@@ -1,0 +1,20 @@
+{
+  "name": "recipe-db",
+  "scripts": {
+    "prepare": "husky install",
+    "synchronize": "node synchronize.js",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "husky": "*",
+    "lint-staged": "*",
+    "prettier": "*"
+  },
+  "license": "MIT",
+  "lint-staged": {
+    "*": [
+      "prettier --write",
+      "npm run synchronize"
+    ]
+  }
+}

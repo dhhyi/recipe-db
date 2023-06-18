@@ -1,16 +1,16 @@
 {
-    "recipes": [
-        {
-            "id": 1,
-            "name": "Rice Pudding"
-        },
-        {
-            "id": 2,
-            "name": "Beatroot Soup"
-        },
-        {
-            "id": 3,
-            "name": "Bean Stew"
-        }
-    ]
+  "recipes": [
+    {
+      "id": 1,
+      "name": "Rice Pudding"
+    },
+    {
+      "id": 2,
+      "name": "Beatroot Soup"
+    },
+    {
+      "id": 3,
+      "name": "Bean Stew"
+    }
+  ]
 }
