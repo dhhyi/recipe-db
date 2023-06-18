@@ -1,0 +1,51 @@
+version: "3.3"
+
+services:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    command:
+      - --log.level=DEBUG
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - 80:80
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - intranet
+
+  recipes-be:
+    build: recipes-be
+    volumes:
+      - ./recipes-be:/app
+    entrypoint: json-server --watch db.json --host 0.0.0.0
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.recipes-be.rule=PathPrefix(`/data/recipes`)
+      - traefik.http.routers.recipes-be.entrypoints=web
+      - traefik.http.routers.recipes-be.middlewares=recipes-be-stripprefix
+      - traefik.http.middlewares.recipes-be-stripprefix.stripprefix.prefixes=/data
+    networks:
+      - intranet
+
+  ratings-be:
+    build: ratings-be
+    volumes:
+      - ./ratings-be:/app
+    entrypoint: json-server --watch db.js --host 0.0.0.0
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ratings-be.rule=PathPrefix(`/data/ratings`)
+      - traefik.http.routers.ratings-be.entrypoints=web
+      - traefik.http.routers.ratings-be.middlewares=ratings-be-stripprefix
+      - traefik.http.middlewares.ratings-be-stripprefix.stripprefix.prefixes=/data
+    networks:
+      - intranet
+
+networks:
+  intranet:
+    name: intranet

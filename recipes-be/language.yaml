@@ -1,0 +1,22 @@
+extends: dcc://javascript
+devcontainer:
+  build:
+    root:
+      - RUN npm i -g json-server
+  ports:
+    - 3000
+  initialize: json-server --host 0.0.0.0 -w db.json
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        recipes-be:
+          rule: PathPrefix(`/data/recipes`)
+          entrypoints: web
+          middlewares: recipes-be-stripprefix
+      middlewares:
+        recipes-be-stripprefix:
+          stripprefix.prefixes: /data
