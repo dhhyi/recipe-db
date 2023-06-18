@@ -1,0 +1,17 @@
+{
+  "name": "apollo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "format": "prettier --write .",
+    "compile": "tsc",
+    "start": "npm run compile && node ./dist/index.js"
+  },
+  "dependencies": {
+    "@apollo/datasource-rest": "^6.0.1",
+    "@apollo/server": "^4.7.4",
+    "@types/node": "^18.16.18",
+    "graphql": "^16.6.0",
+    "typescript": "^5.1.3"
+  }
+}

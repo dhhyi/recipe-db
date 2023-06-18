@@ -1,0 +1,12 @@
+extends: dcc://javascript
+devcontainer:
+  build:
+    user:
+      - RUN npm install -g prettier pnpm
+  initialize: pnpm install
+vscode:
+  settings:
+    editor.defaultFormatter: esbenp.prettier-vscode
+  extensions:
+    - GraphQL.vscode-graphql
+    - esbenp.prettier-vscode
