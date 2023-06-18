@@ -7,13 +7,14 @@
   },
   "devDependencies": {
     "husky": "*",
+    "js-yaml": "^4.1.0",
     "lint-staged": "*",
-    "prettier": "*"
+    "prettier": "^2.0.0"
   },
   "license": "MIT",
   "lint-staged": {
     "*": [
-      "prettier --write",
+      "prettier -u --write",
       "npm run synchronize"
     ]
   }

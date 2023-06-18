@@ -10,3 +10,17 @@ vscode:
   extensions:
     - GraphQL.vscode-graphql
     - esbenp.prettier-vscode
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        apollo:
+          rule: PathPrefix(`/graphql`)
+          entrypoints: web
+          middlewares: apollo-stripprefix
+      middlewares:
+        apollo-stripprefix:
+          stripprefix.prefixes: /graphql
