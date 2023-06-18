@@ -14,9 +14,5 @@ traefik:
     http:
       routers:
         recipes-be:
-          rule: PathPrefix(`/data/recipes`)
-          entrypoints: web
-          middlewares: recipes-be-stripprefix
-      middlewares:
-        recipes-be-stripprefix:
-          stripprefix.prefixes: /data
+          rule: PathPrefix(`/recipes`)
+          entrypoints: rest-internal

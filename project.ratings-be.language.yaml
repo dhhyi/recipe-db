@@ -14,9 +14,5 @@ traefik:
     http:
       routers:
         ratings-be:
-          rule: PathPrefix(`/data/ratings`)
-          entrypoints: web
-          middlewares: ratings-be-stripprefix
-      middlewares:
-        ratings-be-stripprefix:
-          stripprefix.prefixes: /data
+          rule: PathPrefix(`/ratings`)
+          entrypoints: rest-internal
