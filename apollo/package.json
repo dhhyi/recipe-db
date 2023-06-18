@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "format": "prettier --write .",
-    "compile": "tsc",
-    "start": "npm run compile && node ./dist/index.js"
+    "build": "tsc",
+    "start": "npm run build && node ./dist/index.js"
   },
   "dependencies": {
     "@apollo/datasource-rest": "^6.0.1",
