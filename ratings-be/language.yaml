@@ -1,0 +1,22 @@
+extends: dcc://javascript
+devcontainer:
+  build:
+    root:
+      - RUN npm i -g json-server
+  ports:
+    - 3000
+  initialize: json-server --host 0.0.0.0 -w db.js
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        ratings-be:
+          rule: PathPrefix(`/data/ratings`)
+          entrypoints: web
+          middlewares: ratings-be-stripprefix
+      middlewares:
+        ratings-be-stripprefix:
+          stripprefix.prefixes: /data
