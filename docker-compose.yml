@@ -2,14 +2,15 @@ version: "3.3"
 
 services:
   traefik:
-    image: traefik:v2.10
+    image: traefik:v3.0
     container_name: traefik
     command:
-      - --log.level=DEBUG
+      # - --log.level=DEBUG
       - --api.insecure=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
+      - --entrypoints.rest-internal.address=:3000
     ports:
       - 80:80
       - 8080:8080
@@ -25,10 +26,8 @@ services:
     entrypoint: json-server --watch db.json --host 0.0.0.0
     labels:
       - traefik.enable=true
-      - traefik.http.routers.recipes-be.rule=PathPrefix(`/data/recipes`)
-      - traefik.http.routers.recipes-be.entrypoints=web
-      - traefik.http.routers.recipes-be.middlewares=recipes-be-stripprefix
-      - traefik.http.middlewares.recipes-be-stripprefix.stripprefix.prefixes=/data
+      - traefik.http.routers.recipes-be.rule=PathPrefix(`/recipes`)
+      - traefik.http.routers.recipes-be.entrypoints=rest-internal
     networks:
       - intranet
 
@@ -39,12 +38,26 @@ services:
     entrypoint: json-server --watch db.js --host 0.0.0.0
     labels:
       - traefik.enable=true
-      - traefik.http.routers.ratings-be.rule=PathPrefix(`/data/ratings`)
-      - traefik.http.routers.ratings-be.entrypoints=web
-      - traefik.http.routers.ratings-be.middlewares=ratings-be-stripprefix
-      - traefik.http.middlewares.ratings-be-stripprefix.stripprefix.prefixes=/data
+      - traefik.http.routers.ratings-be.rule=PathPrefix(`/ratings`)
+      - traefik.http.routers.ratings-be.entrypoints=rest-internal
     networks:
       - intranet
+
+  apollo:
+    build: apollo
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.apollo.rule=PathPrefix(`/graphql`)
+      - traefik.http.routers.apollo.entrypoints=web
+      - traefik.http.routers.apollo.middlewares=apollo-stripprefix
+      - traefik.http.middlewares.apollo-stripprefix.stripprefix.prefixes=/graphql
+    environment:
+      REST_ENDPOINT: http://traefik:3000
+      # NODE_ENV: production
+    networks:
+      - intranet
+    deploy:
+      replicas: 1
 
 networks:
   intranet:
