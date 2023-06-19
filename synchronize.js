@@ -76,16 +76,9 @@ fs.readdirSync(__dirname).forEach((file) => {
           .map((s) => (s.startsWith("traefik.") ? s : "traefik." + s))
       );
     }
-
-    if (project === "apollo") {
-      service.environment = {
-        REST_ENDPOINT: "http://traefik:3000",
-      };
-      service.deploy = {
-        replicas: 2,
-      };
+    if (languageYaml.devcontainer?.environment) {
+      service.environment = languageYaml.devcontainer.environment;
     }
-
     dockerCompose.services[project] = service;
   }
 });

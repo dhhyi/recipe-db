@@ -4,6 +4,8 @@ devcontainer:
     user:
       - RUN npm install -g prettier pnpm
   initialize: pnpm install
+  environment:
+    REST_ENDPOINT: http://traefik:3000
 vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
