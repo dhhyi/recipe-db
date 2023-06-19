@@ -110,10 +110,10 @@ fs.readdirSync(__dirname).forEach((file) => {
     switch (project) {
       case "apollo":
         service.depends_on = {
-          "recipes-be": {
+          recipes: {
             condition: "service_started",
           },
-          "ratings-be": {
+          ratings: {
             condition: "service_started",
           },
         };
