@@ -1,6 +1,7 @@
 # tmp
 *.bak
 *~
+target
 
 # dependencies
 node_modules
