@@ -2,7 +2,7 @@ const fs = require("fs");
 const cp = require("child_process");
 const path = require("path");
 
-if (!process.env._?.endsWith("/git")) {
+if (!process.env._?.endsWith("/git") && !process.env._?.includes(".vscode")) {
   cp.execSync("npm exec pnpm install", { cwd: __dirname, stdio: "inherit" });
 
   fs.readdirSync(__dirname).forEach((file) => {
@@ -61,6 +61,11 @@ dockerCompose.services.traefik = {
   ports: ["80:80", "8080:8080"],
   volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"],
   networks: ["intranet"],
+  depends_on: {
+    apollo: {
+      condition: "service_started",
+    },
+  },
 };
 
 const regex = /^project\.([\w-]+)\.language\.yaml$/;
@@ -97,6 +102,20 @@ fs.readdirSync(__dirname).forEach((file) => {
     if (languageYaml.devcontainer?.environment) {
       service.environment = languageYaml.devcontainer.environment;
     }
+
+    switch (project) {
+      case "apollo":
+        service.depends_on = {
+          "recipes-be": {
+            condition: "service_started",
+          },
+          "ratings-be": {
+            condition: "service_started",
+          },
+        };
+        break;
+    }
+
     dockerCompose.services[project] = service;
   }
 });
