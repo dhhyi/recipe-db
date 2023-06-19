@@ -79,6 +79,10 @@ fs.readdirSync(__dirname).forEach((file) => {
       { cwd: __dirname, stdio: "inherit" }
     );
 
+    if (project.endsWith("-test")) {
+      return;
+    }
+
     const service = {
       build: project,
       volumes: [`./${project}:/app`],

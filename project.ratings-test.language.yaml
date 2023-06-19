@@ -1,0 +1,38 @@
+extends: base://java
+language:
+  name: karate
+  binary: karate
+  version: false
+devcontainer:
+  build:
+    args:
+      KARATE_VERSION: 1.4.0
+    root:
+      - ADD https://github.com/karatelabs/karate/releases/download/v${KARATE_VERSION}/karate-${KARATE_VERSION}.jar /opt/karate.jar
+      - RUN chmod +rx /opt/karate.jar
+    files:
+      - type: script
+        path: /usr/local/bin/karate
+        content: |
+          #!/bin/bash
+          java -jar /opt/karate.jar "$@"
+      - type: script
+        path: /test.sh
+        content: |
+          #!/bin/bash
+          karate .
+  environment:
+    REST_API: http://ratings-be:3000
+vscode:
+  extensions:
+    - karatelabs.karate
+    - kirkslota.karate-runner
+  settings:
+    karateRunner.karateJS.commandLineArgs: karate
+    karateRunner.karateJar.commandLineArgs: karate
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    enable: false
