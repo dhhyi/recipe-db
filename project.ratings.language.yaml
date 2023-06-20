@@ -1,11 +1,11 @@
-extends: dcc://javascript
+extends: dcc://io
 devcontainer:
   build:
-    root:
-      - RUN npm i -g json-server
+    user:
+      - RUN eerie install https://github.com/IoLanguage/Socket.git
+      - RUN eerie install https://github.com/IoLanguage/CGI.git
   ports:
-    - 3000
-  initialize: json-server --host 0.0.0.0 -w db.js
+    - 8456
 extras:
   - traefik
 traefik:

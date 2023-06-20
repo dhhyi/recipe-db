@@ -1,9 +1,14 @@
-FROM node:lts-alpine
+FROM ghcr.io/dhhyi/dcc-devcontainer-io
 
-RUN npm install -g json-server
+USER vscode
+
+RUN eerie install https://github.com/IoLanguage/Socket.git
+RUN eerie install https://github.com/IoLanguage/CGI.git
+
+EXPOSE 8456
 
 WORKDIR /app
 
-EXPOSE 3000
+COPY *.io .
 
-ENTRYPOINT [ "json-server", "--watch", "/app/db.js", "--host", "0.0.0.0"]
+ENTRYPOINT [ "io" ]
