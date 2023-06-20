@@ -85,9 +85,11 @@ fs.readdirSync(__dirname).forEach((file) => {
 
     const service = {
       build: project,
+      container_name: project,
       volumes: [`./${project}:/app`],
       labels: [],
       networks: ["intranet"],
+      tty: true,
     };
 
     const languageYaml = yaml.load(
@@ -117,6 +119,8 @@ fs.readdirSync(__dirname).forEach((file) => {
             condition: "service_started",
           },
         };
+        break;
+      default:
         break;
     }
 
