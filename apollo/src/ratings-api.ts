@@ -15,6 +15,11 @@ export class RatingsAPI extends RESTDataSource {
     if (rating % 1 !== 0) throw new Error("Rating must be a whole number");
     if (rating < 0 || rating > 5)
       throw new Error("Rating must be between 0 and 5");
-    return this.put(id, { body: { rating } }).then((rating) => rating.rating);
+    return this.put(id, {
+      body: `rating=${rating}`,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+    }).then((rating) => rating.rating);
   }
 }
