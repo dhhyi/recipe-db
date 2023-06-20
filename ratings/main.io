@@ -1,3 +1,5 @@
+ratings := Map clone
+
 Request := Map clone
 
 Request send := method(code, message, data,
@@ -13,8 +15,16 @@ Request sendData := method(data,
     return self send("200", "OK", data)
 )
 
+Request sendNoContent := method(
+    return self send("204", "No Content", nil)
+)
+
 Request error := method(code, message,
     self send(code, message, nil)
+)
+
+Request errorBadRequest := method(message,
+    return self send("400", "Bad Request", message)
 )
 
 Request errorNotFound := method(
@@ -32,19 +42,50 @@ Request errorInternalServerError := method(
 RESTAPI := Object clone
 
 RESTAPI get := method(request,
-    // return request sendData(request)
-    if (request at("path") at(0) == "ratings",
-        id := request at("path") at(1)
-        if (id != nil,
-            return request sendData(Map clone atPut("rating", 5) atPut("id", id))
+    path := request at("path")
+
+    if (path at(0) == "ratings",
+        if (path size == 1,
+            allRatings := ratings asList map(e, Map clone atPut("id", e first) atPut("rating", e last))
+            return request sendData(allRatings)
+        )
+        if (path size == 2,
+            id := path at(1)
+            rating := ratings at(id)
+            return if (rating != nil,
+                request sendData(Map clone atPut("rating", rating) atPut("id", id)),
+                request sendNoContent
+            )
         )
     )
 
     return request errorNotFound
 )
 
+RESTAPI put := method(request,
+    if (request at("path") at(0) == "ratings",
+        id := request at("path") at(1)
+        if (id != nil,
+        if (request at("payload") != nil,
+        if (request at("payload") at("rating") != nil,
+            rating := request at("payload") at("rating") fromBase(10)
+            ratings atPut(id, rating)
+            return request sendData(Map clone atPut("rating", rating) atPut("id", id)))
+        ))
+        return request errorBadRequest("Missing rating")
+    )
+
+    return request errorNotFound
+)
+
 RESTAPI routeRequest := method(httpData,
+    // "---------------" println
+    // httpData println
+    // "---------------" println
+
     methodAndPath := httpData split("\n") at(0)
+    payload := httpData split("\r\n\r\n") at(1)
+
     if (methodAndPath != nil,
         httpMethod := methodAndPath split(" ") at(0)
 
@@ -57,9 +98,13 @@ RESTAPI routeRequest := method(httpData,
         query := methodAndPath split(" ") at(1) split("?") at(1)
         request atPut("query", CGI parseString(query))
 
+        if (payload != nil,
+            request atPut("payload", CGI parseString(payload))
+        )
+
         writeln(httpMethod .. " " .. path)
 
-        if(self getSlot(httpMethod asLowercase) == nil,
+        if (self getSlot(httpMethod asLowercase) == nil,
             return request errorMethodNotAllowed,
             return self getSlot(httpMethod asLowercase) call(request)
         )
@@ -69,7 +114,7 @@ RESTAPI routeRequest := method(httpData,
 
 RESTAPI handleSocketFromServer := method(aSocket, aServer,
     while(aSocket isOpen,
-        if(aSocket read,
+        if (aSocket read,
             data := routeRequest(aSocket readBuffer asString)
             if (data != nil, aSocket write(data))
         )

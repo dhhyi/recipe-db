@@ -22,7 +22,7 @@ devcontainer:
           #!/bin/bash
           karate .
   environment:
-    REST_API: http://ratings:3000
+    REST_API: http://traefik:3000
 vscode:
   extensions:
     - karatelabs.karate
