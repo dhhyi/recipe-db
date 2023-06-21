@@ -6,6 +6,11 @@ devcontainer:
   ports:
     - 3000
   initialize: json-server --host 0.0.0.0 -w db.json
+vscode:
+  settings:
+    peacock.remoteColor: "#730e31"
+  extensions:
+    - johnpapa.vscode-peacock
 extras:
   - traefik
 traefik:

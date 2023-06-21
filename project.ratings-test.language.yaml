@@ -24,12 +24,14 @@ devcontainer:
   environment:
     REST_API: http://traefik:3000
 vscode:
-  extensions:
-    - karatelabs.karate
-    - kirkslota.karate-runner
   settings:
     karateRunner.karateJS.commandLineArgs: karate
     karateRunner.karateJar.commandLineArgs: karate
+    peacock.remoteColor: "#269914"
+  extensions:
+    - johnpapa.vscode-peacock
+    - karatelabs.karate
+    - kirkslota.karate-runner
 extras:
   - traefik
 traefik:
