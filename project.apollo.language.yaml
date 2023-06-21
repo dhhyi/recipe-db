@@ -13,7 +13,9 @@ devcontainer:
 vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
+    peacock.remoteColor: "#3d2160"
   extensions:
+    - johnpapa.vscode-peacock
     - GraphQL.vscode-graphql
     - esbenp.prettier-vscode
 extras:

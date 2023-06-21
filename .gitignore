@@ -10,5 +10,6 @@ package-lock.json
 
 # generated
 .devcontainer
+.vscode
 .update_devcontainer.sh
 docker-compose.yml

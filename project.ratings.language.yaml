@@ -6,6 +6,11 @@ devcontainer:
       - RUN eerie install https://github.com/IoLanguage/CGI.git
   ports:
     - 8456
+vscode:
+  settings:
+    peacock.remoteColor: "#13520a"
+  extensions:
+    - johnpapa.vscode-peacock
 extras:
   - traefik
 traefik:
