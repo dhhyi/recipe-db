@@ -4,6 +4,8 @@ devcontainer:
     user:
       - RUN npm install -g prettier pnpm
   initialize: pnpm install
+  ports:
+    - 4000
   environment:
     REST_ENDPOINT: http://traefik:3000
 vscode:
