@@ -78,7 +78,8 @@ RESTAPI handleSocketFromServer := method(aSocket, aServer, db,
     self db := db
 
     db formatSingle := method(id, rating, count,
-        return Map clone atPut("id", id) atPut("rating", rating) atPut("count", count)
+        roundedRating := ((rating * 2) round) / 2
+        return Map clone atPut("id", id) atPut("rating", roundedRating) atPut("count", count)
     )
 
     while(aSocket isOpen,
