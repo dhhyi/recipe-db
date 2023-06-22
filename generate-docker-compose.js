@@ -2,12 +2,41 @@ const fs = require("fs");
 const cp = require("child_process");
 const path = require("path");
 
-const production = process.argv.slice(2).some((arg) => arg.includes("prod"));
+const regex = /^project\.([\w-]+)\.language\.yaml$/;
 
-if (production) {
+function languageFile(project) {
+  return `project.${project}.language.yaml`;
+}
+
+const availableProjects = fs
+  .readdirSync(__dirname)
+  .filter((file) => regex.test(file))
+  .map((file) => regex.exec(file)[1]);
+const availableDeployProjects = availableProjects.filter(
+  (project) => !project.endsWith("-test")
+);
+
+const PROD = process.argv.slice(2).some((arg) => arg.includes("prod"));
+const DEV = !PROD;
+
+if (PROD) {
   console.log("Setting up for production...");
 } else {
   console.log("Setting up for development...");
+}
+
+const devProjects = [];
+
+if (DEV) {
+  const args = process.argv.slice(2);
+  const requestedDevProjects = availableDeployProjects.filter((project) =>
+    args.includes(project)
+  );
+  devProjects.push(...requestedDevProjects);
+
+  console.log(
+    `Setting up VSCode attaching for ${requestedDevProjects.join(", ")}...`
+  );
 }
 
 const yaml = require("js-yaml");
@@ -52,7 +81,7 @@ const traefik = {
   networks: ["intranet"],
 };
 
-if (production) {
+if (PROD) {
   traefik.depends_on = {
     apollo: {
       condition: "service_started",
@@ -68,70 +97,114 @@ if (production) {
 
 dockerCompose.services.traefik = traefik;
 
-const regex = /^project\.([\w-]+)\.language\.yaml$/;
+availableProjects.forEach((project) => {
+  console.log(`Synchronizing ${project}...`);
+  let commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${languageFile(
+    project
+  )} ${project} --no-vscode`;
 
-fs.readdirSync(__dirname).forEach((file) => {
-  if (regex.test(file)) {
-    const project = regex.exec(file)[1];
-    console.log(`Synchronizing ${project}...`);
-    cp.execSync(
-      `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${file} ${project} --no-vscode`,
-      { cwd: __dirname, stdio: "inherit" }
-    );
-
-    if (project.endsWith("-test")) {
-      return;
-    }
-
-    const service = {
-      build: project,
-      container_name: project,
-      volumes: [`./${project}:/app`],
-      labels: [],
-      networks: ["intranet"],
-      tty: true,
-    };
-
-    const languageYaml = yaml.load(
-      fs.readFileSync(path.join(__dirname, file), "utf-8")
-    );
-    if (languageYaml.traefik?.labels) {
-      service.labels.push("traefik.enable=true");
-
-      const flattened = flattenObject(languageYaml.traefik.labels);
-      service.labels.push(
-        ...flattened
-          .map(([k, v]) => `${k}=${v}`)
-          .map((s) => (s.startsWith("traefik.") ? s : "traefik." + s))
-      );
-    }
-    if (languageYaml.devcontainer?.environment) {
-      service.environment = languageYaml.devcontainer.environment;
-    }
-
-    switch (project) {
-      case "apollo":
-        if (production) {
-          if (!service.environment) {
-            service.environment = {};
-          }
-          service.environment.NODE_ENV = "production";
-          service.depends_on = {
-            recipes: {
-              condition: "service_started",
-            },
-            ratings: {
-              condition: "service_started",
-            },
-          };
-        }
-        break;
-      default:
-        break;
-    }
-
-    dockerCompose.services[project] = service;
+  if (devProjects.includes(project)) {
+    commandLine += "  --dump-meta";
   }
+
+  cp.execSync(commandLine, { cwd: __dirname, stdio: "inherit" });
+
+  if (!availableDeployProjects.includes(project)) {
+    return;
+  }
+
+  const service = {
+    build: devProjects.includes(project) ? `${project}/.devcontainer` : project,
+    container_name: project,
+    labels: [],
+    networks: ["intranet"],
+    tty: true,
+  };
+
+  if (devProjects.includes(project)) {
+    service.volumes = [`./${project}:/app`];
+  }
+
+  const languageYaml = yaml.load(
+    fs.readFileSync(path.join(__dirname, languageFile(project)), "utf-8")
+  );
+  if (languageYaml.traefik?.labels) {
+    service.labels.push("traefik.enable=true");
+
+    const flattened = flattenObject(languageYaml.traefik.labels);
+    service.labels.push(
+      ...flattened
+        .map(([k, v]) => `${k}=${v}`)
+        .map((s) => (s.startsWith("traefik.") ? s : "traefik." + s))
+    );
+  }
+  if (languageYaml.devcontainer?.environment) {
+    if (!service.environment) {
+      service.environment = {};
+    }
+    service.environment = {
+      ...service.environment,
+      ...languageYaml.devcontainer.environment,
+    };
+  }
+
+  if (devProjects.includes(project)) {
+    // add container env from meta for VSCode container attach
+    const devcontainerMetaPath = path.join(
+      __dirname,
+      project,
+      ".devcontainer_meta.json"
+    );
+    const devcontainerDockerfilePath = path.join(
+      __dirname,
+      project,
+      ".devcontainer",
+      "Dockerfile"
+    );
+    if (
+      fs.existsSync(devcontainerMetaPath) &&
+      fs.existsSync(devcontainerDockerfilePath)
+    ) {
+      const meta = JSON.parse(fs.readFileSync(devcontainerMetaPath, "utf-8"));
+      const containerEnv = meta
+        .map((elem) => elem.containerEnv)
+        .reduce((acc, val) => {
+          if (val) {
+            return { ...acc, ...val };
+          }
+          return acc;
+        }, {});
+      if (Object.keys(containerEnv).length) {
+        if (!service.environment) {
+          service.environment = {};
+        }
+        service.environment = { ...service.environment, ...containerEnv };
+      }
+    }
+  }
+
+  switch (project) {
+    case "apollo":
+      if (PROD) {
+        if (!service.environment) {
+          service.environment = {};
+        }
+        service.environment.NODE_ENV = "production";
+        service.depends_on = {
+          recipes: {
+            condition: "service_started",
+          },
+          ratings: {
+            condition: "service_started",
+          },
+        };
+      }
+      break;
+    default:
+      break;
+  }
+
+  dockerCompose.services[project] = service;
 });
 
 console.log("Writing docker-compose.yml...");
