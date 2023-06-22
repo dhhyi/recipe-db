@@ -1,5 +1,5 @@
     @parallel=false
-Feature: Basic test for setting ratings
+Feature: Basic test for setting errornous ratings
 
   Background:
     * def backend = java.lang.System.getenv('REST_API')
