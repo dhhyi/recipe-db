@@ -12,4 +12,5 @@ package-lock.json
 .devcontainer
 .vscode
 .update_devcontainer.sh
+.devcontainer_meta.json
 docker-compose.yml
