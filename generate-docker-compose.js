@@ -183,6 +183,13 @@ availableProjects.forEach((project) => {
     }
   }
 
+  if (DEV) {
+    if (!service.environment) {
+      service.environment = {};
+    }
+    service.environment.TESTING = "true";
+  }
+
   switch (project) {
     case "apollo":
       if (PROD) {

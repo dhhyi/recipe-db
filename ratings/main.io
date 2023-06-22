@@ -78,6 +78,17 @@ RESTAPI put := method(request,
     return request errorNotFound
 )
 
+RESTAPI delete := method(request,
+    if (System getEnvironmentVariable("TESTING") == "true",
+    if (request at("path") size == 1,
+    if (request at("path") at(0) == "ratings",
+        ratings empty
+        return request sendNoContent
+    )))
+
+    return request errorMethodNotAllowed
+)
+
 RESTAPI routeRequest := method(httpData,
     // "---------------" println
     // httpData println
@@ -125,6 +136,10 @@ RESTAPI handleSocketFromServer := method(aSocket, aServer,
 )
 
 writeln("Starting server on port 8456")
+
+if (System getEnvironmentVariable("TESTING") == "true",
+    writeln("TESTING MODE")
+)
 
 server := Server clone setPort(8456)
 
