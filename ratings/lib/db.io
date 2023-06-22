@@ -1,31 +1,51 @@
-DB := Map clone
+DB := SQLite3 clone
 
 DB clone := DB
 
-DB clear := method(
-    self empty
+DB checkNoError := method(
+    if (error, Exception raise("We have an error: " .. error))
 )
 
-DB getAverageRating := method(id,
-    ratings := self at(id)
-    if (ratings == nil,
-        return formatSingle(id, 0, 0),
+DB initialize := method(
+    setPath("db.sqlite")
+    open
 
-        count := ratings size
-        average := ratings values sum / count
-
-        return formatSingle(id, average, count)
+    if (exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';") size == 0,
+        exec("CREATE TABLE Ratings (
+                key varchar(100) NOT NULL,
+                login varchar(100) NOT NULL,
+                value int NOT NULL,
+                CONSTRAINT pk PRIMARY KEY (key, login)
+        );")
+        checkNoError
     )
 )
 
+DB clear := method(
+    exec("DROP TABLE Ratings;")
+    checkNoError
+    close
+    initialize
+)
+
+DB getAverageRating := method(id,
+    result := exec("SELECT AVG(value), COUNT(value) FROM Ratings WHERE key='" .. id .. "';") at(0)
+    checkNoError
+    count := result at("COUNT(value)") asNumber
+    rawRating := result at("AVG(value)")
+    average := if (rawRating == "NULL", 0, rawRating asNumber)
+    return formatSingle(id, average, count)
+)
+
 DB getAllAverageRatings := method(
-    return list()
+    result := exec("SELECT key, AVG(value), COUNT(value) FROM Ratings GROUP BY key;")
+    checkNoError
+    return result map(row, formatSingle(row at("key"), row at("AVG(value)") asNumber, row at("COUNT(value)") asNumber))
 )
 
 DB addRating := method(id, rating, login,
-    current := self at(id)
-    new := if (current == nil, Map clone, current) atPut(login, rating)
-    self atPut(id, new)
-
+    exec("INSERT OR REPLACE INTO Ratings (key, login, value)
+          VALUES ('" .. id .. "', '" .. login .. "', " .. rating .. ");")
+    checkNoError
     return getAverageRating(id)
 )

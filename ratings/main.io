@@ -3,6 +3,7 @@ doFile("lib/request.io")
 doFile("lib/api.io")
 
 db := DB clone
+db initialize
 
 writeln("Starting server on port 8456")
 

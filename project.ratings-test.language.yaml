@@ -20,7 +20,7 @@ devcontainer:
         path: /test.sh
         content: |
           #!/bin/bash
-          karate .
+          find . -name "*.feature" -print0 | xargs -0 -n1 karate -T 1
   environment:
     REST_API: http://traefik:3000
 vscode:
