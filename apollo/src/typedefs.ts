@@ -1,14 +1,19 @@
 export const typeDefs = `#graphql
 
+type Rating {
+  average: Float
+  count: Int
+}
+
 type Recipe {
   id: ID!
   name: String!
-  rating: Float
+  rating: Rating
 }
 
 type Query {
   test: String
-  
+
   recipes: [Recipe]
   recipe(id: ID!): Recipe
 
@@ -16,7 +21,7 @@ type Query {
 }
 
 type Mutation {
-  rate(id: ID!, rating: Int!): Float
+  rate(id: ID!, rating: Int!, login: String!): Float
 }
 
 `;

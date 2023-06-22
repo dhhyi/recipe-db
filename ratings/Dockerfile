@@ -10,5 +10,6 @@ EXPOSE 8456
 WORKDIR /app
 
 COPY *.io .
+COPY lib ./lib
 
 ENTRYPOINT [ "io" ]

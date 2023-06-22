@@ -16,8 +16,8 @@ const Query = {
 };
 
 const Mutation = {
-  rate: async (_source, { id, rating }, { ratingsAPI }: Context) => {
-    return ratingsAPI.addRating(id, rating);
+  rate: async (_source, { id, rating, login }, { ratingsAPI }: Context) => {
+    return ratingsAPI.addRating(id, rating, login);
   },
 };
 

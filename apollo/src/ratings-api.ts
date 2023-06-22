@@ -7,19 +7,26 @@ export class RatingsAPI extends RESTDataSource {
   }
 
   async getRating(id: string) {
-    return this.get(id).then((rating) => rating.rating);
+    return this.get(id).then((rating) => ({
+      average: rating.rating,
+      count: rating.count,
+    }));
   }
 
-  async addRating(id: string, rating: number) {
-    if (isNaN(rating)) throw new Error("Rating must be a number");
-    if (rating % 1 !== 0) throw new Error("Rating must be a whole number");
-    if (rating < 0 || rating > 5)
-      throw new Error("Rating must be between 0 and 5");
+  async addRating(id: string, rating: number, login: string) {
     return this.put(id, {
-      body: `rating=${rating}`,
+      body: `rating=${rating}&login=${login}`,
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
       },
     }).then((rating) => rating.rating);
+  }
+
+  parseBody(response) {
+    if (response.status >= 400) {
+      return response.text();
+    } else {
+      return response.json();
+    }
   }
 }
