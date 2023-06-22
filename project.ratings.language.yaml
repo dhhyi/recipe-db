@@ -25,3 +25,8 @@ traefik:
         ratings:
           rule: PathPrefix(`/ratings`)
           entrypoints: rest-internal
+          middlewares: limit
+      middlewares:
+        limit:
+          buffering.maxRequestBodyBytes: 2048
+          buffering.retryExpression: ResponseCode() == 400 && Attempts() < 2
