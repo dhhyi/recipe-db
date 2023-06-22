@@ -1,9 +1,12 @@
 extends: dcc://io
 devcontainer:
   build:
+    packages:
+      - libsqlite3-dev
     user:
       - RUN eerie install https://github.com/IoLanguage/Socket.git
       - RUN eerie install https://github.com/IoLanguage/CGI.git
+      - RUN eerie install https://github.com/IoLanguage/SQLite3.git
   ports:
     - 8456
 vscode:
@@ -11,6 +14,7 @@ vscode:
     peacock.remoteColor: "#13520a"
   extensions:
     - johnpapa.vscode-peacock
+    - qwtel.sqlite-viewer
 extras:
   - traefik
 traefik:

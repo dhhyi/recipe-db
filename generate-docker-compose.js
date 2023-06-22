@@ -207,6 +207,17 @@ availableProjects.forEach((project) => {
         };
       }
       break;
+    case "ratings":
+      if (PROD) {
+        if (!service.volumes) {
+          service.volumes = [];
+        }
+        if (!fs.existsSync("./ratings/db.sqlite")) {
+          cp.execSync("touch ./ratings/db.sqlite");
+        }
+        service.volumes.push("./ratings/db.sqlite:/app/db.sqlite");
+      }
+      break;
     default:
       break;
   }
