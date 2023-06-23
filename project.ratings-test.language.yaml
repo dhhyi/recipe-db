@@ -37,5 +37,3 @@ extras:
   - traefik
 traefik:
   network: intranet
-  labels:
-    enable: false
