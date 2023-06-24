@@ -121,6 +121,13 @@ availableProjects.forEach((project) => {
     tty: true,
   };
 
+  const appendEnvironment = (obj) => {
+    if (!service.environment) {
+      service.environment = {};
+    }
+    service.environment = { ...service.environment, ...obj };
+  };
+
   if (devProjects.includes(project)) {
     service.volumes = [`./${project}:/app`];
   }
@@ -139,13 +146,7 @@ availableProjects.forEach((project) => {
     );
   }
   if (languageYaml.devcontainer?.environment) {
-    if (!service.environment) {
-      service.environment = {};
-    }
-    service.environment = {
-      ...service.environment,
-      ...languageYaml.devcontainer.environment,
-    };
+    appendEnvironment(languageYaml.devcontainer.environment);
   }
 
   if (devProjects.includes(project)) {
@@ -175,28 +176,21 @@ availableProjects.forEach((project) => {
           return acc;
         }, {});
       if (Object.keys(containerEnv).length) {
-        if (!service.environment) {
-          service.environment = {};
-        }
-        service.environment = { ...service.environment, ...containerEnv };
+        appendEnvironment(containerEnv);
       }
     }
   }
 
   if (DEV) {
-    if (!service.environment) {
-      service.environment = {};
-    }
-    service.environment.TESTING = "true";
+    appendEnvironment({ TESTING: "true" });
+  } else if (PROD) {
+    appendEnvironment({ TESTING: null });
   }
 
   switch (project) {
     case "apollo":
       if (PROD) {
-        if (!service.environment) {
-          service.environment = {};
-        }
-        service.environment.NODE_ENV = "production";
+        appendEnvironment({ NODE_ENV: "production" });
         service.depends_on = {
           recipes: {
             condition: "service_started",
