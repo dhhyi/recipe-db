@@ -1,3 +1,6 @@
+# lint-disable-line relay-page-info-spec
+# lint-disable types-have-descriptions, fields-have-descriptions, arguments-have-descriptions
+
 type Rating {
   average: Float
   count: Int
@@ -10,12 +13,10 @@ type Recipe {
 }
 
 type Query {
-  test: String
-
-  recipes: [Recipe]
-  recipe(id: ID!): Recipe
-
   rating(id: ID!): Float
+
+  recipe(id: ID!): Recipe
+  recipes: [Recipe]
 }
 
 type Mutation {
