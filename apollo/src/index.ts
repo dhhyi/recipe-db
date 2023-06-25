@@ -11,9 +11,12 @@ console.log("Using REST: " + process.env.REST_ENDPOINT);
 
 const typeDefs: string = require("./typedefs.gql");
 
+const TESTING = process.env.TESTING === "true";
+
 const server = new ApolloServer({
   typeDefs,
   resolvers,
+  introspection: TESTING,
 });
 
 startStandaloneServer(server, {
@@ -21,4 +24,7 @@ startStandaloneServer(server, {
   context: async () => context,
 }).then(({ url }) => {
   console.log(`Apollo GraphQL started at: ${url}`);
+  if (TESTING) {
+    console.log("TESTING MODE");
+  }
 });
