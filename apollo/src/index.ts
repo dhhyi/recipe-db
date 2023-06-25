@@ -1,7 +1,6 @@
 import { ApolloServer } from "@apollo/server";
 import { startStandaloneServer } from "@apollo/server/standalone";
 import { resolvers } from "./resolvers.js";
-import { typeDefs } from "./typedefs.js";
 import { context } from "./context.js";
 
 if (!process.env.REST_ENDPOINT) {
@@ -10,14 +9,16 @@ if (!process.env.REST_ENDPOINT) {
 
 console.log("Using REST: " + process.env.REST_ENDPOINT);
 
+const typeDefs: string = require("./typedefs.gql");
+
 const server = new ApolloServer({
   typeDefs,
   resolvers,
 });
 
-const { url } = await startStandaloneServer(server, {
+startStandaloneServer(server, {
   listen: { port: 4000 },
   context: async () => context,
+}).then(({ url }) => {
+  console.log(`Apollo GraphQL started at: ${url}`);
 });
-
-console.log(`Apollo GraphQL started at: ${url}`);

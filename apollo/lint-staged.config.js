@@ -1,3 +1,3 @@
 export default {
-  "*": () => ["npm run build -- --noEmit", "npm run format"],
+  "*": () => ["npm run build", "npm run format"],
 };

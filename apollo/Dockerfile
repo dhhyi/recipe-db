@@ -1,17 +1,16 @@
-FROM node:lts-alpine as builder
+FROM node:18-alpine as builder
 
 RUN npm i -g pnpm
+ENV NODE_ENV=production
 
 WORKDIR /ws
 COPY . /ws/
 RUN pnpm i --frozen-lockfile --prod && pnpm build
 
-FROM node:lts-alpine
+FROM node:18-alpine
 
-COPY --from=builder /ws/node_modules /node_modules
 COPY --from=builder /ws/dist /dist
-COPY --from=builder /ws/package.json /
 
 EXPOSE 4000
 
-ENTRYPOINT ["node", "/dist/index.js"]
+ENTRYPOINT ["node", "/dist/index.cjs"]
