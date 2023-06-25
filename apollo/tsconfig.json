@@ -4,7 +4,7 @@
     "outDir": "dist",
     "lib": ["es2020"],
     "target": "es2020",
-    "module": "ESNext",
+    "module": "CommonJS",
     "moduleResolution": "nodenext",
     "esModuleInterop": true,
     "types": ["node"]
