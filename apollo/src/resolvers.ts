@@ -1,8 +1,6 @@
 import { Context } from "./context.js";
 
 const Query = {
-  test: () => "Test Success, GraphQL server is up & running !!",
-
   recipes: async (_source, _args, { recipesAPI }: Context) => {
     return recipesAPI.getRecipes();
   },
