@@ -1,4 +1,5 @@
 import { RESTDataSource } from "@apollo/datasource-rest";
+import { Rating } from "./graphql.js";
 
 export class RatingsAPI extends RESTDataSource {
   constructor() {
@@ -6,14 +7,14 @@ export class RatingsAPI extends RESTDataSource {
     this.baseURL = process.env.REST_ENDPOINT + "/ratings/";
   }
 
-  async getRating(id: string) {
+  async getRating(id: string): Promise<Rating> {
     return this.get(id).then((rating) => ({
       average: rating.rating,
       count: rating.count,
     }));
   }
 
-  async addRating(id: string, rating: number, login: string) {
+  async addRating(id: string, rating: number, login: string): Promise<number> {
     return this.put(id, {
       body: `rating=${rating}&login=${login}`,
       headers: {

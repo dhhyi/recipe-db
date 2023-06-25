@@ -1,31 +1,37 @@
 import { Context } from "./context.js";
+import {
+  MutationResolvers,
+  QueryResolvers,
+  RecipeResolvers,
+  Resolvers,
+} from "./graphql.js";
 
-const Query = {
-  recipes: async (_source, _args, { recipesAPI }: Context) => {
+const Query: QueryResolvers<Context> = {
+  recipes: async (_source, _args, { recipesAPI }) => {
     return recipesAPI.getRecipes();
   },
-  recipe: async (_source, { id }, { recipesAPI }: Context) => {
+  recipe: async (_source, { id }, { recipesAPI }) => {
     return recipesAPI.getRecipe(id);
   },
 
-  rating: async (_source, { id }, { ratingsAPI }: Context) => {
+  rating: async (_source, { id }, { ratingsAPI }) => {
     return ratingsAPI.getRating(id);
   },
 };
 
-const Mutation = {
-  rate: async (_source, { id, rating, login }, { ratingsAPI }: Context) => {
+const Mutation: MutationResolvers<Context> = {
+  rate: async (_source, { id, rating, login }, { ratingsAPI }) => {
     return ratingsAPI.addRating(id, rating, login);
   },
 };
 
-const Recipe = {
-  rating: async (source, _args, { ratingsAPI }: Context) => {
+const Recipe: RecipeResolvers<Context> = {
+  rating: async (source, _args, { ratingsAPI }) => {
     return ratingsAPI.getRating(source.id);
   },
 };
 
-export const resolvers = {
+export const resolvers: Resolvers<Context> = {
   Query,
   Mutation,
   Recipe,
