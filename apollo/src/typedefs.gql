@@ -13,7 +13,7 @@ type Recipe {
 }
 
 type Query {
-  rating(id: ID!): Float
+  rating(id: ID!): Rating
 
   recipe(id: ID!): Recipe
   recipes: [Recipe]
