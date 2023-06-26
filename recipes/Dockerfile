@@ -1,10 +1,21 @@
-FROM node:lts-alpine
-
-RUN npm install -g json-server
+FROM golang as builder
 
 WORKDIR /app
-COPY db.json .
 
-EXPOSE 3000
+COPY go.mod .
 
-ENTRYPOINT ["json-server", "--watch", "db.json", "--host", "0.0.0.0"]
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+
+FROM scratch
+
+COPY --from=builder /app/main /
+
+ENV GIN_MODE=release
+
+EXPOSE 5000
+
+CMD ["/main"]
