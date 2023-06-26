@@ -20,6 +20,10 @@ const Query: QueryResolvers<Context> = {
 };
 
 const Mutation: MutationResolvers<Context> = {
+  deleteRatingsForTesting: async (_source, _args, { ratingsAPI }) => {
+    return ratingsAPI.deleteRatingsForTesting();
+  },
+
   rate: async (_source, { id, rating, login }, { ratingsAPI }) => {
     return ratingsAPI.addRating(id, rating, login);
   },
