@@ -1,0 +1,30 @@
+extends: dcc://javascript
+devcontainer:
+  build:
+    user:
+      - RUN npm install -g prettier pnpm
+    files:
+      - type: script
+        path: /test.sh
+        content: |
+          #!/bin/bash
+          exec npm run test
+  initialize: |
+    rm -Rf node_modules
+    pnpm install
+  ports:
+    - 4000
+  environment:
+    GRAPHQL_ENDPOINT: http://traefik/graphql
+vscode:
+  settings:
+    editor.defaultFormatter: esbenp.prettier-vscode
+    peacock.remoteColor: "#2d1130"
+  extensions:
+    - johnpapa.vscode-peacock
+    - GraphQL.vscode-graphql
+    - esbenp.prettier-vscode
+extras:
+  - traefik
+traefik:
+  network: intranet
