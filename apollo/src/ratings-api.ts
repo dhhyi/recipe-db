@@ -7,6 +7,12 @@ export class RatingsAPI extends RESTDataSource {
     this.baseURL = process.env.REST_ENDPOINT + "/ratings/";
   }
 
+  async deleteRatingsForTesting(): Promise<boolean> {
+    return this.delete("").then(() => {
+      return true;
+    });
+  }
+
   async getRating(id: string): Promise<Rating> {
     return this.get(id).then((rating) => ({
       average: rating.rating,
@@ -26,6 +32,8 @@ export class RatingsAPI extends RESTDataSource {
   parseBody(response) {
     if (response.status >= 400) {
       return response.text();
+    } else if (response.status === 204) {
+      return null;
     } else {
       return response.json();
     }

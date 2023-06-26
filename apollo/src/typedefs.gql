@@ -20,5 +20,7 @@ type Query {
 }
 
 type Mutation {
+  deleteRatingsForTesting: Boolean
+
   rate(id: ID!, rating: Int!, login: String!): Float
 }
