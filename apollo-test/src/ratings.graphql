@@ -1,0 +1,10 @@
+query RatingByIDQuery($id: ID!) {
+  rating(id: $id) {
+    average
+    count
+  }
+}
+
+mutation RateMutation($id: ID!, $rating: Int!, $login: String!) {
+  rate(id: $id, rating: $rating, login: $login)
+}
