@@ -1,16 +1,18 @@
 const cp = require("child_process");
 const fs = require("fs");
+const { languageFile } = require("./shared");
 
 const project = process.argv[2];
+const command = process.argv.slice(3);
 
 if (!project) {
   console.error("Missing project name");
   process.exit(1);
-} else if (!fs.existsSync(`project.${project}.language.yaml`)) {
-  console.error(`project ${project} is missing`);
+} else if (!fs.existsSync(languageFile(project))) {
+  console.error(`Project ${project} is missing`);
   process.exit(1);
-} else if (!project.endsWith("-test")) {
-  console.error(`project ${project} must end with -test`);
+} else if (command.length === 0) {
+  console.error("Missing command");
   process.exit(1);
 }
 
@@ -28,12 +30,18 @@ try {
 
   containerId = json?.containerId;
 
-  cp.execSync(`devcontainer exec --workspace-folder ${project} /test.sh`, {
-    stdio: "inherit",
-    encoding: "utf-8",
-  });
+  const result = cp.spawnSync(
+    "devcontainer",
+    ["exec", "--workspace-folder", project, ...command],
+    { stdio: "inherit", encoding: "utf-8" }
+  );
+
+  if (result.status !== 0) {
+    console.error(`Command failed with exit code ${result.status}`);
+    process.exit(result.status);
+  }
 } finally {
   if (containerId) {
-    cp.execSync(`docker rm -f ${containerId}`);
+    cp.execSync(`docker stop ${containerId}`);
   }
 }

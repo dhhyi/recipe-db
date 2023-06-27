@@ -2,9 +2,9 @@
   "name": "apollo",
   "private": true,
   "scripts": {
-    "format": "prettier --write .",
-    "codegen": "graphql-codegen --config codegen.ts",
-    "test": "npm run codegen && jest --ci"
+    "codegen": "graphql-codegen --config codegen.ts && tsc --noEmit",
+    "test": "npm run codegen && jest --ci",
+    "precommit": "npm run codegen"
   },
   "dependencies": {
     "axios": "^1.4.0",
