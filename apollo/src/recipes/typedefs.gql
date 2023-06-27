@@ -1,6 +1,12 @@
 # lint-disable-line relay-page-info-spec
 # lint-disable types-have-descriptions, fields-have-descriptions, arguments-have-descriptions
 
-type Query
+type Recipe {
+  id: ID!
+  name: String!
+}
 
-type Mutation
+extend type Query {
+  recipe(id: ID!): Recipe
+  recipes: [Recipe]
+}

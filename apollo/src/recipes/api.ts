@@ -1,5 +1,5 @@
 import { RESTDataSource } from "@apollo/datasource-rest";
-import { Recipe } from "./graphql.js";
+import { Recipe } from "../generated/graphql.js";
 
 export class RecipesAPI extends RESTDataSource {
   constructor() {

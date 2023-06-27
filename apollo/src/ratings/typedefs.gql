@@ -1,0 +1,21 @@
+# lint-disable-line relay-page-info-spec
+# lint-disable types-have-descriptions, fields-have-descriptions, arguments-have-descriptions
+
+type Rating {
+  average: Float
+  count: Int
+}
+
+extend type Recipe {
+  rating: Rating
+}
+
+extend type Query {
+  rating(id: ID!): Rating
+}
+
+extend type Mutation {
+  deleteRatingsForTesting: Boolean
+
+  rate(id: ID!, rating: Int!, login: String!): Float
+}

@@ -20,6 +20,9 @@ dependencies:
   '@graphql-codegen/typescript-resolvers':
     specifier: 4.0.1
     version: 4.0.1(graphql@16.6.0)
+  '@graphql-tools/merge':
+    specifier: ^9.0.0
+    version: 9.0.0(graphql@16.6.0)
   '@types/node':
     specifier: ^18.16.18
     version: 18.16.18
