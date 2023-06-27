@@ -16,12 +16,6 @@ devcontainer:
         content: |
           #!/bin/bash
           java -jar /opt/karate.jar "$@"
-      - type: script
-        path: /test.sh
-        content: |
-          #!/bin/bash
-          set -e
-          karate -T 1 .
   environment:
     REST_API: http://traefik:3000
 vscode:

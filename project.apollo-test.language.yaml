@@ -3,12 +3,6 @@ devcontainer:
   build:
     user:
       - RUN npm install -g prettier pnpm
-    files:
-      - type: script
-        path: /test.sh
-        content: |
-          #!/bin/bash
-          exec npm run test
   initialize: |
     rm -Rf node_modules
     pnpm install

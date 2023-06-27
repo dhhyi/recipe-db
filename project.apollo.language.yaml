@@ -2,7 +2,7 @@ extends: dcc://javascript
 devcontainer:
   build:
     user:
-      - RUN npm install -g prettier pnpm
+      - RUN npm install -g pnpm
   initialize: |
     rm -Rf node_modules
     pnpm install

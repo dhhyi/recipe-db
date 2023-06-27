@@ -1,5 +1,0 @@
-.devcontainer
-.vscode
-pnpm-lock.yaml
-
-src/generated

@@ -1,17 +1,9 @@
 const fs = require("fs");
 const cp = require("child_process");
 const path = require("path");
+const { getAvailableProjects, languageFile, projectRoot } = require("./shared");
 
-const regex = /^project\.([\w-]+)\.language\.yaml$/;
-
-function languageFile(project) {
-  return `project.${project}.language.yaml`;
-}
-
-const availableProjects = fs
-  .readdirSync(__dirname)
-  .filter((file) => regex.test(file))
-  .map((file) => regex.exec(file)[1]);
+const availableProjects = getAvailableProjects();
 const availableDeployProjects = availableProjects.filter(
   (project) => !project.endsWith("-test")
 );
@@ -34,9 +26,11 @@ if (DEV) {
   );
   devProjects.push(...requestedDevProjects);
 
-  console.log(
-    `Setting up VSCode attaching for ${requestedDevProjects.join(", ")}...`
-  );
+  if (devProjects.length > 0) {
+    console.log(
+      `Setting up VSCode attaching for ${requestedDevProjects.join(", ")}...`
+    );
+  }
 }
 
 const yaml = require("js-yaml");
@@ -98,17 +92,6 @@ if (PROD) {
 dockerCompose.services.traefik = traefik;
 
 availableProjects.forEach((project) => {
-  console.log(`Synchronizing ${project}...`);
-  let commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${languageFile(
-    project
-  )} ${project} --no-vscode`;
-
-  if (devProjects.includes(project)) {
-    commandLine += "  --dump-meta";
-  }
-
-  cp.execSync(commandLine, { cwd: __dirname, stdio: "inherit" });
-
   if (!availableDeployProjects.includes(project)) {
     return;
   }
@@ -133,7 +116,7 @@ availableProjects.forEach((project) => {
   }
 
   const languageYaml = yaml.load(
-    fs.readFileSync(path.join(__dirname, languageFile(project)), "utf-8")
+    fs.readFileSync(path.join(projectRoot, languageFile(project)), "utf-8")
   );
   if (languageYaml.traefik?.labels) {
     service.labels.push("traefik.enable=true");
@@ -152,12 +135,12 @@ availableProjects.forEach((project) => {
   if (devProjects.includes(project)) {
     // add container env from meta for VSCode container attach
     const devcontainerMetaPath = path.join(
-      __dirname,
+      projectRoot,
       project,
       ".devcontainer_meta.json"
     );
     const devcontainerDockerfilePath = path.join(
-      __dirname,
+      projectRoot,
       project,
       ".devcontainer",
       "Dockerfile"
@@ -221,7 +204,7 @@ availableProjects.forEach((project) => {
 
 console.log("Writing docker-compose.yml...");
 fs.writeFileSync(
-  __dirname + "/docker-compose.yml",
+  path.join(projectRoot, "docker-compose.yml"),
   yaml.dump(dockerCompose, {
     quotingType: '"',
     forceQuotes: false,

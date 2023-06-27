@@ -2,8 +2,8 @@ package main
 
 import (
 	"log"
-	"time"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )

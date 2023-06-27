@@ -1,12 +1,15 @@
 FROM debian:12 as builder
 
-RUN apt-get update && apt-get install -y build-essential git cmake
+RUN apt-get update \
+  && apt-get install -y build-essential git cmake
 
 ARG IO_VERSION=master
 ENV HOME=/home/io
 
 RUN git clone -b ${IO_VERSION} --single-branch --depth 1 --recursive https://github.com/IoLanguage/io.git /tmp/io
-RUN cd /tmp/io && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=${HOME}/.local .. && make && make install
+RUN cd /tmp/io && mkdir build && cd build \
+  && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=${HOME}/.local .. \
+  && make && make install
 
 ENV PATH=${PATH}:${HOME}/.local/bin:${HOME}/.eerie/base/bin
 ENV LD_LIBRARY_PATH=${HOME}/.local/lib
@@ -31,13 +34,13 @@ COPY --from=builder /home/io/.local/lib /usr/lib
 COPY --from=builder /home/io/.eerie /home/io/.eerie
 COPY --from=builder /installed_packages /installed_packages
 
+# && apt-get install -y libpcre3 \
 FROM debian:12-slim
-RUN apt-get update && apt-get install -y \
-# libpcre3 \
-libevent-2.1-7 \
-libsqlite3-0 \
-&& apt-get clean && rm -rf /var/lib/apt/lists/* && \
-useradd -Ms /bin/false io
+RUN apt-get update \
+  && apt-get install -y libevent-2.1-7 \
+  && apt-get install -y libsqlite3-0 \
+  && apt-get clean && rm -rf /var/lib/apt/lists/* \
+  && useradd -Ms /bin/false io
 
 USER io
 

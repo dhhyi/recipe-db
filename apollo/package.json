@@ -3,10 +3,29 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "format": "prettier --write .",
+    "lint-schema": "graphql-schema-linter",
+    "lint": "npm run lint-schema",
     "codegen": "graphql-codegen --config codegen.ts",
     "build": "npm run codegen && tsc --noEmit && node build.mjs",
-    "start": "npm run build && node ./dist/index.cjs"
+    "start": "npm run build && node ./dist/index.cjs",
+    "precommit": "npm run lint && npm run build"
+  },
+  "graphql-schema-linter": {
+    "rules": [
+      "defined-types-are-used",
+      "deprecations-have-a-reason",
+      "enum-values-all-caps",
+      "enum-values-sorted-alphabetically",
+      "fields-are-camel-cased",
+      "input-object-values-are-camel-cased",
+      "interface-fields-sorted-alphabetically",
+      "type-fields-sorted-alphabetically",
+      "types-are-capitalized"
+    ],
+    "schemaPaths": [
+      "src/typedefs.gql",
+      "src/*/typedefs.gql"
+    ]
   },
   "dependencies": {
     "@apollo/datasource-rest": "^6.0.1",
