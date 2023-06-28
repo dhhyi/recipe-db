@@ -19,7 +19,11 @@ if (!project) {
 let containerId = null;
 
 try {
-  const output = cp.execSync(`devcontainer up --workspace-folder ${project}`, {
+  let commandLine = `devcontainer up --workspace-folder ${project}`;
+  if (process.env.PRE_COMMIT) {
+    commandLine += " --remove-existing-container";
+  }
+  const output = cp.execSync(commandLine, {
     stdio: ["ignore", "pipe", "inherit"],
     encoding: "utf-8",
   });

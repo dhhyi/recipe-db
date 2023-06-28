@@ -1,12 +1,13 @@
 import type { QueryResolvers, Resolvers } from "../generated/graphql.js";
+
 import type { RecipesContext } from "./context.js";
 
 const Query: QueryResolvers<RecipesContext> = {
   recipes: async (_source, _args, { recipesAPI }) => {
-    return recipesAPI.getRecipes();
+    return await recipesAPI.getRecipes();
   },
   recipe: async (_source, { id }, { recipesAPI }) => {
-    return recipesAPI.getRecipe(id);
+    return await recipesAPI.getRecipe(id);
   },
 };
 

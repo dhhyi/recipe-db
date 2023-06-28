@@ -1,6 +1,6 @@
-import { type ExecutionResult, print } from "graphql";
+import { type TypedDocumentNode } from "@graphql-typed-document-node/core";
 import axios from "axios";
-import { TypedDocumentNode } from "@graphql-typed-document-node/core";
+import { type ExecutionResult, print } from "graphql";
 
 export async function executeOperation<TResult, TVariables>(
   operation: TypedDocumentNode<TResult, TVariables>,

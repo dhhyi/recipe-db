@@ -4,4 +4,4 @@ export const recipesTypeDefs: string = require("./typedefs.gql");
 
 export { recipesResolvers } from "./resolvers.js";
 
-export { recipesContext, RecipesContext } from "./context.js";
+export { recipesContext, type RecipesContext } from "./context.js";

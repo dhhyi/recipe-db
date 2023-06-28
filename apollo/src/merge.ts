@@ -1,18 +1,17 @@
 import { mergeResolvers, mergeTypeDefs } from "@graphql-tools/merge";
 
-import { Resolvers } from "./generated/graphql.js";
-
+import { type Resolvers } from "./generated/graphql.js";
 import {
   ratingsTypeDefs,
   ratingsResolvers,
   ratingsContext,
-  RatingsContext,
+  type RatingsContext,
 } from "./ratings/index.js";
 import {
   recipesTypeDefs,
   recipesResolvers,
   recipesContext,
-  RecipesContext,
+  type RecipesContext,
 } from "./recipes/index.js";
 
 export const typeDefs = mergeTypeDefs([

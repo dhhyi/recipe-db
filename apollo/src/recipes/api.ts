@@ -1,5 +1,6 @@
 import { RESTDataSource } from "@apollo/datasource-rest";
-import { Recipe } from "../generated/graphql.js";
+
+import { type Recipe } from "../generated/graphql.js";
 
 export class RecipesAPI extends RESTDataSource {
   constructor() {
@@ -8,10 +9,10 @@ export class RecipesAPI extends RESTDataSource {
   }
 
   async getRecipes(): Promise<Recipe[]> {
-    return this.get("");
+    return await this.get("");
   }
 
   async getRecipe(id: string): Promise<Recipe> {
-    return this.get(id);
+    return await this.get(id);
   }
 }

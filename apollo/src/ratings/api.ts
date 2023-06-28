@@ -1,5 +1,6 @@
 import { RESTDataSource } from "@apollo/datasource-rest";
-import { Rating } from "../generated/graphql.js";
+
+import { type Rating } from "../generated/graphql.js";
 
 export class RatingsAPI extends RESTDataSource {
   constructor() {
@@ -8,20 +9,20 @@ export class RatingsAPI extends RESTDataSource {
   }
 
   async deleteRatingsForTesting(): Promise<boolean> {
-    return this.delete("").then(() => {
+    return await this.delete("").then(() => {
       return true;
     });
   }
 
   async getRating(id: string): Promise<Rating> {
-    return this.get(id).then((rating) => ({
+    return await this.get(id).then((rating) => ({
       average: rating.rating,
       count: rating.count,
     }));
   }
 
   async addRating(id: string, rating: number, login: string): Promise<number> {
-    return this.put(id, {
+    return await this.put(id, {
       body: `rating=${rating}&login=${login}`,
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -29,7 +30,7 @@ export class RatingsAPI extends RESTDataSource {
     }).then((rating) => rating.rating);
   }
 
-  parseBody(response) {
+  parseBody(response): any {
     if (response.status >= 400) {
       return response.text();
     } else if (response.status === 204) {
