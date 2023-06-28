@@ -1,4 +1,4 @@
-    @parallel=false
+@parallel=false
 Feature: All Ratings Endpoint
 
   Background:

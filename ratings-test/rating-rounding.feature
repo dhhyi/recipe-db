@@ -1,4 +1,4 @@
-    @parallel=false
+@parallel=false
 Feature: Rounding Ratings
 
   Background:

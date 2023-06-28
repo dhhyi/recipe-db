@@ -1,4 +1,4 @@
-    @parallel=false
+@parallel=false
 Feature: Basic test for setting errornous ratings
 
   Background:

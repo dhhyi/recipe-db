@@ -10,6 +10,8 @@ devcontainer:
     root:
       - ADD https://github.com/karatelabs/karate/releases/download/v${KARATE_VERSION}/karate-${KARATE_VERSION}.jar /opt/karate.jar
       - RUN chmod +rx /opt/karate.jar
+      - ADD https://github.com/antham/ghokin/releases/download/v3.4.0/ghokin_3.4.0_linux_amd64.tar.gz /tmp/ghokin.tar.gz
+      - RUN tar -xzf /tmp/ghokin.tar.gz -C /tmp && mv /tmp/ghokin /usr/local/bin/ghokin && chmod +rx /usr/local/bin/ghokin
     files:
       - type: script
         path: /usr/local/bin/karate
