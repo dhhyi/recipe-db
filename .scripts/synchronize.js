@@ -77,7 +77,7 @@ function writePrettierIgnores(availableProjects) {
 function writeDccFiles(availableProjects) {
   availableProjects.forEach((project) => {
     console.log(`Writing Devcontainer in ${project} ...`);
-    let commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${languageFile(
+    const commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${languageFile(
       project
     )} ${project} --no-vscode --dump-meta`;
 

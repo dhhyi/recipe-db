@@ -24,6 +24,16 @@ globSync("**/.prettierignore")
     });
   });
 
+// add eslint task for root scripts
+tasks.push({
+  dir: path.basename(scriptRoot),
+  command: "npx eslint " + scriptRoot,
+  message: "Running 'eslint' in " + path.basename(scriptRoot),
+  container: false,
+  priority: 5,
+  run: defaultRun,
+});
+
 // calculate pre-commit in devcontainers
 getAvailableProjects().forEach((dir) => {
   if (fs.existsSync(path.join(projectRoot, dir, "precommit.sh"))) {
@@ -32,7 +42,7 @@ getAvailableProjects().forEach((dir) => {
       command: "sh -e precommit.sh",
       message: "Running 'precommit.sh' in " + dir,
       container: true,
-      priority: 3,
+      priority: 10,
       run: defaultRun,
     });
   } else {
@@ -49,7 +59,7 @@ getAvailableProjects().forEach((dir) => {
           command: "npm run precommit",
           message: "Running 'npm run precommit' in " + dir,
           container: true,
-          priority: 3,
+          priority: 10,
           run: defaultRun,
         });
       }
@@ -102,7 +112,7 @@ tasks
     }
   });
 
-changedFiles = cp
+const changedFiles = cp
   .execSync("git diff --name-only", { encoding: "utf8" })
   .split("\n")
   .filter((file) => file.length > 0);
