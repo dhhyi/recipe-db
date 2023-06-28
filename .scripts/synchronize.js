@@ -91,8 +91,27 @@ function writeDccFiles(availableProjects) {
   });
 }
 
+function writeHideFiles(availableProjects) {
+  const vscodeSettings = {
+    "files.exclude": availableProjects.reduce(
+      (acc, project) => ({
+        ...acc,
+        [`${project}`]: true,
+      }),
+      {}
+    ),
+  };
+  console.log(`Writing .vscode/settings.json ...`);
+  fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, ".vscode/settings.json"),
+    JSON.stringify(vscodeSettings, null, 2)
+  );
+}
+
 const availableProjects = getAvailableProjects();
 
 searchForForbiddenFiles(availableProjects);
 writePrettierIgnores(availableProjects);
 writeDccFiles(availableProjects);
+writeHideFiles(availableProjects);
