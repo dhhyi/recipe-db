@@ -35,7 +35,7 @@ func getRecipe(id string) (bool, Recipe) {
 	case "1":
 		return true, Recipe{ID: "1", Name: "Rice Pudding"}
 	case "2":
-		return true, Recipe{ID: "2", Name: "Beatroot Soup"}
+		return true, Recipe{ID: "2", Name: "Beetroot Soup"}
 	case "3":
 		return true, Recipe{ID: "3", Name: "Bean Stew"}
 	}

@@ -1,0 +1,22 @@
+name: Recipes CRUD
+
+testcases:
+  - name: Get first recipe
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes/1"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual 1
+          - result.bodyjson.name ShouldEqual Rice Pudding
+
+  - name: Get second recipe
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes/2"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.id ShouldEqual 2
+          - result.bodyjson.name ShouldEqual Beetroot Soup
