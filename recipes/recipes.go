@@ -6,6 +6,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	c "github.com/ostafen/clover/v2"
+	d "github.com/ostafen/clover/v2/document"
+	q "github.com/ostafen/clover/v2/query"
 )
 
 func Logger() gin.HandlerFunc {
@@ -25,30 +29,72 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
-type Recipe struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+func initDB() *c.DB {
+	if _, err := os.Stat("./db"); os.IsNotExist(err) {
+		log.Println("Creating db directory")
+		os.Mkdir("db", 0755)
+	}
+	db, error := c.Open("db")
+	if error != nil {
+		log.Fatal(error)
+		os.Exit(1)
+	}
+
+	hasColl, error := db.HasCollection("recipes")
+	if error != nil {
+		log.Fatal(error)
+		os.Exit(1)
+	}
+
+	if !hasColl {
+		log.Println("Creating recipes collection")
+		db.CreateCollection("recipes")
+	} else {
+		count, _ := db.Count(q.NewQuery("recipes"))
+		log.Printf("Recipes collection already exists with %d documents", count)
+	}
+
+	return db
 }
 
-func getRecipe(id string) (bool, Recipe) {
-	switch id {
-	case "1":
-		return true, Recipe{ID: "1", Name: "Rice Pudding"}
-	case "2":
-		return true, Recipe{ID: "2", Name: "Beetroot Soup"}
-	case "3":
-		return true, Recipe{ID: "3", Name: "Bean Stew"}
+type Recipe = map[string]interface{}
+
+func docToRecipe(doc *d.Document) Recipe {
+	recipe := Recipe{}
+	doc.Unmarshal(&recipe)
+	recipe["id"] = doc.ObjectId()
+	return recipe
+}
+
+func getRecipe(db *c.DB, id string) (bool, Recipe) {
+	doc, err := db.FindById("recipes", id)
+
+	if doc == nil || err != nil {
+		return false, Recipe{}
+	} else {
+		return true, docToRecipe(doc)
 	}
-	return false, Recipe{}
+}
+
+func getAllRecipes(db *c.DB) *[]Recipe {
+	docs, _ := db.FindAll(q.NewQuery("recipes"))
+	recipes := []Recipe{}
+	for _, doc := range docs {
+		recipes = append(recipes, docToRecipe(doc))
+	}
+	return &recipes
 }
 
 func main() {
+
 	r := gin.New()
 	r.Use(Logger())
 
+	db := initDB()
+
 	r.GET("/recipes/:id", func(c *gin.Context) {
 		id := c.Param("id")
-		found, recipe := getRecipe(id)
+		found, recipe := getRecipe(db, id)
 		if !found {
 			c.JSON(404, gin.H{"message": "Recipe not found"})
 			return
@@ -56,12 +102,69 @@ func main() {
 		c.JSON(200, recipe)
 	})
 
+	if os.Getenv("TESTING") == "true" {
+		r.DELETE("/recipes", func(c *gin.Context) {
+			db.Delete(q.NewQuery("recipes"))
+			c.Status(204)
+		})
+	}
+
 	r.GET("/recipes", func(c *gin.Context) {
-		_, x1 := getRecipe("1")
-		_, x2 := getRecipe("2")
-		_, x3 := getRecipe("3")
-		recipes := []Recipe{x1, x2, x3}
-		c.JSON(200, recipes)
+		c.JSON(200, getAllRecipes(db))
+	})
+
+	r.POST("/recipes", func(c *gin.Context) {
+		recipe := make(map[string]interface{})
+		err := c.BindJSON(&recipe)
+		if err != nil {
+			c.JSON(400, gin.H{"message": "Invalid JSON"})
+			log.Printf("Error: %s", err)
+			return
+		}
+		if recipe["id"] != nil {
+			c.JSON(400, gin.H{"message": "Reserved field: id"})
+			return
+		}
+
+		doc := d.NewDocumentOf(recipe)
+		id, _ := db.InsertOne("recipes", doc)
+		_, recipe = getRecipe(db, id)
+		c.JSON(201, recipe)
+	})
+
+	r.PATCH("/recipes/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		found, _ := getRecipe(db, id)
+		if !found {
+			c.JSON(404, gin.H{"message": "Recipe not found"})
+			return
+		}
+		recipe := make(map[string]interface{})
+		err := c.BindJSON(&recipe)
+		if err != nil {
+			c.JSON(400, gin.H{"message": "Invalid JSON"})
+			log.Printf("Error: %s", err)
+			return
+		}
+		if recipe["id"] != nil {
+			c.JSON(400, gin.H{"message": "Reserved field: id"})
+			return
+		}
+
+		db.UpdateById("recipes", id, func(doc *d.Document) *d.Document {
+			doc.SetAll(recipe)
+			return doc
+		})
+	})
+
+	r.DELETE("/recipes/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		err := db.DeleteById("recipes", id)
+		if err != nil {
+			c.JSON(404, gin.H{"message": "Recipe not found"})
+			return
+		}
+		c.Status(204)
 	})
 
 	log.Println("Starting server on port 5000")
@@ -71,4 +174,5 @@ func main() {
 	}
 
 	r.Run("0.0.0.0:5000")
+	defer db.Close()
 }

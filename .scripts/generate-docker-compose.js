@@ -195,6 +195,18 @@ availableProjects.forEach((project) => {
         service.volumes.push("./ratings/db.sqlite:/app/db.sqlite");
       }
       break;
+    case "recipes":
+      if (PROD) {
+        if (!service.volumes) {
+          service.volumes = [];
+        }
+        if (!fs.existsSync("./recipes/db/data.db")) {
+          cp.execSync("mkdir -p ./recipes/db");
+          cp.execSync("touch ./recipes/db/data.db");
+        }
+        service.volumes.push("./recipes/db:/app/db");
+      }
+      break;
     default:
       break;
   }

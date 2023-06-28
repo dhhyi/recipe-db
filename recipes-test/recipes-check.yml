@@ -1,0 +1,53 @@
+name: Recipes Sanity Check
+
+testcases:
+  - name: Clear recipes
+    steps:
+      - type: http
+        method: DELETE
+        url: "{{.REST_API}}/recipes"
+        assertions:
+          - result.statuscode ShouldEqual 204
+
+  - name: Sending id field with POST should fail
+    steps:
+      - type: http
+        method: POST
+        url: "{{.REST_API}}/recipes"
+        body: |
+          {
+            "id": "123",
+            "name": "Rice Pudding",
+            "servings": 4
+          }
+        assertions:
+          - result.statuscode ShouldEqual 400
+
+  - name: Add recipe
+    steps:
+      - type: http
+        method: POST
+        url: "{{.REST_API}}/recipes"
+        body: |
+          {
+            "name": "Rice Pudding",
+            "servings": 4
+          }
+        assertions:
+          - result.statuscode ShouldEqual 201
+        vars:
+          recipeId:
+            from: result.bodyjson.id
+
+  - name: Sending id field with PATCH should fail
+    steps:
+      - type: http
+        method: PATCH
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        body: |
+          {
+            "id": "123",
+            "servings": 6
+          }
+        assertions:
+          - result.statuscode ShouldEqual 400
