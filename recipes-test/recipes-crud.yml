@@ -1,22 +1,107 @@
 name: Recipes CRUD
 
 testcases:
-  - name: Get first recipe
+  - name: Clear recipes
     steps:
       - type: http
-        method: GET
-        url: "{{.REST_API}}/recipes/1"
+        method: DELETE
+        url: "{{.REST_API}}/recipes"
         assertions:
-          - result.statuscode ShouldEqual 200
-          - result.bodyjson.id ShouldEqual 1
-          - result.bodyjson.name ShouldEqual Rice Pudding
+          - result.statuscode ShouldEqual 204
 
-  - name: Get second recipe
+  - name: Get recipes
     steps:
       - type: http
         method: GET
-        url: "{{.REST_API}}/recipes/2"
+        url: "{{.REST_API}}/recipes"
         assertions:
           - result.statuscode ShouldEqual 200
-          - result.bodyjson.id ShouldEqual 2
-          - result.bodyjson.name ShouldEqual Beetroot Soup
+          - result.body ShouldEqual []
+
+  - name: Add recipe
+    steps:
+      - type: http
+        method: POST
+        url: "{{.REST_API}}/recipes"
+        body: |
+          {
+            "name": "Rice Pudding",
+            "servings": 4
+          }
+        assertions:
+          - result.statuscode ShouldEqual 201
+        vars:
+          recipeId:
+            from: result.bodyjson.id
+
+  - name: Get all recipes
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson ShouldHaveLength 1
+          - result.bodyjson.bodyjson0.name ShouldEqual Rice Pudding
+
+  - name: Get recipe by id
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.name ShouldEqual Rice Pudding
+          - result.bodyjson.servings ShouldEqual 4
+
+  - name: Update recipe
+    steps:
+      - type: http
+        method: PATCH
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        body: |
+          {
+            "name": "Rice Pudding with Cinnamon",
+            "steps": [
+              "Make the rice pudding",
+              "Add the cinnamon"
+            ]
+          }
+        assertions:
+          - result.statuscode ShouldEqual 200
+
+  - name: Get recipe by id again
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.name ShouldEqual Rice Pudding with Cinnamon
+          - result.bodyjson.servings ShouldEqual 4
+          - result.bodyjson.steps ShouldHaveLength 2
+
+  - name: Delete recipe
+    steps:
+      - type: http
+        method: DELETE
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        assertions:
+          - result.statuscode ShouldEqual 204
+
+  - name: Get recipe by id again to check it doesnt exist anymore
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        assertions:
+          - result.statuscode ShouldEqual 404
+
+  - name: Get all recipes again to check it doesnt exist anymore
+    steps:
+      - type: http
+        method: GET
+        url: "{{.REST_API}}/recipes"
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.body ShouldEqual []
