@@ -1,4 +1,4 @@
-    @parallel=false
+@parallel=false
 Feature: Rating Progression
 
   Background:
