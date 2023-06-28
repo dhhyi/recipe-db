@@ -3,9 +3,7 @@ devcontainer:
   build:
     user:
       - RUN npm install -g prettier pnpm
-  initialize: |
-    rm -Rf node_modules
-    pnpm install
+  initialize: pnpm install
   ports:
     - 4000
   environment:
