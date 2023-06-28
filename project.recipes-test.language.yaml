@@ -1,0 +1,20 @@
+language:
+  name: venom
+  binary: venom
+  version: venom version
+devcontainer:
+  build:
+    root:
+      - ADD --chmod=711 https://github.com/ovh/venom/releases/download/v1.1.0/venom.linux-amd64 /usr/local/bin/venom
+  environment:
+    REST_API: http://traefik:3000
+vscode:
+  settings:
+    peacock.remoteColor: "#430611"
+  extensions:
+    - johnpapa.vscode-peacock
+    - thiht.vscode-venom
+extras:
+  - traefik
+traefik:
+  network: intranet
