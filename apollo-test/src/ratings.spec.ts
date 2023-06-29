@@ -1,5 +1,5 @@
 import {
-  DeleteForTestingDocument,
+  DeleteRatingsForTestingDocument,
   RateMutationDocument,
   RatingByIdQueryDocument,
 } from "./generated/graphql";
@@ -7,7 +7,7 @@ import { executeOperation } from "./helpers";
 
 describe("ratings", () => {
   beforeEach(async () => {
-    await executeOperation(DeleteForTestingDocument);
+    await executeOperation(DeleteRatingsForTestingDocument);
   });
 
   it("should have no rating", async () => {

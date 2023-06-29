@@ -1,0 +1,9 @@
+query IntegrationAllRecipesQuery {
+  recipes {
+    name
+    rating {
+      average
+      count
+    }
+  }
+}

@@ -4,7 +4,7 @@
   "scripts": {
     "codegen": "graphql-codegen --config codegen.ts && tsc --noEmit",
     "lint": "eslint .",
-    "test": "npm run codegen && jest --ci",
+    "test": "npm run codegen && jest --ci --runInBand",
     "precommit": "PRE_COMMIT=1 npm run codegen && npm run lint -- --fix"
   },
   "dependencies": {
