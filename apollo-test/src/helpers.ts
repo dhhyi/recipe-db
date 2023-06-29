@@ -20,7 +20,7 @@ export async function executeOperation<TResult, TVariables>(
   });
   const data = response.data;
   if (data.errors) {
-    throw data.errors;
+    throw new Error(JSON.stringify(data.errors, null, 2));
   }
   return data.data;
 }

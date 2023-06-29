@@ -7,3 +7,11 @@ extend type Query {
   recipe(id: ID!): Recipe
   recipes: [Recipe]
 }
+
+extend type Mutation {
+  deleteRecipesForTesting: Boolean
+
+  createRecipe(value: JSON!): Recipe
+  updateRecipe(id: ID!, value: JSON): Recipe
+  deleteRecipe(id: ID!): Boolean
+}

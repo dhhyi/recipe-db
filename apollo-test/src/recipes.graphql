@@ -1,0 +1,31 @@
+query AllRecipesQuery {
+  recipes {
+    id
+    name
+  }
+}
+
+query RecipeByIdQuery($id: ID!) {
+  recipe(id: $id) {
+    id
+    name
+  }
+}
+
+mutation CreateRecipeMutation($value: JSON!) {
+  createRecipe(value: $value) {
+    id
+    name
+  }
+}
+
+mutation UpdateRecipeMutation($id: ID!, $value: JSON!) {
+  updateRecipe(id: $id, value: $value) {
+    id
+    name
+  }
+}
+
+mutation DeleteRecipeMutation($id: ID!) {
+  deleteRecipe(id: $id)
+}

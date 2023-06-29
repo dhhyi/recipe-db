@@ -128,6 +128,7 @@ func main() {
 
 		doc := d.NewDocumentOf(recipe)
 		id, _ := db.InsertOne("recipes", doc)
+
 		_, recipe = getRecipe(db, id)
 		c.JSON(201, recipe)
 	})
@@ -155,15 +156,19 @@ func main() {
 			doc.SetAll(recipe)
 			return doc
 		})
+
+		_, recipe = getRecipe(db, id)
+		c.JSON(200, recipe)
 	})
 
 	r.DELETE("/recipes/:id", func(c *gin.Context) {
 		id := c.Param("id")
-		err := db.DeleteById("recipes", id)
-		if err != nil {
+		doc, _ := db.FindById("recipes", id)
+		if doc == nil {
 			c.JSON(404, gin.H{"message": "Recipe not found"})
 			return
 		}
+		db.DeleteById("recipes", id)
 		c.Status(204)
 	})
 
