@@ -10,12 +10,26 @@ const args = process.argv.slice(2);
 const defaultRun = args.some((a) => a.includes("all"));
 const verbose = args.some((a) => a.includes("verbose")) || args.includes("-v");
 
+// generate merged schema
+tasks.push({
+  execDir: ".",
+  command: "node .scripts/merge-graphql-schemas.js",
+  dependentDir: globSync("*/.needs-graphql-schema").map((dir) =>
+    path.dirname(dir)
+  ),
+  message: "Running 'merge-graphql-schemas'",
+  container: false,
+  priority: 100,
+  run: defaultRun,
+});
+
 // add prettier tasks
 globSync("**/.prettierignore")
   .map((file) => path.dirname(file))
   .forEach((dir) => {
     tasks.push({
-      dir,
+      execDir: dir,
+      dependentDir: [dir],
       command: "npx prettier --write .",
       message: "Running 'prettier' in " + dir,
       container: false,
@@ -26,7 +40,8 @@ globSync("**/.prettierignore")
 
 // add eslint task for root scripts
 tasks.push({
-  dir: path.basename(scriptRoot),
+  execDir: path.basename(scriptRoot),
+  dependentDir: [path.basename(scriptRoot)],
   command: "npx eslint " + scriptRoot,
   message: "Running 'eslint' in " + path.basename(scriptRoot),
   container: false,
@@ -38,7 +53,8 @@ tasks.push({
 getAvailableProjects().forEach((dir) => {
   if (fs.existsSync(path.join(projectRoot, dir, "precommit.sh"))) {
     tasks.push({
-      dir,
+      execDir: dir,
+      dependentDir: [dir],
       command: "sh -e precommit.sh",
       message: "Running 'precommit.sh' in " + dir,
       container: true,
@@ -55,7 +71,8 @@ getAvailableProjects().forEach((dir) => {
       );
       if (packageJson.scripts?.precommit) {
         tasks.push({
-          dir,
+          execDir: dir,
+          dependentDir: [dir],
           command: "npm run precommit",
           message: "Running 'npm run precommit' in " + dir,
           container: true,
@@ -69,7 +86,7 @@ getAvailableProjects().forEach((dir) => {
 
 tasks.sort((a, b) => {
   if (a.priority === b.priority) {
-    return a.dir.localeCompare(b.dir);
+    return a.execDir.localeCompare(b.execDir);
   }
   return b.priority - a.priority;
 });
@@ -82,9 +99,13 @@ const stagedFiles = cp
   .filter((file) => file.length > 0);
 
 tasks.forEach((task) => {
-  if (task.dir === "." && stagedFiles.length > 0) {
+  if (task.dependentDir.some((dir) => dir === ".") && stagedFiles.length > 0) {
     task.run = true;
-  } else if (stagedFiles.some((file) => file.startsWith(task.dir + "/"))) {
+  } else if (
+    stagedFiles.some((file) =>
+      task.dependentDir.some((dir) => file.startsWith(dir + "/"))
+    )
+  ) {
     task.run = true;
   }
 });
@@ -100,13 +121,12 @@ tasks
 
     try {
       if (task.container) {
-        const commandLine = `node ${scriptRoot}/run-in-devcontainer.js ${task.dir} ${task.command}`;
+        const commandLine = `node ${scriptRoot}/run-in-devcontainer.js ${task.execDir} ${task.command}`;
         cp.execSync(commandLine, { stdio });
       } else {
-        cp.execSync(`${task.command}`, { cwd: task.dir, stdio });
+        cp.execSync(`${task.command}`, { cwd: task.execDir, stdio });
       }
     } catch (error) {
-      console.log(error.output?.join(""));
       console.error(error.message);
       process.exit(1);
     }
