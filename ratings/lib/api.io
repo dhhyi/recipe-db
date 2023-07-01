@@ -1,3 +1,5 @@
+Regex clone
+
 RESTAPI := Object clone
 
 RESTAPI get := method(request,
@@ -51,27 +53,33 @@ RESTAPI delete := method(request,
     return request errorMethodNotAllowed
 )
 
-RESTAPI routeRequest := method(httpData,
-    // "---------------" println
-    // httpData println
-    // "---------------" println
-
-    request := Request parse(httpData)
-
-    methodAndPath := httpData split("\n") at(0)
-    payload := httpData split("\r\n\r\n") at(1)
-
-    if (request at("method") != nil,
-        httpMethod := request at("method")
-
-        writeln(httpMethod .. " " .. request prettyPath)
-
-        if (self getSlot(httpMethod asLowercase) == nil,
-            return request errorMethodNotAllowed,
-            return self getSlot(httpMethod asLowercase) call(request)
-        )
+RESTAPI routeRequest := method(request,
+    httpMethod := request at("method") asLowercase
+    if (self getSlot(httpMethod) == nil,
+        return request errorMethodNotAllowed,
+        return self getSlot(httpMethod) call(request)
     )
-    return nil
+)
+
+RESTAPI parseRequest := method(aSocket,
+    requestData := aSocket readUntilSeq("\r\n\r\n")
+
+    header := requestData split("\r\n") at(0) split(" ")
+    httpMethod := header at(0)
+
+    request := Request clone
+    request setMethod (httpMethod)
+    request setPath (header at(1))
+
+    contentLengthRegex := "Content-Length: (\\d+)" asRegex
+    contentLength := requestData allMatchesOfRegex(contentLengthRegex)
+    if (contentLength size > 0,
+        contentLength := contentLength at(0) at(1) asNumber
+        payload := aSocket readBytes(contentLength)
+        request setPayload (payload asString)
+    )
+
+    return request
 )
 
 RESTAPI handleSocketFromServer := method(aSocket, aServer, db,
@@ -83,15 +91,16 @@ RESTAPI handleSocketFromServer := method(aSocket, aServer, db,
     )
 
     while(aSocket isOpen,
-        if (aSocket read,
-            e := try(
-                data := routeRequest(aSocket readBuffer asString)
-                if (data != nil, aSocket write(data))
-            )
-            e catch(Exception,
-                writeln("Exception: " .. e showStack)
-                aSocket write(Request errorInternalServerError)
-            )
+        request := parseRequest(aSocket)
+        writeln(request at("method") .. " " .. request prettyPath)
+
+        e := try(
+            data := routeRequest(request)
+            if (data != nil, aSocket write(data))
+        )
+        e catch(Exception,
+            writeln("Exception: " .. e showStack)
+            aSocket write(Request errorInternalServerError)
         )
 
         aSocket readBuffer empty

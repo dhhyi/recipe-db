@@ -1,29 +1,19 @@
 Request := Map clone
 
-Request parse := method(httpData,
+Request setMethod := method(method,
+    self atPut("method", method)
+)
 
-    request := Request clone
+Request setPath := method(path,
+    self atPut("path", path split("/") slice(1))
+)
 
-    methodAndPath := httpData split("\n") at(0)
-    payload := httpData split("\r\n\r\n") at(1)
+Request setQuery := method(query,
+    self atPut("query", CGI parseString(query))
+)
 
-    if (methodAndPath != nil,
-        httpMethod := methodAndPath split(" ") at(0)
-
-        request atPut("method", httpMethod)
-
-        path := methodAndPath split(" ") at(1) split("?") at(0)
-        request atPut("path", path split("/") slice(1))
-
-        query := methodAndPath split(" ") at(1) split("?") at(1)
-        request atPut("query", CGI parseString(query))
-
-        if (payload != nil,
-            request atPut("payload", CGI parseString(payload))
-        )
-    )
-
-    return request
+Request setPayload := method(payload,
+    self atPut("payload", CGI parseString(payload))
 )
 
 Request prettyPath := method(
