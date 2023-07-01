@@ -11,6 +11,8 @@ devcontainer:
   initialize: go mod download -x
   ports:
     - 5000
+  environment:
+    TESTING: "true"
 vscode:
   settings:
     peacock.remoteColor: "#730e31"

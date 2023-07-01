@@ -9,6 +9,8 @@ devcontainer:
       - RUN eerie install https://github.com/IoLanguage/SQLite3.git
   ports:
     - 8456
+  environment:
+    TESTING: "true"
 vscode:
   settings:
     peacock.remoteColor: "#13520a"

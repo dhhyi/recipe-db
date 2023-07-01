@@ -7,6 +7,7 @@ devcontainer:
   ports:
     - 4000
   environment:
+    TESTING: "true"
     REST_ENDPOINT: http://traefik:3000
 vscode:
   settings:
