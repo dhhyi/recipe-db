@@ -1,0 +1,20 @@
+extends: dcc://python
+devcontainer:
+  build:
+    user:
+      - RUN pip install ariadne-codegen --break-system-packages
+      - ENV PATH="${HOME}/.local/bin:${PATH}"
+vscode:
+  settings:
+    peacock.remoteColor: "#000000"
+    python.formatting.provider: none
+    "[python]":
+      editor.defaultFormatter: ms-python.black-formatter
+  extensions:
+    - johnpapa.vscode-peacock
+    - GraphQL.vscode-graphql
+    - ms-python.black-formatter
+extras:
+  - traefik
+traefik:
+  network: intranet
