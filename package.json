@@ -8,6 +8,8 @@
     "test-project": "node .scripts/test-project.js"
   },
   "devDependencies": {
+    "@graphql-tools/load-files": "^7.0.0",
+    "@graphql-tools/merge": "^9.0.0",
     "eslint": "^8.0.1",
     "eslint-config-prettier": "^8.8.0",
     "eslint-config-standard": "^17.1.0",

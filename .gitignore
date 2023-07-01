@@ -16,3 +16,4 @@ package-lock.json
 .devcontainer_meta.json
 .prettierignore
 docker-compose.yml
+merged-schema.graphql

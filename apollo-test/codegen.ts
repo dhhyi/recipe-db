@@ -3,7 +3,7 @@ import type { CodegenConfig } from "@graphql-codegen/cli";
 const config: CodegenConfig = {
   overwrite: true,
   schema: process.env.PRE_COMMIT
-    ? "../apollo/src/**/*.gql"
+    ? "merged-schema.graphql"
     : "http://traefik/graphql",
   documents: "src/**/*.graphql",
   generates: {
