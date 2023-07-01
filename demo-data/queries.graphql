@@ -1,0 +1,18 @@
+mutation DeleteRatings {
+  deleteRatingsForTesting
+}
+
+mutation DeleteRecipes {
+  deleteRecipesForTesting
+}
+
+mutation AddRecipe($value: JSON!) {
+  createRecipe(value: $value) {
+    id
+    name
+  }
+}
+
+mutation AddRating($id: ID!, $rating: Int!, $login: String!) {
+  rate(id: $id, rating: $rating, login: $login)
+}

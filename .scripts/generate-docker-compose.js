@@ -4,12 +4,13 @@ const path = require("path");
 const { getAvailableProjects, languageFile, projectRoot } = require("./shared");
 
 const availableProjects = getAvailableProjects();
-const availableDeployProjects = availableProjects.filter(
-  (project) => !project.endsWith("-test")
-);
 
 const PROD = process.argv.slice(2).some((arg) => arg.includes("prod"));
 const DEV = !PROD;
+
+const availableDeployProjects = availableProjects.filter(
+  (project) => !project.endsWith("-test") && (DEV || project !== "demo-data")
+);
 
 if (PROD) {
   console.log("Setting up for production...");
@@ -25,6 +26,7 @@ if (DEV) {
     args.includes(project)
   );
   devProjects.push(...requestedDevProjects);
+  devProjects.push("demo-data");
 
   if (devProjects.length > 0) {
     console.log(
@@ -99,7 +101,6 @@ availableProjects.forEach((project) => {
   const service = {
     build: devProjects.includes(project) ? `${project}/.devcontainer` : project,
     container_name: project,
-    labels: [],
     networks: ["intranet"],
     tty: true,
   };
@@ -119,6 +120,10 @@ availableProjects.forEach((project) => {
     fs.readFileSync(path.join(projectRoot, languageFile(project)), "utf-8")
   );
   if (languageYaml.traefik?.labels) {
+    if (!service.labels) {
+      service.labels = [];
+    }
+
     service.labels.push("traefik.enable=true");
 
     const flattened = flattenObject(languageYaml.traefik.labels);
@@ -207,6 +212,19 @@ availableProjects.forEach((project) => {
         service.volumes.push("./recipes/db:/app/db");
       }
       break;
+    case "demo-data":
+      if (DEV) {
+        service.entrypoint = "sh -Ec 'cd /app && sh -Ee generate.sh'";
+        service.depends_on = {
+          traefik: {
+            condition: "service_started",
+          },
+          apollo: {
+            condition: "service_started",
+          },
+        };
+      }
+      break;
     default:
       break;
   }
@@ -214,7 +232,7 @@ availableProjects.forEach((project) => {
   dockerCompose.services[project] = service;
 });
 
-console.log("Writing docker-compose.yml...");
+console.log("Writing docker-compose.yml ...");
 fs.writeFileSync(
   path.join(projectRoot, "docker-compose.yml"),
   yaml.dump(dockerCompose, {
