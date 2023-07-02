@@ -1,21 +1,20 @@
 FROM golang as builder
 
-WORKDIR /app
+WORKDIR /ws
 
-COPY go.mod .
-
+COPY go.mod go.sum /ws/
 RUN go mod download
 
-COPY . .
-
+COPY recipes.go /ws/
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
 FROM scratch
 
-COPY --from=builder /app/main /
+WORKDIR /app
+COPY --from=builder /ws/main /app/
 
 ENV GIN_MODE=release
 
 EXPOSE 5000
 
-CMD ["/main"]
+CMD ["/app/main"]
