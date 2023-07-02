@@ -32,6 +32,8 @@ COPY --from=builder /home/io/.local/bin /usr/bin
 COPY --from=builder /home/io/.local/lib /usr/lib
 COPY --from=builder /home/io/.eerie /home/io/.eerie
 COPY --from=builder /installed_packages /installed_packages
+COPY *.io /app/
+COPY lib /app/lib
 
 FROM debian:12-slim
 RUN apt-get update \
@@ -41,13 +43,14 @@ RUN apt-get update \
   && apt-get clean && rm -rf /var/lib/apt/lists/* \
   && useradd -Ms /bin/false io
 
-USER io
-
 COPY --from=minimal / /
 
 WORKDIR /app
+
+RUN chown io:io /app
+
+USER io
+
 ENTRYPOINT [ "io" ]
 
 EXPOSE 8456
-COPY *.io .
-COPY lib ./lib
