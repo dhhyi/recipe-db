@@ -17,6 +17,7 @@ vscode:
     - GraphQL.vscode-graphql
     - esbenp.prettier-vscode
 extras:
+  - node-modules-volume
   - traefik
 traefik:
   network: intranet
