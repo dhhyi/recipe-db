@@ -91,7 +91,7 @@ function writeDccFiles(availableProjects) {
   });
 }
 
-function writeHideFiles(availableProjects) {
+function writeRootVSCodeSettingsFiles(availableProjects) {
   const vscodeSettings = {
     "files.exclude": availableProjects.reduce(
       (acc, project) => ({
@@ -100,6 +100,7 @@ function writeHideFiles(availableProjects) {
       }),
       {}
     ),
+    "extensions.ignoreRecommendations": true,
   };
   console.log(`Writing .vscode/settings.json ...`);
   fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
@@ -114,4 +115,4 @@ const availableProjects = getAvailableProjects();
 searchForForbiddenFiles(availableProjects);
 writePrettierIgnores(availableProjects);
 writeDccFiles(availableProjects);
-writeHideFiles(availableProjects);
+writeRootVSCodeSettingsFiles(availableProjects);
