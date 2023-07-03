@@ -1,0 +1,21 @@
+---
+import { AllRecipes, type AllRecipesQuery } from "../generated/graphql";
+import Layout from "../layouts/default.astro";
+import { fetchGraphQL } from "../shared/fetch-data.js";
+
+const query = await fetchGraphQL<AllRecipesQuery>(AllRecipes);
+const recipes = query.recipes ?? [];
+---
+
+<Layout>
+  <h1>Recipe Collection</h1>
+  <ul>
+    {
+      recipes.map((item) => (
+        <li>
+          <a href={"/recipe/" + item.id}>{item?.name}</a>
+        </li>
+      ))
+    }
+  </ul>
+</Layout>

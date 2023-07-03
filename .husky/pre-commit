@@ -3,4 +3,3 @@
 
 export PRE_COMMIT=1
 node .scripts/precommit.js "$@"
-

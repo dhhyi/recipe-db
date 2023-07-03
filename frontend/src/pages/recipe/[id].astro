@@ -1,0 +1,17 @@
+---
+import { RecipeById, type RecipeByIdQuery } from "../../generated/graphql";
+import Layout from "../../layouts/default.astro";
+import { fetchGraphQL } from "../../shared/fetch-data";
+
+const id = Astro.params.id;
+
+const query = await fetchGraphQL<RecipeByIdQuery>(RecipeById, { id });
+const recipe = query.recipe;
+---
+
+<Layout>
+  <h1>{recipe?.name}</h1>
+  <p>Rating: {recipe?.rating?.average}</p>
+  <p>Rated {recipe?.rating?.count} times</p>
+  <a href="/">back to home</a>
+</Layout>

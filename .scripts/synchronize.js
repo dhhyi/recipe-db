@@ -51,6 +51,8 @@ function writePrettierIgnores(availableProjects) {
   const extraIgnores = `
     # extra ignores
     pnpm-lock.yaml
+    .gitkeep
+    .needs-graphql-schema
   `.replace(/^ +/gm, "");
 
   const otherProjectsIgnores =

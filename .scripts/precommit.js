@@ -32,7 +32,7 @@ globSync("**/.prettierignore")
       dependentDir: [dir],
       command: "npx prettier --write .",
       message: "Running 'prettier' in " + dir,
-      container: false,
+      container: dir !== ".",
       priority: dir === "." ? 1 : 2,
       run: defaultRun,
     });
