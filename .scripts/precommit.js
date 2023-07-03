@@ -127,7 +127,9 @@ tasks
         cp.execSync(`${task.command}`, { cwd: task.execDir, stdio });
       }
     } catch (error) {
-      console.error(error.message);
+      const logPath = path.join(projectRoot, "precommit.log");
+      fs.writeFileSync(logPath, error.output.join(""));
+      cp.execSync(`less ${logPath}`, { stdio: "inherit" });
       process.exit(1);
     }
   });
