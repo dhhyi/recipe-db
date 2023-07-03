@@ -2,7 +2,7 @@
   "name": "recipe-db",
   "scripts": {
     "prepare": "husky install && npm run synchronize",
-    "synchronize": "node .scripts/synchronize.js",
+    "synchronize": "node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js",
     "in-devcontainer": "node .scripts/run-in-devcontainer.js",
     "generate-docker-compose": "node .scripts/generate-docker-compose.js",
     "test-project": "node .scripts/test-project.js"

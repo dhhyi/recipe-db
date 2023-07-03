@@ -1,0 +1,17 @@
+query AllRecipes {
+  recipes {
+    id
+    name
+  }
+}
+
+query RecipeById($id: ID!) {
+  recipe(id: $id) {
+    id
+    name
+    rating {
+      average
+      count
+    }
+  }
+}

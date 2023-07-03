@@ -3,6 +3,7 @@
 *~
 target
 .docker
+.DS_Store
 
 # dependencies
 node_modules
@@ -18,3 +19,4 @@ package-lock.json
 docker-compose.yml
 merged-schema.graphql
 .dockerignore
+*.log*

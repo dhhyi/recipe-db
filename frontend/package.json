@@ -1,0 +1,34 @@
+{
+  "name": "frontend",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "codegen": "graphql-codegen --config codegen.ts",
+    "format-astro": "prettier --write '**/*.astro'",
+    "dev": "astro dev --host 0.0.0.0",
+    "start": "npm run dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "lint": "eslint .",
+    "precommit": "PRE_COMMIT=1 npm run codegen && npm run lint -- --fix && tsc --noEmit && npm run format-astro"
+  },
+  "dependencies": {
+    "graphql-tag": "^2.12.6"
+  },
+  "devDependencies": {
+    "@astrojs/node": "^5.3.0",
+    "@graphql-codegen/cli": "^4.0.1",
+    "@graphql-codegen/typescript-document-nodes": "^4.0.1",
+    "@graphql-codegen/typescript-operations": "^4.0.1",
+    "@graphql-eslint/eslint-plugin": "^3.19.3",
+    "@types/node": "^18.16.19",
+    "@typescript-eslint/eslint-plugin": "^5.50.0",
+    "astro": "^2.7.2",
+    "eslint-config-standard-with-typescript": "^36.0.0",
+    "eslint-plugin-astro": "^0.27.2",
+    "graphql": "^16.7.1",
+    "prettier-plugin-astro": "^0.10.0",
+    "typescript": "^5.1.6"
+  }
+}

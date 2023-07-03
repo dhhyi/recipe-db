@@ -1,0 +1,9 @@
+# build output
+dist/
+# generated types
+.astro/
+src/generated/
+
+# environment variables
+.env
+.env.production

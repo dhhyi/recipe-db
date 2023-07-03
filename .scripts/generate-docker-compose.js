@@ -176,6 +176,17 @@ availableProjects.forEach((project) => {
   }
 
   switch (project) {
+    case "frontend":
+      if (PROD) {
+        appendEnvironment({ NODE_ENV: "production" });
+      }
+      service.depends_on = {
+        apollo: {
+          condition: "service_started",
+        },
+      };
+      service.init = true;
+      break;
     case "apollo":
       if (PROD) {
         appendEnvironment({ NODE_ENV: "production" });
