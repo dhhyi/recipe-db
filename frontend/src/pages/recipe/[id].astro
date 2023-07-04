@@ -1,4 +1,5 @@
 ---
+import Rating from "../../components/Rating.svelte";
 import { RecipeById, type RecipeByIdQuery } from "../../generated/graphql";
 import Layout from "../../layouts/default.astro";
 import { fetchGraphQL } from "../../shared/fetch-data";
@@ -11,7 +12,6 @@ const recipe = query.recipe;
 
 <Layout>
   <h1>{recipe?.name}</h1>
-  <p>Rating: {recipe?.rating?.average}</p>
-  <p>Rated {recipe?.rating?.count} times</p>
+  <Rating client:only id={id} />
   <a href="/">back to home</a>
 </Layout>
