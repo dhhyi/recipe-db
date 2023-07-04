@@ -23,6 +23,7 @@ vscode:
 extras:
   - node-modules-volume
   - traefik
+node-modules-volume: recipe-db-frontend-node-modules
 traefik:
   network: intranet
   labels:
