@@ -1,7 +1,12 @@
 const fs = require("fs");
 const cp = require("child_process");
 const path = require("path");
-const { getAvailableProjects, languageFile, projectRoot } = require("./shared");
+const {
+  getAvailableProjects,
+  languageFile,
+  projectRoot,
+  scriptRoot,
+} = require("./shared");
 
 const availableProjects = getAvailableProjects();
 
@@ -253,9 +258,6 @@ fs.writeFileSync(
   })
 );
 
-try {
-  cp.execSync("docker network inspect intranet", { stdio: "ignore" });
-} catch (e) {
-  console.log("Creating network intranet...");
-  cp.execSync("docker network create intranet", { stdio: "inherit" });
-}
+cp.execSync(`node ${path.join(scriptRoot, "create-intranet.js")}`, {
+  stdio: "inherit",
+});
