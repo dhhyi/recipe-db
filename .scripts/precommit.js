@@ -23,6 +23,17 @@ tasks.push({
   run: defaultRun,
 });
 
+// create intranet network
+tasks.push({
+  execDir: ".",
+  command: "node .scripts/create-intranet.js",
+  dependentDir: getAvailableProjects(),
+  message: "Checking intranet network",
+  container: false,
+  priority: 100,
+  run: defaultRun,
+});
+
 // add prettier tasks
 globSync("**/.prettierignore")
   .map((file) => path.dirname(file))
