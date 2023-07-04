@@ -6,12 +6,12 @@ module.exports = {
   plugins: ["unused-imports"],
   overrides: [
     {
+      files: ["*.ts", "*.tsx"],
       extends: [
         "standard-with-typescript",
         "plugin:astro/recommended",
         "prettier",
       ],
-      files: ["*.ts", "*.tsx"],
       parser: "@typescript-eslint/parser",
       processor: "@graphql-eslint/graphql",
       rules: {
@@ -20,21 +20,26 @@ module.exports = {
       },
     },
     {
+      files: ["*.astro"],
       extends: [
         "standard-with-typescript",
         "plugin:astro/recommended",
         "prettier",
       ],
-      files: ["*.astro"],
       parser: "astro-eslint-parser",
       parserOptions: {
         parser: "@typescript-eslint/parser",
         extraFileExtensions: [".astro"],
-        additionalFileExtensions: [".astro"],
       },
       rules: {
         "@typescript-eslint/strict-boolean-expressions": "off",
       },
+    },
+    {
+      files: ["*.svelte"],
+      extends: ["plugin:svelte/recommended", "prettier"],
+      parser: "svelte-eslint-parser",
+      parserOptions: {},
     },
     {
       extends: ["plugin:@graphql-eslint/operations-recommended", "prettier"],

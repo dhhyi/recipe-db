@@ -9,9 +9,12 @@ query RecipeById($id: ID!) {
   recipe(id: $id) {
     id
     name
-    rating {
-      average
-      count
-    }
+  }
+}
+
+query RatingByRecipeId($id: ID!) {
+  rating(id: $id) {
+    average
+    count
   }
 }

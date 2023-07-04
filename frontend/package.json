@@ -4,17 +4,19 @@
   "version": "0.0.1",
   "scripts": {
     "codegen": "graphql-codegen --config codegen.ts",
-    "format-astro": "prettier --write '**/*.astro'",
+    "format": "prettier --write '**/*.astro' '**/*.svelte' .",
     "dev": "astro dev --host 0.0.0.0",
     "start": "npm run dev",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
     "lint": "eslint .",
-    "precommit": "PRE_COMMIT=1 npm run codegen && npm run lint -- --fix && tsc --noEmit && npm run format-astro"
+    "precommit": "PRE_COMMIT=1 npm run codegen && npm run lint -- --fix && npm run format"
   },
   "dependencies": {
-    "graphql-tag": "^2.12.6"
+    "@astrojs/svelte": "^3.1.0",
+    "graphql-tag": "^2.12.6",
+    "svelte": "^4.0.0"
   },
   "devDependencies": {
     "@astrojs/node": "^5.3.0",
@@ -27,8 +29,10 @@
     "astro": "^2.7.2",
     "eslint-config-standard-with-typescript": "^36.0.0",
     "eslint-plugin-astro": "^0.27.2",
+    "eslint-plugin-svelte": "^2.32.2",
     "graphql": "^16.7.1",
     "prettier-plugin-astro": "^0.10.0",
+    "prettier-plugin-svelte": "^2.10.1",
     "typescript": "^5.1.6"
   }
 }

@@ -6,7 +6,9 @@ export async function fetchGraphQL<R extends Query>(
   query: DocumentNode,
   variables: Record<string, any> | undefined = undefined
 ): Promise<R> {
-  const response = await fetch("http://traefik/graphql", {
+  const url =
+    typeof window === "undefined" ? "http://traefik/graphql" : "/graphql";
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
