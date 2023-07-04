@@ -35,6 +35,9 @@ devDependencies:
   glob:
     specifier: ^10.3.0
     version: 10.3.0
+  graphql:
+    specifier: ^16.7.1
+    version: 16.7.1
   husky:
     specifier: '*'
     version: 8.0.3
