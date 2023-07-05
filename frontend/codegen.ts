@@ -8,7 +8,7 @@ const config: CodegenConfig = {
       plugins: [
         "typescript",
         "typescript-operations",
-        "typescript-document-nodes",
+        require.resolve("./codegen-typescript-minified-document-nodes-plugin"),
       ],
       config: {
         // avoidOptionals: {
@@ -18,6 +18,7 @@ const config: CodegenConfig = {
         //   defaultValue: true,
         // },
         maybeValue: "T",
+        documentMode: "documentNode",
       },
     },
   },
