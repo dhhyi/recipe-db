@@ -4,7 +4,7 @@ WORKDIR /ws
 COPY package.json pnpm-lock.yaml /ws/
 RUN pnpm i --frozen-lockfile
 COPY . /ws/
-RUN pnpm build
+RUN npm run codegen && pnpm build
 
 FROM node:18-alpine as node_modules
 WORKDIR /ws

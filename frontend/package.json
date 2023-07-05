@@ -11,7 +11,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "lint": "eslint .",
-    "precommit": "PRE_COMMIT=1 npm run codegen && npm run lint -- --fix && npm run format"
+    "precommit": "npm run codegen && npm run lint -- --fix && npm run format && npm run build"
   },
   "dependencies": {
     "@astrojs/svelte": "^3.1.0",

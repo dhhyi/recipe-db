@@ -2,9 +2,7 @@ import type { CodegenConfig } from "@graphql-codegen/cli";
 
 const config: CodegenConfig = {
   overwrite: true,
-  schema: process.env.PRE_COMMIT
-    ? "merged-schema.graphql"
-    : "http://traefik/graphql",
+  schema: "merged-schema.graphql",
   generates: {
     "src/generated/graphql.ts": {
       plugins: [
