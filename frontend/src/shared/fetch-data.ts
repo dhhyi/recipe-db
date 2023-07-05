@@ -1,9 +1,7 @@
-import { print, type DocumentNode } from "graphql";
-
 import type { Query } from "../generated/graphql";
 
 export async function fetchGraphQL<R extends Query>(
-  query: DocumentNode,
+  query: string,
   variables: Record<string, any> | undefined = undefined
 ): Promise<R> {
   const url =
@@ -11,10 +9,7 @@ export async function fetchGraphQL<R extends Query>(
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query: print(query),
-      variables: variables ?? undefined,
-    }),
+    body: JSON.stringify({ query, variables: variables ?? undefined }),
   });
 
   const json = await response.json();
