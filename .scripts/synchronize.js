@@ -79,7 +79,11 @@ function writePrettierIgnores(availableProjects) {
 
 function writeDockerIgnores(availableProjects) {
   const rootGitIgnore =
-    fs.readFileSync(path.join(projectRoot, ".gitignore"), "utf8") + "\n";
+    fs
+      .readFileSync(path.join(projectRoot, ".gitignore"), "utf8")
+      .split("\n")
+      .filter((line) => line !== "merged-schema.graphql")
+      .join("\n") + "\n";
 
   const extras = `
     precommit.sh
