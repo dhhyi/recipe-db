@@ -32,3 +32,7 @@ traefik:
         frontend:
           rule: PathPrefix(`/`)
           entrypoints: web
+          middlewares: frontend-compress
+      middlewares:
+        frontend-compress:
+          compress: true
