@@ -3,9 +3,7 @@
   "private": true,
   "scripts": {
     "codegen": "graphql-codegen --config codegen.ts && tsc --noEmit",
-    "lint": "eslint .",
-    "test": "npm run codegen && jest --ci --runInBand",
-    "precommit": "PRE_COMMIT=1 npm run codegen && npm run lint -- --fix"
+    "lint": "eslint ."
   },
   "dependencies": {
     "axios": "^1.4.0",

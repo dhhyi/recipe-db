@@ -2,7 +2,12 @@ const { globSync } = require("glob");
 const cp = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const { getAvailableProjects, projectRoot, scriptRoot } = require("./shared");
+const {
+  getAvailableProjects,
+  projectRoot,
+  scriptRoot,
+  getProjectConfig,
+} = require("./shared");
 
 const tasks = [];
 
@@ -38,12 +43,15 @@ tasks.push({
 globSync("**/.prettierignore")
   .map((file) => path.dirname(file))
   .forEach((dir) => {
+    const container =
+      dir !== "." && getProjectConfig(dir).prettier?.plugins?.length > 0;
+
     tasks.push({
       execDir: dir,
       dependentDir: [dir],
-      command: "npx prettier --write .",
+      command: "npx prettier --write '**'",
       message: "Running 'prettier' in " + dir,
-      container: dir !== ".",
+      container,
       priority: dir === "." ? 1 : 2,
       run: defaultRun,
     });
@@ -62,36 +70,16 @@ tasks.push({
 
 // calculate pre-commit in devcontainers
 getAvailableProjects().forEach((dir) => {
-  if (fs.existsSync(path.join(projectRoot, dir, "precommit.sh"))) {
+  if (getProjectConfig(dir).precommit) {
     tasks.push({
       execDir: dir,
       dependentDir: [dir],
-      command: "sh -e precommit.sh",
-      message: "Running 'precommit.sh' in " + dir,
+      command: "precommit",
+      message: "Running 'precommit' in " + dir,
       container: true,
       priority: 10,
       run: defaultRun,
     });
-  } else {
-    const packageJsonPath = path.join(projectRoot, dir, "package.json");
-    if (fs.existsSync(packageJsonPath)) {
-      const packageJson = JSON.parse(
-        fs.readFileSync(packageJsonPath, {
-          encoding: "utf8",
-        })
-      );
-      if (packageJson.scripts?.precommit) {
-        tasks.push({
-          execDir: dir,
-          dependentDir: [dir],
-          command: "npm run precommit",
-          message: "Running 'npm run precommit' in " + dir,
-          container: true,
-          priority: 10,
-          run: defaultRun,
-        });
-      }
-    }
   }
 });
 
@@ -127,7 +115,7 @@ console.log(`Running ${tasks.filter((task) => task.run).length} tasks`);
 tasks
   .filter((task) => task.run)
   .forEach((task) => {
-    console.log(task.message);
+    console.log(task.message + (task.container ? " (devcontainer)" : ""));
     const stdio = verbose ? "inherit" : "pipe";
 
     try {

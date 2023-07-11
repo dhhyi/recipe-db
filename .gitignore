@@ -16,6 +16,7 @@ package-lock.json
 .update_devcontainer.sh
 .devcontainer_meta.json
 .prettierignore
+.prettierrc.*
 docker-compose.yml
 merged-schema.graphql
 .dockerignore

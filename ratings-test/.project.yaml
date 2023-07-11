@@ -1,0 +1,5 @@
+precommit: ghokin fmt replace .
+test: karate -T 1 .
+prettier:
+  ignore:
+    - "*.feature"

@@ -1,7 +1,6 @@
 const cp = require("child_process");
-const path = require("path");
 const fs = require("fs");
-const { languageFile, projectRoot, scriptRoot } = require("./shared");
+const { languageFile, scriptRoot } = require("./shared");
 
 const project = process.argv[2];
 if (!project) {
@@ -15,27 +14,5 @@ if (!project) {
   process.exit(1);
 }
 
-let command;
-if (fs.existsSync(path.join(projectRoot, project, "test.sh"))) {
-  command = "sh -e test.sh";
-} else {
-  const packageJsonPath = path.join(projectRoot, project, "package.json");
-  if (fs.existsSync(packageJsonPath)) {
-    const packageJson = JSON.parse(
-      fs.readFileSync(packageJsonPath, {
-        encoding: "utf8",
-      })
-    );
-    if (packageJson.scripts?.test) {
-      command = "npm run test";
-    }
-  }
-}
-
-if (!command) {
-  console.error("No test script found");
-  process.exit(1);
-}
-
-const commandLine = `node ${scriptRoot}/run-in-devcontainer.js ${project} ${command}`;
+const commandLine = `node ${scriptRoot}/run-in-devcontainer.js ${project} test`;
 cp.execSync(commandLine, { stdio: "inherit" });

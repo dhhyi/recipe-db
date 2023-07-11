@@ -7,8 +7,7 @@
     "lint-code": "eslint .",
     "codegen": "graphql-codegen --config codegen.ts && tsc --noEmit",
     "build": "npm run codegen && node build.mjs",
-    "start": "npm run build && node ./dist/index.cjs",
-    "precommit": "npm run codegen && npm run lint-schema && npm run lint-code -- --fix && npm run build"
+    "start": "npm run build && node ./dist/index.cjs"
   },
   "graphql-schema-linter": {
     "rules": [

@@ -1,0 +1,5 @@
+precommit: |
+  npm run lint-schema
+  npm run codegen
+  npm run lint-code -- --fix
+  npm run build
