@@ -1,0 +1,9 @@
+precommit: |
+  go fmt
+  go build -o precommit.out
+  stat precommit.out
+prettier:
+  ignore:
+    - go.mod
+    - go.sum
+    - "*.go"

@@ -1,0 +1,8 @@
+precommit: |
+  npm run codegen
+  npm run lint -- --fix
+  npm run build
+prettier:
+  plugins:
+    - prettier-plugin-astro
+    - prettier-plugin-svelte

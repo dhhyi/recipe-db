@@ -1,0 +1,6 @@
+test: |
+  npm run codegen
+  npx jest --ci --runInBand
+precommit: |
+  npm run codegen
+  npm run lint -- --fix

@@ -4,14 +4,12 @@
   "version": "0.0.1",
   "scripts": {
     "codegen": "graphql-codegen --config codegen.ts",
-    "format": "prettier --write '**/*.astro' '**/*.svelte' .",
     "dev": "astro dev --host 0.0.0.0",
     "start": "npm run dev",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "lint": "eslint .",
-    "precommit": "npm run codegen && npm run lint -- --fix && npm run format && npm run build"
+    "lint": "eslint ."
   },
   "devDependencies": {
     "@astrojs/node": "^5.3.0",

@@ -1,0 +1,10 @@
+precommit: |
+  ariadne-codegen --config precommit.toml
+  black ./*.py
+  pylint ./*.py
+prettier:
+  ignore:
+    - "*.py"
+    - "*.pyc"
+    - .pylintrc
+    - "*.toml"
