@@ -33,7 +33,7 @@ if (DEV) {
   devProjects.push(...requestedDevProjects);
   devProjects.push("demo-data");
 
-  if (devProjects.length > 0) {
+  if (requestedDevProjects.length > 0) {
     console.log(
       `Setting up VSCode attaching for ${requestedDevProjects.join(", ")}...`
     );
