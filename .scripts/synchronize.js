@@ -201,7 +201,7 @@ function writeDccFiles(availableProjects) {
   });
 }
 
-function writeRootVSCodeSettingsFiles(availableProjects) {
+function writeRootVSCodeSettingsFile(availableProjects) {
   const vscodeSettings = {
     "files.exclude": availableProjects.reduce(
       (acc, project) => ({
@@ -211,6 +211,7 @@ function writeRootVSCodeSettingsFiles(availableProjects) {
       {}
     ),
     "extensions.ignoreRecommendations": true,
+    "task.autoDetect": "off",
   };
   console.log(`Writing .vscode/settings.json ...`);
   fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
@@ -220,11 +221,33 @@ function writeRootVSCodeSettingsFiles(availableProjects) {
   );
 }
 
+function writeRootVSCodeTasksFile() {
+  const tasks = {
+    tasks: [
+      {
+        label: "watch for changes",
+        type: "shell",
+        command: "node .scripts/watch-updates.js",
+        problemMatcher: [],
+      },
+    ],
+  };
+  console.log(`Writing .vscode/tasks.json ...`);
+  fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, ".vscode/tasks.json"),
+    JSON.stringify(tasks, null, 2)
+  );
+}
+
 const availableProjects = getAvailableProjects();
 
 searchForForbiddenFiles(availableProjects);
 writePrettierIgnores(availableProjects);
 writePrettierConfigs(availableProjects);
 writeDockerIgnores(availableProjects);
-writeDccFiles(availableProjects);
-writeRootVSCodeSettingsFiles(availableProjects);
+if (!process.argv.slice(2).includes("--no-dcc")) {
+  writeDccFiles(availableProjects);
+}
+writeRootVSCodeSettingsFile(availableProjects);
+writeRootVSCodeTasksFile();
