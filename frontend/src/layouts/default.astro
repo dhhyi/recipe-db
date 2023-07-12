@@ -11,6 +11,8 @@ import NavBar from "../components/NavBar.vue";
   </head>
   <body>
     <NavBar client:load />
-    <slot />
+    <div class="container mx-auto">
+      <slot />
+    </div>
   </body>
 </html>
