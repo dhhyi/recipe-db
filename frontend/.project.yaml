@@ -3,6 +3,7 @@ devcontainer:
   build:
     user:
       - RUN npm install -g pnpm
+      - RUN echo "alias npm=pnpm" | tee -a $HOME/.zshrc $HOME/.bashrc
   initialize: pnpm install
   ports:
     - 3000
