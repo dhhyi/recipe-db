@@ -3,9 +3,9 @@ const cp = require("child_process");
 const path = require("path");
 const {
   getAvailableProjects,
-  languageFile,
   projectRoot,
   scriptRoot,
+  getProjectConfig,
 } = require("./shared");
 
 const availableProjects = getAvailableProjects();
@@ -121,25 +121,23 @@ availableProjects.forEach((project) => {
     service.volumes = [`./${project}:/app`];
   }
 
-  const languageYaml = yaml.load(
-    fs.readFileSync(path.join(projectRoot, languageFile(project)), "utf-8")
-  );
-  if (languageYaml.traefik?.labels) {
+  const projectConfig = getProjectConfig(project);
+  if (projectConfig.traefik?.labels) {
     if (!service.labels) {
       service.labels = [];
     }
 
     service.labels.push("traefik.enable=true");
 
-    const flattened = flattenObject(languageYaml.traefik.labels);
+    const flattened = flattenObject(projectConfig.traefik.labels);
     service.labels.push(
       ...flattened
         .map(([k, v]) => `${k}=${v}`)
         .map((s) => (s.startsWith("traefik.") ? s : "traefik." + s))
     );
   }
-  if (languageYaml.devcontainer?.environment) {
-    appendEnvironment(languageYaml.devcontainer.environment);
+  if (projectConfig.devcontainer?.environment) {
+    appendEnvironment(projectConfig.devcontainer.environment);
   }
 
   if (devProjects.includes(project)) {

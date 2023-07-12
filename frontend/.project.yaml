@@ -1,3 +1,41 @@
+extends: dcc://javascript
+devcontainer:
+  build:
+    user:
+      - RUN npm install -g pnpm
+  initialize: pnpm install
+  ports:
+    - 3000
+  environment:
+    TESTING: "true"
+    GRAPHQL_ENDPOINT: http://traefik/graphql
+vscode:
+  settings:
+    editor.defaultFormatter: esbenp.prettier-vscode
+    peacock.remoteColor: "#f2b20f"
+  extensions:
+    - johnpapa.vscode-peacock
+    - GraphQL.vscode-graphql
+    - esbenp.prettier-vscode
+    - astro-build.astro-vscode
+    - bradlc.vscode-tailwindcss
+    - svelte.svelte-vscode
+extras:
+  - node-modules-volume
+  - traefik
+node-modules-volume: recipe-db-frontend-node-modules
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        frontend:
+          rule: PathPrefix(`/`)
+          entrypoints: web
+          middlewares: frontend-compress
+      middlewares:
+        frontend-compress:
+          compress: true
 precommit: |
   npm run codegen
   npm run lint -- --fix
