@@ -26,10 +26,6 @@ const PROD = args.some((arg) => arg.includes("prod"));
 const DEV = !PROD;
 const BACKEND = args.some((arg) => arg === "backend");
 
-const availableDeployProjects = availableProjects.filter(
-  (project) => !project.endsWith("-test") && (DEV || project !== "demo-data")
-);
-
 if (PROD) {
   console.log("Setting up for production...");
 } else {
@@ -38,6 +34,13 @@ if (PROD) {
 if (BACKEND) {
   console.log("Setting up backend only...");
 }
+
+const availableDeployProjects = availableProjects.filter(
+  (project) =>
+    !project.endsWith("-test") &&
+    (DEV || project !== "demo-data") &&
+    (!BACKEND || project !== "frontend")
+);
 
 const devProjects = [];
 
@@ -79,6 +82,7 @@ const dockerCompose = {
   networks: {
     intranet: {
       name: "intranet",
+      external: true,
     },
   },
 };
@@ -115,9 +119,6 @@ dockerCompose.services.traefik = traefik;
 
 availableProjects.forEach((project) => {
   if (!availableDeployProjects.includes(project)) {
-    return;
-  }
-  if (project === "frontend" && BACKEND) {
     return;
   }
 
@@ -246,15 +247,18 @@ availableProjects.forEach((project) => {
       break;
     case "demo-data":
       if (DEV) {
-        service.entrypoint = "sh -Ec 'cd /app && sh -Ee generate.sh'";
-        service.depends_on = {
-          traefik: {
+        service.entrypoint =
+          "sh -Ec 'cd /app && sleep 2 && sh -Ee generate.sh'";
+        const services = availableDeployProjects.filter(
+          (service) => service !== "demo-data"
+        );
+        services.push("traefik");
+        service.depends_on = services.reduce((acc, val) => {
+          acc[val] = {
             condition: "service_started",
-          },
-          apollo: {
-            condition: "service_started",
-          },
-        };
+          };
+          return acc;
+        }, {});
       }
       break;
     default:
