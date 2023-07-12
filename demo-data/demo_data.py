@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 
 from graphql_client import Client
 
@@ -33,7 +34,9 @@ async def rate_recipe(recipe_id, rating, user):
 
 
 async def main():
-    await delete_everything()
+    args = sys.argv[1:]
+    if len(args) == 1 and args[0] == "--delete":
+        await delete_everything()
 
     recipe_id = await add_recipe("Rice Pudding")
     await rate_recipe(recipe_id, 5, "joe")
