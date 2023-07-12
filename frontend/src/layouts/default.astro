@@ -1,4 +1,5 @@
 ---
+import NavBar from "../components/NavBar.vue";
 ---
 
 <html lang="en">
@@ -9,6 +10,7 @@
     <title>Astro</title>
   </head>
   <body>
+    <NavBar client:load />
     <slot />
   </body>
 </html>

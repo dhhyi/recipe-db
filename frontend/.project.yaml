@@ -23,6 +23,7 @@ vscode:
     - astro-build.astro-vscode
     - bradlc.vscode-tailwindcss
     - svelte.svelte-vscode
+    - vue.volar
 extras:
   - node-modules-volume
   - traefik

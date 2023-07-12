@@ -1,4 +1,7 @@
 {
   "extends": "astro/tsconfigs/strict",
-  "exclude": ["**/*.svelte"]
+  "exclude": ["**/*.svelte"],
+  "compilerOptions": {
+    "jsx": "preserve"
+  }
 }
