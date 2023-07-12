@@ -7,5 +7,7 @@ https://github.com/hygraph/hygraph-examples/blob/master/with-astro/src/pages/pro
 https://docs.astro.build/de/guides/integrations-guide/svelte/
 https://github.com/sveltejs/prettier-plugin-svelte#usage-with-tailwind-prettier-plugin
 
+https://chrisdermody.com/tailwind-css-static-navbar-with-shadow-on-scroll/
+
 https://github.com/edazpotato/astro-feather-icons#readme
 https://github.com/nanostores/nanostores
