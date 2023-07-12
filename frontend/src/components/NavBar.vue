@@ -21,9 +21,11 @@ if (typeof window !== "undefined") {
 <template>
   <nav
     :class="{ scrolled: !view.atTopOfPage }"
-    class="fixed flex w-full bg-white shadow-md items-center justify-between flex-wrap p-5 m-auto top-0 animated"
+    class="fixed flex w-full bg-white shadow-md items-center justify-between flex-wrap p-5 m-auto top-0"
   >
-    <a class="mx-2" href="/">Startseite</a>
+    <div class="container mx-auto">
+      <a class="mx-2" href="/">Startseite</a>
+    </div>
   </nav>
   <div class="h-16"></div>
 </template>
