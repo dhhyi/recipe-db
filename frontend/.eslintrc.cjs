@@ -40,6 +40,9 @@ module.exports = {
       extends: ["plugin:svelte/recommended", "prettier"],
       parser: "svelte-eslint-parser",
       parserOptions: {},
+      rules: {
+        "no-unused-vars": "error",
+      },
     },
     {
       extends: ["plugin:@graphql-eslint/operations-recommended", "prettier"],

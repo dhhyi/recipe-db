@@ -8,18 +8,20 @@
     const response = await fetchGraphQL(RatingByRecipeId, { id: id });
     return response.rating;
   }
-  const dummyData = {
-    average: 4.5,
-    count: 2,
-  };
 </script>
 
 <div class="rating">
   {#await fetchRating()}
     <p>...loading</p>
   {:then value}
-    <div><span>Rating: </span><span>{value?.average}</span></div>
-    <div><span>Number of ratings: </span><span>{value?.count}</span></div>
+    <div>
+      <span>Rating: </span><span class="font-bold">{value?.average}</span>
+    </div>
+    <div>
+      <span>Number of ratings: </span><span class="font-bold"
+        >{value?.count}</span
+      >
+    </div>
   {:catch error}
     <p style="color: red">{error.message}</p>
   {/await}
