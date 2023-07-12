@@ -1,3 +1,38 @@
+extends: base://java
+language:
+  name: karate
+  binary: karate
+  version: false
+devcontainer:
+  build:
+    args:
+      KARATE_VERSION: 1.4.0
+    root:
+      - ADD https://github.com/karatelabs/karate/releases/download/v${KARATE_VERSION}/karate-${KARATE_VERSION}.jar /opt/karate.jar
+      - RUN chmod +rx /opt/karate.jar
+      - ADD https://github.com/antham/ghokin/releases/download/v3.4.0/ghokin_3.4.0_linux_amd64.tar.gz /tmp/ghokin.tar.gz
+      - RUN tar -xzf /tmp/ghokin.tar.gz -C /tmp && mv /tmp/ghokin /usr/local/bin/ghokin && chmod +rx /usr/local/bin/ghokin
+    files:
+      - type: script
+        path: /usr/local/bin/karate
+        content: |
+          #!/bin/bash
+          java -jar /opt/karate.jar "$@"
+  environment:
+    REST_API: http://traefik:3000
+vscode:
+  settings:
+    karateRunner.karateJS.commandLineArgs: karate
+    karateRunner.karateJar.commandLineArgs: karate
+    peacock.remoteColor: "#269914"
+  extensions:
+    - johnpapa.vscode-peacock
+    - karatelabs.karate
+    - kirkslota.karate-runner
+extras:
+  - traefik
+traefik:
+  network: intranet
 precommit: ghokin fmt replace .
 test: karate -T 1 .
 prettier:

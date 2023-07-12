@@ -1,3 +1,27 @@
+extends: dcc://javascript
+devcontainer:
+  build:
+    user:
+      - RUN npm install -g prettier pnpm
+  initialize: pnpm install
+  ports:
+    - 4000
+  environment:
+    GRAPHQL_ENDPOINT: http://traefik/graphql
+vscode:
+  settings:
+    editor.defaultFormatter: esbenp.prettier-vscode
+    peacock.remoteColor: "#2d1130"
+  extensions:
+    - johnpapa.vscode-peacock
+    - GraphQL.vscode-graphql
+    - esbenp.prettier-vscode
+extras:
+  - node-modules-volume
+  - traefik
+node-modules-volume: recipe-db-apollo-test-node-modules
+traefik:
+  network: intranet
 test: |
   npm run codegen
   npx jest --ci --runInBand
