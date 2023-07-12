@@ -12,6 +12,7 @@ const availableProjects = getAvailableProjects();
 
 const PROD = process.argv.slice(2).some((arg) => arg.includes("prod"));
 const DEV = !PROD;
+const BACKEND = process.argv.slice(2).some((arg) => arg === "backend");
 
 const availableDeployProjects = availableProjects.filter(
   (project) => !project.endsWith("-test") && (DEV || project !== "demo-data")
@@ -21,6 +22,9 @@ if (PROD) {
   console.log("Setting up for production...");
 } else {
   console.log("Setting up for development...");
+}
+if (BACKEND) {
+  console.log("Setting up backend only...");
 }
 
 const devProjects = [];
@@ -100,6 +104,9 @@ dockerCompose.services.traefik = traefik;
 
 availableProjects.forEach((project) => {
   if (!availableDeployProjects.includes(project)) {
+    return;
+  }
+  if (project === "frontend" && BACKEND) {
     return;
   }
 
