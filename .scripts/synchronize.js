@@ -123,13 +123,11 @@ function writePrettierConfigs(availableProjects) {
     return prettier.format(content, { parser: "flow" });
   };
 
-  const rootConfig = prettierConfig(
-    ["prettier-plugin-sh"],
-    [
-      { files: [".husky/*-*"], parser: "sh" },
-      { files: ["LICENSE"], parser: "markdown" },
-    ]
-  );
+  const rootPrettierPlugins = ["prettier-plugin-sh", "prettier-plugin-toml"];
+  const rootConfig = prettierConfig(rootPrettierPlugins, [
+    { files: [".husky/*-*"], parser: "sh" },
+    { files: ["LICENSE"], parser: "markdown" },
+  ]);
 
   console.log(`Writing .prettierrc.cjs ...`);
   fs.writeFileSync(rootPrettierConfigPath, rootConfig);
@@ -138,7 +136,7 @@ function writePrettierConfigs(availableProjects) {
     console.log(`Writing ${project}/.prettierrc.cjs ...`);
     const config = getProjectConfig(project);
     const extraPlugins = config.prettier?.plugins || [];
-    const plugins = ["prettier-plugin-sh", ...extraPlugins];
+    const plugins = [...rootPrettierPlugins, ...extraPlugins];
 
     const projectPrettierConfigPath = path.join(
       projectRoot,
