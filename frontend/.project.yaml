@@ -4,7 +4,9 @@ devcontainer:
     user:
       - RUN npm install -g pnpm
       - RUN echo "alias npm=pnpm" | tee -a $HOME/.zshrc $HOME/.bashrc
-  initialize: pnpm install
+  initialize: |
+    pnpm install
+    npm run codegen
   ports:
     - 3000
   environment:
