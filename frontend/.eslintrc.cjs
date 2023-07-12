@@ -6,6 +6,27 @@ module.exports = {
   plugins: ["unused-imports"],
   overrides: [
     {
+      files: ["*.mjs"],
+      extends: ["standard", "prettier"],
+      parserOptions: {
+        sourceType: "module",
+      },
+    },
+    {
+      files: ["*.cjs"],
+      extends: ["standard", "prettier"],
+      parserOptions: {
+        sourceType: "script",
+      },
+    },
+    {
+      files: ["*.js"],
+      extends: ["standard", "prettier"],
+      parserOptions: {
+        sourceType: "module",
+      },
+    },
+    {
       files: ["*.ts", "*.tsx"],
       extends: [
         "standard-with-typescript",
@@ -45,6 +66,13 @@ module.exports = {
       },
     },
     {
+      files: ["*.vue"],
+      extends: ["plugin:vue/vue3-recommended", "prettier"],
+      parser: "vue-eslint-parser",
+      parserOptions: {},
+      rules: {},
+    },
+    {
       extends: ["plugin:@graphql-eslint/operations-recommended", "prettier"],
       files: ["*.graphql"],
       rules: {
@@ -75,5 +103,5 @@ module.exports = {
       },
     ],
   },
-  ignorePatterns: ["src/generated/*.ts"],
+  ignorePatterns: ["src/generated/*.ts", "dist/*"],
 };
