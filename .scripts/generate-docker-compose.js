@@ -8,11 +8,23 @@ const {
   getProjectConfig,
 } = require("./shared");
 
+const dockerComposeTargetPath = path.join(projectRoot, "docker-compose.yml");
+const args = process.argv.slice(2);
+
+if (
+  args.length === 1 &&
+  args[0] === "prepare" &&
+  fs.existsSync(dockerComposeTargetPath)
+) {
+  console.log("docker-compose.yml already exists, skipping generation");
+  process.exit(0);
+}
+
 const availableProjects = getAvailableProjects();
 
-const PROD = process.argv.slice(2).some((arg) => arg.includes("prod"));
+const PROD = args.some((arg) => arg.includes("prod"));
 const DEV = !PROD;
-const BACKEND = process.argv.slice(2).some((arg) => arg === "backend");
+const BACKEND = args.some((arg) => arg === "backend");
 
 const availableDeployProjects = availableProjects.filter(
   (project) => !project.endsWith("-test") && (DEV || project !== "demo-data")
@@ -30,7 +42,6 @@ if (BACKEND) {
 const devProjects = [];
 
 if (DEV) {
-  const args = process.argv.slice(2);
   const requestedDevProjects = availableDeployProjects.filter((project) =>
     args.includes(project)
   );
@@ -255,7 +266,7 @@ availableProjects.forEach((project) => {
 
 console.log("Writing docker-compose.yml ...");
 fs.writeFileSync(
-  path.join(projectRoot, "docker-compose.yml"),
+  dockerComposeTargetPath,
   yaml.dump(dockerCompose, {
     quotingType: '"',
     forceQuotes: false,
