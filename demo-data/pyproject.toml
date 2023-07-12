@@ -1,3 +1,3 @@
 [tool.ariadne-codegen]
-remote_schema_url  = "http://traefik/graphql"
+remote_schema_url = "http://traefik/graphql"
 queries_path = "queries.graphql"
