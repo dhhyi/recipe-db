@@ -1,4 +1,5 @@
 ---
+import RecipeCard from "../components/RecipeCard.astro";
 import { AllRecipes, type AllRecipesQuery } from "../generated/graphql";
 import Layout from "../layouts/default.astro";
 import { fetchGraphQL } from "../shared/fetch-data.js";
@@ -9,13 +10,7 @@ const recipes = query.recipes ?? [];
 
 <Layout>
   <h1>Recipe Collection</h1>
-  <ul>
-    {
-      recipes.map((item) => (
-        <li>
-          <a href={"/recipe/" + item.id}>{item?.name}</a>
-        </li>
-      ))
-    }
-  </ul>
+  <div class="m-2 grid grid-cols-3 gap-4">
+    {recipes.map((item) => <RecipeCard recipe={item} />)}
+  </div>
 </Layout>
