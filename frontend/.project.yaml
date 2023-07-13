@@ -16,10 +16,15 @@ vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
     peacock.remoteColor: "#f2b20f"
+    filewatcher.commands:
+      - match: "\\.graphql"
+        cmd: cd ${workspaceRoot} && npm run codegen
+        event: onFolderChange
   extensions:
     - johnpapa.vscode-peacock
     - GraphQL.vscode-graphql
     - esbenp.prettier-vscode
+    - appulate.filewatcher
     - astro-build.astro-vscode
     - bradlc.vscode-tailwindcss
     - svelte.svelte-vscode
