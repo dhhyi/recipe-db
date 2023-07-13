@@ -1,0 +1,32 @@
+{
+  "name": "Rote Beete Suppe",
+  "ingredients": [
+    {
+      "name": "Rote Beete",
+      "amount": 500,
+      "unit": "g"
+    },
+    {
+      "name": "Kokosmilch",
+      "amount": 1,
+      "unit": "Dose"
+    },
+    {
+      "name": "Balsamico Essig"
+    },
+    {
+      "name": "Soja Soße"
+    },
+    {
+      "name": "Salz"
+    },
+    {
+      "name": "Wasser"
+    },
+    {
+      "name": "Crème Fraîche",
+      "optional": true
+    }
+  ],
+  "method": "Rote Beete schälen und in Würfel schneiden. In einem Topf mit Wasser gerade so bedecken und kochen bis die Rote Beete weich ist. Die Rote Beete mit einem Pürierstab pürieren. Kokosmilch hinzugeben und mit Balsamico Essig, Soja Soße und Salz abschmecken.\n\nMit Crème Fraîche servieren."
+}

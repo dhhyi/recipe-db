@@ -1,0 +1,34 @@
+{
+  "name": "Spaghetti Carbonara",
+  "ingredients": [
+    {
+      "name": "Spaghetti",
+      "amount": 125,
+      "unit": "g"
+    },
+    {
+      "name": "Eigelb",
+      "amount": 2
+    },
+    {
+      "name": "Parmesan",
+      "amount": 100,
+      "unit": "g"
+    },
+    {
+      "name": "Zwiebel",
+      "amount": "1-2",
+      "unit": "Stück"
+    },
+    {
+      "name": "Salz"
+    },
+    {
+      "name": "Pfeffer"
+    },
+    {
+      "name": "Olivenöl"
+    }
+  ],
+  "method": "Zwiebel längs in feine Streifen schneiden und in Olivenöl langsam karamellisieren.\nWährenddessen Spaghetti in Salzwasser halbgar kochen.\n\nDen Parmesan fein reiben, mit reichlich Pfeffer und den Eigelb in einer Schüssel beiseite stellen.\n\nDie karamellisierten Zwiebeln aus der Pfanne nehmen und beiseite stellen. Die halbgaren Spaghetti in die Pfanne geben und einige Kellen vom Nudelwasser hinzugeben und weiter kochen bis die Spaghetti gar sind und das Wasser deutlich reduziert ist. Dieser Schritt braucht etwas Übung, damit die Spaghetti sowohl gar sind als auch eine stärkehaltige Sauce entsteht. Die Pfanne dann vom Herd nehmen.\n\nEine Kelle des abgekühtem Nudelwassers in die Schüssel mit Eigelb geben und vermengen. Anschließend die Eigelb-Mischung in die Pfanne geben und rühren, bis eine cremige Sauce entsteht. Die Zwiebeln wieder hinzugeben und unterheben.\n\nSofort servieren."
+}

@@ -9,7 +9,7 @@ const recipes = query.recipes ?? [];
 ---
 
 <Layout>
-  <h1>Recipe Collection</h1>
+  <h1>Alle Rezepte</h1>
   <div class="m-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
     {recipes.map((item) => <RecipeCard recipe={item} />)}
   </div>
