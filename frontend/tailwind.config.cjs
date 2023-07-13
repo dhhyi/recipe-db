@@ -18,6 +18,18 @@ module.exports = {
           fontSize: theme("fontSize.3xl"),
           fontWeight: theme("fontWeight.bold"),
         },
+        h2: {
+          padding: theme("spacing.3"),
+          margin: "auto",
+          fontSize: theme("fontSize.2xl"),
+          fontWeight: theme("fontWeight.bold"),
+        },
+        h3: {
+          padding: theme("spacing.2"),
+          margin: "auto",
+          fontSize: theme("fontSize.xl"),
+          fontWeight: theme("fontWeight.bold"),
+        },
       });
     },
   ],

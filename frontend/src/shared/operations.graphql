@@ -5,6 +5,17 @@ query AllRecipes {
   }
 }
 
+query AllRecipesFull {
+  recipes {
+    id
+    name
+    rating {
+      average
+      count
+    }
+  }
+}
+
 query RecipeById($id: ID!) {
   recipe(id: $id) {
     id

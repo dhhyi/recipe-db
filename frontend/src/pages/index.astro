@@ -1,10 +1,10 @@
 ---
 import RecipeCard from "../components/RecipeCard.astro";
-import { AllRecipes, type AllRecipesQuery } from "../generated/graphql";
+import { AllRecipesFull, type AllRecipesFullQuery } from "../generated/graphql";
 import Layout from "../layouts/default.astro";
 import { fetchGraphQL } from "../shared/fetch-data.js";
 
-const query = await fetchGraphQL<AllRecipesQuery>(AllRecipes);
+const query = await fetchGraphQL<AllRecipesFullQuery>(AllRecipesFull);
 const recipes = query.recipes ?? [];
 ---
 
