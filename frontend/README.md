@@ -10,4 +10,6 @@ https://github.com/sveltejs/prettier-plugin-svelte#usage-with-tailwind-prettier-
 https://chrisdermody.com/tailwind-css-static-navbar-with-shadow-on-scroll/
 
 https://github.com/edazpotato/astro-feather-icons#readme
+https://svelte.dev/docs/svelte-components#style
+
 https://github.com/nanostores/nanostores

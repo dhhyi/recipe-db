@@ -1,9 +1,17 @@
 ---
+import RatingStars from "../components/RatingStars.svelte";
 import type { Recipe } from "../generated/graphql";
 
 const recipe: Recipe = Astro.props.recipe;
 ---
 
-<div class="border-2 border-gray-500 w-full rounded text-center h-10">
-  <a href={"/recipe/" + recipe.id}>{recipe?.name}</a>
+<div class="border-2 border-gray-500 w-full rounded flex flex-col items-center">
+  <h2><a href={"/recipe/" + recipe.id}>{recipe?.name}</a></h2>
+  {
+    recipe.rating && (
+      <div class="mb-3">
+        <RatingStars average={recipe.rating.average} count={false} size={24} />
+      </div>
+    )
+  }
 </div>
