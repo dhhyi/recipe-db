@@ -28,6 +28,11 @@ describe("recipes", () => {
       {
         value: {
           name: "test",
+          method: "cook it",
+          ingredients: [
+            { name: "ingredient", amount: 1 },
+            { name: "opt", optional: true },
+          ],
         },
       }
     );
@@ -48,11 +53,19 @@ describe("recipes", () => {
         id: createOperation.createRecipe.id,
       })
     ).toMatchInlineSnapshot(
-      { recipe: { id: expect.any(String) } },
+      {
+        recipe: {
+          id: expect.any(String),
+          ingredients: expect.any(Array),
+          method: expect.any(String),
+        },
+      },
       `
       {
         "recipe": {
           "id": Any<String>,
+          "ingredients": Any<Array>,
+          "method": Any<String>,
           "name": "test",
         },
       }
@@ -70,16 +83,23 @@ describe("recipes", () => {
     expect(create).toBeTruthy();
     expect(create?.createRecipe.id).toBeTruthy();
 
+    const beforeEdit = await executeOperation(RecipeByIdQueryDocument, {
+      id: create.createRecipe.id,
+    });
+    expect(beforeEdit?.recipe).toHaveProperty("name", "test");
+    expect(beforeEdit?.recipe).toHaveProperty("method", null);
+
     const edit = await executeOperation(UpdateRecipeMutationDocument, {
       id: create.createRecipe.id,
-      value: { name: "test2" },
+      value: { name: "test2", method: "cook it" },
     });
     expect(edit).toBeTruthy();
 
-    const recipe = await executeOperation(RecipeByIdQueryDocument, {
+    const afterEdit = await executeOperation(RecipeByIdQueryDocument, {
       id: create.createRecipe.id,
     });
-    expect(recipe?.recipe).toHaveProperty("name", "test2");
+    expect(afterEdit?.recipe).toHaveProperty("name", "test2");
+    expect(afterEdit?.recipe).toHaveProperty("method", "cook it");
   });
 
   it("should be able to delete a recipe", async () => {

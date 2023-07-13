@@ -1,6 +1,15 @@
 type Recipe {
   id: ID!
+  ingredients: [Ingredient]
+  method: String
   name: String!
+}
+
+type Ingredient {
+  amount: String
+  name: String!
+  optional: Boolean
+  unit: String
 }
 
 extend type Query {
