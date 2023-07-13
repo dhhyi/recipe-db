@@ -5,10 +5,21 @@ query AllRecipesQuery {
   }
 }
 
+fragment ingredients on Ingredient {
+  name
+  amount
+  unit
+  optional
+}
+
 query RecipeByIdQuery($id: ID!) {
   recipe(id: $id) {
     id
     name
+    method
+    ingredients {
+      ...ingredients
+    }
   }
 }
 
