@@ -4,7 +4,9 @@ devcontainer:
     user:
       - RUN npm install -g pnpm
       - RUN echo "alias npm=pnpm" | tee -a $HOME/.zshrc $HOME/.bashrc
-  initialize: pnpm install
+  initialize: |
+    pnpm install
+    npm run codegen
   ports:
     - 4000
   environment:
@@ -14,10 +16,15 @@ vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
     peacock.remoteColor: "#3d2160"
+    filewatcher.commands:
+      - match: "\\.gql"
+        cmd: cd ${workspaceRoot} && npm run codegen
+        event: onFileChange
   extensions:
     - johnpapa.vscode-peacock
     - GraphQL.vscode-graphql
     - esbenp.prettier-vscode
+    - appulate.filewatcher
 extras:
   - node-modules-volume
   - traefik

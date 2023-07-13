@@ -4,22 +4,28 @@ devcontainer:
     user:
       - RUN pip install ariadne-codegen --break-system-packages
       - ENV PATH="${HOME}/.local/bin:${PATH}"
+  initialize: ariadne-codegen
 vscode:
   settings:
     peacock.remoteColor: "#000000"
     python.formatting.provider: none
     "[python]":
       editor.defaultFormatter: ms-python.black-formatter
+    filewatcher.commands:
+      - match: "\\.graphql"
+        cmd: cd ${workspaceRoot} && ariadne-codegen
+        event: onFolderChange
   extensions:
     - johnpapa.vscode-peacock
     - GraphQL.vscode-graphql
+    - appulate.filewatcher
     - ms-python.black-formatter
 extras:
   - traefik
 traefik:
   network: intranet
 precommit: |
-  ariadne-codegen --config precommit.toml
+  ariadne-codegen
   black ./*.py
   pylint ./*.py
 prettier:

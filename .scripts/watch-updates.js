@@ -9,7 +9,8 @@ cp.execSync("git ls-files", { encoding: "utf-8" })
     (file) =>
       file.endsWith(".gitignore") ||
       file.endsWith(".project.yaml") ||
-      file.endsWith(".scripts/synchronize.js")
+      file.endsWith(".scripts/synchronize.js") ||
+      file.endsWith("/typedefs.gql")
   )
   .forEach((file) => {
     console.log(`Watching ${file}`);
@@ -23,6 +24,12 @@ cp.execSync("git ls-files", { encoding: "utf-8" })
 
       if (file.endsWith(".project.yaml")) {
         cp.execSync(`sh ${path.dirname(file)}/.update_devcontainer.sh`, {
+          stdio: "inherit",
+        });
+      }
+
+      if (file.endsWith("/typedefs.gql")) {
+        cp.execSync(`node ${scriptRoot}/merge-graphql-schemas.js`, {
           stdio: "inherit",
         });
       }
