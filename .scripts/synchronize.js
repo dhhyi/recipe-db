@@ -104,12 +104,7 @@ function writePrettierConfigs(availableProjects) {
     const overridesContent =
       overrides.length > 0
         ? `overrides: [${overrides
-            .map(
-              (override) =>
-                `{ files: [${override.files.map(
-                  (f) => `"${f}"`
-                )}], options: { parser: "${override.parser}" } }`
-            )
+            .map(([files, options]) => JSON.stringify({ files, options }))
             .join(", ")}],`
         : "";
 
@@ -123,10 +118,27 @@ function writePrettierConfigs(availableProjects) {
     return prettier.format(content, { parser: "flow" });
   };
 
-  const rootPrettierPlugins = ["prettier-plugin-sh", "prettier-plugin-toml"];
+  const rootPrettierPlugins = [
+    "prettier-plugin-sh",
+    "prettier-plugin-toml",
+    "@prettier/plugin-xml",
+  ];
+  const sharedOverrides = [
+    [
+      ["*.svg"],
+      {
+        parser: "xml",
+        xmlWhitespaceSensitivity: "ignore",
+        xmlQuoteAttributes: "double",
+        printWidth: 200,
+      },
+    ],
+  ];
+
   const rootConfig = prettierConfig(rootPrettierPlugins, [
-    { files: [".husky/*-*"], parser: "sh" },
-    { files: ["LICENSE"], parser: "markdown" },
+    [[".husky/*-*"], { parser: "sh" }],
+    [["LICENSE"], { parser: "markdown" }],
+    ...sharedOverrides,
   ]);
 
   console.log(`Writing .prettierrc.cjs ...`);
@@ -143,7 +155,7 @@ function writePrettierConfigs(availableProjects) {
       project,
       ".prettierrc.cjs"
     );
-    const projectPrettierConfig = prettierConfig(plugins, []);
+    const projectPrettierConfig = prettierConfig(plugins, sharedOverrides);
 
     fs.writeFileSync(projectPrettierConfigPath, projectPrettierConfig);
   });
