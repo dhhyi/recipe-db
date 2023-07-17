@@ -1,0 +1,34 @@
+---
+import type { Ingredient, Recipe } from "../generated/graphql";
+
+import RecipeIngredientsTable from "./RecipeIngredientsTable.astro";
+
+const recipe = Astro.props.recipe as Recipe;
+const ingredients = recipe?.ingredients ?? [];
+
+const [requiredIngredients, optionalIngredients] = ingredients.reduce<
+  [Ingredient[], Ingredient[]]
+>(
+  ([required, optional], ingredient) => {
+    if (ingredient.optional) {
+      return [required, [...optional, ingredient]];
+    } else {
+      return [[...required, ingredient], optional];
+    }
+  },
+  [[], []]
+);
+---
+
+<h2 class="hidden">Zutaten</h2>
+<div class="sm:text-justify md:text-2xl text-xl py-4 px-2">
+  <div><RecipeIngredientsTable ingredients={requiredIngredients} /></div>
+  {
+    optionalIngredients.length > 0 && (
+      <div class="pt-4">
+        <h3>optional</h3>
+        <RecipeIngredientsTable ingredients={optionalIngredients} />
+      </div>
+    )
+  }
+</div>

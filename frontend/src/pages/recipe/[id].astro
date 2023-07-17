@@ -1,5 +1,7 @@
 ---
 import Rating from "../../components/Rating.svelte";
+import RecipeIngredients from "../../components/RecipeIngredients.astro";
+import RecipeMethod from "../../components/RecipeMethod.astro";
 import { RecipeById, type RecipeByIdQuery } from "../../generated/graphql";
 import Layout from "../../layouts/default.astro";
 import { fetchGraphQL } from "../../shared/fetch-data";
@@ -11,6 +13,12 @@ const recipe = query.recipe;
 ---
 
 <Layout>
-  <h1>{recipe?.name}</h1>
-  <Rating client:only id={id} />
+  <div class="flex items-center flex-col md:flex-row">
+    <h1 class="md:flex-grow">{recipe?.name}</h1>
+    <div class="md:pr-4 pr-0">
+      <Rating client:only id={id} />
+    </div>
+  </div>
+  <RecipeIngredients recipe={recipe} />
+  <RecipeMethod recipe={recipe} />
 </Layout>

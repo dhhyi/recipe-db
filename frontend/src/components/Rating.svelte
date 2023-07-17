@@ -14,7 +14,7 @@
   }
 </script>
 
-<div class="rating">
+<div>
   {#await fetchRating()}
     <p>...loading</p>
   {:then rating}
