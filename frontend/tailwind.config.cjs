@@ -12,20 +12,23 @@ module.exports = {
   plugins: [
     function ({ addComponents, theme }) {
       addComponents({
-        h1: {
-          padding: theme("spacing.4"),
+        ".h1": {
+          paddingBottom: theme("spacing.4"),
+          paddingTop: theme("spacing.4"),
           margin: "auto",
           fontSize: theme("fontSize.3xl"),
           fontWeight: theme("fontWeight.bold"),
         },
-        h2: {
-          padding: theme("spacing.3"),
+        ".h2": {
+          paddingBottom: theme("spacing.3"),
+          paddingTop: theme("spacing.3"),
           margin: "auto",
           fontSize: theme("fontSize.2xl"),
           fontWeight: theme("fontWeight.bold"),
         },
-        h3: {
-          padding: theme("spacing.2"),
+        ".h3": {
+          paddingBottom: theme("spacing.2"),
+          paddingTop: theme("spacing.2"),
           margin: "auto",
           fontSize: theme("fontSize.xl"),
           fontWeight: theme("fontWeight.bold"),

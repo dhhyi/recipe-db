@@ -6,7 +6,7 @@ const recipe: Recipe = Astro.props.recipe;
 ---
 
 <div class="border-2 border-gray-500 w-full rounded flex flex-col items-center">
-  <h2><a href={"/recipe/" + recipe.id}>{recipe?.name}</a></h2>
+  <h2 class="h2"><a href={"/recipe/" + recipe.id}>{recipe?.name}</a></h2>
   {
     recipe.rating && (
       <div class="mb-3">
