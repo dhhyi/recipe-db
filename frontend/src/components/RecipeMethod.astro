@@ -6,6 +6,6 @@ const method = recipe?.method?.split("\n\n") ?? [];
 ---
 
 <h2 class="hidden">Anleitung</h2>
-<div class="sm:text-justify md:text-2xl text-xl py-4 px-2">
+<div class="sm:text-justify md:text-2xl text-xl py-4">
   {method.map((step) => <p class="py-2">{step}</p>)}
 </div>

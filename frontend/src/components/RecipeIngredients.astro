@@ -21,12 +21,12 @@ const [requiredIngredients, optionalIngredients] = ingredients.reduce<
 ---
 
 <h2 class="hidden">Zutaten</h2>
-<div class="sm:text-justify md:text-2xl text-xl py-4 px-2">
+<div class="sm:text-justify md:text-2xl text-xl py-4">
   <div><RecipeIngredientsTable ingredients={requiredIngredients} /></div>
   {
     optionalIngredients.length > 0 && (
       <div class="pt-4">
-        <h3>optional</h3>
+        <h3 class="h3">optional</h3>
         <RecipeIngredientsTable ingredients={optionalIngredients} />
       </div>
     )
