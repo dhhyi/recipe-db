@@ -1,0 +1,11 @@
+---
+import type { Recipe } from "../generated/graphql";
+
+const recipe = Astro.props.recipe as Recipe;
+const method = recipe?.method?.split("\n\n") ?? [];
+---
+
+<h2 class="hidden">Anleitung</h2>
+<div class="sm:text-justify md:text-2xl text-xl py-4 px-2">
+  {method.map((step) => <p class="py-2">{step}</p>)}
+</div>

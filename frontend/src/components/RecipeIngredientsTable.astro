@@ -1,0 +1,30 @@
+---
+import type { Ingredient } from "../generated/graphql";
+
+const ingredients = Astro.props.ingredients as Ingredient[];
+
+function combineAmountAndUnit(ingredient: Ingredient): string {
+  if (ingredient.unit && ingredient.amount) {
+    return `${ingredient.amount} ${ingredient.unit}`;
+  } else if (ingredient.unit) {
+    return `${ingredient.unit}`;
+  } else if (ingredient.amount) {
+    return `${ingredient.amount}`;
+  } else {
+    return "";
+  }
+}
+---
+
+<table class="w-full">
+  {
+    ingredients.map((ingredient) => (
+      <tr>
+        <td class="md:w-40 sm:w-1/4 w-1/3 text-right pr-4">
+          {combineAmountAndUnit(ingredient)}
+        </td>
+        <td>{ingredient.name}</td>
+      </tr>
+    ))
+  }
+</table>
