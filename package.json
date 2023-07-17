@@ -4,12 +4,17 @@
     "prepare": "husky install && npm run synchronize && npm run generate-docker-compose prepare",
     "synchronize": "node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js",
     "in-devcontainer": "node .scripts/run-in-devcontainer.js",
-    "generate-docker-compose": "node .scripts/generate-docker-compose.js",
+    "generate-docker-compose": "node .scripts/merge-graphql-schemas.js && node .scripts/generate-docker-compose.js",
     "test-project": "node .scripts/test-project.js"
   },
-  "devDependencies": {
+  "dependencies": {
     "@graphql-tools/load-files": "^7.0.0",
     "@graphql-tools/merge": "^9.0.0",
+    "glob": "^10.3.0",
+    "graphql": "^16.7.1",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
     "eslint": "^8.0.1",
     "eslint-config-prettier": "^8.8.0",
     "eslint-config-standard": "^17.1.0",
@@ -17,10 +22,7 @@
     "eslint-plugin-n": "^15.0.0 || ^16.0.0 ",
     "eslint-plugin-promise": "^6.0.0",
     "eslint-plugin-unused-imports": "^2.0.0",
-    "glob": "^10.3.0",
-    "graphql": "^16.7.1",
     "husky": "*",
-    "js-yaml": "^4.1.0",
     "prettier": "^2.8.8",
     "prettier-plugin-sh": "^0.12.8",
     "prettier-plugin-toml": "^0.3.1"

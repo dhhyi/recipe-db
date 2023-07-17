@@ -1,11 +1,12 @@
 const path = require("path");
 const fs = require("fs");
-const glob = require("glob");
+const { projectRoot, checkInstallDependencies } = require("./shared");
+
+checkInstallDependencies();
 
 const { loadFilesSync } = require("@graphql-tools/load-files");
 const { mergeTypeDefs } = require("@graphql-tools/merge");
 const { print } = require("graphql");
-const { projectRoot } = require("./shared");
 
 const loadedFiles = loadFilesSync(
   path.join(projectRoot, "apollo/src/**/*.gql")
@@ -13,6 +14,7 @@ const loadedFiles = loadFilesSync(
 const typeDefs = mergeTypeDefs(loadedFiles);
 const printedTypeDefs = print(typeDefs);
 
+const glob = require("glob");
 glob.sync(path.join(projectRoot, "*/.needs-graphql-schema")).forEach((file) => {
   const dir = path.basename(path.dirname(file));
   const schemaPath = path.join(dir, "merged-schema.graphql");

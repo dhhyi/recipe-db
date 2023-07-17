@@ -6,7 +6,10 @@ const {
   projectRoot,
   scriptRoot,
   getProjectConfig,
+  checkInstallDependencies,
 } = require("./shared");
+
+checkInstallDependencies();
 
 const dockerComposeTargetPath = path.join(projectRoot, "docker-compose.yml");
 const args = process.argv.slice(2);
@@ -42,23 +45,16 @@ const availableDeployProjects = availableProjects.filter(
     (!BACKEND || project !== "frontend")
 );
 
-const devProjects = [];
+let devProjects = [];
 
 if (DEV) {
-  const requestedDevProjects = availableDeployProjects.filter((project) =>
+  devProjects = availableDeployProjects.filter((project) =>
     args.includes(project)
   );
-  devProjects.push(...requestedDevProjects);
-  devProjects.push("demo-data");
-
-  if (requestedDevProjects.length > 0) {
-    console.log(
-      `Setting up VSCode attaching for ${requestedDevProjects.join(", ")}...`
-    );
+  if (devProjects.length > 0) {
+    console.log(`Setting up VSCode attaching for ${devProjects.join(", ")}...`);
   }
 }
-
-const yaml = require("js-yaml");
 
 function flattenObject(obj) {
   const result = [];
@@ -267,6 +263,8 @@ availableProjects.forEach((project) => {
 
   dockerCompose.services[project] = service;
 });
+
+const yaml = require("js-yaml");
 
 console.log("Writing docker-compose.yml ...");
 fs.writeFileSync(
