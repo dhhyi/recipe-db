@@ -21,10 +21,13 @@ if (typeof window !== "undefined") {
 <template>
   <nav
     :class="{ scrolled: !view.atTopOfPage }"
-    class="fixed flex w-full bg-white shadow-md items-center justify-between flex-wrap p-5 m-auto top-0"
+    class="fixed flex w-full bg-white shadow-md items-center justify-between flex-wrap m-auto top-0"
   >
     <div class="container mx-auto">
-      <a class="mx-2" href="/">Startseite</a>
+      <a class="mx-4 my-4 flex items-center" href="/"
+        ><img src="/assets/chefs-hat.svg" alt="Startseite" width="30" />
+        <span class="mx-4 text-2xl hidden sm:block">Rezeptsammlung</span>
+      </a>
     </div>
   </nav>
   <div class="h-16"></div>
