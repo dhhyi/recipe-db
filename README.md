@@ -70,6 +70,8 @@ The backend is organized in a variety of services where the only one _actually_ 
 
 Implemented using [Golang](https://go.dev/), web framework [Gin](https://gin-gonic.com/) and [Clover](https://github.com/ostafen/clover) as document database.
 
+Still open: versioning of recipe data and rollback of edits.
+
 Integration testing done in [Venom](https://github.com/ovh/venom).
 
 ### Ratings
@@ -105,9 +107,19 @@ User can track when he had a certain recipe.
 - Variant of
 - Side dish
 
+### Inspiration
+
+Sources of inspiration web links for this recipe.
+
 ## Cross Concerns
 
+### Authentication
+
+Probably [Google oAuth via traefik](https://www.libe.net/traefik-auth).
+
 ### searching
+
+Maybe with [OpenSearch](https://opensearch.org/docs/latest/) or [Quickwit](https://quickwit.io/docs/get-started/quickstart).
 
 - by name
 - by rating for user
@@ -115,7 +127,7 @@ User can track when he had a certain recipe.
 
 ### Caching and updating
 
-Message queue notify on update -> prerender and cache page again.
+Message queue notify on update -> pre-render and cache page again.
 
 ### Resilience
 
