@@ -1,0 +1,9 @@
+extend type Recipe {
+  inspirations: [String]
+}
+
+extend type Mutation {
+  deleteInspirationsForTesting: Boolean
+
+  setInspirations(id: ID!, inspirations: [String]!): Boolean
+}

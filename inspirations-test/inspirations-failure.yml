@@ -1,0 +1,77 @@
+name: Inspirations CRUD
+
+testcases:
+  - name: Clear inspirations
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/"
+          method: DELETE
+        response:
+          statusCode: 204
+
+  - name: Check no inspiration
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404
+
+  - name: Try create inspiration with faulty json
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: PUT
+          body: '{"'
+        response:
+          statusCode: 400
+
+  - name: Check inspiration should not exist
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404
+
+  - name: Try create inspiration with not an array
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: PUT
+          body: '{"not": "an array"}'
+        response:
+          statusCode: 400
+
+  - name: Check inspiration should not exist
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404
+
+  - name: Try create inspiration with array of not only strings
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: PUT
+          body: '["a string", 1234]'
+        response:
+          statusCode: 400
+
+  - name: Check inspiration should not exist
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404

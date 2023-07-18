@@ -1,0 +1,43 @@
+extends: dcc://lua
+devcontainer:
+  build:
+    packages:
+      - build-essential
+      - m4
+      - cmake
+      - libssl-dev
+    root:
+      - RUN luarocks install --server=https://luarocks.org/dev luaformatter
+      - RUN luarocks install luacheck
+  ports:
+    - 8800
+  environment:
+    TESTING: "true"
+  initialize: |
+    luarocks make --tree lua_modules
+    luarocks install https://raw.githubusercontent.com/dhhyi/Milua/main/milua-0.1-1.rockspec --tree lua_modules
+    luarocks path --tree lua_modules >> ~/.zshrc
+vscode:
+  settings:
+    Lua.format.enable: false
+    peacock.remoteColor: "#1db8e8"
+  extensions:
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        inspirations:
+          rule: PathPrefix(`/inspirations`)
+          entrypoints: rest-internal
+prettier:
+  ignore:
+    - "*.lua"
+    - "*.rockspec"
+precommit: |
+  lua-format *.lua -i
+  lua-format *.rockspec -i --column-table-limit=1
+  luacheck *.lua

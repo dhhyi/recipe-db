@@ -229,6 +229,17 @@ availableProjects.forEach((project) => {
         service.volumes.push("./ratings/db.sqlite:/app/db.sqlite");
       }
       break;
+    case "inspirations":
+      if (PROD) {
+        if (!service.volumes) {
+          service.volumes = [];
+        }
+        if (!fs.existsSync("./inspirations/database.json")) {
+          cp.execSync("touch ./inspirations/database.json");
+        }
+        service.volumes.push("./inspirations/database.json:/app/database.json");
+      }
+      break;
     case "recipes":
       if (PROD) {
         if (!service.volumes) {
