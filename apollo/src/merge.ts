@@ -1,6 +1,11 @@
 import { mergeResolvers, mergeTypeDefs } from "@graphql-tools/merge";
 
 import { type Resolvers } from "./generated/graphql.js";
+import { inspirationsContext } from "./inspirations/context.js";
+import {
+  inspirationsResolvers,
+  inspirationsTypeDefs,
+} from "./inspirations/index.js";
 import {
   ratingsTypeDefs,
   ratingsResolvers,
@@ -16,11 +21,13 @@ import {
 
 export const typeDefs = mergeTypeDefs([
   require("./typedefs.gql"),
+  inspirationsTypeDefs,
   ratingsTypeDefs,
   recipesTypeDefs,
 ]);
 
 export const context = {
+  ...inspirationsContext,
   ...ratingsContext,
   ...recipesContext,
 };
@@ -28,6 +35,7 @@ export const context = {
 type Context = RatingsContext & RecipesContext;
 
 export const resolvers: Resolvers<Context> = mergeResolvers([
+  inspirationsResolvers,
   ratingsResolvers,
   recipesResolvers,
 ]);

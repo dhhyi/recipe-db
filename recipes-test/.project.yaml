@@ -1,6 +1,6 @@
 language:
   name: venom
-  binary: venom
+  binary: venom-run
   version: venom version
 devcontainer:
   build:
