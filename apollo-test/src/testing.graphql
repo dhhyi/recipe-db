@@ -1,7 +1,11 @@
+mutation DeleteRecipesForTesting {
+  deleteRecipesForTesting
+}
+
 mutation DeleteRatingsForTesting {
   deleteRatingsForTesting
 }
 
-mutation DeleteRecipesForTesting {
-  deleteRecipesForTesting
+mutation DeleteInspirationsForTesting {
+  deleteInspirationsForTesting
 }

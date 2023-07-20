@@ -1,0 +1,15 @@
+query RecipeByIdWithInspirationQuery($id: ID!) {
+  recipe(id: $id) {
+    name
+    inspirations {
+      title
+      description
+      favicon
+      canonical
+    }
+  }
+}
+
+mutation SetInspirationsMutation($id: ID!, $inspirations: [String]!) {
+  setInspirations(id: $id, inspirations: $inspirations)
+}

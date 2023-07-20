@@ -240,6 +240,17 @@ availableProjects.forEach((project) => {
         service.volumes.push("./inspirations/database.json:/app/database.json");
       }
       break;
+    case "link-extract":
+      if (PROD) {
+        if (!service.volumes) {
+          service.volumes = [];
+        }
+        if (!fs.existsSync("./link-extract/db.json")) {
+          cp.execSync("touch ./link-extract/db.json");
+        }
+        service.volumes.push("./link-extract/db.json:/app/db.json");
+      }
+      break;
     case "recipes":
       if (PROD) {
         if (!service.volumes) {

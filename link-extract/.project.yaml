@@ -1,0 +1,39 @@
+language:
+  name: deno
+  binary: deno
+  binaryArgs: run
+devcontainer:
+  build:
+    root:
+      - ADD https://deno.land/x/install/install.sh /tmp/install.sh
+      - RUN sh /tmp/install.sh && mv /root/.deno/bin/deno /usr/local/bin/deno
+  selftest: deno eval 'console.log("Hello world!")'
+  ports:
+    - 8081
+vscode:
+  settings:
+    deno.enable: true
+    deno.lint: true
+    "[typescript]":
+      editor.defaultFormatter: denoland.vscode-deno
+    peacock.remoteColor: "#241031"
+  extensions:
+    - johnpapa.vscode-peacock
+    - denoland.vscode-deno
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        link-extract:
+          rule: PathPrefix(`/link-extract`)
+          entrypoints: rest-internal
+prettier:
+  ignore:
+    - "*.ts"
+precommit: |
+  deno fmt
+  deno lint
+  deno task build
