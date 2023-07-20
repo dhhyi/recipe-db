@@ -251,6 +251,17 @@ availableProjects.forEach((project) => {
         service.volumes.push("./link-extract/db.json:/app/db.json");
       }
       break;
+    case "image-inline":
+      if (PROD) {
+        if (!service.volumes) {
+          service.volumes = [];
+        }
+        if (!fs.existsSync("./image-inline/db")) {
+          cp.execSync("mkdir -p ./image-inline/db");
+        }
+        service.volumes.push("./image-inline/db:/app/db");
+      }
+      break;
     case "recipes":
       if (PROD) {
         if (!service.volumes) {

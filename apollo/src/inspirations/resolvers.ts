@@ -21,12 +21,22 @@ const Mutation: MutationResolvers<InspirationsContext> = {
 };
 
 const Recipe: RecipeResolvers<InspirationsContext> = {
-  inspirations: async (source, _args, { inspirationsAPI, linkExtractAPI }) => {
+  inspirations: async (
+    source,
+    _args,
+    { inspirationsAPI, linkExtractAPI, imageInlineAPI }
+  ) => {
     const inspirations = await inspirationsAPI.getInspirations(source.id);
     return await Promise.all(
-      inspirations.map(
-        async (url) => await linkExtractAPI.getExtractedLink(url)
-      )
+      inspirations.map(async (url) => {
+        const response = await linkExtractAPI.getExtractedLink(url);
+        if (response.favicon?.startsWith("http")) {
+          response.favicon = await imageInlineAPI.getInlinedImage(
+            response.favicon
+          );
+        }
+        return response;
+      })
     );
   },
 };
