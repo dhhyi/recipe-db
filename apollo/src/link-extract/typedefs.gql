@@ -1,0 +1,6 @@
+type ExtractedLink {
+  canonical: String
+  description: String
+  favicon: String
+  title: String
+}

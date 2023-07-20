@@ -6,6 +6,7 @@ import {
   inspirationsResolvers,
   inspirationsTypeDefs,
 } from "./inspirations/index.js";
+import { linkExtractTypeDefs } from "./link-extract/index.js";
 import {
   ratingsTypeDefs,
   ratingsResolvers,
@@ -22,6 +23,7 @@ import {
 export const typeDefs = mergeTypeDefs([
   require("./typedefs.gql"),
   inspirationsTypeDefs,
+  linkExtractTypeDefs,
   ratingsTypeDefs,
   recipesTypeDefs,
 ]);

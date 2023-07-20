@@ -1,5 +1,5 @@
 extend type Recipe {
-  inspirations: [String]
+  inspirations: [ExtractedLink]
 }
 
 extend type Mutation {
