@@ -1,0 +1,29 @@
+extends: dcc://perl
+devcontainer:
+  build:
+    packages:
+      - libdancer2-perl
+      - libswitch-perl
+      - perltidy
+  ports:
+    - 3000
+vscode:
+  settings:
+    peacock.remoteColor: "#0c9c90"
+  extensions:
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        image-inline:
+          rule: PathPrefix(`/image-inline`)
+          entrypoints: rest-internal
+prettier:
+  ignore:
+    - "*.pl"
+precommit: |
+  perltidy -b *.pl
