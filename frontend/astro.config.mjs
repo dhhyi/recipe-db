@@ -11,4 +11,9 @@ export default defineConfig({
     mode: "standalone",
   }),
   integrations: [svelte(), tailwind(), vue()],
+  vite: {
+    ssr: {
+      noExternal: ["vue", "vue-feather", "feather-icons"],
+    },
+  },
 });

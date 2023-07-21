@@ -1,6 +1,7 @@
 ---
 import Rating from "../../components/Rating.svelte";
 import RecipeIngredients from "../../components/RecipeIngredients.astro";
+import RecipeInspirations from "../../components/RecipeInspirations.vue";
 import RecipeMethod from "../../components/RecipeMethod.astro";
 import { RecipeById, type RecipeByIdQuery } from "../../generated/graphql";
 import Layout from "../../layouts/default.astro";
@@ -21,4 +22,5 @@ const recipe = query.recipe;
   </div>
   <RecipeIngredients recipe={recipe} />
   <RecipeMethod recipe={recipe} />
+  <RecipeInspirations recipe={recipe} />
 </Layout>
