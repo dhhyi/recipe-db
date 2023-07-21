@@ -27,6 +27,12 @@ query RecipeById($id: ID!) {
       unit
       optional
     }
+    inspirations {
+      title
+      description
+      canonical
+      favicon
+    }
   }
 }
 

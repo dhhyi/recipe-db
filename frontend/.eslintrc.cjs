@@ -69,7 +69,11 @@ module.exports = {
       files: ["*.vue"],
       extends: ["plugin:vue/vue3-recommended", "prettier"],
       parser: "vue-eslint-parser",
-      parserOptions: {},
+      parserOptions: {
+        parser: "@typescript-eslint/parser",
+        extraFileExtensions: [".vue"],
+        project: "./tsconfig.eslint.vue.json",
+      },
       rules: {},
     },
     {
