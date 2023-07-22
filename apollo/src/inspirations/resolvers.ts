@@ -3,6 +3,7 @@ import type {
   RecipeResolvers,
   Resolvers,
 } from "../generated/graphql.js";
+import { urlExtraction } from "../link-extract/index.js";
 
 import type { InspirationsContext } from "./context.js";
 
@@ -21,22 +22,16 @@ const Mutation: MutationResolvers<InspirationsContext> = {
 };
 
 const Recipe: RecipeResolvers<InspirationsContext> = {
-  inspirations: async (
-    source,
-    _args,
-    { inspirationsAPI, linkExtractAPI, imageInlineAPI }
-  ) => {
-    const inspirations = await inspirationsAPI.getInspirations(source.id);
+  inspirations: async (source, _args, context) => {
+    const inspirations = await context.inspirationsAPI.getInspirations(
+      source.id
+    );
     return await Promise.all(
-      inspirations.map(async (url) => {
-        const response = await linkExtractAPI.getExtractedLink(url);
-        if (response.favicon?.startsWith("http")) {
-          response.favicon = await imageInlineAPI.getInlinedImage(
-            response.favicon
-          );
-        }
-        return response;
-      })
+      inspirations.map(async (url) =>
+        url?.startsWith("http")
+          ? await urlExtraction(context, url)
+          : { title: url }
+      )
     );
   },
 };
