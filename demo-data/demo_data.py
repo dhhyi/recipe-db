@@ -41,6 +41,11 @@ def load_txt(file):
         return [line for line in content.read().split("\n") if line]
 
 
+def load_md(file):
+    with open(file, mode="r", encoding="utf-8") as content:
+        return content.read().strip()
+
+
 def file_exists(file):
     try:
         with open(file, mode="r", encoding="utf-8"):
@@ -57,8 +62,10 @@ async def rate_recipe(recipe_id, rating, user):
 
 async def random_rate_recipe(recipe_id):
     users = ["joe", "jane", "bob", "alice", "eve"]
-    for _ in range(1, 10):
-        await rate_recipe(recipe_id, random.randint(1, 5), random.choice(users))
+
+    random_users = random.sample(users, random.randint(3, 5))
+    for user in random_users:
+        await rate_recipe(recipe_id, random.randint(1, 5), user)
 
 
 async def set_inspirations(recipe_id, inspirations):
@@ -67,24 +74,27 @@ async def set_inspirations(recipe_id, inspirations):
     print(f"-> {result}")
 
 
+async def insert_recipe(number):
+    recipe = load_json(f"recipe{number}.json")
+    recipe["method"] = load_md(f"recipe{number}.method.md")
+    recipe_id = await add_recipe(recipe)
+    if file_exists(f"recipe{number}.inspirations.txt"):
+        await set_inspirations(recipe_id, load_txt(f"recipe{number}.inspirations.txt"))
+    return recipe_id
+
+
 async def main():
     args = sys.argv[1:]
     if len(args) == 1 and args[0] == "--delete":
         await delete_everything()
 
-    recipe_id = await add_recipe(load_json("recipe1.json"))
-    if file_exists("recipe1.inspirations.txt"):
-        await set_inspirations(recipe_id, load_txt("recipe1.inspirations.txt"))
+    recipe_id = await insert_recipe(1)
     await rate_recipe(recipe_id, 4, "jane")
 
-    recipe_id = await add_recipe(load_json("recipe2.json"))
-    if file_exists("recipe2.inspirations.txt"):
-        await set_inspirations(recipe_id, load_txt("recipe2.inspirations.txt"))
+    recipe_id = await insert_recipe(2)
     await random_rate_recipe(recipe_id)
 
-    recipe_id = await add_recipe(load_json("recipe3.json"))
-    if file_exists("recipe3.inspirations.txt"):
-        await set_inspirations(recipe_id, load_txt("recipe3.inspirations.txt"))
+    recipe_id = await insert_recipe(3)
     await random_rate_recipe(recipe_id)
 
 

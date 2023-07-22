@@ -1,0 +1,20 @@
+{
+  "version": "0.2",
+  "import": ["@cspell/dict-de-de/cspell-ext.json"],
+  "words": [
+    "Balsamico",
+    "Carbonara",
+    "Crème",
+    "Fraîche",
+    "Risottoreis",
+    "Rundkörniger"
+  ],
+  "ignoreWords": [
+    "Cook",
+    "Instant",
+    "Pressure",
+    "amount",
+    "ingredients",
+    "keep"
+  ]
+}

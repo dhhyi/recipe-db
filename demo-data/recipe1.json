@@ -2,7 +2,7 @@
   "name": "Milchreis",
   "ingredients": [
     {
-      "name": "Rundkoerniger Reis (Milchreis, Risottoreis)",
+      "name": "Rundkörniger Reis (Milchreis, Risottoreis)",
       "amount": 1,
       "unit": "Teil"
     },
@@ -28,6 +28,5 @@
       "name": "Zimtzucker",
       "optional": true
     }
-  ],
-  "method": "Alle Zutaten in den Instant Pot geben und gut verrühren. Deckel schließen und Ventil auf Dichtung stellen. Programm \"Pressure Cook\" mit Intensität \"low\" und \"keep warm\" verwenden und für 10 Minuten kochen.\n\nNach dem Programmende 10 Minuten TNR.\nMilchreis umrühren und bis zur gewünschten Konsistenz eindicken lassen."
+  ]
 }
