@@ -23,7 +23,7 @@ async def delete_everything():
 
 async def add_recipe(recipe):
     print(f"Adding recipe {recipe['name']}")
-    result = await client.add_recipe(json.dumps(recipe))
+    result = await client.add_recipe(recipe)
     print(f"-> {result}")
 
     if result.create_recipe is None:
@@ -68,19 +68,12 @@ async def random_rate_recipe(recipe_id):
         await rate_recipe(recipe_id, random.randint(1, 5), user)
 
 
-async def set_inspirations(recipe_id, inspirations):
-    print(f"Setting inspirations for recipe {recipe_id}")
-    result = await client.set_inspirations(recipe_id, inspirations)
-    print(f"-> {result}")
-
-
 async def insert_recipe(number):
     recipe = load_json(f"recipe{number}.json")
     recipe["method"] = load_md(f"recipe{number}.method.md")
-    recipe_id = await add_recipe(recipe)
     if file_exists(f"recipe{number}.inspirations.txt"):
-        await set_inspirations(recipe_id, load_txt(f"recipe{number}.inspirations.txt"))
-    return recipe_id
+        recipe["inspirations"] = load_txt(f"recipe{number}.inspirations.txt")
+    return await add_recipe(recipe)
 
 
 async def main():

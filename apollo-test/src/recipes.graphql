@@ -23,14 +23,14 @@ query RecipeByIdQuery($id: ID!) {
   }
 }
 
-mutation CreateRecipeMutation($value: JSON!) {
+mutation CreateRecipeMutation($value: RecipeInput!) {
   createRecipe(value: $value) {
     id
     name
   }
 }
 
-mutation UpdateRecipeMutation($id: ID!, $value: JSON!) {
+mutation UpdateRecipeMutation($id: ID!, $value: RecipeInput!) {
   updateRecipe(id: $id, value: $value) {
     id
     name

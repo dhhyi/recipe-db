@@ -1,3 +1,16 @@
+input RecipeInput {
+  ingredients: [IngredientInput]
+  method: String
+  name: String!
+}
+
+input IngredientInput {
+  amount: StringOrInt
+  name: String!
+  optional: Boolean
+  unit: String
+}
+
 type Recipe {
   id: ID!
   ingredients: [Ingredient]
@@ -20,7 +33,7 @@ extend type Query {
 extend type Mutation {
   deleteRecipesForTesting: Boolean
 
-  createRecipe(value: JSON!): Recipe
-  updateRecipe(id: ID!, value: JSON): Recipe
+  createRecipe(value: RecipeInput): Recipe
+  updateRecipe(id: ID!, value: RecipeInput): Recipe
   deleteRecipe(id: ID!): Boolean
 }

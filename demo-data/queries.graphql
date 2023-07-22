@@ -2,7 +2,7 @@ mutation DeleteRecipes {
   deleteRecipesForTesting
 }
 
-mutation AddRecipe($value: JSON!) {
+mutation AddRecipe($value: RecipeInput!) {
   createRecipe(value: $value) {
     id
     name
@@ -19,8 +19,4 @@ mutation AddRating($id: ID!, $rating: Int!, $login: String!) {
 
 mutation DeleteInspirations {
   deleteInspirationsForTesting
-}
-
-mutation SetInspirations($id: ID!, $inspirations: [String!]!) {
-  setInspirations(id: $id, inspirations: $inspirations)
 }
