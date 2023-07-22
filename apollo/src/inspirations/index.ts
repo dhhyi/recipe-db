@@ -1,7 +1,5 @@
-export { InspirationsAPI } from "./api.js";
+export const typeDefs: string = require("./typedefs.gql");
 
-export const inspirationsTypeDefs: string = require("./typedefs.gql");
+export { resolvers } from "./resolvers.js";
 
-export { inspirationsResolvers } from "./resolvers.js";
-
-export { inspirationsContext, type InspirationsContext } from "./context.js";
+export { context } from "./context.js";

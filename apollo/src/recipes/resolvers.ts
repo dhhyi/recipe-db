@@ -33,7 +33,7 @@ const Mutation: MutationResolvers<RecipesContext> = {
   },
 };
 
-export const recipesResolvers: Resolvers<RecipesContext> = {
+export const resolvers: Resolvers<RecipesContext> = {
   Query,
   Mutation,
 };

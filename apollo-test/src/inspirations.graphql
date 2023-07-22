@@ -2,10 +2,13 @@ query RecipeByIdWithInspirationQuery($id: ID!) {
   recipe(id: $id) {
     name
     inspirations {
-      title
-      description
-      favicon
-      canonical
+      url
+      extracted {
+        title
+        description
+        canonical
+        favicon
+      }
     }
   }
 }

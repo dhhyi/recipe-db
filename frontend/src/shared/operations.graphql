@@ -28,10 +28,13 @@ query RecipeById($id: ID!) {
       optional
     }
     inspirations {
-      title
-      description
-      canonical
-      favicon
+      url
+      extracted {
+        title
+        description
+        canonical
+        inlinedFavicon
+      }
     }
   }
 }
