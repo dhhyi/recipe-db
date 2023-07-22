@@ -1,9 +1,12 @@
 lockfileVersion: '6.0'
 
 dependencies:
-  '@vue/server-renderer':
-    specifier: ^3.3.4
-    version: 3.3.4(vue@3.3.4)
+  vue:
+    specifier: ^3.2.30
+    version: 3.3.4
+  vue-feather:
+    specifier: ^2.0.0
+    version: 2.0.0(feather-icons@4.29.0)(vue@3.3.4)
 
 devDependencies:
   '@astrojs/node':
@@ -69,12 +72,6 @@ devDependencies:
   typescript:
     specifier: ^5.1.6
     version: 5.1.6
-  vue:
-    specifier: ^3.2.30
-    version: 3.3.4
-  vue-feather:
-    specifier: ^2.0.0
-    version: 2.0.0(feather-icons@4.29.0)(vue@3.3.4)
 
 packages:
 
@@ -3135,7 +3132,6 @@ packages:
 
   /classnames@2.3.2:
     resolution: {integrity: sha512-CSbhY4cFEJRe6/GQzIk5qXZ4Jeg5pcsP7b5peFSDpffpe1cqjASH/n9UTjBwOp6XpMSTwQ8Za2K5V02ueA7Tmw==}
-    dev: true
 
   /clean-stack@2.2.0:
     resolution: {integrity: sha512-4diC9HaTE+KRAMWhDhrGOECgWZxoevMc5TlkObMqNSsVU62PYzXZ/SMTjzyGAFF1YusgxGcSWTEXBhp0CPwQ1A==}
@@ -3278,7 +3274,6 @@ packages:
   /core-js@3.31.1:
     resolution: {integrity: sha512-2sKLtfq1eFST7l7v62zaqXacPc7uG8ZAya8ogijLhTtaKNcpzpB4TMoTw2Si+8GYKRwFPMMtUT0263QFWFfqyQ==}
     requiresBuild: true
-    dev: true
 
   /cosmiconfig@8.0.0:
     resolution: {integrity: sha512-da1EafcpH6b/TD8vDRaWV7xFINlHlF6zKsGwS1TsuVJTZRkquaS5HTMq7uq6h31619QjbsYl21gVDOm32KM1vQ==}
@@ -3889,7 +3884,6 @@ packages:
     dependencies:
       classnames: 2.3.2
       core-js: 3.31.1
-    dev: true
 
   /figures@3.2.0:
     resolution: {integrity: sha512-yaduQFRKLXYOGgEn6AZau90j3ggSOyiqXU0F9JZfeXYhNa+Jk4X+s45A2zg5jns87GAFa34BBm2kXw4XpNcbdg==}
@@ -6931,7 +6925,7 @@ packages:
     dependencies:
       feather-icons: 4.29.0
       vue: 3.3.4
-    dev: true
+    dev: false
 
   /vue@3.3.4:
     resolution: {integrity: sha512-VTyEYn3yvIeY1Py0WaYGZsXnz3y5UnGi62GjVEqvEGPl6nxbOrCXbVOTQWBEJUqAyTUk2uJ5JLVnYJ6ZzGbrSw==}
