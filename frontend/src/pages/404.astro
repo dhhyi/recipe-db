@@ -1,0 +1,10 @@
+---
+import Layout from "../layouts/default.astro";
+const message = Astro.url.searchParams.get("message");
+---
+
+<Layout>
+  <h1 class="h1">404 - Not Found</h1>
+  <h2 class="h2">Der Inhalt dieser Seite ist nicht verfügbar.</h2>
+  <p>Die Fehlernachricht vom Server war: <b>{message}</b></p>
+</Layout>

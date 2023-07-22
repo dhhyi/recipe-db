@@ -12,4 +12,6 @@ https://chrisdermody.com/tailwind-css-static-navbar-with-shadow-on-scroll/
 https://github.com/edazpotato/astro-feather-icons#readme
 https://svelte.dev/docs/svelte-components#style
 
+https://javascript.plainenglish.io/return-custom-404-responses-in-astro-b844b0e0146d
+
 https://github.com/nanostores/nanostores

@@ -94,7 +94,7 @@ if (import.meta.main) {
       res.headers["Content-Type"] = "application/json";
       res.reply = JSON.stringify(meta);
     } catch (error) {
-      console.log("ERROR", error.message);
+      console.log("ERROR\t", error.message);
       if (error.message.startsWith("Invalid URL")) {
         res.reply = "Please provide a valid url query parameter";
         res.status = 400;

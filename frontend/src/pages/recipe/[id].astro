@@ -5,11 +5,27 @@ import RecipeInspirations from "../../components/RecipeInspirations.vue";
 import RecipeMethod from "../../components/RecipeMethod.astro";
 import { RecipeById, type RecipeByIdQuery } from "../../generated/graphql";
 import Layout from "../../layouts/default.astro";
-import { fetchGraphQL } from "../../shared/fetch-data";
+import { Custom404Error, fetchGraphQL } from "../../shared/fetch-data";
 
 const id = Astro.params.id;
 
-const query = await fetchGraphQL<RecipeByIdQuery>(RecipeById, { id });
+let query: RecipeByIdQuery;
+try {
+  query = await fetchGraphQL<RecipeByIdQuery>(RecipeById, { id });
+} catch (error) {
+  if (error instanceof Custom404Error) {
+    const port = process.env.PORT ?? 3000;
+    const errorPageUrl = `http://localhost:${port}/404?message=${error.message}`;
+    const errorPage = await fetch(errorPageUrl);
+    return new Response(errorPage.body, {
+      headers: errorPage.headers,
+      status: 404,
+      statusText: "Not Found",
+    });
+  } else {
+    throw error;
+  }
+}
 const recipe = query.recipe;
 ---
 
