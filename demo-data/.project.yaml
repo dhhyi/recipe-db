@@ -1,6 +1,11 @@
 extends: dcc://python
 devcontainer:
   build:
+    packages:
+      - nodejs
+      - npm
+    root:
+      - RUN npm install -g cspell @cspell/dict-de-de && cspell link add @cspell/dict-de-de
     user:
       - RUN pip install ariadne-codegen --break-system-packages
       - ENV PATH="${HOME}/.local/bin:${PATH}"
@@ -15,16 +20,21 @@ vscode:
       - match: "\\.graphql"
         cmd: cd ${workspaceRoot} && ariadne-codegen
         event: onFolderChange
+    cSpell.language: de-de
+    cSpell.enabledLanguageIds: ["json", "markdown"]
   extensions:
     - johnpapa.vscode-peacock
     - GraphQL.vscode-graphql
     - appulate.filewatcher
     - ms-python.black-formatter
+    - streetsidesoftware.code-spell-checker
+    - streetsidesoftware.code-spell-checker-german
 extras:
   - traefik
 traefik:
   network: intranet
 precommit: |
+  cspell --locale de-de recipe*.{json,md}
   ariadne-codegen
   black ./*.py
   pylint ./*.py

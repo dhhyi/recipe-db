@@ -173,7 +173,7 @@ function writeDockerIgnores(availableProjects) {
   const extras = `
     .project.yaml
     .gitignore
-    *.md
+    README.md
   `.replace(/^ +/gm, "");
 
   availableProjects.forEach((project) => {
