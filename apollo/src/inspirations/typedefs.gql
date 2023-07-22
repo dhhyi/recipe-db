@@ -2,6 +2,10 @@ extend type Recipe {
   inspirations: [Link]
 }
 
+extend input RecipeInput {
+  inspirations: [String]
+}
+
 extend type Mutation {
   deleteInspirationsForTesting: Boolean
 

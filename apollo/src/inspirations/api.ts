@@ -1,10 +1,16 @@
 import { RESTDataSource } from "@apollo/datasource-rest";
 import { type GraphQLError } from "graphql";
 
+import { addHandler } from "../handlers.js";
+
 export class InspirationsAPI extends RESTDataSource {
   constructor() {
     super();
     this.baseURL = process.env.REST_ENDPOINT + "/inspirations/";
+
+    addHandler("inspirations", async (id: string, data: string[]) => {
+      return await this.setInspirations(id, data);
+    });
   }
 
   async deleteInspirationsForTesting(): Promise<boolean> {

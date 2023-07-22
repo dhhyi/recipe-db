@@ -1,6 +1,7 @@
 import { mergeResolvers, mergeTypeDefs } from "@graphql-tools/merge";
 
 import { type Resolvers } from "./generated/graphql.js";
+import { handlersContext } from "./handlers.js";
 import * as imageInline from "./image-inline/index.js";
 import * as inspirations from "./inspirations/index.js";
 import * as linkExtract from "./link-extract/index.js";
@@ -22,6 +23,7 @@ export const context = {
   ...linkExtract.context,
   ...ratings.context,
   ...recipes.context,
+  ...handlersContext,
 };
 
 export type Context = typeof context;

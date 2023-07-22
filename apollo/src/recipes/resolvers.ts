@@ -20,12 +20,12 @@ const Mutation: MutationResolvers<RecipesContext> = {
     return await recipesAPI.deleteRecipesForTesting();
   },
 
-  createRecipe: async (_source, { value }, { recipesAPI }) => {
-    return await recipesAPI.createRecipe(value);
+  createRecipe: async (_source, { value }, { recipesAPI, handlers }) => {
+    return await recipesAPI.createRecipe(handlers, value);
   },
 
-  updateRecipe: async (_source, { id, value }, { recipesAPI }) => {
-    return await recipesAPI.updateRecipe(id, value);
+  updateRecipe: async (_source, { id, value }, { recipesAPI, handlers }) => {
+    return await recipesAPI.updateRecipe(handlers, id, value);
   },
 
   deleteRecipe: async (_source, { id }, { recipesAPI }) => {
