@@ -9,8 +9,15 @@ export class LinkExtractAPI extends RESTDataSource {
   }
 
   async getExtractedLink(url: string): Promise<ExtractedLink> {
-    return await this.get("", {
+    return await this.get<ExtractedLink>("", {
       params: { url },
-    });
+    })
+      .then((link) => {
+        if (!link.canonical) {
+          link.canonical = url;
+        }
+        return link;
+      })
+      .catch(() => null);
   }
 }

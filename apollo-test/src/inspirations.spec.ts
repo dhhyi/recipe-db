@@ -67,16 +67,22 @@ describe("recipes", () => {
         "recipe": {
           "inspirations": [
             {
-              "canonical": null,
-              "description": null,
-              "favicon": null,
-              "title": "Example Domain",
+              "extracted": {
+                "canonical": "https://example.com",
+                "description": null,
+                "favicon": null,
+                "title": "Example Domain",
+              },
+              "url": "https://example.com",
             },
             {
-              "canonical": null,
-              "description": null,
-              "favicon": "https://google.com/favicon.ico",
-              "title": "Google",
+              "extracted": {
+                "canonical": "https://google.com",
+                "description": null,
+                "favicon": "https://google.com/favicon.ico",
+                "title": "Google",
+              },
+              "url": "https://google.com",
             },
           ],
           "name": "test",

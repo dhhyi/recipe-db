@@ -3,7 +3,6 @@ import type {
   RecipeResolvers,
   Resolvers,
 } from "../generated/graphql.js";
-import { urlExtraction } from "../link-extract/index.js";
 
 import type { InspirationsContext } from "./context.js";
 
@@ -26,17 +25,11 @@ const Recipe: RecipeResolvers<InspirationsContext> = {
     const inspirations = await context.inspirationsAPI.getInspirations(
       source.id
     );
-    return await Promise.all(
-      inspirations.map(async (url) =>
-        url?.startsWith("http")
-          ? await urlExtraction(context, url)
-          : { title: url }
-      )
-    );
+    return inspirations.map((url) => ({ url }));
   },
 };
 
-export const inspirationsResolvers: Resolvers<InspirationsContext> = {
+export const resolvers: Resolvers<InspirationsContext> = {
   Mutation,
   Recipe,
 };

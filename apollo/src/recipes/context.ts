@@ -1,7 +1,7 @@
 import { RecipesAPI } from "./api.js";
 
-export const recipesContext = {
+export const context = {
   recipesAPI: new RecipesAPI(),
 };
 
-export type RecipesContext = typeof recipesContext;
+export type RecipesContext = typeof context;

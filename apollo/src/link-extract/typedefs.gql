@@ -4,3 +4,7 @@ type ExtractedLink {
   favicon: String
   title: String
 }
+
+extend type Link {
+  extracted: ExtractedLink
+}

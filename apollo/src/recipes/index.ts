@@ -1,7 +1,5 @@
-export { RecipesAPI } from "./api.js";
+export const typeDefs: string = require("./typedefs.gql");
 
-export const recipesTypeDefs: string = require("./typedefs.gql");
+export { resolvers } from "./resolvers.js";
 
-export { recipesResolvers } from "./resolvers.js";
-
-export { recipesContext, type RecipesContext } from "./context.js";
+export { context } from "./context.js";

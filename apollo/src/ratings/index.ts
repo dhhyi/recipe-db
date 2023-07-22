@@ -1,7 +1,5 @@
-export { RatingsAPI } from "./api.js";
+export const typeDefs: string = require("./typedefs.gql");
 
-export const ratingsTypeDefs: string = require("./typedefs.gql");
+export { resolvers } from "./resolvers.js";
 
-export { ratingsResolvers } from "./resolvers.js";
-
-export { ratingsContext, type RatingsContext } from "./context.js";
+export { context } from "./context.js";

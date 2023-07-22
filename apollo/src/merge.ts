@@ -1,43 +1,35 @@
 import { mergeResolvers, mergeTypeDefs } from "@graphql-tools/merge";
 
 import { type Resolvers } from "./generated/graphql.js";
-import { inspirationsContext } from "./inspirations/context.js";
-import {
-  inspirationsResolvers,
-  inspirationsTypeDefs,
-} from "./inspirations/index.js";
-import { linkExtractTypeDefs } from "./link-extract/index.js";
-import {
-  ratingsTypeDefs,
-  ratingsResolvers,
-  ratingsContext,
-  type RatingsContext,
-} from "./ratings/index.js";
-import {
-  recipesTypeDefs,
-  recipesResolvers,
-  recipesContext,
-  type RecipesContext,
-} from "./recipes/index.js";
+import * as imageInline from "./image-inline/index.js";
+import * as inspirations from "./inspirations/index.js";
+import * as linkExtract from "./link-extract/index.js";
+import * as ratings from "./ratings/index.js";
+import * as recipes from "./recipes/index.js";
 
 export const typeDefs = mergeTypeDefs([
   require("./typedefs.gql"),
-  inspirationsTypeDefs,
-  linkExtractTypeDefs,
-  ratingsTypeDefs,
-  recipesTypeDefs,
+  imageInline.typeDefs,
+  inspirations.typeDefs,
+  linkExtract.typeDefs,
+  ratings.typeDefs,
+  recipes.typeDefs,
 ]);
 
 export const context = {
-  ...inspirationsContext,
-  ...ratingsContext,
-  ...recipesContext,
+  ...imageInline.context,
+  ...inspirations.context,
+  ...linkExtract.context,
+  ...ratings.context,
+  ...recipes.context,
 };
 
-type Context = RatingsContext & RecipesContext;
+export type Context = typeof context;
 
 export const resolvers: Resolvers<Context> = mergeResolvers([
-  inspirationsResolvers,
-  ratingsResolvers,
-  recipesResolvers,
+  imageInline.resolvers,
+  inspirations.resolvers,
+  linkExtract.resolvers,
+  ratings.resolvers,
+  recipes.resolvers,
 ]);

@@ -29,7 +29,7 @@ const Recipe: RecipeResolvers<RatingsContext> = {
   },
 };
 
-export const ratingsResolvers: Resolvers<RatingsContext> = {
+export const resolvers: Resolvers<RatingsContext> = {
   Query,
   Mutation,
   Recipe,

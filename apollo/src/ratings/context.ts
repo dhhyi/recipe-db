@@ -1,7 +1,7 @@
 import { RatingsAPI } from "./api.js";
 
-export const ratingsContext = {
+export const context = {
   ratingsAPI: new RatingsAPI(),
 };
 
-export type RatingsContext = typeof ratingsContext;
+export type RatingsContext = typeof context;

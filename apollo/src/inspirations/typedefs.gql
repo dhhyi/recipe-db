@@ -1,5 +1,5 @@
 extend type Recipe {
-  inspirations: [ExtractedLink]
+  inspirations: [Link]
 }
 
 extend type Mutation {
