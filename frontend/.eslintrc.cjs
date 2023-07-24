@@ -91,7 +91,7 @@ module.exports = {
     ecmaVersion: "latest",
     sourceType: "module",
     project: "./tsconfig.json",
-    schema: "./merged-schema.graphql",
+    schema: "./recipe-db.graphqls",
     operations: ["./src/shared/**/*.graphql"],
   },
   rules: {

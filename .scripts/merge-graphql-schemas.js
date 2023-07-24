@@ -15,9 +15,13 @@ const typeDefs = mergeTypeDefs(loadedFiles);
 const printedTypeDefs = print(typeDefs);
 
 const glob = require("glob");
-glob.sync(path.join(projectRoot, "*/.needs-graphql-schema")).forEach((file) => {
-  const dir = path.basename(path.dirname(file));
-  const schemaPath = path.join(dir, "merged-schema.graphql");
-  console.log("Writing merged schema to " + schemaPath);
-  fs.writeFileSync(schemaPath, printedTypeDefs);
-});
+glob
+  .sync(path.join(projectRoot, "**/.needs-graphql-schema"))
+  .forEach((file) => {
+    const dir = path.dirname(file);
+    const schemaPath = path.join(dir, "recipe-db.graphqls");
+    console.log(
+      "Writing merged schema to " + schemaPath.replace(projectRoot + "/", "")
+    );
+    fs.writeFileSync(schemaPath, printedTypeDefs);
+  });

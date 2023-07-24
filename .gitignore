@@ -18,6 +18,6 @@ package-lock.json
 .prettierignore
 .prettierrc.*
 docker-compose.yml
-merged-schema.graphql
+recipe-db.graphqls
 .dockerignore
 *.log*
