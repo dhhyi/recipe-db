@@ -1,0 +1,54 @@
+extends: dcc://kotlin
+devcontainer:
+  build:
+    root:
+      - ADD https://repo1.maven.org/maven2/com/facebook/ktfmt/0.44/ktfmt-0.44-jar-with-dependencies.jar /opt/ktfmt.jar
+      - RUN sudo chmod 444 -Rf /opt && sudo chmod +x /opt
+    files:
+      - type: script
+        path: /usr/bin/ktformat
+        content: |
+          #!/bin/bash
+          java -jar /opt/ktfmt.jar "$@"
+    user:
+      - RUN echo "alias gradle='./gradlew --no-daemon'" | tee -a /home/vscode/.bashrc /home/vscode/.zshrc
+  ports:
+    - 4000
+  environment:
+    TESTING: "true"
+    GRAPHQL_ENDPOINT: http://traefik/graphql
+    CONTEXT_PATH: /edit
+  initialize: ./gradlew --no-daemon tasks
+vscode:
+  settings:
+    # gradle.autoDetect: "off"
+    peacock.remoteColor: "#ea0ff2"
+  extensions:
+    - johnpapa.vscode-peacock
+    - GraphQL.vscode-graphql
+    # - vscjava.vscode-gradle
+extras:
+  - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.gradle: recipe-db-frontend-edit-gradle-user-home
+  $HOME/.vaadin: recipe-db-frontend-edit-vaadin-user-home
+  .gradle: recipe-db-frontend-edit-gradle
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        frontend-edit:
+          rule: PathPrefix(`/edit`)
+          entrypoints: web
+precommit: |
+  ktformat src build.gradle.kts
+  ./gradlew --no-daemon compileKotlin detekt
+prettier:
+  ignore:
+    - ROOT
+    - "*.kt"
+    - "*.kts"
+    - "*.jar"
+    - "*.png"

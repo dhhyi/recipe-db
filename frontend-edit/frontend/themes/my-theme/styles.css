@@ -1,0 +1,70 @@
+/*
+   CSS styling examples for the Vaadin app.
+
+   Visit https://vaadin.com/docs/styling/application-theme/ for more information.
+*/
+
+/* Example: CSS class name to center align the content . */
+.container {
+  margin: 0 auto;
+  max-width: 750px;
+}
+
+/* Example: the style is applied only to the textfields which have the `bordered` class name. */
+vaadin-text-field.bordered::part(input-field) {
+  box-shadow: inset 0 0 0 1px var(--lumo-contrast-30pct);
+  background-color: var(--lumo-base-color);
+}
+
+label {
+  color: var(--lumo-secondary-text-color);
+  font-weight: 500;
+  font-size: var(--lumo-font-size-s);
+}
+
+.ingredients {
+  width: 100%;
+}
+
+.ingredients .ingredients-amount {
+  width: 10%;
+  margin-right: 3px;
+}
+
+.ingredients .ingredients-unit {
+  width: 15%;
+  margin: 0 3px;
+}
+
+.ingredients .ingredients-ingredient {
+  width: 55%;
+  margin: 0 3px;
+}
+
+.ingredients .ingredients-optional {
+  width: 15%;
+  margin-left: 3px;
+}
+
+.ingredients.ingredients-header > label {
+  padding-left: 5px;
+  padding-top: 14px;
+}
+
+.ingredients.ingredients-header > label.ingredients-ingredient {
+  padding-left: 13px;
+}
+
+.inspirations {
+  width: 100%;
+}
+
+.inspirations > label {
+  width: 100%;
+  padding-top: 17px;
+}
+
+.inspirations > vaadin-text-field {
+  width: 100%;
+  margin-right: 3px;
+}
