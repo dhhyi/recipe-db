@@ -134,6 +134,12 @@ function writePrettierConfigs(availableProjects) {
         printWidth: 200,
       },
     ],
+    [
+      ["*.properties"],
+      {
+        parser: "sh",
+      },
+    ],
   ];
 
   const rootConfig = prettierConfig(rootPrettierPlugins, [

@@ -1,0 +1,10 @@
+exceptions:
+  TooGenericExceptionThrown:
+    active: true
+style:
+  MagicNumber:
+    active: false
+  WildcardImport:
+    active: true
+    excludeImports:
+      - com.github.mvysny.karibudsl.v10.*
