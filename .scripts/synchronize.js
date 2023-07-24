@@ -167,7 +167,7 @@ function writeDockerIgnores(availableProjects) {
     fs
       .readFileSync(path.join(projectRoot, ".gitignore"), "utf8")
       .split("\n")
-      .filter((line) => line !== "merged-schema.graphql")
+      .filter((line) => line !== "recipe-db.graphqls")
       .join("\n") + "\n";
 
   const extras = `
