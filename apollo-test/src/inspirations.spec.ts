@@ -4,7 +4,7 @@ import {
   DeleteInspirationsForTestingDocument,
   DeleteRecipesForTestingDocument,
   RecipeByIdWithInspirationQueryDocument,
-  SetInspirationsMutationDocument,
+  UpdateRecipeMutationDocument,
 } from "./generated/graphql";
 import { executeOperation } from "./helpers";
 
@@ -29,6 +29,7 @@ describe("recipes", () => {
       {
         value: {
           name: "test",
+          inspirations: ["https://example.com", "https://google.com"],
         },
       }
     );
@@ -43,20 +44,6 @@ describe("recipes", () => {
       }
     `
     );
-
-    const setInspirationsOperation = await executeOperation(
-      SetInspirationsMutationDocument,
-      {
-        id: createOperation.createRecipe.id,
-        inspirations: ["https://example.com", "https://google.com"],
-      }
-    );
-
-    expect(setInspirationsOperation).toMatchInlineSnapshot(`
-      {
-        "setInspirations": true,
-      }
-    `);
 
     expect(
       await executeOperation(RecipeByIdWithInspirationQueryDocument, {
@@ -90,4 +77,53 @@ describe("recipes", () => {
       }
     `);
   });
+
+  it.each([[null], [[]]])(
+    "should be able to remove inspirations from recipe by sending %s",
+    async (val) => {
+      const createOperation = await executeOperation(
+        CreateRecipeMutationDocument,
+        {
+          value: {
+            name: "test",
+            inspirations: ["https://example.com"],
+          },
+        }
+      );
+      expect(createOperation).toHaveProperty("createRecipe.id");
+      const getOperationBefore = await executeOperation(
+        RecipeByIdWithInspirationQueryDocument,
+        {
+          id: createOperation.createRecipe.id,
+        }
+      );
+      expect(getOperationBefore).toHaveProperty(
+        "recipe.inspirations",
+        expect.any(Array)
+      );
+      expect(getOperationBefore.recipe.inspirations).toHaveLength(1);
+
+      const deleteOperation = await executeOperation(
+        UpdateRecipeMutationDocument,
+        {
+          id: createOperation.createRecipe.id,
+          value: {
+            inspirations: val,
+          },
+        }
+      );
+      expect(deleteOperation).toHaveProperty("updateRecipe.id");
+      const getOperationAfter = await executeOperation(
+        RecipeByIdWithInspirationQueryDocument,
+        {
+          id: createOperation.createRecipe.id,
+        }
+      );
+      expect(getOperationAfter).toHaveProperty(
+        "recipe.inspirations",
+        expect.any(Array)
+      );
+      expect(getOperationAfter.recipe.inspirations).toHaveLength(0);
+    }
+  );
 });

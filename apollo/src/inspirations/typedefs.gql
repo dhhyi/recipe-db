@@ -1,5 +1,5 @@
 extend type Recipe {
-  inspirations: [Link]
+  inspirations: [Link!]!
 }
 
 extend input RecipeInput {
@@ -8,6 +8,4 @@ extend input RecipeInput {
 
 extend type Mutation {
   deleteInspirationsForTesting: Boolean
-
-  setInspirations(id: ID!, inspirations: [String]!): Boolean
 }

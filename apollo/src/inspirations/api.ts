@@ -9,7 +9,18 @@ export class InspirationsAPI extends RESTDataSource {
     this.baseURL = process.env.REST_ENDPOINT + "/inspirations/";
 
     addHandler("inspirations", async (id: string, data: string[]) => {
-      return await this.setInspirations(id, data);
+      if (data?.length) {
+        await this.setInspirations(id, data);
+      } else {
+        await this.get(id)
+          .then(async () => await this.delete(id))
+          .catch((err: GraphQLError) => {
+            const response = err.extensions?.response as { status: number };
+            if (response?.status !== 404) {
+              throw err;
+            }
+          });
+      }
     });
   }
 
