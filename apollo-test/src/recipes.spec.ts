@@ -141,4 +141,45 @@ describe("recipes", () => {
       }
     `);
   });
+
+  it.each([[""], [null]])(
+    "should not be able to add a recipe with '%s' name",
+    async (val) => {
+      try {
+        await executeOperation(CreateRecipeMutationDocument, {
+          value: {
+            name: val,
+          },
+        });
+        throw new Error("should have thrown");
+      } catch (error) {
+        expect(error?.message).toEqual(
+          "400: Bad Request: Missing field value for name (service: recipes)"
+        );
+      }
+    }
+  );
+
+  it.each([[""], [null]])(
+    "should not be able to change the name of recipe to '%s'",
+    async (val) => {
+      const create = await executeOperation(CreateRecipeMutationDocument, {
+        value: { name: "test" },
+      });
+      expect(create).toBeTruthy();
+      expect(create?.createRecipe.id).toBeTruthy();
+
+      try {
+        await executeOperation(UpdateRecipeMutationDocument, {
+          id: create.createRecipe.id,
+          value: { name: val },
+        });
+        throw new Error("should have thrown");
+      } catch (error) {
+        expect(error?.message).toEqual(
+          "400: Bad Request: Missing field value for name (service: recipes)"
+        );
+      }
+    }
+  );
 });

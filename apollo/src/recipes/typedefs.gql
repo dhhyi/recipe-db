@@ -1,7 +1,7 @@
 input RecipeInput {
-  ingredients: [IngredientInput]
+  ingredients: [IngredientInput!]
   method: String
-  name: String!
+  name: String
 }
 
 input IngredientInput {
@@ -13,7 +13,7 @@ input IngredientInput {
 
 type Recipe {
   id: ID!
-  ingredients: [Ingredient]
+  ingredients: [Ingredient!]
   method: String
   name: String!
 }
