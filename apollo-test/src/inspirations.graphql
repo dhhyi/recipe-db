@@ -12,7 +12,3 @@ query RecipeByIdWithInspirationQuery($id: ID!) {
     }
   }
 }
-
-mutation SetInspirationsMutation($id: ID!, $inspirations: [String]!) {
-  setInspirations(id: $id, inspirations: $inspirations)
-}

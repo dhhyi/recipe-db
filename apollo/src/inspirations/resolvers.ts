@@ -10,14 +10,6 @@ const Mutation: MutationResolvers<InspirationsContext> = {
   deleteInspirationsForTesting: async (_source, _args, { inspirationsAPI }) => {
     return await inspirationsAPI.deleteInspirationsForTesting();
   },
-
-  setInspirations: async (
-    _source,
-    { id, inspirations },
-    { inspirationsAPI }
-  ) => {
-    return await inspirationsAPI.setInspirations(id, inspirations);
-  },
 };
 
 const Recipe: RecipeResolvers<InspirationsContext> = {
