@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -85,6 +87,20 @@ func getAllRecipes(db *c.DB) *[]Recipe {
 	return &recipes
 }
 
+func recipeSanityCheck(recipe Recipe) (bool, string) {
+	if recipe["id"] != nil {
+		return false, "Reserved field: id"
+	}
+	if recipe["name"] == "" {
+		return false, "Missing field value for name"
+	}
+	json, _ := json.Marshal(recipe)
+	if strings.Contains(string(json), "\"name\":null") {
+		return false, "Missing field value for name"
+	}
+	return true, ""
+}
+
 func main() {
 
 	r := gin.New()
@@ -121,8 +137,8 @@ func main() {
 			log.Printf("Error: %s", err)
 			return
 		}
-		if recipe["id"] != nil {
-			c.JSON(400, gin.H{"message": "Reserved field: id"})
+		if ok, msg := recipeSanityCheck(recipe); !ok {
+			c.JSON(400, gin.H{"message": msg})
 			return
 		}
 
@@ -147,8 +163,8 @@ func main() {
 			log.Printf("Error: %s", err)
 			return
 		}
-		if recipe["id"] != nil {
-			c.JSON(400, gin.H{"message": "Reserved field: id"})
+		if ok, msg := recipeSanityCheck(recipe); !ok {
+			c.JSON(400, gin.H{"message": msg})
 			return
 		}
 
