@@ -1,13 +1,5 @@
 extends: dcc://go
 devcontainer:
-  build:
-    user:
-      - RUN go install -v golang.org/x/tools/gopls@latest
-      - RUN go install -v github.com/go-delve/delve/cmd/dlv@latest
-      - RUN go install -v honnef.co/go/tools/cmd/staticcheck@latest
-      - RUN go install -v github.com/ramya-rao-a/go-outline@latest
-      - ENV PATH=${HOME}/go/bin:${PATH}
-      - RUN go install -v github.com/mitranim/gow@latest
   initialize: go mod download -x
   ports:
     - 5000

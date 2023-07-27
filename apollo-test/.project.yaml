@@ -1,11 +1,6 @@
-extends: dcc://javascript
+extends: dcc://javascript-pnpm
 devcontainer:
-  build:
-    user:
-      - RUN npm install -g pnpm
-      - RUN echo "alias npm=pnpm" | tee -a $HOME/.zshrc $HOME/.bashrc
   initialize: |
-    echo "store-dir=/home/pnpm\npackage-import-method=copy" > $HOME/.npmrc
     pnpm install
     npm run codegen
   ports:

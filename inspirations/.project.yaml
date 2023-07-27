@@ -2,13 +2,8 @@ extends: dcc://lua
 devcontainer:
   build:
     packages:
-      - build-essential
       - m4
-      - cmake
       - libssl-dev
-    root:
-      - RUN luarocks install --server=https://luarocks.org/dev luaformatter
-      - RUN luarocks install luacheck
   ports:
     - 8800
   environment:
