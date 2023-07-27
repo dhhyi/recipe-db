@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://pony
+devcontainer:
+  build:
+    user:
+      - RUN ponyup update corral release
+  initialize: |
+    corral update
+vscode:
+  settings:
+    peacock.remoteColor: "#ff325b"
+  extensions:
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+  - named-volumes
+namedVolumes:
+  _corral: recipe-db-status-corral
+traefik:
+  network: intranet
+  labels:
+    http:
+      routers:
+        recipes:
+          rule: PathPrefix(`/status`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: backend

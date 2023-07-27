@@ -219,10 +219,21 @@ const traefik = {
   command: [
     "--entrypoints.web.address=:80",
     "--entrypoints.rest-internal.address=:3000",
+    "--api=true",
+    "--global.sendAnonymousUsage",
   ],
   ports: [`${frontendPort}:80`],
   volumes: [],
   networks: ["intranet"],
+  labels: [
+    "traefik.enable=true",
+    "traefik.http.routers.traefik.entrypoints=rest-internal",
+    "traefik.http.routers.traefik.service=api@internal",
+    "traefik.http.routers.traefik.rule=" +
+      (PROD ? ["api"] : ["api", "dashboard"])
+        .map((s) => `PathPrefix(\`/${s}\`)`)
+        .join(" || "),
+  ],
 };
 
 if (PROD) {
@@ -230,12 +241,13 @@ if (PROD) {
   traefik.volumes.push("./traefik.yml:/traefik_config.yml:ro");
 } else {
   traefik.command.push(
-    "--api.insecure=true",
+    "--api.dashboard=true", 
+    "--log.level=INFO",
     "--providers.docker=true",
     "--providers.docker.exposedbydefault=false",
-  );
+    );
   traefik.volumes.push("/var/run/docker.sock:/var/run/docker.sock:ro");
-  traefik.ports.push("3000:3000", "8080:8080");
+  traefik.ports.push("3000:3000");
 }
 
 dockerCompose.services.traefik = traefik;
