@@ -58,6 +58,10 @@ Possibilities:
 - [Hilla](https://hilla.dev/)
   - compatible with [Tailwind CSS](https://hilla.dev/blog/hilla-tailwind-tutorial/)
 
+#### Recipe Adding and Editing
+
+Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin). with [Gradle](https://gradle.org/) build tool and [Vaadin Boot](https://github.com/mvysny/vaadin-boot) for app startup.
+
 ### Style
 
 If possible, consistent styling with [Tailwind CSS](https://tailwindcss.com/).
@@ -79,6 +83,29 @@ Integration testing done in [Venom](https://github.com/ovh/venom).
 Implemented in [IO](https://iolanguage.org/) with [SQLite](https://www.sqlite.org/) as relational database.
 
 Integration testing in [Karate](https://www.karatelabs.io/).
+
+### Inspiration
+
+Sources of inspiration web links for this recipe.
+Implemented in [Lua](https://www.lua.org/) using [Milua](https://github.com/MiguelMJ/Milua) for setting up REST API.
+Data stored as plain JSON File.
+
+Testing is done using [Venom](https://github.com/ovh/venom) with [Tavern Executor](https://github.com/intercloud/venom/tree/executor-tavern/executors/tavern)
+
+### Utility Services
+
+Services with utility character.
+
+#### Link Extract
+
+Extracts favicon, title, description and canonical link of URL.
+
+Implemented in [Deno](https://deno.land/) using [Denorest](https://denorest.deno.dev/) and [AloeDB](https://github.com/Kirlovon/AloeDB) document database.
+
+#### Image Inline
+
+Convert an Image URL to an inlined image.
+Implemented in [Perl](https://www.perl.org/) using [Dancer2](https://metacpan.org/pod/Dancer2) for the REST API setup.
 
 ### Tags
 
@@ -107,9 +134,15 @@ User can track when he had a certain recipe.
 - Variant of
 - Side dish
 
-### Inspiration
+### Collections
 
-Sources of inspiration web links for this recipe.
+Add recipes to collections (public and private)
+
+### Recipe State
+
+- public
+- draft
+- idea
 
 ## Cross Concerns
 
@@ -140,3 +173,13 @@ Maybe later.
 - prettier as formatter for general
 - testing with integration test projects
 - demo-data project
+
+## List of possible REST API testing frameworks
+
+- https://github.com/brooklynDev/airborne
+- https://github.com/martinmaher/jcache-chat-citrus
+- https://citrusframework.org/citrus/reference/3.4.0/html/index.html#http-rest
+- https://gettaurus.org/
+- https://github.com/svanoort/pyresttest
+- https://rest-assured.io/
+- https://www.baeldung.com/cucumber-rest-api-testing
