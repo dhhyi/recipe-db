@@ -4,7 +4,6 @@ devcontainer:
     packages:
       - libdancer2-perl
       - libswitch-perl
-      - perltidy
   ports:
     - 3000
 vscode:
