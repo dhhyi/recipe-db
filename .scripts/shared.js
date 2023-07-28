@@ -17,7 +17,7 @@ function checkInstallDependencies() {
 function getAvailableProjects() {
   const { globSync } = require("glob");
   return globSync("*/.project.yaml", { cwd: projectRoot }).map((file) =>
-    path.dirname(file)
+    path.dirname(file),
   );
 }
 

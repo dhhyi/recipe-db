@@ -43,3 +43,4 @@ prettier:
     - "*.py"
     - "*.pyc"
     - .pylintrc
+    - "*.toml"

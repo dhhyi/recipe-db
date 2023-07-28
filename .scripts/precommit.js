@@ -19,8 +19,8 @@ const verbose = args.some((a) => a.includes("verbose")) || args.includes("-v");
 tasks.push({
   execDir: ".",
   command: "node .scripts/merge-graphql-schemas.js",
-  dependentDir: globSync("*/.needs-graphql-schema").map((dir) =>
-    path.dirname(dir)
+  dependent: globSync("*/.needs-graphql-schema").map((dir) =>
+    path.dirname(dir),
   ),
   message: "Running 'merge-graphql-schemas'",
   container: false,
@@ -32,10 +32,21 @@ tasks.push({
 tasks.push({
   execDir: ".",
   command: "node .scripts/create-intranet.js",
-  dependentDir: getAvailableProjects(),
+  dependent: getAvailableProjects(),
   message: "Checking intranet network",
   container: false,
   priority: 100,
+  run: defaultRun,
+});
+
+// create intranet network
+tasks.push({
+  execDir: ".",
+  command: "node .scripts/check-npm-dependency-sync.js",
+  dependent: ["pnpm-lock.yaml", "package.json"],
+  message: "Checking npm dependency synchronization",
+  container: false,
+  priority: 80,
   run: defaultRun,
 });
 
@@ -48,7 +59,7 @@ globSync("**/.prettierignore")
 
     tasks.push({
       execDir: dir,
-      dependentDir: [dir],
+      dependent: [dir],
       command: "npx prettier --write '**'",
       message: "Running 'prettier' in " + dir,
       container,
@@ -60,7 +71,7 @@ globSync("**/.prettierignore")
 // add eslint task for root scripts
 tasks.push({
   execDir: path.basename(scriptRoot),
-  dependentDir: [path.basename(scriptRoot)],
+  dependent: [path.basename(scriptRoot)],
   command: "npx eslint " + scriptRoot,
   message: "Running 'eslint' in " + path.basename(scriptRoot),
   container: false,
@@ -73,7 +84,7 @@ getAvailableProjects().forEach((dir) => {
   if (getProjectConfig(dir).precommit) {
     tasks.push({
       execDir: dir,
-      dependentDir: [dir],
+      dependent: [dir],
       command: "precommit",
       message: "Running 'precommit' in " + dir,
       container: true,
@@ -98,11 +109,13 @@ const stagedFiles = cp
   .filter((file) => file.length > 0);
 
 tasks.forEach((task) => {
-  if (task.dependentDir.some((dir) => dir === ".") && stagedFiles.length > 0) {
+  if (task.dependent.some((dir) => dir === ".") && stagedFiles.length > 0) {
     task.run = true;
   } else if (
     stagedFiles.some((file) =>
-      task.dependentDir.some((dir) => file.startsWith(dir + "/"))
+      task.dependent.some(
+        (dir) => file.startsWith(dir + "/") || file.endsWith(dir),
+      ),
     )
   ) {
     task.run = true;

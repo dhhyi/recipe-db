@@ -9,7 +9,7 @@ const Link: LinkResolvers<LinkExtractContext> = {
   extracted: async (
     source,
     _args,
-    { linkExtractAPI }
+    { linkExtractAPI },
   ): Promise<ExtractedLink> => {
     return source.url?.startsWith("http")
       ? await linkExtractAPI.getExtractedLink(source.url)

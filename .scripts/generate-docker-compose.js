@@ -42,14 +42,14 @@ const availableDeployProjects = availableProjects.filter(
   (project) =>
     !project.endsWith("-test") &&
     (DEV || project !== "demo-data") &&
-    (!BACKEND || project !== "frontend")
+    (!BACKEND || project !== "frontend"),
 );
 
 let devProjects = [];
 
 if (DEV) {
   devProjects = availableDeployProjects.filter((project) =>
-    args.includes(project)
+    args.includes(project),
   );
   if (devProjects.length > 0) {
     console.log(`Setting up VSCode attaching for ${devProjects.join(", ")}...`);
@@ -105,7 +105,7 @@ if (PROD) {
   };
 } else {
   traefik.command.push(
-    "--api.insecure=true"
+    "--api.insecure=true",
     // "--log.level=DEBUG",
   );
   traefik.ports.push("3000:3000", "8080:8080");
@@ -148,7 +148,7 @@ availableProjects.forEach((project) => {
     service.labels.push(
       ...flattened
         .map(([k, v]) => `${k}=${v}`)
-        .map((s) => (s.startsWith("traefik.") ? s : "traefik." + s))
+        .map((s) => (s.startsWith("traefik.") ? s : "traefik." + s)),
     );
   }
   if (projectConfig.devcontainer?.environment) {
@@ -160,13 +160,13 @@ availableProjects.forEach((project) => {
     const devcontainerMetaPath = path.join(
       projectRoot,
       project,
-      ".devcontainer_meta.json"
+      ".devcontainer_meta.json",
     );
     const devcontainerDockerfilePath = path.join(
       projectRoot,
       project,
       ".devcontainer",
-      "Dockerfile"
+      "Dockerfile",
     );
     if (
       fs.existsSync(devcontainerMetaPath) &&
@@ -279,7 +279,7 @@ availableProjects.forEach((project) => {
         service.entrypoint =
           "sh -Ec 'cd /app && sleep 2 && sh -Ee generate.sh'";
         const services = availableDeployProjects.filter(
-          (service) => service !== "demo-data"
+          (service) => service !== "demo-data",
         );
         services.push("traefik");
         service.depends_on = services.reduce((acc, val) => {
@@ -306,7 +306,7 @@ fs.writeFileSync(
     quotingType: '"',
     forceQuotes: false,
     lineWidth: 1000,
-  })
+  }),
 );
 
 cp.execSync(`node ${path.join(scriptRoot, "create-intranet.js")}`, {

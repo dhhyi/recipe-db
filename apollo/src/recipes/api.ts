@@ -26,7 +26,7 @@ export class RecipesAPI extends RESTDataSource {
 
   async createRecipe(
     handlers: RecipeHandlers,
-    value: RecipeInput
+    value: RecipeInput,
   ): Promise<Recipe> {
     const recipeBase: Partial<RecipeInput> = {};
     for (const key in value) {
@@ -52,7 +52,7 @@ export class RecipesAPI extends RESTDataSource {
   async updateRecipe(
     handlers: RecipeHandlers,
     id: string,
-    value: RecipeInput
+    value: RecipeInput,
   ): Promise<Recipe> {
     const recipeBase: Partial<RecipeInput> = {};
     for (const key in value) {

@@ -53,18 +53,18 @@ try {
     projectRoot,
     project,
     ".devcontainer",
-    "devcontainer.json"
+    "devcontainer.json",
   );
   const existingRunningContainerID = cp
     .execSync(
       `docker ps --filter "label=devcontainer.config_file=${workspaceDevcontainerJson}" --filter "status=running" --format '{{.ID}}'`,
-      { encoding: "utf-8" }
+      { encoding: "utf-8" },
     )
     ?.trim()
     ?.split("\n")?.[0];
   if (existingRunningContainerID) {
     console.log(
-      `Using existing running container ${existingRunningContainerID}`
+      `Using existing running container ${existingRunningContainerID}`,
     );
     containerId = existingRunningContainerID;
     stopAfter = false;
@@ -72,7 +72,7 @@ try {
     const existingStoppedContainerID = cp
       .execSync(
         `docker ps -a --filter "label=devcontainer.config_file=${workspaceDevcontainerJson}" --filter "exited=0" --format '{{.ID}}'`,
-        { encoding: "utf-8" }
+        { encoding: "utf-8" },
       )
       ?.trim();
     if (
@@ -80,7 +80,7 @@ try {
       existingStoppedContainerID.split("\n").length === 1
     ) {
       console.log(
-        `Starting existing stopped container ${existingStoppedContainerID}`
+        `Starting existing stopped container ${existingStoppedContainerID}`,
       );
       cp.execSync(`docker start ${existingStoppedContainerID}`);
       containerId = existingStoppedContainerID;
@@ -88,7 +88,7 @@ try {
       const existingContainerIDs = cp
         .execSync(
           `docker ps -a --filter "label=devcontainer.config_file=${workspaceDevcontainerJson}" --format '{{.ID}}'`,
-          { encoding: "utf-8" }
+          { encoding: "utf-8" },
         )
         ?.trim();
       existingContainerIDs
@@ -118,11 +118,11 @@ try {
   // get workspace mount of container
   const workspaceMounts = JSON.parse(
     cp.execSync(
-      `docker inspect --type container ${containerId} --format '{{json .Mounts}}'`
-    )
+      `docker inspect --type container ${containerId} --format '{{json .Mounts}}'`,
+    ),
   );
   const workspaceMount = workspaceMounts.find(
-    (m) => m.Type === "bind" && m.Source.startsWith(projectRoot)
+    (m) => m.Type === "bind" && m.Source.startsWith(projectRoot),
   );
   if (!workspaceMount) {
     throw new Error("Failed to find workspace mount");
@@ -133,7 +133,7 @@ try {
   const result = cp.spawnSync(
     "docker",
     ["exec", "--workdir", workspaceFolder, containerId, ...runCommand],
-    { stdio: "inherit", encoding: "utf-8" }
+    { stdio: "inherit", encoding: "utf-8" },
   );
 
   if (result.status !== 0) {

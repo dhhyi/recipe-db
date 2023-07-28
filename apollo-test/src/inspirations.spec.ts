@@ -31,7 +31,7 @@ describe("recipes", () => {
           name: "test",
           inspirations: ["https://example.com", "https://google.com"],
         },
-      }
+      },
     );
     expect(createOperation).toMatchInlineSnapshot(
       { createRecipe: { id: expect.any(String) } },
@@ -42,13 +42,13 @@ describe("recipes", () => {
           "name": "test",
         },
       }
-    `
+    `,
     );
 
     expect(
       await executeOperation(RecipeByIdWithInspirationQueryDocument, {
         id: createOperation.createRecipe.id,
-      })
+      }),
     ).toMatchInlineSnapshot(`
       {
         "recipe": {
@@ -88,18 +88,18 @@ describe("recipes", () => {
             name: "test",
             inspirations: ["https://example.com"],
           },
-        }
+        },
       );
       expect(createOperation).toHaveProperty("createRecipe.id");
       const getOperationBefore = await executeOperation(
         RecipeByIdWithInspirationQueryDocument,
         {
           id: createOperation.createRecipe.id,
-        }
+        },
       );
       expect(getOperationBefore).toHaveProperty(
         "recipe.inspirations",
-        expect.any(Array)
+        expect.any(Array),
       );
       expect(getOperationBefore.recipe.inspirations).toHaveLength(1);
 
@@ -110,20 +110,20 @@ describe("recipes", () => {
           value: {
             inspirations: val,
           },
-        }
+        },
       );
       expect(deleteOperation).toHaveProperty("updateRecipe.id");
       const getOperationAfter = await executeOperation(
         RecipeByIdWithInspirationQueryDocument,
         {
           id: createOperation.createRecipe.id,
-        }
+        },
       );
       expect(getOperationAfter).toHaveProperty(
         "recipe.inspirations",
-        expect.any(Array)
+        expect.any(Array),
       );
       expect(getOperationAfter.recipe.inspirations).toHaveLength(0);
-    }
+    },
   );
 });

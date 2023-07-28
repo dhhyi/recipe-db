@@ -10,13 +10,13 @@ cp.execSync("git ls-files", { encoding: "utf-8" })
       file.endsWith(".gitignore") ||
       file.endsWith(".project.yaml") ||
       file.endsWith(".scripts/synchronize.js") ||
-      file.endsWith("/typedefs.gql")
+      file.endsWith("/typedefs.gql"),
   )
   .forEach((file) => {
     console.log(`Watching ${file}`);
     fs.watchFile(file, () => {
       console.log(
-        `-------------------------------------\nFile ${file} changed`
+        `-------------------------------------\nFile ${file} changed`,
       );
       cp.execSync(`node ${scriptRoot}/synchronize.js --no-dcc`, {
         stdio: "inherit",

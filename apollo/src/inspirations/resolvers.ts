@@ -15,7 +15,7 @@ const Mutation: MutationResolvers<InspirationsContext> = {
 const Recipe: RecipeResolvers<InspirationsContext> = {
   inspirations: async (source, _args, context) => {
     const inspirations = await context.inspirationsAPI.getInspirations(
-      source.id
+      source.id,
     );
     return inspirations.map((url) => ({ url }));
   },

@@ -28,7 +28,7 @@ describe("ratings", () => {
         id: "1",
         rating: 2,
         login: "test",
-      })
+      }),
     ).toMatchInlineSnapshot(`
       {
         "rate": 2,
