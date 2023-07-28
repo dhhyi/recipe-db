@@ -1,4 +1,6 @@
 <script>
+  import { AlertTriangleIcon } from "svelte-feather-icons";
+
   import { RatingByRecipeId } from "../generated/graphql";
   import { fetchGraphQL } from "../shared/fetch-data";
 
@@ -24,6 +26,8 @@
       {size}
     />
   {:catch error}
-    <p style="color: red">{error.message}</p>
+    <span title="Bewertungen sind nicht verfuegbar ({error.message})">
+      <AlertTriangleIcon size="32" class="warning-icon" />
+    </span>
   {/await}
 </div>

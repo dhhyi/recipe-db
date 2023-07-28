@@ -1,0 +1,29 @@
+---
+import Layout from "../layouts/default.astro";
+const message = Astro.url.searchParams.get("message");
+const statusCode = Astro.url.searchParams.get("statusCode");
+const statusText = Astro.url.searchParams.get("statusText");
+
+const autoMessage = (): string => {
+  switch (statusCode) {
+    case "404":
+      return "Die Seite konnte nicht gefunden werden.";
+    case "500":
+      return "Es ist ein interner Serverfehler aufgetreten.";
+    default:
+      return "Irgendetwas ist schief gelaufen.";
+  }
+};
+---
+
+<Layout>
+  <h1 class="h1">{statusCode} - {statusText}</h1>
+  <h2 class="h2">{autoMessage}</h2>
+  {
+    message && (
+      <p>
+        Die Fehlernachricht vom Server war: <b>{message}</b>
+      </p>
+    )
+  }
+</Layout>

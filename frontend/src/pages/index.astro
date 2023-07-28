@@ -4,9 +4,15 @@ import RecipeCard from "../components/RecipeCard.astro";
 import { AllRecipesFull, type AllRecipesFullQuery } from "../generated/graphql";
 import Layout from "../layouts/default.astro";
 import { fetchGraphQL } from "../shared/fetch-data.js";
+import { handleError } from "../shared/handle-error";
 
-const query = await fetchGraphQL<AllRecipesFullQuery>(AllRecipesFull);
-const recipes = query.recipes ?? [];
+let recipes: AllRecipesFullQuery["recipes"];
+try {
+  const query = await fetchGraphQL<AllRecipesFullQuery>(AllRecipesFull);
+  recipes = query.recipes ?? [];
+} catch (error) {
+  return handleError(error);
+}
 ---
 
 <Layout>
