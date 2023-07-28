@@ -9,6 +9,9 @@ vscode:
     - johnpapa.vscode-peacock
 extras:
   - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.cache/deno: recipe-db-link-extract-deno-cache
 traefik:
   network: intranet
   labels:
