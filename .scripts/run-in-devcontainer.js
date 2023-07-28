@@ -60,7 +60,8 @@ try {
       `docker ps --filter "label=devcontainer.config_file=${workspaceDevcontainerJson}" --filter "status=running" --format '{{.ID}}'`,
       { encoding: "utf-8" }
     )
-    ?.trim();
+    ?.trim()
+    ?.split("\n")?.[0];
   if (existingRunningContainerID) {
     console.log(
       `Using existing running container ${existingRunningContainerID}`
