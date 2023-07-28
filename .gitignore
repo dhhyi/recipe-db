@@ -21,3 +21,6 @@ docker-compose.yml
 recipe-db.graphqls
 .dockerignore
 *.log*
+
+# data
+/data
