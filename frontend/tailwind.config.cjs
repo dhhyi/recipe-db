@@ -33,6 +33,9 @@ module.exports = {
           fontSize: theme("fontSize.xl"),
           fontWeight: theme("fontWeight.bold"),
         },
+        ".warning-icon": {
+          fill: theme("colors.yellow.500"),
+        },
       });
     },
   ],

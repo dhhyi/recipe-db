@@ -4,6 +4,10 @@ import type { Query } from "../generated/graphql";
 
 export class Custom404Error extends Error {}
 
+export class ApolloDownError extends Error {}
+
+export class ServerError extends Error {}
+
 function is404(error: GraphQLError): boolean {
   const response = error.extensions?.response as {
     status: number;
@@ -29,13 +33,31 @@ export async function fetchGraphQL<R extends Query>(
     body: JSON.stringify({ query, variables: variables ?? undefined }),
   });
 
-  const json = await response.json();
-  if (json.errors) {
-    if (json.errors.length === 1 && is404(json.errors[0])) {
-      throw new Custom404Error(firstMessage(json.errors[0]));
-    }
-    throw new Error(JSON.stringify(json.errors));
-  }
+  try {
+    const json = await response.json();
+    if (json.errors) {
+      if (
+        (!json.data ||
+          Object.entries(json.data).every(([_, v]) => v === null)) &&
+        json.errors.length === 1 &&
+        is404(json.errors[0])
+      ) {
+        throw new Custom404Error(firstMessage(json.errors[0]));
+      }
+      console.log("QUERY", /([A-Z]\w*)/.exec(query)?.[1], variables ?? {});
 
-  return json.data;
+      json.errors.forEach((error: GraphQLError) => {
+        console.error("ERROR", error.path?.join?.("/"), error.message);
+      });
+    }
+
+    return json.data;
+  } catch (error) {
+    if (response.status === 502) {
+      throw new ApolloDownError();
+    } else if (error instanceof SyntaxError) {
+      throw new ServerError("GraphQL server response is not valid JSON.");
+    }
+    throw error;
+  }
 }
