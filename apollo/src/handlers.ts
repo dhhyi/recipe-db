@@ -18,7 +18,7 @@ export const handlersContext = {
 
 export function addHandler<T extends RecipeExternalFields>(
   name: T,
-  handler: HandlerFunction<RecipeInput[T]>
+  handler: HandlerFunction<RecipeInput[T]>,
 ): void {
   handlers[name] = handler;
 }

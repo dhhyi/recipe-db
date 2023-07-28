@@ -16,11 +16,11 @@ function searchForForbiddenFiles(availableProjects) {
   }).filter(
     (file) =>
       file !== ".gitignore" &&
-      !availableProjects.some((project) => file === `${project}/.gitignore`)
+      !availableProjects.some((project) => file === `${project}/.gitignore`),
   );
   if (forbiddenGitIgnores.length > 0) {
     console.error(
-      `Forbidden .gitignore files found: ${forbiddenGitIgnores.join(", ")}`
+      `Forbidden .gitignore files found: ${forbiddenGitIgnores.join(", ")}`,
     );
     process.exit(1);
   }
@@ -31,11 +31,11 @@ function searchForForbiddenFiles(availableProjects) {
     .split("\n")
     .filter((file) => file !== "");
   const forbiddenPrettierFiles = gitLsFiles.filter((file) =>
-    /\/?(\.prettierignore|.*prettierrc.*|prettier\.config\..*)$/.test(file)
+    /\/?(\.prettierignore|.*prettierrc.*|prettier\.config\..*)$/.test(file),
   );
   if (forbiddenPrettierFiles.length > 0) {
     console.error(
-      `Forbidden files found: ${forbiddenPrettierFiles.join(", ")}`
+      `Forbidden files found: ${forbiddenPrettierFiles.join(", ")}`,
     );
     process.exit(1);
   }
@@ -47,7 +47,7 @@ const warning = (commentSign) =>
 function writePrettierIgnores(availableProjects) {
   const rootGitIgnore = fs.readFileSync(
     path.join(projectRoot, ".gitignore"),
-    "utf8"
+    "utf8",
   );
   const extraIgnores = `
     # extra ignores
@@ -67,7 +67,7 @@ function writePrettierIgnores(availableProjects) {
       rootGitIgnore +
       extraIgnores +
       ".husky/_\n" +
-      otherProjectsIgnores
+      otherProjectsIgnores,
   );
 
   availableProjects.forEach((project) => {
@@ -88,15 +88,15 @@ function writePrettierIgnores(availableProjects) {
         rootGitIgnore +
         localGitIgnore +
         extraIgnores +
-        extraLocalIgnores
+        extraLocalIgnores,
     );
   });
 }
 
-function writePrettierConfigs(availableProjects) {
+async function writePrettierConfigs(availableProjects) {
   const rootPrettierConfigPath = path.join(projectRoot, ".prettierrc.cjs");
 
-  const prettierConfig = (plugins, overrides) => {
+  const prettierConfig = async (plugins, overrides) => {
     const pluginsContent = `plugins: [${plugins
       .sort()
       .map((plugin) => `require.resolve("${plugin}")`)
@@ -116,14 +116,10 @@ function writePrettierConfigs(availableProjects) {
       overridesContent +
       "}";
 
-    return prettier.format(content, { parser: "flow" });
+    return await prettier.format(content, { parser: "flow" });
   };
 
-  const rootPrettierPlugins = [
-    "prettier-plugin-sh",
-    "prettier-plugin-toml",
-    "@prettier/plugin-xml",
-  ];
+  const rootPrettierPlugins = ["prettier-plugin-sh", "@prettier/plugin-xml"];
   const sharedOverrides = [
     [
       ["*.svg"],
@@ -142,7 +138,7 @@ function writePrettierConfigs(availableProjects) {
     ],
   ];
 
-  const rootConfig = prettierConfig(rootPrettierPlugins, [
+  const rootConfig = await prettierConfig(rootPrettierPlugins, [
     [[".husky/*-*"], { parser: "sh" }],
     [["LICENSE"], { parser: "markdown" }],
     ...sharedOverrides,
@@ -151,7 +147,7 @@ function writePrettierConfigs(availableProjects) {
   console.log(`Writing .prettierrc.cjs ...`);
   fs.writeFileSync(rootPrettierConfigPath, rootConfig);
 
-  availableProjects.forEach((project) => {
+  availableProjects.forEach(async (project) => {
     console.log(`Writing ${project}/.prettierrc.cjs ...`);
     const config = getProjectConfig(project);
     const extraPlugins = config.prettier?.plugins || [];
@@ -160,9 +156,12 @@ function writePrettierConfigs(availableProjects) {
     const projectPrettierConfigPath = path.join(
       projectRoot,
       project,
-      ".prettierrc.cjs"
+      ".prettierrc.cjs",
     );
-    const projectPrettierConfig = prettierConfig(plugins, sharedOverrides);
+    const projectPrettierConfig = await prettierConfig(
+      plugins,
+      sharedOverrides,
+    );
 
     fs.writeFileSync(projectPrettierConfigPath, projectPrettierConfig);
   });
@@ -194,7 +193,7 @@ function writeDockerIgnores(availableProjects) {
       const localDockerIgnorePath = path.join(
         projectRoot,
         project,
-        ".dockerignore"
+        ".dockerignore",
       );
       const content = warning("#") + rootGitIgnore + localGitIgnore + extras;
 
@@ -207,7 +206,7 @@ function writeDccFiles(availableProjects) {
   availableProjects.forEach((project) => {
     console.log(`Writing Devcontainer in ${project} ...`);
     const commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${languageFile(
-      project
+      project,
     )} ${project} --no-vscode --no-validate`;
 
     try {
@@ -227,7 +226,7 @@ function writeRootVSCodeSettingsFile(availableProjects) {
         ...acc,
         [`${project}/[!.]*`]: true,
       }),
-      {}
+      {},
     ),
     "extensions.ignoreRecommendations": true,
     "task.autoDetect": "off",
@@ -236,7 +235,7 @@ function writeRootVSCodeSettingsFile(availableProjects) {
   fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, ".vscode/settings.json"),
-    JSON.stringify(vscodeSettings, null, 2)
+    JSON.stringify(vscodeSettings, null, 2),
   );
 }
 
@@ -255,7 +254,7 @@ function writeRootVSCodeTasksFile() {
   fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, ".vscode/tasks.json"),
-    JSON.stringify(tasks, null, 2)
+    JSON.stringify(tasks, null, 2),
   );
 }
 

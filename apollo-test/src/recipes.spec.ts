@@ -34,7 +34,7 @@ describe("recipes", () => {
             { name: "opt", optional: true },
           ],
         },
-      }
+      },
     );
     expect(createOperation).toMatchInlineSnapshot(
       { createRecipe: { id: expect.any(String) } },
@@ -45,13 +45,13 @@ describe("recipes", () => {
           "name": "test",
         },
       }
-    `
+    `,
     );
 
     expect(
       await executeOperation(RecipeByIdQueryDocument, {
         id: createOperation.createRecipe.id,
-      })
+      }),
     ).toMatchInlineSnapshot(
       {
         recipe: {
@@ -69,7 +69,7 @@ describe("recipes", () => {
           "name": "test",
         },
       }
-    `
+    `,
     );
 
     const allRecipes = await executeOperation(AllRecipesQueryDocument);
@@ -116,7 +116,7 @@ describe("recipes", () => {
       DeleteRecipeMutationDocument,
       {
         id: create.createRecipe.id,
-      }
+      },
     );
     expect(deleteOperation).toMatchInlineSnapshot(`
       {
@@ -133,7 +133,7 @@ describe("recipes", () => {
       DeleteRecipeMutationDocument,
       {
         id: "unknown",
-      }
+      },
     );
     expect(deleteOperation).toMatchInlineSnapshot(`
       {
@@ -154,10 +154,10 @@ describe("recipes", () => {
         throw new Error("should have thrown");
       } catch (error) {
         expect(error?.message).toEqual(
-          "400: Bad Request: Missing field value for name (service: recipes)"
+          "400: Bad Request: Missing field value for name (service: recipes)",
         );
       }
-    }
+    },
   );
 
   it.each([[""], [null]])(
@@ -177,9 +177,9 @@ describe("recipes", () => {
         throw new Error("should have thrown");
       } catch (error) {
         expect(error?.message).toEqual(
-          "400: Bad Request: Missing field value for name (service: recipes)"
+          "400: Bad Request: Missing field value for name (service: recipes)",
         );
       }
-    }
+    },
   );
 });
