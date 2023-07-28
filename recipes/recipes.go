@@ -31,12 +31,21 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
-func initDB() *c.DB {
-	if _, err := os.Stat("./db"); os.IsNotExist(err) {
-		log.Println("Creating db directory")
-		os.Mkdir("db", 0755)
+func findDBLocation() string {
+	if val, set := os.LookupEnv("DATA_LOCATION"); set {
+		return val
+	} else {
+		return "db"
 	}
-	db, error := c.Open("db")
+}
+
+func initDB() *c.DB {
+	location := findDBLocation()
+	if _, err := os.Stat(location); os.IsNotExist(err) {
+		log.Println("Creating db directory at " + location)
+		os.MkdirAll(location, 0755)
+	}
+	db, error := c.Open(location)
 	if error != nil {
 		log.Fatal(error)
 		os.Exit(1)
@@ -46,9 +55,7 @@ func initDB() *c.DB {
 	if error != nil {
 		log.Fatal(error)
 		os.Exit(1)
-	}
-
-	if !hasColl {
+	} else if !hasColl {
 		log.Println("Creating recipes collection")
 		db.CreateCollection("recipes")
 	} else {

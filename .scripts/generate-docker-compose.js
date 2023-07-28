@@ -83,6 +83,20 @@ const dockerCompose = {
   },
 };
 
+if (PROD) {
+  dockerCompose.volumes = {
+    data: {
+      name: "recipe-db-data",
+      driver: "local",
+      driver_opts: {
+        type: "none",
+        device: projectRoot + "/data",
+        o: "bind",
+      },
+    },
+  };
+}
+
 const traefik = {
   image: "traefik:v3.0",
   container_name: "traefik",
@@ -193,6 +207,14 @@ availableProjects.forEach((project) => {
     appendEnvironment({ TESTING: null });
   }
 
+  const setDBVolume = () => {
+    if (!service.volumes) {
+      service.volumes = [];
+    }
+    service.volumes.push("data:/app/data");
+    service.environment.DATA_LOCATION = "/app/data/" + project;
+  };
+
   switch (project) {
     case "frontend":
       if (PROD) {
@@ -205,6 +227,13 @@ availableProjects.forEach((project) => {
       };
       service.init = true;
       break;
+    case "frontend-edit":
+      service.depends_on = {
+        apollo: {
+          condition: "service_started",
+        },
+      };
+      break;
     case "apollo":
       if (PROD) {
         appendEnvironment({ NODE_ENV: "production" });
@@ -216,62 +245,6 @@ availableProjects.forEach((project) => {
             condition: "service_started",
           },
         };
-      }
-      break;
-    case "ratings":
-      if (PROD) {
-        if (!service.volumes) {
-          service.volumes = [];
-        }
-        if (!fs.existsSync("./ratings/db.sqlite")) {
-          cp.execSync("touch ./ratings/db.sqlite");
-        }
-        service.volumes.push("./ratings/db.sqlite:/app/db.sqlite");
-      }
-      break;
-    case "inspirations":
-      if (PROD) {
-        if (!service.volumes) {
-          service.volumes = [];
-        }
-        if (!fs.existsSync("./inspirations/database.json")) {
-          cp.execSync("touch ./inspirations/database.json");
-        }
-        service.volumes.push("./inspirations/database.json:/app/database.json");
-      }
-      break;
-    case "link-extract":
-      if (PROD) {
-        if (!service.volumes) {
-          service.volumes = [];
-        }
-        if (!fs.existsSync("./link-extract/db.json")) {
-          cp.execSync("touch ./link-extract/db.json");
-        }
-        service.volumes.push("./link-extract/db.json:/app/db.json");
-      }
-      break;
-    case "image-inline":
-      if (PROD) {
-        if (!service.volumes) {
-          service.volumes = [];
-        }
-        if (!fs.existsSync("./image-inline/db")) {
-          cp.execSync("mkdir -p ./image-inline/db");
-        }
-        service.volumes.push("./image-inline/db:/app/db");
-      }
-      break;
-    case "recipes":
-      if (PROD) {
-        if (!service.volumes) {
-          service.volumes = [];
-        }
-        if (!fs.existsSync("./recipes/db/data.db")) {
-          cp.execSync("mkdir -p ./recipes/db");
-          cp.execSync("touch ./recipes/db/data.db");
-        }
-        service.volumes.push("./recipes/db:/app/db");
       }
       break;
     case "demo-data":
@@ -290,8 +263,18 @@ availableProjects.forEach((project) => {
         }, {});
       }
       break;
-    default:
+    case "recipes":
+    case "ratings":
+    case "inspirations":
+    case "image-inline":
+    case "link-extract":
+      if (PROD) {
+        setDBVolume();
+      }
       break;
+    default:
+      console.error(`Unknown project ${project} - please add it to the script`);
+      process.exit(1);
   }
 
   dockerCompose.services[project] = service;

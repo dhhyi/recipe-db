@@ -4,6 +4,13 @@ use LWP::UserAgent ();
 use MIME::Base64;
 use Switch;
 use Digest::MD5 qw(md5_hex);
+use File::Path  qw(make_path);
+
+# get database location from environment
+my $db = $ENV{DATA_LOCATION} || "db";
+print "Database location: $db\n";
+
+make_path($db);
 
 get '/image-inline/' => sub {
     delayed {
@@ -21,11 +28,11 @@ get '/image-inline/' => sub {
         print "URL\t$url\n";
 
         my $file_name = md5_hex($url);
-        if ( -e "db/$file_name" ) {
+        if ( -e "$db/$file_name" ) {
             print "CACHE\t$url\n";
             my $content = do {
                 local $/ = undef;
-                open my $fh, "<", "db/$file_name";
+                open my $fh, "<", "$db/$file_name";
                 <$fh>;
             };
             content $content;
@@ -55,9 +62,7 @@ get '/image-inline/' => sub {
 
                 my $data = "data:$ext;base64,$encoded";
 
-                mkdir "db" unless -d "db";
-
-                open my $fh, ">", "db/$file_name";
+                open my $fh, ">", "$db/$file_name";
                 print $fh $data;
                 close $fh;
 

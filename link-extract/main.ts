@@ -7,6 +7,7 @@ import {
   WebApp,
 } from "https://deno.land/x/denorest@v4.2/mod.ts";
 import { Database } from "https://deno.land/x/aloedb@0.9.0/mod.ts";
+import { dirname } from "https://deno.land/std@0.196.0/path/mod.ts";
 
 interface PageMetaData {
   url: string;
@@ -17,7 +18,23 @@ interface PageMetaData {
 }
 
 function initDatabase() {
-  return new Database<PageMetaData>("./db.json");
+  const location = Deno.env.get("DATA_LOCATION");
+  let dbFile: string;
+  if (location) {
+    if (location.endsWith(".json")) {
+      dbFile = location;
+    } else {
+      dbFile = `${location}/db.json`;
+    }
+    const folder = dirname(dbFile);
+
+    Deno.mkdirSync(folder, { recursive: true });
+  } else {
+    dbFile = "./db.json";
+  }
+  console.log("Database location:", dbFile);
+
+  return new Database<PageMetaData>(dbFile);
 }
 
 async function getPageMetaData(url: URL): Promise<PageMetaData> {

@@ -3,12 +3,34 @@ DB := SQLite3 clone
 DB clone := DB
 
 DB checkNoError := method(
-    if (error, Exception raise("We have an error: " .. error))
+    if (error,
+        writeln("ERROR " .. error)
+        System exit(1)
+    )
+)
+
+DB openOrCreate := method(
+    location := System getEnvironmentVariable("DATA_LOCATION")
+    if (location, if (location endsWithSeq(".sqlite"), location, location := location .. "/db.sqlite"))
+    if (location == nil, location = "db.sqlite")
+
+    dbFile := File clone setPath(location)
+
+    writeln("DB Location: " .. dbFile path)
+
+    if (dbFile exists,
+        writeln("Found existing database"),
+        writeln("Creating new database")
+        Directory with(dbFile parentDirectory path) createIfAbsent
+    )
+
+    setPath(dbFile path)
+    open
+    checkNoError
 )
 
 DB initialize := method(
-    setPath("db.sqlite")
-    open
+    openOrCreate
 
     if (exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';") size == 0,
         exec("CREATE TABLE Ratings (

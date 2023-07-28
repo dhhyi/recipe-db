@@ -3,9 +3,27 @@ local json = require "dkjson"
 
 local data = {}
 
+local function database_location()
+    local location = os.getenv("DATA_LOCATION")
+    if location == nil then
+        location = "db.json"
+    else
+        local ending = ".json"
+        if location:sub(-#ending) ~= ending then
+            location = location .. "/db.json"
+        end
+        local directory = location:match("(.*/)")
+        if directory ~= nil then os.execute("mkdir -p " .. directory) end
+    end
+    return location
+end
+
+local db_location = database_location()
+print("Database location: " .. db_location)
+
 -- function that loads data from a file
 local function load_data()
-    local file = io.open("database.json", "r")
+    local file = io.open(db_location, "r")
     if file then
         data = json.decode(file:read("*a")) or {}
         file:close()
@@ -14,7 +32,7 @@ end
 
 -- function that saves data to a file
 local function save_data()
-    local file = io.open("database.json", "w")
+    local file = io.open(db_location, "w")
     if file then
         file:write(json.encode(data))
         file:close()

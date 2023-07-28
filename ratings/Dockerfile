@@ -4,7 +4,7 @@ RUN apt-get update \
   && apt-get install -y build-essential git cmake
 
 ARG IO_VERSION=master
-ENV HOME=/home/io
+ENV HOME=/root
 
 RUN git clone -b ${IO_VERSION} --single-branch --depth 1 --recursive https://github.com/IoLanguage/io.git /tmp/io
 RUN cd /tmp/io && mkdir build && cd build \
@@ -28,9 +28,9 @@ RUN find ${HOME}/.eerie -type d -name .git -print -exec rm -rf {} +
 RUN rm -rf ${HOME}/.eerie/env/_base
 
 FROM scratch as minimal
-COPY --from=builder /home/io/.local/bin /usr/bin
-COPY --from=builder /home/io/.local/lib /usr/lib
-COPY --from=builder /home/io/.eerie /home/io/.eerie
+COPY --from=builder /root/.local/bin /usr/bin
+COPY --from=builder /root/.local/lib /usr/lib
+COPY --from=builder /root/.eerie /root/.eerie
 COPY --from=builder /installed_packages /installed_packages
 COPY *.io /app/
 COPY lib /app/lib
@@ -40,16 +40,11 @@ RUN apt-get update \
   && apt-get install -y libpcre3 \
   && apt-get install -y libevent-2.1-7 \
   && apt-get install -y libsqlite3-0 \
-  && apt-get clean && rm -rf /var/lib/apt/lists/* \
-  && useradd -Ms /bin/false io
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=minimal / /
 
 WORKDIR /app
-
-RUN chown io:io /app
-
-USER io
 
 ENTRYPOINT [ "io" ]
 
