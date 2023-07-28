@@ -72,7 +72,7 @@ globSync("**/.prettierignore")
 tasks.push({
   execDir: path.basename(scriptRoot),
   dependent: [path.basename(scriptRoot)],
-  command: "npx eslint " + scriptRoot,
+  command: "npx eslint --fix " + scriptRoot,
   message: "Running 'eslint' in " + path.basename(scriptRoot),
   container: false,
   priority: 5,
