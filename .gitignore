@@ -21,6 +21,7 @@ docker-compose.yml
 recipe-db.graphqls
 .dockerignore
 *.log*
+traefik.yml
 
 # data
 /data

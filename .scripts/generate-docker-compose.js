@@ -11,6 +11,87 @@ const {
 
 checkInstallDependencies();
 
+function writeTraefikConfig(projects, configPath) {
+  const combinedConfig = projects.reduce(
+    (acc, project) => {
+      console.log(`found project ${project}`);
+      const projectConfig = getProjectConfig(project);
+      const config = projectConfig.traefik?.labels?.http;
+      if (projectConfig.devcontainer.ports === undefined) {
+        throw new Error(`No ports found for ${project}`);
+      } else if (projectConfig.devcontainer.ports.length !== 1) {
+        throw new Error(
+          `Expected 1 port for ${project}, found ${projectConfig.devcontainer.ports.length}`,
+        );
+      }
+      const port = projectConfig.devcontainer.ports[0];
+
+      if (config === undefined) {
+        throw new Error(`No traefik config found for ${project}`);
+      }
+      const serviceName = `recipe-db-${project}`;
+      Object.entries(config.routers).forEach(([routerName, routerConfig]) => {
+        const config = {
+          service: serviceName,
+          rule: routerConfig.rule,
+          entrypoints: routerConfig.entrypoints.split(","),
+        };
+        if (routerConfig.middlewares) {
+          config.middlewares = routerConfig.middlewares.split(",");
+        }
+        if (acc.http.routers[routerName] !== undefined) {
+          throw new Error(`Router ${routerName} already exists`);
+        }
+        acc.http.routers[routerName] = config;
+      });
+      if (config.middlewares) {
+        Object.entries(config.middlewares).forEach(
+          ([middlewareName, middlewareConfig]) => {
+            if (acc.http.middlewares[middlewareName] !== undefined) {
+              throw new Error(`Middleware ${middlewareName} already exists`);
+            }
+            acc.http.middlewares[middlewareName] = middlewareConfig;
+          },
+        );
+      }
+
+      acc.http.services[serviceName] = {
+        loadBalancer: {
+          servers: [
+            {
+              url: `http://${project}:${port}`,
+            },
+          ],
+          healthCheck: {
+            interval: "10s",
+            timeout: "1s",
+            path: "/health",
+          },
+        },
+      };
+
+      return acc;
+    },
+    { http: { routers: {}, middlewares: {}, services: {} } },
+  );
+
+  console.log(
+    `Traefik config with ${
+      Object.keys(combinedConfig.http.routers).length
+    } routers, ${
+      Object.keys(combinedConfig.http.middlewares).length
+    } middlewares and ${
+      Object.keys(combinedConfig.http.services).length
+    } services`,
+  );
+
+  const yaml = require("js-yaml");
+
+  const yamlStr = yaml.dump(combinedConfig);
+  console.log(`Writing traefik config to ${configPath}`);
+  fs.writeFileSync(configPath, yamlStr);
+}
+
 const dockerComposeTargetPath = path.join(projectRoot, "docker-compose.yml");
 const args = process.argv.slice(2);
 
@@ -47,6 +128,7 @@ const availableDeployProjects = availableProjects.filter(
 
 let devProjects = [];
 
+const traefikConfigPath = path.join(projectRoot, "traefik.yml");
 if (DEV) {
   devProjects = availableDeployProjects.filter((project) =>
     args.includes(project),
@@ -54,6 +136,11 @@ if (DEV) {
   if (devProjects.length > 0) {
     console.log(`Setting up VSCode attaching for ${devProjects.join(", ")}...`);
   }
+  if (fs.existsSync(traefikConfigPath)) {
+    fs.unlinkSync(traefikConfigPath);
+  }
+} else if (PROD) {
+  writeTraefikConfig(availableDeployProjects, traefikConfigPath);
 }
 
 function flattenObject(obj) {
@@ -99,15 +186,12 @@ if (PROD) {
 
 const traefik = {
   image: "traefik:v3.0",
-  container_name: "traefik",
   command: [
-    "--providers.docker=true",
-    "--providers.docker.exposedbydefault=false",
     "--entrypoints.web.address=:80",
     "--entrypoints.rest-internal.address=:3000",
   ],
   ports: ["80:80"],
-  volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"],
+  volumes: [],
   networks: ["intranet"],
 };
 
@@ -117,11 +201,15 @@ if (PROD) {
       condition: "service_started",
     },
   };
+  traefik.command.push("--providers.file.filename=/traefik_config.yml");
+  traefik.volumes.push("./traefik.yml:/traefik_config.yml:ro");
 } else {
   traefik.command.push(
     "--api.insecure=true",
-    // "--log.level=DEBUG",
+    "--providers.docker=true",
+    "--providers.docker.exposedbydefault=false",
   );
+  traefik.volumes.push("/var/run/docker.sock:/var/run/docker.sock:ro");
   traefik.ports.push("3000:3000", "8080:8080");
 }
 
