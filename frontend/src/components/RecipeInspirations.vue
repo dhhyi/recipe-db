@@ -13,7 +13,7 @@ type Link = Pick<
 
 const links = (props.recipe.inspirations
   ?.map((link) =>
-    link.extracted === null ? { title: link.url } : link.extracted
+    link.extracted === null ? { title: link.url } : link.extracted,
   )
   ?.filter((x) => !!x) ?? []) as Link[];
 </script>

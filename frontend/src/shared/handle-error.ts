@@ -14,11 +14,11 @@ export async function handleError(error: Error): Promise<Response> {
 export async function getErrorPage(
   statusCode: number,
   statusText: string,
-  message?: string
+  message?: string,
 ): Promise<Response> {
   const port = process.env.PORT ?? 3000;
   let errorPageUrl = `http://localhost:${port}/error?statusCode=${statusCode}&statusText=${encodeURIComponent(
-    statusText
+    statusText,
   )}`;
   if (message) {
     errorPageUrl += `&message=${encodeURIComponent(message)}`;

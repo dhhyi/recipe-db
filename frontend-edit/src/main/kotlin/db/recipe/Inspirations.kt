@@ -27,7 +27,7 @@ class Inspirations : VerticalLayout() {
       addClassName("inspirations")
       text = textField {}
       deleteButton =
-          iconButton(image("icons/trash.svg") { setWidth("24px") }) {
+          iconButton(image(deleteIcon) { setWidth("24px") }) {
             addClassName("inspirations-remove")
             setThemeName("tertiary")
           }
@@ -60,7 +60,7 @@ class Inspirations : VerticalLayout() {
     flexLayout {
       addClassName("inspirations")
       nativeLabel("Inspirationen")
-      iconButton(image("icons/plus.svg") { setWidth("24px") }) {
+      iconButton(image(addIcon) { setWidth("24px") }) {
         addClassName("inspirations-add")
         setThemeName("tertiary")
         onLeftClick { addRow() }

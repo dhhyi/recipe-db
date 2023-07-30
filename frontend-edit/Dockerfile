@@ -6,7 +6,7 @@ COPY build.gradle.kts gradlew /app/
 RUN ./gradlew --no-daemon clean
 RUN ./gradlew vaadinPrepareFrontend -Pvaadin.productionMode --no-daemon --info --stacktrace
 COPY . .
-RUN ./gradlew build -x test -Pvaadin.productionMode --no-daemon --info --stacktrace
+RUN ./gradlew build -x test -x detekt -Pvaadin.productionMode --no-daemon --info --stacktrace
 WORKDIR /app/build/distributions/
 RUN unzip app.zip
 

@@ -132,6 +132,10 @@ func main() {
 		})
 	}
 
+	r.GET("/health", func(c *gin.Context) {
+		c.Status(204)
+	})
+
 	r.GET("/recipes", func(c *gin.Context) {
 		c.JSON(200, getAllRecipes(db))
 	})

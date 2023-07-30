@@ -33,7 +33,7 @@ class Ingredients : VerticalLayout() {
       name = textField { addClassName("ingredients-ingredient") }
       optional = checkBox { addClassName("ingredients-optional") }
       deleteButton =
-          iconButton(image("icons/trash.svg") { setWidth("24px") }) {
+          iconButton(image(deleteIcon) { setWidth("24px") }) {
             addClassName("ingredients-remove")
             setThemeName("tertiary")
           }
@@ -83,7 +83,7 @@ class Ingredients : VerticalLayout() {
       nativeLabel("Einheit") { addClassName("ingredients-unit") }
       nativeLabel("Zutat") { addClassName("ingredients-ingredient") }
       nativeLabel("Optional") { addClassName("ingredients-optional") }
-      iconButton(image("icons/plus.svg") { setWidth("24px") }) {
+      iconButton(image(addIcon) { setWidth("24px") }) {
         addClassName("ingredients-add")
         setThemeName("tertiary")
         onLeftClick { addRow() }

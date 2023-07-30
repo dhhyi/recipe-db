@@ -58,6 +58,9 @@ if os.getenv("TESTING") == "true" then
     end)
 end
 
+app.add_handler("GET", "/health",
+                function() return nil, {[":status"] = "204"} end)
+
 app.add_handler("GET", "/inspirations/...", function(captures)
     local recipe_id = captures[1]
     local inspirations = data[recipe_id]
