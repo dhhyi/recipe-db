@@ -174,12 +174,12 @@ if (PROD) {
   dockerCompose.volumes = {
     data: {
       name: "recipe-db-data",
-      driver: "local",
-      driver_opts: {
-        type: "none",
-        device: projectRoot + "/data",
-        o: "bind",
-      },
+      // driver: "local",
+      // driver_opts: {
+      //   type: "none",
+      //   device: projectRoot + "/data",
+      //   o: "bind",
+      // },
     },
   };
 }
