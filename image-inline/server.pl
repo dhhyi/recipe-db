@@ -12,6 +12,10 @@ print "Database location: $db\n";
 
 make_path($db);
 
+get '/health' => sub {
+    status 204;
+};
+
 get '/image-inline/' => sub {
     delayed {
         my $url = query_parameters->get('url');

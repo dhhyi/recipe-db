@@ -5,6 +5,10 @@ RESTAPI := Object clone
 RESTAPI get := method(request,
     path := request at("path")
 
+    if (path at(0) == "health",
+        return request sendNoContent
+    )
+
     if (path at(0) == "ratings",
         if (path size == 1,
             allRatings := db getAllAverageRatings

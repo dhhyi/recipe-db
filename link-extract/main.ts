@@ -82,6 +82,10 @@ if (import.meta.main) {
   const router = new Router();
   const db = initDatabase();
 
+  router.get("/health", (_: Req, res: Res) => {
+    res.status = 200;
+  });
+
   router.get("/link-extract", async (req: Req, res: Res) => {
     const parsed = pathParse(req);
     const urlQuery = parsed.query?.url;

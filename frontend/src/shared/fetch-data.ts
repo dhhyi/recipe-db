@@ -23,7 +23,7 @@ function firstMessage(error: GraphQLError): string {
 
 export async function fetchGraphQL<R extends Query>(
   query: string,
-  variables: Record<string, any> | undefined = undefined
+  variables: Record<string, any> | undefined = undefined,
 ): Promise<R> {
   const url =
     typeof window === "undefined" ? "http://traefik/graphql" : "/graphql";

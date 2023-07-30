@@ -35,10 +35,11 @@ traefik:
         apollo:
           rule: PathPrefix(`/graphql`)
           entrypoints: web
-          middlewares: apollo-stripprefix
-      middlewares:
-        apollo-stripprefix:
-          stripprefix.prefixes: /graphql
+      #     middlewares: apollo-stripprefix
+      # middlewares:
+      #   apollo-stripprefix:
+      #     stripprefix:
+      #       prefixes: /graphql
 precommit: |
   npm run lint-schema
   npm run codegen

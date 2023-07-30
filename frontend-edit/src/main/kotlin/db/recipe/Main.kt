@@ -1,18 +1,21 @@
 package db.recipe
 
-import com.github.mvysny.vaadinboot.VaadinBoot
-import com.vaadin.flow.component.page.AppShellConfigurator
-import com.vaadin.flow.theme.Theme
+import org.springframework.boot.Banner
+import org.springframework.boot.autoconfigure.SpringBootApplication
+import org.springframework.boot.runApplication
 
-@Theme("my-theme") class Main : AppShellConfigurator
+@SpringBootApplication open class Main
 
-fun main() {
-  val port = System.getenv("PORT")?.toInt() ?: 4000
-  val boot = VaadinBoot().setPort(port).openBrowserInDevMode(false)
+fun main(args: Array<String>) {
+  val port = System.getenv("PORT") ?: "4000"
+
   val contextPath = System.getenv("CONTEXT_PATH")
   if (contextPath != null) {
-    boot.withContextRoot(contextPath).run()
-  } else {
-    boot.run()
+    System.setProperty("vaadin.urlMapping", "$contextPath/*")
+  }
+
+  runApplication<Main>(*args) {
+    setBannerMode(Banner.Mode.OFF)
+    setDefaultProperties(mapOf("server.port" to port))
   }
 }

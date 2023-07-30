@@ -20,7 +20,7 @@ module.exports = {
           documents
             .map(
               ({ name, raw }) =>
-                `export const ${name} = '${minimizeQuery(raw)}'`
+                `export const ${name} = '${minimizeQuery(raw)}'`,
             )
             .join("\n") +
           "\n"
