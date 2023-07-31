@@ -33,6 +33,7 @@ extras:
   - traefik
 traefik:
   network: intranet
+category: development
 precommit: |
   cspell --locale de-de recipe*.{json,md}
   ariadne-codegen

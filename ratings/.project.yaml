@@ -27,6 +27,7 @@ traefik:
         ratings:
           rule: PathPrefix(`/ratings`)
           entrypoints: rest-internal
+category: backend
 prettier:
   ignore:
     - "*.io"

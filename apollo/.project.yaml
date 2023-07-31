@@ -40,6 +40,7 @@ traefik:
       #   apollo-stripprefix:
       #     stripprefix:
       #       prefixes: /graphql
+category: api
 precommit: |
   npm run lint-schema
   npm run codegen

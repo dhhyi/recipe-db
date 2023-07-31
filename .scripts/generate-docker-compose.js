@@ -115,16 +115,42 @@ if (PROD) {
 } else {
   console.log("Setting up for development...");
 }
-if (BACKEND) {
-  console.log("Setting up backend only...");
-}
 
-const availableDeployProjects = availableProjects.filter(
-  (project) =>
-    !project.endsWith("-test") &&
-    (DEV || project !== "demo-data") &&
-    (!BACKEND || project !== "frontend"),
-);
+const categorizedProjects = availableProjects.reduce((acc, project) => {
+  const projectConfig = getProjectConfig(project);
+  if (projectConfig.category) {
+    if (acc[projectConfig.category] === undefined) {
+      acc[projectConfig.category] = [];
+    }
+    acc[projectConfig.category].push(project);
+  } else if (project.endsWith("-test")) {
+    if (acc.test === undefined) {
+      acc.test = [];
+    }
+    acc.test.push(project);
+  } else {
+    console.warn(`No category found for ${project}`);
+  }
+  return acc;
+}, {});
+
+console.log("Available projects:");
+Object.keys(categorizedProjects)
+  .sort()
+  .forEach((category) => {
+    console.log(
+      `  ${category}: ${categorizedProjects[category].sort().join(", ")}`,
+    );
+  });
+
+const availableDeployProjects = [
+  ...categorizedProjects.backend,
+  ...categorizedProjects.api,
+  ...categorizedProjects.frontend,
+];
+if (DEV) {
+  availableDeployProjects.push(...categorizedProjects.development);
+}
 
 let devProjects = [];
 
@@ -186,6 +212,7 @@ if (PROD) {
 
 const traefik = {
   image: "traefik:v3.0",
+  container_name: "traefik",
   command: [
     "--entrypoints.web.address=:80",
     "--entrypoints.rest-internal.address=:3000",
@@ -196,11 +223,6 @@ const traefik = {
 };
 
 if (PROD) {
-  traefik.depends_on = {
-    apollo: {
-      condition: "service_started",
-    },
-  };
   traefik.command.push("--providers.file.filename=/traefik_config.yml");
   traefik.volumes.push("./traefik.yml:/traefik_config.yml:ro");
 } else {
@@ -217,6 +239,13 @@ dockerCompose.services.traefik = traefik;
 
 availableProjects.forEach((project) => {
   if (!availableDeployProjects.includes(project)) {
+    return;
+  } else if (
+    BACKEND &&
+    !["backend", "api"].some((cat) =>
+      categorizedProjects[cat].includes(project),
+    )
+  ) {
     return;
   }
 
@@ -257,6 +286,13 @@ availableProjects.forEach((project) => {
     appendEnvironment(projectConfig.devcontainer.environment);
   }
 
+  // if (projectConfig.category) {
+  //   if (!service.profiles) {
+  //     service.profiles = [];
+  //   }
+  //   service.profiles.push(projectConfig.category);
+  // }
+
   if (devProjects.includes(project)) {
     // add container env from meta for VSCode container attach
     const devcontainerMetaPath = path.join(
@@ -295,74 +331,46 @@ availableProjects.forEach((project) => {
     appendEnvironment({ TESTING: null });
   }
 
-  const setDBVolume = () => {
+  service.init = true;
+
+  if (PROD && categorizedProjects.backend.includes(project)) {
     if (!service.volumes) {
       service.volumes = [];
     }
     service.volumes.push("data:/app/data");
     service.environment.DATA_LOCATION = "/app/data/" + project;
-  };
+  }
 
-  switch (project) {
-    case "frontend":
-      if (PROD) {
-        appendEnvironment({ NODE_ENV: "production" });
-      }
-      service.depends_on = {
-        apollo: {
-          condition: "service_started",
-        },
+  if (PROD && projectConfig.extends?.includes("javascript")) {
+    appendEnvironment({ NODE_ENV: "production" });
+  }
+
+  const findServicesExcluding = (projects, exclude) =>
+    projects.filter((service) => !exclude.includes(service));
+
+  const dependsOn = (services) =>
+    services.reduce((acc, val) => {
+      acc[val] = {
+        condition: "service_started",
       };
-      service.init = true;
-      break;
-    case "recipes-edit":
-      service.depends_on = {
-        apollo: {
-          condition: "service_started",
-        },
-      };
-      break;
-    case "apollo":
-      if (PROD) {
-        appendEnvironment({ NODE_ENV: "production" });
-        service.depends_on = {
-          recipes: {
-            condition: "service_started",
-          },
-          ratings: {
-            condition: "service_started",
-          },
-        };
-      }
-      break;
-    case "demo-data":
-      if (DEV) {
-        service.entrypoint =
-          "sh -Ec 'cd /app && sleep 2 && sh -Ee generate.sh'";
-        const services = availableDeployProjects.filter(
-          (service) => service !== "demo-data",
-        );
-        services.push("traefik");
-        service.depends_on = services.reduce((acc, val) => {
-          acc[val] = {
-            condition: "service_started",
-          };
-          return acc;
-        }, {});
-      }
-      break;
-    case "recipes":
-    case "ratings":
-    case "inspirations":
-    case "image-inline":
-    case "link-extract":
-      if (PROD) {
-        setDBVolume();
-      }
-      break;
-    default:
-      console.error(`Unknown project ${project} - please add it to the script`);
-      process.exit(1);
+      return acc;
+    }, {});
+
+  if (PROD && categorizedProjects.frontend.includes(project)) {
+    service.depends_on = dependsOn(categorizedProjects.api);
+  }
+
+  if (PROD && categorizedProjects.api.includes(project)) {
+    service.depends_on = dependsOn(["traefik", ...categorizedProjects.backend]);
+  }
+
+  if (DEV && categorizedProjects.development.includes(project)) {
+    service.depends_on = dependsOn(
+      findServicesExcluding(availableDeployProjects, [
+        project,
+        ...categorizedProjects.development,
+      ]),
+    );
   }
 
   dockerCompose.services[project] = service;
