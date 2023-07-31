@@ -33,6 +33,7 @@ traefik:
         recipes-edit:
           rule: PathPrefix(`/edit`)
           entrypoints: web
+category: frontend
 precommit: |
   ktfmt src build.gradle.kts
   ./gradlew --no-daemon compileKotlin detekt

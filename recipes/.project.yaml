@@ -23,6 +23,7 @@ traefik:
         recipes:
           rule: PathPrefix(`/recipes`)
           entrypoints: rest-internal
+category: backend
 precommit: |
   go fmt
   go build -o precommit.out
