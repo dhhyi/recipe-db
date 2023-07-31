@@ -50,17 +50,9 @@ As most parts of any Astro page can be pre-rendered and cached and rerendered wh
 
 Parts with heavy interaction like the pages for adding and editing recipes will be implemented in a different solution.
 
-Possibilities:
-
-- [Vaadin](https://vaadin.com/)
-  - via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin) or [Scala](https://vaadin.com/docs/v8/framework/getting-started/getting-started-scala);
-  - testing available via [Karibu](https://github.com/mvysny/karibu-testing/).
-- [Hilla](https://hilla.dev/)
-  - compatible with [Tailwind CSS](https://hilla.dev/blog/hilla-tailwind-tutorial/)
-
 #### Recipe Adding and Editing
 
-Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin). with [Gradle](https://gradle.org/) build tool and [Vaadin Boot](https://github.com/mvysny/vaadin-boot) for app startup.
+Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin). with [Gradle](https://gradle.org/) build tool and [Spring Boot](https://spring.io/projects/spring-boot) for app startup.
 
 ### Style
 
