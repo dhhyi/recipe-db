@@ -1,4 +1,4 @@
-name: Inspirations CRUD
+name: Inspirations Sanity Checks
 
 testcases:
   - name: Clear inspirations
