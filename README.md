@@ -38,7 +38,7 @@ For building all of the projects in the mono repo, [Docker](https://www.docker.c
 
 Even though the frontend parts have access to a unified GraphQL API, I want to implement the different parts with different solutions.
 
-### Parts with limited interaction
+### Parts with limited interaction ([`frontend`](./frontend))
 
 For pages that are mostly static, [Astro](https://astro.build/) is a perfect implementation solution for speedy serving and caching.
 
@@ -50,7 +50,7 @@ As most parts of any Astro page can be pre-rendered and cached and rerendered wh
 
 Parts with heavy interaction like the pages for adding and editing recipes will be implemented in a different solution.
 
-#### Recipe Adding and Editing
+#### Recipe Adding and Editing ([`recipes-edit`](./recipes-edit))
 
 Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin). with [Gradle](https://gradle.org/) build tool and [Spring Boot](https://spring.io/projects/spring-boot) for app startup.
 
@@ -62,7 +62,7 @@ If possible, consistent styling with [Tailwind CSS](https://tailwindcss.com/).
 
 The backend is organized in a variety of services where the only one _actually_ necessary is the one holding recipe data. Each service exposes a REST API which is tested with a different integration testing framework.
 
-### Recipes
+### Recipes ([`recipes`](./recipes), [`recipes-test`](./recipes-test))
 
 Implemented using [Golang](https://go.dev/), web framework [Gin](https://gin-gonic.com/) and [Clover](https://github.com/ostafen/clover) as document database.
 
@@ -70,13 +70,13 @@ Still open: versioning of recipe data and rollback of edits.
 
 Integration testing done in [Venom](https://github.com/ovh/venom).
 
-### Ratings
+### Ratings ([`ratings`](./ratings), [`ratings-test`](./ratings-test))
 
 Implemented in [IO](https://iolanguage.org/) with [SQLite](https://www.sqlite.org/) as relational database.
 
 Integration testing in [Karate](https://www.karatelabs.io/).
 
-### Inspiration
+### Inspiration ([`inspirations`](./inspirations), [`inspirations-test`](./inspirations-test))
 
 Sources of inspiration web links for this recipe.
 Implemented in [Lua](https://www.lua.org/) using [Milua](https://github.com/MiguelMJ/Milua) for setting up REST API.
@@ -88,16 +88,18 @@ Testing is done using [Venom](https://github.com/ovh/venom) with [Tavern Executo
 
 Services with utility character.
 
-#### Link Extract
+#### Link Extract ([`link-extract`](./link-extract))
 
 Extracts favicon, title, description and canonical link of URL.
 
 Implemented in [Deno](https://deno.land/) using [Denorest](https://denorest.deno.dev/) and [AloeDB](https://github.com/Kirlovon/AloeDB) document database.
 
-#### Image Inline
+#### Image Inline ([`image-inline`](./image-inline))
 
 Convert an Image URL to an inlined image.
 Implemented in [Perl](https://www.perl.org/) using [Dancer2](https://metacpan.org/pod/Dancer2) for the REST API setup.
+
+## Ideas for other services:
 
 ### Tags
 
