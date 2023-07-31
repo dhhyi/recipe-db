@@ -315,7 +315,7 @@ availableProjects.forEach((project) => {
       };
       service.init = true;
       break;
-    case "frontend-edit":
+    case "recipes-edit":
       service.depends_on = {
         apollo: {
           condition: "service_started",

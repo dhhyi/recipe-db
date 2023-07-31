@@ -22,15 +22,15 @@ extras:
   - traefik
   - named-volumes
 namedVolumes:
-  $HOME/.gradle: recipe-db-frontend-edit-gradle-user-home
-  $HOME/.vaadin: recipe-db-frontend-edit-vaadin-user-home
-  .gradle: recipe-db-frontend-edit-gradle
+  $HOME/.gradle: recipe-db-recipes-edit-gradle-user-home
+  $HOME/.vaadin: recipe-db-recipes-edit-vaadin-user-home
+  .gradle: recipe-db-recipes-edit-gradle
 traefik:
   network: intranet
   labels:
     http:
       routers:
-        frontend-edit:
+        recipes-edit:
           rule: PathPrefix(`/edit`)
           entrypoints: web
 precommit: |
