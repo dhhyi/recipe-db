@@ -23,6 +23,7 @@ recipe-db.graphqls
 .dockerignore
 *.log*
 traefik.yml
+/helm
 
 # data
 /data

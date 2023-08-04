@@ -111,7 +111,8 @@ if (
 
 const availableProjects = getAvailableProjects();
 
-const PROD = args.some((arg) => arg.includes("prod"));
+const PROD = args.some((arg) => arg.includes("prod") || arg.includes("helm"));
+const HELM = args.some((arg) => arg.includes("helm"));
 const DEV = !PROD;
 const BACKEND = args.some((arg) => arg === "backend");
 
@@ -230,8 +231,22 @@ const traefik = {
 };
 
 if (PROD) {
-  traefik.command.push("--providers.file.filename=/traefik_config.yml");
-  traefik.volumes.push("./traefik.yml:/traefik_config.yml:ro");
+  traefik.command.push("--providers.file.filename=/traefik_config");
+
+  if (HELM) {
+    traefik.configs = ["traefik_config"]
+    traefik.labels = [
+      'kompose.service.type=LoadBalancer',
+    ]
+    dockerCompose.configs = {
+      'traefik_config': {
+        file: "./traefik.yml",
+      },
+    };
+
+  } else {
+    traefik.volumes.push("./traefik.yml:/traefik_config:ro");
+  }
 } else {
   traefik.command.push(
     "--api.insecure=true",
@@ -259,10 +274,25 @@ availableProjects.forEach((project) => {
   const projectConfig = getProjectConfig(project);
 
   const service = {
+    image: `recipe-db-${project}:latest`,
     build: devProjects.includes(project) ? `${project}/.devcontainer` : project,
     container_name: project,
     networks: ["intranet"],
   };
+
+  if (HELM) {
+    if (!service.labels) {
+      service.labels = [];
+    }
+    service.labels.push("kompose.image-pull-policy=Never", "kompose.service.type=ClusterIP", "kompose.service.expose=true");
+  }
+
+  try {
+    const port = getServicePort(project);
+    service.ports = [`${port}:${port}`]
+  } catch (error) {
+    //ignore
+  }
 
   const appendEnvironment = (obj) => {
     if (!service.environment) {
