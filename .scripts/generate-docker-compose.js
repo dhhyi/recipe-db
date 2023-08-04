@@ -11,20 +11,25 @@ const {
 
 checkInstallDependencies();
 
+function getServicePort(project) {
+  const projectConfig = getProjectConfig(project);
+  if (projectConfig.devcontainer.ports === undefined) {
+    throw new Error(`No ports found for ${project}`);
+  } else if (projectConfig.devcontainer.ports.length !== 1) {
+    throw new Error(
+      `Expected 1 port for ${project}, found ${projectConfig.devcontainer.ports.length}`,
+    );
+  }
+  const port = projectConfig.devcontainer.ports[0];
+  return port;
+}
+
 function writeTraefikConfig(projects, configPath) {
   const combinedConfig = projects.reduce(
     (acc, project) => {
       console.log(`found project ${project}`);
       const projectConfig = getProjectConfig(project);
       const config = projectConfig.traefik?.labels?.http;
-      if (projectConfig.devcontainer.ports === undefined) {
-        throw new Error(`No ports found for ${project}`);
-      } else if (projectConfig.devcontainer.ports.length !== 1) {
-        throw new Error(
-          `Expected 1 port for ${project}, found ${projectConfig.devcontainer.ports.length}`,
-        );
-      }
-      const port = projectConfig.devcontainer.ports[0];
 
       if (config === undefined) {
         throw new Error(`No traefik config found for ${project}`);
@@ -59,7 +64,7 @@ function writeTraefikConfig(projects, configPath) {
         loadBalancer: {
           servers: [
             {
-              url: `http://${project}:${port}`,
+              url: `http://${project}:${getServicePort(project)}`,
             },
           ],
           healthCheck: {
@@ -271,7 +276,7 @@ availableProjects.forEach((project) => {
     service.volumes = [`./${project}:/app`];
   }
 
-  if (projectConfig.traefik?.labels) {
+  if (DEV && projectConfig.traefik?.labels) {
     if (!service.labels) {
       service.labels = [];
     }
