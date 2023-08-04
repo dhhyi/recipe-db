@@ -22,6 +22,7 @@ traefik:
           rule: PathPrefix(`/image-inline`)
           entrypoints: rest-internal
 category: backend
+needsInit: true
 prettier:
   ignore:
     - "*.pl"

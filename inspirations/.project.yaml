@@ -32,6 +32,7 @@ traefik:
           rule: PathPrefix(`/inspirations`)
           entrypoints: rest-internal
 category: backend
+needsInit: true
 prettier:
   ignore:
     - "*.lua"

@@ -44,6 +44,7 @@ traefik:
         frontend-compress:
           compress: true
 category: frontend
+needsInit: true
 precommit: |
   npm run codegen
   npm run lint -- --fix

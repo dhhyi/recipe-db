@@ -210,6 +210,8 @@ if (PROD) {
   };
 }
 
+const frontendPort = process.env.FRONTEND_PORT || 80;
+
 const traefik = {
   image: "traefik:v3.0",
   container_name: "traefik",
@@ -217,7 +219,7 @@ const traefik = {
     "--entrypoints.web.address=:80",
     "--entrypoints.rest-internal.address=:3000",
   ],
-  ports: ["80:80"],
+  ports: [`${frontendPort}:80`],
   volumes: [],
   networks: ["intranet"],
 };
@@ -249,11 +251,13 @@ availableProjects.forEach((project) => {
     return;
   }
 
+  const projectConfig = getProjectConfig(project);
+
   const service = {
     build: devProjects.includes(project) ? `${project}/.devcontainer` : project,
     container_name: project,
     networks: ["intranet"],
-    tty: true,
+    init: projectConfig.needsInit,
   };
 
   const appendEnvironment = (obj) => {
@@ -267,7 +271,6 @@ availableProjects.forEach((project) => {
     service.volumes = [`./${project}:/app`];
   }
 
-  const projectConfig = getProjectConfig(project);
   if (projectConfig.traefik?.labels) {
     if (!service.labels) {
       service.labels = [];
@@ -330,8 +333,6 @@ availableProjects.forEach((project) => {
   } else if (PROD) {
     appendEnvironment({ TESTING: null });
   }
-
-  service.init = true;
 
   if (PROD && categorizedProjects.backend.includes(project)) {
     if (!service.volumes) {

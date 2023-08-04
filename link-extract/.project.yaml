@@ -21,6 +21,7 @@ traefik:
           rule: PathPrefix(`/link-extract`)
           entrypoints: rest-internal
 category: backend
+needsInit: true
 prettier:
   ignore:
     - "*.ts"
