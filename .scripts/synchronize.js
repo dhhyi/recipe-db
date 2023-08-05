@@ -207,7 +207,7 @@ function writeDccFiles(availableProjects) {
     console.log(`Writing Devcontainer in ${project} ...`);
     const commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${languageFile(
       project,
-    )} ${project} --no-vscode --no-validate`;
+    )} ${project} --no-vscode`;
 
     try {
       cp.execSync(commandLine, { cwd: projectRoot, encoding: "utf8" });

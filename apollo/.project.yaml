@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://javascript-pnpm
 devcontainer:
   initialize: |
@@ -40,6 +41,8 @@ traefik:
       #   apollo-stripprefix:
       #     stripprefix:
       #       prefixes: /graphql
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
 precommit: |
   npm run lint-schema

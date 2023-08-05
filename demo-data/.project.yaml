@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://python
 devcontainer:
   build:
@@ -33,6 +34,8 @@ extras:
   - traefik
 traefik:
   network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
 category: development
 precommit: |
   cspell --locale de-de recipe*.{json,md}

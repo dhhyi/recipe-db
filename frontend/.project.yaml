@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://javascript-pnpm
 devcontainer:
   initialize: |
@@ -43,6 +44,8 @@ traefik:
       middlewares:
         frontend-compress:
           compress: true
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 needsInit: true
 precommit: |

@@ -12,7 +12,8 @@ package-lock.json
 
 # generated
 .devcontainer
-.vscode
+.vscode/settings.json
+.vscode/tasks.json
 .update_devcontainer.sh
 .devcontainer_meta.json
 .prettierignore
