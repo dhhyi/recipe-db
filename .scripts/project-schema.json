@@ -1,0 +1,41 @@
+{
+  "$id": "https://example.com/language.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "title": "Project",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["category"],
+  "properties": {
+    "category": {
+      "type": "string",
+      "enum": ["api", "frontend", "backend", "test", "development"]
+    },
+    "precommit": {
+      "type": "string"
+    },
+    "test": {
+      "type": "string"
+    },
+    "prettier": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "needsInit": {
+      "type": "boolean"
+    }
+  }
+}

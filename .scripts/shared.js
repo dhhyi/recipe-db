@@ -28,7 +28,9 @@ function languageFile(project) {
 function getProjectConfig(project) {
   const projectYaml = path.join(projectRoot, project, ".project.yaml");
   const yaml = require("js-yaml");
-  return yaml.load(fs.readFileSync(projectYaml, "utf8"));
+  return yaml
+    .loadAll(fs.readFileSync(projectYaml, "utf8"))
+    .reduce((acc, v) => ({ ...acc, ...v }), {});
 }
 
 module.exports = {

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://perl
 devcontainer:
   build:
@@ -21,6 +22,8 @@ traefik:
         image-inline:
           rule: PathPrefix(`/image-inline`)
           entrypoints: rest-internal
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 needsInit: true
 prettier:

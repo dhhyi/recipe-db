@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 language:
   name: karate
   binary: karate
@@ -35,6 +36,9 @@ extras:
   - traefik
 traefik:
   network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
 precommit: ghokin fmt replace .
 test: karate -T 1 .
 prettier:

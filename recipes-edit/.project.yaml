@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://kotlin
 devcontainer:
   build:
@@ -33,6 +34,8 @@ traefik:
         recipes-edit:
           rule: PathPrefix(`/edit`)
           entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 precommit: |
   ktfmt src build.gradle.kts

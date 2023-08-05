@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://deno
 devcontainer:
   ports:
@@ -20,6 +21,8 @@ traefik:
         link-extract:
           rule: PathPrefix(`/link-extract`)
           entrypoints: rest-internal
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 needsInit: true
 prettier:
