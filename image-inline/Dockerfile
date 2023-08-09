@@ -1,5 +1,6 @@
 FROM debian
 RUN apt-get update && apt-get install -y \
+  tini \
   perl \
   libdancer2-perl \
   libswitch-perl \
@@ -7,4 +8,5 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 COPY server.pl .
 EXPOSE 3000
-CMD ["perl", "server.pl"]
+ENTRYPOINT [ "tini", "--" ]
+CMD [ "perl", "server.pl" ]

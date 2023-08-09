@@ -262,7 +262,6 @@ availableProjects.forEach((project) => {
     build: devProjects.includes(project) ? `${project}/.devcontainer` : project,
     container_name: project,
     networks: ["intranet"],
-    init: projectConfig.needsInit,
   };
 
   const appendEnvironment = (obj) => {

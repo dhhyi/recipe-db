@@ -5,10 +5,12 @@ RUN deno task build
 
 FROM frolvlad/alpine-glibc
 # RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add tini
 WORKDIR /app
 COPY --from=builder /app/link-extract .
 EXPOSE 8081
-CMD ["/app/link-extract"]
+ENTRYPOINT [ "tini", "--" ]
+CMD [ "/app/link-extract" ]
 
 # esbuild
 # FROM debian AS esbuild
