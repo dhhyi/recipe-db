@@ -33,9 +33,6 @@
           }
         }
       }
-    },
-    "needsInit": {
-      "type": "boolean"
     }
   }
 }

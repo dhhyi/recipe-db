@@ -24,7 +24,6 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
-needsInit: true
 prettier:
   ignore:
     - "*.ts"
