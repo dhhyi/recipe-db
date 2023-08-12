@@ -46,8 +46,10 @@ Logger.prototype.child = function () {
   return new Logger();
 };
 
+const logger = new Logger();
+
 const server = Fastify({
-  logger: new Logger(),
+  logger,
   disableRequestLogging: true,
 });
 
@@ -72,6 +74,15 @@ server.addHook("onResponse", (req, reply, done) => {
 await server
   .register(fastifyStatic, {
     root: fileURLToPath(new URL("./dist/client", import.meta.url)),
+    setHeaders(res, path) {
+      if (/\.[0-9a-f]{8}\./.test(path)) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      } else if (path.includes("/assets/")) {
+        res.setHeader("Cache-Control", "public, max-age=300");
+      } else {
+        res.setHeader("Cache-Control", "public, max-age=0, no-cache");
+      }
+    },
   })
   .register(fastifyMiddie);
 server.use(ssrHandler);
