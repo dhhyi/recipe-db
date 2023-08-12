@@ -6,11 +6,8 @@ import com.vaadin.flow.component.orderedlayout.FlexLayout
 import com.vaadin.flow.component.orderedlayout.VerticalLayout
 import com.vaadin.flow.component.textfield.TextField
 import kotlin.streams.toList
-import org.slf4j.LoggerFactory
 
 class Inspirations : VerticalLayout() {
-  private val logger = LoggerFactory.getLogger(Inspirations::class.java)
-
   fun setInspirations(inspirations: List<RecipeByIdQuery.Inspiration>?) {
     if (inspirations == null || inspirations.isEmpty()) {
       addRow()

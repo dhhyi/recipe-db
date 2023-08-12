@@ -13,9 +13,12 @@ import com.vaadin.flow.router.HasUrlParameter
 import com.vaadin.flow.router.Route
 import db.recipe.backend.Interactions
 import db.recipe.type.RecipeInput
+import org.slf4j.LoggerFactory
 
 @Route("")
 class RecipeEdit : KComposite(), HasUrlParameter<String> {
+  private val logger = LoggerFactory.getLogger(RecipeEdit::class.java)
+
   private val interaction = Interactions()
 
   private lateinit var idField: TextField
@@ -81,13 +84,15 @@ class RecipeEdit : KComposite(), HasUrlParameter<String> {
 
   override fun setParameter(event: BeforeEvent, recipeId: String?) {
     if (isCreate(recipeId)) {
-      idField.setVisible(false)
-      return
-    } else {
-      idField.value = recipeId
-    }
+      logger.info("Creating new recipe")
 
-    interaction.getRecipe(idField.value, { objectToForm(it) }, { showError("Error: $it") })
+      idField.setVisible(false)
+    } else {
+      logger.info("Editing recipe $recipeId")
+
+      idField.value = recipeId
+      interaction.getRecipe(idField.value, { objectToForm(it) }, { showError("Error: $it") })
+    }
   }
 
   private fun isCreate(recipeId: String?): Boolean {
