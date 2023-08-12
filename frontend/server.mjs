@@ -6,8 +6,48 @@ import Fastify from "fastify";
 
 import { handler as ssrHandler } from "./dist/server/entry.mjs";
 
+function format(msg) {
+  if (typeof msg === "string") {
+    return msg;
+  } else if (typeof msg === "object" && !!msg.method && !!msg.url) {
+    if (msg.statusCode && msg.durationMs) {
+      return `${msg.method} ${msg.url} ${msg.statusCode} ${msg.durationMs}ms`;
+    }
+    return `${msg.method} ${msg.url}`;
+  }
+  try {
+    return JSON.stringify(msg);
+  } catch (error) {
+    return msg;
+  }
+}
+function Logger(...args) {
+  this.args = args;
+}
+Logger.prototype.info = function (msg) {
+  console.log(format(msg));
+};
+Logger.prototype.error = function (msg) {
+  console.log("ERROR", format(msg));
+};
+Logger.prototype.debug = function (msg) {
+  console.log("DEBUG", format(msg));
+};
+Logger.prototype.fatal = function (msg) {
+  console.log("FATAL", format(msg));
+};
+Logger.prototype.warn = function (msg) {
+  console.log("WARN", format(msg));
+};
+Logger.prototype.trace = function (msg) {
+  console.log("TRACE", format(msg));
+};
+Logger.prototype.child = function () {
+  return new Logger();
+};
+
 const server = Fastify({
-  logger: true,
+  logger: new Logger(),
   disableRequestLogging: true,
 });
 
@@ -15,19 +55,17 @@ const now = () => Date.now();
 
 server.addHook("onRequest", (req, reply, done) => {
   reply.startTime = now();
-  req.log.info({ url: req.raw.url, id: req.id }, "received request");
+  req.log.info({ method: req.method, url: req.raw.url, id: req.id });
   done();
 });
 
 server.addHook("onResponse", (req, reply, done) => {
-  req.log.info(
-    {
-      url: req.raw.url, // add url to response as well for simple correlating
-      statusCode: reply.raw.statusCode,
-      durationMs: now() - reply.startTime, // recreate duration in ms - use process.hrtime() - https://nodejs.org/api/process.html#process_process_hrtime_bigint for most accuracy
-    },
-    "request completed",
-  );
+  req.log.info({
+    url: req.raw.url,
+    method: req.method,
+    statusCode: reply.raw.statusCode,
+    durationMs: now() - reply.startTime,
+  });
   done();
 });
 
