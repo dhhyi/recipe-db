@@ -1,0 +1,29 @@
+name: Publish
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: install node
+        uses: actions/setup-node@v3
+        with:
+          node-version: lts/Hydrogen
+
+      - name: generate docker-compose.yml
+        run: npm run generate-docker-compose
+
+      - name: build and push images
+        uses: whoan/docker-build-with-cache-action@v5
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: "${{ secrets.GITHUB_TOKEN }}"
+          compose_file: docker-compose.yml

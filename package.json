@@ -1,5 +1,6 @@
 {
   "name": "recipe-db",
+  "repository": "github:dhhyi/recipe-db",
   "scripts": {
     "prepare": "husky install && npm run synchronize && npm run generate-docker-compose prepare",
     "synchronize": "node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js",

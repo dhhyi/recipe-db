@@ -259,10 +259,35 @@ availableProjects.forEach((project) => {
   const projectConfig = getProjectConfig(project);
 
   const service = {
-    build: devProjects.includes(project) ? `${project}/.devcontainer` : project,
+    build: {
+      context: devProjects.includes(project)
+        ? `${project}/.devcontainer`
+        : project,
+    },
     container_name: project,
     networks: ["intranet"],
   };
+
+  if (!devProjects.includes(project)) {
+    service.image = `ghcr.io/dhhyi/recipe-db-${project}:latest`;
+    if (!service.build.labels) {
+      service.build.labels = {};
+    }
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"),
+    );
+
+    if (
+      typeof packageJson.repository === "string" &&
+      packageJson.repository.startsWith("github:")
+    ) {
+      const repo = packageJson.repository.replace(
+        /^github:/,
+        "https://github.com/",
+      );
+      service.build.labels["org.opencontainers.image.source"] = repo;
+    }
+  }
 
   const appendEnvironment = (obj) => {
     if (!service.environment) {
