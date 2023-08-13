@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: install node
         uses: actions/setup-node@v3
@@ -22,6 +22,8 @@ jobs:
 
       - name: build and push images
         uses: whoan/docker-build-with-cache-action@v5
+        env:
+          DOCKER_BUILDKIT: 0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
