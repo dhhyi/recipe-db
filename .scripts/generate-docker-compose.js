@@ -157,16 +157,8 @@ if (DEV) {
   availableDeployProjects.push(...categorizedProjects.development);
 }
 
-let devProjects = [];
-
 const traefikConfigPath = path.join(projectRoot, "traefik.yml");
 if (DEV) {
-  devProjects = availableDeployProjects.filter((project) =>
-    args.includes(project),
-  );
-  if (devProjects.length > 0) {
-    console.log(`Setting up VSCode attaching for ${devProjects.join(", ")}...`);
-  }
   if (fs.existsSync(traefikConfigPath)) {
     fs.unlinkSync(traefikConfigPath);
   }
@@ -260,33 +252,29 @@ availableProjects.forEach((project) => {
 
   const service = {
     build: {
-      context: devProjects.includes(project)
-        ? `${project}/.devcontainer`
-        : project,
+      context: project,
     },
     container_name: project,
     networks: ["intranet"],
   };
 
-  if (!devProjects.includes(project)) {
-    service.image = `ghcr.io/dhhyi/recipe-db-${project}:latest`;
-    if (!service.build.labels) {
-      service.build.labels = {};
-    }
-    const packageJson = JSON.parse(
-      fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"),
-    );
+  service.image = `ghcr.io/dhhyi/recipe-db-${project}:latest`;
+  if (!service.build.labels) {
+    service.build.labels = {};
+  }
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"),
+  );
 
-    if (
-      typeof packageJson.repository === "string" &&
-      packageJson.repository.startsWith("github:")
-    ) {
-      const repo = packageJson.repository.replace(
-        /^github:/,
-        "https://github.com/",
-      );
-      service.build.labels["org.opencontainers.image.source"] = repo;
-    }
+  if (
+    typeof packageJson.repository === "string" &&
+    packageJson.repository.startsWith("github:")
+  ) {
+    const repo = packageJson.repository.replace(
+      /^github:/,
+      "https://github.com/",
+    );
+    service.build.labels["org.opencontainers.image.source"] = repo;
   }
 
   const appendEnvironment = (obj) => {
@@ -295,10 +283,6 @@ availableProjects.forEach((project) => {
     }
     service.environment = { ...service.environment, ...obj };
   };
-
-  if (devProjects.includes(project)) {
-    service.volumes = [`./${project}:/app`];
-  }
 
   if (DEV && projectConfig.traefik?.labels) {
     if (!service.labels) {
@@ -324,38 +308,6 @@ availableProjects.forEach((project) => {
   //   }
   //   service.profiles.push(projectConfig.category);
   // }
-
-  if (devProjects.includes(project)) {
-    // add container env from meta for VSCode container attach
-    const devcontainerMetaPath = path.join(
-      projectRoot,
-      project,
-      ".devcontainer_meta.json",
-    );
-    const devcontainerDockerfilePath = path.join(
-      projectRoot,
-      project,
-      ".devcontainer",
-      "Dockerfile",
-    );
-    if (
-      fs.existsSync(devcontainerMetaPath) &&
-      fs.existsSync(devcontainerDockerfilePath)
-    ) {
-      const meta = JSON.parse(fs.readFileSync(devcontainerMetaPath, "utf-8"));
-      const containerEnv = meta
-        .map((elem) => elem.containerEnv)
-        .reduce((acc, val) => {
-          if (val) {
-            return { ...acc, ...val };
-          }
-          return acc;
-        }, {});
-      if (Object.keys(containerEnv).length) {
-        appendEnvironment(containerEnv);
-      }
-    }
-  }
 
   if (DEV) {
     appendEnvironment({ TESTING: "true" });
