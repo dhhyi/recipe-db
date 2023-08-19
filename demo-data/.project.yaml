@@ -6,7 +6,7 @@ devcontainer:
       - nodejs
       - npm
     root:
-      - RUN npm install -g cspell @cspell/dict-de-de && cspell link add @cspell/dict-de-de
+      - RUN npm install -g cspell@6 @cspell/dict-de-de && cspell link add @cspell/dict-de-de
     user:
       - RUN pip install ariadne-codegen --break-system-packages
       - ENV PATH="${HOME}/.local/bin:${PATH}"
