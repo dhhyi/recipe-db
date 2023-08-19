@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17 AS BUILD
+FROM eclipse-temurin:17.0.8_7-jdk-jammy AS BUILD
 RUN apt update && apt install unzip -y
 WORKDIR /app/
 COPY gradle /app/gradle/
@@ -10,7 +10,7 @@ RUN ./gradlew build -x test -x detekt -Pvaadin.productionMode --no-daemon --info
 WORKDIR /app/build/distributions/
 RUN unzip app.zip
 
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17.0.8_7-jre-alpine
 COPY --from=BUILD /app/build/distributions/app /app/
 WORKDIR /app/bin
 ENV PORT=4000 CONTEXT_PATH=/edit
