@@ -17,6 +17,9 @@ jobs:
         with:
           node-version: lts/Hydrogen
 
+      - name: pin docker images
+        run: npm run pin-docker-images
+
       - name: generate docker-compose.yml
         run: npm run generate-docker-compose
 

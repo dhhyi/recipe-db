@@ -3,7 +3,8 @@
   "repository": "github:dhhyi/recipe-db",
   "scripts": {
     "prepare": "husky install && npm run synchronize && npm run generate-docker-compose prepare",
-    "synchronize": "node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js",
+    "synchronize": "node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js && npm run pin-docker-images",
+    "pin-docker-images": "node .scripts/pin-docker-images.js",
     "in-devcontainer": "node .scripts/run-in-devcontainer.js",
     "generate-docker-compose": "node .scripts/merge-graphql-schemas.js && node .scripts/generate-docker-compose.js",
     "test-project": "node .scripts/test-project.js"
