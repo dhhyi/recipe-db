@@ -17,11 +17,11 @@ jobs:
         with:
           node-version: lts/Hydrogen
 
-      - name: pin docker images
-        run: npm run pin-docker-images
+      - name: install pnpm
+        run: npm i -g pnpm
 
-      - name: generate docker-compose.yml
-        run: npm run generate-docker-compose
+      - name: synchronize
+        run: pnpm i --frozen-lockfile
 
       - name: build and push images
         uses: whoan/docker-build-with-cache-action@v5
@@ -32,3 +32,25 @@ jobs:
           username: ${{ github.actor }}
           password: "${{ secrets.GITHUB_TOKEN }}"
           compose_file: docker-compose.yml
+
+      - name: build devcontainers
+        run: |
+          for dc in */.project.yaml; do
+            echo "Building $dc"
+            curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - $dc --build
+          done
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: publish devcontainers
+        run: |
+          for dc in */.project.yaml; do
+            dir=$(dirname $dc)
+            echo "Building $dir"
+            docker push ghcr.io/dhhyi/recipe-db-devcontainer-$dir:latest
+          done

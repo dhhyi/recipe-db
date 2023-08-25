@@ -1,6 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://python
 devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-demo-data
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     packages:
       - nodejs

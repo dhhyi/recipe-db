@@ -1,6 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://kotlin
 devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-recipes-edit
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     user:
       - RUN echo "alias gradle='./gradlew --no-daemon'" | tee -a /home/vscode/.bashrc /home/vscode/.zshrc
