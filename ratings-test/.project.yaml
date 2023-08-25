@@ -4,6 +4,10 @@ language:
   binary: karate
   version: false
 devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-ratings-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     packages:
       - openjdk-17-jre-headless

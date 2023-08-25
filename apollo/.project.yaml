@@ -1,6 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://javascript-pnpm
 devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-apollo
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   initialize: |
     pnpm install
     npm run codegen

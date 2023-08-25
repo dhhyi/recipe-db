@@ -4,6 +4,10 @@ language:
   binary: venom-run
   version: venom version
 devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-recipes-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     root:
       - ADD --chmod=711 https://github.com/ovh/venom/releases/download/v1.1.0/venom.linux-amd64 /usr/local/bin/venom

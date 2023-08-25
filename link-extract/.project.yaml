@@ -1,6 +1,10 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://deno
 devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-link-extract
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   ports:
     - 8081
 vscode:
