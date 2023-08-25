@@ -11,6 +11,10 @@ const {
 
 checkInstallDependencies();
 
+cp.execSync(`node ${path.join(scriptRoot, "create-intranet.js")}`, {
+  stdio: "inherit",
+});
+
 function getServicePort(project) {
   const projectConfig = getProjectConfig(project);
   if (projectConfig.devcontainer.ports === undefined) {
@@ -369,7 +373,3 @@ fs.writeFileSync(
     lineWidth: 1000,
   }),
 );
-
-cp.execSync(`node ${path.join(scriptRoot, "create-intranet.js")}`, {
-  stdio: "inherit",
-});
