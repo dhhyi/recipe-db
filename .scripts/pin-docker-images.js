@@ -50,14 +50,23 @@ function getProjectImageNames() {
   const images = dockerFiles
     .flatMap((dockerfilePath) => {
       const regex = /FROM\s+([^\s]+)/gm;
+      const labelsRegex = /FROM.*\s+AS\s+([^\s]+)/gim;
 
       const dockerfile = fs.readFileSync(dockerfilePath, "utf8");
-      const images = [];
+
       let match;
+
+      const images = [];
       while ((match = regex.exec(dockerfile)) !== null) {
         images.push(match[1]);
       }
-      return images;
+
+      const labels = [];
+      while ((match = labelsRegex.exec(dockerfile)) !== null) {
+        labels.push(match[1]);
+      }
+
+      return images.filter((image) => !labels.includes(image));
     })
     .filter((image) => image !== "scratch")
     .filter((v, i, a) => a.indexOf(v) === i)
