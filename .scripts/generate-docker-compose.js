@@ -303,7 +303,18 @@ availableProjects.forEach((project) => {
     );
   }
   if (projectConfig.devcontainer?.environment) {
-    appendEnvironment(projectConfig.devcontainer.environment);
+    const filtered = Object.entries(projectConfig.devcontainer.environment)
+      .filter(([k, v]) => {
+        if (v.includes("${")) {
+          console.warn(
+            `Skipping environment variable '${k}' with value '${v}' for ${project}`,
+          );
+          return false;
+        }
+        return true;
+      })
+      .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {});
+    appendEnvironment(filtered);
   }
 
   // if (projectConfig.category) {
