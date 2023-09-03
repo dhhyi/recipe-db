@@ -13,6 +13,7 @@ devcontainer:
   environment:
     TESTING: "true"
     REST_ENDPOINT: http://traefik:3000
+    TRAEFIK_ENTRYPOINTS: web,rest-internal
 vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
@@ -36,6 +37,13 @@ traefik:
   network: intranet
   labels:
     http:
+      services:
+        recipe-db-apollo:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
       routers:
         apollo:
           rule: PathPrefix(`/graphql`)

@@ -21,6 +21,13 @@ traefik:
   network: intranet
   labels:
     http:
+      services:
+        recipe-db-link-extract:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
       routers:
         link-extract:
           rule: PathPrefix(`/link-extract`)

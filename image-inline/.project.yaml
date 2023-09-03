@@ -22,6 +22,13 @@ traefik:
   network: intranet
   labels:
     http:
+      services:
+        recipe-db-image-inline:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
       routers:
         image-inline:
           rule: PathPrefix(`/image-inline`)

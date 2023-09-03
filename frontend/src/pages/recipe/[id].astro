@@ -32,7 +32,7 @@ try {
       <RecipeIngredients recipe={recipe} />
     </div>
     <div class="sm:w-1/12 sm:block hidden">
-      <RecipeEdit recipe={recipe} />
+      <RecipeEdit client:only recipe={recipe} />
     </div>
   </div>
   <RecipeMethod recipe={recipe} />

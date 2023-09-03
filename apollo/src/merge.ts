@@ -7,6 +7,7 @@ import * as inspirations from "./inspirations/index.js";
 import * as linkExtract from "./link-extract/index.js";
 import * as ratings from "./ratings/index.js";
 import * as recipes from "./recipes/index.js";
+import * as traefik from "./traefik/index.js";
 
 export const typeDefs = mergeTypeDefs([
   require("./typedefs.gql"),
@@ -15,6 +16,7 @@ export const typeDefs = mergeTypeDefs([
   linkExtract.typeDefs,
   ratings.typeDefs,
   recipes.typeDefs,
+  traefik.typeDefs,
 ]);
 
 export const context = {
@@ -23,6 +25,7 @@ export const context = {
   ...linkExtract.context,
   ...ratings.context,
   ...recipes.context,
+  ...traefik.context,
   ...handlersContext,
 };
 
@@ -34,4 +37,5 @@ export const resolvers: Resolvers<Context> = mergeResolvers([
   linkExtract.resolvers,
   ratings.resolvers,
   recipes.resolvers,
+  traefik.resolvers,
 ]);
