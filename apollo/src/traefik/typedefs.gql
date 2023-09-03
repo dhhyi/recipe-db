@@ -1,0 +1,7 @@
+extend type Query {
+  onlineServices: [String]
+
+  isServiceOnline(name: String!): Boolean
+
+  allServicesOnline(names: [String!]): Boolean
+}

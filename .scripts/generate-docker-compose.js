@@ -29,6 +29,12 @@ function getServicePort(project) {
 }
 
 function writeTraefikConfig(projects, configPath) {
+  const traefik = {
+    rule: "PathPrefix(`/api`)",
+    entrypoints: ["rest-internal"],
+    service: "api@internal",
+  };
+
   const combinedConfig = projects.reduce(
     (acc, project) => {
       console.log(`found project ${project}`);
@@ -38,7 +44,23 @@ function writeTraefikConfig(projects, configPath) {
       if (config === undefined) {
         throw new Error(`No traefik config found for ${project}`);
       }
-      const serviceName = `recipe-db-${project}`;
+      if (Object.keys(config.services || []).length !== 1) {
+        throw new Error("Expected 1 service");
+      }
+      const serviceName = Object.keys(config.services)[0];
+      acc.http.services[serviceName] = config.services[serviceName];
+      if (!acc.http.services[serviceName]) {
+        acc.http.services[serviceName] = {};
+      }
+      if (!acc.http.services[serviceName].loadBalancer) {
+        acc.http.services[serviceName].loadBalancer = {};
+      }
+      if (!acc.http.services[serviceName].loadBalancer.servers) {
+        acc.http.services[serviceName].loadBalancer.servers = [
+          { url: `http://${project}:${getServicePort(project)}` },
+        ];
+      }
+
       Object.entries(config.routers).forEach(([routerName, routerConfig]) => {
         const config = {
           service: serviceName,
@@ -53,6 +75,7 @@ function writeTraefikConfig(projects, configPath) {
         }
         acc.http.routers[routerName] = config;
       });
+
       if (config.middlewares) {
         Object.entries(config.middlewares).forEach(
           ([middlewareName, middlewareConfig]) => {
@@ -64,24 +87,9 @@ function writeTraefikConfig(projects, configPath) {
         );
       }
 
-      acc.http.services[serviceName] = {
-        loadBalancer: {
-          servers: [
-            {
-              url: `http://${project}:${getServicePort(project)}`,
-            },
-          ],
-          healthCheck: {
-            interval: "10s",
-            timeout: "1s",
-            path: "/health",
-          },
-        },
-      };
-
       return acc;
     },
-    { http: { routers: {}, middlewares: {}, services: {} } },
+    { http: { routers: { traefik }, middlewares: {}, services: {} } },
   );
 
   console.log(
@@ -219,6 +227,8 @@ const traefik = {
   command: [
     "--entrypoints.web.address=:80",
     "--entrypoints.rest-internal.address=:3000",
+    "--api=true",
+    "--global.sendAnonymousUsage",
   ],
   ports: [`${frontendPort}:80`],
   volumes: [],
@@ -230,12 +240,20 @@ if (PROD) {
   traefik.volumes.push("./traefik.yml:/traefik_config.yml:ro");
 } else {
   traefik.command.push(
-    "--api.insecure=true",
+    "--api.dashboard=true",
+    "--log.level=INFO",
     "--providers.docker=true",
     "--providers.docker.exposedbydefault=false",
   );
   traefik.volumes.push("/var/run/docker.sock:/var/run/docker.sock:ro");
-  traefik.ports.push("3000:3000", "8080:8080");
+  traefik.ports.push("3000:3000");
+  traefik.labels = [
+    "traefik.enable=true",
+    "traefik.http.routers.traefik.entrypoints=rest-internal",
+    "traefik.http.routers.traefik.service=api@internal",
+    "traefik.http.routers.traefik.rule=" +
+      ["api", "dashboard"].map((s) => `PathPrefix(\`/${s}\`)`).join(" || "),
+  ];
 }
 
 dockerCompose.services.traefik = traefik;
@@ -271,6 +289,7 @@ availableProjects.forEach((project) => {
   );
 
   if (
+    PROD &&
     typeof packageJson.repository === "string" &&
     packageJson.repository.startsWith("github:")
   ) {
@@ -368,6 +387,15 @@ availableProjects.forEach((project) => {
         ...categorizedProjects.development,
       ]),
     );
+  }
+
+  if (categorizedProjects.development.includes(project)) {
+    appendEnvironment({
+      SERVICES: [
+        ...categorizedProjects.backend,
+        ...categorizedProjects.api,
+      ].join(","),
+    });
   }
 
   dockerCompose.services[project] = service;

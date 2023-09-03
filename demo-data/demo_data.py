@@ -1,11 +1,32 @@
 import asyncio
 import json
+import os
 import sys
 import random
 
 from graphql_client import Client
+from graphql_client.exceptions import GraphQLClientHttpError
 
 client = Client("http://traefik/graphql")
+
+
+async def wait_all_online():
+    print("Waiting for all services to be online")
+
+    names = os.getenv("SERVICES")
+    if names is None:
+        print("SERVICES environment variable not set")
+        return
+
+    print(f"SERVICES: {names}")
+
+    while True:
+        result = await client.all_services_up(names.split(","))
+        print(f"-> {result}")
+        if result.all_services_online:
+            break
+        sys.stdout.flush()
+        await asyncio.sleep(1)
 
 
 async def delete_everything():
@@ -77,18 +98,25 @@ async def insert_recipe(number):
 
 
 async def main():
-    args = sys.argv[1:]
-    if len(args) == 1 and args[0] == "--delete":
-        await delete_everything()
+    try:
+        await wait_all_online()
 
-    recipe_id = await insert_recipe(1)
-    await rate_recipe(recipe_id, 4, "jane")
+        args = sys.argv[1:]
+        if len(args) == 1 and args[0] == "--delete":
+            await delete_everything()
 
-    recipe_id = await insert_recipe(2)
-    await random_rate_recipe(recipe_id)
+        recipe_id = await insert_recipe(1)
+        await rate_recipe(recipe_id, 4, "jane")
 
-    recipe_id = await insert_recipe(3)
-    await random_rate_recipe(recipe_id)
+        recipe_id = await insert_recipe(2)
+        await random_rate_recipe(recipe_id)
+
+        recipe_id = await insert_recipe(3)
+        await random_rate_recipe(recipe_id)
+    except GraphQLClientHttpError as qraphql_error:
+        print(f"GraphQL error: {qraphql_error}")
+        print(f"GraphQL error: {qraphql_error.response.json()}")
+        return 1
 
 
 if __name__ == "__main__":

@@ -24,6 +24,13 @@ traefik:
   network: intranet
   labels:
     http:
+      services:
+        recipe-db-recipes:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
       routers:
         recipes:
           rule: PathPrefix(`/recipes`)

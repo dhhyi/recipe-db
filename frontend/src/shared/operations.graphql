@@ -45,3 +45,7 @@ query RatingByRecipeId($id: ID!) {
     count
   }
 }
+
+query RecipesEditOnline {
+  isServiceOnline(name: "recipes-edit")
+}
