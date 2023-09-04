@@ -1,0 +1,19 @@
+scalar Upload
+
+type ImageMetadata {
+  height: Int!
+  size: Int!
+  thumbUrl: String!
+  url: String!
+  width: Int!
+}
+
+extend type Recipe {
+  image: ImageMetadata
+}
+
+extend type Mutation {
+  deleteImagesForTesting: Boolean
+
+  setImage(recipeId: ID!, file: Upload!): Boolean!
+}

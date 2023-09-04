@@ -1,7 +1,5 @@
 import type { GraphQLError } from "graphql";
 
-import type { Query } from "../generated/graphql";
-
 export class Custom404Error extends Error {}
 
 export class ApolloDownError extends Error {}
@@ -21,7 +19,7 @@ function firstMessage(error: GraphQLError): string {
   return response?.body?.message ?? error.message;
 }
 
-export async function fetchGraphQL<R extends Query>(
+export async function fetchGraphQL<R>(
   query: string,
   variables: Record<string, any> | undefined = undefined,
 ): Promise<R> {

@@ -1,6 +1,7 @@
 ---
 import Rating from "../../components/Rating.svelte";
 import RecipeEdit from "../../components/RecipeEdit.vue";
+import RecipeImage from "../../components/RecipeImage.astro";
 import RecipeIngredients from "../../components/RecipeIngredients.astro";
 import RecipeInspirations from "../../components/RecipeInspirations.vue";
 import RecipeMethod from "../../components/RecipeMethod.astro";
@@ -22,17 +23,22 @@ try {
 
 <Layout>
   <div class="flex items-center flex-col md:flex-row">
+    <div class="pt-6 md:hidden max-w-sm">
+      <RecipeImage image={recipe?.image} />
+    </div>
     <h1 class="h1 md:flex-grow">{recipe?.name}</h1>
-    <div class="md:pr-4 pr-0">
+    <div class="flex flex-col md:flex-row items-center">
       <Rating client:only id={id} />
+      <div class="p-2"></div>
+      <RecipeEdit client:only recipe={recipe} />
     </div>
   </div>
+  <div class="hidden md:flex md:flex-col md:items-center">
+    <RecipeImage image={recipe?.image} />
+  </div>
   <div class="flex">
-    <div class="sm:w-11/12 w-full">
+    <div class="w-full">
       <RecipeIngredients recipe={recipe} />
-    </div>
-    <div class="sm:w-1/12 sm:block hidden">
-      <RecipeEdit client:only recipe={recipe} />
     </div>
   </div>
   <RecipeMethod recipe={recipe} />

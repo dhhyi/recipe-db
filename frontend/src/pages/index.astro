@@ -1,7 +1,7 @@
 ---
 import RecipeAdd from "../components/RecipeAdd.vue";
 import RecipeCard from "../components/RecipeCard.astro";
-import { AllRecipesFull, type AllRecipesFullQuery } from "../generated/graphql";
+import { AllRecipesFull, AllRecipesFullQuery } from "../generated/graphql";
 import Layout from "../layouts/default.astro";
 import { fetchGraphQL } from "../shared/fetch-data.js";
 import { handleError } from "../shared/handle-error";
@@ -22,7 +22,9 @@ try {
       <RecipeAdd client:only />
     </div>
   </div>
-  <div class="m-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-    {recipes.map((item) => <RecipeCard recipe={item} />)}
+  <div class="flex flex-col items-center">
+    <div class="m-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {recipes.map((item) => <RecipeCard recipe={item} />)}
+    </div>
   </div>
 </Layout>

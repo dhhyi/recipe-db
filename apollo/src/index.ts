@@ -6,6 +6,7 @@ import { ApolloServerPluginDrainHttpServer } from "@apollo/server/plugin/drainHt
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
+import graphqlUploadExpress from "graphql-upload/graphqlUploadExpress.mjs";
 
 import { context, resolvers, typeDefs } from "./merge.js";
 
@@ -18,6 +19,9 @@ console.log("Using REST: " + process.env.REST_ENDPOINT);
 const TESTING = process.env.TESTING === "true";
 
 const app = express();
+
+app.use(graphqlUploadExpress());
+
 const httpServer = http.createServer(app);
 
 const server = new ApolloServer({
@@ -25,6 +29,7 @@ const server = new ApolloServer({
   resolvers,
   introspection: TESTING,
   plugins: [ApolloServerPluginDrainHttpServer({ httpServer })],
+  csrfPrevention: true,
 });
 
 server

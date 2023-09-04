@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://julia
+devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-images
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - build-essential
+      - clang
+  ports:
+    - 8000
+  environment:
+    TESTING: "true"
+    JULIA_PROJECT: "${containerWorkspaceFolder}"
+  initialize: >-
+    julia -e 'using Pkg;
+    Pkg.instantiate(verbose = true);
+    Pkg.precompile(["Genie", "Images"]);'
+vscode:
+  settings:
+    peacock.remoteColor: "#e9211a"
+    "[julia]":
+      editor.defaultFormatter: 0h7z.vscode-julia-format
+    julia-format.tabs: 0
+  extensions:
+    - 0h7z.vscode-julia-format
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.julia: recipe-db-images-julia-depot
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-images:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        images:
+          rule: PathPrefix(`/images`)
+          entrypoints: rest-internal
+        images-public:
+          rule: PathPrefix(`/public`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: backend
+prettier:
+  ignore:
+    - "*.toml"
+    - "*.jl"
+precommit: |
+  julia -e 'using JuliaFormatter; format(".")'
