@@ -5,13 +5,30 @@ import type { Recipe } from "../generated/graphql";
 const recipe: Recipe = Astro.props.recipe;
 ---
 
-<div class="border-2 border-gray-500 w-full rounded flex flex-col items-center">
-  <h2 class="h2"><a href={"/recipe/" + recipe.id}>{recipe?.name}</a></h2>
-  {
-    recipe.rating && (
-      <div class="mb-3">
-        <RatingStars average={recipe.rating.average} count={false} size={24} />
-      </div>
-    )
-  }
+<div class="border-4 border-gray-500 max-w-sm rounded-2xl">
+  <a class="flex flex-col items-center" href={"/recipe/" + recipe.id}>
+    {
+      recipe.image?.thumbUrl && (
+        <div class="w-full">
+          <img
+            src={recipe.image.thumbUrl}
+            alt={recipe.name}
+            class="w-full max-w-sm rounded-t-xl"
+          />
+        </div>
+      )
+    }
+    <h2 class="h2">{recipe?.name}</h2>
+    {
+      recipe.rating && (
+        <div class="mb-3">
+          <RatingStars
+            average={recipe.rating.average}
+            count={false}
+            size={24}
+          />
+        </div>
+      )
+    }
+  </a>
 </div>

@@ -24,3 +24,11 @@ mutation AddRating($id: ID!, $rating: Int!, $login: String!) {
 mutation DeleteInspirations {
   deleteInspirationsForTesting
 }
+
+mutation DeleteImages {
+  deleteImagesForTesting
+}
+
+mutation AddImage($id: ID!, $file: Upload!) {
+  setImage(recipeId: $id, file: $file)
+}

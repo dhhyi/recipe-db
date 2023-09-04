@@ -5,9 +5,11 @@ import sys
 import random
 
 from graphql_client import Client
+from graphql_client.base_model import Upload
 from graphql_client.exceptions import GraphQLClientHttpError
 
-client = Client("http://traefik/graphql")
+headers = {"apollo-require-preflight": "true"}
+client = Client("http://traefik/graphql", headers=headers)
 
 
 async def wait_all_online():
@@ -39,6 +41,9 @@ async def delete_everything():
     print(f"-> {result}")
 
     result = await client.delete_inspirations()
+    print(f"-> {result}")
+
+    result = await client.delete_images()
     print(f"-> {result}")
 
 
@@ -97,6 +102,17 @@ async def insert_recipe(number):
     return await add_recipe(recipe)
 
 
+async def maybe_add_image(number, recipe_id):
+    image_file = f"recipe{number}.jpg"
+    if file_exists(image_file):
+        print(f"Adding image to recipe {recipe_id}")
+        with open(image_file, mode="rb") as content:
+            content = content.read()
+            upload = Upload(image_file, content, "image/jpeg")
+            result = await client.add_image(recipe_id, upload)
+            print(f"-> {result}")
+
+
 async def main():
     try:
         await wait_all_online()
@@ -106,17 +122,21 @@ async def main():
             await delete_everything()
 
         recipe_id = await insert_recipe(1)
+        await maybe_add_image(1, recipe_id)
         await rate_recipe(recipe_id, 4, "jane")
 
         recipe_id = await insert_recipe(2)
+        await maybe_add_image(2, recipe_id)
         await random_rate_recipe(recipe_id)
 
         recipe_id = await insert_recipe(3)
+        await maybe_add_image(3, recipe_id)
         await random_rate_recipe(recipe_id)
-    except GraphQLClientHttpError as qraphql_error:
-        print(f"GraphQL error: {qraphql_error}")
-        print(f"GraphQL error: {qraphql_error.response.json()}")
-        return 1
+
+    except GraphQLClientHttpError as graphql_error:
+        print(f"HTTP error: {graphql_error.status_code}")
+        print(json.dumps(graphql_error.response.json(), indent=2))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

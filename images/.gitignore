@@ -1,0 +1,9 @@
+# generated
+Manifest.toml
+sysimage.so
+
+# testing
+uploaded.*
+
+# data
+/public

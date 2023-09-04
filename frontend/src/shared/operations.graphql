@@ -9,6 +9,10 @@ query AllRecipesFull {
   recipes {
     id
     name
+    image {
+      url
+      thumbUrl
+    }
     rating {
       average
       count
@@ -21,6 +25,10 @@ query RecipeById($id: ID!) {
     id
     name
     method
+    image {
+      url
+      thumbUrl
+    }
     ingredients {
       name
       amount

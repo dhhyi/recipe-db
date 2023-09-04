@@ -52,3 +52,4 @@ prettier:
     - "*.pyc"
     - .pylintrc
     - "*.toml"
+    - "*.jpg"

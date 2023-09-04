@@ -1,0 +1,7 @@
+---
+import type { ImageMetadata } from "../generated/graphql";
+
+const image = Astro.props.image as ImageMetadata;
+---
+
+{image?.thumbUrl && <img src={image.thumbUrl} class="max-w-sm" />}
