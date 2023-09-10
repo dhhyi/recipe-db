@@ -54,6 +54,6 @@ query RatingByRecipeId($id: ID!) {
   }
 }
 
-query RecipesEditOnline {
-  isServiceOnline(name: "recipes-edit")
+query EditServicesOnline {
+  recipeEdit: isServiceOnline(name: "recipes-edit")
 }
