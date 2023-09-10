@@ -125,6 +125,10 @@ route("/images/:recipeId", method = DELETE) do
     path = imageFile(recipeId)
     if (isfile(path))
         rm(path)
+        thumbPath = imageFile(recipeId, true)
+        if (isfile(thumbPath))
+            rm(thumbPath)
+        end
         HTTP.Response(204, "")
     else
         HTTP.Response(404, "Not found")
