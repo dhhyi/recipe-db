@@ -149,13 +149,11 @@ else
     8000
 end
 
-Genie.config.run_as_server = !haskey(ENV, "PRECOMPILE")
 if (testingMode)
     @info "Running in TESTING mode"
 end
-up(host = "0.0.0.0", port = port)
+up(host = "127.0.0.1", port = port, async = true)
 
-# precompile logic
 using JSON
 
 function testImage(extension, width = 800, height = 600)
@@ -244,4 +242,9 @@ catch e
     end
 end
 
+down()
 @info "All tests passed"
+
+if (!haskey(ENV, "PRECOMPILE"))
+    up(host = "0.0.0.0", port = port, async = false)
+end
