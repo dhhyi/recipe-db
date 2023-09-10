@@ -276,14 +276,22 @@ availableProjects.forEach((project) => {
     build: {
       context: project,
     },
+    image: `ghcr.io/dhhyi/recipe-db-${project}:latest`,
     container_name: project,
     networks: ["intranet"],
   };
 
-  service.image = `ghcr.io/dhhyi/recipe-db-${project}:latest`;
-  if (!service.build.labels) {
-    service.build.labels = {};
+  if (PROD) {
+    const dockerfile = fs.readFileSync(
+      path.join(projectRoot, project, "Dockerfile"),
+      "utf8",
+    );
+    const hasProductionLabel = /^FROM.*AS production$/im;
+    if (hasProductionLabel.test(dockerfile)) {
+      service.build.target = "production";
+    }
   }
+
   const packageJson = JSON.parse(
     fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"),
   );
@@ -297,6 +305,9 @@ availableProjects.forEach((project) => {
       /^github:/,
       "https://github.com/",
     );
+    if (!service.build.labels) {
+      service.build.labels = {};
+    }
     service.build.labels["org.opencontainers.image.source"] = repo;
   }
 
