@@ -22,7 +22,7 @@ const config: CodegenConfig = {
       },
     },
   },
-  documents: "src/**/*.graphql",
+  documents: "operations.graphql",
 };
 
 export default config;

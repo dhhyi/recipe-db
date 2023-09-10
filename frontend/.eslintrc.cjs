@@ -92,7 +92,7 @@ module.exports = {
     sourceType: "module",
     project: "./tsconfig.json",
     schema: "./recipe-db.graphqls",
-    operations: ["./src/shared/**/*.graphql"],
+    operations: ["./**/*.graphql"],
   },
   rules: {
     "import/order": [
