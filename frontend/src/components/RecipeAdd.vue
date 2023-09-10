@@ -3,15 +3,15 @@ import { ref } from "vue";
 import VueFeather from "vue-feather";
 
 import {
-  RecipesEditOnline,
-  RecipesEditOnlineQuery,
+  EditServicesOnline,
+  EditServicesOnlineQuery,
 } from "../generated/graphql";
 import { fetchGraphQL } from "../shared/fetch-data";
 
 const recipesEditAvailable = ref(false);
 
-fetchGraphQL<RecipesEditOnlineQuery>(RecipesEditOnline).then((data) => {
-  recipesEditAvailable.value = !!data.isServiceOnline;
+fetchGraphQL<EditServicesOnlineQuery>(EditServicesOnline).then((data) => {
+  recipesEditAvailable.value = !!data.recipeEdit;
 });
 </script>
 
