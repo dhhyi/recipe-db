@@ -21,8 +21,12 @@ Request prettyPath := method(
     return if (path == nil, "", "/" .. path join("/"))
 )
 
+Request verbose := System getEnvironmentVariable("VERBOSE") == "true"
+
 Request send := method(code, message, data,
-    writeln((self at("method")) .. " " .. (self prettyPath) .. " ".. code .. " " .. message)
+    if (verbose,
+        writeln((self at("method")) .. " " .. (self prettyPath) .. " ".. code .. " " .. message)
+    )
 
     return "HTTP/1.1 " .. code .. " " .. message .. "\r\n" .. if (data == nil, "\r\n", "Content-type: application/json\r\n\r\n" .. data)
 )

@@ -86,6 +86,8 @@ RESTAPI parseRequest := method(aSocket,
     return request
 )
 
+RESTAPI verbose := System getEnvironmentVariable("VERBOSE") == "true"
+
 RESTAPI handleSocketFromServer := method(aSocket, aServer, db,
     self db := db
 
@@ -96,7 +98,9 @@ RESTAPI handleSocketFromServer := method(aSocket, aServer, db,
 
     while(aSocket isOpen,
         request := parseRequest(aSocket)
-        writeln(request at("method") .. " " .. request prettyPath)
+        if (verbose,
+            writeln(request at("method") .. " " .. request prettyPath)
+        )
 
         e := try(
             data := routeRequest(request)
