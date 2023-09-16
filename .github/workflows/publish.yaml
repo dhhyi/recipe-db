@@ -21,7 +21,9 @@ jobs:
         run: npm i -g pnpm
 
       - name: synchronize
-        run: pnpm i --frozen-lockfile
+        run: |
+          pnpm i --frozen-lockfile
+          npm run generate-docker-compose prod
 
       - name: build and push images
         uses: whoan/docker-build-with-cache-action@v5
