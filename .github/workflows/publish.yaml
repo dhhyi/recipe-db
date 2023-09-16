@@ -34,21 +34,3 @@ jobs:
           username: ${{ github.actor }}
           password: "${{ secrets.GITHUB_TOKEN }}"
           compose_file: docker-compose.yml
-
-      - name: install @devcontainers/cli
-        run: npm i -g @devcontainers/cli
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@v2
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: build and publish devcontainers
-        run: |
-          docker buildx create --use
-          for dc in */.project.yaml; do
-            echo "Building $dc"
-            curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - $dc --push
-          done
