@@ -1,5 +1,6 @@
 local app = require "milua"
 local json = require "dkjson"
+local logger = require("milua_log")
 
 local data = {}
 
@@ -101,4 +102,12 @@ end)
 
 load_data()
 
-app.start({HOST = "0.0.0.0", PORT = 8800})
+if os.getenv("VERBOSE") ~= "true" then
+    local function noop() end
+    logger:add_logger("INFO", noop)
+    logger:add_logger("DEBUG", noop)
+end
+
+local config = {HOST = "0.0.0.0", PORT = 8800}
+print("Starting server on " .. config.HOST .. ":" .. config.PORT .. "...")
+app.start(config)
