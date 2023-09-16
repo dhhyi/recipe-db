@@ -5,6 +5,7 @@ using FileIO
 import Dates: unix2datetime
 using Images
 using HTTP
+using Logging
 
 testingMode = haskey(ENV, "TESTING")
 
@@ -160,6 +161,9 @@ up(host = "127.0.0.1", port = port, async = true)
 
 using JSON
 
+gLogger = global_logger()
+global_logger(NullLogger())
+
 function testImage(extension, width = 800, height = 600)
     test_image = [RGB(rand(N0f8, 3)...) for x ∈ 1:height, y ∈ 1:width]
     save("/tmp/test.$extension", test_image)
@@ -247,8 +251,18 @@ catch e
 end
 
 down()
+
+global_logger(gLogger)
 @info "All tests passed"
 
 if (!haskey(ENV, "PRECOMPILE"))
+    sleep(3)
+    @info "Starting exposed Server"
+    level = if haskey(ENV, "VERBOSE") && ENV["VERBOSE"] == "true"
+        Logging.Info
+    else
+        Logging.Warn
+    end
+    global_logger(ConsoleLogger(level))
     up(host = "0.0.0.0", port = port, async = false)
 end
