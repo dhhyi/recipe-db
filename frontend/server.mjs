@@ -21,11 +21,13 @@ function format(msg) {
     return msg;
   }
 }
-function Logger(...args) {
-  this.args = args;
+function Logger(verbose) {
+  this.verbose = !!verbose;
 }
 Logger.prototype.info = function (msg) {
-  console.log(format(msg));
+  if (this.verbose || typeof msg === "string") {
+    console.log(format(msg));
+  }
 };
 Logger.prototype.error = function (msg) {
   console.log("ERROR", format(msg));
@@ -40,13 +42,15 @@ Logger.prototype.warn = function (msg) {
   console.log("WARN", format(msg));
 };
 Logger.prototype.trace = function (msg) {
-  console.log("TRACE", format(msg));
+  if (this.verbose) {
+    console.log("TRACE", format(msg));
+  }
 };
 Logger.prototype.child = function () {
-  return new Logger();
+  return new Logger(this.verbose);
 };
 
-const logger = new Logger();
+const logger = new Logger(process.env.VERBOSE);
 
 const server = Fastify({
   logger,
