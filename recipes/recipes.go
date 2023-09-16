@@ -14,11 +14,14 @@ import (
 	q "github.com/ostafen/clover/v2/query"
 )
 
-func Logger() gin.HandlerFunc {
+func Logger(verbose bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method := c.Request.Method
 		path := c.Request.URL.Path
-		log.Printf("%s %s", method, path)
+
+		if verbose {
+			log.Printf("%s %s", method, path)
+		}
 
 		t := time.Now()
 
@@ -27,7 +30,9 @@ func Logger() gin.HandlerFunc {
 		latency := time.Since(t)
 		status := c.Writer.Status()
 
-		log.Printf("%s %s %d %s", method, path, status, latency)
+		if verbose || status >= 400 {
+			log.Printf("%s %s %d %s", method, path, status, latency)
+		}
 	}
 }
 
@@ -111,7 +116,7 @@ func recipeSanityCheck(recipe Recipe) (bool, string) {
 func main() {
 
 	r := gin.New()
-	r.Use(Logger())
+	r.Use(Logger(os.Getenv("VERBOSE") == "true"))
 
 	db := initDB()
 
