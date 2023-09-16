@@ -10,6 +10,8 @@ use File::Path  qw(make_path);
 my $db = $ENV{DATA_LOCATION} || "db";
 print "Database location: $db\n";
 
+my $verbose = $ENV{VERBOSE} || 0;
+
 make_path($db);
 
 get '/health' => sub {
@@ -29,11 +31,15 @@ get '/image-inline/' => sub {
 
         response_header 'Content-Type' => 'text/plain';
         flush;
-        print "URL\t$url\n";
+        if ($verbose) {
+            print "URL\t$url\n";
+        }
 
         my $file_name = md5_hex($url);
         if ( -e "$db/$file_name" ) {
-            print "CACHE\t$url\n";
+            if ($verbose) {
+                print "CACHE\t$url\n";
+            }
             my $content = do {
                 local $/ = undef;
                 open my $fh, "<", "$db/$file_name";
@@ -43,7 +49,9 @@ get '/image-inline/' => sub {
             done;
         }
         else {
-            print "FETCH\t$url\n";
+            if ($verbose) {
+                print "FETCH\t$url\n";
+            }
 
             my $ext = $url =~ s/.*\.//r;
             switch ($ext) {

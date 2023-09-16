@@ -9,6 +9,10 @@ import {
 import { Database } from "https://deno.land/x/aloedb@0.9.0/mod.ts";
 import { dirname } from "https://deno.land/std@0.196.0/path/mod.ts";
 
+if (Deno.env.get("VERBOSE") !== "true") {
+  console.info = () => {};
+}
+
 interface PageMetaData {
   url: string;
   favicon: string | null;
@@ -98,18 +102,18 @@ if (import.meta.main) {
 
     try {
       const decodedUrl = decodeURIComponent(urlQuery);
-      console.log("URL\t", decodedUrl);
+      console.info("URL\t", decodedUrl);
       const url = new URL(decodedUrl);
       let meta = await db.findOne({ url: url.href });
       if (meta) {
-        console.log("CACHED\t", meta.canonical);
+        console.info("CACHED\t", meta.canonical);
       } else {
         meta = await getPageMetaData(url);
         await db.insertOne(meta);
         if (meta.canonical && meta.canonical !== meta.url) {
           await db.insertOne({ ...meta, url: meta.canonical });
         }
-        console.log("FETCHED\t", meta.canonical);
+        console.info("FETCHED\t", meta.canonical);
       }
 
       res.headers["Content-Type"] = "application/json";
