@@ -8,14 +8,22 @@ jobs:
   publish:
     permissions: write-all
     runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_PARALLEL_LIMIT: 1
     steps:
       - name: checkout
         uses: actions/checkout@v3
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: latest
 
       - name: install node
         uses: actions/setup-node@v3
         with:
           node-version: lts/Hydrogen
+          cache: pnpm
 
       - name: report versions
         run: |
@@ -25,19 +33,10 @@ jobs:
           docker --version
           docker compose version
 
-      - name: install pnpm
-        run: npm i -g pnpm
-
       - name: synchronize
         run: |
           echo "::group::pnpm install"
           pnpm i --frozen-lockfile
-          echo "::endgroup::"
-          echo "::group::generate prod docker-compose.yml"
-          npm run generate-docker-compose prod
-          echo "::endgroup::"
-          echo "::group::docker-compose.yml"
-          cat docker-compose.yml
           echo "::endgroup::"
 
       - name: login to ghcr.io
@@ -46,13 +45,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: "${{ secrets.GITHUB_TOKEN }}"
+      - name: create buildx builder
+        run: docker buildx create --use
 
-      - name: build and push images
-        env:
-          DOCKER_BUILDKIT: 1
-          COMPOSE_PARALLEL_LIMIT: 1
+      - name: build dev images
         run: |
-          docker buildx create --use
+          echo "::group::docker-compose.yml"
+          cat docker-compose.yml
+          echo "::endgroup::"
+          docker compose build
+
+      - name: build and push prod images
+        run: |
+          echo "::group::generate prod docker-compose.yml"
+          npm run generate-docker-compose prod
+          echo "::endgroup::"
+          echo "::group::docker-compose.yml"
+          cat docker-compose.yml
+          echo "::endgroup::"
           docker compose build
           docker compose push
 
