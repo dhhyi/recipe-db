@@ -275,6 +275,9 @@ availableProjects.forEach((project) => {
   const service = {
     build: {
       context: project,
+      cache_from: [
+        `type=registry,ref=ghcr.io/dhhyi/recipe-db-${project}-cache`,
+      ],
     },
     image: `ghcr.io/dhhyi/recipe-db-${project}:latest`,
     container_name: project,
@@ -289,6 +292,11 @@ availableProjects.forEach((project) => {
     const hasProductionLabel = /^FROM.*AS production$/im;
     if (hasProductionLabel.test(dockerfile)) {
       service.build.target = "production";
+    }
+    if (process.env.CI) {
+      service.build.cache_to = [
+        `type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-${project}-cache`,
+      ];
     }
   }
 
