@@ -258,13 +258,26 @@ function writeRootVSCodeTasksFile() {
   );
 }
 
-const availableProjects = getAvailableProjects();
+const args = process.argv.slice(2);
 
-searchForForbiddenFiles(availableProjects);
+const projectsFromCommandLine = args.filter(
+  (dir) =>
+    fs.existsSync(path.join(projectRoot, dir)) &&
+    fs.lstatSync(path.join(projectRoot, dir)).isDirectory(),
+);
+
+const allAvailableProjects = getAvailableProjects();
+const availableProjects =
+  projectsFromCommandLine?.length > 0
+    ? projectsFromCommandLine
+    : allAvailableProjects;
+
+searchForForbiddenFiles(allAvailableProjects);
+
 writePrettierIgnores(availableProjects);
 writePrettierConfigs(availableProjects);
 writeDockerIgnores(availableProjects);
-if (!process.argv.slice(2).includes("--no-dcc")) {
+if (!args.includes("--no-dcc")) {
   writeDccFiles(availableProjects);
 }
 writeRootVSCodeSettingsFile(availableProjects);

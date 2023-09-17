@@ -41,7 +41,7 @@ jobs:
           echo "::endgroup::"
 
       - name: login to ghcr.io
-        uses: docker/login-action@v1
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -55,3 +55,60 @@ jobs:
           docker buildx create --use
           docker compose build
           docker compose push
+
+  calc:
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.find.outputs.projects }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: find projects
+        id: find
+        run: |
+          projects=$(ls */.project.yaml | xargs dirname | xargs -I {} echo -n '"{}",' | sed -e s/,$//)
+          echo "projects=[${projects}]" >> $GITHUB_OUTPUT
+          echo "::group::GITHUB_OUTPUT"
+          cat $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+  devcontainers:
+    permissions: write-all
+    runs-on: ubuntu-latest
+    needs:
+      - calc
+    strategy:
+      fail-fast: true
+      max-parallel: 4
+      matrix:
+        project: ${{ fromJson(needs.calc.outputs.projects) }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: latest
+
+      - name: install node
+        uses: actions/setup-node@v3
+        with:
+          node-version: lts/Hydrogen
+          cache: pnpm
+
+      - name: install @devcontainers/cli
+        run: pnpm i -g @devcontainers/cli
+
+      - name: login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: dcc
+        run: |
+          pnpm install --ignore-scripts
+          node .scripts/synchronize.js ${{ matrix.project }}
+          sh ${{ matrix.project }}/.update_devcontainer.sh --push
