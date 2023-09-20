@@ -76,6 +76,11 @@ Implemented in [IO](https://iolanguage.org/) with [SQLite](https://www.sqlite.or
 
 Integration testing in [Karate](https://www.karatelabs.io/).
 
+### Images
+
+Image server implemented in [Julia](https://julialang.org/) using [Genie](https://genieframework.com/) and [JuliaImages](https://juliaimages.org/latest/).
+Testing is part of the precompile/warm-up process.
+
 ### Inspiration ([`inspirations`](./inspirations), [`inspirations-test`](./inspirations-test))
 
 Sources of inspiration web links for this recipe.
@@ -111,10 +116,6 @@ Specific tags for:
 - Vegetarian/Vegan/Pescetarian
 - Main/Side/Appetizer/Dessert
 
-### Images
-
-Probably self-implemented image server in [Julia](https://julialang.org/)?
-
 ### Comments
 
 graph-like data structure
@@ -133,6 +134,8 @@ User can track when he had a certain recipe.
 Add recipes to collections (public and private)
 
 ### Recipe State
+
+(should really be part of recipe data)
 
 - public
 - draft
