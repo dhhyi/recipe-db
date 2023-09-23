@@ -6,8 +6,7 @@ RUN deno task build
 FROM frolvlad/alpine-glibc
 # RUN apk --no-cache add ca-certificates
 RUN apk --no-cache add tini
-WORKDIR /app
-COPY --from=builder /app/link-extract .
+COPY --from=builder /app/app /
 EXPOSE 8081
 ENTRYPOINT [ "tini", "--" ]
-CMD [ "/app/link-extract" ]
+CMD [ "/app" ]
