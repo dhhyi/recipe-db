@@ -54,6 +54,10 @@ Parts with heavy interaction like the pages for adding and editing recipes will 
 
 Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin). with [Gradle](https://gradle.org/) build tool and [Spring Boot](https://spring.io/projects/spring-boot) for app startup.
 
+#### Image Adding and Editing ([`images-edit`](./images-edit))
+
+Implemented in [Elm](https://elm-lang.org/) using [elm-graphql](https://github.com/dillonkearns/elm-graphql) for GraphQL integration.
+
 ### Style
 
 If possible, consistent styling with [Tailwind CSS](https://tailwindcss.com/).
@@ -76,7 +80,7 @@ Implemented in [IO](https://iolanguage.org/) with [SQLite](https://www.sqlite.or
 
 Integration testing in [Karate](https://www.karatelabs.io/).
 
-### Images
+### Images ([`images`](./images))
 
 Image server implemented in [Julia](https://julialang.org/) using [Genie](https://genieframework.com/) and [JuliaImages](https://juliaimages.org/latest/).
 Testing is part of the precompile/warm-up process.
