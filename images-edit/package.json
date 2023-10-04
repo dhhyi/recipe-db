@@ -1,0 +1,15 @@
+{
+  "name": "images-edit",
+  "version": "1.0.0",
+  "scripts": {
+    "codegen": "elm-graphql --schema-file recipe-db.graphqls",
+    "lint": "elm-review --ignore-dirs src/Api"
+  },
+  "dependencies": {
+    "@dillonkearns/elm-graphql": "^4.3.1",
+    "elm": "^0.19.1-5"
+  },
+  "devDependencies": {
+    "elm-review": "^2.10.3"
+  }
+}

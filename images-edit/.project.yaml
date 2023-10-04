@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://elm
+devcontainer:
+  build:
+    packages:
+      - nginx
+    root:
+      - >-
+        RUN wget https://github.com/soulteary/nginx-formatter/releases/download/v1.1.1/nginx-formatter_1.1.1_linux_amd64.tar.gz -O /tmp/nginx-formatter.tar.gz &&
+        tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp &&
+        mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter &&
+        rm /tmp/nginx-formatter.tar.gz
+      - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-images-edit
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  ports:
+    - 80
+  environment:
+    TESTING: "true"
+  initialize: |
+    sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf
+    sudo ln -sf ${containerWorkspaceFolder}/index.html /usr/share/nginx/html/index.html
+    sudo /etc/init.d/nginx start
+    cd ${containerWorkspaceFolder}
+    npm install
+    npm run codegen
+    elm make src/Main.elm --output /usr/share/nginx/html/elm.js
+vscode:
+  settings:
+    peacock.remoteColor: "#995d51"
+    filewatcher.commands:
+      - match: "\\.elm"
+        cmd: cd ${workspaceRoot} && elm make src/Main.elm --output /usr/share/nginx/html/elm.js
+        event: onFileChange
+      - match: "nginx.conf"
+        cmd: sudo /etc/init.d/nginx reload
+        event: onFileChange
+      - match: "\\.graphql"
+        cmd: cd ${workspaceRoot} && npm run codegen
+        event: onFolderChange
+  extensions:
+    - johnpapa.vscode-peacock
+    - appulate.filewatcher
+    - GraphQL.vscode-graphql
+extras:
+  - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.elm: recipe-db-images-edit-elm-cache
+  node_modules: recipe-db-images-edit-node-modules
+  elm-stuff: recipe-db-images-edit-elm-stuff
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-images-edit:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        images-edit:
+          rule: PathPrefix(`/images`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: frontend
+prettier:
+  ignore:
+    - "*.elm"
+    - nginx.conf
+    - elm.json
+precommit: |
+  nginx-formatter -indent=4
+  npx prettier --tab-width 4 --print-width 10 --ignore-path /dev/null --write elm.json
+  elm-format --yes .
+  npm run codegen
+  elm make src/Main.elm --output /dev/null
+  npm run lint
