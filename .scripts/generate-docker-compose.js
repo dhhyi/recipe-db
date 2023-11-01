@@ -219,8 +219,6 @@ if (PROD) {
   };
 }
 
-const frontendPort = process.env.FRONTEND_PORT || 80;
-
 const traefik = {
   image: "traefik:v3.0",
   container_name: "traefik",
@@ -230,7 +228,7 @@ const traefik = {
     "--api=true",
     "--global.sendAnonymousUsage",
   ],
-  ports: [`${frontendPort}:80`],
+  ports: [`8080:80`],
   volumes: [],
   networks: ["intranet"],
 };
