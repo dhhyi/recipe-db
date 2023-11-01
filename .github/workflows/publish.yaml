@@ -53,7 +53,8 @@ jobs:
           echo "::group::docker-compose.yml"
           cat docker-compose.yml
           echo "::endgroup::"
-          docker compose build
+          docker compose build demo-data
+          docker compose push demo-data
 
       - name: build and push prod images
         run: |
