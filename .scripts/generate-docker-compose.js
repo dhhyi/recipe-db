@@ -220,7 +220,7 @@ if (PROD) {
 }
 
 const traefik = {
-  image: "traefik:v3.0",
+  image: "traefik:v3.7",
   container_name: "traefik",
   command: [
     "--entrypoints.web.address=:80",
