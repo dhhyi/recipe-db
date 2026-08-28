@@ -1,8 +1,4 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-language:
-  name: venom
-  binary: venom-run
-  version: venom version
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-recipes-test

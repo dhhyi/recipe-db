@@ -14,7 +14,7 @@ Required for running anything:
 - docker or comparable container builder
 - docker compose
 
-Run `npm run generate-docker-compose` and `docker compose up`. The project will be available on http://localhost. Traefik is listening on http://localhost:8080. Apollo GraphQL is available on http://localhost/graphql.
+Run `npm run generate-docker-compose` and `docker compose up`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
 
 Required for development:
 
