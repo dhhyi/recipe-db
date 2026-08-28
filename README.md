@@ -80,10 +80,13 @@ Implemented in [IO](https://iolanguage.org/) with [SQLite](https://www.sqlite.or
 
 Integration testing in [Karate](https://www.karatelabs.io/).
 
-### Images ([`images`](./images))
+### Images ([`images`](./images), [`images-test`](./images-test))
 
-Image server implemented in [Julia](https://julialang.org/) using [Genie](https://genieframework.com/) and [JuliaImages](https://juliaimages.org/latest/).
-Testing is part of the precompile/warm-up process.
+Image server implemented in [Nim](https://nim-lang.org/) using [Jester](https://github.com/dom96/jester) and [Pixie](https://github.com/treeform/pixie).
+Uploads are cropped and resized to thumbnails and served statically.
+The service is shipped as a statically linked binary in a `scratch` image.
+
+Testing is done using [Hurl](https://hurl.dev/).
 
 ### Inspiration ([`inspirations`](./inspirations), [`inspirations-test`](./inspirations-test))
 

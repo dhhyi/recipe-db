@@ -1,37 +1,42 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://julia
+extends: base://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-images
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    args:
+      NIM_VERSION: "2.2.4"
     packages:
       - build-essential
-      - clang
+      - ca-certificates
+      - curl
+      - xz-utils
+    root:
+      - ADD https://nim-lang.org/download/nim-${NIM_VERSION}-linux_x64.tar.xz /tmp/nim.tar.xz
+      - RUN cd /opt && tar -xf /tmp/nim.tar.xz && mv nim-${NIM_VERSION} nim && rm /tmp/nim.tar.xz
+      - ENV PATH=/opt/nim/bin:${PATH}
   ports:
     - 8000
   environment:
     TESTING: "true"
-    JULIA_PROJECT: "${containerWorkspaceFolder}"
-  initialize: >-
-    julia -e 'using Pkg;
-    Pkg.instantiate(verbose = true);
-    Pkg.precompile(["Genie", "Images"]);'
+  initialize: nimble install -d -y
+  selftest: |
+    nim --version
+    echo 'echo "Hello World!"' >/tmp/helloworld.nim
+    nim c -r --hints:off /tmp/helloworld.nim
 vscode:
   settings:
     peacock.remoteColor: "#e9211a"
-    "[julia]":
-      editor.defaultFormatter: 0h7z.vscode-julia-format
-    julia-format.tabs: 0
   extensions:
-    - 0h7z.vscode-julia-format
+    - nimlang.nimlang
     - johnpapa.vscode-peacock
 extras:
   - traefik
   - named-volumes
 namedVolumes:
-  $HOME/.julia: recipe-db-images-julia-depot
+  $HOME/.nimble: recipe-db-images-nimble-cache
 traefik:
   network: intranet
   labels:
@@ -55,7 +60,8 @@ traefik:
 category: backend
 prettier:
   ignore:
-    - "*.toml"
-    - "*.jl"
+    - "*.nim"
+    - "*.nimble"
 precommit: |
-  julia -e 'using JuliaFormatter; format(".")'
+  nimpretty server.nim
+  nimble build -d:release -y --threads:off

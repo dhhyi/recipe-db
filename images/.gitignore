@@ -1,9 +1,6 @@
 # generated
-Manifest.toml
-sysimage.so
-
-# testing
-uploaded.*
+/server
+nimcache/
 
 # data
 /public
