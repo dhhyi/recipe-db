@@ -1,24 +1,18 @@
-FROM julia:1-bookworm as base
+FROM alpine:3.21 AS build
+RUN apk add --no-cache nim nimble gcc musl-dev git
 WORKDIR /app
-ENV JULIA_PROJECT=/app/ JULIA_DEPOT_PATH=/app/.julia
-COPY Project.toml /app/
-RUN julia -e 'using Pkg; Pkg.instantiate(); Pkg.precompile(["Genie", "Images"]);'
-COPY . /app
-ENV PORT 8000
+COPY images.nimble /app/
+RUN nimble install -d -y
+COPY server.nim /app/
+RUN nimble build -d:release -y --threads:off --passL:"-static" \
+  && strip server \
+  && mkdir -p /data/public \
+  && chown -R 65534:65534 /data
+
+FROM scratch
+COPY --from=build /app/server /server
+COPY --from=build --chown=65534:65534 /data /data
+USER 65534:65534
+ENV PORT=8000 DATA_LOCATION=/data
 EXPOSE 8000
-
-FROM julia:1-bookworm as precompile
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  build-essential \
-  clang
-WORKDIR /app/
-ENV JULIA_PROJECT=/app/ JULIA_DEPOT_PATH=/app/.julia
-COPY --from=base /app /app/
-RUN julia precompile.jl
-
-FROM base as production
-COPY --from=precompile /app/sysimage.so /app/
-ENTRYPOINT ["julia", "-J", "sysimage.so", "server.jl"]
-
-FROM base
-ENTRYPOINT ["julia", "server.jl"]
+ENTRYPOINT ["/server"]

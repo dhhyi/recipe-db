@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-images-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    args:
+      HURL_VERSION: 8.0.1
+    packages:
+      - libcurl4
+      - libxml2
+    root:
+      - ADD https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu.tar.gz /tmp/hurl.tar.gz
+      - RUN tar -xzf /tmp/hurl.tar.gz -C /tmp
+        && mv /tmp/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu/bin/hurl /usr/local/bin/hurl
+        && mv /tmp/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu/bin/hurlfmt /usr/local/bin/hurlfmt
+        && chmod +rx /usr/local/bin/hurl /usr/local/bin/hurlfmt
+        && rm -rf /tmp/hurl.tar.gz /tmp/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu
+    files:
+      - type: script
+        path: /usr/local/bin/hurl-run
+        content: |
+          #!/bin/sh
+          if [ -z "$REST_API" ]; then
+            echo "REST_API is not set"
+            exit 1
+          fi
+          if [ -z "$WEB_API" ]; then
+            echo "WEB_API is not set"
+            exit 1
+          fi
+          if [ -z "$1" ]; then
+            set -- *.hurl
+          fi
+          # Files share the image store, so they must not run in parallel.
+          exec hurl --test --jobs 1 --variable REST_API="$REST_API" --variable WEB_API="$WEB_API" "$@"
+  environment:
+    REST_API: http://traefik:3000
+    WEB_API: http://traefik
+vscode:
+  settings:
+    peacock.remoteColor: "#8a4fff"
+  extensions:
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+traefik:
+  network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
+precommit: hurlfmt --in-place *.hurl
+test: hurl-run
+prettier:
+  ignore:
+    - "*.hurl"
+    - fixtures
