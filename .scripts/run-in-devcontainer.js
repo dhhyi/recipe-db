@@ -29,17 +29,25 @@ if (command.length === 1 && command[0] === "test") {
     .filter(Boolean)
     .join(" && ");
 
-  runCommand = ["sh", "-ce", projectTestCommand];
+  runCommand = [
+    "fish",
+    "-c",
+    `mise activate fish | source; and ${projectTestCommand}`,
+  ];
 } else if (command.length === 1 && command[0] === "precommit") {
   if (!projectConfig.precommit) {
     console.error("Project does not have precommit command");
     process.exit(1);
   }
   const projectPrecommitCommand =
-    "export PRE_COMMIT=1 && " +
+    "set --export PRE_COMMIT 1; and " +
     projectConfig.precommit.split("\n").filter(Boolean).join(" && ");
 
-  runCommand = ["sh", "-ce", projectPrecommitCommand];
+  runCommand = [
+    "fish",
+    "-c",
+    `mise activate fish | source; and ${projectPrecommitCommand}`,
+  ];
 } else {
   runCommand = command;
 }
