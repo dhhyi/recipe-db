@@ -193,8 +193,6 @@ function flattenObject(obj) {
 }
 
 const dockerCompose = {
-  version: "3",
-
   services: {},
 
   networks: {

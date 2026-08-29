@@ -1,4 +1,4 @@
-FROM node:lts-bookworm as builder
+FROM node:lts-bookworm AS builder
 RUN npm i -g elm @dillonkearns/elm-graphql
 WORKDIR /app
 COPY . .
