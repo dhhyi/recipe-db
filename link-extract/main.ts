@@ -1,13 +1,7 @@
-import { DOMParser } from "https://deno.land/x/deno_dom@v0.1.38/deno-dom-wasm.ts";
-import {
-  pathParse,
-  Req,
-  Res,
-  Router,
-  WebApp,
-} from "https://deno.land/x/denorest@v4.2/mod.ts";
-import { Database } from "https://deno.land/x/aloedb@0.9.0/mod.ts";
-import { dirname } from "https://deno.land/std@0.196.0/path/mod.ts";
+import { dirname } from "@std/path";
+import { Database } from "aloedb";
+import { DOMParser } from "deno_dom";
+import { pathParse, Req, Res, Router, WebApp } from "denorest";
 
 if (Deno.env.get("VERBOSE") !== "true") {
   console.info = () => {};
@@ -61,6 +55,9 @@ async function getPageMetaData(url: URL): Promise<PageMetaData> {
     let favicon = doc.querySelector("link[rel='icon']")?.getAttribute("href");
     if (favicon && !favicon.startsWith("http")) {
       favicon = new URL(favicon, url).href;
+      if (favicon === "data:,") {
+        favicon = null;
+      }
     } else {
       const defaultFavicon = new URL("/favicon.ico", url.origin).href;
       const defaultFaviconResponse = await fetch(defaultFavicon);
@@ -119,13 +116,16 @@ if (import.meta.main) {
       res.headers["Content-Type"] = "application/json";
       res.reply = JSON.stringify(meta);
     } catch (error) {
-      console.log("ERROR\t", error.message);
-      if (error.message.startsWith("Invalid URL")) {
+      const errorMessage = error instanceof Error
+        ? error.message
+        : String(error);
+      console.log("ERROR\t", errorMessage);
+      if (errorMessage.startsWith("Invalid URL")) {
         res.reply = "Please provide a valid url query parameter";
         res.status = 400;
         return;
       } else {
-        res.reply = error.message;
+        res.reply = errorMessage;
         res.status = 500;
       }
     }

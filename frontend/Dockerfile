@@ -1,18 +1,18 @@
-FROM node:18-alpine as builder
+FROM node:lts-alpine AS builder
 RUN npm i -g pnpm
 WORKDIR /ws
-COPY package.json pnpm-lock.yaml /ws/
+COPY package.json pnpm-*.yaml /ws/
 RUN pnpm i --frozen-lockfile
 COPY . /ws/
 RUN npm run codegen && pnpm build
 
-FROM node:18-alpine as node_modules
+FROM node:lts-alpine AS node_modules
 WORKDIR /ws
-COPY package.json pnpm-lock.yaml /ws/
+COPY package.json pnpm-*.yaml /ws/
 RUN echo "node-linker=hoisted" > .npmrc
 RUN npm i -g pnpm && pnpm i --frozen-lockfile --prod
 
-FROM node:18-alpine
+FROM node:lts-alpine
 RUN apk add --no-cache tini
 WORKDIR /app
 COPY --from=builder /ws/dist /app/dist/

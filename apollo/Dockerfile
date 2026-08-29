@@ -1,10 +1,10 @@
-FROM node:18-alpine as builder
+FROM node:lts-alpine AS builder
 
 RUN npm i -g pnpm
 ENV NODE_ENV=production
 
 WORKDIR /ws
-COPY package.json pnpm-lock.yaml /ws/
+COPY package.json pnpm-*.yaml /ws/
 RUN pnpm i --frozen-lockfile --prod
 COPY . /ws/
 RUN pnpm build

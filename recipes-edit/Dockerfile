@@ -1,4 +1,4 @@
-FROM eclipse-temurin:17.0.8_7-jdk-jammy AS BUILD
+FROM eclipse-temurin:17.0.8_7-jdk-jammy AS build
 RUN apt update && apt install unzip -y
 WORKDIR /app/
 COPY gradle /app/gradle/
@@ -11,7 +11,7 @@ WORKDIR /app/build/distributions/
 RUN unzip app.zip
 
 FROM eclipse-temurin:17.0.8_7-jre-alpine
-COPY --from=BUILD /app/build/distributions/app /app/
+COPY --from=build /app/build/distributions/app /app/
 WORKDIR /app/bin
 ENV PORT=4000 CONTEXT_PATH=/edit
 EXPOSE 4000

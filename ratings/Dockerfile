@@ -1,12 +1,13 @@
-FROM debian:bookworm as builder
+FROM debian:bookworm AS builder
 
 RUN apt-get update \
   && apt-get install -y build-essential git cmake
 
-ARG IO_VERSION=master
+ARG IO_VERSION=8d1566b5edf8f378618fc7739518d7a5c56de654
 ENV HOME=/root
 
-RUN git clone -b ${IO_VERSION} --single-branch --depth 1 --recursive https://github.com/IoLanguage/io.git /tmp/io
+RUN git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io
+RUN cd /tmp/io && git checkout $IO_VERSION
 RUN cd /tmp/io && mkdir build && cd build \
   && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=${HOME}/.local .. \
   && make && make install
@@ -27,7 +28,7 @@ RUN eerie pkg:list > /installed_packages
 RUN find ${HOME}/.eerie -type d -name .git -print -exec rm -rf {} +
 RUN rm -rf ${HOME}/.eerie/env/_base
 
-FROM scratch as minimal
+FROM scratch AS minimal
 COPY --from=builder /root/.local/bin /usr/bin
 COPY --from=builder /root/.local/lib /usr/lib
 COPY --from=builder /root/.eerie /root/.eerie
