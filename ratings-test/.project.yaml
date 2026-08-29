@@ -1,18 +1,18 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://java
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-ratings-test
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
-    packages:
-      - openjdk-17-jre-headless
     args:
-      KARATE_VERSION: 1.4.0
+      KARATE_VERSION: 2.1.2
+      GHOKIN_VERSION: 3.10.0
     root:
       - ADD https://github.com/karatelabs/karate/releases/download/v${KARATE_VERSION}/karate-${KARATE_VERSION}.jar /opt/karate.jar
       - RUN chmod +rx /opt/karate.jar
-      - ADD https://github.com/antham/ghokin/releases/download/v3.4.0/ghokin_3.4.0_linux_amd64.tar.gz /tmp/ghokin.tar.gz
+      - ADD https://github.com/antham/ghokin/releases/download/v${GHOKIN_VERSION}/ghokin_${GHOKIN_VERSION}_linux_amd64.tar.gz /tmp/ghokin.tar.gz
       - RUN tar -xzf /tmp/ghokin.tar.gz -C /tmp && mv /tmp/ghokin /usr/local/bin/ghokin && chmod +rx /usr/local/bin/ghokin
     files:
       - type: script
