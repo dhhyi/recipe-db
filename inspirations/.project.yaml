@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://lua
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-inspirations
@@ -9,6 +9,8 @@ devcontainer:
     user:
       - RUN mise use -g lua@5.4
     packages:
+      - build-essential
+      - cmake
       - m4
       - libssl-dev
     files:
@@ -37,6 +39,8 @@ vscode:
     peacock.remoteColor: "#1db8e8"
   extensions:
     - johnpapa.vscode-peacock
+    - sumneko.lua
+    - bubuabu.busted-test-explorer
 extras:
   - traefik
   - named-volumes
