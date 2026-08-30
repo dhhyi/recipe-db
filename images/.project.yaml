@@ -63,5 +63,6 @@ prettier:
     - "*.nim"
     - "*.nimble"
 precommit: |
+  nim --version
   nimpretty server.nim
   nimble build -d:release -y --threads:off

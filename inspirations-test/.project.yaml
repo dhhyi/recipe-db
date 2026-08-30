@@ -38,3 +38,4 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 test: venom-run
+precommit: venom version

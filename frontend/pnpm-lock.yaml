@@ -54,9 +54,15 @@ importers:
       '@typescript-eslint/eslint-plugin':
         specifier: ^5.50.0
         version: 5.62.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
+      '@typescript-eslint/parser':
+        specifier: ^5.50.0
+        version: 5.62.0(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
       astro:
         specifier: ^2.7.2
         version: 2.10.15(@types/node@18.19.130)(supports-color@7.2.0)
+      astro-eslint-parser:
+        specifier: ^0.14.0
+        version: 0.14.0(supports-color@7.2.0)
       eslint-config-standard-with-typescript:
         specifier: ^35.0.0
         version: 35.0.0(@typescript-eslint/eslint-plugin@5.62.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint-plugin-import@2.32.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0))(eslint-plugin-n@15.7.0(eslint@8.57.1(supports-color@7.2.0)))(eslint-plugin-promise@6.6.0(eslint@8.57.1(supports-color@7.2.0)))(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
@@ -87,6 +93,9 @@ importers:
       svelte:
         specifier: ^4.0.0
         version: 4.2.20
+      svelte-eslint-parser:
+        specifier: ^0.33.1
+        version: 0.33.1(svelte@4.2.20)
       svelte-feather-icons:
         specifier: ^4.0.1
         version: 4.2.0
@@ -96,6 +105,9 @@ importers:
       typescript:
         specifier: ^5.0.4
         version: 5.9.3
+      vue-eslint-parser:
+        specifier: ^9.4.3
+        version: 9.4.3(eslint@8.57.1(supports-color@7.2.0))(supports-color@7.2.0)
 
 packages:
 
@@ -4063,6 +4075,15 @@ packages:
   supports-preserve-symlinks-flag@1.0.0:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
+
+  svelte-eslint-parser@0.33.1:
+    resolution: {integrity: sha512-vo7xPGTlKBGdLH8T5L64FipvTrqv3OQRx9d2z5X05KKZDlF4rQk8KViZO4flKERY+5BiVdOh7zZ7JGJWo5P0uA==}
+    engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
+    peerDependencies:
+      svelte: ^3.37.0 || ^4.0.0
+    peerDependenciesMeta:
+      svelte:
+        optional: true
 
   svelte-eslint-parser@0.43.0:
     resolution: {integrity: sha512-GpU52uPKKcVnh8tKN5P4UZpJ/fUDndmq7wfsvoVXsyP+aY0anol7Yqo01fyrlaWGMFfm4av5DyrjlaXdLRJvGA==}
@@ -9462,6 +9483,16 @@ snapshots:
       has-flag: 4.0.0
 
   supports-preserve-symlinks-flag@1.0.0: {}
+
+  svelte-eslint-parser@0.33.1(svelte@4.2.20):
+    dependencies:
+      eslint-scope: 7.2.2
+      eslint-visitor-keys: 3.4.3
+      espree: 9.6.1
+      postcss: 8.5.26
+      postcss-scss: 4.0.9(postcss@8.5.26)
+    optionalDependencies:
+      svelte: 4.2.20
 
   svelte-eslint-parser@0.43.0(svelte@4.2.20):
     dependencies:

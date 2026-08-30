@@ -6,9 +6,20 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    user:
+      - RUN mise use -g lua@5.4
     packages:
       - m4
       - libssl-dev
+    files:
+      - type: file
+        path: ~/.config/fish/conf.d/lua_modules.fish
+        content: |
+          #!/usr/bin/env fish
+          # Add lua_modules to PATH using luarocks
+          if test -d lua_modules
+              eval (luarocks path --tree lua_modules --shell fish 2>/dev/null || echo)
+          end
   ports:
     - 8800
   environment:
@@ -16,7 +27,10 @@ devcontainer:
   initialize: |
     luarocks make --tree lua_modules
     luarocks install https://raw.githubusercontent.com/dhhyi/Milua/main/milua-0.1-1.rockspec --tree lua_modules
-    luarocks path --tree lua_modules >> ~/.zshrc
+    luarocks install --server=https://luarocks.org/dev luaformatter --tree lua_modules
+    luarocks install luacheck --tree lua_modules
+  instantiate: |
+    mkdir -p ~/.config/fish/conf.d
 vscode:
   settings:
     Lua.format.enable: false
@@ -51,6 +65,8 @@ prettier:
     - "*.lua"
     - "*.rockspec"
 precommit: |
+  eval "$(luarocks path --tree lua_modules)"
+  lua -v
   lua-format *.lua -i
   lua-format *.rockspec -i --column-table-limit=1
   luacheck *.lua

@@ -39,7 +39,9 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-precommit: ghokin fmt replace .
+precommit: |
+  ghokin version
+  ghokin fmt replace .
 test: karate -T 1 .
 prettier:
   ignore:

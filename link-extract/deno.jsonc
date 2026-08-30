@@ -1,12 +1,12 @@
 {
   "tasks": {
     "dev": "deno run --allow-net --allow-read --allow-write --allow-env --watch main.ts",
-    "build": "deno compile --allow-net --allow-read --allow-write --allow-env main.ts",
+    "build": "deno compile --allow-net --allow-read --allow-write --allow-env main.ts"
   },
   "imports": {
     "@std/path": "https://deno.land/std@0.196.0/path/mod.ts",
     "aloedb": "https://deno.land/x/aloedb@0.9.0/mod.ts",
     "deno_dom": "https://deno.land/x/deno_dom@v0.1.38/deno-dom-wasm.ts",
-    "denorest": "https://deno.land/x/denorest@v4.2/mod.ts",
-  },
+    "denorest": "https://deno.land/x/denorest@v4.2/mod.ts"
+  }
 }

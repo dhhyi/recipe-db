@@ -50,7 +50,9 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-precommit: hurlfmt --in-place *.hurl
+precommit: |
+  hurl --version
+  hurlfmt --in-place *.hurl
 test: hurl-run
 prettier:
   ignore:

@@ -26,7 +26,7 @@ class Interactions {
   fun getRecipe(
       id: String,
       callback: (RecipeByIdQuery.Recipe?) -> Unit,
-      errors: (List<Error>?) -> Unit
+      errors: (List<Error>?) -> Unit,
   ) {
     runBlocking<Unit> {
       val response = apolloClient.query(RecipeByIdQuery(id = id)).execute()
@@ -42,7 +42,7 @@ class Interactions {
   fun createRecipe(
       recipe: RecipeInput,
       callback: (id: String) -> Unit,
-      errors: (List<Error>?) -> Unit
+      errors: (List<Error>?) -> Unit,
   ) {
     runBlocking<Unit> {
       val response = apolloClient.mutation(CreateRecipeMutation(recipe)).execute()
@@ -59,7 +59,7 @@ class Interactions {
       id: String,
       recipe: RecipeInput,
       callback: (id: String) -> Unit,
-      errors: (List<Error>?) -> Unit
+      errors: (List<Error>?) -> Unit,
   ) {
     runBlocking<Unit> {
       val response = apolloClient.mutation(UpdateRecipeMutation(id, recipe)).execute()

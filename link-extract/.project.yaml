@@ -39,6 +39,7 @@ prettier:
   ignore:
     - "*.ts"
 precommit: |
+  deno --version
   deno fmt
   deno lint
   deno task build
