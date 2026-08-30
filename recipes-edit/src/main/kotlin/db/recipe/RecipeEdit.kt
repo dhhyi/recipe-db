@@ -79,7 +79,11 @@ class RecipeEdit : KComposite(), HasUrlParameter<String> {
     val ingredients = Optional.present(ingredientsRaw)
 
     return RecipeInput(
-        name = name, method = method, inspirations = inspirations, ingredients = ingredients)
+        name = name,
+        method = method,
+        inspirations = inspirations,
+        ingredients = ingredients,
+    )
   }
 
   override fun setParameter(event: BeforeEvent, recipeId: String?) {
@@ -120,7 +124,11 @@ class RecipeEdit : KComposite(), HasUrlParameter<String> {
         interaction.createRecipe(value, { redirectBack(it) }, { showError("Error: $it") })
       } else {
         interaction.updateRecipe(
-            idField.value, value, { redirectBack(it) }, { showError("Error: $it") })
+            idField.value,
+            value,
+            { redirectBack(it) },
+            { showError("Error: $it") },
+        )
       }
     } catch (e: Exception) {
       showError(e.message ?: "Unbekannter Fehler der Klasse ${e.javaClass}")

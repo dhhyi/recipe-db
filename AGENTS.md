@@ -9,3 +9,8 @@ When modifying `.project.yaml` files, run `pnpm synchronize` to apply the change
 Before running tests, ensure the docker compose project is up and running.
 
 Execute tests with the `package.json` script `test-project`.
+
+## Running precommit checks
+
+Execute precommit checks with `pnpm in-devcontainer <project> precommit`.
+Make sure any existing devcontainer torn down before running precommit checks.

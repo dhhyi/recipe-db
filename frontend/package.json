@@ -22,7 +22,9 @@
     "@prettier/plugin-xml": "^3.1.1",
     "@types/node": "^18.17.1",
     "@typescript-eslint/eslint-plugin": "^5.50.0",
+    "@typescript-eslint/parser": "^5.50.0",
     "astro": "^2.7.2",
+    "astro-eslint-parser": "^0.14.0",
     "eslint-config-standard-with-typescript": "^35.0.0",
     "eslint-plugin-astro": "^0.27.2",
     "eslint-plugin-svelte": "^2.32.2",
@@ -33,9 +35,11 @@
     "prettier-plugin-astro": "^0.11.0",
     "prettier-plugin-svelte": "^3.0.3",
     "svelte": "^4.0.0",
+    "svelte-eslint-parser": "^0.33.1",
     "svelte-feather-icons": "^4.0.1",
     "tailwindcss": "^3.0.24",
-    "typescript": "^5.0.4"
+    "typescript": "^5.0.4",
+    "vue-eslint-parser": "^9.4.3"
   },
   "dependencies": {
     "@fastify/middie": "^8.3.0",

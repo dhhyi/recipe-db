@@ -75,6 +75,7 @@ prettier:
     - nginx.conf
     - elm.json
 precommit: |
+  elm --version
   nginx-formatter -indent=4
   npx prettier --tab-width 4 --print-width 10 --ignore-path /dev/null --write elm.json
   elm-format --yes .

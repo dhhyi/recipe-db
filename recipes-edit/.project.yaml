@@ -7,6 +7,7 @@ devcontainer:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     user:
+      - RUN mise use -g java@17
       - RUN echo "alias gradle='./gradlew --no-daemon'" | tee -a /home/vscode/.bashrc /home/vscode/.zshrc
   ports:
     - 4000
@@ -49,6 +50,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 precommit: |
+  ./gradlew --version
   ktfmt src build.gradle.kts
   ./gradlew --no-daemon compileKotlin detekt
 prettier:

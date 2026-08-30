@@ -40,4 +40,5 @@ prettier:
   ignore:
     - "*.pl"
 precommit: |
+  perl --version
   perltidy -b *.pl

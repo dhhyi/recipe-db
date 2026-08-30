@@ -53,7 +53,8 @@ class Ingredients : VerticalLayout() {
           amount = Optional.presentIfNotNull(if (amount.value == "") null else amount.value),
           unit = Optional.presentIfNotNull(if (unit.value == "") null else unit.value),
           name = name.value,
-          optional = Optional.presentIfNotNull(optional.value))
+          optional = Optional.presentIfNotNull(optional.value),
+      )
     }
 
     fun isEmpty(): Boolean = name.value.isEmpty()

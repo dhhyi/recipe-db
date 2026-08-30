@@ -57,6 +57,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
 precommit: |
+  npm --version
   npm run lint-schema
   npm run codegen
   npm run lint-code -- --fix
