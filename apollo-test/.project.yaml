@@ -1,44 +1,46 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://javascript-pnpm
+extends: dcc://java
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-apollo-test
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
-  initialize: |
-    pnpm install
-    npm run codegen
-  ports:
-    - 4000
+  build:
+    args:
+      KARATE_VERSION: 2.1.2
+      GHOKIN_VERSION: 3.10.0
+    root:
+      - ADD https://github.com/karatelabs/karate/releases/download/v${KARATE_VERSION}/karate-${KARATE_VERSION}.jar /opt/karate.jar
+      - RUN chmod +rx /opt/karate.jar
+      - ADD https://github.com/antham/ghokin/releases/download/v${GHOKIN_VERSION}/ghokin_${GHOKIN_VERSION}_linux_amd64.tar.gz /tmp/ghokin.tar.gz
+      - RUN tar -xzf /tmp/ghokin.tar.gz -C /tmp && mv /tmp/ghokin /usr/local/bin/ghokin && chmod +rx /usr/local/bin/ghokin
+    files:
+      - type: script
+        path: /usr/local/bin/karate
+        content: |
+          #!/bin/bash
+          java -jar /opt/karate.jar "$@"
+  selftest: karate -h
   environment:
-    GRAPHQL_ENDPOINT: http://traefik/graphql
+    GRAPHQL_API: http://traefik/graphql
 vscode:
   settings:
-    editor.defaultFormatter: esbenp.prettier-vscode
+    karateRunner.karateJS.commandLineArgs: karate
+    karateRunner.karateJar.commandLineArgs: karate
     peacock.remoteColor: "#2d1130"
-    filewatcher.commands:
-      - match: "\\.graphql"
-        cmd: cd ${workspaceRoot} && npm run codegen
-        event: onFolderChange
   extensions:
     - johnpapa.vscode-peacock
-    - GraphQL.vscode-graphql
-    - esbenp.prettier-vscode
-    - appulate.filewatcher
+    - karatelabs.karate
+    - kirkslota.karate-runner
 extras:
-  - named-volumes
   - traefik
-namedVolumes:
-  node_modules: recipe-db-apollo-test-node-modules
-  /home/pnpm: recipe-db-pnpm-store
 traefik:
   network: intranet
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: |
-  npm run codegen
-  npx jest --ci --runInBand
-precommit: |
-  npm run codegen
-  npm run lint -- --fix
+precommit: ghokin fmt replace .
+test: karate -T 1 .
+prettier:
+  ignore:
+    - "*.feature"

@@ -1,0 +1,6 @@
+mutation ($value: RecipeInput!) {
+  createRecipe(value: $value) {
+    id
+    name
+  }
+}

@@ -1,0 +1,7 @@
+query ($id: ID!) {
+  recipe(id: $id) {
+    inspirations {
+      url
+    }
+  }
+}

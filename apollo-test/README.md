@@ -1,3 +1,3 @@
-https://the-guild.dev/graphql/codegen/docs/getting-started/installation
+https://karatelabs.github.io/karate/
 
-https://the-guild.dev/graphql/codegen/docs/guides/api-testing
+https://github.com/karatelabs/karate/wiki/GraphQL

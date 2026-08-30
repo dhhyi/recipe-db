@@ -1,0 +1,3 @@
+mutation ($id: ID!, $rating: Int!, $login: String!) {
+  rate(id: $id, rating: $rating, login: $login)
+}
