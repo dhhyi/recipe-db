@@ -1,4 +1,4 @@
-query RecipeByIdWithInspirationQuery($id: ID!) {
+query ($id: ID!) {
   recipe(id: $id) {
     name
     inspirations {

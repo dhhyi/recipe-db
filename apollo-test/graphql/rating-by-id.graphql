@@ -1,0 +1,6 @@
+query ($id: ID!) {
+  rating(id: $id) {
+    average
+    count
+  }
+}

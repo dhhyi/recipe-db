@@ -1,4 +1,4 @@
-query IntegrationAllRecipesQuery {
+query {
   recipes {
     name
     rating {
