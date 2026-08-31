@@ -18,38 +18,37 @@ if (!project) {
 }
 
 const projectConfig = getProjectConfig(project);
+const toCommand = (cmd) =>
+  cmd
+    .split("\n")
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("#"))
+    .join(" && ");
 let runCommand;
 if (command.length === 1 && command[0] === "test") {
   if (!projectConfig.test) {
     console.error("Project does not have test command");
     process.exit(1);
   }
-  const projectTestCommand = projectConfig.test
-    .split("\n")
-    .filter(Boolean)
-    .join(" && ");
-
-  runCommand = [
-    "fish",
-    "-c",
-    `mise activate fish | source; and ${projectTestCommand}`,
-  ];
+  runCommand = ["fish", "-c", toCommand(projectConfig.test)];
 } else if (command.length === 1 && command[0] === "precommit") {
   if (!projectConfig.precommit) {
     console.error("Project does not have precommit command");
     process.exit(1);
   }
-  const projectPrecommitCommand =
-    "set --export PRE_COMMIT 1; and " +
-    projectConfig.precommit.split("\n").filter(Boolean).join(" && ");
-
   runCommand = [
     "fish",
     "-c",
-    `mise activate fish | source; and ${projectPrecommitCommand}`,
+    "set --export PRE_COMMIT 1; and " + toCommand(projectConfig.precommit),
   ];
+} else if (command.length === 1 && command[0] === "prettier") {
+  if (!projectConfig.prettier) {
+    console.error("Project does not have prettier command");
+    process.exit(1);
+  }
+  runCommand = ["fish", "-c", `npx prettier --write '**'`];
 } else {
-  runCommand = command;
+  runCommand = ["fish", "-c", command.join(" ")];
 }
 
 let containerId = null;
