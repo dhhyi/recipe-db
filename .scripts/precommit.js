@@ -60,7 +60,7 @@ globSync("**/.prettierignore")
     tasks.push({
       execDir: dir,
       dependent: [dir],
-      command: "npx prettier --write '**'",
+      command: container ? "prettier" : "npx prettier --write '**'",
       message: "Running 'prettier' in " + dir,
       container,
       priority: dir === "." ? 1 : 2,
