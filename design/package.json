@@ -1,0 +1,33 @@
+{
+  "name": "design",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && storybook build",
+    "preview": "vite preview",
+    "start": "storybook dev -p 6006",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@anyblades/blades": "3.0.0-alpha.3",
+    "lit": "^3.3.3",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@storybook/web-components-vite": "^10.5.10",
+    "@tailwindcss/vite": "^4.3.3",
+    "eslint-plugin-storybook": "^10.5.10",
+    "http-server": "^14.1.1",
+    "storybook": "^10.5.10",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:storybook/recommended"
+    ]
+  }
+}

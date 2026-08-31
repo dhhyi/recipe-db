@@ -1,6 +1,5 @@
 import node from "@astrojs/node";
 import svelte from "@astrojs/svelte";
-import tailwind from "@astrojs/tailwind";
 import vue from "@astrojs/vue";
 import { defineConfig } from "astro/config";
 
@@ -10,5 +9,5 @@ export default defineConfig({
   adapter: node({
     mode: "middleware",
   }),
-  integrations: [svelte(), tailwind(), vue()],
+  integrations: [svelte(), vue()],
 });
