@@ -7,6 +7,8 @@ An uploaded image is decoded, stored at its original size, then center-cropped t
 4:3 and resized to a 600x450 thumbnail. Both files are written as PNG into the data
 folder and served statically under `/public`.
 
+Testing (in [`images-test`](../images-test)) is done using [Hurl](https://hurl.dev/).
+
 ## API
 
 | Route                        | Description                                                                                                                                                                              |

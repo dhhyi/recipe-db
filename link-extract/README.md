@@ -1,9 +1,7 @@
-https://github.com/denoland/deno/issues/6900#issuecomment-737557552
-https://github.com/craigmulligan/deno-demo/blob/main/Dockerfile
+# Link Extract
 
-https://examples.deno.land/http-requests
-https://deno.land/manual@v1.35.2/advanced/jsx_dom/deno_dom
+Extracts favicon, title, description and canonical link of a URL.
 
-https://denorest.deno.dev/
-
-https://deno.land/x/aloedb@0.9.0
+Implemented in [Deno](https://deno.land/) using
+[Denorest](https://denorest.deno.dev/) and
+[AloeDB](https://github.com/Kirlovon/AloeDB) document database.

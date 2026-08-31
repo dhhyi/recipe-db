@@ -1,6 +1,6 @@
-https://hurl.dev/
+# Images Integration Tests
 
-https://github.com/Orange-OpenSource/hurl
+Integration tests for the images service, implemented in [Hurl](https://hurl.dev/).
 
 The images service is reached on two Traefik entrypoints, so the tests use two
 variables: `REST_API` for `/images` on `rest-internal` and `WEB_API` for `/public`

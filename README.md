@@ -38,25 +38,15 @@ For building all of the projects in the mono repo, [Docker](https://www.docker.c
 
 Even though the frontend parts have access to a unified GraphQL API, I want to implement the different parts with different solutions.
 
-### Parts with limited interaction ([`frontend`](./frontend))
-
-For pages that are mostly static, [Astro](https://astro.build/) is a perfect implementation solution for speedy serving and caching.
-
-Astro offers [plugins](https://docs.astro.build/en/guides/integrations-guide/#official-integrations) for different languages for components, which I want to try all.
-
-As most parts of any Astro page can be pre-rendered and cached and rerendered when the data changes, I plan on adding a cache purging solution from backend to frontend later. (Message Que, Websocket)
+### Parts with limited interaction — see [`frontend`](./frontend)
 
 ### Heavy interaction
 
 Parts with heavy interaction like the pages for adding and editing recipes will be implemented in a different solution.
 
-#### Recipe Adding and Editing ([`recipes-edit`](./recipes-edit))
+#### Recipe Adding and Editing — see [`recipes-edit`](./recipes-edit)
 
-Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin). with [Gradle](https://gradle.org/) build tool and [Spring Boot](https://spring.io/projects/spring-boot) for app startup.
-
-#### Image Adding and Editing ([`images-edit`](./images-edit))
-
-Implemented in [Elm](https://elm-lang.org/) using [elm-graphql](https://github.com/dillonkearns/elm-graphql) for GraphQL integration.
+#### Image Adding and Editing — see [`images-edit`](./images-edit)
 
 ### Style
 
@@ -66,50 +56,21 @@ If possible, consistent styling with [Tailwind CSS](https://tailwindcss.com/).
 
 The backend is organized in a variety of services where the only one _actually_ necessary is the one holding recipe data. Each service exposes a REST API which is tested with a different integration testing framework.
 
-### Recipes ([`recipes`](./recipes), [`recipes-test`](./recipes-test))
+### Recipes — see [`recipes`](./recipes) ([`recipes-test`](./recipes-test))
 
-Implemented using [Golang](https://go.dev/), web framework [Gin](https://gin-gonic.com/) and [Clover](https://github.com/ostafen/clover) as document database.
+### Ratings — see [`ratings`](./ratings) ([`ratings-test`](./ratings-test))
 
-Still open: versioning of recipe data and rollback of edits.
+### Images — see [`images`](./images) ([`images-test`](./images-test))
 
-Integration testing done in [Venom](https://github.com/ovh/venom).
-
-### Ratings ([`ratings`](./ratings), [`ratings-test`](./ratings-test))
-
-Implemented in [IO](https://iolanguage.org/) with [SQLite](https://www.sqlite.org/) as relational database.
-
-Integration testing in [Karate](https://www.karatelabs.io/).
-
-### Images ([`images`](./images), [`images-test`](./images-test))
-
-Image server implemented in [Nim](https://nim-lang.org/) using [Jester](https://github.com/dom96/jester) and [Pixie](https://github.com/treeform/pixie).
-Uploads are cropped and resized to thumbnails and served statically.
-The service is shipped as a statically linked binary in a `scratch` image.
-
-Testing is done using [Hurl](https://hurl.dev/).
-
-### Inspiration ([`inspirations`](./inspirations), [`inspirations-test`](./inspirations-test))
-
-Sources of inspiration web links for this recipe.
-Implemented in [Lua](https://www.lua.org/) using [Milua](https://github.com/MiguelMJ/Milua) for setting up REST API.
-Data stored as plain JSON File.
-
-Testing is done using [Venom](https://github.com/ovh/venom) with [Tavern Executor](https://github.com/intercloud/venom/tree/executor-tavern/executors/tavern)
+### Inspiration — see [`inspirations`](./inspirations) ([`inspirations-test`](./inspirations-test))
 
 ### Utility Services
 
 Services with utility character.
 
-#### Link Extract ([`link-extract`](./link-extract))
+#### Link Extract — see [`link-extract`](./link-extract)
 
-Extracts favicon, title, description and canonical link of URL.
-
-Implemented in [Deno](https://deno.land/) using [Denorest](https://denorest.deno.dev/) and [AloeDB](https://github.com/Kirlovon/AloeDB) document database.
-
-#### Image Inline ([`image-inline`](./image-inline))
-
-Convert an Image URL to an inlined image.
-Implemented in [Perl](https://www.perl.org/) using [Dancer2](https://metacpan.org/pod/Dancer2) for the REST API setup.
+#### Image Inline — see [`image-inline`](./image-inline)
 
 ## Ideas for other services:
 
@@ -122,6 +83,10 @@ Specific tags for:
 - Country
 - Vegetarian/Vegan/Pescetarian
 - Main/Side/Appetizer/Dessert
+
+### Add to shopping list
+
+[Bring!](https://www.getbring.com/) integration.
 
 ### Comments
 
