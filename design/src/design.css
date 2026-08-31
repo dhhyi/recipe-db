@@ -1,0 +1,99 @@
+@import "@anyblades/blades";
+
+:root {
+  --pico-primary: #0a750f !important;
+  --pico-primary-background: #0a750f !important;
+  --pico-primary-hover-background: #12c01b !important;
+  --pico-primary-focus: #12d21ca9 !important;
+  --pico-card-border-color: color-mix(
+    in srgb,
+    currentColor 50%,
+    white
+  ) !important;
+}
+
+ul:not(.markerless, .unlist, .unlist-all),
+ol:not(.markerless, .unlist, .unlist-all) {
+  padding-inline-start: 1.5rem;
+}
+
+ul:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
+  > li:not([style*="--list-marker:"]) {
+  list-style-type: disc;
+}
+
+ol:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
+  > li:not([style*="--list-marker:"]) {
+  list-style-type: decimal;
+}
+
+button {
+  --pico-font-weight: bold;
+}
+
+article {
+  border-width: 2px;
+  border-style: solid;
+  border-color: color-mix(in srgb, currentColor 50%, white);
+}
+
+@import "tailwindcss";
+@theme {
+  --font-display: sans-serif;
+  /*
+   * Mirror Pico/blades breakpoints exactly, by name and value.
+   * Pico's are baked into its shipped CSS as literal px media queries and cannot be
+   * overridden (@media can't read custom properties), so Tailwind adapts to Pico, not
+   * the other way around. Keeping px rather than rem avoids the two drifting apart when
+   * the browser's root font size isn't 16px. Note Pico's top step is `xxl`, not `2xl`.
+   */
+  --breakpoint-*: initial;
+  --breakpoint-sm: 576px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+  --breakpoint-xxl: 1536px;
+  --font-weight-*: initial;
+  --text-*: initial;
+  --color-*: initial;
+  --spacing-*: initial;
+  --spacing-0: 0;
+  --spacing-1: 0.382rem;
+  --spacing-2: 0.618rem;
+  --spacing-3: 1rem;
+  --spacing-5: 1.618rem;
+  --spacing-8: 2.618rem;
+  --spacing-13: 4.236rem;
+}
+
+/* Story classes arrive at runtime via args, so nothing to scan; generate them explicitly. */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{p,px,py,pt,pr,pb,pl,m,mx,my,mt,mr,mb,ml,gap}-{0,1,2,3,5,8,13}{,!}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}gap-{x,y}-{0,1,2,3,5,8,13}");
+
+/* Layout */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{block,inline-block,inline,flex,inline-flex,grid,inline-grid,flow-root,contents,hidden,table,table-row,table-cell,list-item}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}container");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{static,relative,absolute,fixed,sticky}");
+
+/* Flexbox */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}flex-{row,row-reverse,col,col-reverse,wrap,wrap-reverse,nowrap,1,auto,initial,none}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{grow,shrink}{,-0}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}basis-{0,1,2,3,5,8,13,auto,full}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}order-{1,2,3,4,5,6,first,last,none}");
+
+/* Grid */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}grid-{cols,rows}-{1,2,3,4,5,6,7,8,9,10,11,12,none,subgrid}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-span-{1,2,3,4,5,6,7,8,9,10,11,12,full}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-{start,end}-{1,2,3,4,5,6,7,8,9,10,11,12,13,auto}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}grid-flow-{row,col,dense,row-dense,col-dense}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{auto-cols,auto-rows}-{auto,min,max,fr}");
+
+/* Box alignment */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}items-{start,end,center,baseline,stretch}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}justify-{normal,start,end,center,between,around,evenly,stretch}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}justify-{items,self}-{auto,start,end,center,stretch}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}content-{normal,start,end,center,between,around,evenly,stretch,baseline}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}self-{auto,start,end,center,stretch,baseline}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}place-content-{start,end,center,between,around,evenly,stretch,baseline}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}place-items-{start,end,center,stretch,baseline}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}place-self-{auto,start,end,center,stretch}");

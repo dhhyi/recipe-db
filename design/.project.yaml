@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://javascript-pnpm
+devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-design
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  initialize: |
+    pnpm install
+  ports:
+    - 3000
+  environment:
+    TESTING: "true"
+vscode:
+  settings:
+    editor.defaultFormatter: esbenp.prettier-vscode
+    peacock.remoteColor: "#e024d1"
+  extensions:
+    - johnpapa.vscode-peacock
+    - esbenp.prettier-vscode
+extras:
+  - named-volumes
+  - traefik
+  - tmux
+namedVolumes:
+  node_modules: recipe-db-apollo-node-modules
+  /home/pnpm: recipe-db-pnpm-store
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-design:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        design:
+          rule: PathPrefix(`/design`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: frontend
+# TODO: activate lint
+precommit: |
+  npm --version
+  npx storybook --version
+  npm run build

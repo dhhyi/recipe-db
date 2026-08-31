@@ -1,10 +1,11 @@
 module Main exposing (main)
 
+import Accessibility.Role as Role
 import Browser
 import Browser.Navigation as Navigation
 import File exposing (File)
 import Html exposing (Html, a, div, h1, h2, img, input, label, text)
-import Html.Attributes exposing (class, for, hidden, href, id, multiple, src, type_)
+import Html.Attributes exposing (class, for, hidden, href, id, multiple, src, style, type_)
 import Html.Events exposing (on)
 import Json.Decode as D
 import RecipeDB
@@ -106,7 +107,7 @@ main =
 
 view : Model -> Html Msg
 view model =
-    div [ class "flex-column" ]
+    div [ class "flex flex-col gap-1" ]
         [ recipeDisplay model
         , uploadFeedback model
         , interactions model
@@ -119,7 +120,7 @@ recipeDisplay model =
         RemoteData.Success maybeRecipe ->
             case maybeRecipe of
                 Just recipe ->
-                    div [ class "flex-column" ]
+                    div [ class "contents" ]
                         [ recipeHeading recipe
                         , recipeThumbnail recipe
                         ]
@@ -146,7 +147,7 @@ recipeThumbnail : RecipeDB.RecipeData -> Html Msg
 recipeThumbnail recipe =
     case recipe.thumbUrl of
         Just thumbUrl ->
-            img [ src thumbUrl ] []
+            img [ src thumbUrl, style "max-width" "600px", style "width" "auto" ] []
 
         Nothing ->
             h2 [] [ text "Kein Bild vorhanden" ]
@@ -154,7 +155,7 @@ recipeThumbnail recipe =
 
 backToRecipeLink : Model -> Html Msg
 backToRecipeLink model =
-    a [ href ("/recipe/" ++ model.recipeId), class "button" ] [ text "Abbrechen" ]
+    a [ href ("/recipe/" ++ model.recipeId), Role.button, class "secondary" ] [ text "Abbrechen" ]
 
 
 uploadFeedback : Model -> Html Msg
@@ -183,7 +184,7 @@ uploadImageButton _ =
         fileDecoder =
             D.at [ "target", "files", String.fromInt 0 ] File.decoder
     in
-    div []
+    div [ class "contents" ]
         [ input
             [ id "upload-image"
             , type_ "file"
@@ -192,17 +193,13 @@ uploadImageButton _ =
             , hidden True
             ]
             []
-        , label [ for "upload-image", class "button" ] [ text "Bild hochladen" ]
+        , label [ for "upload-image", Role.button, class "mb-0!" ] [ text "Bild hochladen" ]
         ]
 
 
 interactions : Model -> Html Msg
 interactions model =
-    div []
-        [ div [ class "padding-top", class "flex-row" ]
-            [ uploadImageButton model
-            , backToRecipeLink model
-            ]
-
-        -- , div [] [ text (Debug.toString model) ]
+    div [ class "flex flex-row gap-2 sm:gap-5 md:gap-13" ]
+        [ uploadImageButton model
+        , backToRecipeLink model
         ]
