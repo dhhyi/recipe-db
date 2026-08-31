@@ -1,17 +1,7 @@
-https://docs.astro.build/en/getting-started/
+# Frontend
 
-https://github.com/nodejs/docker-node/blob/main/docs/BestPractices.md
+For pages that are mostly static, [Astro](https://astro.build/) is used for speedy serving and caching.
 
-https://github.com/hygraph/hygraph-examples/blob/master/with-astro/src/pages/products/%5Bslug%5D.astro
+Astro offers [plugins](https://docs.astro.build/en/guides/integrations-guide/#official-integrations) for different languages for components, which this project tries out.
 
-https://docs.astro.build/de/guides/integrations-guide/svelte/
-https://github.com/sveltejs/prettier-plugin-svelte#usage-with-tailwind-prettier-plugin
-
-https://chrisdermody.com/tailwind-css-static-navbar-with-shadow-on-scroll/
-
-https://github.com/edazpotato/astro-feather-icons#readme
-https://svelte.dev/docs/svelte-components#style
-
-https://javascript.plainenglish.io/return-custom-404-responses-in-astro-b844b0e0146d
-
-https://github.com/nanostores/nanostores
+As most parts of any Astro page can be pre-rendered and cached and rerendered when the data changes, there are plans to add a cache purging solution from backend to frontend later (Message Queue, Websocket).

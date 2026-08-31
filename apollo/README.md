@@ -1,4 +1,3 @@
-https://the-guild.dev/graphql/codegen/docs/getting-started/installation
+# Apollo GraphQL Gateway
 
-https://www.apollographql.com/docs/apollo-server/v3/data/file-uploads/
-https://gist.github.com/aarkerio/3aba6d75869995c6aca1b2f48dfa7d7b
+Combines all backend REST services into a single [Apollo GraphQL](https://www.apollographql.com/) API, implemented in [TypeScript](https://www.typescriptlang.org/) using Apollo Server.

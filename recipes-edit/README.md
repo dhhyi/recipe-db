@@ -1,7 +1,3 @@
-https://vaadin.com/docs/v8/framework/getting-started/getting-started-kotlin
+# Recipe Adding and Editing
 
-https://github.com/mvysny/karibu-helloworld-application/tree/master
-
-https://github.com/mvysny/karibu-dsl/tree/master/karibu-dsl
-
-https://github.com/vaadin/base-starter-spring-gradle/tree/v24
+Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin) with [Gradle](https://gradle.org/) build tool and [Spring Boot](https://spring.io/projects/spring-boot) for app startup.

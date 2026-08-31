@@ -1,3 +1,3 @@
-https://karatelabs.github.io/karate/
+# Apollo Integration Tests
 
-https://github.com/karatelabs/karate/wiki/GraphQL
+Integration tests for the Apollo GraphQL gateway, implemented in [Karate](https://www.karatelabs.io/).
