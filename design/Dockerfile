@@ -6,11 +6,7 @@ RUN pnpm i --frozen-lockfile
 COPY . /ws/
 RUN pnpm build
 
-FROM busybox:latest
-RUN adduser -D static
-USER static
-WORKDIR /home/static
-COPY --from=builder /ws/dist/assets/index-*.css design/styles.css
-RUN touch health
-EXPOSE 3000
-ENTRYPOINT ["busybox", "httpd", "-f", "-v", "-p", "3000"]
+FROM nginx:stable-alpine-perl
+RUN sed -i '1i load_module modules/ngx_http_perl_module.so;' /etc/nginx/nginx.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /ws/dist /usr/share/nginx/html

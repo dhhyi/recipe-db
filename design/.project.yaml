@@ -5,25 +5,57 @@ devcontainer:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-design
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - nginx
+      - libnginx-mod-http-perl
+    root:
+      - >-
+        RUN wget https://github.com/soulteary/nginx-formatter/releases/download/v1.1.1/nginx-formatter_1.1.1_linux_amd64.tar.gz -O /tmp/nginx-formatter.tar.gz &&
+        tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp &&
+        mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter &&
+        rm /tmp/nginx-formatter.tar.gz
+      - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
+    files:
+      - type: script
+        path: /usr/local/bin/distribute-styling
+        content: |
+          #!/bin/sh
+          target="/usr/share/nginx/html"
+          input="$1"
+          rm -rf "$target"/*
+          cp -Rfv "$input"/* "$target"/
   initialize: |
+    sudo /etc/init.d/nginx start
+    sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf
     pnpm install
+    pnpm build
+    distribute-styling "${containerWorkspaceFolder}/dist"
   ports:
-    - 3000
+    - 80
   environment:
     TESTING: "true"
 vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
     peacock.remoteColor: "#e024d1"
+    filewatcher.commands:
+      - match: "nginx.conf"
+        cmd: sudo /etc/init.d/nginx reload
+        event: onFileChange
+      - match: "\\.css"
+        cmd: cd ${workspaceRoot} && pnpm build && distribute-styling "${workspaceRoot}/dist"
+        event: onFileChange
   extensions:
     - johnpapa.vscode-peacock
+    - appulate.filewatcher
     - esbenp.prettier-vscode
 extras:
   - named-volumes
   - traefik
   - tmux
 namedVolumes:
-  node_modules: recipe-db-apollo-node-modules
+  node_modules: recipe-db-design-node-modules
   /home/pnpm: recipe-db-pnpm-store
 traefik:
   network: intranet
@@ -47,4 +79,8 @@ category: frontend
 precommit: |
   npm --version
   npx storybook --version
+  # nginx-formatter -indent=4
   npm run build
+prettier:
+  ignore:
+    - nginx.conf
