@@ -1,0 +1,93 @@
+package components
+
+import "frontend/src/generated"
+import "frontend/src/util"
+
+templ inspiration(in gql.InspirationsLink) {
+	<a
+		class="flex gap-2 items-center"
+		href={ in.Extracted.Canonical }
+	>
+		<img
+			height
+			class="h-5"
+			src={ in.Extracted.InlinedFavicon }
+		/>{ in.Extracted.Title }
+	</a>
+}
+
+templ editFields(id string, recipeEdit bool, imageEdit bool) {
+	if recipeEdit || imageEdit {
+		<details class="dropdown sm:ml-auto">
+			<summary role="button" class="outline">Bearbeiten</summary>
+			<ul class="markerless">
+				if recipeEdit {
+					<li><a href={ "/edit/" + id }>Rezept bearbeiten</a></li>
+				}
+				if imageEdit {
+					<li><a href={ "/images-edit/" + id }>Bilder bearbeiten</a></li>
+				}
+			</ul>
+		</details>
+	}
+}
+
+templ Detail(resp *gql.RecipeByIdResponse) {
+	{{ recipe := resp.Recipe }}
+	<div class="flex flex-col sm:flex-row pt-1">
+		<hgroup>
+			<h2>{ recipe.Name }</h2>
+			@Rating(recipe.Rating)
+		</hgroup>
+		@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)
+	</div>
+	<p class="contents">
+		<img
+			class="md:self-center pb-3"
+			style="max-width: 650px;"
+			src={ recipe.Image.ThumbUrl }
+			alt={ recipe.Name }
+		/>
+	</p>
+	if len(recipe.Ingredients) > 0 {
+		<h3>Zutaten</h3>
+		<table>
+			<thead>
+				<tr>
+					<th>Anzahl</th>
+					<th>Zutat</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, ingredient := range recipe.Ingredients {
+					<tr>
+						<td>
+							{ ingredient.Amount } { ingredient.Unit }
+							if ingredient.Optional {
+								<span>(optional) </span>
+							}
+						</td>
+						<td>
+							{ ingredient.Name }
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+	if len(recipe.Method) > 0 {
+		<h3>Zubereitung</h3>
+		@templ.Raw(util.ToMarkDown(recipe.Method))
+	}
+	if len(recipe.Inspirations) > 0 {
+		<h3>Inspirationen</h3>
+		<ul class="markerless">
+			for _, insp := range recipe.Inspirations {
+				<li>
+					@inspiration(insp)
+				</li>
+			}
+		</ul>
+	}
+	<button onclick="history.back()">Back</button>
+}

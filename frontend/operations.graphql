@@ -1,60 +1,62 @@
-query AllRecipes {
-  recipes {
-    id
-    name
+fragment Rating on Rating {
+  average
+  count
+}
+
+fragment RecipeStub on Recipe {
+  id
+  name
+  image {
+    url
+    thumbUrl
+  }
+  rating {
+    ...Rating
   }
 }
 
-query AllRecipesFull {
+query Overview {
   recipes {
-    id
+    ...RecipeStub
+  }
+}
+
+fragment InspirationsLink on Link {
+  url
+  extracted {
+    title
+    description
+    canonical
+    inlinedFavicon
+  }
+}
+
+fragment RecipeDetail on Recipe {
+  id
+  name
+  method
+  image {
+    url
+    thumbUrl
+  }
+  ingredients {
     name
-    image {
-      url
-      thumbUrl
-    }
-    rating {
-      average
-      count
-    }
+    amount
+    unit
+    optional
+  }
+  rating {
+    ...Rating
+  }
+  inspirations {
+    ...InspirationsLink
   }
 }
 
 query RecipeById($id: ID!) {
   recipe(id: $id) {
-    id
-    name
-    method
-    image {
-      url
-      thumbUrl
-    }
-    ingredients {
-      name
-      amount
-      unit
-      optional
-    }
-    inspirations {
-      url
-      extracted {
-        title
-        description
-        canonical
-        inlinedFavicon
-      }
-    }
+    ...RecipeDetail
   }
-}
-
-query RatingByRecipeId($id: ID!) {
-  rating(id: $id) {
-    average
-    count
-  }
-}
-
-query EditServicesOnline {
-  recipeEdit: isServiceOnline(name: "recipes-edit")
-  imageEdit: isServiceOnline(name: "images-edit")
+  recipeEditOnline: isServiceOnline(name: "recipes-edit")
+  imageEditOnline: isServiceOnline(name: "images-edit")
 }

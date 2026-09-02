@@ -1,0 +1,13 @@
+package components
+
+import "frontend/src/generated"
+import "math"
+
+templ Rating(rating gql.Rating) {
+	<span>
+		for i := 1; i <= int(math.Round(rating.Average)); i++ {
+			⭐
+		}
+		({ rating.Count })
+	</span>
+}

@@ -1,24 +1,22 @@
-FROM node:lts-alpine AS builder
-RUN npm i -g pnpm
-WORKDIR /ws
-COPY package.json pnpm-*.yaml /ws/
-RUN pnpm i --frozen-lockfile
-COPY . /ws/
-RUN npm run codegen && pnpm build
+FROM golang:bookworm AS builder
 
-FROM node:lts-alpine AS node_modules
 WORKDIR /ws
-COPY package.json pnpm-*.yaml /ws/
-RUN echo "node-linker=hoisted" > .npmrc
-RUN npm i -g pnpm && pnpm i --frozen-lockfile --prod
 
-FROM node:lts-alpine
-RUN apk add --no-cache tini
+COPY go.mod go.sum /ws/
+RUN go mod download
+RUN go install github.com/a-h/templ/cmd/templ@latest
+
+COPY *.go *.templ genqlient.yaml recipe-db.graphqls operations.graphql /ws/
+COPY src /ws/src
+RUN go run github.com/Khan/genqlient@main
+RUN templ generate
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+
+FROM scratch
+
 WORKDIR /app
-COPY --from=builder /ws/dist /app/dist/
-COPY --from=node_modules /ws/node_modules /app/node_modules
-COPY server.mjs /app/server.mjs
+COPY --from=builder /ws/main /app/
+
 EXPOSE 3000
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
-ENTRYPOINT [ "tini", "--" ]
-CMD [ "node", "./server.mjs" ]
+
+CMD ["/app/main"]
