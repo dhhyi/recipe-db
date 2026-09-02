@@ -213,7 +213,11 @@ function writeDccFiles(availableProjects) {
     console.log(`Writing Devcontainer in ${project} ...`);
     const projectFile = languageFile(project);
 
-    const commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${projectFile} ${project} --no-vscode`;
+    /** @type {string} */
+    let commandLine;
+    if (!fs.existsSync(path.join(project, ".update_devcontainer.sh")))
+      commandLine = `curl -so- https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ${projectFile} ${project} --no-vscode`;
+    else commandLine = `sh -c 'cd ${project} && sh .update_devcontainer.sh'`;
 
     try {
       cp.execSync(commandLine, { cwd: projectRoot, encoding: "utf8" });
