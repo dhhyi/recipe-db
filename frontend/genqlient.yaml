@@ -1,0 +1,9 @@
+# Default genqlient config; for full documentation see:
+# https://github.com/Khan/genqlient/blob/main/docs/genqlient.yaml
+schema: recipe-db.graphqls
+operations:
+  - operations.graphql
+generated: src/generated/graphql.go
+package: gql
+context_type: "-"
+flatten: true

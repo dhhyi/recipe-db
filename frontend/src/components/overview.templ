@@ -1,0 +1,24 @@
+package components
+
+import "frontend/src/generated"
+
+templ recipeTile(item gql.RecipeStub) {
+	<article>
+		<header>
+			<h3 class="font-bold"><a href={ "/recipe/" + item.Id }>{ item.Name }</a></h3>
+		</header>
+		<img src={ item.Image.ThumbUrl } alt={ item.Name }/>
+		<footer>
+			@Rating(item.Rating)
+		</footer>
+	</article>
+}
+
+templ Overview(resp *gql.OverviewResponse) {
+	<h2>Alle Rezepte</h2>
+	<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4">
+		for _, recipe := range resp.Recipes {
+			@recipeTile(recipe)
+		}
+	</div>
+}

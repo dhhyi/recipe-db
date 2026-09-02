@@ -12,6 +12,33 @@
   ) !important;
 }
 
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  --pico-font-weight: 400;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.5rem;
+}
+
+h3 {
+  font-size: 1.25rem;
+}
+
+h4,
+h5,
+h6 {
+  font-size: 1rem;
+}
+
 ul:not(.markerless, .unlist, .unlist-all),
 ol:not(.markerless, .unlist, .unlist-all) {
   padding-inline-start: 1.5rem;
@@ -67,13 +94,17 @@ article {
 }
 
 /* Story classes arrive at runtime via args, so nothing to scan; generate them explicitly. */
-@source inline("{,sm:,md:,lg:,xl:,xxl:}{p,px,py,pt,pr,pb,pl,m,mx,my,mt,mr,mb,ml,gap}-{0,1,2,3,5,8,13}{,!}");
+
+/* Padding/Margin */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{p,px,py,pt,pr,pb,pl,m,mx,my,mt,mr,mb,ml,gap}-{0,1,2,3,5,8,13,auto}{,!}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}gap-{x,y}-{0,1,2,3,5,8,13}");
 
 /* Layout */
-@source inline("{,sm:,md:,lg:,xl:,xxl:}{block,inline-block,inline,flex,inline-flex,grid,inline-grid,flow-root,contents,hidden,table,table-row,table-cell,list-item}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{block,inline-block,inline,flex,inline-flex,grid,inline-grid,flow-root,contents,hidden,table,table-row,table-cell,list-item}{,!}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}container");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{static,relative,absolute,fixed,sticky}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{top,right,bottom,left}-{0,1,2,3,5,8,13}{,!}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}z-{0,10,20,30,40,50}{,!}");
 
 /* Flexbox */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}flex-{row,row-reverse,col,col-reverse,wrap,wrap-reverse,nowrap,1,auto,initial,none}");
@@ -82,7 +113,7 @@ article {
 @source inline("{,sm:,md:,lg:,xl:,xxl:}order-{1,2,3,4,5,6,first,last,none}");
 
 /* Grid */
-@source inline("{,sm:,md:,lg:,xl:,xxl:}grid-{cols,rows}-{1,2,3,4,5,6,7,8,9,10,11,12,none,subgrid}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}grid-{cols,rows}-{1,2,3,4,5,6,7,8,9,10,11,12,none,subgrid}{,!}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-span-{1,2,3,4,5,6,7,8,9,10,11,12,full}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-{start,end}-{1,2,3,4,5,6,7,8,9,10,11,12,13,auto}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}grid-flow-{row,col,dense,row-dense,col-dense}");
@@ -97,3 +128,9 @@ article {
 @source inline("{,sm:,md:,lg:,xl:,xxl:}place-content-{start,end,center,between,around,evenly,stretch,baseline}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}place-items-{start,end,center,stretch,baseline}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}place-self-{auto,start,end,center,stretch}");
+
+/* Text util */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}text-{left,center,right,justify,start,end}");
+
+/* Width/Height */
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{w,h,min-w,max-w,min-h,max-h}-{0,1,2,3,5,8,13,full,screen}{,!}");
