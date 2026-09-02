@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && storybook build",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "start": "storybook dev -p 6006",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@anyblades/blades": "3.0.0-alpha.3",
