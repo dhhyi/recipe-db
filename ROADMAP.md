@@ -33,6 +33,22 @@ The frontend should have a consistent and visually appealing design, leveraging 
 When replacing Astro with Go + templ + HTMX, repair the frontend styling
 and apply the shared component library.
 
+### Accessibility structure
+
+Give every user-facing page a page-specific `<h1>` inside a `<main>` landmark,
+with matching, route-specific document titles. Keep “Rezeptdatenbank” as a
+shared linked brand rather than a heading. Apply this consistently to the
+overview, recipe detail, image editor, and replacement recipe editor; render
+loading, success, and error feedback as live status messages instead of
+headings.
+
+Examples:
+
+- Overview: `<title>Alle Rezepte | RezeptDB</title>` and `<h1>Alle Rezepte</h1>`
+- Recipe detail: `<title>Milchreis | RezeptDB</title>` and `<h1>Milchreis</h1>`
+- Image editor: `<title>Bild für Milchreis bearbeiten | RezeptDB</title>` and
+  `<h1>Bild für Milchreis bearbeiten</h1>`
+
 ### Image editor
 
 The image editor is intentionally simple now. Add only the shared UI header;
