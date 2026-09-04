@@ -1,9 +1,11 @@
 FROM node:lts-bookworm AS builder
-RUN npm i -g elm @dillonkearns/elm-graphql
+RUN npm i -g pnpm@11
 WORKDIR /app
-COPY . .
-RUN npm run codegen -- --skip-elm-format
-RUN elm make src/Main.elm --optimize --output=elm.js
+COPY package.json pnpm-*.yaml /app/
+RUN pnpm i --frozen-lockfile
+COPY . /app/
+RUN pnpm codegen --skip-elm-format
+RUN pnpm build --optimize
 
 FROM nginx:stable-alpine
 # COPY nginx.conf /etc/nginx/templates/default.conf.template
