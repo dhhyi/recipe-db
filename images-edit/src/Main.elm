@@ -4,7 +4,7 @@ import Accessibility.Role as Role
 import Browser
 import Browser.Navigation as Navigation
 import File exposing (File)
-import Html exposing (Html, a, div, h1, h2, img, input, label, text)
+import Html exposing (Html, a, div, h2, h3, img, input, label, text)
 import Html.Attributes exposing (class, for, hidden, href, id, multiple, src, style, type_)
 import Html.Events exposing (on)
 import Json.Decode as D
@@ -126,13 +126,13 @@ recipeDisplay model =
                         ]
 
                 Nothing ->
-                    h2 [] [ text "Rezept nicht gefunden" ]
+                    h3 [] [ text "Rezept nicht gefunden" ]
 
         RemoteData.Loading ->
-            h2 [] [ text "Lade..." ]
+            h3 [] [ text "Lade..." ]
 
         RemoteData.Failure _ ->
-            h2 [] [ text "Fehler beim Laden" ]
+            h3 [] [ text "Fehler beim Laden" ]
 
         _ ->
             text ""
@@ -140,7 +140,7 @@ recipeDisplay model =
 
 recipeHeading : RecipeDB.RecipeData -> Html Msg
 recipeHeading recipe =
-    h1 [] [ text recipe.name ]
+    h2 [] [ text recipe.name ]
 
 
 recipeThumbnail : RecipeDB.RecipeData -> Html Msg
@@ -150,7 +150,7 @@ recipeThumbnail recipe =
             img [ src thumbUrl, style "max-width" "600px", style "width" "auto" ] []
 
         Nothing ->
-            h2 [] [ text "Kein Bild vorhanden" ]
+            h3 [] [ text "Kein Bild vorhanden" ]
 
 
 backToRecipeLink : Model -> Html Msg
@@ -162,16 +162,16 @@ uploadFeedback : Model -> Html Msg
 uploadFeedback model =
     case model.uploaded of
         RemoteData.Success True ->
-            h2 [] [ text "Bild hochgeladen" ]
+            h3 [] [ text "Bild hochgeladen" ]
 
         RemoteData.Success False ->
-            h2 [] [ text "Fehler beim Hochladen" ]
+            h3 [] [ text "Fehler beim Hochladen" ]
 
         RemoteData.Loading ->
-            h2 [] [ text "Lade hoch..." ]
+            h3 [] [ text "Lade hoch..." ]
 
         RemoteData.Failure _ ->
-            h2 [] [ text "Fehler beim Hochladen" ]
+            h3 [] [ text "Fehler beim Hochladen" ]
 
         _ ->
             text ""

@@ -43,7 +43,7 @@ vscode:
       - match: "nginx.conf"
         cmd: sudo /etc/init.d/nginx reload
         event: onFileChange
-      - match: "\\.css"
+      - match: "(\\.css|components\/.*)"
         cmd: cd ${workspaceRoot} && pnpm build && distribute-styling "${workspaceRoot}/dist"
         event: onFileChange
   extensions:
