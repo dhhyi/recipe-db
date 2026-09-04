@@ -20,6 +20,7 @@
   "devDependencies": {
     "@storybook/web-components-vite": "^10.5.10",
     "@tailwindcss/vite": "^4.3.3",
+    "eslint": "^10.9.1",
     "eslint-plugin-storybook": "^10.5.10",
     "http-server": "^14.1.1",
     "storybook": "^10.5.10",
