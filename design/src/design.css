@@ -134,3 +134,7 @@ article {
 
 /* Width/Height */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{w,h,min-w,max-w,min-h,max-h}-{0,1,2,3,5,8,13,full,screen}{,!}");
+
+header-component {
+  display: contents;
+}

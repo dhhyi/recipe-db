@@ -1,12 +1,7 @@
 package components
 
 templ header() {
-	<header class="p-2 sticky top-0 z-10" style="background-color: var(--pico-background-color);">
-		<a class="flex flex-row gap-2" href="/">
-			<img height class="h-8 pb-2" src="/design/chefs-hat.svg" alt=""/>
-			<h1>Rezeptdatenbank</h1>
-		</a>
-	</header>
+	<header-component></header-component>
 }
 
 templ Layout(title string) {
@@ -17,6 +12,7 @@ templ Layout(title string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ title }</title>
 			<link rel="stylesheet" href="/design/styles.css"/>
+			<script type="module" src="/design/components.js"></script>
 			<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
 		</head>
 		<body class="container flex flex-col">
