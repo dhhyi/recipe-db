@@ -9,12 +9,12 @@ devcontainer:
     packages:
       - nginx
       - libnginx-mod-http-perl
+    args:
+      NGINX_FORMATTER_VERSION: "2.3.0"
     root:
-      - >-
-        RUN wget https://github.com/soulteary/nginx-formatter/releases/download/v1.1.1/nginx-formatter_1.1.1_linux_amd64.tar.gz -O /tmp/nginx-formatter.tar.gz &&
-        tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp &&
-        mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter &&
-        rm /tmp/nginx-formatter.tar.gz
+      - ADD https://github.com/soulteary/nginx-formatter/releases/download/v${NGINX_FORMATTER_VERSION}/nginx-formatter_${NGINX_FORMATTER_VERSION}_linux_amd64.tar.gz /tmp/nginx-formatter.tar.gz
+      - RUN tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp
+        && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
       - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
     files:
       - type: script
@@ -75,11 +75,10 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
-# TODO: activate lint
 precommit: |
   npm --version
   npx storybook --version
-  # nginx-formatter -indent=4
+  nginx-formatter -indent=4
   npm run build
 prettier:
   ignore:
