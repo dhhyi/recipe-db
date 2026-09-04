@@ -50,7 +50,7 @@ Parts with heavy interaction like the pages for adding and editing recipes will 
 
 ### Style
 
-If possible, consistent styling with [Tailwind CSS](https://tailwindcss.com/).
+Consistent styling including shared Web Components, see [`design`](./design)
 
 ## Backend
 
