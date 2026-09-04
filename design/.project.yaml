@@ -79,6 +79,7 @@ precommit: |
   npm --version
   npx storybook --version
   nginx-formatter -indent=4
+  npm run lint -- --fix
   npm run build
 prettier:
   ignore:
