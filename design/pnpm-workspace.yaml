@@ -1,2 +1,5 @@
+# pnpm 11 only reads storeDir from here, not from .npmrc - keep it project-local so it can be a named volume
+storeDir: .pnpm-store
+packageImportMethod: copy
 allowBuilds:
   esbuild: true

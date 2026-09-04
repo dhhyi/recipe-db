@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://javascript-pnpm
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-design
@@ -9,6 +9,8 @@ devcontainer:
     packages:
       - nginx
       - libnginx-mod-http-perl
+      # official node >=25 linux binaries are linked against libatomic
+      - libatomic1
     args:
       NGINX_FORMATTER_VERSION: "2.3.0"
     root:
@@ -25,6 +27,9 @@ devcontainer:
           input="$1"
           rm -rf "$target"/*
           cp -Rfv "$input"/* "$target"/
+    user:
+      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
+      - RUN mise use -g node@26 npm:pnpm@11
   initialize: |
     sudo /etc/init.d/nginx start
     sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf
@@ -50,13 +55,15 @@ vscode:
     - johnpapa.vscode-peacock
     - appulate.filewatcher
     - esbenp.prettier-vscode
+    - nicoespeon.abracadabra
+    - MylesMurphy.prettify-ts
 extras:
   - named-volumes
   - traefik
   - tmux
 namedVolumes:
   node_modules: recipe-db-design-node-modules
-  /home/pnpm: recipe-db-pnpm-store
+  .pnpm-store: recipe-db-design-pnpm-store
 traefik:
   network: intranet
   labels:
@@ -76,11 +83,11 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 precommit: |
-  npm --version
-  npx storybook --version
+  pnpm --version
+  pnpm exec storybook --version
   nginx-formatter -indent=4
-  npm run lint -- --fix
-  npm run build
+  pnpm lint --fix
+  pnpm build
 prettier:
   ignore:
     - nginx.conf
