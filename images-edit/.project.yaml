@@ -1,9 +1,11 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://elm
+extends: dcc://debian
 devcontainer:
   build:
     packages:
       - nginx
+      # official node >=25 linux binaries are linked against libatomic
+      - libatomic1
     args:
       NGINX_FORMATTER_VERSION: "2.3.0"
     root:
@@ -11,6 +13,9 @@ devcontainer:
       - RUN tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp
         && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
       - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
+    user:
+      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
+      - RUN mise use -g node@26 npm:pnpm@11
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-images-edit
     labels:
@@ -24,31 +29,35 @@ devcontainer:
     sudo ln -sf ${containerWorkspaceFolder}/index.html /usr/share/nginx/html/index.html
     sudo /etc/init.d/nginx start
     cd ${containerWorkspaceFolder}
-    npm install
-    npm run codegen
-    elm make src/Main.elm --output /usr/share/nginx/html/elm.js
+    pnpm install
+    pnpm codegen
+    pnpm build && cp -f elm.js /usr/share/nginx/html/elm.js
 vscode:
   settings:
     peacock.remoteColor: "#995d51"
+    "[elm]":
+      editor.defaultFormatter: elmTooling.elm-ls-vscode
     filewatcher.commands:
       - match: "\\.elm"
-        cmd: cd ${workspaceRoot} && elm make src/Main.elm --output /usr/share/nginx/html/elm.js
+        cmd: cd ${workspaceRoot} && pnpm build && cp -fv elm.js /usr/share/nginx/html/elm.js
         event: onFileChange
       - match: "nginx.conf"
         cmd: sudo /etc/init.d/nginx reload
         event: onFileChange
       - match: "\\.graphql"
-        cmd: cd ${workspaceRoot} && npm run codegen
+        cmd: cd ${workspaceRoot} && pnpm codegen
         event: onFolderChange
   extensions:
     - johnpapa.vscode-peacock
     - appulate.filewatcher
     - GraphQL.vscode-graphql
+    - elmTooling.elm-ls-vscode
 extras:
   - traefik
   - named-volumes
 namedVolumes:
   $HOME/.elm: recipe-db-images-edit-elm-cache
+  .pnpm-store: recipe-db-images-edit-pnpm-store
   node_modules: recipe-db-images-edit-node-modules
   elm-stuff: recipe-db-images-edit-elm-stuff
 traefik:
@@ -75,10 +84,10 @@ prettier:
     - nginx.conf
     - elm.json
 precommit: |
-  elm --version
+  pnpm exec elm --version
   nginx-formatter -indent=4
   npx prettier --tab-width 4 --print-width 10 --ignore-path /dev/null --write elm.json
-  elm-format --yes .
-  npm run codegen
-  elm make src/Main.elm --output /dev/null
-  npm run lint
+  pnpm exec elm-format --yes .
+  pnpm codegen
+  pnpm build
+  pnpm lint

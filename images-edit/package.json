@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "scripts": {
     "codegen": "elm-graphql --schema-file recipe-db.graphqls",
+    "build": "elm make src/Main.elm --output elm.js",
     "lint": "elm-review --ignore-dirs src/Api"
   },
-  "dependencies": {
-    "@dillonkearns/elm-graphql": "^4.3.1",
-    "elm": "^0.19.1-5"
-  },
   "devDependencies": {
+    "@dillonkearns/elm-graphql": "^4.3.1",
+    "elm": "0.19.2-0",
+    "elm-format": "^0.8.7",
     "elm-review": "^2.10.3"
   }
 }
