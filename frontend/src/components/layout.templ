@@ -1,9 +1,5 @@
 package components
 
-templ header() {
-	<header-component></header-component>
-}
-
 templ Layout(title string) {
 	<!DOCTYPE html>
 	<html lang="de">
@@ -15,9 +11,11 @@ templ Layout(title string) {
 			<script type="module" src="/design/components.js"></script>
 			<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
 		</head>
-		<body class="container flex flex-col">
-			@header()
-			{ children... }
+		<body class="container">
+			<header-component></header-component>
+			<main>
+				{ children... }
+			</main>
 		</body>
 	</html>
 }

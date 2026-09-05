@@ -24,22 +24,6 @@ JavaScript build tooling (root-level, .scripts folder) will be replaced with Baz
 
 The frontend should have a consistent and visually appealing design, leveraging the shared UI component library implemented with Lit web components, Blades CSS, and Tailwind CSS for spacing and layout. Storybook will be used for documenting and testing the components.
 
-### Accessibility structure
-
-Give every user-facing page a page-specific `<h1>` inside a `<main>` landmark,
-with matching, route-specific document titles. Keep “Rezeptdatenbank” as a
-shared linked brand rather than a heading. Apply this consistently to the
-overview, recipe detail, image editor, and replacement recipe editor; render
-loading, success, and error feedback as live status messages instead of
-headings.
-
-Examples:
-
-- Overview: `<title>Alle Rezepte | RezeptDB</title>` and `<h1>Alle Rezepte</h1>`
-- Recipe detail: `<title>Milchreis | RezeptDB</title>` and `<h1>Milchreis</h1>`
-- Image editor: `<title>Bild für Milchreis bearbeiten | RezeptDB</title>` and
-  `<h1>Bild für Milchreis bearbeiten</h1>`
-
 ### Recipe editor
 
 Replace `recipes-edit`, which is runtime-heavy and difficult to customize,
