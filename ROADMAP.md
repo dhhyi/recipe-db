@@ -44,3 +44,18 @@ Examples:
 
 Replace `recipes-edit`, which is runtime-heavy and difficult to customize,
 with an editor based on [Sky](https://sky-lang.org/).
+
+## Image handling
+
+### More specific image information
+
+Image metadata from the images backend should include width, height, and aspect ratio so that the frontend can render images with the correct aspect ratio without loading the image first.
+Thumbnails are now used by default and have a width of 650px, which is arguably too large for a thumbnail. For overview pages, a thumbnail width of 300px is more appropriate.
+
+### Better image editor
+
+The images frontend should be the only place where the full-size image is loaded, along with a crop overlay that lets the user select the crop area.
+
+### Placeholder images
+
+Frontend apps that load images should use a correctly sized placeholder while loading and also support a placeholder when an image is unavailable. The placeholder could be a blurred version of the image, and it can later be replaced with a higher-quality version once the image is scrolled into view.
