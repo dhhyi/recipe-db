@@ -131,10 +131,16 @@ article {
 
 /* Text util */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}text-{left,center,right,justify,start,end}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{no-underline,undeline,line-through}{,!}");
 
 /* Width/Height */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{w,h,min-w,max-w,min-h,max-h}-{0,1,2,3,5,8,13,full,screen}{,!}");
 
 header-component {
   display: contents;
+}
+
+.recipe-thumbnail {
+  margin: 0 auto;
+  max-width: min(650px, 100%);
 }

@@ -36,21 +36,20 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 	{{ recipe := resp.Recipe }}
 	<div class="flex flex-col sm:flex-row pt-1">
 		<hgroup>
-			<h2>{ recipe.Name }</h2>
+			<h1>{ recipe.Name }</h1>
 			@Rating(recipe.Rating)
 		</hgroup>
 		@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)
 	</div>
-	<p class="contents">
+	<figure class="contents!">
 		<img
-			class="md:self-center pb-3"
-			style="max-width: 650px;"
+			class="recipe-thumbnail"
 			src={ recipe.Image.ThumbUrl }
 			alt={ recipe.Name }
 		/>
-	</p>
+	</figure>
 	if len(recipe.Ingredients) > 0 {
-		<h3>Zutaten</h3>
+		<h2>Zutaten</h2>
 		<table>
 			<thead>
 				<tr>
@@ -76,11 +75,11 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		</table>
 	}
 	if len(recipe.Method) > 0 {
-		<h3>Zubereitung</h3>
+		<h2>Zubereitung</h2>
 		@templ.Raw(util.ToMarkDown(recipe.Method))
 	}
 	if len(recipe.Inspirations) > 0 {
-		<h3>Inspirationen</h3>
+		<h2>Inspirationen</h2>
 		<ul class="markerless">
 			for _, insp := range recipe.Inspirations {
 				<li>
@@ -89,5 +88,5 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 			}
 		</ul>
 	}
-	<button onclick="history.back()">Back</button>
+	<button onclick="history.back()">Zurück</button>
 }
