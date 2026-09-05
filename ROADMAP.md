@@ -43,3 +43,15 @@ The images frontend should be the only place where the full-size image is loaded
 ### Placeholder images
 
 Frontend apps that load images should use a correctly sized placeholder while loading and also support a placeholder when an image is unavailable. The placeholder could be a blurred version of the image, and it can later be replaced with a higher-quality version once the image is scrolled into view.
+
+## Misc
+
+### Check caching of devcontainers
+
+The build scripts simplify the devcontainers by inserting the image instead of the build in de devcontainer.json. Normally Cache-Form should take care of that
+
+### better tailwind support 
+
+It would be great to use the tailwind VSCode extension in projects to have support for the classes.
+
+it would also be great if the tailwind tree shaking step could be used to minify the resulting style file.
