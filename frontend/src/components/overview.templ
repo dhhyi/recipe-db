@@ -20,5 +20,10 @@ templ Overview(resp *gql.OverviewResponse) {
 		for _, recipe := range resp.Recipes {
 			@recipeTile(recipe)
 		}
+		if resp.RecipeEditOnline {
+			<a href="/edit/new" class="contents" aria-label="Neues Rezept hinzufügen">
+				<article class="flex items-center justify-center" style="font-size: 3rem; text-decoration: none;">+</article>
+			</a>
+		}
 	</div>
 }
