@@ -4,8 +4,8 @@ import Accessibility.Role as Role
 import Browser
 import Browser.Navigation as Navigation
 import File exposing (File)
-import Html exposing (Html, a, div, h2, h3, img, input, label, text)
-import Html.Attributes exposing (class, for, hidden, href, id, multiple, src, style, type_)
+import Html exposing (Html, a, div, figure, h1, img, input, label, p, text)
+import Html.Attributes exposing (attribute, class, for, hidden, href, id, multiple, src, style, type_)
 import Html.Events exposing (on)
 import Json.Decode as D
 import RecipeDB
@@ -31,6 +31,12 @@ type Msg
 
 type alias Flags =
     { recipeId : String }
+
+
+type Feedback
+    = Success String
+    | Failure String
+    | Loading String
 
 
 
@@ -107,74 +113,83 @@ main =
 
 view : Model -> Html Msg
 view model =
-    div [ class "flex flex-col gap-1" ]
-        [ recipeDisplay model
-        , uploadFeedback model
-        , interactions model
-        ]
+    Html.main_ []
+        (recipeDisplay model
+            ++ uploadFeedback model
+            ++ [ interactions model ]
+        )
 
 
-recipeDisplay : Model -> Html Msg
+feedback : Feedback -> Html Msg
+feedback f =
+    case f of
+        Success message ->
+            p [ Role.alert, class "pt-2", style "color" "var(--pico-ins-color)" ] [ text message ]
+
+        Failure message ->
+            p [ Role.alert, class "pt-2", style "color" "var(--pico-del-color)" ] [ text message ]
+
+        Loading message ->
+            p [ class "pt-2", attribute "aria-busy" "true" ] [ text message ]
+
+
+recipeDisplay : Model -> List (Html Msg)
 recipeDisplay model =
     case model.recipe of
         RemoteData.Success maybeRecipe ->
             case maybeRecipe of
                 Just recipe ->
-                    div [ class "contents" ]
-                        [ recipeHeading recipe
-                        , recipeThumbnail recipe
-                        ]
+                    [ recipeHeading recipe
+                    , recipeThumbnail recipe
+                    ]
 
                 Nothing ->
-                    h3 [] [ text "Rezept nicht gefunden" ]
+                    [ feedback (Failure "Rezept nicht gefunden") ]
 
         RemoteData.Loading ->
-            h3 [] [ text "Lade..." ]
+            [ feedback (Loading "Lade...") ]
 
         RemoteData.Failure _ ->
-            h3 [] [ text "Fehler beim Laden" ]
+            [ feedback (Failure "Fehler beim Laden") ]
 
         _ ->
-            text ""
+            []
 
 
 recipeHeading : RecipeDB.RecipeData -> Html Msg
 recipeHeading recipe =
-    h2 [] [ text recipe.name ]
+    h1 [] [ text ("Bild für " ++ recipe.name ++ " bearbeiten") ]
 
 
 recipeThumbnail : RecipeDB.RecipeData -> Html Msg
 recipeThumbnail recipe =
     case recipe.thumbUrl of
         Just thumbUrl ->
-            img [ src thumbUrl, style "max-width" "600px", style "width" "auto" ] []
+            figure [ class "contents!" ]
+                [ img [ src thumbUrl, class "recipe-thumbnail" ] []
+                ]
 
         Nothing ->
-            h3 [] [ text "Kein Bild vorhanden" ]
+            feedback (Failure "Kein Bild vorhanden")
 
 
-backToRecipeLink : Model -> Html Msg
-backToRecipeLink model =
-    a [ href ("/recipe/" ++ model.recipeId), Role.button, class "secondary" ] [ text "Abbrechen" ]
-
-
-uploadFeedback : Model -> Html Msg
+uploadFeedback : Model -> List (Html Msg)
 uploadFeedback model =
     case model.uploaded of
         RemoteData.Success True ->
-            h3 [] [ text "Bild hochgeladen" ]
+            [ feedback (Success "Bild hochgeladen") ]
 
         RemoteData.Success False ->
-            h3 [] [ text "Fehler beim Hochladen" ]
+            [ feedback (Failure "Fehler beim Hochladen") ]
 
         RemoteData.Loading ->
-            h3 [] [ text "Lade hoch..." ]
+            [ feedback (Loading "Lade hoch...") ]
 
         RemoteData.Failure _ ->
-            h3 [] [ text "Fehler beim Hochladen" ]
+            [ feedback (Failure "Fehler beim Hochladen") ]
 
         _ ->
-            text ""
+            []
 
 
 uploadImageButton : Model -> Html Msg
@@ -197,9 +212,14 @@ uploadImageButton _ =
         ]
 
 
+backToRecipeLink : Model -> Html Msg
+backToRecipeLink model =
+    a [ href ("/recipe/" ++ model.recipeId), Role.button, class "secondary" ] [ text "Abbrechen" ]
+
+
 interactions : Model -> Html Msg
 interactions model =
-    div [ class "flex flex-row gap-2 sm:gap-5 md:gap-13" ]
+    p [ class "pt-3 grid" ]
         [ uploadImageButton model
         , backToRecipeLink model
         ]
