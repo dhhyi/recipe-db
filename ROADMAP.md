@@ -24,11 +24,6 @@ JavaScript build tooling (root-level, .scripts folder) will be replaced with Baz
 
 The frontend should have a consistent and visually appealing design, leveraging the shared UI component library implemented with Lit web components, Blades CSS, and Tailwind CSS for spacing and layout. Storybook will be used for documenting and testing the components.
 
-### Recipe editor
-
-Replace `recipes-edit`, which is runtime-heavy and difficult to customize,
-with an editor based on [Sky](https://sky-lang.org/).
-
 ## Image handling
 
 ### More specific image information

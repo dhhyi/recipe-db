@@ -91,31 +91,32 @@ article {
   --spacing-5: 1.618rem;
   --spacing-8: 2.618rem;
   --spacing-13: 4.236rem;
+  --spacing-21: 6.854rem;
 }
 
 /* Story classes arrive at runtime via args, so nothing to scan; generate them explicitly. */
 
 /* Padding/Margin */
-@source inline("{,sm:,md:,lg:,xl:,xxl:}{p,px,py,pt,pr,pb,pl,m,mx,my,mt,mr,mb,ml,gap}-{0,1,2,3,5,8,13,auto}{,!}");
-@source inline("{,sm:,md:,lg:,xl:,xxl:}gap-{x,y}-{0,1,2,3,5,8,13}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{p,px,py,pt,pr,pb,pl,m,mx,my,mt,mr,mb,ml,gap}-{0,1,2,3,5,8,13,21,auto}{,!}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}gap-{x,y}-{0,1,2,3,5,8,13,21}");
 
 /* Layout */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{block,inline-block,inline,flex,inline-flex,grid,inline-grid,flow-root,contents,hidden,table,table-row,table-cell,list-item}{,!}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}container");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{static,relative,absolute,fixed,sticky}");
-@source inline("{,sm:,md:,lg:,xl:,xxl:}{top,right,bottom,left}-{0,1,2,3,5,8,13}{,!}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{top,right,bottom,left}-{0,1,2,3,5,8,13,21}{,!}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}z-{0,10,20,30,40,50}{,!}");
 
 /* Flexbox */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}flex-{row,row-reverse,col,col-reverse,wrap,wrap-reverse,nowrap,1,auto,initial,none}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{grow,shrink}{,-0}");
-@source inline("{,sm:,md:,lg:,xl:,xxl:}basis-{0,1,2,3,5,8,13,auto,full}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}basis-{0,1,2,3,5,8,13,21,auto,full}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}order-{1,2,3,4,5,6,first,last,none}");
 
 /* Grid */
 @source inline("{,sm:,md:,lg:,xl:,xxl:}grid-{cols,rows}-{1,2,3,4,5,6,7,8,9,10,11,12,none,subgrid}{,!}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-span-{1,2,3,4,5,6,7,8,9,10,11,12,full}");
-@source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-{start,end}-{1,2,3,4,5,6,7,8,9,10,11,12,13,auto}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{col,row}-{start,end}-{1,2,3,4,5,6,7,8,9,10,11,12,13,21,auto}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}grid-flow-{row,col,dense,row-dense,col-dense}");
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{auto-cols,auto-rows}-{auto,min,max,fr}");
 
@@ -134,7 +135,7 @@ article {
 @source inline("{,sm:,md:,lg:,xl:,xxl:}{no-underline,undeline,line-through}{,!}");
 
 /* Width/Height */
-@source inline("{,sm:,md:,lg:,xl:,xxl:}{w,h,min-w,max-w,min-h,max-h}-{0,1,2,3,5,8,13,full,screen}{,!}");
+@source inline("{,sm:,md:,lg:,xl:,xxl:}{w,h,min-w,max-w,min-h,max-h}-{0,1,2,3,5,8,13,21,full,screen}{,!}");
 
 header-component {
   display: contents;

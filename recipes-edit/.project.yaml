@@ -1,40 +1,52 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://kotlin
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-recipes-edit
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    packages:
+      - build-essential
+      - pkg-config
+      - libssl-dev
+      - musl-tools
     user:
-      - RUN mise use -g java@17
-      - RUN echo "alias gradle='./gradlew --no-daemon'" | tee -a /home/vscode/.bashrc /home/vscode/.zshrc
+      - RUN mise use -g rust@1.98.0
+      - RUN rustup target add wasm32-unknown-unknown x86_64-unknown-linux-musl
+      - RUN mise use -g cargo:cargo-leptos@0.3.7
+      - RUN mise use -g cargo:leptosfmt
   ports:
-    - 4000
-  environment:
-    TESTING: "true"
-    GRAPHQL_ENDPOINT: http://traefik/graphql
-    CONTEXT_PATH: /edit
-  initialize: ./gradlew --no-daemon tasks
+    - 3000
+  initialize: cargo fetch
 vscode:
   settings:
-    # gradle.autoDetect: "off"
-    peacock.remoteColor: "#ea0ff2"
+    peacock.remoteColor: "#cfcfcf"
+    "[rust]":
+      editor.defaultFormatter: rust-lang.rust-analyzer
   extensions:
     - johnpapa.vscode-peacock
+    - rust-lang.rust-analyzer
     - GraphQL.vscode-graphql
-    # - vscjava.vscode-gradle
+  tasks:
+    - label: Run watch server
+      command: cargo leptos watch
 extras:
   - traefik
   - named-volumes
 namedVolumes:
-  $HOME/.gradle: recipe-db-recipes-edit-gradle-user-home
-  $HOME/.vaadin: recipe-db-recipes-edit-vaadin-user-home
-  .gradle: recipe-db-recipes-edit-gradle
+  $HOME/.cargo/registry: recipe-db-recipes-edit-cargo-registry
+  $HOME/.cargo/git: recipe-db-recipes-edit-cargo-git
+  target: recipe-db-recipes-edit-target
 traefik:
   network: intranet
   labels:
     http:
+      middlewares:
+        recipes-edit-strip:
+          stripPrefix:
+            prefixes:
+              - /edit
       services:
         recipe-db-recipes-edit:
           loadBalancer:
@@ -46,17 +58,21 @@ traefik:
         recipes-edit:
           rule: PathPrefix(`/edit`)
           entrypoints: web
+          middlewares: recipes-edit-strip
+        recipes-edit-assets:
+          rule: PathPrefix(`/pkg`)
+          entrypoints: web
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 precommit: |
-  ./gradlew --version
-  ktfmt src build.gradle.kts
-  ./gradlew --no-daemon compileKotlin detekt
+  cargo --version
+  leptosfmt src/app.rs
+  cargo fmt
+  cargo clippy --all-targets -- -D warnings
+  cargo build
 prettier:
   ignore:
-    - ROOT
-    - "*.kt"
-    - "*.kts"
-    - "*.jar"
-    - "*.png"
+    - "*.rs"
+    - Cargo.toml
+    - Cargo.lock
