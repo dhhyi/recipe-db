@@ -19,6 +19,7 @@ query Overview {
   recipes {
     ...RecipeStub
   }
+  recipeEditOnline: isServiceOnline(name: "recipes-edit")
 }
 
 fragment InspirationsLink on Link {
