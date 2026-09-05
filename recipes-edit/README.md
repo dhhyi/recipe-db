@@ -1,3 +1,5 @@
 # Recipe Adding and Editing
 
-Implemented in [Vaadin](https://vaadin.com/) via [Kotlin](https://vaadin.com/docs/v14/flow/guide/start/kotlin) with [Gradle](https://gradle.org/) build tool and [Spring Boot](https://spring.io/projects/spring-boot) for app startup.
+Implemented in Rust with [Leptos](https://leptos.dev/) (server-side rendering + hydration via [axum](https://github.com/tokio-rs/axum)), built with [cargo-leptos](https://github.com/leptos-rs/cargo-leptos).
+
+This is currently a starter scaffold with a counter; the recipe form itself is still to be implemented.

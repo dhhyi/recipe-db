@@ -27,6 +27,7 @@ devcontainer:
           input="$1"
           rm -rf "$target"/*
           cp -Rfv "$input"/* "$target"/
+          sudo /etc/init.d/nginx restart
     user:
       # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
       - RUN mise use -g node@26 npm:pnpm@11
