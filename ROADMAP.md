@@ -43,3 +43,31 @@ The images frontend should be the only place where the full-size image is loaded
 ### Placeholder images
 
 Frontend apps that load images should use a correctly sized placeholder while loading and also support a placeholder when an image is unavailable. The placeholder could be a blurred version of the image, and it can later be replaced with a higher-quality version once the image is scrolled into view.
+
+## Misc
+
+### Check caching of devcontainers
+
+The build scripts simplify the devcontainers by inserting the image instead of the build in de devcontainer.json. Normally Cache-Form should take care of that
+
+### better tailwind support
+
+It would be great to use the tailwind VSCode extension in projects to have support for the classes.
+
+it would also be great if the tailwind tree shaking step could be used to minify the resulting style file.
+
+### Recipe update optional
+
+Optional fields in recipe updates should not overwrite if they are not supplied. maybe use PATCH?
+
+### Recipe empty name error
+
+Update with an empty name currently propagates 400 to the client, but it should be proper graphql error that is then displayed by the recipe-edit frontend.
+
+### Demo data handling
+
+Project demo-data should not be deployed to the stack but instead be runnable via script (in-devcontainer) as it currently pulls up the whole stack when the container is added.
+
+### Distributing graphql schema
+
+GraphQL schema files are currently copied into the projects that need it via a `.needs-graphql-schema` file. This should be replaced with a property in `.project.yaml` files. The type of this property should be string and it should be the relative target where this file is copied to. i.e. `graphqlSchema: "."` or `graphqlSchema: "src/graphql"`.
