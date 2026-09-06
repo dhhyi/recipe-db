@@ -16,6 +16,8 @@ Required for running anything:
 
 Run `npm run generate-docker-compose` and `docker compose up`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
 
+To supply your own recipes, you can use the [demo-data project](demo-data/README.md) to generate demo recipes, ratings, inspirations and images via the GraphQL API.
+
 Required for development:
 
 - pnpm (`npm i -g pnpm`)
@@ -141,7 +143,7 @@ Maybe later.
 - custom precommit
 - prettier as formatter for general
 - testing with integration test projects
-- demo-data project
+- [demo-data project](demo-data/README.md)
 
 ## List of possible REST API testing frameworks
 

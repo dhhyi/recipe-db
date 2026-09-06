@@ -1,15 +1,9 @@
-FROM python:3-slim-bookworm AS base
+FROM python:3-slim-bookworm
 
-RUN apt-get update && apt-get install -y cron tini && apt-get clean
 RUN pip install ariadne-codegen
 
 WORKDIR /app
 COPY *.graphql *.py *.toml *.sh recipe* /app/
-RUN chmod +x /app/start.sh
+RUN chmod +x /app/generate.sh
 
-CMD [ "tini", "--", "/bin/sh", "/app/start.sh" ]
-
-FROM base AS production
-
-FROM base
-ENV RESET_CRONTAB="@reboot"
+CMD [ "/app/generate.sh" ]

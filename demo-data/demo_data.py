@@ -47,6 +47,27 @@ async def delete_everything():
     print(f"-> {result}")
 
 
+async def has_existing_recipes():
+    result = await client.recipes()
+    return bool(result.recipes)
+
+
+def confirm_delete():
+    if os.getenv("FORCE_DELETE"):
+        print("FORCE_DELETE set, deleting existing recipe data without confirmation")
+        return
+
+    if not sys.stdin.isatty():
+        print("Existing recipe data found, refusing to delete non-interactively.")
+        print("Set FORCE_DELETE=1 to delete without confirmation.")
+        sys.exit(1)
+
+    answer = input("Existing recipe data found. Delete it and continue? [y/N] ")
+    if answer.strip().lower() not in ("y", "yes"):
+        print("Aborting")
+        sys.exit(1)
+
+
 async def add_recipe(recipe):
     print(f"Adding recipe {recipe['name']}")
     result = await client.add_recipe(recipe)
@@ -119,6 +140,8 @@ async def main():
 
         args = sys.argv[1:]
         if len(args) == 1 and args[0] == "--delete":
+            if await has_existing_recipes():
+                confirm_delete()
             await delete_everything()
 
         recipe_id = await insert_recipe(1)
