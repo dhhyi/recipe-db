@@ -1,6 +1,11 @@
 const path = require("path");
 const fs = require("fs");
-const { projectRoot, checkInstallDependencies } = require("./shared");
+const {
+  projectRoot,
+  getAvailableProjects,
+  getProjectConfig,
+  checkInstallDependencies,
+} = require("./shared");
 
 checkInstallDependencies();
 
@@ -14,12 +19,17 @@ const loadedFiles = loadFilesSync(
 const typeDefs = mergeTypeDefs(loadedFiles);
 const printedTypeDefs = print(typeDefs);
 
-const glob = require("glob");
-glob
-  .sync(path.join(projectRoot, "**/.needs-graphql-schema"))
-  .forEach((file) => {
-    const dir = path.dirname(file);
-    const schemaPath = path.join(dir, "recipe-db.graphqls");
+getAvailableProjects()
+  .map((project) => ({ project, config: getProjectConfig(project) }))
+  .filter(({ config }) => config.graphqlSchema)
+  .forEach(({ project, config }) => {
+    const outputDirectory = path.join(
+      projectRoot,
+      project,
+      config.graphqlSchema,
+    );
+    fs.mkdirSync(outputDirectory, { recursive: true });
+    const schemaPath = path.join(outputDirectory, "recipe-db.graphqls");
     console.log(
       "Writing merged schema to " + schemaPath.replace(projectRoot + "/", ""),
     );
