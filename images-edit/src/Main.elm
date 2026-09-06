@@ -4,7 +4,7 @@ import Accessibility.Role as Role
 import Browser
 import File exposing (File)
 import Html exposing (Html, a, div, figure, h1, img, input, label, p, text)
-import Html.Attributes exposing (attribute, class, for, hidden, href, id, multiple, src, style, type_)
+import Html.Attributes exposing (attribute, class, for, hidden, href, id, multiple, src, type_)
 import Html.Events exposing (on)
 import Json.Decode as D
 import Maybe.Extra exposing (toList)
@@ -117,10 +117,10 @@ feedback : Feedback -> Html Msg
 feedback f =
     case f of
         Success message ->
-            p [ Role.alert, class "pt-2", style "color" "var(--pico-ins-color)" ] [ text message ]
+            p [ class "feedback success", Role.alert ] [ text message ]
 
         Failure message ->
-            p [ Role.alert, class "pt-2", style "color" "var(--pico-del-color)" ] [ text message ]
+            p [ class "feedback error", Role.alert ] [ text message ]
 
 
 recipeDisplay : Model -> List (Html Msg)

@@ -392,8 +392,8 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
             }}
 
             {move || match save_pending.value().get() {
-                Some(Ok(())) => view! { <p>"Gespeichert."</p> }.into_any(),
-                Some(Err(error)) => view! { <p>{error.to_string()}</p> }.into_any(),
+                Some(Ok(())) => view! { <p class="feedback success" role="alert">"Gespeichert"</p> }.into_any(),
+                Some(Err(error)) => view! { <p class="feedback error" role="alert">{error.to_string()}</p> }.into_any(),
                 None => ().into_any(),
             }}
 
