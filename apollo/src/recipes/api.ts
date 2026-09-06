@@ -1,8 +1,23 @@
 import { RESTDataSource } from "@apollo/datasource-rest";
-import { type GraphQLError } from "graphql";
+import { GraphQLError } from "graphql";
 
-import { type RecipeInput, type Recipe } from "../generated/graphql.js";
+import { type Recipe, type RecipeInput } from "../generated/graphql.js";
 import { type RecipeHandlers } from "../handlers.js";
+
+// the recipes service rejects a missing/empty name with a 400 - surface it as a field validation error
+function rethrowAsValidationError(err: GraphQLError): never {
+  const response = err.extensions?.response as
+    { status: number; body?: { message?: string } } | undefined;
+  if (
+    response?.status === 400 &&
+    response.body?.message === "Missing field value for name"
+  ) {
+    throw new GraphQLError(response.body.message, {
+      extensions: { code: "BAD_USER_INPUT", field: "name" },
+    });
+  }
+  throw err;
+}
 
 export class RecipesAPI extends RESTDataSource {
   constructor() {
@@ -36,7 +51,9 @@ export class RecipesAPI extends RESTDataSource {
       }
     }
 
-    const recipe = await this.post("", { body: recipeBase });
+    const recipe = await this.post("", { body: recipeBase }).catch(
+      rethrowAsValidationError,
+    );
     const id = recipe.id;
 
     for (const key in handlers) {
@@ -64,7 +81,9 @@ export class RecipesAPI extends RESTDataSource {
       }
     }
 
-    return await this.patch(id, { body: recipeBase });
+    return await this.patch(id, { body: recipeBase }).catch(
+      rethrowAsValidationError,
+    );
   }
 
   async deleteRecipe(id: string): Promise<boolean> {

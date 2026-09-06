@@ -98,9 +98,10 @@ Feature: recipes
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: <name> } } }
     * method post
     * status 200
-    * match response.errors[0].message == '400: Bad Request'
-    * match response.errors[0].extensions.response.body.message == 'Missing field value for name'
-    * match response.errors[0].extensions.response.url contains '/recipes'
+    * match response.data.createRecipe == null
+    * match response.errors[0].message == 'Missing field value for name'
+    * match response.errors[0].extensions.code == 'BAD_USER_INPUT'
+    * match response.errors[0].extensions.field == 'name'
 
     Examples:
       | name |
@@ -117,9 +118,10 @@ Feature: recipes
     * request { query: '#(read("graphql/update-recipe.graphql"))', variables: { id: '#(recipeId)', value: { name: <name> } } }
     * method post
     * status 200
-    * match response.errors[0].message == '400: Bad Request'
-    * match response.errors[0].extensions.response.body.message == 'Missing field value for name'
-    * match response.errors[0].extensions.response.url contains '/recipes'
+    * match response.data.updateRecipe == null
+    * match response.errors[0].message == 'Missing field value for name'
+    * match response.errors[0].extensions.code == 'BAD_USER_INPUT'
+    * match response.errors[0].extensions.field == 'name'
 
     Examples:
       | name |
