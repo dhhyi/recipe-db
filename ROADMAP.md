@@ -50,7 +50,3 @@ Add a `--push-cache` option to Devcontainer Creator. It should build devcontaine
 It would be great to use the tailwind VSCode extension in projects to have support for the classes.
 
 it would also be great if the tailwind tree shaking step could be used to minify the resulting style file.
-
-### Recipe update optional
-
-Optional fields in recipe updates should not overwrite if they are not supplied. maybe use PATCH?
