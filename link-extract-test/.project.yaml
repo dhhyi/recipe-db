@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-link-extract-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - python3
+      - python3-pip
+    user:
+      - RUN python3 -m pip install --user --break-system-packages robotframework robotframework-requests robotframework-tidy
+      - ENV PATH="${HOME}/.local/bin:${PATH}"
+  environment:
+    REST_API: http://traefik:3000
+vscode:
+  settings:
+    peacock.remoteColor: "#305941"
+  extensions:
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+traefik:
+  network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
+precommit: |
+  python3 --version
+  robotidy .
+  robot --dryrun --outputdir target .
+test: sh run-tests.sh
+prettier:
+  ignore:
+    - "*.py"
+    - "*.robot"
+    - target

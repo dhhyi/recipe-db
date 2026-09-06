@@ -1,0 +1,8 @@
+name: link-extract
+version: 0.1.0
+
+targets:
+  link-extract:
+    main: main.cr
+
+crystal: ">= 1.17.0"

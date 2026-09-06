@@ -12,10 +12,6 @@ It's also allowed for the Elm images-edit frontend, since JavaScript is merely t
 
 The Apollo GraphQL server will be replaced with a solution based on Elixir+Absinthe.
 
-### Replace link-extract Deno application
-
-This application will be replaced with a different solution.
-
 ### Replace JavaScript build tools
 
 JavaScript build tooling (root-level, .scripts folder) will be replaced with Bazel build rules and native toolchain integrations.
