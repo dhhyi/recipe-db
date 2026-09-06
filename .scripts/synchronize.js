@@ -202,12 +202,6 @@ function writeDockerIgnores(availableProjects) {
 }
 
 function writeDccFiles(availableProjects) {
-  const gitChanges = cp
-    .execSync("git status --porcelain")
-    .toString()
-    .split("\n")
-    .filter((line) => !!line);
-
   availableProjects.forEach((project) => {
     console.log(`Writing Devcontainer in ${project} ...`);
     const projectFile = languageFile(project);
@@ -220,38 +214,6 @@ function writeDccFiles(availableProjects) {
 
     try {
       cp.execSync(commandLine, { cwd: projectRoot, encoding: "utf8" });
-
-      if (
-        !process.env.CI &&
-        !gitChanges.some((line) => line.endsWith(projectFile))
-      ) {
-        const devcontainerPath = path.join(
-          projectRoot,
-          project,
-          ".devcontainer",
-        );
-        const devcontainerJsonPath = path.join(
-          devcontainerPath,
-          "devcontainer.json",
-        );
-        const devcontainerJson = JSON.parse(
-          fs.readFileSync(devcontainerJsonPath, "utf8"),
-        );
-        const image = getProjectConfig(project).devcontainer.publish.image;
-        if (image) {
-          console.log(`Simplifying devcontainer for ${project} ...`);
-          delete devcontainerJson.build;
-          devcontainerJson.image = image;
-          fs.writeFileSync(
-            devcontainerJsonPath,
-            JSON.stringify(devcontainerJson, null, 2),
-          );
-          const dockerfilePath = path.join(devcontainerPath, "Dockerfile");
-          if (fs.existsSync(dockerfilePath)) {
-            fs.unlinkSync(dockerfilePath);
-          }
-        }
-      }
     } catch (e) {
       console.error(e.output?.join(""));
       console.error(e.message);
