@@ -59,10 +59,6 @@ Optional fields in recipe updates should not overwrite if they are not supplied.
 
 Update with an empty name currently propagates 400 to the client, but it should be proper graphql error that is then displayed by the recipe-edit frontend.
 
-### Demo data handling
-
-Project demo-data should not be deployed to the stack but instead be runnable via script (in-devcontainer) as it currently pulls up the whole stack when the container is added.
-
 ### Distributing graphql schema
 
 GraphQL schema files are currently copied into the projects that need it via a `.needs-graphql-schema` file. This should be replaced with a property in `.project.yaml` files. The type of this property should be string and it should be the relative target where this file is copied to. i.e. `graphqlSchema: "."` or `graphqlSchema: "src/graphql"`.

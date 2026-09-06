@@ -351,12 +351,11 @@ availableProjects.forEach((project) => {
     appendEnvironment(filtered);
   }
 
-  // if (projectConfig.category) {
-  //   if (!service.profiles) {
-  //     service.profiles = [];
-  //   }
-  //   service.profiles.push(projectConfig.category);
-  // }
+  if (categorizedProjects.development.includes(project)) {
+    service.profiles = ["development"];
+    // job-like: run once to completion, never restart (docker equivalent of a k8s Job's restartPolicy: Never)
+    service.restart = "no";
+  }
 
   if (DEV) {
     appendEnvironment({ TESTING: "true" });
@@ -376,9 +375,6 @@ availableProjects.forEach((project) => {
     appendEnvironment({ NODE_ENV: "production" });
   }
 
-  const findServicesExcluding = (projects, exclude) =>
-    projects.filter((service) => !exclude.includes(service));
-
   const dependsOn = (services) =>
     services.reduce((acc, val) => {
       acc[val] = {
@@ -393,15 +389,6 @@ availableProjects.forEach((project) => {
 
   if (PROD && categorizedProjects.api.includes(project)) {
     service.depends_on = dependsOn(["traefik", ...categorizedProjects.backend]);
-  }
-
-  if (DEV && categorizedProjects.development.includes(project)) {
-    service.depends_on = dependsOn(
-      findServicesExcluding(availableDeployProjects, [
-        project,
-        ...categorizedProjects.development,
-      ]),
-    );
   }
 
   if (categorizedProjects.development.includes(project)) {
