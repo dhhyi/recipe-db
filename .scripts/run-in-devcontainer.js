@@ -3,8 +3,18 @@ const fs = require("fs");
 const path = require("path");
 const { languageFile, getProjectConfig, projectRoot } = require("./shared");
 
-const project = process.argv[2];
-const command = process.argv.slice(3);
+const args = process.argv.slice(2);
+let removeAfter = false;
+if (args[0] === "--rm") {
+  removeAfter = true;
+  args.shift();
+}
+const project = args[0];
+if (args[1] === "--rm") {
+  removeAfter = true;
+  args.splice(1, 1);
+}
+const command = args.slice(1);
 
 if (!project) {
   console.error("Missing project name");
@@ -148,7 +158,10 @@ try {
     process.exit(result.status);
   }
 } finally {
-  if (containerId && stopAfter) {
+  if (containerId && removeAfter) {
+    console.log(`Removing container ${containerId}`);
+    cp.execSync(`docker rm -f ${containerId}`);
+  } else if (containerId && stopAfter) {
     console.log(`Stopping container ${containerId}`);
     cp.execSync(`docker stop ${containerId}`);
   } else {
