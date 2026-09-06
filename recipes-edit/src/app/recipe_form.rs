@@ -242,8 +242,7 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
     let inspirations = RwSignal::new(initial.inspirations);
     let ingredients = RwSignal::new(initial.ingredients);
     let navigate = use_navigate();
-
-    let save = Action::new(move |(): &()| {
+    let save_pending = Action::new(move |(): &()| {
         let mode = mode.clone();
         let navigate = navigate.clone();
         let input = update_recipe_input(
@@ -263,11 +262,12 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
             }
         }
     });
+    let save_pending_signal = save_pending.pending();
 
     view! {
         <form on:submit=move |event| {
             event.prevent_default();
-            save.dispatch(());
+            save_pending.dispatch(());
         }>
             <fieldset>
                 <label>
@@ -391,14 +391,22 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
                     .collect_view()
             }}
 
-            <button type="submit" disabled=move || save.pending().get()>
-                "Speichern"
-            </button>
-            {move || match save.value().get() {
+            {move || match save_pending.value().get() {
                 Some(Ok(())) => view! { <p>"Gespeichert."</p> }.into_any(),
                 Some(Err(error)) => view! { <p>{error.to_string()}</p> }.into_any(),
                 None => ().into_any(),
             }}
+
+            <div class="grid">
+                <button
+                    type="submit"
+                    disabled=move || save_pending_signal.get()
+                    aria-busy=move || save_pending_signal.get()
+                >
+                    "Speichern"
+                </button>
+                <a href="/" role="button" class="secondary">"Abbrechen"</a>
+            </div>
         </form>
     }
 }
