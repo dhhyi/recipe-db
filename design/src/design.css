@@ -141,6 +141,16 @@ header-component {
   display: contents;
 }
 
+.feedback {
+  &.success {
+    color: var(--pico-ins-color);
+  }
+
+  &.error {
+    color: var(--pico-del-color);
+  }
+}
+
 .recipe-thumbnail {
   margin: 0 auto;
   max-width: min(650px, 100%);
