@@ -54,7 +54,3 @@ it would also be great if the tailwind tree shaking step could be used to minify
 ### Recipe update optional
 
 Optional fields in recipe updates should not overwrite if they are not supplied. maybe use PATCH?
-
-### Recipe empty name error
-
-Update with an empty name currently propagates 400 to the client, but it should be proper graphql error that is then displayed by the recipe-edit frontend.

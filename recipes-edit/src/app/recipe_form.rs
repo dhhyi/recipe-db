@@ -4,7 +4,7 @@ use leptos::wasm_bindgen::JsCast;
 use leptos::web_sys;
 use leptos_router::{hooks::use_navigate, NavigateOptions};
 
-use super::server::{create_recipe as create_recipe_server, save_recipe};
+use super::server::{create_recipe as create_recipe_server, save_recipe, RecipeError};
 
 #[derive(Clone)]
 struct IngredientForm {
@@ -263,6 +263,12 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
         }
     });
     let save_pending_signal = save_pending.pending();
+    let name_invalid = Memo::new(move |_| {
+        matches!(
+            save_pending.value().get(),
+            Some(Err(RecipeError::EmptyName))
+        )
+    });
 
     view! {
         <form on:submit=move |event| {
@@ -271,14 +277,21 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
         }>
             <fieldset>
                 <label>
-                    <span>"Name"</span>
+                    <span id="name-label">"Name"</span>
                     <input
                         type="text"
                         id="name"
                         name="name"
+                        aria-labelledby="name-label"
+                        aria-invalid=move || name_invalid.get().then_some("true")
+                        aria-describedby=move || name_invalid.get().then_some("name-helper")
                         value=move || name.get()
                         on:input:target=move |event| name.set(event.target().value())
                     />
+                    // adjacent sibling of the input so blades colors it as an invalid hint
+                    <Show when=move || name_invalid.get()>
+                        <small id="name-helper">"Name darf nicht leer sein."</small>
+                    </Show>
                 </label>
             </fieldset>
             <h2>"Zutaten"</h2>
@@ -393,6 +406,7 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
 
             {move || match save_pending.value().get() {
                 Some(Ok(())) => view! { <p class="feedback success" role="alert">"Gespeichert"</p> }.into_any(),
+                Some(Err(RecipeError::EmptyName)) => ().into_any(),
                 Some(Err(error)) => view! { <p class="feedback error" role="alert">{error.to_string()}</p> }.into_any(),
                 None => ().into_any(),
             }}
