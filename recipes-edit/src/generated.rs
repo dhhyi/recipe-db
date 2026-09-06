@@ -11,20 +11,24 @@ type StringOrInt = serde_json::Value;
 )]
 pub struct RecipeById;
 
+// without skip_serializing_none, a None field would be serialized as null, which clears it on the server
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "recipe-db.graphqls",
     query_path = "operations.graphql",
     response_derives = "Debug",
-    variables_derives = "Debug, Clone, Deserialize"
+    variables_derives = "Debug, Clone, Deserialize",
+    skip_serializing_none
 )]
 pub struct CreateRecipe;
 
+// without skip_serializing_none, a None field would be serialized as null, which clears it on the server
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "recipe-db.graphqls",
     query_path = "operations.graphql",
     response_derives = "Debug",
-    variables_derives = "Debug, Clone, Deserialize"
+    variables_derives = "Debug, Clone, Deserialize",
+    skip_serializing_none
 )]
 pub struct UpdateRecipe;
