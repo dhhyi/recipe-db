@@ -29,6 +29,22 @@ pnpm in-devcontainer images-edit pnpm build --output /dev/null
 pnpm in-devcontainer apollo pnpm install
 ```
 
+An optional `--rm` flag, placed before the project name, tears down the container after the command
+runs instead of just stopping it (or leaving it running if it was already running). Use this to make
+sure a devcontainer is rebuilt from scratch on the next run, e.g. after changing its `.project.yaml`
+or Dockerfile:
+
+```sh
+pnpm in-devcontainer --rm <project> <command>
+```
+
+To tear down an already running container without running anything meaningful, use the `true`
+executable as the command:
+
+```sh
+pnpm in-devcontainer --rm < project > true
+```
+
 ## Modifying .project.yaml files
 
 When modifying `.project.yaml` files, run `pnpm synchronize` to apply the changes. Do not modify files in .devcontainer directories directly.
