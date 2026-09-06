@@ -78,3 +78,30 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 400
           - result.bodyjson.message ShouldEqual Missing field value for name
+
+  - name: Sending no name field at all with POST should fail
+    steps:
+      - type: http
+        method: POST
+        url: "{{.REST_API}}/recipes"
+        body: |
+          {
+            "servings": 4
+          }
+        assertions:
+          - result.statuscode ShouldEqual 400
+          - result.bodyjson.message ShouldEqual Missing field value for name
+
+  - name: Sending no name field at all with PATCH should succeed and keep the existing name
+    steps:
+      - type: http
+        method: PATCH
+        url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        body: |
+          {
+            "servings": 6
+          }
+        assertions:
+          - result.statuscode ShouldEqual 200
+          - result.bodyjson.name ShouldEqual Rice Pudding
+          - result.bodyjson.servings ShouldEqual 6

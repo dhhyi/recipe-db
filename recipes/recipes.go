@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -99,15 +97,14 @@ func getAllRecipes(db *c.DB) *[]Recipe {
 	return &recipes
 }
 
-func recipeSanityCheck(recipe Recipe) (bool, string) {
+// requireName should be true for creation (POST), where a name is mandatory, and false for
+// partial updates (PATCH), where omitting the field entirely is fine but an explicit empty/null isn't.
+func recipeSanityCheck(recipe Recipe, requireName bool) (bool, string) {
 	if recipe["id"] != nil {
 		return false, "Reserved field: id"
 	}
-	if recipe["name"] == "" {
-		return false, "Missing field value for name"
-	}
-	json, _ := json.Marshal(recipe)
-	if strings.Contains(string(json), "\"name\":null") {
+	name, hasName := recipe["name"]
+	if (requireName && !hasName) || (hasName && (name == nil || name == "")) {
 		return false, "Missing field value for name"
 	}
 	return true, ""
@@ -153,7 +150,7 @@ func main() {
 			log.Printf("Error: %s", err)
 			return
 		}
-		if ok, msg := recipeSanityCheck(recipe); !ok {
+		if ok, msg := recipeSanityCheck(recipe, true); !ok {
 			c.JSON(400, gin.H{"message": msg})
 			return
 		}
@@ -179,7 +176,7 @@ func main() {
 			log.Printf("Error: %s", err)
 			return
 		}
-		if ok, msg := recipeSanityCheck(recipe); !ok {
+		if ok, msg := recipeSanityCheck(recipe, false); !ok {
 			c.JSON(400, gin.H{"message": msg})
 			return
 		}
