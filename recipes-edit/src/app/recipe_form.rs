@@ -263,16 +263,19 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
         }
     });
     let save_pending_signal = save_pending.pending();
+    let name_edited = RwSignal::new(false);
     let name_invalid = Memo::new(move |_| {
-        matches!(
-            save_pending.value().get(),
-            Some(Err(RecipeError::EmptyName))
-        )
+        !name_edited.get()
+            && matches!(
+                save_pending.value().get(),
+                Some(Err(RecipeError::EmptyName))
+            )
     });
 
     view! {
         <form on:submit=move |event| {
             event.prevent_default();
+            name_edited.set(false);
             save_pending.dispatch(());
         }>
             <fieldset>
@@ -286,7 +289,10 @@ pub(super) fn RecipeForm(initial: RecipeFormInitial, mode: RecipeFormMode) -> im
                         aria-invalid=move || name_invalid.get().then_some("true")
                         aria-describedby=move || name_invalid.get().then_some("name-helper")
                         value=move || name.get()
-                        on:input:target=move |event| name.set(event.target().value())
+                        on:input:target=move |event| {
+                            name_edited.set(true);
+                            name.set(event.target().value());
+                        }
                     />
                     // adjacent sibling of the input so blades colors it as an invalid hint
                     <Show when=move || name_invalid.get()>
