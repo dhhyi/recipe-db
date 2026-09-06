@@ -41,6 +41,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: development
+graphqlSchema: "."
 precommit: |
   python --version
   cspell --locale de-de recipe*.{json,md}

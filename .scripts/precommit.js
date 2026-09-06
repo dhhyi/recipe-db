@@ -19,8 +19,8 @@ const verbose = args.some((a) => a.includes("verbose")) || args.includes("-v");
 tasks.push({
   execDir: ".",
   command: "node .scripts/merge-graphql-schemas.js",
-  dependent: globSync("*/.needs-graphql-schema").map((dir) =>
-    path.dirname(dir),
+  dependent: getAvailableProjects().filter(
+    (project) => getProjectConfig(project).graphqlSchema,
   ),
   message: "Running 'merge-graphql-schemas'",
   container: false,

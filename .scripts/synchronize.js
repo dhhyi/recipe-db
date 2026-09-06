@@ -53,7 +53,6 @@ function writePrettierIgnores(availableProjects) {
     # extra ignores
     pnpm-lock.yaml
     .gitkeep
-    .needs-graphql-schema
     *.txt
   `.replace(/^ +/gm, "");
 

@@ -78,6 +78,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
+graphqlSchema: "."
 prettier:
   ignore:
     - "*.elm"

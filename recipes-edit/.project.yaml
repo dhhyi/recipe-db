@@ -65,6 +65,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
+graphqlSchema: "."
 precommit: |
   cargo --version
   leptosfmt src/app.rs
