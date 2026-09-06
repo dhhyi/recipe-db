@@ -44,9 +44,3 @@ Frontend apps that load images should use a correctly sized placeholder while lo
 ### Devcontainer build caching
 
 Add a `--push-cache` option to Devcontainer Creator. It should build devcontainers with registry `cache-from` and `cache-to`, but must not push the resulting runtime image. Update CI to use this mode, remove the devcontainer image pushes, and delete the existing devcontainer images from GitHub Container Registry while retaining the cache images. Keep the generated `build` configuration locally so local build changes remain visible and can reuse the remote cache.
-
-### better tailwind support
-
-It would be great to use the tailwind VSCode extension in projects to have support for the classes.
-
-it would also be great if the tailwind tree shaking step could be used to minify the resulting style file.

@@ -14,6 +14,17 @@
       "type": "string",
       "minLength": 1
     },
+    "dockerContext": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tailwindSources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "precommit": {
       "type": "string"
     },

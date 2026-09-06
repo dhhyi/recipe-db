@@ -27,6 +27,7 @@ vscode:
       templ: html
     tailwindCSS.includeLanguages:
       templ: html
+    tailwindCSS.experimental.configFile: ../design/src/design.css
     filewatcher.commands:
       - match: "\\.graphqls?"
         cmd: cd ${workspaceRoot} && go run github.com/Khan/genqlient@main
@@ -37,6 +38,7 @@ vscode:
     - golang.Go
     - a-h.templ
     - GraphQL.vscode-graphql
+    - bradlc.vscode-tailwindcss
   tasks:
     - label: Run watch server
       command: templ generate --watch --cmd="go run ."
@@ -68,6 +70,8 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
+tailwindSources:
+  - src
 precommit: |
   go version
   templ generate

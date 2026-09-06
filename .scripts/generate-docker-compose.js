@@ -267,10 +267,11 @@ availableProjects.forEach((project) => {
   }
 
   const projectConfig = getProjectConfig(project);
+  const dockerContext = projectConfig.dockerContext || project;
 
   const service = {
     build: {
-      context: project,
+      context: dockerContext,
       cache_from: [
         `type=registry,ref=ghcr.io/dhhyi/recipe-db-${project}-cache`,
       ],
@@ -279,6 +280,14 @@ availableProjects.forEach((project) => {
     container_name: project,
     networks: ["intranet"],
   };
+
+  const dockerfile = path.relative(
+    dockerContext,
+    path.join(project, "Dockerfile"),
+  );
+  if (dockerfile !== "Dockerfile") {
+    service.build.dockerfile = dockerfile;
+  }
 
   if (PROD) {
     const dockerfile = fs.readFileSync(

@@ -44,7 +44,10 @@ devcontainer:
 vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
+    files.associations:
+      "*.css": tailwindcss
     peacock.remoteColor: "#e024d1"
+    tailwindCSS.experimental.configFile: src/design.css
     filewatcher.commands:
       - match: "nginx.conf"
         cmd: sudo /etc/init.d/nginx reload
@@ -58,6 +61,7 @@ vscode:
     - esbenp.prettier-vscode
     - nicoespeon.abracadabra
     - MylesMurphy.prettify-ts
+    - bradlc.vscode-tailwindcss
 extras:
   - named-volumes
   - traefik
@@ -83,6 +87,9 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
+dockerContext: "."
+tailwindSources:
+  - src/components
 precommit: |
   pnpm --version
   pnpm exec storybook --version

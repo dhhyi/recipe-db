@@ -24,10 +24,14 @@ vscode:
     peacock.remoteColor: "#cfcfcf"
     "[rust]":
       editor.defaultFormatter: rust-lang.rust-analyzer
+    tailwindCSS.includeLanguages:
+      rust: html
+    tailwindCSS.experimental.configFile: ../design/src/design.css
   extensions:
     - johnpapa.vscode-peacock
     - rust-lang.rust-analyzer
     - GraphQL.vscode-graphql
+    - bradlc.vscode-tailwindcss
   tasks:
     - label: Run watch server
       command: cargo leptos watch
@@ -66,6 +70,8 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
+tailwindSources:
+  - src
 precommit: |
   cargo --version
   leptosfmt src/app.rs

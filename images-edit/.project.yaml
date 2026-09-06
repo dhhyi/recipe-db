@@ -37,6 +37,11 @@ vscode:
     peacock.remoteColor: "#995d51"
     "[elm]":
       editor.defaultFormatter: elmTooling.elm-ls-vscode
+      tailwindCSS.experimental.classRegex:
+        - '\bclass\s+"([^"]*)"'
+    tailwindCSS.includeLanguages:
+      elm: html
+    tailwindCSS.experimental.configFile: ../design/src/design.css
     filewatcher.commands:
       - match: "\\.elm"
         cmd: cd ${workspaceRoot} && pnpm build && cp -fv elm.js /usr/share/nginx/html/elm.js
@@ -52,6 +57,7 @@ vscode:
     - appulate.filewatcher
     - GraphQL.vscode-graphql
     - elmTooling.elm-ls-vscode
+    - bradlc.vscode-tailwindcss
 extras:
   - traefik
   - named-volumes
@@ -79,6 +85,9 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
+tailwindSources:
+  - index.html
+  - src
 prettier:
   ignore:
     - "*.elm"

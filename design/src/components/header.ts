@@ -13,7 +13,7 @@ export class HeaderComponent extends LitElement {
     return html`
       <header
         style="background-color: var(--pico-background-color);"
-        class="px-2 py-1 sticky top-0 z-10 relative"
+        class="px-2 py-1 sticky top-0 z-10"
       >
         <nav>
           <a href="/">
