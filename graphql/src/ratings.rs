@@ -1,0 +1,79 @@
+use async_graphql::{Context, Error, Object, SimpleObject, ID};
+use serde::Deserialize;
+
+use crate::rest_client::RestClient;
+
+#[derive(Clone, Debug, SimpleObject)]
+pub struct Rating {
+    pub average: Option<f64>,
+    pub count: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct RestRating {
+    rating: f64,
+    count: i32,
+}
+
+pub struct RatingsApi {
+    client: RestClient,
+}
+
+impl RatingsApi {
+    pub fn new() -> Self {
+        Self {
+            client: RestClient::new("ratings"),
+        }
+    }
+
+    pub async fn delete_ratings_for_testing(&self) -> Result<bool, Error> {
+        self.client.delete("").await?;
+        Ok(true)
+    }
+
+    pub async fn get_rating(&self, id: &str) -> Result<Rating, Error> {
+        let rating: RestRating = self.client.get(id).await?;
+        Ok(Rating {
+            average: Some(rating.rating),
+            count: Some(rating.count),
+        })
+    }
+
+    pub async fn add_rating(&self, id: &str, rating: i32, login: &str) -> Result<f64, Error> {
+        let body = format!("rating={rating}&login={login}");
+        let result: RestRating = self.client.put_form(id, body).await?;
+        Ok(result.rating)
+    }
+}
+
+#[derive(Default)]
+pub struct RatingsQuery;
+
+#[Object]
+impl RatingsQuery {
+    async fn rating(&self, ctx: &Context<'_>, id: ID) -> Result<Rating, Error> {
+        ctx.data::<RatingsApi>()?.get_rating(id.as_str()).await
+    }
+}
+
+#[derive(Default)]
+pub struct RatingsMutation;
+
+#[Object]
+impl RatingsMutation {
+    async fn delete_ratings_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
+        ctx.data::<RatingsApi>()?.delete_ratings_for_testing().await
+    }
+
+    async fn rate(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+        rating: i32,
+        login: String,
+    ) -> Result<f64, Error> {
+        ctx.data::<RatingsApi>()?
+            .add_rating(id.as_str(), rating, &login)
+            .await
+    }
+}

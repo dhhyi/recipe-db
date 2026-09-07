@@ -1,18 +1,28 @@
-FROM node:lts-alpine AS builder
+FROM rust:1-bookworm AS chef
 
-RUN npm i -g pnpm
-ENV NODE_ENV=production
+RUN apt-get update && apt-get -y install --no-install-recommends musl-tools && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-unknown-linux-musl
+RUN cargo install cargo-chef --locked
 
-WORKDIR /ws
-COPY package.json pnpm-*.yaml /ws/
-RUN pnpm i --frozen-lockfile --prod
-COPY . /ws/
-RUN pnpm build
+WORKDIR /app
 
-FROM node:18-alpine
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY src src
+RUN cargo chef prepare --recipe-path recipe.json
 
-COPY --from=builder /ws/dist /app
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
+COPY Cargo.toml Cargo.lock ./
+COPY src src
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+FROM scratch
+
+# scratch has no /tmp - async-graphql needs one to spool multipart file uploads to disk
+COPY --from=builder --chmod=1777 /tmp /tmp
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/graphql /app/graphql
 
 EXPOSE 4000
-
-ENTRYPOINT ["node", "/app/index.cjs"]
+ENTRYPOINT ["/app/graphql"]

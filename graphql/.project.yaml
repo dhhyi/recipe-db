@@ -7,14 +7,14 @@ devcontainer:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     packages:
-      # official node >=25 linux binaries are linked against libatomic
-      - libatomic1
+      - build-essential
+      - pkg-config
+      - libssl-dev
+      - musl-tools
     user:
-      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
-      - RUN mise use -g node@26 npm:pnpm@11
-  initialize: |
-    pnpm install
-    npm run codegen
+      - RUN mise use -g rust@1.98.0
+      - RUN rustup target add x86_64-unknown-linux-musl
+  initialize: cargo fetch
   ports:
     - 4000
   environment:
@@ -23,23 +23,20 @@ devcontainer:
     TRAEFIK_ENTRYPOINTS: web,rest-internal
 vscode:
   settings:
-    editor.defaultFormatter: esbenp.prettier-vscode
     peacock.remoteColor: "#dbdb94"
-    filewatcher.commands:
-      - match: "\\.gql"
-        cmd: cd ${workspaceRoot} && npm run codegen
-        event: onFileChange
+    "[rust]":
+      editor.defaultFormatter: rust-lang.rust-analyzer
   extensions:
     - johnpapa.vscode-peacock
+    - rust-lang.rust-analyzer
     - GraphQL.vscode-graphql
-    - esbenp.prettier-vscode
-    - appulate.filewatcher
 extras:
   - named-volumes
   - traefik
 namedVolumes:
-  node_modules: recipe-db-graphql-node-modules
-  /home/pnpm: recipe-db-pnpm-store
+  $HOME/.cargo/registry: recipe-db-graphql-cargo-registry
+  $HOME/.cargo/git: recipe-db-graphql-cargo-git
+  target: recipe-db-graphql-target
 traefik:
   network: intranet
   labels:
@@ -64,8 +61,12 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
 precommit: |
-  npm --version
-  npm run lint-schema
-  npm run codegen
-  npm run lint-code -- --fix
-  npm run build
+  cargo --version
+  cargo fmt --check
+  cargo clippy --all-targets -- -D warnings
+  cargo build --release
+prettier:
+  ignore:
+    - "*.rs"
+    - Cargo.toml
+    - Cargo.lock

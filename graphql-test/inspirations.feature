@@ -16,8 +16,12 @@ Feature: inspirations
     * status 200
     * match response.data == { recipes: [] }
 
-  Scenario: should have a recipe with inspirations after adding one
-    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['https://example.com', 'https://google.com'] } } }
+  Scenario: should have a recipe with extracted inspirations after adding one
+    * def fixtureApi = java.lang.System.getenv('INSPIRATION_FIXTURE_API')
+    * def pageUrl = fixtureApi + '/page'
+    * def canonicalUrl = fixtureApi + '/canonical'
+    * def faviconUrl = fixtureApi + '/favicon.ico'
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['#(pageUrl)'] } } }
     * method post
     * status 200
     * match response.data.createRecipe == { id: '#string', name: 'test' }
@@ -32,8 +36,16 @@ Feature: inspirations
         recipe: {
           name: 'test',
           inspirations: [
-            { url: 'https://example.com' },
-            { url: 'https://google.com' }
+            {
+              url: '#(pageUrl)',
+              extracted: {
+                canonical: '#(canonicalUrl)',
+                description: 'Fixture page for GraphQL inspiration extraction',
+                favicon: '#(faviconUrl)',
+                inlinedFavicon: 'data:image/x-icon;base64,aWNvbg==',
+                title: 'GraphQL Inspiration Fixture'
+              }
+            }
           ]
         }
       }
