@@ -2,7 +2,7 @@
 extends: dcc://debian
 devcontainer:
   publish:
-    image: ghcr.io/dhhyi/recipe-db-devcontainer-apollo-test
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-graphql-test
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:

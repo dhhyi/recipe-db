@@ -11,7 +11,7 @@ import (
 	gql "frontend/src/generated"
 )
 
-var client = graphql.NewClient("http://apollo:4000/graphql", http.DefaultClient)
+var client = graphql.NewClient("http://graphql:4000/graphql", http.DefaultClient)
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

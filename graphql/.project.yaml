@@ -2,7 +2,7 @@
 extends: dcc://debian
 devcontainer:
   publish:
-    image: ghcr.io/dhhyi/recipe-db-devcontainer-apollo
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-graphql
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
@@ -38,26 +38,26 @@ extras:
   - named-volumes
   - traefik
 namedVolumes:
-  node_modules: recipe-db-apollo-node-modules
+  node_modules: recipe-db-graphql-node-modules
   /home/pnpm: recipe-db-pnpm-store
 traefik:
   network: intranet
   labels:
     http:
       services:
-        recipe-db-apollo:
+        recipe-db-graphql:
           loadBalancer:
             healthCheck:
               interval: 10s
               timeout: 1s
               path: /health
       routers:
-        apollo:
+        graphql:
           rule: PathPrefix(`/graphql`)
           entrypoints: web
-      #     middlewares: apollo-stripprefix
+      #     middlewares: graphql-stripprefix
       # middlewares:
-      #   apollo-stripprefix:
+      #   graphql-stripprefix:
       #     stripprefix:
       #       prefixes: /graphql
 ---

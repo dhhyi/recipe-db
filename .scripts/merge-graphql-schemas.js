@@ -14,7 +14,7 @@ const { mergeTypeDefs } = require("@graphql-tools/merge");
 const { print } = require("graphql");
 
 const loadedFiles = loadFilesSync(
-  path.join(projectRoot, "apollo/src/**/*.gql"),
+  path.join(projectRoot, "graphql/src/**/*.gql"),
 );
 const typeDefs = mergeTypeDefs(loadedFiles);
 const printedTypeDefs = print(typeDefs);
