@@ -13,9 +13,11 @@ It's also allowed for frontends compiled to JavaScript, like Elm (images-edit) a
 The Apollo GraphQL server will be replaced with a solution based on Rust+async-graphql. Query and
 mutation fields are merged per domain with `MergedObject`, and the fields that other services
 contribute to `Recipe` (rating, image, inspirations) are added via `ComplexObject`. The generated SDL
-replaces the hand-written `typedefs.gql` fragments as the source of truth, so
-`.scripts/merge-graphql-schemas.js` has to export it from the running schema instead of merging
-files. The per-recipe fan-out to the REST backends should use DataLoader to remove the current N+1.
+replaces the hand-written `typedefs.gql` fragments as the source of truth. Producing it doesn't
+require a running server: a small binary/subcommand builds the `Schema` object and prints
+`schema.sdl()` to stdout, so `.scripts/merge-graphql-schemas.js` shells out to `cargo run` (via the
+devcontainer, like other scripts) to capture that SDL instead of loading and merging `.gql` files.
+The per-recipe fan-out to the REST backends should use DataLoader to remove the current N+1.
 
 ### Rewrite recipes-edit in ClojureScript
 
@@ -35,6 +37,30 @@ response shapes are genuinely lost.
 ### Replace JavaScript build tools
 
 JavaScript build tooling (root-level, .scripts folder) will be replaced with Bazel build rules and native toolchain integrations.
+
+#### Rework docker-compose/deployment generation
+
+`generate-docker-compose.js` currently mixes several concerns in one script: reading each project's
+`.project.yaml` traefik section, aggregating it into the production `traefik.yml`, and rendering the
+full `docker-compose.yml` (service definitions, profiles, depends_on, dev/prod differences) in a
+single pass. Its replacement should be a proper templating mechanism instead, using **ytt** (a
+single-binary, no-runtime-deps templating/overlay tool for YAML; CUE and jsonnet are more powerful
+but heavier alternatives if ytt turns out too limited): a docker-compose service template populated
+from the traefik/service data in `.project.yaml`, rendered per flavour (development, production).
+
+Local dev stays on docker-compose regardless of what happens to production: the current setup's best
+feature is that a devcontainer carries the exact same Traefik labels as the production service, so
+opening it in VS Code just swaps it into the already-running stack on the shared Docker network —
+zero extra steps. That's worth more than any Kubernetes benefit for local dev.
+
+For production, go full Kubernetes (k3s, matching the Raspberry Pi target) instead of also supporting
+docker-compose there — plus k3d as a local stand-in for testing the production k3s setup itself
+(not for day-to-day service development, which stays docker-compose). Low-priority note: Kubernetes
+has an equivalent of the devcontainer-swap workflow, called service "interception", via tools like
+Telepresence or mirrord, which reroute a running service's traffic to a local process/container while
+the rest of the cluster keeps running — but it needs a cluster-side agent plus a local tunnel/daemon
+per intercepted service, so it's not worth chasing unless the docker-compose dev setup becomes
+untenable.
 
 ## Image handling
 
