@@ -115,8 +115,11 @@ jobs:
           pnpm i -g @devcontainers/cli@latest
           devcontainer --version
 
+      - name: create buildx builder
+        run: docker buildx create --use
+
+      - name: dcc push cache
+        run: sh ${{ matrix.project }}/.update_devcontainer.sh --build --push-cache -vv
+
       - name: precommit check
         run: pnpm in-devcontainer ${{ matrix.project }} precommit
-
-      - name: dcc push
-        run: sh ${{ matrix.project }}/.update_devcontainer.sh --push

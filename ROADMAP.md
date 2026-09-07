@@ -68,10 +68,6 @@ Setup a public deployment.
 
 ## Misc
 
-### Devcontainer build caching
-
-Add a `--push-cache` option to Devcontainer Creator. It should build devcontainers with registry `cache-from` and `cache-to`, but must not push the resulting runtime image. Update CI to use this mode, remove the devcontainer image pushes, and delete the existing devcontainer images from GitHub Container Registry while retaining the cache images. Keep the generated `build` configuration locally so local build changes remain visible and can reuse the remote cache.
-
 ### Rewrite recipe backend
 
 Since currently both `frontend` and `recipes` is written in Go, it violates the playground rule to have another language for each project. Find a good language that can be used for the recipe backend, and rewrite it in that language. The new language should be one that is not already used in the project, and should be suitable for receiving json data and querying them by ID.
