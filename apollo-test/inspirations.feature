@@ -32,14 +32,8 @@ Feature: inspirations
         recipe: {
           name: 'test',
           inspirations: [
-            {
-              url: 'https://example.com',
-              extracted: { canonical: 'https://example.com', description: null, favicon: null, title: 'Example Domain' }
-            },
-            {
-              url: 'https://google.com',
-              extracted: { canonical: 'https://google.com', description: null, favicon: 'https://google.com/favicon.ico', title: 'Google' }
-            }
+            { url: 'https://example.com' },
+            { url: 'https://google.com' }
           ]
         }
       }
