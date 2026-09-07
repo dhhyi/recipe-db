@@ -66,6 +66,22 @@ The images frontend should be the only place where the full-size image is loaded
 
 Frontend apps that load images should use a correctly sized placeholder while loading and also support a placeholder when an image is unavailable. The placeholder could be a blurred version of the image, and it can later be replaced with a higher-quality version once the image is scrolled into view.
 
+## Ratings
+
+### Add ratings to recipes
+
+For now, only add ratings with a static user ID, but later on, the user ID should be taken from the login mechanism.
+
+There should be a shared web component with a hover-mechanism for adding new ratings, and a static display of the average rating for a recipe (with half-stars like the old implementation).
+
+### Ratings optional
+
+The ratings backend should be optional, so that the stack can be deployed without it. The GraphQL schema should reflect this, and the frontend should not show as well as edit ratings if the backend is not available.
+
+## Inspirations
+
+The inspirations backend should be optional, so that the stack can be deployed without it. The GraphQL schema should reflect this, and the frontend should not show as well as edit inspirations if the backend is not available.
+
 ## Raspberry Pi deployment
 
 ### Check for ARM64 build
@@ -86,3 +102,10 @@ Setup a public deployment.
 ### Rewrite recipe backend
 
 Since currently both `frontend` and `recipes` is written in Go, it violates the playground rule to have another language for each project. Find a good language that can be used for the recipe backend, and rewrite it in that language. The new language should be one that is not already used in the project, and should be suitable for receiving json data and querying them by ID.
+
+### better devcontainers
+
+With the dcc tools, devcontainers can be named.
+Also add a VSCode customization so that all project titles have the project name only (maybe modification state, but no file names).
+DCC should be invoked without --no-vscode
+filewatcher doesn't seem to print stderr (it also fails on any stderr?!) - maybe choose an alternative or completely migrate to watchexec with vscode tasks?
