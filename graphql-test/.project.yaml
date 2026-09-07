@@ -6,6 +6,8 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    packages:
+      - python3
     user:
       - RUN mise use -g java@21
     args:
@@ -44,7 +46,10 @@ category: test
 precommit: |
   ghokin version
   ghokin fmt replace .
-test: karate -T 1 .
+test: sh run-tests.sh
 prettier:
   ignore:
     - "*.feature"
+    - "*.jpg"
+    - "*.py"
+    - "*.sh"

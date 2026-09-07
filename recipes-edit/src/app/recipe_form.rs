@@ -41,8 +41,9 @@ impl RecipeFormInitial {
     pub(super) fn from_recipe(recipe: RecipeByIdRecipe) -> Self {
         let mut inspirations = recipe
             .inspirations
-            .iter()
-            .map(|inspiration| inspiration.url.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|inspiration| inspiration.url)
             .collect::<Vec<_>>();
         normalize_inspirations(&mut inspirations);
 
@@ -178,7 +179,6 @@ fn update_recipe_input(
             inspirations
                 .into_iter()
                 .filter(|inspiration| !inspiration.is_empty())
-                .map(Some)
                 .collect(),
         ),
         ingredients: Some(

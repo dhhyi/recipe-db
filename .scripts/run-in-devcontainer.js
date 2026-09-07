@@ -80,7 +80,7 @@ try {
     ?.trim()
     ?.split("\n")?.[0];
   if (existingRunningContainerID) {
-    console.log(
+    console.error(
       `Using existing running container ${existingRunningContainerID}`,
     );
     containerId = existingRunningContainerID;
@@ -96,7 +96,7 @@ try {
       existingStoppedContainerID &&
       existingStoppedContainerID.split("\n").length === 1
     ) {
-      console.log(
+      console.error(
         `Starting existing stopped container ${existingStoppedContainerID}`,
       );
       cp.execSync(`docker start ${existingStoppedContainerID}`);
@@ -112,7 +112,7 @@ try {
         .split("\n")
         .filter(Boolean)
         .forEach((id) => {
-          console.log(`Removing existing container ${id}`);
+          console.error(`Removing existing container ${id}`);
           cp.execSync(`docker rm -f ${id}`);
         });
     }
@@ -159,12 +159,12 @@ try {
   }
 } finally {
   if (containerId && removeAfter) {
-    console.log(`Removing container ${containerId}`);
+    console.error(`Removing container ${containerId}`);
     cp.execSync(`docker rm -f ${containerId}`);
   } else if (containerId && stopAfter) {
-    console.log(`Stopping container ${containerId}`);
+    console.error(`Stopping container ${containerId}`);
     cp.execSync(`docker stop ${containerId}`);
   } else {
-    console.log(`Leaving container ${containerId} running`);
+    console.error(`Leaving container ${containerId} running`);
   }
 }

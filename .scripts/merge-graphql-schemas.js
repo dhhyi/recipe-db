@@ -1,7 +1,9 @@
 const path = require("path");
 const fs = require("fs");
+const cp = require("child_process");
 const {
   projectRoot,
+  scriptRoot,
   getAvailableProjects,
   getProjectConfig,
   checkInstallDependencies,
@@ -9,15 +11,10 @@ const {
 
 checkInstallDependencies();
 
-const { loadFilesSync } = require("@graphql-tools/load-files");
-const { mergeTypeDefs } = require("@graphql-tools/merge");
-const { print } = require("graphql");
-
-const loadedFiles = loadFilesSync(
-  path.join(projectRoot, "graphql/src/**/*.gql"),
+const printedTypeDefs = cp.execSync(
+  `node ${path.join(scriptRoot, "run-in-devcontainer.js")} graphql cargo run --release -- print-schema`,
+  { cwd: projectRoot, encoding: "utf-8" },
 );
-const typeDefs = mergeTypeDefs(loadedFiles);
-const printedTypeDefs = print(typeDefs);
 
 getAvailableProjects()
   .map((project) => ({ project, config: getProjectConfig(project) }))

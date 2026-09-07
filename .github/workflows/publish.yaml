@@ -37,12 +37,6 @@ jobs:
           pnpm i -g @devcontainers/cli@latest
           devcontainer --version
 
-      - name: synchronize
-        run: |
-          echo "::group::pnpm install"
-          pnpm i --frozen-lockfile
-          echo "::endgroup::"
-
       - name: login to ghcr.io
         uses: docker/login-action@v4
         with:
@@ -52,6 +46,12 @@ jobs:
 
       - name: create buildx builder
         run: docker buildx create --use
+
+      - name: synchronize
+        run: |
+          echo "::group::pnpm install"
+          pnpm i --frozen-lockfile
+          echo "::endgroup::"
 
       - name: build dev images
         run: |

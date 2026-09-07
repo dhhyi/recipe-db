@@ -8,17 +8,6 @@ It is okay for the design project using Storybook, and web-components that are s
 
 It's also allowed for frontends compiled to JavaScript, like Elm (images-edit) and ClojureScript (recipes-edit), since JavaScript is merely the output, but not the language used for development.
 
-### Replace Apollo GraphQL
-
-The Apollo GraphQL server will be replaced with a solution based on Rust+async-graphql. Query and
-mutation fields are merged per domain with `MergedObject`, and the fields that other services
-contribute to `Recipe` (rating, image, inspirations) are added via `ComplexObject`. The generated SDL
-replaces the hand-written `typedefs.gql` fragments as the source of truth. Producing it doesn't
-require a running server: a small binary/subcommand builds the `Schema` object and prints
-`schema.sdl()` to stdout, so `.scripts/merge-graphql-schemas.js` shells out to `cargo run` (via the
-devcontainer, like other scripts) to capture that SDL instead of loading and merging `.gql` files.
-The per-recipe fan-out to the REST backends should use DataLoader to remove the current N+1.
-
 ### Rewrite recipes-edit in ClojureScript
 
 recipes-edit is currently the only Rust project, and Rust is needed for the GraphQL server instead.

@@ -51,7 +51,9 @@ makeUploadRequest recipeId file targetMsg =
     let
         query : String
         query =
-            "{ \"query\": \"mutation ($file: Upload!) { setImage(recipeId: \\\"" ++ recipeId ++ "\\\", file: $file) }\" }"
+            -- per the GraphQL multipart request spec, "variables" must already contain a `null`
+            -- placeholder for every Upload variable the "map" below then overwrites
+            "{ \"query\": \"mutation ($file: Upload!) { setImage(recipeId: \\\"" ++ recipeId ++ "\\\", file: $file) }\", \"variables\": { \"file\": null } }"
 
         map : String
         map =
