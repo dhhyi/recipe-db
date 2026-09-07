@@ -35,14 +35,14 @@ sure a devcontainer is rebuilt from scratch on the next run, e.g. after changing
 or Dockerfile:
 
 ```sh
-pnpm in-devcontainer --rm <project> <command>
+pnpm in-devcontainer --rm recipes <command>
 ```
 
 To tear down an already running container without running anything meaningful, use the `true`
 executable as the command:
 
 ```sh
-pnpm in-devcontainer --rm < project > true
+pnpm in-devcontainer --rm recipes true
 ```
 
 ## Modifying .project.yaml files
@@ -67,13 +67,15 @@ are visually distinguishable. Hues are picked from a 15°-step wheel (0°, 15°,
 
 Before running tests, ensure the docker compose project is up and running.
 
-Execute tests with the `package.json` script `test-project`.
+Execute tests with the `package.json` script `in-devcontainer` and `test` target.
 
 Examples:
 
 ```sh
-pnpm test-project images-test
+pnpm in-devcontainer images-test test
 ```
+
+This will run the `test:` script defined in the second yaml document of the project's `.project.yaml` file.
 
 ## Running precommit checks
 
