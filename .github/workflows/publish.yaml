@@ -8,7 +8,7 @@ on:
       - main
 
 jobs:
-  publish:
+  test-and-publish:
     permissions: write-all
     runs-on: ubuntu-latest
     env:
@@ -28,9 +28,14 @@ jobs:
         run: |
           set -x
           node --version
-          npm --version
+          pnpm --version
           docker --version
           docker compose version
+
+      - name: install @devcontainers/cli
+        run: |
+          pnpm i -g @devcontainers/cli@latest
+          devcontainer --version
 
       - name: synchronize
         run: |
@@ -53,8 +58,29 @@ jobs:
           echo "::group::docker-compose.yml"
           cat docker-compose.yml
           echo "::endgroup::"
-          docker compose build demo-data
-          docker compose push demo-data
+          echo "::group::docker compose build"
+          docker compose --profile development build
+          echo "::endgroup::"
+
+      - name: test projects
+        run: |
+          echo "::group::docker-compose.yml"
+          cat docker-compose.yml
+          echo "::endgroup::"
+          echo "::group::docker compose up"
+          docker compose up -d --wait || (docker compose logs && exit 1)
+          echo "::endgroup::"
+          echo "::group::docker compose ps"
+          docker compose ps
+          echo "::endgroup::"
+          for project in $(ls */.project.yaml | xargs dirname); do
+            test_cmd=$(yq eval 'select(documentIndex==1) | .test // ""' $project/.project.yaml)
+            if [ -n "$test_cmd" ]; then
+              echo "::group::test $project"
+              pnpm in-devcontainer $project test
+              echo "::endgroup::"
+            fi
+          done
 
       - name: build and push prod images
         run: |
