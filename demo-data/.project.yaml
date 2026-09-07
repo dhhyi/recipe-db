@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://python
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-demo-data
@@ -9,10 +9,13 @@ devcontainer:
     packages:
       - nodejs
       - npm
+      # mise's python@3.13 currently fails to build on dcc://debian, use the apt package instead
+      - python3
+      - python3-pip
     root:
       - RUN npm install -g cspell@6 @cspell/dict-de-de && cspell link add @cspell/dict-de-de
     user:
-      - RUN pip install ariadne-codegen --break-system-packages
+      - RUN pip install ariadne-codegen black pylint --break-system-packages
       - ENV PATH="${HOME}/.local/bin:${PATH}"
   initialize: ariadne-codegen
 vscode:
@@ -43,7 +46,7 @@ traefik:
 category: development
 graphqlSchema: "."
 precommit: |
-  python --version
+  python3 --version
   cspell --locale de-de recipe*.{json,md}
   ariadne-codegen
   black ./*.py

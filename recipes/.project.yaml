@@ -1,10 +1,13 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://go
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-recipes
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    user:
+      - RUN mise use -g go@1.25
   initialize: go mod download -x
   ports:
     - 5000
@@ -19,7 +22,7 @@ extras:
   - traefik
   - named-volumes
 namedVolumes:
-  $HOME/go/pkg/mod/cache: recipe-db-recipes-go-cache
+  $HOME/go/pkg/mod: recipe-db-recipes-go-cache
 traefik:
   network: intranet
   labels:

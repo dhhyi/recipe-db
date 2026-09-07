@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://perl
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-image-inline
@@ -9,6 +9,7 @@ devcontainer:
     packages:
       - libdancer2-perl
       - libswitch-perl
+      - perltidy
   ports:
     - 3000
 vscode:
