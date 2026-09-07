@@ -2,9 +2,13 @@
 
 This project is intended to be a playground for a microservice architecture in the domain of a recipe collection.
 
-As part of the exercise, I want to try as many different programming languages, frameworks and methods as possible.
+As part of the exercise, I want to try as many different programming languages, frameworks and methods as possible. The goal is to learn how to deal with problems that arise in this polyglot architecture.
 
-This README is still a work in progress...
+There are really just three rules:
+
+- No technology should be used twice. (Different languages, frameworks, libraries, etc.)
+- Cut as early as possible to get as many running parts as possible.
+- Limit the amount of JavaScript/TypeScript to a minimum. (I see enough of it in my day job.)
 
 # Getting Started
 
