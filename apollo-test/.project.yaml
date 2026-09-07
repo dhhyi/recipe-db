@@ -1,11 +1,13 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
-extends: dcc://java
+extends: dcc://debian
 devcontainer:
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-apollo-test
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    user:
+      - RUN mise use -g java@21
     args:
       KARATE_VERSION: 2.1.2
       GHOKIN_VERSION: 3.10.0
