@@ -1,5 +1,5 @@
 {
-  "name": "apollo",
+  "name": "graphql",
   "private": true,
   "type": "module",
   "scripts": {

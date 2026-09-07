@@ -58,6 +58,8 @@ Consistent styling including shared Web Components, see [`design`](./design)
 
 The backend is organized in a variety of services where the only one _actually_ necessary is the one holding recipe data. Each service exposes a REST API which is tested with a different integration testing framework.
 
+A GraphQL gateway is used to combine all backend REST services into a single API. (see [`graphql`](./graphql) and [`graphql-test`](./graphql-test))
+
 ### Recipes — see [`recipes`](./recipes) ([`recipes-test`](./recipes-test))
 
 ### Ratings — see [`ratings`](./ratings) ([`ratings-test`](./ratings-test))

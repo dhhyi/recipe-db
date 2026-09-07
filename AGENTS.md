@@ -26,7 +26,7 @@ pnpm in-devcontainer images-edit precommit
 pnpm in-devcontainer images-edit prettier
 pnpm in-devcontainer recipes-test test
 pnpm in-devcontainer images-edit pnpm build --output /dev/null
-pnpm in-devcontainer apollo pnpm install
+pnpm in-devcontainer graphql pnpm install
 ```
 
 An optional `--rm` flag, placed before the project name, tears down the container after the command
