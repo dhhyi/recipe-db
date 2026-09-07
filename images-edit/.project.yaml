@@ -34,7 +34,7 @@ devcontainer:
     pnpm build && cp -f elm.js /usr/share/nginx/html/elm.js
 vscode:
   settings:
-    peacock.remoteColor: "#995d51"
+    peacock.remoteColor: "#94dbdb"
     "[elm]":
       editor.defaultFormatter: elmTooling.elm-ls-vscode
       tailwindCSS.experimental.classRegex:

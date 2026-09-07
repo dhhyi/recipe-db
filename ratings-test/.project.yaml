@@ -29,7 +29,7 @@ vscode:
   settings:
     karateRunner.karateJS.commandLineArgs: karate
     karateRunner.karateJar.commandLineArgs: karate
-    peacock.remoteColor: "#269914"
+    peacock.remoteColor: "#c95dc9"
   extensions:
     - johnpapa.vscode-peacock
     - karatelabs.karate
