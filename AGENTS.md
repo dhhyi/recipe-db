@@ -49,6 +49,20 @@ pnpm in-devcontainer --rm < project > true
 
 When modifying `.project.yaml` files, run `pnpm synchronize` to apply the changes. Do not modify files in .devcontainer directories directly.
 
+### Peacock color palette
+
+Each project's `.project.yaml` sets `peacock.remoteColor` (a pastel HSL color, S=50%, L=72%, except
+`-test` projects which use L=57.6%, i.e. 20% darker than their base project) so devcontainer windows
+are visually distinguishable. Hues are picked from a 15°-step wheel (0°, 15°, 30°, ... 345°):
+
+- Frontend projects (`design`, `frontend`, `images-edit`, `recipes-edit`) use the 4 cardinal hues
+  (0°, 90°, 180°, 270°) for maximum separation from each other.
+- All other non-`-test` projects use one of: 30°, 60°, 120°, 150°, 210°, 240°, 300°, 330°.
+- A `-test` project reuses its base project's hue, darkened by 20% lightness.
+- The remaining hues (15°, 45°, 75°, 105°, 135°, 165°, 195°, 225°, 255°, 285°, 315°, 345°) are free —
+  assign one of these to a new non-frontend project (or a new cardinal hue if adding a 5th frontend
+  project) rather than picking an arbitrary color.
+
 ## Integration Testing projects
 
 Before running tests, ensure the docker compose project is up and running.

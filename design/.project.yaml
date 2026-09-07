@@ -46,7 +46,7 @@ vscode:
     editor.defaultFormatter: esbenp.prettier-vscode
     files.associations:
       "*.css": tailwindcss
-    peacock.remoteColor: "#e024d1"
+    peacock.remoteColor: "#db9494"
     tailwindCSS.experimental.configFile: src/design.css
     filewatcher.commands:
       - match: "nginx.conf"

@@ -20,7 +20,7 @@ devcontainer:
   initialize: ariadne-codegen
 vscode:
   settings:
-    peacock.remoteColor: "#000000"
+    peacock.remoteColor: "#dbb894"
     python.formatting.provider: none
     "[python]":
       editor.defaultFormatter: ms-python.black-formatter

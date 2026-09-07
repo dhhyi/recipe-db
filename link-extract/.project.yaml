@@ -21,7 +21,7 @@ devcontainer:
     - 8081
 vscode:
   settings:
-    peacock.remoteColor: "#cbfe12"
+    peacock.remoteColor: "#9494db"
   extensions:
     - johnpapa.vscode-peacock
 extras:

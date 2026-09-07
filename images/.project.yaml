@@ -28,7 +28,7 @@ devcontainer:
     nim c -r --hints:off /tmp/helloworld.nim
 vscode:
   settings:
-    peacock.remoteColor: "#e9211a"
+    peacock.remoteColor: "#94dbb8"
   extensions:
     - nimlang.nimlang
     - johnpapa.vscode-peacock

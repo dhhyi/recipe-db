@@ -36,7 +36,7 @@ devcontainer:
 vscode:
   settings:
     Lua.format.enable: false
-    peacock.remoteColor: "#1db8e8"
+    peacock.remoteColor: "#94b8db"
   extensions:
     - johnpapa.vscode-peacock
     - sumneko.lua

@@ -24,7 +24,7 @@ devcontainer:
 vscode:
   settings:
     editor.defaultFormatter: esbenp.prettier-vscode
-    peacock.remoteColor: "#3d2160"
+    peacock.remoteColor: "#dbdb94"
     filewatcher.commands:
       - match: "\\.gql"
         cmd: cd ${workspaceRoot} && npm run codegen

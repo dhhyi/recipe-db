@@ -20,7 +20,7 @@ devcontainer:
     go run github.com/Khan/genqlient@main
 vscode:
   settings:
-    peacock.remoteColor: "#f2b20f"
+    peacock.remoteColor: "#b8db94"
     "[templ]":
       editor.defaultFormatter: a-h.templ
     emmet.includeLanguages:

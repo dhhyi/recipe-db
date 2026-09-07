@@ -16,7 +16,7 @@ devcontainer:
     REST_API: http://traefik:3000
 vscode:
   settings:
-    peacock.remoteColor: "#305941"
+    peacock.remoteColor: "#5d5dc9"
   extensions:
     - johnpapa.vscode-peacock
 extras:

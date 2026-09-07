@@ -54,7 +54,7 @@ devcontainer:
     TESTING: "true"
 vscode:
   settings:
-    peacock.remoteColor: "#13520a"
+    peacock.remoteColor: "#db94db"
   extensions:
     - johnpapa.vscode-peacock
     - qwtel.sqlite-viewer
