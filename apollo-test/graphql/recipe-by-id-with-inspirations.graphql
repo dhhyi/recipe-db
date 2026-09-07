@@ -3,12 +3,6 @@ query ($id: ID!) {
     name
     inspirations {
       url
-      extracted {
-        title
-        description
-        canonical
-        favicon
-      }
     }
   }
 }
