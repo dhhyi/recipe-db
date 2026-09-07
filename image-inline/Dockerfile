@@ -1,5 +1,5 @@
-FROM debian:bookworm
-RUN apt-get update && apt-get install -y \
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
   tini \
   perl \
   libdancer2-perl \
