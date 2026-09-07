@@ -412,31 +412,38 @@ function writeRootVSCodeSettingsFile(availableProjects, tailwindSources) {
     },
     "tailwindCSS.includeLanguages": tailwindIncludeLanguages,
     ...tailwindElmSettings,
+    "filewatcher.commands": [
+      {
+        match: "(^|/)\\.gitignore$|^\\.scripts/synchronize\\.js$",
+        // eslint-disable-next-line no-template-curly-in-string
+        cmd: "cd ${workspaceRoot} && node .scripts/synchronize.js --no-dcc",
+        event: "onFileChange",
+      },
+      {
+        match: "(^|/)typedefs\\.gql$",
+        // eslint-disable-next-line no-template-curly-in-string
+        cmd: "cd ${workspaceRoot} && node .scripts/synchronize.js --no-dcc && node .scripts/merge-graphql-schemas.js",
+        event: "onFileChange",
+      },
+      {
+        match: ".scripts/synchronize\\.js$",
+        // eslint-disable-next-line no-template-curly-in-string
+        cmd: "cd ${workspaceRoot} && node .scripts/synchronize.js --no-dcc",
+        event: "onFileChange",
+      },
+      ...availableProjects.map((project) => ({
+        match: `/${project}/\\.project\\.yaml$`,
+        // eslint-disable-next-line no-template-curly-in-string
+        cmd: `cd \${workspaceRoot} && node .scripts/synchronize.js --no-dcc && sh ${project}/.update_devcontainer.sh`,
+        event: "onFileChange",
+      })),
+    ],
   };
   console.log(`Writing .vscode/settings.json ...`);
   fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
   fs.writeFileSync(
     path.join(projectRoot, ".vscode/settings.json"),
     JSON.stringify(vscodeSettings, null, 2),
-  );
-}
-
-function writeRootVSCodeTasksFile() {
-  const tasks = {
-    tasks: [
-      {
-        label: "watch for changes",
-        type: "shell",
-        command: "node .scripts/watch-updates.js",
-        problemMatcher: [],
-      },
-    ],
-  };
-  console.log(`Writing .vscode/tasks.json ...`);
-  fs.mkdirSync(path.join(projectRoot, ".vscode"), { recursive: true });
-  fs.writeFileSync(
-    path.join(projectRoot, ".vscode/tasks.json"),
-    JSON.stringify(tasks, null, 2),
   );
 }
 
@@ -466,4 +473,3 @@ if (!args.includes("--no-dcc")) {
   writeDccFiles(availableProjects);
 }
 writeRootVSCodeSettingsFile(allAvailableProjects, tailwindSources);
-writeRootVSCodeTasksFile();
