@@ -25,6 +25,7 @@ devcontainer:
     TRAEFIK_ENTRYPOINTS: web,rest-internal
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#dbdb94"
     "[rust]":
       editor.defaultFormatter: rust-lang.rust-analyzer

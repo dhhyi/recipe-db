@@ -21,6 +21,7 @@ devcontainer:
     go run github.com/Khan/genqlient@main
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#b8db94"
     "[templ]":
       editor.defaultFormatter: a-h.templ

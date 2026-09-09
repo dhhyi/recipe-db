@@ -15,6 +15,7 @@ devcontainer:
     - 3000
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#94db94"
   extensions:
     - johnpapa.vscode-peacock

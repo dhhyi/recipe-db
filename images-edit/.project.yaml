@@ -35,6 +35,7 @@ devcontainer:
     pnpm build && cp -f elm.js /usr/share/nginx/html/elm.js
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#94dbdb"
     "[elm]":
       editor.defaultFormatter: elmTooling.elm-ls-vscode

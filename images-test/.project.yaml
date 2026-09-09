@@ -41,6 +41,7 @@ devcontainer:
     WEB_API: http://traefik
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#5dc993"
   extensions:
     - johnpapa.vscode-peacock

@@ -60,6 +60,7 @@ devcontainer:
   initialize: sudo /etc/init.d/nginx start
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     karateRunner.karateJS.commandLineArgs: karate
     karateRunner.karateJar.commandLineArgs: karate
     peacock.remoteColor: "#c9c95d"
