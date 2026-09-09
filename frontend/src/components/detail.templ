@@ -3,19 +3,6 @@ package components
 import "frontend/src/generated"
 import "frontend/src/util"
 
-templ inspiration(in gql.InspirationsLink) {
-	<a
-		class="flex gap-2 items-center"
-		href={ in.Extracted.Canonical }
-	>
-		<img
-			height
-			class="h-5"
-			src={ in.Extracted.InlinedFavicon }
-		/>{ in.Extracted.Title }
-	</a>
-}
-
 templ editFields(id string, recipeEdit bool, imageEdit bool) {
 	if recipeEdit || imageEdit {
 		<details class="dropdown sm:ml-auto">
@@ -37,19 +24,21 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 	<div class="flex flex-col sm:flex-row pt-1">
 		<hgroup>
 			<h1>{ recipe.Name }</h1>
-			if resp.RatingsOnline {
+			if resp.RatingsOnline && recipe.Rating != nil {
 				@Rating(recipe.Rating, true)
 			}
 		</hgroup>
 		@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)
 	</div>
-	<figure class="contents!">
-		<img
-			class="recipe-thumbnail"
-			src={ recipe.Image.ThumbUrl }
-			alt={ recipe.Name }
-		/>
-	</figure>
+	if recipe.Image != nil {
+		<figure class="contents!">
+			<img
+				class="recipe-thumbnail"
+				src={ recipe.Image.ThumbUrl }
+				alt={ recipe.Name }
+			/>
+		</figure>
+	}
 	if len(recipe.Ingredients) > 0 {
 		<h2>Zutaten</h2>
 		<table>
@@ -63,8 +52,13 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 				for _, ingredient := range recipe.Ingredients {
 					<tr>
 						<td>
-							{ ingredient.Amount } { ingredient.Unit }
-							if ingredient.Optional {
+							if ingredient.Amount != nil {
+								{ *ingredient.Amount }
+							}
+							if ingredient.Unit != nil {
+								{ *ingredient.Unit }
+							}
+							if ingredient.Optional != nil && *ingredient.Optional {
 								<span>(optional) </span>
 							}
 						</td>
@@ -76,19 +70,14 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 			</tbody>
 		</table>
 	}
-	if len(recipe.Method) > 0 {
+	if recipe.Method != nil && len(*recipe.Method) > 0 {
 		<h2>Zubereitung</h2>
-		@templ.Raw(util.ToMarkDown(recipe.Method))
+		@templ.Raw(util.ToMarkDown(*recipe.Method))
 	}
-	if len(recipe.Inspirations) > 0 {
+	if resp.InspirationsOnline && len(recipe.Inspirations) > 0 {
 		<h2>Inspirationen</h2>
-		<ul class="markerless">
-			for _, insp := range recipe.Inspirations {
-				<li>
-					@inspiration(insp)
-				</li>
-			}
-		</ul>
+		@InspirationsStub(recipe.Id)
+		// @Inspirations(recipe.Inspirations)
 	}
 	<a href="/" role="button">Zur Startseite</a>
 }

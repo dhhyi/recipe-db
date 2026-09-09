@@ -7,8 +7,10 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 		<header>
 			<h2 class="font-bold"><a href={ "/recipe/" + item.Id }>{ item.Name }</a></h2>
 		</header>
-		<img src={ item.Image.ThumbUrl } alt={ item.Name }/>
-		if ratingsOnline {
+		if item.Image != nil {
+			<img src={ item.Image.ThumbUrl } alt={ item.Name }/>
+		}
+		if ratingsOnline && item.Rating != nil {
 			<footer>
 				@Rating(item.Rating, false)
 			</footer>
