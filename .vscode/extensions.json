@@ -1,3 +1,3 @@
 {
-  "recommendations": ["redhat.vscode-yaml", "appulate.filewatcher"]
+  "recommendations": ["redhat.vscode-yaml", "pucelle.run-on-save"]
 }

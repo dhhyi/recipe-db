@@ -90,7 +90,3 @@ Setup a public deployment.
 ### Rewrite recipe backend
 
 Since currently both `frontend` and `recipes` is written in Go, it violates the playground rule to have another language for each project. Find a good language that can be used for the recipe backend, and rewrite it in that language. The new language should be one that is not already used in the project, and should be suitable for receiving json data and querying them by ID.
-
-### better devcontainers
-
-filewatcher doesn't seem to print stderr (it also fails on any stderr?!) - maybe choose an alternative or completely migrate to watchexec with vscode tasks?

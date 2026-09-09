@@ -412,30 +412,29 @@ function writeRootVSCodeSettingsFile(availableProjects, tailwindSources) {
     },
     "tailwindCSS.includeLanguages": tailwindIncludeLanguages,
     ...tailwindElmSettings,
-    "filewatcher.commands": [
+    "runOnSave.commands": [
       {
         match: "(^|/)\\.gitignore$|^\\.scripts/synchronize\\.js$",
-        // eslint-disable-next-line no-template-curly-in-string
-        cmd: "cd ${workspaceRoot} && node .scripts/synchronize.js --no-dcc",
-        event: "onFileChange",
-      },
-      {
-        match: "(^|/)typedefs\\.gql$",
-        // eslint-disable-next-line no-template-curly-in-string
-        cmd: "cd ${workspaceRoot} && node .scripts/synchronize.js --no-dcc && node .scripts/merge-graphql-schemas.js",
-        event: "onFileChange",
+        command:
+          // eslint-disable-next-line no-template-curly-in-string
+          "cd ${workspaceFolder} && node .scripts/synchronize.js --no-dcc",
+        runningStatusMessage: "synchronizing...",
+        finishStatusMessage: "synchronizing ✔",
       },
       {
         match: ".scripts/synchronize\\.js$",
-        // eslint-disable-next-line no-template-curly-in-string
-        cmd: "cd ${workspaceRoot} && node .scripts/synchronize.js --no-dcc",
-        event: "onFileChange",
+        command:
+          // eslint-disable-next-line no-template-curly-in-string
+          "cd ${workspaceFolder} && node .scripts/synchronize.js --no-dcc",
+        runningStatusMessage: "synchronizing...",
+        finishStatusMessage: "synchronizing ✔",
       },
       ...availableProjects.map((project) => ({
         match: `/${project}/\\.project\\.yaml$`,
         // eslint-disable-next-line no-template-curly-in-string
-        cmd: `cd \${workspaceRoot} && node .scripts/synchronize.js --no-dcc && sh ${project}/.update_devcontainer.sh`,
-        event: "onFileChange",
+        command: `cd \${workspaceFolder} && node .scripts/synchronize.js --no-dcc && sh ${project}/.update_devcontainer.sh`,
+        runningStatusMessage: `${project} devcontainer...`,
+        finishStatusMessage: `${project} devcontainer ✔`,
       })),
     ],
   };

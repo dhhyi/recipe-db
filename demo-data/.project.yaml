@@ -26,16 +26,17 @@ vscode:
     python.formatting.provider: none
     "[python]":
       editor.defaultFormatter: ms-python.black-formatter
-    filewatcher.commands:
+    runOnSave.commands:
       - match: "\\.graphql"
-        cmd: cd ${workspaceRoot} && ariadne-codegen
-        event: onFolderChange
+        command: cd ${workspaceFolder} && ariadne-codegen
+        runningStatusMessage: "codegen..."
+        finishStatusMessage: "codegen ✔"
     cSpell.language: de-de
     cSpell.enabledLanguageIds: ["json", "markdown"]
   extensions:
     - johnpapa.vscode-peacock
     - GraphQL.vscode-graphql
-    - appulate.filewatcher
+    - pucelle.run-on-save
     - ms-python.black-formatter
     - streetsidesoftware.code-spell-checker
     - streetsidesoftware.code-spell-checker-german

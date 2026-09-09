@@ -44,19 +44,22 @@ vscode:
     tailwindCSS.includeLanguages:
       elm: html
     tailwindCSS.experimental.configFile: ../design/src/design.css
-    filewatcher.commands:
+    runOnSave.commands:
       - match: "\\.elm"
-        cmd: cd ${workspaceRoot} && pnpm build && cp -fv elm.js /usr/share/nginx/html/elm.js
-        event: onFileChange
+        command: cd ${workspaceFolder} && pnpm build && cp -fv elm.js /usr/share/nginx/html/elm.js
+        runningStatusMessage: "elm..."
+        finishStatusMessage: "elm ✔"
       - match: "nginx.conf"
-        cmd: sudo /etc/init.d/nginx reload
-        event: onFileChange
+        command: sudo /etc/init.d/nginx reload
+        runningStatusMessage: "nginx..."
+        finishStatusMessage: "nginx ✔"
       - match: "\\.graphql"
-        cmd: cd ${workspaceRoot} && pnpm codegen
-        event: onFolderChange
+        command: cd ${workspaceFolder} && pnpm codegen
+        runningStatusMessage: "codegen..."
+        finishStatusMessage: "codegen ✔"
   extensions:
     - johnpapa.vscode-peacock
-    - appulate.filewatcher
+    - pucelle.run-on-save
     - GraphQL.vscode-graphql
     - elmTooling.elm-ls-vscode
     - bradlc.vscode-tailwindcss
