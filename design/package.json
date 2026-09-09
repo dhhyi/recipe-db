@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "start": "storybook dev -p 6006",
+    "start": "storybook dev -p 6006 --no-open",
     "lint": "eslint .",
     "build-storybook": "storybook build"
   },

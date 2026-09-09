@@ -46,7 +46,7 @@ traefik:
           loadBalancer:
             healthCheck:
               interval: 10s
-              timeout: 1s
+              timeout: 3s
               path: /health
       routers:
         images:
