@@ -30,16 +30,18 @@ vscode:
     tailwindCSS.includeLanguages:
       templ: html
     tailwindCSS.experimental.configFile: ../design/src/design.css
-    filewatcher.commands:
+    runOnSave.commands:
       - match: '(\.graphqls?|genqlient.yaml)$'
-        cmd: cd ${workspaceRoot} && go run github.com/Khan/genqlient@main
-        event: onFileChange
+        command: cd ${workspaceFolder} && go run github.com/Khan/genqlient@main
+        runningStatusMessage: "genqlient..."
+        finishStatusMessage: "genqlient ✔"
       - match: "\\.templ$"
-        cmd: cd ${workspaceRoot} && templ generate
-        event: onFileChange
+        command: cd ${workspaceFolder} && templ generate
+        runningStatusMessage: "templ..."
+        finishStatusMessage: "templ ✔"
   extensions:
     - johnpapa.vscode-peacock
-    - appulate.filewatcher
+    - pucelle.run-on-save
     - golang.Go
     - a-h.templ
     - GraphQL.vscode-graphql
