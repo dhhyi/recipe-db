@@ -66,18 +66,6 @@ The images frontend should be the only place where the full-size image is loaded
 
 Frontend apps that load images should use a correctly sized placeholder while loading and also support a placeholder when an image is unavailable. The placeholder could be a blurred version of the image, and it can later be replaced with a higher-quality version once the image is scrolled into view.
 
-## Ratings
-
-### Add ratings to recipes
-
-For now, only add ratings with a static user ID, but later on, the user ID should be taken from the login mechanism.
-
-There should be a shared web component with a hover-mechanism for adding new ratings, and a static display of the average rating for a recipe (with half-stars like the old implementation).
-
-### Ratings optional
-
-The ratings backend should be optional, so that the stack can be deployed without it. The GraphQL schema should reflect this, and the frontend should not show as well as edit ratings if the backend is not available.
-
 ## Inspirations
 
 The inspirations backend should be optional, so that the stack can be deployed without it. The GraphQL schema should reflect this, and the frontend should not show as well as edit inspirations if the backend is not available.

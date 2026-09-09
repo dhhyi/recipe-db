@@ -18,11 +18,12 @@ const lorem = new LoremIpsum();
 export const Sticky: Story = {
   render: () => html`
     <header-component></header-component>
-    <main class="p-2">
+    <main style="padding: 0.5rem 0;">
+      <h1>${lorem.generateWords(3)}</h1>
       ${lorem
-        .generateParagraphs(20)
+        .generateParagraphs(5)
         .split("\n")
-        .map((text) => html`<p>${text}</p>`)}
+        .map((text) => html`<p class="text-justify">${text}</p>`)}
     </main>
   `,
 };

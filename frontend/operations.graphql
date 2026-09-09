@@ -1,4 +1,5 @@
 fragment Rating on Rating {
+  recipeId
   average
   count
 }
@@ -20,6 +21,7 @@ query Overview {
     ...RecipeStub
   }
   recipeEditOnline: isServiceOnline(name: "recipes-edit")
+  ratingsOnline: isServiceOnline(name: "ratings")
 }
 
 fragment InspirationsLink on Link {
@@ -60,4 +62,11 @@ query RecipeById($id: ID!) {
   }
   recipeEditOnline: isServiceOnline(name: "recipes-edit")
   imageEditOnline: isServiceOnline(name: "images-edit")
+  ratingsOnline: isServiceOnline(name: "ratings")
+}
+
+mutation RateRecipe($id: ID!, $rating: Int!, $login: String!) {
+  rate(id: $id, rating: $rating, login: $login) {
+    ...Rating
+  }
 }

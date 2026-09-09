@@ -11,13 +11,13 @@ Feature: ratings
     * request { query: '#(read("graphql/rating-by-id.graphql"))', variables: { id: '1' } }
     * method post
     * status 200
-    * match response.data == { rating: { average: 0, count: 0 } }
+    * match response.data == { rating: { recipeId: '1', average: 0, count: 0 } }
 
   Scenario: should execute rate
     * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2, login: 'test' } }
     * method post
     * status 200
-    * match response.data == { rate: 2 }
+    * match response.data == { rate: { average: 2, count: 1 } }
 
   Scenario: should have rating after multiple rates
     * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2, login: 'test1' } }
@@ -35,4 +35,4 @@ Feature: ratings
     * request { query: '#(read("graphql/rating-by-id.graphql"))', variables: { id: '1' } }
     * method post
     * status 200
-    * match response.data == { rating: { average: 3.5, count: 3 } }
+    * match response.data == { rating: { recipeId: '1', average: 3.5, count: 3 } }

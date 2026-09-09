@@ -2,15 +2,17 @@ package components
 
 import "frontend/src/generated"
 
-templ recipeTile(item gql.RecipeStub) {
+templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 	<article>
 		<header>
 			<h2 class="font-bold"><a href={ "/recipe/" + item.Id }>{ item.Name }</a></h2>
 		</header>
 		<img src={ item.Image.ThumbUrl } alt={ item.Name }/>
-		<footer>
-			@Rating(item.Rating)
-		</footer>
+		if ratingsOnline {
+			<footer>
+				@Rating(item.Rating, false)
+			</footer>
+		}
 	</article>
 }
 
@@ -18,7 +20,7 @@ templ Overview(resp *gql.OverviewResponse) {
 	<h1>Alle Rezepte</h1>
 	<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4">
 		for _, recipe := range resp.Recipes {
-			@recipeTile(recipe)
+			@recipeTile(recipe, resp.RatingsOnline)
 		}
 		if resp.RecipeEditOnline {
 			<a href="/edit/new" class="contents" aria-label="Neues Rezept hinzufügen">
