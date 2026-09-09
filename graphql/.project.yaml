@@ -12,6 +12,7 @@ devcontainer:
       - libssl-dev
       - musl-tools
     user:
+      - RUN mise use -g watchexec
       - RUN mise use -g rust@1.98.0
       - RUN rustup target add x86_64-unknown-linux-musl
   initialize: cargo fetch
@@ -30,6 +31,9 @@ vscode:
     - johnpapa.vscode-peacock
     - rust-lang.rust-analyzer
     - GraphQL.vscode-graphql
+  tasks:
+    - label: Run watch server
+      command: watchexec -r -e rs,toml,lock -- cargo run
 extras:
   - named-volumes
   - traefik

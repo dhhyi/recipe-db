@@ -36,6 +36,9 @@ vscode:
     - johnpapa.vscode-peacock
     - karatelabs.karate
     - kirkslota.karate-runner
+  tasks:
+    - label: Run Tests
+      command: karate -T 1 .
 extras:
   - traefik
 traefik:
