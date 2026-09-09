@@ -93,5 +93,4 @@ Since currently both `frontend` and `recipes` is written in Go, it violates the 
 
 ### better devcontainers
 
-DCC should be invoked without --no-vscode
 filewatcher doesn't seem to print stderr (it also fails on any stderr?!) - maybe choose an alternative or completely migrate to watchexec with vscode tasks?
