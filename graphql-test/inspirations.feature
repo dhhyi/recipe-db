@@ -17,8 +17,8 @@ Feature: inspirations
     * match response.data == { recipes: [] }
 
   Scenario: should have a recipe with extracted inspirations after adding one
-    * def fixtureApi = java.lang.System.getenv('INSPIRATION_FIXTURE_API')
-    * def pageUrl = fixtureApi + '/page'
+    * def fixtureApi = java.lang.System.getenv('FIXTURE_API')
+    * def pageUrl = fixtureApi + '/'
     * def canonicalUrl = fixtureApi + '/canonical'
     * def faviconUrl = fixtureApi + '/favicon.ico'
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['#(pageUrl)'] } } }

@@ -8,7 +8,7 @@ devcontainer:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     packages:
-      - python3
+      - nginx
     user:
       - RUN mise use -g java@21
     args:
@@ -19,15 +19,45 @@ devcontainer:
       - RUN chmod +rx /opt/karate.jar
       - ADD https://github.com/antham/ghokin/releases/download/v${GHOKIN_VERSION}/ghokin_${GHOKIN_VERSION}_linux_amd64.tar.gz /tmp/ghokin.tar.gz
       - RUN tar -xzf /tmp/ghokin.tar.gz -C /tmp && mv /tmp/ghokin /usr/local/bin/ghokin && chmod +rx /usr/local/bin/ghokin
+      - RUN rm -f /etc/nginx/sites-enabled/default
     files:
       - type: script
         path: /usr/local/bin/karate
         content: |
           #!/bin/bash
           java -jar /opt/karate.jar "$@"
+      - type: file
+        path: /var/www/html/index.html
+        content: |
+          <!doctype html>
+          <html>
+            <head>
+              <title>GraphQL Inspiration Fixture</title>
+              <meta name="description" content="Fixture page for GraphQL inspiration extraction">
+              <link rel="icon" href="/graphql-test-fixture/favicon.ico">
+              <link rel="canonical" href="http://traefik:3000/graphql-test-fixture/canonical">
+            </head>
+            <body>fixture</body>
+          </html>
+      - type: file
+        path: /var/www/html/favicon.ico
+        base64: aWNvbg==
+      - type: file
+        path: /etc/nginx/conf.d/default.conf
+        content: |
+          server {
+            listen 80 default_server;
+            listen [::]:80 default_server;
+            root /var/www/html;
+            index index.html;
+          }
+  ports:
+    - 80
   selftest: karate -h
   environment:
     GRAPHQL_API: http://traefik/graphql
+    FIXTURE_API: http://traefik:3000/graphql-test-fixture
+  initialize: sudo /etc/init.d/nginx start
 vscode:
   settings:
     karateRunner.karateJS.commandLineArgs: karate
@@ -44,16 +74,30 @@ extras:
   - traefik
 traefik:
   network: intranet
+  labels:
+    http:
+      middlewares:
+        graphql-test-strip:
+          stripPrefix:
+            prefixes: /graphql-test-fixture
+      services:
+        recipe-db-graphql-test-fixture:
+          loadBalancer:
+            server:
+              port: "80"
+      routers:
+        graphql-test-fixture:
+          rule: PathPrefix(`/graphql-test-fixture`)
+          entrypoints: rest-internal
+          middlewares: graphql-test-strip
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 precommit: |
   ghokin version
   ghokin fmt replace .
-test: sh run-tests.sh
 prettier:
   ignore:
     - "*.feature"
     - "*.jpg"
-    - "*.py"
-    - "*.sh"
+test: karate -T 1 .
