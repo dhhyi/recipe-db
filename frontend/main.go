@@ -54,7 +54,22 @@ func main() {
 			http.Error(w, "failed to rate recipe", http.StatusInternalServerError)
 			return
 		}
-		templ.Handler(components.Rating(resp.Rate, true)).ServeHTTP(w, r)
+		templ.Handler(components.Rating(&resp.Rate, true)).ServeHTTP(w, r)
+	})
+
+	http.HandleFunc("/recipe/{id}/inspirations", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
+		resp, err := gql.RecipeInspirations(client, id)
+		if err != nil {
+			log.Printf("failed to fetch recipe inspirations: %v", err)
+			http.Error(w, "failed to fetch recipe inspirations", http.StatusInternalServerError)
+			return
+		}
+		templ.Handler(components.InspirationsLazy(resp)).ServeHTTP(w, r)
 	})
 
 	http.HandleFunc("/recipe/{id}", func(w http.ResponseWriter, r *http.Request) {

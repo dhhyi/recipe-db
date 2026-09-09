@@ -7,3 +7,4 @@ generated: src/generated/graphql.go
 package: gql
 context_type: "-"
 flatten: true
+optional: pointer

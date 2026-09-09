@@ -1,0 +1,55 @@
+package components
+
+import "frontend/src/generated"
+
+templ inspiration(in gql.InspirationsLink) {
+	if in.Extracted != nil && in.Extracted.Canonical != nil {
+		<a
+			class="flex gap-2 items-center"
+			href={ *in.Extracted.Canonical }
+			if in.Extracted.Description != nil {
+				title={ *in.Extracted.Description }
+			}
+		>
+			if in.Extracted.InlinedFavicon != nil {
+				<img
+					height
+					class="h-5"
+					src={ *in.Extracted.InlinedFavicon }
+				/>
+			}
+			if in.Extracted.Title != nil {
+				{ *in.Extracted.Title }
+			}
+		</a>
+	} else if len(in.Url) > 0 {
+		<a href={ in.Url }>
+			{ in.Url }
+		</a>
+	}
+}
+
+templ InspirationsLazy(in *gql.RecipeInspirationsResponse) {
+	if in.Recipe != nil {
+		@inspirations(in.Recipe.Inspirations)
+	}
+}
+
+templ inspirations(in []gql.InspirationsLink) {
+	<ul class="markerless">
+		for _, insp := range in {
+			<li>
+				@inspiration(insp)
+			</li>
+		}
+	</ul>
+}
+
+templ InspirationsStub(recipeId string) {
+	<div
+		aria-busy="true"
+		hx-get={ "/recipe/" + recipeId + "/inspirations" }
+		hx-trigger="intersect"
+		hx-swap="outerHTML"
+	></div>
+}

@@ -2,14 +2,19 @@ package components
 
 import "frontend/src/generated"
 
-templ Rating(rating gql.Rating, ratingPossible bool) {
+templ Rating(rating *gql.Rating, ratingPossible bool) {
 	<rating-component
-		rating={ rating.Average }
-		count={ rating.Count }
+		if rating.Average != nil {
+			rating={ *rating.Average }
+		}
+		if rating.Count != nil {
+			count={ *rating.Count }
+		}
 		if ratingPossible {
 			hx-post={ "/recipe/" + rating.RecipeId + "/rate" }
-			hx-trigger="rated"
 			hx-target="this"
+			hx-swap="outerHTML"
+			hx-trigger="rated"
 			hx-vals="js:{rating: event.detail}"
 		}
 	></rating-component>
