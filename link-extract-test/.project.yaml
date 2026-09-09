@@ -64,6 +64,7 @@ devcontainer:
   initialize: sudo /etc/init.d/nginx start
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#5d5dc9"
   extensions:
     - johnpapa.vscode-peacock

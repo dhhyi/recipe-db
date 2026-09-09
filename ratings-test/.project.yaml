@@ -28,6 +28,7 @@ devcontainer:
     REST_API: http://traefik:3000
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     karateRunner.karateJS.commandLineArgs: karate
     karateRunner.karateJar.commandLineArgs: karate
     peacock.remoteColor: "#c95dc9"

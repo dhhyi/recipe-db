@@ -29,6 +29,7 @@ devcontainer:
     nim c -r --hints:off /tmp/helloworld.nim
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#94dbb8"
   extensions:
     - nimlang.nimlang

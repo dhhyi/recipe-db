@@ -21,6 +21,7 @@ devcontainer:
   initialize: ariadne-codegen
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#dbb894"
     python.formatting.provider: none
     "[python]":

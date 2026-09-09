@@ -36,6 +36,7 @@ devcontainer:
     mkdir -p ~/.config/fish/conf.d
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     Lua.format.enable: false
     peacock.remoteColor: "#94b8db"
   extensions:

@@ -44,6 +44,7 @@ devcontainer:
     TESTING: "true"
 vscode:
   settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     editor.defaultFormatter: esbenp.prettier-vscode
     files.associations:
       "*.css": tailwindcss
