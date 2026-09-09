@@ -113,3 +113,15 @@ header-component {
   margin: 0 auto;
   max-width: min(650px, 100%);
 }
+
+rating-component[hx-post] {
+  svg {
+    transition: all 0.3s ease;
+  }
+  svg:has(~ svg:hover),
+  svg:hover {
+    fill: #ffec17;
+    color: #ffec17;
+    cursor: pointer;
+  }
+}

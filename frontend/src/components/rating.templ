@@ -1,13 +1,16 @@
 package components
 
 import "frontend/src/generated"
-import "math"
 
-templ Rating(rating gql.Rating) {
-	<span>
-		for i := 1; i <= int(math.Round(rating.Average)); i++ {
-			⭐
+templ Rating(rating gql.Rating, ratingPossible bool) {
+	<rating-component
+		rating={ rating.Average }
+		count={ rating.Count }
+		if ratingPossible {
+			hx-post={ "/recipe/" + rating.RecipeId + "/rate" }
+			hx-trigger="rated"
+			hx-target="this"
+			hx-vals="js:{rating: event.detail}"
 		}
-		({ rating.Count })
-	</span>
+	></rating-component>
 }

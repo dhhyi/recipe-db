@@ -3,8 +3,10 @@ use serde::Deserialize;
 
 use crate::rest_client::RestClient;
 
-#[derive(Clone, Debug, SimpleObject)]
+#[derive(Clone, Debug, Deserialize, SimpleObject)]
+#[serde(rename_all = "camelCase")]
 pub struct Rating {
+    pub recipe_id: async_graphql::ID,
     pub average: Option<f64>,
     pub count: Option<i32>,
 }
@@ -34,15 +36,20 @@ impl RatingsApi {
     pub async fn get_rating(&self, id: &str) -> Result<Rating, Error> {
         let rating: RestRating = self.client.get(id).await?;
         Ok(Rating {
+            recipe_id: ID::from(id.to_string()),
             average: Some(rating.rating),
             count: Some(rating.count),
         })
     }
 
-    pub async fn add_rating(&self, id: &str, rating: i32, login: &str) -> Result<f64, Error> {
+    pub async fn add_rating(&self, id: &str, rating: i32, login: &str) -> Result<Rating, Error> {
         let body = format!("rating={rating}&login={login}");
         let result: RestRating = self.client.put_form(id, body).await?;
-        Ok(result.rating)
+        Ok(Rating {
+            recipe_id: ID::from(id.to_string()),
+            average: Some(result.rating),
+            count: Some(result.count),
+        })
     }
 }
 
@@ -71,7 +78,7 @@ impl RatingsMutation {
         id: ID,
         rating: i32,
         login: String,
-    ) -> Result<f64, Error> {
+    ) -> Result<Rating, Error> {
         ctx.data::<RatingsApi>()?
             .add_rating(id.as_str(), rating, &login)
             .await

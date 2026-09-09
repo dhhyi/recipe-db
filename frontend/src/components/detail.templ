@@ -37,7 +37,9 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 	<div class="flex flex-col sm:flex-row pt-1">
 		<hgroup>
 			<h1>{ recipe.Name }</h1>
-			@Rating(recipe.Rating)
+			if resp.RatingsOnline {
+				@Rating(recipe.Rating, true)
+			}
 		</hgroup>
 		@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)
 	</div>

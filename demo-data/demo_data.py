@@ -110,7 +110,7 @@ async def rate_recipe(recipe_id, rating, user):
 async def random_rate_recipe(recipe_id):
     users = ["joe", "jane", "bob", "alice", "eve"]
 
-    random_users = random.sample(users, random.randint(3, 5))
+    random_users = random.sample(users, random.randint(0, 3))
     for user in random_users:
         await rate_recipe(recipe_id, random.randint(1, 5), user)
 
