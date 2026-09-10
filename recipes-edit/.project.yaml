@@ -8,41 +8,74 @@ devcontainer:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     packages:
-      - build-essential
-      - pkg-config
-      - libssl-dev
-      - musl-tools
+      - nginx
+      - libatomic1
+    args:
+      NGINX_FORMATTER_VERSION: "2.3.0"
+    root:
+      - ADD https://github.com/soulteary/nginx-formatter/releases/download/v${NGINX_FORMATTER_VERSION}/nginx-formatter_${NGINX_FORMATTER_VERSION}_linux_amd64.tar.gz /tmp/nginx-formatter.tar.gz
+      - RUN tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp
+        && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
+      - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
     user:
-      - RUN mise use -g rust@1.98.0
-      - RUN rustup target add wasm32-unknown-unknown x86_64-unknown-linux-musl
-      - RUN mise use -g cargo:cargo-leptos@0.3.7
-      - RUN mise use -g cargo:leptosfmt
+      - RUN mise use -g java@21
+      - RUN mise use -g clojure@1.12.3.1577
+      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
+      - RUN mise use -g node@26 npm:pnpm@11
+    files:
+      - type: script
+        path: /usr/local/bin/distribute-js
+        content: |
+          #!/bin/sh
+          [ -z "$1" ] && echo "No argument supplied" && exit 1
+          echo "Distributing $1/* to /usr/share/nginx/html/"
+          cp -Rf "$1"/* /usr/share/nginx/html/
+          sudo /etc/init.d/nginx restart
   ports:
-    - 3000
-  initialize: cargo fetch
+    - 80
+  initialize: |
+    sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf
+    sudo ln -sf ${containerWorkspaceFolder}/index.html /usr/share/nginx/html/index.html
+    sudo /etc/init.d/nginx start
+    cd ${containerWorkspaceFolder}
+    pnpm install
+    pnpm build
+    distribute-js public
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
     peacock.remoteColor: "#b894db"
-    "[rust]":
-      editor.defaultFormatter: rust-lang.rust-analyzer
+    "[clojure]":
+      editor.defaultFormatter: betterthantomorrow.calva
     tailwindCSS.includeLanguages:
-      rust: html
+      clojure: html
     tailwindCSS.experimental.configFile: ../design/src/design.css
+    runOnSave.commands:
+      - languages: ["clojure", "graphql"]
+        command: cd ${workspaceFolder} && pnpm build && distribute-js public
+        runningStatusMessage: "clojure..."
+        finishStatusMessage: "clojure ✔"
+      - match: "nginx.conf"
+        command: sudo /etc/init.d/nginx reload
+        runningStatusMessage: "nginx..."
+        finishStatusMessage: "nginx ✔"
   extensions:
     - johnpapa.vscode-peacock
-    - rust-lang.rust-analyzer
+    - betterthantomorrow.calva
+    - pucelle.run-on-save
     - GraphQL.vscode-graphql
     - bradlc.vscode-tailwindcss
   tasks:
     - label: Run watch server
-      command: cargo leptos watch
+      command: pnpm watch
 extras:
   - traefik
   - named-volumes
 namedVolumes:
-  $HOME/.cargo/registry: recipe-db-recipes-edit-cargo-registry
-  $HOME/.cargo/git: recipe-db-recipes-edit-cargo-git
+  $HOME/.m2: recipe-db-recipes-edit-m2
+  $HOME/.gitlibs: recipe-db-recipes-edit-gitlibs
+  .pnpm-store: recipe-db-recipes-edit-pnpm-store
+  node_modules: recipe-db-recipes-edit-node-modules
   target: recipe-db-recipes-edit-target
 traefik:
   network: intranet
@@ -51,8 +84,7 @@ traefik:
       middlewares:
         recipes-edit-strip:
           stripPrefix:
-            prefixes:
-              - /edit
+            prefixes: /edit
       services:
         recipe-db-recipes-edit:
           loadBalancer:
@@ -65,23 +97,26 @@ traefik:
           rule: PathPrefix(`/edit`)
           entrypoints: web
           middlewares: recipes-edit-strip
-        recipes-edit-assets:
-          rule: PathPrefix(`/pkg`)
-          entrypoints: web
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
 tailwindSources:
+  - index.html
   - src
 precommit: |
-  cargo --version
-  leptosfmt src/app.rs
-  cargo fmt
-  cargo clippy --all-targets -- -D warnings
-  cargo build
+  java --version
+  clojure --version
+  npx prettier --write index.html package.json pnpm-workspace.yaml
+  nginx-formatter -indent=4
+  clojure -M:format fix src deps.edn shadow-cljs.edn
+  clojure -M:lint --lint src
+  pnpm test
+  pnpm build
 prettier:
   ignore:
-    - "*.rs"
-    - Cargo.toml
-    - Cargo.lock
+    - "*.clj"
+    - "*.cljc"
+    - "*.cljs"
+    - "*.edn"
+    - nginx.conf

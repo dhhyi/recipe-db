@@ -1,0 +1,2 @@
+storeDir: .pnpm-store
+packageImportMethod: copy

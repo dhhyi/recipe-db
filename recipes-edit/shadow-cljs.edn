@@ -1,0 +1,10 @@
+{:deps true
+ :builds
+ {:app {:target :browser
+        :output-dir "public/js"
+        :asset-path "/edit/js"
+        :modules {:main {:init-fn recipes-edit.core/init}}}
+  :test {:target :node-test
+         :output-to "target/test.js"
+         :ns-regexp "-test$"
+         :autorun false}}}

@@ -1,34 +1,17 @@
-FROM rust:1-bookworm AS chef
+FROM node:lts-bookworm AS node
 
-RUN apt-get update && apt-get -y install --no-install-recommends musl-tools && apt-get clean && rm -rf /var/lib/apt/lists/*
-RUN rustup target add wasm32-unknown-unknown x86_64-unknown-linux-musl
-RUN cargo install cargo-chef cargo-leptos --locked
-
-WORKDIR /app
-
-FROM chef AS planner
-COPY Cargo.toml Cargo.lock ./
-COPY src src
-COPY style style
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS builder
-COPY --from=planner /app/recipe.json recipe.json
-# pre-bake dependency compilation for both cargo-leptos targets, cached independently of src changes
-RUN cargo chef cook --release --target x86_64-unknown-linux-musl --no-default-features --features ssr --recipe-path recipe.json
-RUN cargo chef cook --release --target wasm32-unknown-unknown --no-default-features --features hydrate --recipe-path recipe.json
-COPY Cargo.toml Cargo.lock build.rs recipe-db.graphqls operations.graphql ./
-COPY src src
-COPY style style
-RUN cargo leptos build --release
-
-FROM scratch
+FROM clojure:temurin-21-tools-deps-bookworm-slim AS builder
+COPY --from=node /usr/local /usr/local
+RUN npm install --global pnpm@11
 
 WORKDIR /app
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/recipes-edit /app/
-COPY --from=builder /app/target/site /app/site
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY deps.edn shadow-cljs.edn operations.graphql recipe-db.graphqls ./
+COPY src src
+RUN pnpm build
 
-ENV LEPTOS_SITE_ROOT=/app/site
-ENV LEPTOS_SITE_ADDR=0.0.0.0:3000
-EXPOSE 3000
-ENTRYPOINT ["/app/recipes-edit"]
+FROM nginx:stable-alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY index.html /usr/share/nginx/html/index.html
+COPY --from=builder /app/public/js /usr/share/nginx/html/js
