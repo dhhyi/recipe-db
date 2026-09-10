@@ -8,21 +8,6 @@ It is okay for the design project using Storybook, and web-components that are s
 
 It's also allowed for frontends compiled to JavaScript, like Elm (images-edit) and ClojureScript (recipes-edit), since JavaScript is merely the output, but not the language used for development.
 
-### Rewrite recipes-edit in ClojureScript
-
-recipes-edit is currently the only Rust project, and Rust is needed for the GraphQL server instead.
-It will be rewritten as a client-side ClojureScript app served by nginx, mirroring the Elm
-images-edit setup. This drops server-side rendering and the Leptos server functions, so the browser
-talks to `/graphql` directly.
-
-ClojureScript has no equivalent of `graphql_client`/elm-graphql that turns schema plus operations
-into bindings — the ecosystem only offers runtime clients (re-graph) and an operations-only query
-builder (graphql-builder). Most of the safety is still recoverable, because ClojureScript macros run
-in JVM Clojure at compile time: a macro can validate `operations.graphql` against
-`recipe-db.graphqls` with graphql-java and fail the build on schema drift. Together with the GraphQL
-LSP, which already checks operations against the copied schema in the editor, only the typed
-response shapes are genuinely lost.
-
 ### Replace JavaScript build tools
 
 JavaScript build tooling (root-level, .scripts folder) will be replaced with Bazel build rules and native toolchain integrations.
