@@ -2,6 +2,7 @@
 *.bak
 *~
 target
+dist-newstyle
 .docker
 .DS_Store
 

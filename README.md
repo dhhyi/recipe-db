@@ -78,7 +78,7 @@ Services with utility character.
 
 #### Link Extract — see [`link-extract`](./link-extract)
 
-#### Image Inline — see [`image-inline`](./image-inline)
+#### Image Inline — see [`image-inline`](./image-inline) ([`image-inline-test`](./image-inline-test))
 
 ## Ideas for other services:
 
