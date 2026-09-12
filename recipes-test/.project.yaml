@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
 devcontainer:
   name: recipe-db-recipes-test
   publish:
@@ -6,23 +7,8 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
-    root:
-      - ADD --chmod=711 https://github.com/ovh/venom/releases/download/v1.1.0/venom.linux-amd64 /usr/local/bin/venom
-    files:
-      - type: script
-        path: /usr/local/bin/venom-run
-        content: |
-          #!/bin/sh
-          if [ -z "$REST_API" ]; then
-            echo "REST_API is not set"
-            exit 1
-          fi
-          if [ -z "$1" ]; then
-            tests="."
-          else
-            tests="$*"
-          fi
-          exec venom run --var REST_API="$REST_API" --stop-on-failure $tests
+    user:
+      - RUN mise use -g java@21 maven@3.9.16
   environment:
     REST_API: http://traefik:3000
 vscode:
@@ -31,7 +17,7 @@ vscode:
     peacock.remoteColor: "#c95d93"
   extensions:
     - johnpapa.vscode-peacock
-    - thiht.vscode-venom
+    - vscjava.vscode-java-pack
 extras:
   - traefik
 traefik:
@@ -39,5 +25,11 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: venom-run recipes-check.yml && venom-run recipes-crud.yml
-precommit: venom version
+test: mvn --batch-mode --no-transfer-progress test
+precommit: |
+  java --version
+  mvn --version
+  mvn --batch-mode --no-transfer-progress spotless:apply
+prettier:
+  ignore:
+    - "*.java"

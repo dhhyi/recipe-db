@@ -92,3 +92,7 @@ See [`recipes/lib/recipes/problem.ex`](recipes/lib/recipes/problem.ex) for the c
 implementation. `graphql` forwards `code`/`field`/`status` from any backend's Problem Details response
 into GraphQL error `extensions` generically (see `graphql/src/rest_client.rs`'s `RestError::into_error`),
 so a new `code` automatically reaches GraphQL clients without any graphql-side change.
+
+## Investigating CI errors
+
+When you are asked to investigate CI errors, start by pulling the logs of the latest run via GitHub CLI.
