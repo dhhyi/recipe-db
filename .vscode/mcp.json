@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "recipe-db-mcp": {
+      "url": "http://localhost:8080/mcp",
+      "type": "http"
+    }
+  },
+  "inputs": []
+}

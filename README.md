@@ -58,6 +58,10 @@ Parts with heavy interaction like the pages for adding and editing recipes will 
 
 Consistent styling including shared Web Components, see [`design`](./design)
 
+### Agent Integration
+
+Adding recipes and images from an AI agent via an [MCP](https://modelcontextprotocol.io/) server, see [`mcp`](./mcp) ([`mcp-test`](./mcp-test))
+
 ## Backend
 
 The backend is organized in a variety of services where the only one _actually_ necessary is the one holding recipe data. Each service exposes a REST API which is tested with a different integration testing framework.

@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-mcp
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-mcp
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    user:
+      - RUN mise use -g dotnet@9
+  initialize: dotnet restore
+  ports:
+    - 5000
+  environment:
+    TESTING: "true"
+vscode:
+  settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
+    peacock.remoteColor: "#dbc994"
+    "[csharp]":
+      editor.defaultFormatter: ms-dotnettools.csharp
+  extensions:
+    - johnpapa.vscode-peacock
+    - ms-dotnettools.csharp
+    - GraphQL.vscode-graphql
+  tasks:
+    - label: Run watch server
+      command: dotnet watch run
+extras:
+  - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.nuget/packages: recipe-db-mcp-nuget-cache
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-mcp:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        mcp:
+          rule: PathPrefix(`/mcp`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: frontend
+graphqlSchema: "."
+precommit: |
+  dotnet --version
+  dotnet format
+  dotnet build
+prettier:
+  ignore:
+    - "*.cs"
+    - "*.csproj"
