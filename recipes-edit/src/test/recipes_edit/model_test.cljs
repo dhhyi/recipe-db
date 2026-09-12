@@ -24,16 +24,28 @@
          (model/normalize-inspirations ["" "https://example.com" ""]))))
 
 (deftest builds-graphql-input
-  (is (= {:name "Suppe"
-          :method nil
-          :inspirations ["https://example.com"]
-          :ingredients [{:name "Salz" :optional true :unit "Prise"}]}
-         (model/form->input
-          {:name "Suppe"
-           :method ""
-           :inspirations ["https://example.com" ""]
-           :ingredients [{:amount "" :unit "Prise" :name "Salz" :optional true}
-                         model/blank-ingredient]}))))
+  (testing "includes inspirations when online or default"
+    (is (= {:name "Suppe"
+            :method nil
+            :inspirations ["https://example.com"]
+            :ingredients [{:name "Salz" :optional true :unit "Prise"}]}
+           (model/form->input
+            {:name "Suppe"
+             :method ""
+             :inspirations ["https://example.com" ""]
+             :ingredients [{:amount "" :unit "Prise" :name "Salz" :optional true}
+                           model/blank-ingredient]}))))
+  (testing "omits inspirations when inspirations are offline"
+    (is (= {:name "Suppe"
+            :method nil
+            :ingredients [{:name "Salz" :optional true :unit "Prise"}]}
+           (model/form->input
+            {:name "Suppe"
+             :method ""
+             :inspirations ["https://example.com" ""]
+             :ingredients [{:amount "" :unit "Prise" :name "Salz" :optional true}
+                           model/blank-ingredient]}
+            {:inspirations-online false})))))
 
 (deftest classifies-empty-name-errors
   (is (model/empty-name-error?
