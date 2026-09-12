@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-image-inline-test
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-image-inline-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - nginx
+      - ruby
+      - ruby-dev
+      - build-essential
+    root:
+      - RUN gem install rspec airborne
+      - RUN rm -f /etc/nginx/sites-enabled/default
+    files:
+      - type: file
+        path: /var/www/html/tiny.png
+        base64: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      - type: file
+        path: /var/www/html/tiny.jpg
+        base64: /9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k=
+      - type: file
+        path: /etc/nginx/conf.d/default.conf
+        content: |
+          server {
+            listen 80 default_server;
+            listen [::]:80 default_server;
+            root /var/www/html;
+          }
+  ports:
+    - 80
+  environment:
+    REST_API: http://traefik:3000
+    FIXTURE_API: http://traefik:3000/image-inline-test-fixture
+  initialize: sudo /etc/init.d/nginx start
+vscode:
+  settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
+    peacock.remoteColor: "#5dc95d"
+  extensions:
+    - johnpapa.vscode-peacock
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      middlewares:
+        image-inline-test-strip:
+          stripPrefix:
+            prefixes: /image-inline-test-fixture
+      services:
+        recipe-db-image-inline-test-fixture:
+          loadBalancer:
+            server:
+              port: "80"
+      routers:
+        image-inline-test-fixture:
+          rule: PathPrefix(`/image-inline-test-fixture`)
+          entrypoints: rest-internal
+          middlewares: image-inline-test-strip
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
+precommit: ruby --version
+test: rspec
+prettier:
+  ignore:
+    - "*.rb"
+    - "*.jpg"
+    - "*.png"

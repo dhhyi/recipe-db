@@ -8,9 +8,19 @@ devcontainer:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     packages:
-      - libdancer2-perl
-      - libswitch-perl
-      - perltidy
+      - build-essential
+      - curl
+      - libffi-dev
+      - libffi8
+      - libgmp-dev
+      - libgmp10
+      - libncurses-dev
+      - libncurses6
+      - libtinfo6
+      - pkg-config
+      - zlib1g-dev
+    user:
+      - RUN mise use -g ghc@9.6.6 cabal@3.10.3.0
   ports:
     - 3000
 vscode:
@@ -41,7 +51,10 @@ traefik:
 category: backend
 prettier:
   ignore:
-    - "*.pl"
+    - "*.hs"
+    - dist-newstyle
+    - "*.cabal"
 precommit: |
-  perl --version
-  perltidy -b *.pl
+  ghc --version
+  cabal update
+  cabal build
