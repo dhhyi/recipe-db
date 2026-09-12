@@ -1,21 +1,46 @@
 package components
 
-import "frontend/src/generated"
+import (
+	"fmt"
+	"frontend/src/generated"
+)
 
 templ Rating(rating *gql.Rating, ratingPossible bool) {
-	<rating-component
+	{{
+		ratingValue := ""
 		if rating.Average != nil {
-			rating={ *rating.Average }
+			ratingValue = fmt.Sprintf("%v", *rating.Average)
+		}
+		ratingCount := ""
+		if rating.Count != nil {
+			ratingCount = fmt.Sprintf("%d", *rating.Count)
+		}
+	}}
+	<span
+		itemscope
+		itemtype="https://schema.org/AggregateRating"
+		itemprop="aggregateRating"
+	>
+		if rating.Average != nil {
+			<meta itemprop="ratingValue" content={ ratingValue }/>
 		}
 		if rating.Count != nil {
-			count={ *rating.Count }
+			<meta itemprop="ratingCount" content={ ratingCount }/>
 		}
-		if ratingPossible {
-			hx-post={ "/recipe/" + rating.RecipeId + "/rate" }
-			hx-target="this"
-			hx-swap="outerHTML"
-			hx-trigger="rated"
-			hx-vals="js:{rating: event.detail}"
-		}
-	></rating-component>
+		<rating-component
+			if rating.Average != nil {
+				rating={ *rating.Average }
+			}
+			if rating.Count != nil {
+				count={ *rating.Count }
+			}
+			if ratingPossible {
+				hx-post={ "/recipe/" + rating.RecipeId + "/rate" }
+				hx-target="this"
+				hx-swap="outerHTML"
+				hx-trigger="rated"
+				hx-vals="js:{rating: event.detail}"
+			}
+		></rating-component>
+	</span>
 }

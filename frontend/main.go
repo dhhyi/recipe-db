@@ -23,7 +23,8 @@ func main() {
 			return
 		}
 		ctx := templ.WithChildren(r.Context(), components.Overview(resp))
-		templ.Handler(components.Layout("Alle Rezepte | RezeptDB")).ServeHTTP(w, r.WithContext(ctx))
+		title := "Alle Rezepte | RezeptDB"
+		templ.Handler(components.Layout(title)).ServeHTTP(w, r.WithContext(ctx))
 	})
 
 	http.HandleFunc("/recipe/{id}/rate", func(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +86,8 @@ func main() {
 			return
 		}
 		ctx := templ.WithChildren(r.Context(), components.Detail(resp))
-		templ.Handler(components.Layout(resp.Recipe.Name+" | RezeptDB")).ServeHTTP(w, r.WithContext(ctx))
+		title := resp.Recipe.Name + " | RezeptDB"
+		templ.Handler(components.Layout(title)).ServeHTTP(w, r.WithContext(ctx))
 	})
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
