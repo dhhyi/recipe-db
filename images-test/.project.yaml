@@ -1,4 +1,5 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
 devcontainer:
   name: recipe-db-images-test
   publish:
@@ -12,12 +13,12 @@ devcontainer:
       - libcurl4
       - libxml2
     root:
-      - ADD https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu.tar.gz /tmp/hurl.tar.gz
+      - ADD https://github.com/Orange-OpenSource/hurl/releases/download/$HURL_VERSION/hurl-$HURL_VERSION-x86_64-unknown-linux-gnu.tar.gz /tmp/hurl.tar.gz
       - RUN tar -xzf /tmp/hurl.tar.gz -C /tmp
-        && mv /tmp/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu/bin/hurl /usr/local/bin/hurl
-        && mv /tmp/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu/bin/hurlfmt /usr/local/bin/hurlfmt
+        && mv /tmp/hurl-$HURL_VERSION-x86_64-unknown-linux-gnu/bin/hurl /usr/local/bin/hurl
+        && mv /tmp/hurl-$HURL_VERSION-x86_64-unknown-linux-gnu/bin/hurlfmt /usr/local/bin/hurlfmt
         && chmod +rx /usr/local/bin/hurl /usr/local/bin/hurlfmt
-        && rm -rf /tmp/hurl.tar.gz /tmp/hurl-${HURL_VERSION}-x86_64-unknown-linux-gnu
+        && rm -rf /tmp/hurl.tar.gz /tmp/hurl-$HURL_VERSION-x86_64-unknown-linux-gnu
     files:
       - type: script
         path: /usr/local/bin/hurl-run
