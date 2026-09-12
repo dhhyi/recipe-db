@@ -30,7 +30,7 @@
      :on-click #(rf/dispatch [::events/remove-ingredient index])}
     "-"]])
 
-(defn- recipe-form [{:keys [form status name-error? feedback]}]
+(defn- recipe-form [{:keys [form status name-error? feedback inspirations-online]}]
   (let [saving? (= :saving status)]
     [:form
      {:on-submit (fn [event]
@@ -62,18 +62,20 @@
        :on-change (fn [event]
                     (resize-textarea! (.-target event))
                     (rf/dispatch [::events/set-method (.. event -target -value)]))}]
-     [:h2 "Inspirationen"]
-     (doall
-      (map-indexed
-       (fn [index inspiration]
-         [:div {:key index}
-          [:input
-           {:type "url"
-            :id (str "inspiration-" index)
-            :placeholder "Link"
-            :value inspiration
-            :on-change #(rf/dispatch [::events/set-inspiration index (.. % -target -value)])}]])
-       (:inspirations form)))
+     (when inspirations-online
+       [:<>
+        [:h2 "Inspirationen"]
+        (doall
+         (map-indexed
+          (fn [index inspiration]
+            [:div {:key index}
+             [:input
+              {:type "url"
+               :id (str "inspiration-" index)
+               :placeholder "Link"
+               :value inspiration
+               :on-change #(rf/dispatch [::events/set-inspiration index (.. % -target -value)])}]])
+          (:inspirations form)))])
      (when feedback
        [:p.feedback
         {:class (name (:kind feedback)) :role "alert"}

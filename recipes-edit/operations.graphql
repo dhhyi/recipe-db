@@ -12,6 +12,11 @@ query RecipeById($id: ID!) {
       optional
     }
   }
+  inspirationsOnline: isServiceOnline(name: "inspirations")
+}
+
+query ServiceOnline {
+  inspirationsOnline: isServiceOnline(name: "inspirations")
 }
 
 mutation CreateRecipe($input: RecipeInput!) {

@@ -8,12 +8,14 @@
 (def recipe-query (operation "RecipeById"))
 (def create-mutation (operation "CreateRecipe"))
 (def update-mutation (operation "UpdateRecipe"))
+(def service-online-query (operation "ServiceOnline"))
 
 (defn initial-db [route]
   {:route route
    :status (if (= :edit (:page route)) :loading :idle)
    :form (model/blank-form)
    :name-error? false
+   :inspirations-online nil
    :feedback nil})
 
 (defn initialize-db [db route]
@@ -34,14 +36,19 @@
 (rf/reg-event-fx
  ::initialize
  (fn [{:keys [db]} [_ route]]
-   (cond-> {:db (initialize-db db route)}
-     (= :edit (:page route))
-     (assoc :dispatch
-            [::re-graph/query
-             {:id :recipe
-              :query recipe-query
-              :variables {:id (:id route)}
-              :callback [::recipe-loaded]}]))))
+   (let [page (:page route)]
+     {:db (initialize-db db route)
+      :dispatch (case page
+                  :edit [::re-graph/query
+                         {:id :recipe
+                          :query recipe-query
+                          :variables {:id (:id route)}
+                          :callback [::recipe-loaded]}]
+                  :new  [::re-graph/query
+                         {:id :service-online
+                          :query service-online-query
+                          :callback [::service-online-loaded]}]
+                  nil)})))
 
 (rf/reg-event-db
  ::recipe-loaded
@@ -50,7 +57,15 @@
      (cond
        (seq errors) (assoc db :status :error :feedback {:kind :error :message (model/error-message errors)})
        (nil? (:recipe data)) (assoc db :status :not-found)
-       :else (assoc db :status :idle :form (model/recipe->form (:recipe data)))))))
+       :else (assoc db :status :idle :inspirations-online (:inspirationsOnline data) :form (model/recipe->form (:recipe data)))))))
+
+(rf/reg-event-db
+ ::service-online-loaded
+ (fn [db [_ {:keys [response]}]]
+   (let [{:keys [data errors]} (normalize-response response)]
+     (if (seq errors)
+       (assoc db :feedback {:kind :error :message (model/error-message errors)})
+       (assoc db :inspirations-online (:inspirationsOnline data))))))
 
 (rf/reg-event-db
  ::set-name
@@ -99,7 +114,7 @@
  (fn [{:keys [db]} _]
    (let [{:keys [page id]} (:route db)
          request {:query (if (= :new page) create-mutation update-mutation)
-                  :variables (cond-> {:input (model/form->input (:form db))}
+                  :variables (cond-> {:input (model/form->input (:form db) {:inspirations-online (:inspirations-online db)})}
                                (= :edit page) (assoc :id id))
                   :callback [::saved]}]
      {:db (assoc db :status :saving :name-error? false :feedback nil)

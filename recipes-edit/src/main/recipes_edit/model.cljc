@@ -55,16 +55,19 @@
                   (seq unit) (conj unit)
                   optional (conj "optional"))))
 
-(defn form->input [{:keys [name method inspirations ingredients]}]
-  {:name name
-   :method (when (seq method) method)
-   :inspirations (vec (remove empty? inspirations))
-   :ingredients (->> ingredients
-                     (remove blank-ingredient?)
-                     (mapv (fn [{:keys [amount unit name optional]}]
-                             (cond-> {:name name :optional optional}
-                               (seq amount) (assoc :amount amount)
-                               (seq unit) (assoc :unit unit)))))})
+(defn form->input
+  ([form]
+   (form->input form {:inspirations-online true}))
+  ([{:keys [name method inspirations ingredients]} {:keys [inspirations-online]}]
+   (cond-> {:name name
+            :method (when (seq method) method)
+            :ingredients (->> ingredients
+                              (remove blank-ingredient?)
+                              (mapv (fn [{:keys [amount unit name optional]}]
+                                      (cond-> {:name name :optional optional}
+                                        (seq amount) (assoc :amount amount)
+                                        (seq unit) (assoc :unit unit)))))}
+     inspirations-online (assoc :inspirations (vec (remove empty? inspirations))))))
 
 (defn empty-name-error? [{:keys [extensions]}]
   (and (= "required-field" (:code extensions))
