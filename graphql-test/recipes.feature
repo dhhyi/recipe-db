@@ -114,7 +114,7 @@ Feature: recipes
     * status 200
     * match response.data.createRecipe == null
     * match response.errors[0].message == 'Missing field value for name'
-    * match response.errors[0].extensions.code == 'BAD_USER_INPUT'
+    * match response.errors[0].extensions.code == 'required-field'
     * match response.errors[0].extensions.field == 'name'
 
     Examples:
@@ -134,7 +134,7 @@ Feature: recipes
     * status 200
     * match response.data.updateRecipe == null
     * match response.errors[0].message == 'Missing field value for name'
-    * match response.errors[0].extensions.code == 'BAD_USER_INPUT'
+    * match response.errors[0].extensions.code == 'required-field'
     * match response.errors[0].extensions.field == 'name'
 
     Examples:

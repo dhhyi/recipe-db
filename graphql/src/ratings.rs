@@ -1,7 +1,7 @@
 use async_graphql::{Context, Error, Object, SimpleObject, ID};
 use serde::Deserialize;
 
-use crate::rest_client::RestClient;
+use crate::rest_client::{RestClient, RestError};
 
 #[derive(Clone, Debug, Deserialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
@@ -29,12 +29,15 @@ impl RatingsApi {
     }
 
     pub async fn delete_ratings_for_testing(&self) -> Result<bool, Error> {
-        self.client.delete("").await?;
+        self.client
+            .delete("")
+            .await
+            .map_err(RestError::into_error)?;
         Ok(true)
     }
 
     pub async fn get_rating(&self, id: &str) -> Result<Rating, Error> {
-        let rating: RestRating = self.client.get(id).await?;
+        let rating: RestRating = self.client.get(id).await.map_err(RestError::into_error)?;
         Ok(Rating {
             recipe_id: ID::from(id.to_string()),
             average: Some(rating.rating),
@@ -44,7 +47,11 @@ impl RatingsApi {
 
     pub async fn add_rating(&self, id: &str, rating: i32, login: &str) -> Result<Rating, Error> {
         let body = format!("rating={rating}&login={login}");
-        let result: RestRating = self.client.put_form(id, body).await?;
+        let result: RestRating = self
+            .client
+            .put_form(id, body)
+            .await
+            .map_err(RestError::into_error)?;
         Ok(Rating {
             recipe_id: ID::from(id.to_string()),
             average: Some(result.rating),

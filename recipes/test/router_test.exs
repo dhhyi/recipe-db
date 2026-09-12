@@ -73,7 +73,7 @@ defmodule Recipes.RouterTest do
     assert %{
              "status" => 422,
              "detail" => "Missing field value for name",
-             "code" => "invalid-field",
+             "code" => "required-field",
              "field" => "name"
            } = Jason.decode!(response.resp_body)
   end

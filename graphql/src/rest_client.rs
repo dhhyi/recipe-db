@@ -1,11 +1,21 @@
+use async_graphql::{Error, ErrorExtensions};
 use reqwest::{Client, Method, StatusCode};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 /// Thin wrapper around a REST backend, mirroring the old `RESTDataSource` base class.
 #[derive(Clone)]
 pub struct RestClient {
     client: Client,
     base_path: String,
+}
+
+/// RFC 9457 Problem Details body, the error shape every backend is expected to send on non-2xx
+/// responses. `code`/`field` are our own extension members on top of the RFC's core fields.
+#[derive(Deserialize)]
+pub struct ProblemDetails {
+    pub detail: String,
+    pub code: String,
+    pub field: Option<String>,
 }
 
 /// Carries the upstream status code so callers can pattern-match on it (e.g. treat 404 as `None`).
@@ -21,8 +31,24 @@ impl std::fmt::Display for RestError {
     }
 }
 
-// async_graphql already provides a blanket `impl<T: Display> From<T> for Error`, so `RestError`
-// converts into `Error` via `.into()`/`?` without a dedicated `From` impl.
+impl RestError {
+    /// Converts to a GraphQL error, forwarding a backend's Problem Details as structured
+    /// `extensions` (`code`, `status`, `field`) instead of just a flat message. Falls back to
+    /// `status: body` for backends that don't send Problem Details.
+    pub fn into_error(self) -> Error {
+        let status = self.status.as_u16();
+        if let Ok(problem) = serde_json::from_str::<ProblemDetails>(&self.body) {
+            return Error::new(problem.detail).extend_with(|_, e| {
+                e.set("code", problem.code);
+                e.set("status", status);
+                if let Some(field) = problem.field {
+                    e.set("field", field);
+                }
+            });
+        }
+        Error::new(self.to_string())
+    }
+}
 
 impl RestClient {
     pub fn new(base_path: &str) -> Self {

@@ -12,8 +12,8 @@ defmodule Recipes.RecipeTest do
 
   test "requires a nonblank string name" do
     assert :ok = Recipe.validate(%{"name" => "Rice Pudding"})
-    assert {:error, :invalid_field, _, "name"} = Recipe.validate(%{"name" => "  "})
-    assert {:error, :invalid_field, _, "name"} = Recipe.validate(%{"name" => 42})
+    assert {:error, :required_field, _, "name"} = Recipe.validate(%{"name" => "  "})
+    assert {:error, :required_field, _, "name"} = Recipe.validate(%{"name" => 42})
   end
 
   test "rejects a reserved id" do

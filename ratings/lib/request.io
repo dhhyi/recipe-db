@@ -23,12 +23,13 @@ Request prettyPath := method(
 
 Request verbose := System getEnvironmentVariable("VERBOSE") == "true"
 
-Request send := method(code, message, data,
+Request send := method(code, message, data, contentType,
     if (verbose,
         writeln((self at("method")) .. " " .. (self prettyPath) .. " ".. code .. " " .. message)
     )
 
-    return "HTTP/1.1 " .. code .. " " .. message .. "\r\n" .. if (data == nil, "\r\n", "Content-type: application/json\r\n\r\n" .. data)
+    ct := if (contentType == nil, "application/json", contentType)
+    return "HTTP/1.1 " .. code .. " " .. message .. "\r\n" .. if (data == nil, "\r\n", "Content-type: " .. ct .. "\r\n\r\n" .. data)
 )
 
 Request sendData := method(data,
@@ -43,8 +44,11 @@ Request error := method(code, message,
     self send(code, message, nil)
 )
 
-Request errorBadRequest := method(message,
-    return self send("400", "Bad Request", message)
+Request errorBadRequest := method(detail, code, field,
+    ## RFC 9457 Problem Details body, mirroring the recipes service's error shape.
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Bad Request") atPut("status", 400) atPut("detail", detail) atPut("code", code)
+    if (field != nil, problem atPut("field", field))
+    return self send("400", "Bad Request", problem asJson, "application/problem+json")
 )
 
 Request errorNotFound := method(

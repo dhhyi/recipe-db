@@ -29,18 +29,18 @@ RESTAPI put := method(request,
         id := request at("path") at(1)
         if (id != nil,
         if (request at("payload") != nil,
-            if (request at("payload") at("rating") == nil, return request errorBadRequest("Missing rating"))
-            if (request at("payload") at("login") == nil, return request errorBadRequest("Missing login"))
+            if (request at("payload") at("rating") == nil, return request errorBadRequest("Missing rating", "missing-field", "rating"))
+            if (request at("payload") at("login") == nil, return request errorBadRequest("Missing login", "missing-field", "login"))
 
             rating := request at("payload") at("rating") asNumber
-            if (list(1, 2, 3, 4, 5) contains(rating) == false, return request errorBadRequest("Invalid rating"))
+            if (list(1, 2, 3, 4, 5) contains(rating) == false, return request errorBadRequest("Invalid rating", "invalid-field", "rating"))
 
             login := request at("payload") at("login")
             data := db addRating(id, rating, login) asJson
             return request sendData(data)
             )
         )
-        return request errorBadRequest("Missing rating")
+        return request errorBadRequest("Missing rating", "missing-field", "rating")
     )
 
     return request errorNotFound

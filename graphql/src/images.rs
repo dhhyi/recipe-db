@@ -2,7 +2,7 @@ use async_graphql::{Context, Error, Object, SimpleObject, Upload, ID};
 use reqwest::StatusCode;
 use serde::Deserialize;
 
-use crate::rest_client::RestClient;
+use crate::rest_client::{RestClient, RestError};
 
 #[derive(Clone, Debug, Deserialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
@@ -47,12 +47,16 @@ impl ImagesApi {
     ) -> Result<bool, Error> {
         self.client
             .post_bytes::<serde_json::Value>(recipe_id, mimetype, content)
-            .await?;
+            .await
+            .map_err(RestError::into_error)?;
         Ok(true)
     }
 
     pub async fn delete_images_for_testing(&self) -> Result<bool, Error> {
-        self.client.delete("").await?;
+        self.client
+            .delete("")
+            .await
+            .map_err(RestError::into_error)?;
         Ok(true)
     }
 }

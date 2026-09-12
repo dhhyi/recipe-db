@@ -1,7 +1,7 @@
 use async_graphql::{Context, Error, Object};
 use serde::Deserialize;
 
-use crate::rest_client::RestClient;
+use crate::rest_client::{RestClient, RestError};
 
 #[derive(Deserialize)]
 struct TraefikRouter {
@@ -43,11 +43,17 @@ impl TraefikApi {
     }
 
     async fn get_routers(&self) -> Result<Vec<TraefikRouter>, Error> {
-        Ok(self.client.get("routers").await?)
+        self.client
+            .get("routers")
+            .await
+            .map_err(RestError::into_error)
     }
 
     async fn get_services(&self) -> Result<Vec<TraefikService>, Error> {
-        Ok(self.client.get("services").await?)
+        self.client
+            .get("services")
+            .await
+            .map_err(RestError::into_error)
     }
 
     pub async fn get_online_services(&self) -> Result<Vec<String>, Error> {

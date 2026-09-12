@@ -61,6 +61,19 @@ proc matchesContentType(body, contentType: string): bool =
   of "image/jpeg", "image/jpg": body.startsWith(jpegSignature)
   else: false
 
+proc problemDetails(status: HttpCode, title, detail, code: string): string =
+  ## RFC 9457 Problem Details body, mirroring the recipes service's error shape.
+  $(%*{
+    "type": "about:blank",
+    "title": title,
+    "status": ord(status),
+    "detail": detail,
+    "code": code,
+  })
+
+template respProblem(status: HttpCode, title, detail, code: string) =
+  resp status, problemDetails(status, title, detail, code), "application/problem+json"
+
 router imagesRouter:
   get "/health":
     resp Http204, ""
@@ -77,18 +90,20 @@ router imagesRouter:
   post "/images/@recipeId":
     let recipeId = @"recipeId"
     if not isSafeSegment(recipeId):
-      resp Http400, "Invalid recipe id"
+      respProblem(Http400, "Bad Request", "Invalid recipe id", "invalid-recipe-id")
 
     let contentType = ($request.headers.getOrDefault(
         "Content-Type")).split(';')[0].strip().toLowerAscii()
     let body = request.body
     if not matchesContentType(body, contentType):
-      resp Http400, "Unsupported content type '" & contentType & "'"
+      respProblem(Http400, "Bad Request",
+          "Unsupported content type '" & contentType & "'", "unsupported-content-type")
 
     try:
       let dimensions = decodeImageDimensions(body)
       if dimensions.width * dimensions.height > maxPixels:
-        resp Http400, "Image exceeds the maximum of " & $maxPixels & " pixels"
+        respProblem(Http400, "Bad Request",
+            "Image exceeds the maximum of " & $maxPixels & " pixels", "image-too-large")
 
       let image = decodeImage(body)
       image.writeFile(imageFile(recipeId))
@@ -97,7 +112,7 @@ router imagesRouter:
       resp Http201, ""
     except PixieError, IOError, OSError:
       error "Upload of '", recipeId, "' failed: ", getCurrentExceptionMsg()
-      resp Http400, "Error: " & getCurrentExceptionMsg()
+      respProblem(Http400, "Bad Request", getCurrentExceptionMsg(), "invalid-image")
 
   get "/images/@recipeId/meta":
     let recipeId = @"recipeId"
@@ -124,7 +139,7 @@ router imagesRouter:
       }), "application/json"
     except PixieError, OSError:
       error "Meta of '", recipeId, "' failed: ", getCurrentExceptionMsg()
-      resp Http500, "Error: " & getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error", getCurrentExceptionMsg(), "metadata-error")
 
   delete "/images/?":
     if not testingMode:

@@ -5,6 +5,7 @@ use MIME::Base64;
 use Switch;
 use Digest::MD5 qw(md5_hex);
 use File::Path  qw(make_path);
+use JSON::PP    qw(encode_json);
 
 # get database location from environment
 my $db = $ENV{DATA_LOCATION} || "db";
@@ -13,6 +14,22 @@ print "Database location: $db\n";
 my $verbose = $ENV{VERBOSE} || 0;
 
 make_path($db);
+
+# RFC 9457 Problem Details body, mirroring the recipes service's error shape.
+sub send_problem {
+    my ( $status, $title, $detail, $code ) = @_;
+    status $status;
+    content_type 'application/problem+json';
+    content encode_json(
+        {
+            type   => "about:blank",
+            title  => $title,
+            status => $status,
+            detail => $detail,
+            code   => $code,
+        }
+    );
+}
 
 get '/health' => sub {
     status 204;
@@ -23,14 +40,12 @@ get '/image-inline/' => sub {
         my $url = query_parameters->get('url');
 
         if ( !$url ) {
-            status 400;
-            content "Missing url parameter";
+            send_problem( 400, "Bad Request", "Missing url parameter",
+                "missing-query-param" );
             done;
             return;
         }
 
-        response_header 'Content-Type' => 'text/plain';
-        flush;
         if ($verbose) {
             print "URL\t$url\n";
         }
@@ -45,6 +60,7 @@ get '/image-inline/' => sub {
                 open my $fh, "<", "$db/$file_name";
                 <$fh>;
             };
+            content_type 'text/plain';
             content $content;
             done;
         }
@@ -78,11 +94,12 @@ get '/image-inline/' => sub {
                 print $fh $data;
                 close $fh;
 
+                content_type 'text/plain';
                 content $data;
             }
             else {
-                status 500;
-                content $response->status_line;
+                send_problem( 500, "Internal Server Error",
+                    $response->status_line, "fetch-error" );
             }
             done;
         }

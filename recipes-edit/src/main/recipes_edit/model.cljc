@@ -67,7 +67,7 @@
                                (seq unit) (assoc :unit unit)))))})
 
 (defn empty-name-error? [{:keys [extensions]}]
-  (and (= "BAD_USER_INPUT" (:code extensions))
+  (and (= "required-field" (:code extensions))
        (= "name" (:field extensions))))
 
 (defn error-message [errors]

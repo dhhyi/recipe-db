@@ -18,7 +18,7 @@ defmodule Recipes.Recipe do
         :ok
 
       true ->
-        {:error, :invalid_field, "Missing field value for name", "name"}
+        {:error, :required_field, "Missing field value for name", "name"}
     end
   end
 

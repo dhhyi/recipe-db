@@ -18,6 +18,27 @@ struct PageMetaData
   end
 end
 
+# RFC 9457 Problem Details body, mirroring the recipes service's error shape.
+struct ProblemDetails
+  include JSON::Serializable
+
+  property type : String
+  property title : String
+  property status : Int32
+  property detail : String
+  property code : String
+
+  def initialize(@title : String, @status : Int32, @detail : String, @code : String)
+    @type = "about:blank"
+  end
+end
+
+def send_problem(response : HTTP::Server::Response, status : Int32, title : String, detail : String, code : String)
+  response.status_code = status
+  response.content_type = "application/problem+json"
+  ProblemDetails.new(title, status, detail, code).to_json(response)
+end
+
 class InvalidUrlError < Exception
 end
 
@@ -164,8 +185,7 @@ server = HTTP::Server.new do |context|
   when "/link-extract"
     url_query = request.query_params["url"]?
     unless url_query
-      response.status_code = 400
-      response.print "Please provide a url query parameter"
+      send_problem(response, 400, "Bad Request", "Please provide a url query parameter", "missing-query-param")
       next
     end
 
@@ -193,13 +213,11 @@ server = HTTP::Server.new do |context|
       response.content_type = "application/json"
       meta.to_json(response)
     rescue error : InvalidUrlError
-      response.status_code = 400
-      response.print "Please provide a valid url query parameter"
+      send_problem(response, 400, "Bad Request", "Please provide a valid url query parameter", "invalid-url")
     rescue error
       error_message = error.message || error.to_s
       puts "ERROR\t#{error_message}"
-      response.status_code = 500
-      response.print error_message
+      send_problem(response, 500, "Internal Server Error", error_message, "fetch-error")
     end
   else
     response.status_code = 404
