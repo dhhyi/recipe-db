@@ -1,0 +1,11 @@
+{
+  "schema": "recipe-db.graphqls",
+  "documents": "operations.graphql",
+  "extensions": {
+    "strawberryShake": {
+      "name": "McpClient",
+      "namespace": "Mcp.GraphQL",
+      "url": "http://traefik/graphql"
+    }
+  }
+}
