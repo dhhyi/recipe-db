@@ -3,12 +3,12 @@ package components
 import "frontend/src/generated"
 
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<article>
+	<article itemscope itemtype="https://schema.org/Recipe">
 		<header>
-			<h2 class="font-bold"><a href={ "/recipe/" + item.Id }>{ item.Name }</a></h2>
+			<h2 class="font-bold"><a href={ "/recipe/" + item.Id } itemprop="name">{ item.Name }</a></h2>
 		</header>
 		if item.Image != nil {
-			<img src={ item.Image.ThumbUrl } alt={ item.Name }/>
+			<img src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
 		}
 		if ratingsOnline && item.Rating != nil {
 			<footer>

@@ -21,63 +21,68 @@ templ editFields(id string, recipeEdit bool, imageEdit bool) {
 
 templ Detail(resp *gql.RecipeByIdResponse) {
 	{{ recipe := resp.Recipe }}
-	<div class="flex flex-col sm:flex-row pt-1">
-		<hgroup>
-			<h1>{ recipe.Name }</h1>
-			if resp.RatingsOnline && recipe.Rating != nil {
-				@Rating(recipe.Rating, true)
-			}
-		</hgroup>
-		@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)
-	</div>
-	if recipe.Image != nil {
-		<figure class="contents!">
-			<img
-				class="recipe-thumbnail"
-				src={ recipe.Image.ThumbUrl }
-				alt={ recipe.Name }
-			/>
-		</figure>
-	}
-	if len(recipe.Ingredients) > 0 {
-		<h2>Zutaten</h2>
-		<table>
-			<thead>
-				<tr>
-					<th>Anzahl</th>
-					<th>Zutat</th>
-				</tr>
-			</thead>
-			<tbody>
-				for _, ingredient := range recipe.Ingredients {
-					<tr>
-						<td>
-							if ingredient.Amount != nil {
-								{ *ingredient.Amount }
-							}
-							if ingredient.Unit != nil {
-								{ *ingredient.Unit }
-							}
-							if ingredient.Optional != nil && *ingredient.Optional {
-								<span>(optional) </span>
-							}
-						</td>
-						<td>
-							{ ingredient.Name }
-						</td>
-					</tr>
+	<div itemscope itemtype="https://schema.org/Recipe" class="contents">
+		<div class="flex flex-col sm:flex-row pt-1">
+			<hgroup>
+				<h1 itemprop="name">{ recipe.Name }</h1>
+				if resp.RatingsOnline && recipe.Rating != nil {
+					@Rating(recipe.Rating, true)
 				}
-			</tbody>
-		</table>
-	}
-	if recipe.Method != nil && len(*recipe.Method) > 0 {
-		<h2>Zubereitung</h2>
-		@templ.Raw(util.ToMarkDown(*recipe.Method))
-	}
-	if resp.InspirationsOnline && len(recipe.Inspirations) > 0 {
-		<h2>Inspirationen</h2>
-		@InspirationsStub(recipe.Id)
-		// @Inspirations(recipe.Inspirations)
-	}
+			</hgroup>
+			@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)
+		</div>
+		if recipe.Image != nil {
+			<figure class="contents!">
+				<img
+					class="recipe-thumbnail"
+					src={ recipe.Image.ThumbUrl }
+					alt={ recipe.Name }
+					itemprop="image"
+				/>
+			</figure>
+		}
+		if len(recipe.Ingredients) > 0 {
+			<h2>Zutaten</h2>
+			<table>
+				<thead>
+					<tr>
+						<th>Anzahl</th>
+						<th>Zutat</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, ingredient := range recipe.Ingredients {
+						<tr itemprop="recipeIngredient">
+							<td>
+								if ingredient.Amount != nil {
+									{ *ingredient.Amount }
+								}
+								if ingredient.Unit != nil {
+									{ *ingredient.Unit }
+								}
+								if ingredient.Optional != nil && *ingredient.Optional {
+									<span>(optional) </span>
+								}
+							</td>
+							<td>
+								{ ingredient.Name }
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+		if recipe.Method != nil && len(*recipe.Method) > 0 {
+			<h2>Zubereitung</h2>
+			<div itemprop="recipeInstructions">
+				@templ.Raw(util.ToMarkDown(*recipe.Method))
+			</div>
+		}
+		if resp.InspirationsOnline && len(recipe.Inspirations) > 0 {
+			<h2>Inspirationen</h2>
+			@InspirationsStub(recipe.Id)
+			// @Inspirations(recipe.Inspirations)
+		}
+	</div>
 	<a href="/" role="button">Zur Startseite</a>
 }
