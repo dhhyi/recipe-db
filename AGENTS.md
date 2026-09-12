@@ -81,3 +81,14 @@ This will run the `test:` script defined in the second yaml document of the proj
 
 Execute precommit checks with `in-devcontainer` script. (see above)
 Make sure any existing devcontainer torn down before running precommit checks.
+
+## REST API error responses
+
+Every REST backend must report errors as [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) Problem
+Details: `Content-Type: application/problem+json`, body `{ "type": "about:blank", "title", "status",
+"detail", "code", "field"? }`. `code` is a stable, dash-cased machine-readable identifier
+(`field` is set only for errors tied to a specific input field); `title`/`detail` are human-readable.
+See [`recipes/lib/recipes/problem.ex`](recipes/lib/recipes/problem.ex) for the canonical
+implementation. `graphql` forwards `code`/`field`/`status` from any backend's Problem Details response
+into GraphQL error `extensions` generically (see `graphql/src/rest_client.rs`'s `RestError::into_error`),
+so a new `code` automatically reaches GraphQL clients without any graphql-side change.

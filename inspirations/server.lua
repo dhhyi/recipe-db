@@ -50,6 +50,21 @@ local function check_input(array)
     return true
 end
 
+-- RFC 9457 Problem Details body, mirroring the recipes service's error shape.
+local function problem_details(status, detail, code)
+    local body = json.encode({
+        type = "about:blank",
+        title = "Bad Request",
+        status = status,
+        detail = detail,
+        code = code
+    })
+    return body, {
+        ["Content-Type"] = "application/problem+json",
+        [":status"] = tostring(status)
+    }
+end
+
 if os.getenv("TESTING") == "true" then
     app.add_handler("DELETE", "/inspirations/", function()
         data = {}
@@ -77,8 +92,8 @@ app.add_handler("PUT", "/inspirations/...", function(captures, _q, _h, body)
     local decoded = json.decode(body)
 
     if not check_input(decoded) then
-        return "Input must be an json array of strings.",
-               {["Content-Type"] = "text/plain", [":status"] = "400"}
+        return problem_details(400, "Input must be a JSON array of strings.",
+                               "invalid-input")
     end
 
     data[recipe_id] = {}

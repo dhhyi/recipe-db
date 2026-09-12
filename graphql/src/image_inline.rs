@@ -1,6 +1,6 @@
 use async_graphql::Error;
 
-use crate::rest_client::RestClient;
+use crate::rest_client::{RestClient, RestError};
 
 pub struct ImageInlineApi {
     client: RestClient,
@@ -14,9 +14,9 @@ impl ImageInlineApi {
     }
 
     pub async fn get_inlined_image(&self, url: &str) -> Result<String, Error> {
-        Ok(self
-            .client
+        self.client
             .get_text_with_query("/", &[("url", url)])
-            .await?)
+            .await
+            .map_err(RestError::into_error)
     }
 }

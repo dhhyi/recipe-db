@@ -43,7 +43,7 @@ defmodule Recipes.RepositoryTest do
   test "rolls back a patch that removes the name", %{repository: repository} do
     assert {:ok, created} = Repository.create(%{"name" => "Rice Pudding"}, repository)
 
-    assert {:error, :invalid_field, _, "name"} =
+    assert {:error, :required_field, _, "name"} =
              Repository.patch(created["id"], %{"name" => nil}, repository)
 
     assert {:ok, stored} = Repository.get(created["id"], repository)

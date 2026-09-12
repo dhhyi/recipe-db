@@ -98,7 +98,7 @@ testcases:
           - result.headers.content-type ShouldStartWith application/problem+json
           - result.bodyjson.status ShouldEqual 422
           - result.bodyjson.detail ShouldEqual Missing field value for name
-          - result.bodyjson.code ShouldEqual invalid-field
+          - result.bodyjson.code ShouldEqual required-field
           - result.bodyjson.field ShouldEqual name
 
   - name: Sending an empty name with PATCH should fail
@@ -117,7 +117,7 @@ testcases:
           - result.headers.content-type ShouldStartWith application/problem+json
           - result.bodyjson.status ShouldEqual 422
           - result.bodyjson.detail ShouldEqual Missing field value for name
-          - result.bodyjson.code ShouldEqual invalid-field
+          - result.bodyjson.code ShouldEqual required-field
           - result.bodyjson.field ShouldEqual name
 
   - name: Sending no name field at all with POST should fail
@@ -136,7 +136,7 @@ testcases:
           - result.headers.content-type ShouldStartWith application/problem+json
           - result.bodyjson.status ShouldEqual 422
           - result.bodyjson.detail ShouldEqual Missing field value for name
-          - result.bodyjson.code ShouldEqual invalid-field
+          - result.bodyjson.code ShouldEqual required-field
           - result.bodyjson.field ShouldEqual name
 
   - name: Sending no name field at all with PATCH should succeed and keep the existing name

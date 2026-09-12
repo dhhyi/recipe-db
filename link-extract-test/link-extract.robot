@@ -8,12 +8,16 @@ Suite Setup     Create Session    link_extract    %{REST_API}
 *** Test Cases ***
 Missing Url Is Rejected
     ${response}=    GET On Session    link_extract    /link-extract    expected_status=400
-    Should Be Equal As Strings    ${response.text}    Please provide a url query parameter
+    ${body}=    Set Variable    ${response.json()}
+    Dictionary Should Contain Item    ${body}    detail    Please provide a url query parameter
+    Dictionary Should Contain Item    ${body}    code    missing-query-param
 
 Invalid Url Is Rejected
     &{params}=    Create Dictionary    url=not-a-url
     ${response}=    GET On Session    link_extract    /link-extract    params=${params}    expected_status=400
-    Should Be Equal As Strings    ${response.text}    Please provide a valid url query parameter
+    ${body}=    Set Variable    ${response.json()}
+    Dictionary Should Contain Item    ${body}    detail    Please provide a valid url query parameter
+    Dictionary Should Contain Item    ${body}    code    invalid-url
 
 Html Metadata Is Extracted
     &{params}=    Create Dictionary    url=%{FIXTURE_API}/page
@@ -42,4 +46,6 @@ Canonical Url Uses Cached Metadata
 Non Html Response Fails
     &{params}=    Create Dictionary    url=%{FIXTURE_API}/plain
     ${response}=    GET On Session    link_extract    /link-extract    params=${params}    expected_status=500
-    Should Be Equal As Strings    ${response.text}    Response is not HTML
+    ${body}=    Set Variable    ${response.json()}
+    Dictionary Should Contain Item    ${body}    detail    Response is not HTML
+    Dictionary Should Contain Item    ${body}    code    fetch-error

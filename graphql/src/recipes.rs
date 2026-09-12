@@ -1,32 +1,8 @@
-use async_graphql::{Context, Error, ErrorExtensions, Object, ID};
+use async_graphql::{Context, Error, Object, ID};
 use reqwest::StatusCode;
-use serde::Deserialize;
 
 use crate::recipe::{Recipe, RecipeInput};
 use crate::rest_client::{RestClient, RestError};
-
-#[derive(Deserialize)]
-struct ProblemDetails {
-    detail: String,
-    code: String,
-    field: Option<String>,
-}
-
-/// The recipes service rejects a missing/empty name with a 422 - surface it as the same
-/// `BAD_USER_INPUT`/`field: name` shape the frontend/graphql-test expect.
-fn rethrow_as_validation_error(err: RestError) -> Error {
-    if err.status == StatusCode::UNPROCESSABLE_ENTITY {
-        if let Ok(problem) = serde_json::from_str::<ProblemDetails>(&err.body) {
-            if problem.code == "invalid-field" && problem.field.as_deref() == Some("name") {
-                return Error::new(problem.detail).extend_with(|_, e| {
-                    e.set("code", "BAD_USER_INPUT");
-                    e.set("field", "name");
-                });
-            }
-        }
-    }
-    err.into()
-}
 
 pub struct RecipesApi {
     client: RestClient,
@@ -40,19 +16,22 @@ impl RecipesApi {
     }
 
     pub async fn delete_recipes_for_testing(&self) -> Result<bool, Error> {
-        self.client.delete("").await?;
+        self.client
+            .delete("")
+            .await
+            .map_err(RestError::into_error)?;
         Ok(true)
     }
 
     pub async fn get_recipes(&self) -> Result<Vec<Recipe>, Error> {
-        Ok(self.client.get("").await?)
+        self.client.get("").await.map_err(RestError::into_error)
     }
 
     pub async fn get_recipe(&self, id: &str) -> Result<Option<Recipe>, Error> {
         match self.client.get(id).await {
             Ok(recipe) => Ok(Some(recipe)),
             Err(err) if err.status == StatusCode::NOT_FOUND => Ok(None),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err.into_error()),
         }
     }
 
@@ -60,21 +39,21 @@ impl RecipesApi {
         self.client
             .post("", &value.base())
             .await
-            .map_err(rethrow_as_validation_error)
+            .map_err(RestError::into_error)
     }
 
     pub async fn update_recipe(&self, id: &str, value: &RecipeInput) -> Result<Recipe, Error> {
         self.client
             .patch(id, &value.base())
             .await
-            .map_err(rethrow_as_validation_error)
+            .map_err(RestError::into_error)
     }
 
     pub async fn delete_recipe(&self, id: &str) -> Result<bool, Error> {
         match self.client.delete(id).await {
             Ok(()) => Ok(true),
             Err(err) if err.status == StatusCode::NOT_FOUND => Ok(false),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(err.into_error()),
         }
     }
 }

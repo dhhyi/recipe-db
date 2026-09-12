@@ -12,8 +12,8 @@
 (deftest normalizes-graphql-response-keys
   (is (= {:data {:createRecipe nil}
           :errors [{:message "Missing field value for name"
-                    :extensions {:code "BAD_USER_INPUT" :field "name"}}]}
+                    :extensions {:code "required-field" :field "name"}}]}
          (events/normalize-response
           {"data" {"createRecipe" nil}
            "errors" [{"message" "Missing field value for name"
-                      "extensions" {"code" "BAD_USER_INPUT" "field" "name"}}]}))))
+                      "extensions" {"code" "required-field" "field" "name"}}]}))))

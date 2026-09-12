@@ -37,6 +37,6 @@
 
 (deftest classifies-empty-name-errors
   (is (model/empty-name-error?
-       {:extensions {:code "BAD_USER_INPUT" :field "name"}}))
+       {:extensions {:code "required-field" :field "name"}}))
   (is (not (model/empty-name-error?
-            {:extensions {:code "BAD_USER_INPUT" :field "method"}}))))
+            {:extensions {:code "required-field" :field "method"}}))))
