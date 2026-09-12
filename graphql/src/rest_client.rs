@@ -148,7 +148,19 @@ impl RestClient {
         path: &str,
         body: &B,
     ) -> Result<T, RestError> {
-        self.request(Method::PATCH, path, Some(body), None).await
+        let url = self.url(path);
+        let response = self
+            .client
+            .patch(url)
+            .header("Content-Type", "application/merge-patch+json")
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| RestError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                body: err.to_string(),
+            })?;
+        Self::parse_response(response).await
     }
 
     pub async fn put<B: Serialize, T: DeserializeOwned>(

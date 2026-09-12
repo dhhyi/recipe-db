@@ -71,7 +71,3 @@ Explore the possibility of deploying the stack on a Raspberry Pi with either Kub
 Setup a public deployment.
 
 ## Misc
-
-### Rewrite recipe backend
-
-Since currently both `frontend` and `recipes` is written in Go, it violates the playground rule to have another language for each project. Find a good language that can be used for the recipe backend, and rewrite it in that language. The new language should be one that is not already used in the project, and should be suitable for receiving json data and querying them by ID.
