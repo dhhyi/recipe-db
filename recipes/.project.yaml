@@ -7,12 +7,25 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    packages:
+      - autoconf
+      - build-essential
+      - libncurses-dev
+      - libssl-dev
+      - libssh-dev
+      - m4
     user:
-      - RUN mise use -g go@1.25
-  initialize: go mod download -x
+      - RUN KERL_CONFIGURE_OPTIONS="--without-javac --without-odbc --without-wx" mise use -g erlang@27.3.4.17 elixir@1.18.5-otp-27
+      - RUN mkdir -p $HOME/.hex $HOME/.cache/rebar3
+  initialize: |
+    mix local.hex --force
+    mix local.rebar --force
+    mix deps.get
   ports:
     - 5000
   environment:
+    LANG: C.UTF-8
+    LC_ALL: C.UTF-8
     TESTING: "true"
 vscode:
   settings:
@@ -20,11 +33,13 @@ vscode:
     peacock.remoteColor: "#db94b8"
   extensions:
     - johnpapa.vscode-peacock
+    - elixir-lsp.elixir-ls
 extras:
   - traefik
   - named-volumes
 namedVolumes:
-  $HOME/go/pkg/mod: recipe-db-recipes-go-cache
+  $HOME/.hex: recipe-db-recipes-hex-cache
+  $HOME/.cache/rebar3: recipe-db-recipes-rebar-cache
 traefik:
   network: intranet
   labels:
@@ -44,12 +59,16 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 precommit: |
-  go version
-  go fmt
-  go build -o precommit.out
-  stat precommit.out
+  elixir --version
+  mix format
+  mix compile --warnings-as-errors
+  mix credo --strict
+  mix test
+  MIX_ENV=prod mix release --overwrite
+test: mix test
 prettier:
   ignore:
-    - go.mod
-    - go.sum
-    - "*.go"
+    - mix.exs
+    - mix.lock
+    - "*.ex"
+    - "*.exs"

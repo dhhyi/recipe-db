@@ -14,6 +14,8 @@ testcases:
       - type: http
         method: POST
         url: "{{.REST_API}}/recipes"
+        headers:
+          Content-Type: application/json
         body: |
           {
             "id": "123",
@@ -21,13 +23,34 @@ testcases:
             "servings": 4
           }
         assertions:
+          - result.statuscode ShouldEqual 422
+          - result.headers.content-type ShouldStartWith application/problem+json
+          - result.bodyjson.status ShouldEqual 422
+          - result.bodyjson.code ShouldEqual reserved-field
+          - result.bodyjson.field ShouldEqual id
+
+  - name: Sending a JSON array with POST should fail
+    steps:
+      - type: http
+        method: POST
+        url: "{{.REST_API}}/recipes"
+        headers:
+          Content-Type: application/json
+        body: |
+          ["Rice Pudding"]
+        assertions:
           - result.statuscode ShouldEqual 400
+          - result.headers.content-type ShouldStartWith application/problem+json
+          - result.bodyjson.status ShouldEqual 400
+          - result.bodyjson.code ShouldEqual invalid-json-object
 
   - name: Add recipe
     steps:
       - type: http
         method: POST
         url: "{{.REST_API}}/recipes"
+        headers:
+          Content-Type: application/json
         body: |
           {
             "name": "Rice Pudding",
@@ -44,59 +67,85 @@ testcases:
       - type: http
         method: PATCH
         url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        headers:
+          Content-Type: application/merge-patch+json
         body: |
           {
             "id": "123",
             "servings": 6
           }
         assertions:
-          - result.statuscode ShouldEqual 400
+          - result.statuscode ShouldEqual 422
+          - result.headers.content-type ShouldStartWith application/problem+json
+          - result.bodyjson.status ShouldEqual 422
+          - result.bodyjson.code ShouldEqual reserved-field
+          - result.bodyjson.field ShouldEqual id
 
   - name: Sending an empty name with POST should fail
     steps:
       - type: http
         method: POST
         url: "{{.REST_API}}/recipes"
+        headers:
+          Content-Type: application/json
         body: |
           {
             "name": "",
             "servings": 4
           }
         assertions:
-          - result.statuscode ShouldEqual 400
-          - result.bodyjson.message ShouldEqual Missing field value for name
+          - result.statuscode ShouldEqual 422
+          - result.headers.content-type ShouldStartWith application/problem+json
+          - result.bodyjson.status ShouldEqual 422
+          - result.bodyjson.detail ShouldEqual Missing field value for name
+          - result.bodyjson.code ShouldEqual invalid-field
+          - result.bodyjson.field ShouldEqual name
 
   - name: Sending an empty name with PATCH should fail
     steps:
       - type: http
         method: PATCH
         url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        headers:
+          Content-Type: application/merge-patch+json
         body: |
           {
             "name": ""
           }
         assertions:
-          - result.statuscode ShouldEqual 400
-          - result.bodyjson.message ShouldEqual Missing field value for name
+          - result.statuscode ShouldEqual 422
+          - result.headers.content-type ShouldStartWith application/problem+json
+          - result.bodyjson.status ShouldEqual 422
+          - result.bodyjson.detail ShouldEqual Missing field value for name
+          - result.bodyjson.code ShouldEqual invalid-field
+          - result.bodyjson.field ShouldEqual name
 
   - name: Sending no name field at all with POST should fail
     steps:
       - type: http
         method: POST
         url: "{{.REST_API}}/recipes"
+        headers:
+          Content-Type: application/json
         body: |
           {
             "servings": 4
           }
         assertions:
-          - result.statuscode ShouldEqual 400
-          - result.bodyjson.message ShouldEqual Missing field value for name
+          - result.statuscode ShouldEqual 422
+          - result.headers.content-type ShouldStartWith application/problem+json
+          - result.bodyjson.status ShouldEqual 422
+          - result.bodyjson.detail ShouldEqual Missing field value for name
+          - result.bodyjson.code ShouldEqual invalid-field
+          - result.bodyjson.field ShouldEqual name
 
   - name: Sending no name field at all with PATCH should succeed and keep the existing name
     steps:
       - type: http
         method: PATCH
         url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        headers:
+          Content-Type: application/merge-patch+json
         body: |
           {
             "servings": 6

@@ -6,17 +6,19 @@ use crate::recipe::{Recipe, RecipeInput};
 use crate::rest_client::{RestClient, RestError};
 
 #[derive(Deserialize)]
-struct ErrorBody {
-    message: Option<String>,
+struct ProblemDetails {
+    detail: String,
+    code: String,
+    field: Option<String>,
 }
 
-/// The recipes service rejects a missing/empty name with a 400 - surface it as the same
+/// The recipes service rejects a missing/empty name with a 422 - surface it as the same
 /// `BAD_USER_INPUT`/`field: name` shape the frontend/graphql-test expect.
 fn rethrow_as_validation_error(err: RestError) -> Error {
-    if err.status == StatusCode::BAD_REQUEST {
-        if let Ok(body) = serde_json::from_str::<ErrorBody>(&err.body) {
-            if body.message.as_deref() == Some("Missing field value for name") {
-                return Error::new("Missing field value for name").extend_with(|_, e| {
+    if err.status == StatusCode::UNPROCESSABLE_ENTITY {
+        if let Ok(problem) = serde_json::from_str::<ProblemDetails>(&err.body) {
+            if problem.code == "invalid-field" && problem.field.as_deref() == Some("name") {
+                return Error::new(problem.detail).extend_with(|_, e| {
                     e.set("code", "BAD_USER_INPUT");
                     e.set("field", "name");
                 });

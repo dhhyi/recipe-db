@@ -23,13 +23,21 @@ testcases:
       - type: http
         method: POST
         url: "{{.REST_API}}/recipes"
+        headers:
+          Content-Type: application/json
         body: |
           {
             "name": "Rice Pudding",
-            "servings": 4
+            "servings": 4,
+            "metadata": {
+              "source": "family",
+              "season": "winter"
+            }
           }
         assertions:
           - result.statuscode ShouldEqual 201
+          - result.bodyjson.id ShouldNotBeEmpty
+          - result.bodyjson.id ShouldHaveLength 36
         vars:
           recipeId:
             from: result.bodyjson.id
@@ -59,9 +67,15 @@ testcases:
       - type: http
         method: PATCH
         url: "{{.REST_API}}/recipes/{{.Add-recipe.recipeId}}"
+        headers:
+          Content-Type: application/merge-patch+json
         body: |
           {
             "name": "Rice Pudding with Cinnamon",
+            "servings": null,
+            "metadata": {
+              "season": "autumn"
+            },
             "steps": [
               "Make the rice pudding",
               "Add the cinnamon"
@@ -69,6 +83,9 @@ testcases:
           }
         assertions:
           - result.statuscode ShouldEqual 200
+          - result.bodyjson ShouldNotContainKey servings
+          - result.bodyjson.metadata.source ShouldEqual family
+          - result.bodyjson.metadata.season ShouldEqual autumn
 
   - name: Get recipe by id again
     steps:
@@ -78,7 +95,9 @@ testcases:
         assertions:
           - result.statuscode ShouldEqual 200
           - result.bodyjson.name ShouldEqual Rice Pudding with Cinnamon
-          - result.bodyjson.servings ShouldEqual 4
+          - result.bodyjson ShouldNotContainKey servings
+          - result.bodyjson.metadata.source ShouldEqual family
+          - result.bodyjson.metadata.season ShouldEqual autumn
           - result.bodyjson.steps ShouldHaveLength 2
 
   - name: Delete recipe
