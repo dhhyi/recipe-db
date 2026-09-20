@@ -109,7 +109,7 @@ header-component {
   }
 }
 
-.recipe-thumbnail {
+.recipe-image {
   margin: 0 auto;
   max-width: min(650px, 100%);
 }

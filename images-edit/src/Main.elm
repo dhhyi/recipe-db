@@ -150,10 +150,10 @@ recipeHeading recipe =
 
 recipeThumbnail : RecipeDB.RecipeData -> Html Msg
 recipeThumbnail recipe =
-    case recipe.thumbUrl of
-        Just thumbUrl ->
+    case recipe.url of
+        Just url ->
             figure [ class "contents!" ]
-                [ img [ src thumbUrl, class "recipe-thumbnail" ] []
+                [ img [ src url, class "recipe-image" ] []
                 ]
 
         Nothing ->

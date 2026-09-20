@@ -4,8 +4,9 @@ import jester
 import pixie
 
 const
-  thumbWidth = 600
-  thumbHeight = 450
+  ratio = 4.0 / 3.0
+  thumbWidth = 300
+  normalWidth = 650
   imagesSubfolder = "public"
   pngSignature = "\x89PNG\r\n\x1A\n"
   jpegSignature = "\xFF\xD8"
@@ -39,16 +40,15 @@ proc imageFile(recipeId: string, thumb = false): string =
 proc imageUrl(recipeId: string, thumb = false): string =
   "/" & imagesSubfolder & "/" & imageFileName(recipeId, thumb)
 
-proc cropToThumbRatio(image: Image): Image =
+proc cropToRatio(image: Image): Image =
   ## Centered crop so the result has the thumbnail's aspect ratio.
   let
-    targetRatio = thumbWidth / thumbHeight
-    ratio = image.width / image.height
-  if ratio > targetRatio:
-    let w = min(image.width, int(image.height.float * targetRatio + 0.5))
+    imageRatio = image.width / image.height
+  if imageRatio > ratio:
+    let w = min(image.width, int(image.height.float * ratio + 0.5))
     image.subImage((image.width - w) div 2, 0, w, image.height)
-  elif ratio < targetRatio:
-    let h = min(image.height, int(image.width.float / targetRatio + 0.5))
+  elif imageRatio < ratio:
+    let h = min(image.height, int(image.width.float / ratio + 0.5))
     image.subImage(0, (image.height - h) div 2, image.width, h)
   else:
     image
@@ -85,6 +85,7 @@ router imagesRouter:
     let path = dataFolder / name
     if not fileExists(path):
       resp Http404, "Not found"
+    info "GET public image '", name, "'"
     sendFile(path)
 
   post "/images/@recipeId":
@@ -106,9 +107,11 @@ router imagesRouter:
             "Image exceeds the maximum of " & $maxPixels & " pixels", "image-too-large")
 
       let image = decodeImage(body)
-      image.writeFile(imageFile(recipeId))
-      image.cropToThumbRatio().resize(thumbWidth, thumbHeight).writeFile(
-          imageFile(recipeId, true))
+      image.cropToRatio().resize(normalWidth, toInt(normalWidth /
+          ratio)).writeFile(imageFile(recipeId))
+      image.cropToRatio().resize(thumbWidth, toInt(thumbWidth /
+          ratio)).writeFile(imageFile(recipeId, true))
+      info "POST upload of '", recipeId, "' succeeded"
       resp Http201, ""
     except PixieError, IOError, OSError:
       error "Upload of '", recipeId, "' failed: ", getCurrentExceptionMsg()
@@ -123,16 +126,17 @@ router imagesRouter:
     if not fileExists(path):
       resp Http404, "Not found"
 
+    info "GET meta for '", recipeId, "'"
     try:
       let
-        info = getFileInfo(path)
+        imageInfo = getFileInfo(path)
         dimensions = readImageDimensions(path)
       resp Http200, $(%*{
         "recipeId": recipeId,
         "height": dimensions.height,
         "width": dimensions.width,
-        "size": info.size,
-        "modified": info.lastWriteTime.utc.format(
+        "size": imageInfo.size,
+        "modified": imageInfo.lastWriteTime.utc.format(
             "yyyy-MM-dd'T'HH:mm:ss'.'fff"),
         "url": imageUrl(recipeId),
         "thumbUrl": imageUrl(recipeId, true),
@@ -144,6 +148,7 @@ router imagesRouter:
   delete "/images/?":
     if not testingMode:
       resp Http404, "Not found"
+    info "DELETE all images"
     removeDir(dataFolder)
     createDir(dataFolder)
     resp Http204, ""
@@ -156,6 +161,7 @@ router imagesRouter:
     let path = imageFile(recipeId)
     if not fileExists(path):
       resp Http404, "Not found"
+    info "DELETE image '", recipeId, "'"
     removeFile(path)
     removeFile(imageFile(recipeId, true))
     resp Http204, ""

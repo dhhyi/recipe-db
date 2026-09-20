@@ -16,7 +16,7 @@ import RemoteData exposing (RemoteData)
 
 type alias RecipeData =
     { name : String
-    , thumbUrl : Maybe String
+    , url : Maybe String
     }
 
 
@@ -31,7 +31,7 @@ makeRecipeRequest recipeId targetMsg =
         selection =
             SelectionSet.map2 RecipeData
                 Recipe.name
-                (Recipe.image ImageMetadata.thumbUrl)
+                (Recipe.image ImageMetadata.url)
 
         recipeQuery : SelectionSet (Maybe RecipeData) RootQuery
         recipeQuery =
