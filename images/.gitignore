@@ -1,6 +1,10 @@
 # generated
 /server
 nimcache/
+nimbledeps/
+nimble.develop
+nimble.paths
+config.nims
 
 # data
 /public
