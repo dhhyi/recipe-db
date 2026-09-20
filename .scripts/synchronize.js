@@ -13,11 +13,23 @@ const {
 function searchForForbiddenFiles(availableProjects) {
   const forbiddenGitIgnores = globSync("**/.gitignore", {
     cwd: projectRoot,
-  }).filter(
-    (file) =>
-      file !== ".gitignore" &&
-      !availableProjects.some((project) => file === `${project}/.gitignore`),
-  );
+  })
+    .filter(
+      (file) =>
+        file !== ".gitignore" &&
+        !availableProjects.some((project) => file === `${project}/.gitignore`),
+    )
+    .filter((file) => {
+      // check if file is under version control
+      try {
+        cp.execSync(`git ls-files --error-unmatch "${file}"`, {
+          stdio: "ignore",
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    });
   if (forbiddenGitIgnores.length > 0) {
     console.error(
       `Forbidden .gitignore files found: ${forbiddenGitIgnores.join(", ")}`,
