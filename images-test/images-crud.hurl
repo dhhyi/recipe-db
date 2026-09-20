@@ -13,8 +13,8 @@ HTTP 200
 [Asserts]
 header "Content-Type" contains "application/json"
 jsonpath "$.recipeId" == "rice-pudding"
-jsonpath "$.width" == 800
-jsonpath "$.height" == 450
+jsonpath "$.width" == 650
+jsonpath "$.height" == 488
 jsonpath "$.size" isInteger
 jsonpath "$.size" > 0
 jsonpath "$.modified" matches /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/
@@ -44,8 +44,8 @@ HTTP 201
 GET {{REST_API}}/images/rice-pudding/meta
 HTTP 200
 [Asserts]
-jsonpath "$.width" == 480
-jsonpath "$.height" == 640
+jsonpath "$.width" == 650
+jsonpath "$.height" == 488
 
 DELETE {{REST_API}}/images/rice-pudding
 HTTP 204

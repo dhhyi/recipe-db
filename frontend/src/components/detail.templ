@@ -34,8 +34,8 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		if recipe.Image != nil {
 			<figure class="contents!">
 				<img
-					class="recipe-thumbnail"
-					src={ recipe.Image.ThumbUrl }
+					class="recipe-image"
+					src={ recipe.Image.Url }
 					alt={ recipe.Name }
 					itemprop="image"
 				/>

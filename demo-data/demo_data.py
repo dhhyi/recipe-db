@@ -4,12 +4,15 @@ import os
 import sys
 import random
 
+import httpx
 from graphql_client import Client
 from graphql_client.base_model import Upload
 from graphql_client.exceptions import GraphQLClientHttpError
 
 headers = {"apollo-require-preflight": "true"}
-client = Client("http://traefik/graphql", headers=headers)
+# large recipe photos can take a while to decode/resize server-side
+http_client = httpx.AsyncClient(headers=headers, timeout=30.0)
+client = Client("http://traefik/graphql", http_client=http_client)
 
 
 async def wait_all_online():

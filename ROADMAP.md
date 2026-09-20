@@ -41,7 +41,6 @@ untenable.
 ### More specific image information
 
 Image metadata from the images backend should include width, height, and aspect ratio so that the frontend can render images with the correct aspect ratio without loading the image first.
-Thumbnails are now used by default and have a width of 650px, which is arguably too large for a thumbnail. For overview pages, a thumbnail width of 300px is more appropriate.
 
 ### Better image editor
 
