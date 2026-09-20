@@ -1,0 +1,48 @@
+{
+  "name": "Schnelle Lauch-Kichererbsen-Pfanne",
+  "ingredients": [
+    {
+      "name": "weiße Bohnen",
+      "amount": 1,
+      "unit": "Glas"
+    },
+    {
+      "name": "Kichererbsen",
+      "amount": 2,
+      "unit": "Dosen"
+    },
+    {
+      "name": "Lauch",
+      "amount": 1,
+      "unit": "Stange"
+    },
+    {
+      "name": "getrocknete Tomaten"
+    },
+    {
+      "name": "Zitrone"
+    },
+    {
+      "name": "Kritharaki (griechische Nudeln)"
+    },
+    {
+      "name": "Hefeflocken"
+    },
+    {
+      "name": "Muskatnuss, gerieben"
+    },
+    {
+      "name": "Schnittlauch, getrocknet",
+      "optional": true
+    },
+    {
+      "name": "Sojasahne"
+    },
+    {
+      "name": "Cashewkerne"
+    },
+    {
+      "name": "Gemüsebrühe"
+    }
+  ]
+}

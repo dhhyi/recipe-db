@@ -31,6 +31,10 @@ vscode:
         command: cd ${workspaceFolder} && ariadne-codegen
         runningStatusMessage: "codegen..."
         finishStatusMessage: "codegen ✔"
+      - match: 'recipe.*\.(json|md)'
+        command: cspell --locale de-de recipe*.{json,md}
+        runningStatusMessage: "spelling..."
+        finishStatusMessage: "spelling ✔"
     cSpell.language: de-de
     cSpell.enabledLanguageIds: ["json", "markdown"]
   extensions:
