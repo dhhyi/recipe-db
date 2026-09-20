@@ -3,11 +3,19 @@
   "import": ["@cspell/dict-de-de/cspell-ext.json"],
   "words": [
     "Balsamico",
+    "Cabanossi",
     "Carbonara",
+    "Cashewkerne",
     "Crème",
     "Fraîche",
+    "Hefeflocken",
+    "Kritharaki",
+    "Lauchringe",
+    "Packungsanweisung",
     "Risottoreis",
-    "Rundkörniger"
+    "Rundkörniger",
+    "Sahnealternative",
+    "Stabmixer"
   ],
   "ignoreWords": [
     "Cook",

@@ -156,6 +156,14 @@ async def main():
         await maybe_add_image(3, recipe_id)
         await random_rate_recipe(recipe_id)
 
+        recipe_id = await insert_recipe(4)
+        await maybe_add_image(4, recipe_id)
+        await random_rate_recipe(recipe_id)
+
+        recipe_id = await insert_recipe(5)
+        await maybe_add_image(5, recipe_id)
+        await random_rate_recipe(recipe_id)
+
     except GraphQLClientHttpError as graphql_error:
         print(f"HTTP error: {graphql_error.status_code}")
         print(json.dumps(graphql_error.response.json(), indent=2))

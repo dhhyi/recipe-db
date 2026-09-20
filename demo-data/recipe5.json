@@ -1,0 +1,36 @@
+{
+  "name": "Linsen Gemüse Eintopf",
+  "ingredients": [
+    {
+      "name": "Linsen"
+    },
+    {
+      "name": "Kartoffeln"
+    },
+    {
+      "name": "Möhren"
+    },
+    {
+      "name": "Paprika"
+    },
+    {
+      "name": "Zwiebel"
+    },
+    {
+      "name": "Spinat"
+    },
+    {
+      "name": "Suppe"
+    },
+    {
+      "name": "Tomatenmark"
+    },
+    {
+      "name": "Gewürze"
+    },
+    {
+      "name": "Cabanossi",
+      "optional": true
+    }
+  ]
+}
