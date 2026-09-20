@@ -18,6 +18,8 @@ devcontainer:
       - ADD https://nim-lang.org/download/nim-$NIM_VERSION-linux_x64.tar.xz /tmp/nim.tar.xz
       - RUN cd /opt && tar -xf /tmp/nim.tar.xz && mv nim-$NIM_VERSION nim && rm /tmp/nim.tar.xz
       - ENV PATH=/opt/nim/bin:$PATH
+    user:
+      - RUN mise use -g watchexec
   ports:
     - 8000
   environment:
@@ -34,6 +36,9 @@ vscode:
   extensions:
     - nimlang.nimlang
     - johnpapa.vscode-peacock
+  tasks:
+    - label: Run watch server
+      command: watchexec -e nim -r "sh -c 'nimble build -d:release --threads:off && VERBOSE=true ./server'"
 extras:
   - traefik
   - named-volumes
