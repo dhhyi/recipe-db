@@ -8,7 +8,7 @@ const projectRoot = path.normalize(path.join(__dirname, ".."));
 function checkInstallDependencies() {
   if (!fs.existsSync(path.join(projectRoot, "node_modules", ".modules.yaml"))) {
     console.log("Installing dependencies");
-    cp.execSync("npm exec pnpm -- i --prod --ignore-scripts", {
+    cp.execSync("pnpm i --prod --ignore-scripts", {
       stdio: "inherit",
     });
   }

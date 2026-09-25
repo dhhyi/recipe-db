@@ -18,10 +18,8 @@ devcontainer:
         && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
       - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
     user:
-      - RUN mise use -g java@21
-      - RUN mise use -g clojure@1.12.3.1577
-      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
-      - RUN mise use -g node@26 npm:pnpm@11
+      - RUN mise settings idiomatic_version_file_enable_tools=pnpm
+      - RUN mise use -g java@21 clojure@1.12.3.1577 node@26
     files:
       - type: script
         path: /usr/local/bin/distribute-js
@@ -33,6 +31,7 @@ devcontainer:
           sudo /etc/init.d/nginx restart
   ports:
     - 80
+  instantiate: mise -y install
   initialize: |
     sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf
     sudo ln -sf ${containerWorkspaceFolder}/index.html /usr/share/nginx/html/index.html
@@ -109,7 +108,7 @@ tailwindSources:
 precommit: |
   java --version
   clojure --version
-  npx prettier --write index.html package.json pnpm-workspace.yaml
+  pnpm prettier --write index.html package.json pnpm-workspace.yaml
   nginx-formatter -indent=4
   clojure -M:format fix src deps.edn shadow-cljs.edn
   clojure -M:lint --lint src

@@ -56,7 +56,7 @@ if (command.length === 1 && command[0] === "test") {
     console.error("Project does not have prettier command");
     process.exit(1);
   }
-  runCommand = ["fish", "-c", `npx prettier --write '**'`];
+  runCommand = ["fish", "-c", `pnpm prettier --write '**'`];
 } else {
   runCommand = ["fish", "-c", command.join(" ")];
 }

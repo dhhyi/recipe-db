@@ -1,5 +1,5 @@
 FROM node:lts-bookworm AS builder
-RUN npm i -g pnpm@11
+RUN npm i -g pnpm@12.6.0
 WORKDIR /app
 COPY package.json pnpm-*.yaml /app/
 RUN pnpm i --frozen-lockfile

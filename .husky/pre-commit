@@ -1,5 +1,0 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
-export PRE_COMMIT=1
-node .scripts/precommit.js "$@"

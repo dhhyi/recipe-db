@@ -2,7 +2,7 @@ FROM node:lts-bookworm AS node
 
 FROM clojure:temurin-21-tools-deps-bookworm-slim AS builder
 COPY --from=node /usr/local /usr/local
-RUN npm install --global pnpm@11
+RUN npm install --global pnpm@12.6.0
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

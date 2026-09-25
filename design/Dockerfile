@@ -1,5 +1,5 @@
 FROM node:lts-alpine AS builder
-RUN npm i -g pnpm@11
+RUN npm i -g pnpm@12.6.0
 WORKDIR /ws
 COPY design/package.json design/pnpm-*.yaml /ws/
 RUN pnpm i --frozen-lockfile
