@@ -96,3 +96,14 @@ so a new `code` automatically reaches GraphQL clients without any graphql-side c
 ## Investigating CI errors
 
 When you are asked to investigate CI errors, start by pulling the logs of the latest run via GitHub CLI.
+
+## List of possible REST API testing frameworks
+
+If you pick one for a new project, make sure to remove it from this list.
+
+- https://github.com/martinmaher/jcache-chat-citrus
+- https://citrusframework.org/citrus/reference/3.4.0/html/index.html#http-rest
+- https://gettaurus.org/
+- https://github.com/svanoort/pyresttest
+- https://rest-assured.io/
+- https://www.baeldung.com/cucumber-rest-api-testing
