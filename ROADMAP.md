@@ -14,6 +14,11 @@ JavaScript build tooling (root-level, .scripts folder) will be replaced with Baz
 
 #### Rework docker-compose/deployment generation
 
+> **Status:** Compose templating is complete. The old JavaScript generator has been replaced by a
+> shell/yq/jq data-preparation step and ytt templates for development and production Compose output,
+> including the production `traefik.yml`. The later Kubernetes/k3s and k3d deployment work remains
+> open.
+
 `generate-docker-compose.js` currently mixes several concerns in one script: reading each project's
 `.project.yaml` traefik section, aggregating it into the production `traefik.yml`, and rendering the
 full `docker-compose.yml` (service definitions, profiles, depends_on, dev/prod differences) in a

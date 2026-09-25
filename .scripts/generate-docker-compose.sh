@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+
+project_root=$(cd "$(dirname "$0")/.." && pwd)
+output_compose="$project_root/docker-compose.yml"
+output_traefik="$project_root/traefik.yml"
+flavour=development
+backend_only=false
+
+yq() {
+  mise exec -- yq "$@"
+}
+
+jq() {
+  mise exec -- jq "$@"
+}
+
+for argument in "$@"; do
+  case "$argument" in
+    prod | production) flavour=production ;;
+    backend) backend_only=true ;;
+    prepare)
+      if [ -f "$output_compose" ]; then
+        echo "docker-compose.yml already exists, skipping generation"
+        exit 0
+      fi
+      ;;
+    *)
+      echo "unknown argument: $argument" >&2
+      exit 1
+      ;;
+  esac
+done
+
+case "$flavour" in
+  development) echo "Setting up for development..." ;;
+  production) echo "Setting up for production..." ;;
+esac
+
+temporary_directory=$(mktemp -d)
+trap 'rm -rf "$temporary_directory"' EXIT
+
+data_values="$temporary_directory/data-values.yml"
+fragments="$temporary_directory/project-fragments.jsonl"
+ci=false
+if [ -n "${CI:-}" ]; then
+  ci=true
+fi
+jq -n \
+  --arg flavour "$flavour" \
+  --argjson backendOnly "$backend_only" \
+  --argjson ci "$ci" \
+  '{flavour: $flavour, backendOnly: $backendOnly, ci: $ci, projects: []}' \
+  > "$data_values"
+repository=$(yq -r '.repository // ""' "$project_root/package.json")
+
+for project_file in "$project_root"/*/.project.yaml; do
+  project_directory=$(dirname "$project_file")
+  project=$(basename "$project_directory")
+  echo "Processing project: $project"
+  PROJECT="$project" REPOSITORY="$repository" \
+    yq -o=json -I=0 eval-all \
+    'select(documentIndex == 0) * select(documentIndex == 1)
+       | .name = env(PROJECT)
+       | .repository = env(REPOSITORY)' \
+    "$project_file" >> "$fragments"
+done
+
+jq --slurpfile projects "$fragments" \
+  '.projects = $projects' "$data_values" > "$temporary_directory/next.yml"
+mv "$temporary_directory/next.yml" "$data_values"
+
+render() {
+  render_template=$1
+  render_output=$2
+  echo "Rendering $render_output..."
+  set -- \
+    -f "$project_root/.scripts/templates/$render_template-template.yml" \
+    --data-values-file "$data_values"
+  if [ "$render_template" = docker-compose ]; then
+    set -- "$@" \
+      -f "$project_root/.scripts/templates/service-template.lib.yml" \
+      -f "$project_root/.scripts/templates/traefik-service-template.lib.yml"
+  fi
+  mise exec -- ytt "$@" > "$render_output"
+}
+
+render docker-compose "$output_compose"
+if [ "$flavour" = production ]; then
+  render traefik "$output_traefik"
+else
+  rm -f "$output_traefik"
+fi

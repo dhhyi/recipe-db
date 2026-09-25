@@ -18,6 +18,12 @@ jobs:
       - name: checkout
         uses: actions/checkout@v7
 
+      - name: setup mise tools
+        uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
       - uses: pnpm/setup@v2
         with:
           cache: true
@@ -74,7 +80,7 @@ jobs:
           docker compose ps
           echo "::endgroup::"
           for project in $(ls */.project.yaml | xargs dirname); do
-            test_cmd=$(yq eval 'select(documentIndex==1) | .test // ""' $project/.project.yaml)
+            test_cmd=$(mise exec -- yq eval 'select(documentIndex==1) | .test // ""' $project/.project.yaml)
             if [ -n "$test_cmd" ]; then
               echo "::group::test $project"
               pnpm in-devcontainer $project test

@@ -15,10 +15,11 @@ There are really just three rules:
 Required for running anything:
 
 - Node.js >= 18
+- [mise](https://mise.jdx.dev/) (to install the pinned ytt renderer)
 - docker or comparable container builder
 - docker compose
 
-Run `npm run generate-docker-compose` and `docker compose up`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
+Run `mise install` once, then run `npm run generate-docker-compose` and `docker compose up`. The ytt templates render the development `docker-compose.yml`; production generation also renders the static `traefik.yml` configuration with `npm run generate-docker-compose prod`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
 
 To supply your own recipes, you can use the [demo-data project](demo-data/README.md) to generate demo recipes, ratings, inspirations and images via the GraphQL API.
 

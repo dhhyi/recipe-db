@@ -212,6 +212,7 @@ function writePrettierIgnores(availableProjects) {
     pnpm-lock.yaml
     .gitkeep
     *.txt
+    mise.toml
   `.replace(/^ +/gm, "");
 
   const otherProjectsIgnores =
