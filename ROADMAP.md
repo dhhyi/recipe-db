@@ -57,4 +57,67 @@ The web frontend should be protected with a login mechanism, so that it is not p
 Explore the possibility of deploying the stack on a Raspberry Pi with either Kubernetes or Docker Compose.
 Setup a public deployment.
 
+## Ideas for other services:
+
+### Tags
+
+TBA, maybe graph database?
+
+Specific tags for:
+
+- Country
+- Vegetarian/Vegan/Pescetarian
+- Main/Side/Appetizer/Dessert
+
+### Add to shopping list
+
+[Bring!](https://www.getbring.com/) integration.
+
+### Comments
+
+graph-like data structure
+
+### Food diary
+
+User can track when he had a certain recipe.
+
+### Relations
+
+- Variant of
+- Side dish
+
+### Collections
+
+Add recipes to collections (public and private)
+
+### Recipe State
+
+(should really be part of recipe data)
+
+- public
+- draft
+- idea
+
+## Cross Concerns
+
+### Authentication
+
+Probably [Google oAuth via traefik](https://www.libe.net/traefik-auth).
+
+### searching
+
+Maybe with [OpenSearch](https://opensearch.org/docs/latest/) or [Quickwit](https://quickwit.io/docs/get-started/quickstart).
+
+- by name
+- by rating for user
+- recipes containing ingredient/tag
+
+### Caching and updating
+
+Message queue notify on update -> pre-render and cache page again.
+
+### Resilience
+
+Maybe later.
+
 ## Misc
