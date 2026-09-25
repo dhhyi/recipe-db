@@ -14,20 +14,13 @@ There are really just three rules:
 
 Required for running anything:
 
-- Node.js >= 18
-- [mise](https://mise.jdx.dev/) (to install the pinned ytt renderer)
+- [mise](https://mise.jdx.dev/) (to install development tools)
 - docker or comparable container builder
 - docker compose
 
-Run `mise install` once, then run `npm run generate-docker-compose` and `docker compose up`. The ytt templates render the development `docker-compose.yml`; production generation also renders the static `traefik.yml` configuration with `npm run generate-docker-compose prod`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
+Run `mise install` once, then run `mise run generate-docker-compose` and `docker compose up`. The ytt templates render the development `docker-compose.yml`; production generation also renders the static `traefik.yml` configuration with `mise run generate-docker-compose prod`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
 
 To supply your own recipes, you can use the [demo-data project](demo-data/README.md) to generate demo recipes, ratings, inspirations and images via the GraphQL API.
-
-Required for development:
-
-- pnpm (`npm i -g pnpm`)
-- @devcontainers/cli (`npm i -g @devcontainers/cli@latest`)
-- VSCode
 
 After project checkout, run `pnpm install`. This will generate all necessary files for development (config files for prettier and docker as well as VSCode devcontainers).
 

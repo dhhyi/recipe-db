@@ -108,7 +108,7 @@ if (process.argv.slice(2).includes("update")) {
 
   if (!inSync) {
     console.error(
-      "Images are not in sync. Run `npm run pin-docker-images update` to update the lockfile.",
+      "Images are not in sync. Run `pnpm run pin-docker-images update` to update the lockfile.",
     );
     process.exit(1);
   }
