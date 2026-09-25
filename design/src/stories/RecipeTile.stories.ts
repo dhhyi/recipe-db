@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/web-components-vite";
 import { html } from "lit";
+import { until } from "lit/directives/until.js";
 
 import carbonaraThumb from "../assets/carbonara-thumb.png";
 import "../components/rating.ts";
@@ -39,6 +40,52 @@ export const Light: Story = {
     <a>
       <recipe-tile-component>
         <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
+        <h2 slot="title">${title}</h2>
+      </recipe-tile-component>
+    </a>
+  `,
+};
+
+export const Empty: Story = {
+  render: ({ title }) => html`
+    <a>
+      <recipe-tile-component>
+        <h2 slot="title">${title}</h2>
+      </recipe-tile-component>
+    </a>
+  `,
+};
+
+export const Loading: Story = {
+  render: ({ title }) => {
+    const source = new Promise<string>((resolve) => {
+      setTimeout(() => resolve(carbonaraThumb), 2000);
+    });
+
+    return html`
+      <a>
+        <recipe-tile-component>
+          <img
+            slot="image"
+            src=${until(source, "")}
+            alt="Spaghetti carbonara"
+          />
+          <h2 slot="title">${title}</h2>
+        </recipe-tile-component>
+      </a>
+    `;
+  },
+};
+
+export const Error: Story = {
+  render: ({ title }) => html`
+    <a>
+      <recipe-tile-component>
+        <img
+          slot="image"
+          src="/missing-recipe-thumbnail.png"
+          alt="Spaghetti carbonara"
+        />
         <h2 slot="title">${title}</h2>
       </recipe-tile-component>
     </a>

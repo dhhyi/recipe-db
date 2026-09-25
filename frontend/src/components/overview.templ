@@ -6,7 +6,9 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 	<a href={ "/recipe/" + item.Id } class="contents" aria-label={ "Rezept " + item.Name }>
 		<recipe-tile-component itemscope itemtype="https://schema.org/Recipe">
 			<h2 slot="title" class="font-bold" itemprop="name" title={ item.Name }>{ item.Name }</h2>
-			<img slot="image" src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
+			if item.Image != nil {
+				<img slot="image" src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
+			}
 			if ratingsOnline && item.Rating != nil {
 				{{ slot := "rating" }}
 				@Rating(item.Rating, false, &slot)
