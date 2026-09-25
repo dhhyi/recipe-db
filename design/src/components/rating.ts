@@ -4,6 +4,8 @@ import { customElement, property } from "lit/decorators.js";
 @customElement("rating-component")
 export class RatingComponent extends LitElement {
   protected createRenderRoot() {
+    // drop stale render output restored e.g. from htmx history cache
+    this.replaceChildren();
     return this;
   }
 
