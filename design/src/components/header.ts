@@ -6,6 +6,8 @@ import bannerSvg from "../assets/banner.svg?raw";
 @customElement("header-component")
 export class HeaderComponent extends LitElement {
   protected createRenderRoot() {
+    // drop stale render output restored e.g. from htmx history cache
+    this.replaceChildren();
     return this;
   }
 
@@ -16,7 +18,7 @@ export class HeaderComponent extends LitElement {
         class="px-2 py-1 sticky top-0 z-10"
       >
         <nav>
-          <a href="/">
+          <a href="/" hx-boost="true">
             <span style="color: var(--pico-h1-color)" class="contents *:h-8"
               >${unsafeSVG(bannerSvg)}</span
             >
