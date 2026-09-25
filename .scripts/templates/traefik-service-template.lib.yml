@@ -1,0 +1,20 @@
+#@ def traefik_service(flavour):
+#@   service = {
+#@     "image": "traefik:v3.7",
+#@     "container_name": "traefik",
+#@     "command": ["--entrypoints.web.address=:80", "--entrypoints.rest-internal.address=:3000", "--api=true", "--global.sendAnonymousUsage"],
+#@     "ports": ["8080:80"],
+#@     "volumes": [],
+#@     "networks": ["intranet"],
+#@   }
+#@   if flavour == "production":
+#@     service["command"].append("--providers.file.filename=/traefik_config.yml")
+#@     service["volumes"].append("./traefik.yml:/traefik_config.yml:ro")
+#@   else:
+#@     service["command"].extend(["--api.dashboard=true", "--log.level=INFO", "--providers.docker=true", "--providers.docker.exposedbydefault=false"])
+#@     service["volumes"].append("/var/run/docker.sock:/var/run/docker.sock:ro")
+#@     service["ports"].append("3000:3000")
+#@     service["labels"] = ["traefik.enable=true", "traefik.http.routers.traefik.entrypoints=rest-internal", "traefik.http.routers.traefik.service=api@internal", "traefik.http.routers.traefik.rule=PathPrefix(`/api`) || PathPrefix(`/dashboard`)"]
+#@   end
+#@   return service
+#@ end

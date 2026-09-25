@@ -1,0 +1,35 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:template", "template")
+#@ load("service-template.lib.yml", "service")
+#@ load("traefik-service-template.lib.yml", "traefik_service")
+#@ def projects(category):
+#@   return [project for project in data.values.projects if project.category == category]
+#@ end
+#@ backend_projects = projects("backend")
+#@ api_projects = projects("api")
+#@ frontend_projects = projects("frontend")
+#@ deploy_projects = backend_projects + api_projects + frontend_projects
+#@ if data.values.flavour == "development":
+#@   deploy_projects += projects("development")
+#@ end
+#@ if data.values.backendOnly:
+#@   deploy_projects = backend_projects + api_projects
+#@ end
+#@ def service_map():
+#@   services = {"traefik": traefik_service(data.values.flavour)}
+#@   for project in deploy_projects:
+#@     services.update(service(project, data.values.flavour, backend_projects, api_projects, frontend_projects, data.values.backendOnly, data.values.ci))
+#@   end
+#@   return services
+#@ end
+services:
+  _: #@ template.replace(service_map())
+networks:
+  intranet:
+    name: intranet
+    external: true
+#@ if data.values.flavour == "production":
+volumes:
+  data:
+    name: recipe-db-data
+#@ end

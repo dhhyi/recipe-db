@@ -1,0 +1,60 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:struct", "struct")
+#@ def deploy_projects():
+#@   return [project for project in data.values.projects if project.category in ["backend", "api", "frontend"]]
+#@ end
+#@ def traefik_config():
+#@   routers = {"traefik": {"rule": "PathPrefix(`/api`)", "entrypoints": ["rest-internal"], "service": "api@internal"}}
+#@   middlewares = {}
+#@   services = {}
+#@   for project in deploy_projects():
+#@     project_data = struct.encode(project)
+#@     http = struct.encode(project.traefik.labels.http)
+#@     service_configs = struct.encode(http["services"])
+#@     router_configs = struct.encode(http["routers"])
+#@     service_names = [name for name in service_configs]
+#@     if len(service_names) != 1:
+#@       fail("Expected exactly one Traefik service for " + project.name)
+#@     end
+#@     service_name = service_names[0]
+#@     service_config = {}
+#@     for key in service_configs[service_name]:
+#@       service_config[key] = service_configs[service_name][key]
+#@     end
+#@     if "loadBalancer" not in service_config:
+#@       service_config["loadBalancer"] = {}
+#@     else:
+#@       load_balancer = {}
+#@       for key in service_config["loadBalancer"]:
+#@         load_balancer[key] = service_config["loadBalancer"][key]
+#@       end
+#@       service_config["loadBalancer"] = load_balancer
+#@     end
+#@     if "servers" not in service_config["loadBalancer"]:
+#@       service_config["loadBalancer"]["servers"] = [{"url": "http://" + project.name + ":" + str(project_data["devcontainer"]["ports"][0])}]
+#@     end
+#@     services[service_name] = service_config
+#@     for router_name in router_configs:
+#@       router = router_configs[router_name]
+#@       router_config = {"service": service_name, "rule": router["rule"], "entrypoints": router["entrypoints"].split(",")}
+#@       if "middlewares" in router:
+#@         router_config["middlewares"] = router["middlewares"].split(",")
+#@       end
+#@       if router_name in routers:
+#@         fail("Router " + router_name + " already exists")
+#@       end
+#@       routers[router_name] = router_config
+#@     end
+#@     if "middlewares" in http:
+#@       middleware_configs = struct.encode(http["middlewares"])
+#@       for middleware_name in middleware_configs:
+#@         if middleware_name in middlewares:
+#@           fail("Middleware " + middleware_name + " already exists")
+#@         end
+#@         middlewares[middleware_name] = middleware_configs[middleware_name]
+#@       end
+#@     end
+#@   end
+#@   return {"http": {"routers": routers, "middlewares": middlewares, "services": services}}
+#@ end
+http: #@ traefik_config()["http"]

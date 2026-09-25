@@ -1,0 +1,4 @@
+[tools]
+jq = "latest"
+yq = "latest"
+ytt = "latest"

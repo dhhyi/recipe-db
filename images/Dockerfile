@@ -12,7 +12,6 @@ RUN nimble build -d:release -y --threads:off --passL:"-static" \
 FROM scratch
 COPY --from=build /app/server /server
 COPY --from=build --chown=65534:65534 /data /data
-USER 65534:65534
 ENV PORT=8000 DATA_LOCATION=/data
 EXPOSE 8000
 ENTRYPOINT ["/server"]
