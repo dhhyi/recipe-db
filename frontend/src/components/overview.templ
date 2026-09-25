@@ -3,24 +3,21 @@ package components
 import "frontend/src/generated"
 
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<article itemscope itemtype="https://schema.org/Recipe">
-		<header>
-			<h2 class="font-bold"><a href={ "/recipe/" + item.Id } itemprop="name">{ item.Name }</a></h2>
-		</header>
-		if item.Image != nil {
-			<img src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
-		}
-		if ratingsOnline && item.Rating != nil {
-			<footer>
-				@Rating(item.Rating, false)
-			</footer>
-		}
-	</article>
+	<a href={ "/recipe/" + item.Id } class="contents" aria-label={ "Rezept " + item.Name }>
+		<recipe-tile-component itemscope itemtype="https://schema.org/Recipe">
+			<h2 slot="title" class="font-bold" itemprop="name" title={ item.Name }>{ item.Name }</h2>
+			<img slot="image" src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
+			if ratingsOnline && item.Rating != nil {
+				{{ slot := "rating" }}
+				@Rating(item.Rating, false, &slot)
+			}
+		</recipe-tile-component>
+	</a>
 }
 
 templ Overview(resp *gql.OverviewResponse) {
 	<h1>Alle Rezepte</h1>
-	<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4">
+	<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4 mx-auto max-w-[350px] sm:max-w-none">
 		for _, recipe := range resp.Recipes {
 			@recipeTile(recipe, resp.RatingsOnline)
 		}

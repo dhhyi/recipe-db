@@ -26,7 +26,7 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 			<hgroup>
 				<h1 itemprop="name">{ recipe.Name }</h1>
 				if resp.RatingsOnline && recipe.Rating != nil {
-					@Rating(recipe.Rating, true)
+					@Rating(recipe.Rating, true, nil)
 				}
 			</hgroup>
 			@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImageEditOnline)

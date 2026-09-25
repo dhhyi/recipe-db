@@ -4,7 +4,7 @@ import { html } from "lit";
 import "../design.css";
 
 const meta = {
-  title: "Blades/Feedback",
+  title: "Components/Feedback",
   tags: ["autodocs"],
 } satisfies Meta;
 

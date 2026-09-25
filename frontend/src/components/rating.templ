@@ -5,7 +5,7 @@ import (
 	"frontend/src/generated"
 )
 
-templ Rating(rating *gql.Rating, ratingPossible bool) {
+templ Rating(rating *gql.Rating, ratingPossible bool, slot *string) {
 	{{
 		ratingValue := ""
 		if rating.Average != nil {
@@ -20,6 +20,9 @@ templ Rating(rating *gql.Rating, ratingPossible bool) {
 		itemscope
 		itemtype="https://schema.org/AggregateRating"
 		itemprop="aggregateRating"
+		if slot != nil {
+			slot={ *slot }
+		}
 	>
 		if rating.Average != nil {
 			<meta itemprop="ratingValue" content={ ratingValue }/>

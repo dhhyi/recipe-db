@@ -66,6 +66,9 @@ vscode:
     - nicoespeon.abracadabra
     - MylesMurphy.prettify-ts
     - bradlc.vscode-tailwindcss
+  tasks:
+    - label: Run Storybook
+      command: npm start
 extras:
   - named-volumes
   - traefik
@@ -103,3 +106,4 @@ precommit: |
 prettier:
   ignore:
     - nginx.conf
+    - "*.png"

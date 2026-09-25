@@ -55,7 +55,7 @@ func main() {
 			http.Error(w, "failed to rate recipe", http.StatusInternalServerError)
 			return
 		}
-		templ.Handler(components.Rating(&resp.Rate, true)).ServeHTTP(w, r)
+		templ.Handler(components.Rating(&resp.Rate, true, nil)).ServeHTTP(w, r)
 	})
 
 	http.HandleFunc("/recipe/{id}/inspirations", func(w http.ResponseWriter, r *http.Request) {
