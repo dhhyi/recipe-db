@@ -30,8 +30,9 @@ devcontainer:
           cp -Rfv "$input"/* "$target"/
           sudo /etc/init.d/nginx restart
     user:
-      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
-      - RUN mise use -g node@26 npm:pnpm@11
+      - RUN mise settings idiomatic_version_file_enable_tools=pnpm
+      - RUN mise use -g node@26
+  instantiate: mise -y install
   initialize: |
     sudo /etc/init.d/nginx start
     sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf

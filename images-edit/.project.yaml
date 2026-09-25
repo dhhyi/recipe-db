@@ -15,8 +15,8 @@ devcontainer:
         && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
       - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
     user:
-      # mise's aqua registry cannot resolve pnpm assets, so use the npm backend
-      - RUN mise use -g node@26 npm:pnpm@11
+      - RUN mise settings idiomatic_version_file_enable_tools=pnpm
+      - RUN mise use -g node@26
   publish:
     image: ghcr.io/dhhyi/recipe-db-devcontainer-images-edit
     labels:
@@ -26,6 +26,7 @@ devcontainer:
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     TESTING: "true"
+  instantiate: mise -y install
   initialize: |
     sudo ln -sf ${containerWorkspaceFolder}/nginx.conf /etc/nginx/conf.d/default.conf
     sudo ln -sf ${containerWorkspaceFolder}/index.html /usr/share/nginx/html/index.html
@@ -102,7 +103,7 @@ prettier:
 precommit: |
   pnpm exec elm --version
   nginx-formatter -indent=4
-  npx prettier --tab-width 4 --print-width 10 --ignore-path /dev/null --write elm.json
+  pnpm exec prettier --tab-width 4 --print-width 10 --ignore-path /dev/null --write elm.json
   pnpm exec elm-format --yes .
   pnpm codegen
   pnpm build

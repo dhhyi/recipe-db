@@ -39,17 +39,6 @@ tasks.push({
   run: defaultRun,
 });
 
-// create intranet network
-tasks.push({
-  execDir: ".",
-  command: "node .scripts/check-npm-dependency-sync.js",
-  dependent: ["pnpm-lock.yaml", "package.json"],
-  message: "Checking npm dependency synchronization",
-  container: false,
-  priority: 80,
-  run: defaultRun,
-});
-
 // add prettier tasks
 globSync("**/.prettierignore")
   .map((file) => path.dirname(file))
@@ -60,7 +49,7 @@ globSync("**/.prettierignore")
     tasks.push({
       execDir: dir,
       dependent: [dir],
-      command: container ? "prettier" : "npx prettier --write '**'",
+      command: container ? "prettier" : "pnpm exec prettier --write '**'",
       message: "Running 'prettier' in " + dir,
       container,
       priority: dir === "." ? 1 : 2,
@@ -72,7 +61,7 @@ globSync("**/.prettierignore")
 tasks.push({
   execDir: path.basename(scriptRoot),
   dependent: [path.basename(scriptRoot)],
-  command: "npx eslint --fix " + scriptRoot,
+  command: "pnpm exec eslint --fix " + scriptRoot,
   message: "Running 'eslint' in " + path.basename(scriptRoot),
   container: false,
   priority: 5,

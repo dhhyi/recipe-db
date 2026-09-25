@@ -3,8 +3,8 @@
   "repository": "github:dhhyi/recipe-db",
   "scripts": {
     "install-precommit": "echo 'PRE_COMMIT=1 node .scripts/precommit.js \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
-    "prepare": "npm run install-precommit && npm run synchronize && npm run generate-docker-compose prepare",
-    "synchronize": "node .scripts/create-intranet.js && node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js && npm run pin-docker-images",
+    "prepare": "pnpm run install-precommit && pnpm run synchronize && pnpm run generate-docker-compose prepare",
+    "synchronize": "node .scripts/create-intranet.js && node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js && pnpm run pin-docker-images",
     "pin-docker-images": "node .scripts/pin-docker-images.js",
     "in-devcontainer": "node .scripts/run-in-devcontainer.js",
     "generate-docker-compose": "sh .scripts/generate-docker-compose.sh",
@@ -28,6 +28,16 @@
     "prettier": "^3.0.0",
     "prettier-plugin-sh": "^0.13.1",
     "tailwindcss": "4.3.3"
+  },
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.6.0",
+      "onFail": "error"
+    }
   },
   "license": "MIT"
 }

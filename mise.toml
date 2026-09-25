@@ -1,4 +1,9 @@
 [tools]
 jq = "latest"
+node = "26"
+"npm:@devcontainers/cli" = "latest"
 yq = "latest"
 ytt = "latest"
+
+[settings]
+idiomatic_version_file_enable_tools = ['npm', 'pnpm']

@@ -17,7 +17,7 @@ second yaml document of the project's `.project.yaml`:
 
 - `test` — runs the project's `test:` script
 - `precommit` — runs the project's `precommit:` script with `PRE_COMMIT=1` set
-- `prettier` — runs `npx prettier --write '**'` (only for projects that declare a `prettier:` section)
+- `prettier` — runs `prettier --write '**'` (only for projects that declare a `prettier:` section)
 
 Examples:
 
