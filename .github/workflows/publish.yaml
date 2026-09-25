@@ -80,7 +80,7 @@ jobs:
       - name: build and push prod images
         run: |
           echo "::group::generate prod docker-compose.yml"
-          pnpm run generate-docker-compose prod
+          mise run generate-docker-compose prod
           echo "::endgroup::"
           echo "::group::docker-compose.yml"
           cat docker-compose.yml

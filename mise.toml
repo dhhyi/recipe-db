@@ -5,5 +5,8 @@ node = "26"
 yq = "latest"
 ytt = "latest"
 
+[tasks.generate-docker-compose]
+run = "sh .scripts/generate-docker-compose.sh"
+
 [settings]
 idiomatic_version_file_enable_tools = ['npm', 'pnpm']

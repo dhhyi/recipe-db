@@ -3,11 +3,10 @@
   "repository": "github:dhhyi/recipe-db",
   "scripts": {
     "install-precommit": "echo 'PRE_COMMIT=1 node .scripts/precommit.js \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
-    "prepare": "pnpm run install-precommit && pnpm run synchronize && pnpm run generate-docker-compose prepare",
+    "prepare": "pnpm run install-precommit && pnpm run synchronize && mise run generate-docker-compose prepare",
     "synchronize": "node .scripts/create-intranet.js && node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js && pnpm run pin-docker-images",
     "pin-docker-images": "node .scripts/pin-docker-images.js",
     "in-devcontainer": "node .scripts/run-in-devcontainer.js",
-    "generate-docker-compose": "sh .scripts/generate-docker-compose.sh",
     "seed-demodata": "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
   },
   "dependencies": {
