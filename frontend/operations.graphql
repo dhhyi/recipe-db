@@ -51,6 +51,7 @@ query RecipeById($id: ID!) {
     ...RecipeDetail
   }
   recipeEditOnline: isServiceOnline(name: "recipes-edit")
+  imagesOnline: isServiceOnline(name: "images")
   imageEditOnline: isServiceOnline(name: "images-edit")
   ratingsOnline: isServiceOnline(name: "ratings")
   inspirationsOnline: isServiceOnline(name: "inspirations")

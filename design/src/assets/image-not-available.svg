@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" role="img" aria-labelledby="title desc">
+  <title id="title">Image not available</title>
+  <desc id="desc">A simple camera icon with a diagonal strike-through.</desc>
+  <defs>
+    <filter id="soft-shadow" x="16" y="14" width="128" height="92" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="4" flood-color="#021006" flood-opacity="0.36" stdDeviation="3" />
+    </filter>
+  </defs>
+
+  <g fill="none" filter="url(#soft-shadow)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42 43h19l7-9h24l7 9h19c6 0 10 4 10 10v37c0 6-4 10-10 10H42c-6 0-10-4-10-10V53c0-6 4-10 10-10Z" stroke="#159032" stroke-width="8" />
+    <path d="M46 53h68" stroke="#61d967" stroke-opacity="0.5" stroke-width="4" />
+    <circle cx="80" cy="72" r="19" stroke="#3fc952" stroke-width="7" />
+    <circle cx="80" cy="72" r="7" stroke="#91ea83" stroke-opacity="0.72" stroke-width="4" />
+    <path d="M107 58h7" stroke="#91ea83" stroke-opacity="0.72" stroke-width="5" />
+
+    <path d="M31 22 130 101" stroke="#0f6f25" stroke-opacity="0.9" stroke-width="13" />
+    <path d="M31 22 130 101" stroke="#50d75c" stroke-width="7" />
+  </g>
+</svg>
