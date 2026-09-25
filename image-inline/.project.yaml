@@ -9,18 +9,10 @@ devcontainer:
   build:
     packages:
       - build-essential
-      - curl
-      - libffi-dev
-      - libffi8
-      - libgmp-dev
-      - libgmp10
-      - libncurses-dev
-      - libncurses6
-      - libtinfo6
+      - cabal-install
+      - ghc
       - pkg-config
       - zlib1g-dev
-    user:
-      - RUN mise use -g ghc@9.6.6 cabal@3.10.3.0
   ports:
     - 3000
   environment:
