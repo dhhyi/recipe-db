@@ -38,6 +38,7 @@ devcontainer:
           # Files share the image store, so they must not run in parallel.
           exec hurl --test --jobs 1 --variable REST_API="$REST_API" --variable WEB_API="$WEB_API" "$@"
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000
     WEB_API: http://traefik
 vscode:

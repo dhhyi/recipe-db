@@ -25,6 +25,7 @@ devcontainer:
           fi
           exec venom run --var REST_API="$REST_API" --stop-on-failure $tests
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000
 vscode:
   settings:

@@ -10,6 +10,7 @@ devcontainer:
     user:
       - RUN mise use -g java@21 maven@3.9.16
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000
 vscode:
   settings:

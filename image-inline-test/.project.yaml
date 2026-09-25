@@ -33,6 +33,7 @@ devcontainer:
   ports:
     - 80
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000
     FIXTURE_API: http://traefik:3000/image-inline-test-fixture
   initialize: sudo /etc/init.d/nginx start

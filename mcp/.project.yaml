@@ -13,6 +13,7 @@ devcontainer:
   ports:
     - 5000
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     TESTING: "true"
 vscode:
   settings:

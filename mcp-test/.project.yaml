@@ -31,6 +31,7 @@ devcontainer:
   ports:
     - 80
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     MCP_URL: http://traefik/mcp
     REST_API: http://traefik:3000
     FIXTURE_API: http://traefik:3000/mcp-test-fixture

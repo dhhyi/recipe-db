@@ -18,6 +18,8 @@ devcontainer:
     user:
       - RUN pip install ariadne-codegen black pylint --break-system-packages
       - ENV PATH="${HOME}/.local/bin:${PATH}"
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
   initialize: ariadne-codegen
 vscode:
   settings:

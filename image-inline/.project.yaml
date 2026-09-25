@@ -23,6 +23,8 @@ devcontainer:
       - RUN mise use -g ghc@9.6.6 cabal@3.10.3.0
   ports:
     - 3000
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
