@@ -20,6 +20,8 @@ devcontainer:
       - RUN mise use -g crystal@1.17.1
   ports:
     - 8081
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"

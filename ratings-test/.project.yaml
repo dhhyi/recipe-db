@@ -25,6 +25,7 @@ devcontainer:
           java -jar /opt/karate.jar "$@"
   selftest: karate -h
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000
 vscode:
   settings:

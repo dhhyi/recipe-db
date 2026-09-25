@@ -23,6 +23,7 @@ devcontainer:
     TESTING: "true"
     REST_ENDPOINT: http://traefik:3000
     TRAEFIK_ENTRYPOINTS: web,rest-internal
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"

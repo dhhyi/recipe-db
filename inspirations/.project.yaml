@@ -26,6 +26,7 @@ devcontainer:
   ports:
     - 8800
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     TESTING: "true"
   initialize: |
     luarocks make --tree lua_modules

@@ -55,6 +55,7 @@ devcontainer:
     - 80
   selftest: karate -h
   environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     GRAPHQL_API: http://traefik/graphql
     FIXTURE_API: http://traefik:3000/graphql-test-fixture
   initialize: sudo /etc/init.d/nginx start
