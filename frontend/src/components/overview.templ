@@ -3,7 +3,7 @@ package components
 import "frontend/src/generated"
 
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<a href={ "/recipe/" + item.Id } class="contents" aria-label={ "Rezept " + item.Name } hx-boost="true">
+	<a href={ "/recipe/" + item.Id } aria-label={ "Rezept " + item.Name } hx-boost="true">
 		<recipe-tile-component itemscope itemtype="https://schema.org/Recipe">
 			<h2 slot="title" class="font-bold" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 			if item.Image != nil {
