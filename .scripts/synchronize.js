@@ -1,7 +1,6 @@
 const fs = require("fs");
 const cp = require("child_process");
 const path = require("path");
-const prettier = require("prettier");
 const {
   projectRoot,
   getAvailableProjects,
@@ -264,64 +263,6 @@ function writePrettierIgnore(availableProjects) {
   });
 }
 
-async function writePrettierConfig() {
-  const rootPrettierConfigPath = path.join(projectRoot, ".prettierrc.cjs");
-
-  const prettierConfig = async (plugins, overrides) => {
-    const pluginsContent = `plugins: [${plugins
-      .sort()
-      .map((plugin) => `require.resolve("${plugin}")`)
-      .join(", ")}],`;
-
-    const overridesContent =
-      overrides.length > 0
-        ? `overrides: [${overrides
-            .map(([files, options]) => JSON.stringify({ files, options }))
-            .join(", ")}],`
-        : "";
-
-    const content =
-      warning("//") +
-      "module.exports = {" +
-      pluginsContent +
-      overridesContent +
-      "}";
-
-    return await prettier.format(content, { parser: "flow" });
-  };
-
-  const rootPrettierPlugins = [
-    "prettier-plugin-sh",
-    "prettier-plugin-toml",
-    "@prettier/plugin-xml",
-  ];
-  const sharedOverrides = [
-    [
-      ["*.svg"],
-      {
-        parser: "xml",
-        xmlWhitespaceSensitivity: "ignore",
-        xmlQuoteAttributes: "double",
-        printWidth: 200,
-      },
-    ],
-    [
-      ["*.properties"],
-      {
-        parser: "sh",
-      },
-    ],
-  ];
-
-  const rootConfig = await prettierConfig(rootPrettierPlugins, [
-    [["LICENSE"], { parser: "markdown" }],
-    ...sharedOverrides,
-  ]);
-
-  console.log(`Writing .prettierrc.cjs ...`);
-  fs.writeFileSync(rootPrettierConfigPath, rootConfig);
-}
-
 function writeDockerIgnores(availableProjects) {
   const rootGitIgnore =
     fs
@@ -473,7 +414,6 @@ const tailwindSources = writeTailwindSources(allAvailableProjects);
 writeTailwindDockerInputs(tailwindSources);
 writeRootDockerIgnore();
 writePrettierIgnore(allAvailableProjects);
-writePrettierConfig();
 writeDockerIgnores(availableProjects);
 if (!args.includes("--no-dcc")) {
   writeDccFiles(availableProjects);
