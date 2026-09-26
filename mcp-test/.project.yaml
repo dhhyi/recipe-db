@@ -71,4 +71,3 @@ precommit: python3 --version
 prettier:
   ignore:
     - "*.py"
-    - "*.toml"

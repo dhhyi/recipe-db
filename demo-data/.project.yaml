@@ -65,5 +65,4 @@ prettier:
     - "*.py"
     - "*.pyc"
     - .pylintrc
-    - "*.toml"
     - "*.jpg"

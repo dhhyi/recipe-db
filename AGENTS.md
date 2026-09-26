@@ -12,18 +12,16 @@ pnpm in-devcontainer <project> <command>
 The command is executed with `fish` inside the project's devcontainer. An existing running container
 is reused, otherwise one is started (and stopped again afterwards).
 
-Three command names are special and are not passed through verbatim — they are resolved from the
+Two command names are special and are not passed through verbatim — they are resolved from the
 second yaml document of the project's `.project.yaml`:
 
 - `test` — runs the project's `test:` script
 - `precommit` — runs the project's `precommit:` script with `PRE_COMMIT=1` set
-- `prettier` — runs `prettier --write '**'` (only for projects that declare a `prettier:` section)
 
 Examples:
 
 ```sh
 pnpm in-devcontainer images-edit precommit
-pnpm in-devcontainer images-edit prettier
 pnpm in-devcontainer recipes-test test
 pnpm in-devcontainer images-edit pnpm build --output /dev/null
 pnpm in-devcontainer graphql pnpm install

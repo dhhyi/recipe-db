@@ -31,7 +31,7 @@ devcontainer:
           sudo /etc/init.d/nginx restart
     user:
       - RUN mise settings idiomatic_version_file_enable_tools=pnpm
-      - RUN mise use -g node@26
+      - RUN mise use -g node@26 npm:prettier
   instantiate: mise -y install
   initialize: |
     sudo /etc/init.d/nginx start
