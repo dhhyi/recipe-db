@@ -125,7 +125,7 @@ if (process.argv.slice(2).includes("update")) {
         console.log(`${base}:${tag} is already up to date`);
         return;
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
 
