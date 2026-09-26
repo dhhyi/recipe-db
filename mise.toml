@@ -2,6 +2,7 @@
 jq = "latest"
 node = "26"
 "npm:@devcontainers/cli" = "latest"
+shellcheck = "latest"
 yq = "latest"
 ytt = "latest"
 
