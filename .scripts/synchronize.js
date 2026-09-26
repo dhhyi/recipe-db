@@ -2,7 +2,6 @@ const fs = require("fs");
 const cp = require("child_process");
 const path = require("path");
 const prettier = require("prettier");
-const { globSync } = require("glob");
 const {
   projectRoot,
   getAvailableProjects,
@@ -11,9 +10,10 @@ const {
 } = require("./shared");
 
 function searchForForbiddenFiles(availableProjects) {
-  const forbiddenGitIgnores = globSync("**/.gitignore", {
-    cwd: projectRoot,
-  })
+  const forbiddenGitIgnores = fs
+    .globSync("**/.gitignore", {
+      cwd: projectRoot,
+    })
     .filter(
       (file) =>
         file !== ".gitignore" &&
