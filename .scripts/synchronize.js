@@ -426,7 +426,6 @@ function writeRootVSCodeSettingsFile(availableProjects, tailwindSources) {
       {
         match: "(^|/)\\.gitignore$|^\\.scripts/synchronize\\.js$",
         command:
-          // eslint-disable-next-line no-template-curly-in-string
           "cd ${workspaceFolder} && node .scripts/synchronize.js --no-dcc",
         runningStatusMessage: "synchronizing...",
         finishStatusMessage: "synchronizing ✔",
@@ -434,14 +433,12 @@ function writeRootVSCodeSettingsFile(availableProjects, tailwindSources) {
       {
         match: ".scripts/synchronize\\.js$",
         command:
-          // eslint-disable-next-line no-template-curly-in-string
           "cd ${workspaceFolder} && node .scripts/synchronize.js --no-dcc",
         runningStatusMessage: "synchronizing...",
         finishStatusMessage: "synchronizing ✔",
       },
       ...availableProjects.map((project) => ({
         match: `/${project}/\\.project\\.yaml$`,
-        // eslint-disable-next-line no-template-curly-in-string
         command: `cd \${workspaceFolder} && node .scripts/synchronize.js --no-dcc && sh ${project}/.update_devcontainer.sh`,
         runningStatusMessage: `${project} devcontainer...`,
         finishStatusMessage: `${project} devcontainer ✔`,
