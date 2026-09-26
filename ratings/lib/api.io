@@ -47,7 +47,7 @@ RESTAPI put := method(request,
 )
 
 RESTAPI delete := method(request,
-    if (System getEnvironmentVariable("TESTING") == "true",
+    if (System getEnvironmentVariable("PRODUCTION") != "true",
     if (request at("path") size == 1,
     if (request at("path") at(0) == "ratings",
         db clear

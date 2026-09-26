@@ -7,8 +7,8 @@ db initialize
 
 writeln("Starting server on port 8456")
 
-if (System getEnvironmentVariable("TESTING") == "true",
-    writeln("TESTING MODE")
+if (System getEnvironmentVariable("PRODUCTION") == "true",
+    writeln("PRODUCTION MODE")
 )
 
 server := Server clone setPort(8456)

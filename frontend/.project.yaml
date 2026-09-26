@@ -15,7 +15,6 @@ devcontainer:
     - 3000
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
-    TESTING: "true"
   initialize: |
     go mod download -x
     templ generate

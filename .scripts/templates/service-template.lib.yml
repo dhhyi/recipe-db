@@ -24,9 +24,7 @@
 #@   return result
 #@ end
 
-#@ def service(project, flavour, backend_projects, api_projects, frontend_projects, backend_only, ci):
-#@   production = flavour == "production"
-#@   development = project.category == "development"
+#@ def service(project, options, projects):
 #@   context = project.dockerContext if "dockerContext" in project else project.name
 #@   dockerfile = "Dockerfile" if context == project.name else project.name + "/Dockerfile"
 #@   build = {
@@ -42,12 +40,6 @@
 #@   if dockerfile != "Dockerfile":
 #@     build["dockerfile"] = dockerfile
 #@   end
-#@   if production and ci:
-#@     build["cache_to"] = ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache"]
-#@   end
-#@   if production and project.repository.startswith("github:"):
-#@     build["labels"] = {"org.opencontainers.image.source": "https://github.com/" + project.repository[7:]}
-#@   end
 #@   if "environment" in project.devcontainer:
 #@     environment = {}
 #@     for key in project.devcontainer.environment:
@@ -60,30 +52,36 @@
 #@       service["environment"] = environment
 #@     end
 #@   end
-#@   if not production and "labels" in project.traefik:
-#@     labels = ["traefik.enable=true"]
-#@     for key, value in flatten_labels(project.traefik.labels):
-#@       labels.append(("traefik." if not key.startswith("traefik.") else "") + key + "=" + value)
+#@   if options.production:
+#@     service.setdefault("environment", {})["PRODUCTION"] = "true"
+#@     if options.ci:
+#@       build["cache_to"] = ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache"]
 #@     end
-#@     service["labels"] = labels
+#@     if project.repository.startswith("github:"):
+#@       build["labels"] = {"org.opencontainers.image.source": "https://github.com/" + project.repository[7:]}
+#@     end
+#@     if project.category == "backend":
+#@       service["volumes"] = ["data:/app/data"]
+#@       service["environment"]["DATA_LOCATION"] = "/app/data/" + project.name
+#@     elif project.category == "frontend":
+#@       service["depends_on"] = depends_on(projects.api)
+#@     elif project.category == "api":
+#@       service["depends_on"] = {"traefik": {"condition": "service_started"}}
+#@       service["depends_on"].update(depends_on(projects.backend))
+#@     end
+#@   else:
+#@     if "labels" in project.traefik:
+#@       labels = ["traefik.enable=true"]
+#@       for key, value in flatten_labels(project.traefik.labels):
+#@         labels.append(("traefik." if not key.startswith("traefik.") else "") + key + "=" + value)
+#@       end
+#@       service["labels"] = labels
+#@     end
 #@   end
-#@   if development:
+#@   if project.category == "job":
 #@     service["profiles"] = ["development"]
 #@     service["restart"] = "no"
-#@   end
-#@   service.setdefault("environment", {})["TESTING"] = "true" if not production else None
-#@   if production and project.category == "backend":
-#@     service["volumes"] = ["data:/app/data"]
-#@     service["environment"]["DATA_LOCATION"] = "/app/data/" + project.name
-#@   end
-#@   if production and project.category == "frontend":
-#@     service["depends_on"] = depends_on(api_projects)
-#@   elif production and project.category == "api":
-#@     service["depends_on"] = {"traefik": {"condition": "service_started"}}
-#@     service["depends_on"].update(depends_on(backend_projects))
-#@   end
-#@   if development:
-#@     service["environment"]["SERVICES"] = ",".join([p.name for p in backend_projects + api_projects])
+#@     service.setdefault("environment", {})["SERVICES"] = ",".join([p.name for p in projects.backend + projects.api])
 #@   end
 #@   return {project.name: service}
 #@ end

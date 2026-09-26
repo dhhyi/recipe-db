@@ -2,33 +2,46 @@
 #@ load("@ytt:template", "template")
 #@ load("service-template.lib.yml", "service")
 #@ load("traefik-service-template.lib.yml", "traefik_service")
-#@ def projects(category):
+#@ load("@ytt:struct", "struct")
+#@
+#@ def filter_projects(category):
 #@   return [project for project in data.values.projects if project.category == category]
 #@ end
-#@ backend_projects = projects("backend")
-#@ api_projects = projects("api")
-#@ frontend_projects = projects("frontend")
-#@ deploy_projects = backend_projects + api_projects + frontend_projects
-#@ if data.values.flavour == "development":
-#@   deploy_projects += projects("development")
+#@
+#@ projects = struct.make(
+#@   backend=filter_projects("backend"),
+#@   api=filter_projects("api"),
+#@   frontend=filter_projects("frontend"),
+#@   job=filter_projects("job")
+#@ )
+#@ options = struct.make(
+#@   production=data.values.production,
+#@   ci=data.values.ci
+#@ )
+#@
+#@ deploy_projects = projects.backend + projects.api
+#@ if not data.values.backendOnly:
+#@   deploy_projects += projects.frontend
 #@ end
-#@ if data.values.backendOnly:
-#@   deploy_projects = backend_projects + api_projects
+#@ if not options.production:
+#@   deploy_projects += projects.job
 #@ end
+#@
 #@ def service_map():
-#@   services = {"traefik": traefik_service(data.values.flavour)}
+#@   services = {"traefik": traefik_service(options.production)}
 #@   for project in deploy_projects:
-#@     services.update(service(project, data.values.flavour, backend_projects, api_projects, frontend_projects, data.values.backendOnly, data.values.ci))
+#@     services.update(service(project, options, projects))
 #@   end
 #@   return services
 #@ end
+#@
 services:
   _: #@ template.replace(service_map())
 networks:
   intranet:
     name: intranet
     external: true
-#@ if data.values.flavour == "production":
+#@ if options.production:
 volumes:
   data:
     name: recipe-db-data

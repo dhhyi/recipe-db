@@ -24,7 +24,6 @@ devcontainer:
     - 8000
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
-    TESTING: "true"
   initialize: nimble install -d -y
   selftest: |
     nim --version

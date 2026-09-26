@@ -22,7 +22,7 @@ pub struct MutationRoot(
 pub type ApiSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub fn build_schema() -> ApiSchema {
-    let testing = std::env::var("TESTING").as_deref() == Ok("true");
+    let production = std::env::var("PRODUCTION").as_deref() == Ok("true");
 
     let mut builder = Schema::build(
         QueryRoot::default(),
@@ -37,7 +37,7 @@ pub fn build_schema() -> ApiSchema {
     .data(ImageInlineApi::new())
     .data(TraefikApi::new());
 
-    if !testing {
+    if production {
         builder = builder.disable_introspection();
     }
 

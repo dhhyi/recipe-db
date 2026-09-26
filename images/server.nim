@@ -12,7 +12,7 @@ const
   jpegSignature = "\xFF\xD8"
 
 let
-  testingMode = existsEnv("TESTING")
+  productionMode = getEnv("PRODUCTION") == "true"
   verbose = getEnv("VERBOSE") == "true"
   documentRoot = getEnv("DATA_LOCATION", "public")
   dataFolder = documentRoot / imagesSubfolder
@@ -146,7 +146,7 @@ router imagesRouter:
       respProblem(Http500, "Internal Server Error", getCurrentExceptionMsg(), "metadata-error")
 
   delete "/images/?":
-    if not testingMode:
+    if productionMode:
       resp Http404, "Not found"
     info "DELETE all images"
     removeDir(dataFolder)
@@ -173,8 +173,8 @@ proc main() =
   ))
   createDir(dataFolder)
   info "Data location '", dataFolder, "'"
-  if testingMode:
-    info "Running in TESTING mode"
+  if productionMode:
+    info "Running in PRODUCTION mode"
 
   let settings = newSettings(
     port = Port(port),

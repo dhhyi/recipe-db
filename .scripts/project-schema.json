@@ -8,7 +8,7 @@
   "properties": {
     "category": {
       "type": "string",
-      "enum": ["api", "frontend", "backend", "test", "development"]
+      "enum": ["api", "frontend", "backend", "test", "job"]
     },
     "graphqlSchema": {
       "type": "string",

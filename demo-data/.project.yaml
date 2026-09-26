@@ -52,7 +52,7 @@ traefik:
   network: intranet
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
-category: development
+category: job
 graphqlSchema: "."
 precommit: |
   python3 --version

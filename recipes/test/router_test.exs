@@ -9,15 +9,15 @@ defmodule Recipes.RouterTest do
   @options Router.init([])
 
   setup do
-    previous_testing = System.get_env("TESTING")
-    System.put_env("TESTING", "true")
+    previous_production = System.get_env("PRODUCTION")
+    System.delete_env("PRODUCTION")
     :ok = Repository.clear()
 
     on_exit(fn ->
-      if previous_testing do
-        System.put_env("TESTING", previous_testing)
+      if previous_production do
+        System.put_env("PRODUCTION", previous_production)
       else
-        System.delete_env("TESTING")
+        System.delete_env("PRODUCTION")
       end
     end)
   end

@@ -27,7 +27,6 @@ devcontainer:
     - 8800
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
-    TESTING: "true"
   initialize: |
     luarocks make --tree lua_modules
     luarocks install https://raw.githubusercontent.com/dhhyi/Milua/main/milua-0.1-1.rockspec --tree lua_modules
