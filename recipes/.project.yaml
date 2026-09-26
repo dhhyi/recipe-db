@@ -27,7 +27,6 @@ devcontainer:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     LANG: C.UTF-8
     LC_ALL: C.UTF-8
-    TESTING: "true"
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"

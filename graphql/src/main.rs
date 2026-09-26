@@ -31,7 +31,8 @@ async fn main() {
 
     let app = Router::new().route("/health", get(|| async { "" }));
 
-    let app = if std::env::var("TESTING").as_deref() == Ok("true") {
+    let production = std::env::var("PRODUCTION").as_deref() == Ok("true");
+    let app = if !production {
         app.route(
             "/graphql",
             get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) })

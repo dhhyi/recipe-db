@@ -65,7 +65,7 @@ local function problem_details(status, detail, code)
     }
 end
 
-if os.getenv("TESTING") == "true" then
+if os.getenv("PRODUCTION") ~= "true" then
     app.add_handler("DELETE", "/inspirations/", function()
         data = {}
         save_data()
