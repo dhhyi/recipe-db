@@ -108,7 +108,6 @@ tailwindSources:
 precommit: |
   java --version
   clojure --version
-  pnpm prettier --write index.html package.json pnpm-workspace.yaml
   nginx-formatter -indent=4
   clojure -M:format fix src deps.edn shadow-cljs.edn
   clojure -M:lint --lint src

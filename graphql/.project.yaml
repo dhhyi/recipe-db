@@ -75,5 +75,4 @@ precommit: |
 prettier:
   ignore:
     - "*.rs"
-    - Cargo.toml
     - Cargo.lock

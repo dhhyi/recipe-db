@@ -1,4 +1,3 @@
-const { globSync } = require("glob");
 const cp = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -39,23 +38,16 @@ tasks.push({
   run: defaultRun,
 });
 
-// add prettier tasks
-globSync("**/.prettierignore")
-  .map((file) => path.dirname(file))
-  .forEach((dir) => {
-    const container =
-      dir !== "." && getProjectConfig(dir).prettier?.plugins?.length > 0;
-
-    tasks.push({
-      execDir: dir,
-      dependent: [dir],
-      command: container ? "prettier" : "pnpm exec prettier --write '**'",
-      message: "Running 'prettier' in " + dir,
-      container,
-      priority: dir === "." ? 1 : 2,
-      run: defaultRun,
-    });
-  });
+// add prettier task
+tasks.push({
+  execDir: ".",
+  dependent: ["."],
+  command: "pnpm exec prettier --write .",
+  message: "Running 'prettier'",
+  container: false,
+  priority: 50,
+  run: defaultRun,
+});
 
 // add eslint task for root scripts
 tasks.push({

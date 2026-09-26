@@ -42,12 +42,12 @@ function searchForForbiddenFiles(availableProjects) {
     .toString()
     .split("\n")
     .filter((file) => file !== "");
-  const forbiddenPrettierFiles = gitLsFiles.filter((file) =>
-    /\/?(\.prettierignore|.*prettierrc.*|prettier\.config\..*)$/.test(file),
+  const forbiddenPrettierIgnoreFiles = gitLsFiles.filter((file) =>
+    /\/?\.prettierignore$/.test(file),
   );
-  if (forbiddenPrettierFiles.length > 0) {
+  if (forbiddenPrettierIgnoreFiles.length > 0) {
     console.error(
-      `Forbidden files found: ${forbiddenPrettierFiles.join(", ")}`,
+      `Forbidden files found: ${forbiddenPrettierIgnoreFiles.join(", ")}`,
     );
     process.exit(1);
   }
@@ -202,7 +202,27 @@ function writeTailwindDockerInputs(tailwindSources) {
   );
 }
 
-function writePrettierIgnores(availableProjects) {
+function prefixIgnoreRules(project, content) {
+  return content
+    .split("\n")
+    .map((line) => {
+      if (line === "" || line.startsWith("#")) {
+        return line;
+      }
+
+      const negation = line.startsWith("!") ? "!" : "";
+      const pattern = negation ? line.slice(1) : line;
+      const separator = pattern.startsWith("/")
+        ? ""
+        : pattern.includes("/")
+          ? "/"
+          : "/**/";
+      return `${negation}/${project}${separator}${pattern}`;
+    })
+    .join("\n");
+}
+
+function writePrettierIgnore(availableProjects) {
   const rootGitIgnore = fs.readFileSync(
     path.join(projectRoot, ".gitignore"),
     "utf8",
@@ -212,46 +232,39 @@ function writePrettierIgnores(availableProjects) {
     pnpm-lock.yaml
     .gitkeep
     *.txt
-    mise.toml
   `.replace(/^ +/gm, "");
 
-  const otherProjectsIgnores =
-    "\n# extra runs\n" + availableProjects.join("\n") + "\n";
+  const projectIgnores = availableProjects
+    .map((project) => {
+      const localGitignorePath = path.join(projectRoot, project, ".gitignore");
+      const localGitIgnore = fs.existsSync(localGitignorePath)
+        ? fs.readFileSync(localGitignorePath, "utf8")
+        : "";
+      const extraLocalIgnores = (
+        getProjectConfig(project).prettier?.ignore || []
+      ).join("\n");
+
+      return `\n# ${project}\n${prefixIgnoreRules(
+        project,
+        [localGitIgnore, extraLocalIgnores].filter(Boolean).join("\n"),
+      )}\n`;
+    })
+    .join("");
 
   console.log(`Writing .prettierignore ...`);
   fs.writeFileSync(
     path.join(projectRoot, ".prettierignore"),
-    warning("#") +
-      rootGitIgnore +
-      extraIgnores +
-      ".husky/_\n" +
-      otherProjectsIgnores,
+    warning("#") + rootGitIgnore + extraIgnores + projectIgnores,
   );
 
   availableProjects.forEach((project) => {
-    const localGitignorePath = path.join(projectRoot, project, ".gitignore");
-    const localGitIgnore = fs.existsSync(localGitignorePath)
-      ? "\n# local\n" + fs.readFileSync(localGitignorePath, "utf8")
-      : "";
-
-    const projectConfig = getProjectConfig(project);
-    const extraLocalIgnores =
-      (projectConfig.prettier?.ignore || []).join("\n") + "\n";
-
-    const outputFile = path.join(project, ".prettierignore");
-    console.log(`Writing ${outputFile} ...`);
-    fs.writeFileSync(
-      path.join(projectRoot, outputFile),
-      warning("#") +
-        rootGitIgnore +
-        localGitIgnore +
-        extraIgnores +
-        extraLocalIgnores,
-    );
+    fs.rmSync(path.join(projectRoot, project, ".prettierignore"), {
+      force: true,
+    });
   });
 }
 
-async function writePrettierConfigs(availableProjects) {
+async function writePrettierConfig() {
   const rootPrettierConfigPath = path.join(projectRoot, ".prettierrc.cjs");
 
   const prettierConfig = async (plugins, overrides) => {
@@ -277,7 +290,11 @@ async function writePrettierConfigs(availableProjects) {
     return await prettier.format(content, { parser: "flow" });
   };
 
-  const rootPrettierPlugins = ["prettier-plugin-sh", "@prettier/plugin-xml"];
+  const rootPrettierPlugins = [
+    "prettier-plugin-sh",
+    "prettier-plugin-toml",
+    "@prettier/plugin-xml",
+  ];
   const sharedOverrides = [
     [
       ["*.svg"],
@@ -297,32 +314,12 @@ async function writePrettierConfigs(availableProjects) {
   ];
 
   const rootConfig = await prettierConfig(rootPrettierPlugins, [
-    [[".husky/*-*"], { parser: "sh" }],
     [["LICENSE"], { parser: "markdown" }],
     ...sharedOverrides,
   ]);
 
   console.log(`Writing .prettierrc.cjs ...`);
   fs.writeFileSync(rootPrettierConfigPath, rootConfig);
-
-  availableProjects.forEach(async (project) => {
-    console.log(`Writing ${project}/.prettierrc.cjs ...`);
-    const config = getProjectConfig(project);
-    const extraPlugins = config.prettier?.plugins || [];
-    const plugins = [...rootPrettierPlugins, ...extraPlugins];
-
-    const projectPrettierConfigPath = path.join(
-      projectRoot,
-      project,
-      ".prettierrc.cjs",
-    );
-    const projectPrettierConfig = await prettierConfig(
-      plugins,
-      sharedOverrides,
-    );
-
-    fs.writeFileSync(projectPrettierConfigPath, projectPrettierConfig);
-  });
 }
 
 function writeDockerIgnores(availableProjects) {
@@ -478,8 +475,8 @@ searchForForbiddenFiles(allAvailableProjects);
 const tailwindSources = writeTailwindSources(allAvailableProjects);
 writeTailwindDockerInputs(tailwindSources);
 writeRootDockerIgnore();
-writePrettierIgnores(availableProjects);
-writePrettierConfigs(availableProjects);
+writePrettierIgnore(allAvailableProjects);
+writePrettierConfig();
 writeDockerIgnores(availableProjects);
 if (!args.includes("--no-dcc")) {
   writeDccFiles(availableProjects);

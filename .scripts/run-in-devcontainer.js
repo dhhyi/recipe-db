@@ -51,12 +51,6 @@ if (command.length === 1 && command[0] === "test") {
     "-c",
     "set --export PRE_COMMIT 1; and " + toCommand(projectConfig.precommit),
   ];
-} else if (command.length === 1 && command[0] === "prettier") {
-  if (!projectConfig.prettier) {
-    console.error("Project does not have prettier command");
-    process.exit(1);
-  }
-  runCommand = ["fish", "-c", `pnpm prettier --write '**'`];
 } else {
   runCommand = ["fish", "-c", command.join(" ")];
 }
