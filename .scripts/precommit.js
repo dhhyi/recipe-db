@@ -60,6 +60,18 @@ tasks.push({
   run: defaultRun,
 });
 
+// add shellcheck task for tracked shell scripts
+tasks.push({
+  execDir: ".",
+  dependent: ["."],
+  command:
+    "git ls-files -z -- '*.sh' '*.bash' | xargs -0 mise exec -- shellcheck",
+  message: "Running 'shellcheck'",
+  container: false,
+  priority: 5,
+  run: defaultRun,
+});
+
 // calculate pre-commit in devcontainers
 getAvailableProjects().forEach((dir) => {
   if (getProjectConfig(dir).precommit) {
