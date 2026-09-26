@@ -31,11 +31,11 @@ templ inspiration(in gql.InspirationsLink) {
 
 templ InspirationsLazy(in *gql.RecipeInspirationsResponse) {
 	if in.Recipe != nil {
-		@inspirations(in.Recipe.Inspirations)
+		@inspirationsList(in.Recipe.Inspirations)
 	}
 }
 
-templ inspirations(in []gql.InspirationsLink) {
+templ inspirationsList(in []gql.InspirationsLink) {
 	<ul class="markerless">
 		for _, insp := range in {
 			<li>
