@@ -10,7 +10,6 @@
     "seed-demodata": "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
   },
   "dependencies": {
-    "glob": "^10.3.3",
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {
