@@ -17,7 +17,7 @@ const verbose = args.some((a) => a.includes("verbose")) || args.includes("-v");
 // generate merged schema
 tasks.push({
   execDir: ".",
-  command: "node .scripts/merge-graphql-schemas.js",
+  command: "mise run merge-graphql-schemas",
   dependent: getAvailableProjects().filter(
     (project) => getProjectConfig(project).graphqlSchema,
   ),

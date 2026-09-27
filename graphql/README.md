@@ -11,6 +11,4 @@ Query/mutation fields are merged per domain module (`recipes`, `ratings`, `image
 `impl ComplexObject` per type, those types are defined centrally (`src/recipe.rs`, `src/link.rs`)
 with field bodies delegating to the owning domain module.
 
-Running `cargo run -- print-schema` builds the `Schema` (without needing a running server or
-`REST_ENDPOINT`) and prints its SDL to stdout; `.scripts/merge-graphql-schemas.js` shells out to this
-via the devcontainer to produce `recipe-db.graphqls` for consumers.
+Running `cargo run -- print-schema` builds the `Schema` (without needing a running server or `REST_ENDPOINT`) and prints its SDL to stdout.
