@@ -11,7 +11,7 @@ operations in the browser bundle.
 Run project commands through the devcontainer from the repository root:
 
 ```sh
-pnpm in-devcontainer recipes-edit pnpm watch
-pnpm in-devcontainer recipes-edit pnpm test
-pnpm in-devcontainer recipes-edit precommit
+mise run in-devcontainer recipes-edit pnpm watch
+mise run in-devcontainer recipes-edit pnpm test
+mise run in-devcontainer recipes-edit precommit
 ```

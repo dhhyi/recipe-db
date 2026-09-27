@@ -3,7 +3,6 @@ const fs = require("fs");
 const cp = require("child_process");
 const {
   projectRoot,
-  scriptRoot,
   getAvailableProjects,
   getProjectConfig,
   checkInstallDependencies,
@@ -12,7 +11,7 @@ const {
 checkInstallDependencies();
 
 const printedTypeDefs = cp.execSync(
-  `node ${path.join(scriptRoot, "run-in-devcontainer.js")} graphql cargo run --release -- print-schema`,
+  `mise run --raw in-devcontainer graphql cargo run --release -- print-schema`,
   { cwd: projectRoot, encoding: "utf-8" },
 );
 

@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+
+project_root=$(cd "$(dirname "$0")/.." && pwd -P)
+remove_after=false
+stop_after=false
+container_id=
+
+if [ "${1:-}" = --rm ]; then
+  remove_after=true
+  shift
+fi
+project=${1:-}
+case $project in
+  '' | . | .. | */*)
+    echo "Expected a subproject name" >&2
+    exit 1
+    ;;
+esac
+shift
+if [ "${1:-}" = --rm ]; then
+  remove_after=true
+  shift
+fi
+if [ "$#" -eq 0 ]; then
+  echo "Missing command" >&2
+  exit 1
+fi
+
+project_dir=$project_root/$project
+project_file=$project_dir/.project.yaml
+if [ ! -f "$project_file" ]; then
+  echo "Project $project is missing" >&2
+  exit 1
+fi
+
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = precommit ]; }; then
+  script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
+  if [ -z "$script" ]; then
+    echo "Project does not have $1 command" >&2
+    exit 1
+  fi
+  run_command=$(printf '%s\n' "$script" | awk '
+    NF && $0 !~ /^#/ {
+      if (seen) printf " && "
+      printf "%s", $0
+      seen = 1
+    }
+  ')
+  if [ "$1" = precommit ]; then
+    run_command="set --export PRE_COMMIT 1; and $run_command"
+  fi
+else
+  run_command=$*
+fi
+
+cleanup() {
+  status=$?
+  trap - 0
+  if [ -n "$container_id" ]; then
+    if [ "$remove_after" = true ]; then
+      echo "Removing container $container_id" >&2
+      docker rm -f "$container_id" >&2 || status=1
+    elif [ "$stop_after" = true ]; then
+      echo "Stopping container $container_id" >&2
+      docker stop "$container_id" >&2 || status=1
+    fi
+  fi
+  exit "$status"
+}
+trap cleanup 0
+trap 'exit 129' 1
+trap 'exit 130' 2
+trap 'exit 131' 3
+trap 'exit 143' 15
+
+config_file=$project_dir/.devcontainer/devcontainer.json
+label=devcontainer.config_file=$config_file
+container_id=$(docker ps --filter "label=$label" --format '{{.ID}}' | sed -n '1p')
+if [ -n "$container_id" ]; then
+  echo "Using existing running container $container_id" >&2
+else
+  container_id=$(docker ps -a --filter "label=$label" --format '{{.ID}}' | sed -n '1p')
+  if [ -n "$container_id" ]; then
+    echo "Starting existing stopped container $container_id" >&2
+    docker start "$container_id" >&2
+  else
+    container_id=$(devcontainer up --workspace-folder "$project_dir" | jq -er '.containerId')
+  fi
+  stop_after=true
+fi
+
+devcontainer exec --container-id "$container_id" --workspace-folder "$project_dir" fish -c "$run_command"

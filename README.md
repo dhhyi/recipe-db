@@ -24,6 +24,10 @@ To supply your own recipes, you can use the [demo-data project](demo-data/README
 
 After project checkout, run `pnpm install`. This will generate all necessary files for development (config files for prettier and docker as well as VSCode devcontainers).
 
+Run a subproject command in its devcontainer with `mise run in-devcontainer <project> <command>`, for example `mise run in-devcontainer graphql cargo build`. Use `test` or `precommit` to run the corresponding script from the second document of the project's `.project.yaml`.
+
+Use the devcontainers for development. They are set up with all necessary dependencies and configurations for file watchers and tasks for running watch serve commands efficiently.
+
 # Technologies / Building Blocks
 
 The project is organized in a mono repo. All individual projects provide docker images that can be built independently.

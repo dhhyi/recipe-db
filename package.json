@@ -4,8 +4,7 @@
   "scripts": {
     "install-precommit": "echo 'PRE_COMMIT=1 node .scripts/precommit.js \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
     "prepare": "pnpm run install-precommit && pnpm run synchronize && mise run generate-docker-compose prepare",
-    "synchronize": "mise run create-intranet && node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js",
-    "in-devcontainer": "node .scripts/run-in-devcontainer.js"
+    "synchronize": "mise run create-intranet && node .scripts/synchronize.js && node .scripts/merge-graphql-schemas.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

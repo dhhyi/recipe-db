@@ -6,11 +6,13 @@ Never run project tooling (elm, go, gradle, cargo, pnpm, ...) directly on the ho
 the devcontainer:
 
 ```sh
-pnpm in-devcontainer <project> <command>
+mise run --raw in-devcontainer <project> <command>
 ```
 
 The command is executed with `fish` inside the project's devcontainer. An existing running container
-is reused, otherwise one is started (and stopped again afterwards).
+is reused and left running; a stopped container is restarted, or a new one is created if needed.
+Containers started by the script are stopped afterwards, even when the command fails. The command's
+exit status is returned to the caller, and its stdout is not mixed with lifecycle messages.
 
 Two command names are special and are not passed through verbatim — they are resolved from the
 second yaml document of the project's `.project.yaml`:
@@ -21,26 +23,26 @@ second yaml document of the project's `.project.yaml`:
 Examples:
 
 ```sh
-pnpm in-devcontainer images-edit precommit
-pnpm in-devcontainer recipes-test test
-pnpm in-devcontainer images-edit pnpm build --output /dev/null
-pnpm in-devcontainer graphql pnpm install
+mise run --raw in-devcontainer images-edit precommit
+mise run --raw in-devcontainer recipes-test test
+mise run --raw in-devcontainer images-edit pnpm build --output /dev/null
+mise run --raw in-devcontainer graphql pnpm install
 ```
 
-An optional `--rm` flag, placed before the project name, tears down the container after the command
+An optional `--rm` flag, placed before or after the project name, removes the container after the command
 runs instead of just stopping it (or leaving it running if it was already running). Use this to make
 sure a devcontainer is rebuilt from scratch on the next run, e.g. after changing its `.project.yaml`
 or Dockerfile:
 
 ```sh
-pnpm in-devcontainer --rm recipes <command>
+mise run --raw in-devcontainer --rm recipes <command>
 ```
 
 To tear down an already running container without running anything meaningful, use the `true`
 executable as the command:
 
 ```sh
-pnpm in-devcontainer --rm recipes true
+mise run --raw in-devcontainer --rm recipes true
 ```
 
 ## Modifying .project.yaml files
@@ -65,12 +67,12 @@ are visually distinguishable. Hues are picked from a 15°-step wheel (0°, 15°,
 
 Before running tests, ensure the docker compose project is up and running.
 
-Execute tests with the `package.json` script `in-devcontainer` and `test` target.
+Execute tests with the `mise run --raw in-devcontainer` task and `test` target.
 
 Examples:
 
 ```sh
-pnpm in-devcontainer images-test test
+mise run --raw in-devcontainer images-test test
 ```
 
 This will run the `test:` script defined in the second yaml document of the project's `.project.yaml` file.

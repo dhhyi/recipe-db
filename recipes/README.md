@@ -23,7 +23,7 @@ The database defaults to `db/recipes.sqlite3`. Set `DATA_LOCATION` to change its
 Run unit tests with:
 
 ```sh
-pnpm in-devcontainer recipes test
+mise run in-devcontainer recipes test
 ```
 
 Integration testing in [`recipes-test`](../recipes-test) uses

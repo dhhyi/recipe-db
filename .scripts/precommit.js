@@ -126,8 +126,8 @@ tasks
 
     try {
       if (task.container) {
-        const commandLine = `node ${scriptRoot}/run-in-devcontainer.js ${task.execDir} ${task.command}`;
-        cp.execSync(commandLine, { stdio });
+        const commandLine = `mise run --raw in-devcontainer ${task.execDir} ${task.command}`;
+        cp.execSync(commandLine, { cwd: projectRoot, stdio });
       } else {
         cp.execSync(`${task.command}`, { cwd: task.execDir, stdio });
       }
