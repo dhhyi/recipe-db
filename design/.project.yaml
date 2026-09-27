@@ -16,8 +16,7 @@ devcontainer:
       NGINX_FORMATTER_VERSION: "2.3.0"
     root:
       - ADD https://github.com/soulteary/nginx-formatter/releases/download/v${NGINX_FORMATTER_VERSION}/nginx-formatter_${NGINX_FORMATTER_VERSION}_linux_amd64.tar.gz /tmp/nginx-formatter.tar.gz
-      - RUN tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp
-        && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
+      - RUN tar -xvf /tmp/nginx-formatter.tar.gz -C /tmp && mv /tmp/nginx-formatter /usr/local/bin/nginx-formatter
       - RUN rm -rf /etc/nginx/sites-enabled/default && chmod -R 777 /usr/share/nginx/html
     files:
       - type: script

@@ -1,5 +1,4 @@
-Zwiebel längs in feine Streifen schneiden und in Olivenöl langsam karamellisieren.
-Währenddessen Spaghetti in Salzwasser halbgar kochen.
+Zwiebel längs in feine Streifen schneiden und in Olivenöl langsam karamellisieren. Währenddessen Spaghetti in Salzwasser halbgar kochen.
 
 Den Parmesan fein reiben, mit reichlich Pfeffer und den Eigelb in einer Schüssel beiseite stellen.
 

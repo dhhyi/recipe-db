@@ -20,26 +20,14 @@ devcontainer:
       IO_VERSION: 8d1566b5edf8f378618fc7739518d7a5c56de654
       PCRE_VERSION: "8.45"
     root:
-      - RUN git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io
-        && cd /tmp/io && git checkout $IO_VERSION
-        && mkdir build && cd build
-        && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=/usr/local ..
-        && make && make install
+      - RUN git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io && cd /tmp/io && git checkout $IO_VERSION && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=/usr/local .. && make && make install
       - RUN chown -R vscode:vscode /tmp/io
       # trixie dropped the PCRE1 dev package; the Io Regex addon still uses the old
       # pcre.h API, so build it from source
-      - RUN wget -q https://sourceforge.net/projects/pcre/files/pcre/$PCRE_VERSION/pcre-$PCRE_VERSION.tar.gz/download -O /tmp/pcre.tar.gz
-        && tar -xzf /tmp/pcre.tar.gz -C /tmp
-        && cd /tmp/pcre-$PCRE_VERSION && ./configure --prefix=/usr/local && make && make install
-        && ldconfig
+      - RUN wget -q https://sourceforge.net/projects/pcre/files/pcre/$PCRE_VERSION/pcre-$PCRE_VERSION.tar.gz/download -O /tmp/pcre.tar.gz && tar -xzf /tmp/pcre.tar.gz -C /tmp && cd /tmp/pcre-$PCRE_VERSION && ./configure --prefix=/usr/local && make && make install && ldconfig
       # eerie's docio dependency pulls in IoLanguage/Markdown, whose source assumes an
       # older discount API; patch it and redirect git clones to the patched copy
-      - RUN git clone https://github.com/IoLanguage/Markdown.git /opt/Markdown-patched
-        && sed -i 's/mkd_flag_t \*flags/mkd_flag_t flags/' /opt/Markdown-patched/source/IoMarkdown.c
-        && git -C /opt/Markdown-patched -c user.email=devcontainer@example.com -c user.name=devcontainer
-        commit -am "patch for discount 2.2 mkd_flag_t API"
-        && chown -R vscode:vscode /opt/Markdown-patched
-        && git config --system url."file:///opt/Markdown-patched".insteadOf "https://github.com/IoLanguage/Markdown.git"
+      - RUN git clone https://github.com/IoLanguage/Markdown.git /opt/Markdown-patched && sed -i 's/mkd_flag_t \*flags/mkd_flag_t flags/' /opt/Markdown-patched/source/IoMarkdown.c && git -C /opt/Markdown-patched -c user.email=devcontainer@example.com -c user.name=devcontainer commit -am "patch for discount 2.2 mkd_flag_t API" && chown -R vscode:vscode /opt/Markdown-patched && git config --system url."file:///opt/Markdown-patched".insteadOf "https://github.com/IoLanguage/Markdown.git"
     user:
       - ENV LD_LIBRARY_PATH=/usr/local/lib
       - ENV EERIEDIR="${HOME}/.eerie"

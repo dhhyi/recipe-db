@@ -1,4 +1,5 @@
 module.exports = {
+  proseWrap: "never",
   plugins: [
     require.resolve("@prettier/plugin-xml"),
     require.resolve("prettier-plugin-sh"),
