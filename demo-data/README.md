@@ -6,7 +6,7 @@ Implemented in Python using a codegen'd GraphQL client ([ariadne-codegen](https:
 Run it on demand against an already-running deployment with:
 
 ```sh
-npm run seed-demodata
+mise run seed-demodata
 ```
 
 This rebuilds the image (so local changes are always picked up), deletes any existing
@@ -17,5 +17,5 @@ When run non-interactively (no TTY attached, e.g. in CI) it refuses and exits wi
 of prompting. Set `FORCE_DELETE=1` to skip the confirmation and delete unconditionally:
 
 ```sh
-FORCE_DELETE=1 npm run seed-demodata
+FORCE_DELETE=1 mise run seed-demodata
 ```
