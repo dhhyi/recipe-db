@@ -38,45 +38,45 @@ For building all of the projects in the mono repo, [Docker](https://www.docker.c
 
 Even though the frontend parts have access to a unified GraphQL API, I want to implement the different parts with different solutions.
 
-### Parts with limited interaction — see [`frontend`](./frontend)
+### Parts with limited interaction — see [`frontend`](./frontend/README.md)
 
 ### Heavy interaction
 
 Parts with heavy interaction like the pages for adding and editing recipes will be implemented in a different solution.
 
-#### Recipe Adding and Editing — see [`recipes-edit`](./recipes-edit)
+#### Recipe Adding and Editing — see [`recipes-edit`](./recipes-edit/README.md)
 
-#### Image Adding and Editing — see [`images-edit`](./images-edit)
+#### Image Adding and Editing — see [`images-edit`](./images-edit/README.md)
 
 ### Style
 
-Consistent styling including shared Web Components, see [`design`](./design)
+Consistent styling including shared Web Components, see [`design`](./design/README.md)
 
 ### Agent Integration
 
-Adding recipes and images from an AI agent via an [MCP](https://modelcontextprotocol.io/) server, see [`mcp`](./mcp) ([`mcp-test`](./mcp-test))
+Adding recipes and images from an AI agent via an [MCP](https://modelcontextprotocol.io/) server, see [`mcp`](./mcp/README.md) ([`mcp-test`](./mcp-test/README.md))
 
 ## Backend
 
 The backend is organized in a variety of services where the only one _actually_ necessary is the one holding recipe data. Each service exposes a REST API which is tested with a different integration testing framework.
 
-A GraphQL gateway is used to combine all backend REST services into a single API. (see [`graphql`](./graphql) and [`graphql-test`](./graphql-test))
+A GraphQL gateway is used to combine all backend REST services into a single API. (see [`graphql`](./graphql/README.md) and [`graphql-test`](./graphql-test/README.md))
 
-### Recipes — see [`recipes`](./recipes) ([`recipes-test`](./recipes-test))
+### Recipes — see [`recipes`](./recipes/README.md) ([`recipes-test`](./recipes-test/README.md))
 
-### Ratings — see [`ratings`](./ratings) ([`ratings-test`](./ratings-test))
+### Ratings — see [`ratings`](./ratings/README.md) ([`ratings-test`](./ratings-test/README.md))
 
-### Images — see [`images`](./images) ([`images-test`](./images-test))
+### Images — see [`images`](./images/README.md) ([`images-test`](./images-test/README.md))
 
-### Inspiration — see [`inspirations`](./inspirations) ([`inspirations-test`](./inspirations-test))
+### Inspiration — see [`inspirations`](./inspirations/README.md) ([`inspirations-test`](./inspirations-test/README.md))
 
 ### Utility Services
 
 Services with utility character.
 
-#### Link Extract — see [`link-extract`](./link-extract)
+#### Link Extract — see [`link-extract`](./link-extract/README.md)
 
-#### Image Inline — see [`image-inline`](./image-inline) ([`image-inline-test`](./image-inline-test))
+#### Image Inline — see [`image-inline`](./image-inline/README.md) ([`image-inline-test`](./image-inline-test/README.md))
 
 ## Dev Support
 
