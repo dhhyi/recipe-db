@@ -344,13 +344,6 @@ function writeRootVSCodeSettingsFile(availableProjects, tailwindSources) {
         }
       : {};
   const vscodeSettings = {
-    "files.exclude": availableProjects.reduce(
-      (acc, project) => ({
-        ...acc,
-        [`${project}/[!.]*`]: true,
-      }),
-      {},
-    ),
     "files.associations": {
       "*.css": "tailwindcss",
     },
