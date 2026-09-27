@@ -1,4 +1,4 @@
-FROM alpine:3.21 AS build
+FROM alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS build
 RUN apk add --no-cache nim nimble gcc musl-dev git
 WORKDIR /app
 COPY images.nimble /app/

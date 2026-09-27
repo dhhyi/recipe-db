@@ -1,4 +1,4 @@
-FROM debian:bookworm AS builder
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS builder
 
 RUN apt-get update \
   && apt-get install -y build-essential git cmake
@@ -36,7 +36,7 @@ COPY --from=builder /installed_packages /installed_packages
 COPY *.io /app/
 COPY lib /app/lib
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 RUN apt-get update \
   && apt-get install -y libpcre3 \
   && apt-get install -y libevent-2.1-7 \
