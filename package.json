@@ -3,8 +3,7 @@
   "repository": "github:dhhyi/recipe-db",
   "scripts": {
     "install-precommit": "echo 'PRE_COMMIT=1 node .scripts/precommit.js \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
-    "prepare": "pnpm run install-precommit && pnpm run synchronize && mise run generate-docker-compose prepare",
-    "synchronize": "mise run create-intranet && node .scripts/synchronize.js && mise run merge-graphql-schemas"
+    "prepare": "pnpm run install-precommit && mise run sync && mise run generate-docker-compose prepare"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

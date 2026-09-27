@@ -6,6 +6,35 @@ shellcheck = "latest"
 yq = "latest"
 ytt = "latest"
 
+[tasks.check-forbidden-files]
+run = "sh .scripts/check-forbidden-files.sh"
+
+[tasks.sync-tailwind]
+run = "sh .scripts/sync-tailwind.sh"
+
+[tasks.sync-ignore-files]
+run = "sh .scripts/sync-ignore-files.sh"
+
+[tasks.sync-vscode-settings]
+run = "sh .scripts/sync-vscode-settings.sh"
+
+[tasks.sync-files]
+run = [
+  "mise run check-forbidden-files",
+  "mise run --jobs 3 sync-tailwind ::: sync-ignore-files ::: sync-vscode-settings",
+]
+
+[tasks.sync-devcontainers]
+run = "sh .scripts/sync-devcontainers.sh"
+
+[tasks.sync]
+run = [
+  "mise run create-intranet",
+  "mise run sync-files",
+  "mise run sync-devcontainers",
+  "mise run merge-graphql-schemas",
+]
+
 [tasks.generate-docker-compose]
 run = "sh .scripts/generate-docker-compose.sh"
 
