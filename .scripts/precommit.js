@@ -30,7 +30,7 @@ tasks.push({
 // create intranet network
 tasks.push({
   execDir: ".",
-  command: "node .scripts/create-intranet.js",
+  command: "mise run create-intranet",
   dependent: getAvailableProjects(),
   message: "Checking intranet network",
   container: false,
