@@ -1,4 +1,4 @@
-FROM benz0li/ghc-musl:9.6.6 AS builder
+FROM benz0li/ghc-musl:9.6.6@sha256:c7cc5628a272cfec03962d412826a810b5e35802409c06dbd723651e3a5e8a0e AS builder
 WORKDIR /image-inline
 COPY image-inline.cabal /image-inline/
 RUN cabal update && cabal build --enable-executable-static --only-dependencies

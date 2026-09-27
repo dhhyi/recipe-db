@@ -1,4 +1,4 @@
-FROM node:lts-alpine AS builder
+FROM node:lts-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS builder
 RUN npm i -g pnpm@12.6.0
 WORKDIR /ws
 COPY design/package.json design/pnpm-*.yaml /ws/
@@ -15,7 +15,7 @@ COPY ["recipes-edit/src","/recipes-edit/src"]
 # END generated Tailwind Docker inputs
 RUN pnpm build
 
-FROM nginx:stable-alpine-perl
+FROM nginx:stable-alpine-perl@sha256:8db47934355efdfdd5b5ed3cac1e9461fc5a2ec28d3e0b0b33db08a34cc15892
 RUN sed -i '1i load_module modules/ngx_http_perl_module.so;' /etc/nginx/nginx.conf
 COPY design/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /ws/dist /usr/share/nginx/html

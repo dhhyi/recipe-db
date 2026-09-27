@@ -15,5 +15,8 @@ run = "docker network inspect intranet >/dev/null 2>&1 || docker network create 
 [tasks.seed-demodata]
 run = "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
 
+[tasks.update-docker-image-digests]
+run = "sh .scripts/update-docker-image-digests.sh"
+
 [settings]
 idiomatic_version_file_enable_tools = ["npm", "pnpm"]
