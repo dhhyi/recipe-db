@@ -47,7 +47,7 @@ mise run --raw in-devcontainer --rm recipes true
 
 ## Modifying .project.yaml files
 
-When modifying `.project.yaml` files, run `pnpm synchronize` to apply the changes. Do not modify files in .devcontainer directories directly.
+When modifying `.project.yaml` files, run `mise run sync` to apply the changes. Do not modify files in .devcontainer directories directly.
 
 ### Peacock color palette
 

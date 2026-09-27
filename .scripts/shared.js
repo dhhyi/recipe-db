@@ -20,10 +20,6 @@ function getAvailableProjects() {
     .map((file) => path.dirname(file));
 }
 
-function languageFile(project) {
-  return path.join(project, ".project.yaml");
-}
-
 function getProjectConfig(project) {
   const projectYaml = path.join(projectRoot, project, ".project.yaml");
   const yaml = require("js-yaml");
@@ -36,7 +32,6 @@ module.exports = {
   projectRoot,
   scriptRoot,
   getAvailableProjects,
-  languageFile,
   getProjectConfig,
   checkInstallDependencies,
 };
