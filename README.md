@@ -34,9 +34,7 @@ The project is organized in a mono repo. All individual projects provide docker 
 
 ## General Architecture
 
-Every aspect in the Recipe DB is bundled in a microservice. [Traefik](https://traefik.io/) is used to glue everything together.
-All individual backend services are made available to the frontend via [Apollo GraphQL](https://www.apollographql.com/).
-For building all of the projects in the mono repo, [Docker](https://www.docker.com/) is used as a programming language agnostic builder.
+Every aspect in the Recipe DB is bundled in a microservice. [Traefik](https://traefik.io/) is used to glue everything together. All individual backend services are made available to the frontend via [Apollo GraphQL](https://www.apollographql.com/). For building all of the projects in the mono repo, [Docker](https://www.docker.com/) is used as a programming language agnostic builder.
 
 ## Frontend
 
