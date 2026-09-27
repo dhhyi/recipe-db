@@ -12,6 +12,18 @@ It's also allowed for frontends compiled to JavaScript, like Elm (images-edit) a
 
 JavaScript build tooling (root-level, .scripts folder) will be replaced with Bazel build rules and native toolchain integrations.
 
+#### Migrate precommit checks to Bazel
+
+Keep `run-in-devcontainer` as the way project tools run. Split each project's precommit work into formatting, which may change source files, and read-only checks. Formatting runs inside the project's devcontainer on every applicable precommit. Bazel runs the checks as per-project targets with declared inputs and caches successful results.
+
+Replace the JavaScript precommit orchestrator with a small hook that selects projects from staged files, runs formatting, requests Bazel checks, and retains the final guard that aborts when a staged file changed during the run. On retry, checks for unchanged projects should be cache hits.
+
+Start with two projects and verify the retry case: both run; formatting changes one; the hook aborts; after staging that change, Bazel skips the unchanged project's successful checks. Then migrate remaining projects and CI.
+
+Integration-test targets must include the tested services and fixtures in their inputs. Cache them only when their starting state is controlled and skipping their side effects cannot affect later tests. Keep existing devcontainer `test` and `precommit` entry points available during migration.
+
+Migrate production Docker builds separately. They already use BuildKit caching; measure the benefit before moving image artifacts into Bazel.
+
 #### Rework docker-compose/deployment generation
 
 > **Status:** Compose templating is complete. The old JavaScript generator has been replaced by a shell/yq/jq data-preparation step and ytt templates for development and production Compose output, including the production `traefik.yml`. The later Kubernetes/k3s and k3d deployment work remains open.
@@ -40,8 +52,7 @@ The web frontend should be protected with a login mechanism, so that it is not p
 
 ### Setup Raspberry Pi deployment
 
-Explore the possibility of deploying the stack on a Raspberry Pi with either Kubernetes or Docker Compose.
-Setup a public deployment.
+Explore the possibility of deploying the stack on a Raspberry Pi with either Kubernetes or Docker Compose. Setup a public deployment.
 
 ## Ideas for other services:
 
