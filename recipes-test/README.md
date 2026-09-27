@@ -6,5 +6,5 @@ Integration tests for the recipes service, implemented with
 Run the tests with:
 
 ```sh
-pnpm in-devcontainer recipes-test test
+mise run in-devcontainer recipes-test test
 ```
