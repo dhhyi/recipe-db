@@ -21,16 +21,8 @@ jobs:
       - name: setup mise tools
         uses: jdx/mise-action@v2
         with:
-          install: true
+          install: false
           cache: true
-
-      - name: report versions
-        run: |
-          set -x
-          node --version
-          pnpm --version
-          docker --version
-          docker compose version
 
       - name: login to ghcr.io
         uses: docker/login-action@v4
@@ -42,11 +34,16 @@ jobs:
       - name: create buildx builder
         run: docker buildx create --use
 
-      - name: synchronize
+      - name: install tools and synchronize
+        run: mise install
+
+      - name: report versions
         run: |
-          echo "::group::pnpm install"
-          pnpm i --frozen-lockfile
-          echo "::endgroup::"
+          set -x
+          node --version
+          pnpm --version
+          docker --version
+          docker compose version
 
       - name: format project files
         run: |
