@@ -7,6 +7,23 @@ yq = "latest"
 ytt = "latest"
 "aqua:bazelbuild/bazelisk" = "latest"
 
+[hooks]
+postinstall = { task = "setup" }
+
+[tasks.install-deps]
+run = "pnpm install --frozen-lockfile"
+
+[tasks.install-precommit]
+run = "printf '%s\\n' '#!/bin/sh' 'exec bash .scripts/precommit.sh \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
+
+[tasks.setup]
+run = [
+  "mise run install-deps",
+  "mise run install-precommit",
+  "mise run sync",
+  "mise run generate-docker-compose prepare",
+]
+
 [tasks.check-forbidden-files]
 run = "sh .scripts/check-forbidden-files.sh"
 

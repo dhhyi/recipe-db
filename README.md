@@ -22,12 +22,10 @@ After checkout, run these commands in order:
 
 ```sh
 mise install
-pnpm install
-mise run generate-docker-compose
 docker compose up
 ```
 
-`pnpm install` generates the development configuration and VS Code devcontainers through its prepare script. Run `mise run generate-docker-compose` again after changing a project's `.project.yaml`; the install script skips Compose generation when `docker-compose.yml` already exists. The ytt templates render the development `docker-compose.yml`; production generation also renders the static `traefik.yml` configuration with `mise run generate-docker-compose prod`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. GraphQL is available on http://localhost:8080/graphql.
+`mise install` installs the required tools and runs the project's setup tasks. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. GraphQL is available on http://localhost:8080/graphql.
 
 To supply your own recipes, you can use the [demo-data project](demo-data/README.md) to generate demo recipes, ratings, inspirations and images via the GraphQL API.
 
