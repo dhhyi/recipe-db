@@ -66,9 +66,9 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
-precommit: |
+format: cargo fmt
+check: |
   cargo --version
-  cargo fmt --check
   cargo clippy --all-targets -- -D warnings
   cargo build --release
 prettier:

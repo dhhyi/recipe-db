@@ -10,11 +10,6 @@ if [ "$#" -eq 0 ]; then
   done
 fi
 
-if [ "$#" -gt 1 ]; then
-  printf '%s\0' "$@" | xargs -0 -n 1 -P 4 sh "$project_root/.scripts/sync-devcontainers.sh"
-  exit
-fi
-
 output_file=$(mktemp)
 trap 'rm -f "$output_file"' EXIT
 

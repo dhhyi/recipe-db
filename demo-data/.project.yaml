@@ -49,11 +49,12 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: job
 graphqlSchema: "."
-precommit: |
-  python3 --version
-  cspell --locale de-de recipe*.{json,md}
+format: |
   ariadne-codegen
   black ./*.py
+check: |
+  python3 --version
+  cspell --locale de-de recipe*.{json,md}
   pylint ./*.py
 prettier:
   ignore:

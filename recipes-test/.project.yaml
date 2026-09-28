@@ -27,10 +27,10 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 test: mvn --batch-mode --no-transfer-progress test
-precommit: |
+format: mvn --batch-mode --no-transfer-progress spotless:apply
+check: |
   java --version
   mvn --version
-  mvn --batch-mode --no-transfer-progress spotless:apply
 prettier:
   ignore:
     - "*.java"

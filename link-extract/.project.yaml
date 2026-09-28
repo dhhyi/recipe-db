@@ -53,8 +53,8 @@ prettier:
     - "*.cr"
     - shard.yml
     - target
-precommit: |
+format: crystal tool format
+check: |
   crystal --version
-  crystal tool format
   mkdir -p target
   crystal build main.cr -o target/precommit.out

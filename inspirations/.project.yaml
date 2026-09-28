@@ -16,12 +16,14 @@ devcontainer:
       - libssl-dev
     files:
       - type: file
-        path: ~/.config/fish/conf.d/lua_modules.fish
+        path: $HOME/.config/fish/conf.d/lua_modules.fish
         content: |
           #!/usr/bin/env fish
           # Add lua_modules to PATH using luarocks
           if test -d lua_modules
-              eval (luarocks path --tree lua_modules --shell fish 2>/dev/null || echo)
+              set -gx LUA_PATH (luarocks path --tree lua_modules --lr-path)
+              set -gx LUA_CPATH (luarocks path --tree lua_modules --lr-cpath)
+              fish_add_path (string split : (luarocks path --tree lua_modules --lr-bin))
           end
   ports:
     - 8800
@@ -70,9 +72,9 @@ prettier:
   ignore:
     - "*.lua"
     - "*.rockspec"
-precommit: |
-  eval "$(luarocks path --tree lua_modules)"
-  lua -v
+format: |
   lua-format *.lua -i
   lua-format *.rockspec -i --column-table-limit=1
+check: |
+  lua -v
   luacheck *.lua

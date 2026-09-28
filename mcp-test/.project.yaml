@@ -65,7 +65,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 test: pytest
-precommit: python3 --version
+check: python3 --version
 prettier:
   ignore:
     - "*.py"

@@ -71,4 +71,4 @@ category: backend
 prettier:
   ignore:
     - "*.io"
-precommit: io --version
+check: io --version

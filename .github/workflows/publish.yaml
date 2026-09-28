@@ -48,6 +48,19 @@ jobs:
           pnpm i --frozen-lockfile
           echo "::endgroup::"
 
+      - name: format project files
+        run: |
+          pnpm exec prettier --log-level warn --write .
+          mise run --raw generate-bazel-build
+          targets=$(mise exec -- bazelisk query 'attr(name, "_format$", //:all)')
+          mapfile -t format_targets <<< "$targets"
+          mise exec -- bazelisk build --action_env=PATH --jobs=1 "${format_targets[@]}"
+          for target in "${format_targets[@]}"; do
+            project=${target#//:}
+            tar -xf "bazel-bin/${project%_format}-format.tar"
+          done
+          git diff --exit-code
+
       - name: build dev images
         run: |
           echo "::group::docker-compose.yml"
@@ -77,6 +90,11 @@ jobs:
             fi
           done
 
+      - name: Bazel precommit check
+        run: |
+          mise run --raw generate-bazel-build
+          mise exec -- bazelisk build --action_env=PATH --jobs=1 //:all
+
       - name: build and push prod images
         run: |
           echo "::group::generate prod docker-compose.yml"
@@ -97,13 +115,5 @@ jobs:
           for project in $(ls */.project.yaml | xargs dirname); do
             echo "::group::build and push devcontainer $project"
             sh $project/.update_devcontainer.sh --build --push-cache -vv
-            echo "::endgroup::"
-          done
-
-      - name: precommit check
-        run: |
-          for project in $(ls */.project.yaml | xargs dirname); do
-            echo "::group::precommit check $project"
-            mise run --raw in-devcontainer "$project" precommit
             echo "::endgroup::"
           done

@@ -51,9 +51,9 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
-precommit: |
+format: dotnet format
+check: |
   dotnet --version
-  dotnet format
   dotnet build
 prettier:
   ignore:

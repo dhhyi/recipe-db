@@ -95,9 +95,8 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-precommit: |
-  ghokin version
-  ghokin fmt replace .
+format: ghokin fmt replace .
+check: ghokin version
 prettier:
   ignore:
     - "*.feature"
