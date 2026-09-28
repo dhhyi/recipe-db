@@ -58,9 +58,9 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
-precommit: |
+format: mix format
+check: |
   elixir --version
-  mix format
   mix compile --warnings-as-errors
   mix credo --strict
   mix test

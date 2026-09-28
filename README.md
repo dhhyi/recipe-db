@@ -18,13 +18,20 @@ Required for running anything:
 - docker or comparable container builder
 - docker compose
 
-Run `mise install` once, then run `mise run generate-docker-compose` and `docker compose up`. The ytt templates render the development `docker-compose.yml`; production generation also renders the static `traefik.yml` configuration with `mise run generate-docker-compose prod`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. Apollo GraphQL is available on http://localhost:8080/graphql.
+After checkout, run these commands in order:
+
+```sh
+mise install
+pnpm install
+mise run generate-docker-compose
+docker compose up
+```
+
+`pnpm install` generates the development configuration and VS Code devcontainers through its prepare script. Run `mise run generate-docker-compose` again after changing a project's `.project.yaml`; the install script skips Compose generation when `docker-compose.yml` already exists. The ytt templates render the development `docker-compose.yml`; production generation also renders the static `traefik.yml` configuration with `mise run generate-docker-compose prod`. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. GraphQL is available on http://localhost:8080/graphql.
 
 To supply your own recipes, you can use the [demo-data project](demo-data/README.md) to generate demo recipes, ratings, inspirations and images via the GraphQL API.
 
-After project checkout, run `pnpm install`. This will generate all necessary files for development (config files for prettier and docker as well as VSCode devcontainers).
-
-Run a subproject command in its devcontainer with `mise run in-devcontainer <project> <command>`, for example `mise run in-devcontainer graphql cargo build`. Use `test` or `precommit` to run the corresponding script from the second document of the project's `.project.yaml`.
+Run a subproject command in its devcontainer with `mise run in-devcontainer <project> <command>`, for example `mise run in-devcontainer graphql cargo build`. Use `format`, `check`, or `test` to run the corresponding script from the second document of the project's `.project.yaml`.
 
 Use the devcontainers for development. They are set up with all necessary dependencies and configurations for file watchers and tasks for running watch serve commands efficiently.
 

@@ -97,11 +97,13 @@ category: frontend
 dockerContext: "."
 tailwindSources:
   - src/components
-precommit: |
-  pnpm --version
-  pnpm exec storybook --version
+format: |
   nginx-formatter -indent=4
   pnpm lint --fix
+check: |
+  pnpm --version
+  pnpm exec storybook --version
+  pnpm lint
   pnpm build
 prettier:
   ignore:

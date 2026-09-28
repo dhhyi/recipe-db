@@ -5,6 +5,7 @@ node = "26"
 shellcheck = "latest"
 yq = "latest"
 ytt = "latest"
+"aqua:bazelbuild/bazelisk" = "latest"
 
 [tasks.check-forbidden-files]
 run = "sh .scripts/check-forbidden-files.sh"
@@ -27,12 +28,16 @@ run = [
 [tasks.sync-devcontainers]
 run = "sh .scripts/sync-devcontainers.sh"
 
+[tasks.generate-bazel-build]
+run = "bash .scripts/generate-bazel-build.sh"
+
 [tasks.sync]
 run = [
   "mise run create-intranet",
   "mise run sync-files",
   "mise run sync-devcontainers",
   "mise run merge-graphql-schemas",
+  "mise run generate-bazel-build",
 ]
 
 [tasks.generate-docker-compose]

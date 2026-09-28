@@ -104,11 +104,12 @@ graphqlSchema: "."
 tailwindSources:
   - index.html
   - src
-precommit: |
-  java --version
-  clojure --version
+format: |
   nginx-formatter -indent=4
   clojure -M:format fix src deps.edn shadow-cljs.edn
+check: |
+  java --version
+  clojure --version
   clojure -M:lint --lint src
   pnpm test
   pnpm build

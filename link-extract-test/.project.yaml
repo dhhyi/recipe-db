@@ -90,9 +90,9 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-precommit: |
+format: robotidy .
+check: |
   python3 --version
-  robotidy .
   robot --dryrun --outputdir target .
 prettier:
   ignore:

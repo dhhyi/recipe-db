@@ -25,7 +25,10 @@
         "minLength": 1
       }
     },
-    "precommit": {
+    "format": {
+      "type": "string"
+    },
+    "check": {
       "type": "string"
     },
     "test": {

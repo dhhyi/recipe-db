@@ -97,10 +97,11 @@ prettier:
   ignore:
     - "*.elm"
     - nginx.conf
-precommit: |
-  pnpm exec elm --version
+format: |
   nginx-formatter -indent=4
   pnpm exec elm-format --yes .
   pnpm codegen
+check: |
+  pnpm exec elm --version
   pnpm build
   pnpm lint

@@ -2,19 +2,12 @@
   "name": "recipe-db",
   "repository": "github:dhhyi/recipe-db",
   "scripts": {
-    "install-precommit": "echo 'PRE_COMMIT=1 node .scripts/precommit.js \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
+    "install-precommit": "printf '%s\\n' '#!/bin/sh' 'exec bash .scripts/precommit.sh \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit",
     "prepare": "pnpm run install-precommit && mise run sync && mise run generate-docker-compose prepare"
-  },
-  "dependencies": {
-    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@anyblades/blades": "3.0.0-alpha.3",
-    "@eslint/js": "^10.0.1",
     "@prettier/plugin-xml": "^3.1.1",
-    "eslint": "^10.11.0",
-    "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.12.0",
     "prettier": "^3.0.0",
     "prettier-plugin-sh": "^0.13.1",
     "prettier-plugin-toml": "^3.0.2",

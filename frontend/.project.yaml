@@ -79,10 +79,11 @@ category: frontend
 graphqlSchema: "."
 tailwindSources:
   - src
-precommit: |
-  go version
+format: |
   templ generate
   go fmt ./...
+check: |
+  go version
   go vet ./...
   go build -o main
   stat main

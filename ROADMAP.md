@@ -14,7 +14,9 @@ JavaScript build tooling (root-level, .scripts folder) will be replaced with Baz
 
 #### Migrate precommit checks to Bazel
 
-Keep `run-in-devcontainer` as the way project tools run. Split each project's precommit work into formatting, which may change source files, and read-only checks. Formatting runs inside the project's devcontainer on every applicable precommit. Bazel runs the checks as per-project targets with declared inputs and caches successful results.
+> **Status:** All projects now declare separate formatting and read-only precommit checks. A generated root `BUILD.bazel` provides per-project cacheable format archives and check targets; the hook replays format archives before checks, and CI runs formatting, the integration-test suite, then Bazel checks. Production Docker builds remain on BuildKit, as planned.
+
+Keep `run-in-devcontainer` as the way project tools run. Split each project's precommit work into formatting, which may change source files, and read-only checks. Bazel caches each project's formatter output as an archive; applying that archive on a cache hit preserves formatting edits without starting a devcontainer. Bazel also runs checks as per-project targets with declared inputs and caches successful results.
 
 Replace the JavaScript precommit orchestrator with a small hook that selects projects from staged files, runs formatting, requests Bazel checks, and retains the final guard that aborts when a staged file changed during the run. On retry, checks for unchanged projects should be cache hits.
 

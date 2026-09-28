@@ -34,7 +34,7 @@ if [ ! -f "$project_file" ]; then
   exit 1
 fi
 
-if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = precommit ]; }; then
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ]; }; then
   script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
   if [ -z "$script" ]; then
     echo "Project does not have $1 command" >&2
@@ -47,9 +47,6 @@ if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = precommit ]; }; then
       seen = 1
     }
   ')
-  if [ "$1" = precommit ]; then
-    run_command="set --export PRE_COMMIT 1; and $run_command"
-  fi
 else
   run_command=$*
 fi

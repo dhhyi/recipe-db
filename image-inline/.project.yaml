@@ -48,7 +48,7 @@ prettier:
     - "*.hs"
     - dist-newstyle
     - "*.cabal"
-precommit: |
+check: |
   ghc --version
   cabal update
   cabal build

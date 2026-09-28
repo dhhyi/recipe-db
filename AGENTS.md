@@ -10,15 +10,17 @@ mise run --raw in-devcontainer <project> <command>
 
 The command is executed with `fish` inside the project's devcontainer. An existing running container is reused and left running; a stopped container is restarted, or a new one is created if needed. Containers started by the script are stopped afterwards, even when the command fails. The command's exit status is returned to the caller, and its stdout is not mixed with lifecycle messages.
 
-Two command names are special and are not passed through verbatim — they are resolved from the second yaml document of the project's `.project.yaml`:
+These command names are resolved from the second YAML document of the project's `.project.yaml`:
 
 - `test` — runs the project's `test:` script
-- `precommit` — runs the project's `precommit:` script with `PRE_COMMIT=1` set
+- `format` — runs the project's `format:` script
+- `check` — runs the project's `check:` script
 
 Examples:
 
 ```sh
-mise run --raw in-devcontainer images-edit precommit
+mise run --raw in-devcontainer images-edit format
+mise run --raw in-devcontainer graphql check
 mise run --raw in-devcontainer recipes-test test
 mise run --raw in-devcontainer images-edit pnpm build --output /dev/null
 mise run --raw in-devcontainer graphql pnpm install
