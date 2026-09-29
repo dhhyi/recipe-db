@@ -1,41 +1,5 @@
 # Roadmap
 
-## Get rid of most JavaScript
-
-I deal with TypeScript/JavaScript enough in my daily work, so I want to minimize its presence in this project as much as possible. It shouldn't be used as a project base.
-
-It is okay for the design project using Storybook, and web-components that are shared between different parts of the application.
-
-It's also allowed for frontends compiled to JavaScript, like Elm (images-edit) and ClojureScript (recipes-edit), since JavaScript is merely the output, but not the language used for development.
-
-### Replace JavaScript build tools
-
-JavaScript build tooling (root-level, .scripts folder) will be replaced with Bazel build rules and native toolchain integrations.
-
-#### Migrate precommit checks to Bazel
-
-> **Status:** All projects now declare separate formatting and read-only precommit checks. A generated root `BUILD.bazel` provides per-project cacheable format archives and check targets; the hook replays format archives before checks, and CI runs formatting, the integration-test suite, then Bazel checks. Production Docker builds remain on BuildKit, as planned.
-
-Keep `run-in-devcontainer` as the way project tools run. Split each project's precommit work into formatting, which may change source files, and read-only checks. Bazel caches each project's formatter output as an archive; applying that archive on a cache hit preserves formatting edits without starting a devcontainer. Bazel also runs checks as per-project targets with declared inputs and caches successful results.
-
-Replace the JavaScript precommit orchestrator with a small hook that selects projects from staged files, runs formatting, requests Bazel checks, and retains the final guard that aborts when a staged file changed during the run. On retry, checks for unchanged projects should be cache hits.
-
-Start with two projects and verify the retry case: both run; formatting changes one; the hook aborts; after staging that change, Bazel skips the unchanged project's successful checks. Then migrate remaining projects and CI.
-
-Integration-test targets must include the tested services and fixtures in their inputs. Cache them only when their starting state is controlled and skipping their side effects cannot affect later tests. Keep existing devcontainer `test` and `precommit` entry points available during migration.
-
-Migrate production Docker builds separately. They already use BuildKit caching; measure the benefit before moving image artifacts into Bazel.
-
-#### Rework docker-compose/deployment generation
-
-> **Status:** Compose templating is complete. The old JavaScript generator has been replaced by a shell/yq/jq data-preparation step and ytt templates for development and production Compose output, including the production `traefik.yml`. The later Kubernetes/k3s and k3d deployment work remains open.
-
-`generate-docker-compose.js` currently mixes several concerns in one script: reading each project's `.project.yaml` traefik section, aggregating it into the production `traefik.yml`, and rendering the full `docker-compose.yml` (service definitions, profiles, depends_on, dev/prod differences) in a single pass. Its replacement should be a proper templating mechanism instead, using **ytt** (a single-binary, no-runtime-deps templating/overlay tool for YAML; CUE and jsonnet are more powerful but heavier alternatives if ytt turns out too limited): a docker-compose service template populated from the traefik/service data in `.project.yaml`, rendered per flavour (development, production).
-
-Local dev stays on docker-compose regardless of what happens to production: the current setup's best feature is that a devcontainer carries the exact same Traefik labels as the production service, so opening it in VS Code just swaps it into the already-running stack on the shared Docker network — zero extra steps. That's worth more than any Kubernetes benefit for local dev.
-
-For production, go full Kubernetes (k3s, matching the Raspberry Pi target) instead of also supporting docker-compose there — plus k3d as a local stand-in for testing the production k3s setup itself (not for day-to-day service development, which stays docker-compose). Low-priority note: Kubernetes has an equivalent of the devcontainer-swap workflow, called service "interception", via tools like Telepresence or mirrord, which reroute a running service's traffic to a local process/container while the rest of the cluster keeps running — but it needs a cluster-side agent plus a local tunnel/daemon per intercepted service, so it's not worth chasing unless the docker-compose dev setup becomes untenable.
-
 ## Image handling
 
 ### Better image editor
@@ -54,7 +18,9 @@ The web frontend should be protected with a login mechanism, so that it is not p
 
 ### Setup Raspberry Pi deployment
 
-Explore the possibility of deploying the stack on a Raspberry Pi with either Kubernetes or Docker Compose. Setup a public deployment.
+Deploy the production stack on k3s, matching the Raspberry Pi target, rather than supporting production Docker Compose. Use k3d as a local stand-in for testing the production k3s setup. Both of these deployments need templating with ytt.
+
+Set up a public deployment.
 
 ## Ideas for other services:
 
@@ -126,11 +92,15 @@ Probably [Google oAuth via traefik](https://www.libe.net/traefik-auth).
 
 ### searching
 
-Maybe with [OpenSearch](https://opensearch.org/docs/latest/) or [Quickwit](https://quickwit.io/docs/get-started/quickstart).
+Build a dedicated search platform using [Typesense](https://typesense.org/) and a thin Zig service. Target a Raspberry Pi 3 with about 100 recipes initially; verify ARM64 compatibility, memory use, and startup time on the target device.
 
-- by name
-- by rating for user
-- recipes containing ingredient/tag
+Index current recipe data exposed by GraphQL, with room to add fields such as tags as they become available. Search German text with full-text search, typo tolerance, facets, and pagination; highlighting is not needed. The service should forward composable Typesense query options and return ordered recipe IDs plus facet and pagination metadata. GraphQL remains the source of precise recipe data. Defer user-specific rating search.
+
+Use NATS JetStream for queued, durable recipe-change notifications. Only mutations performed through GraphQL publish events. The Zig service consumes them with a durable consumer, reloads the recipe through GraphQL, then replaces its Typesense document; confirmed recipe deletions remove the document. Repeated delivery must be safe. If an optional source service is unavailable while rebuilding a document, retain its fields from the previous indexed document rather than erasing them.
+
+Provide a daily scheduled reindex and a way to trigger one manually. Rebuilds may make search unavailable while running. Start with the backend only; frontend integration is separate work.
+
+TODO: address the gap where a recipe mutation succeeds but publishing its notification fails. For the initial happy path, the scheduled reindex provides eventual recovery.
 
 ### Caching and updating
 
