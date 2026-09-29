@@ -9,7 +9,8 @@ defmodule Recipes.Application do
   def start(_type, _args) do
     children = [
       {Recipes.Repository, []},
-      {Bandit, plug: Recipes.Router, port: 5000, ip: {0, 0, 0, 0}}
+      {Bandit,
+       plug: Recipes.Router, port: 5000, ip: {0, 0, 0, 0}, http_1_options: [max_requests: 1]}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Recipes.Supervisor)

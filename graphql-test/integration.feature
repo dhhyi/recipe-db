@@ -7,6 +7,7 @@ Feature: integration
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post
     * status 200
+    * match response.data.deleteRecipesForTesting == true
     * request { query: '#(read("graphql/delete-ratings-for-testing.graphql"))' }
     * method post
     * status 200
