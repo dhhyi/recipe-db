@@ -68,6 +68,8 @@ jobs:
           echo "::endgroup::"
 
       - name: test projects
+        env:
+          VERBOSE: "true"
         run: |
           echo "::group::docker-compose.yml"
           cat docker-compose.yml
@@ -82,7 +84,12 @@ jobs:
             test_cmd=$(mise exec -- yq eval 'select(documentIndex==1) | .test // ""' $project/.project.yaml)
             if [ -n "$test_cmd" ]; then
               echo "::group::test $project"
-              mise run --raw in-devcontainer "$project" test
+              if ! mise run --raw in-devcontainer "$project" test; then
+                echo "::group::docker compose logs"
+                docker compose logs --no-color
+                echo "::endgroup::"
+                exit 1
+              fi
               echo "::endgroup::"
             fi
           done

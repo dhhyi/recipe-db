@@ -32,6 +32,9 @@
 #@   for project in deploy_projects:
 #@     services.update(service(project, options, projects))
 #@   end
+#@   for name in services:
+#@     services[name].setdefault("environment", {})["VERBOSE"] = None
+#@   end
 #@   return services
 #@ end
 #@
