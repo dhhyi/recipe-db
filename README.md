@@ -45,7 +45,7 @@ Every aspect in the Recipe DB is bundled in a microservice. [Traefik](https://tr
 
 Even though the frontend parts have access to a unified GraphQL API, I want to implement the different parts with different solutions.
 
-### Parts with limited interaction — see [`frontend`](./frontend/README.md)
+### Parts with limited interaction — see [`browse`](./browse/README.md)
 
 ### Heavy interaction
 
