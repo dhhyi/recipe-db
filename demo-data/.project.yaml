@@ -49,9 +49,10 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: job
 graphqlSchema: "."
-format: |
-  ariadne-codegen
-  black ./*.py
+generate:
+  - command: ariadne-codegen
+    output: graphql_client/**/*.py
+format: black ./*.py
 check: |
   python3 --version
   cspell --locale de-de recipe*.{json,md}

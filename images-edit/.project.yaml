@@ -97,10 +97,12 @@ prettier:
   ignore:
     - "*.elm"
     - nginx.conf
+generate:
+  - command: pnpm codegen
+    output: src/Api/**/*.elm
 format: |
   nginx-formatter -indent=4
   pnpm exec elm-format --yes .
-  pnpm codegen
 check: |
   pnpm exec elm --version
   pnpm build

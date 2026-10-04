@@ -38,6 +38,17 @@ To tear down an already running container without running anything meaningful, u
 mise run --raw in-devcontainer --rm recipes true
 ```
 
+## Working on Bazel scripts
+
+When working on Bazel scripts, run their checks, linting, and regression tests directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules. For example:
+
+```sh
+mise exec -- bash .scripts/tests/bazel-generation.sh
+mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck
+```
+
+Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
+
 ## Modifying .project.yaml files
 
 When modifying `.project.yaml` files, run `mise run sync` to apply the changes. Do not modify files in .devcontainer directories directly.
