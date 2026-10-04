@@ -34,8 +34,12 @@ if [ ! -f "$project_file" ]; then
   exit 1
 fi
 
-if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ]; }; then
-  script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
+  if [ "$1" = generate ]; then
+    script=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[].command' "$project_file")
+  else
+    script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
+  fi
   if [ -z "$script" ]; then
     echo "Project does not have $1 command" >&2
     exit 1

@@ -41,8 +41,7 @@ fi
 pnpm exec prettier --log-level warn --write .
 
 bazel_targets=()
-format_targets=()
-format_projects=()
+restore_archives=()
 for project in "${projects[@]}"; do
   check=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project/.project.yaml")
   if [[ -n "$check" ]]; then
@@ -58,24 +57,25 @@ for project in "${projects[@]}"; do
       esac
     done
     if [[ -n "$format" && "$format_needed" == true ]]; then
-      format_targets+=("//:${project}_format")
-      format_projects+=("$project")
+      bazel_targets+=("//:${project}_precommit")
+      restore_archives+=("bazel-bin/$project-format.tar")
+    else
+      bazel_targets+=("//:${project}_check")
+      generators=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project/.project.yaml")
+      if [[ "$generators" -gt 0 ]]; then
+        restore_archives+=("bazel-bin/$project-generate.tar")
+      fi
     fi
-    bazel_targets+=("//:${project}_precommit")
   fi
 done
 
 mise run --raw generate-bazel-build
 
-if ((${#format_targets[@]} > 0)); then
-  mise exec -- bazelisk build --action_env=PATH --jobs=1 "${format_targets[@]}"
-  for project in "${format_projects[@]}"; do
-    tar -xf "bazel-bin/$project-format.tar"
-  done
-fi
-
 if ((${#bazel_targets[@]} > 0)); then
   mise exec -- bazelisk build --action_env=PATH --jobs=1 "${bazel_targets[@]}"
+  for archive in "${restore_archives[@]}"; do
+    tar -xf "$archive"
+  done
 fi
 
 mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck

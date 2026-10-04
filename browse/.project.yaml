@@ -79,9 +79,12 @@ category: frontend
 graphqlSchema: "."
 tailwindSources:
   - src
-format: |
-  templ generate
-  go fmt ./...
+generate:
+  - command: go run github.com/Khan/genqlient@main
+    output: src/generated/graphql.go
+  - command: templ generate
+    output: src/**/*_templ.go
+format: go fmt ./...
 check: |
   go version
   go vet ./...

@@ -13,11 +13,43 @@ quote() {
   jq -Rn --arg value "$1" '$value'
 }
 
+emit_rule() {
+  local name=$1 archive=$2 script=$3 dependency=$4
+  shift 4
+  {
+    printf '\ngenrule(\n'
+    printf '    name = "%s",\n' "$name"
+    printf '    srcs = [\n'
+    for file in "$@"; do
+      printf '        %s,\n' "$(quote "$file")"
+    done
+    if [[ -n "$dependency" ]]; then
+      printf '        %s,\n' "$(quote ":$dependency")"
+    fi
+    printf '        %s,\n' "$(quote "$script")"
+    if [[ "$archive" == *.tar ]]; then
+      printf '        %s,\n' "$(quote .scripts/bazel-artifacts.sh)"
+    fi
+    printf '        %s,\n' "$(quote .scripts/run-in-devcontainer.sh)"
+    printf '        %s,\n' "$(quote mise.toml)"
+    printf '    ],\n'
+    printf '    outs = ["%s"],\n' "$archive"
+    printf '    cmd = "sh %s %s %s' "\$(location $script)" "$project" "\$@"
+    if [[ -n "$dependency" ]]; then
+      printf ' %s' "\$(location :$dependency)"
+    fi
+    printf '",\n'
+    printf '    tags = ["local"],\n'
+    printf ')\n'
+  } >> "$output"
+}
+
 for project_file in */.project.yaml; do
   project=${project_file%/.project.yaml}
   check=$(yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project_file")
-  [[ -n "$check" ]] || continue
   format=$(yq eval-all -r 'select(documentIndex == 1) | .format // ""' "$project_file")
+  generators=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project_file")
+  [[ -n "$check" || -n "$format" || "$generators" -gt 0 ]] || continue
 
   files=()
   format_files=()
@@ -34,11 +66,12 @@ for project_file in */.project.yaml; do
 
   graphql_schema=$(yq eval-all -r 'select(documentIndex == 1) | .graphqlSchema // ""' "$project_file")
   if [[ -n "$graphql_schema" ]]; then
-    schema_file="$project/recipe-db.graphqls"
+    schema_file="$project/$graphql_schema/recipe-db.graphqls"
     if [[ ! -f "$schema_file" ]]; then
       printf 'Missing generated GraphQL schema: %s (run mise run sync)\n' "$schema_file" >&2
       exit 1
     fi
+    schema_file=$(realpath --relative-to="$workspace_root" "$schema_file")
     if [[ -z ${included_files["$schema_file"]+x} ]]; then
       files+=("$schema_file")
       format_files+=("$schema_file")
@@ -68,41 +101,24 @@ for project_file in */.project.yaml; do
     done
   fi
 
-  if [[ -n "$format" ]]; then
-    {
-      printf '\ngenrule(\n'
-      printf '    name = "%s_format",\n' "$project"
-      printf '    srcs = [\n'
-      for file in "${format_files[@]}"; do
-        printf '        %s,\n' "$(quote "$file")"
-      done
-      printf '        %s,\n' "$(quote .scripts/format-bazel.sh)"
-      printf '        %s,\n' "$(quote .scripts/run-in-devcontainer.sh)"
-      printf '        %s,\n' "$(quote mise.toml)"
-      printf '    ],\n'
-      printf '    outs = ["%s-format.tar"],\n' "$project"
-      printf "    cmd = \"sh \$(location .scripts/format-bazel.sh) %s \$@\",\n" "$project"
-      printf '    tags = ["local"],\n'
-      printf ')\n'
-    } >> "$output"
+  generation_dependency=
+  if [[ "$generators" -gt 0 ]]; then
+    generation_dependency="${project}_generate"
+    emit_rule "$generation_dependency" "$project-generate.tar" .scripts/generate-bazel.sh "" "${format_files[@]}"
   fi
 
-  {
-    printf '\ngenrule(\n'
-    printf '    name = "%s_precommit",\n' "$project"
-    printf '    srcs = [\n'
-    for file in "${files[@]}"; do
-      printf '        %s,\n' "$(quote "$file")"
-    done
-    printf '        %s,\n' "$(quote .scripts/bazel-check.sh)"
-    printf '        %s,\n' "$(quote .scripts/run-in-devcontainer.sh)"
-    printf '        %s,\n' "$(quote mise.toml)"
-    printf '    ],\n'
-    printf '    outs = ["%s-precommit.ok"],\n' "$project"
-    printf "    cmd = \"sh \$(location .scripts/bazel-check.sh) %s \$@\",\n" "$project"
-    printf '    tags = ["local"],\n'
-    printf ')\n'
-  } >> "$output"
+  if [[ -n "$format" ]]; then
+    emit_rule "${project}_format" "$project-format.tar" .scripts/format-bazel.sh "$generation_dependency" "${format_files[@]}"
+  fi
+
+  if [[ -n "$check" ]]; then
+    emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-check.sh "$generation_dependency" "${files[@]}"
+    check_dependency=$generation_dependency
+    if [[ -n "$format" ]]; then
+      check_dependency="${project}_format"
+    fi
+    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$check_dependency" "${files[@]}"
+  fi
 done
 
 {
@@ -112,7 +128,7 @@ done
   while IFS= read -r -d '' file; do
     [[ -f "$file" ]] || continue
     printf '        %s,\n' "$(quote "$file")"
-  done < <(git ls-files --cached -z -- '*.sh' '*.bash')
+  done < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '*.bash' | sort -zu)
   printf '    ],\n'
   printf '    tools = ["mise.toml"],\n'
   printf '    outs = ["shellcheck.ok"],\n'
