@@ -14,7 +14,7 @@ mise run --raw in-devcontainer "$project" format
     printf '%s\0' "$project/recipe-db.graphqls"
   fi
   case $project in
-    frontend) find "$project/src" -type f -name '*_templ.go' -print0 ;;
+    browse) find "$project/src" -type f -name '*_templ.go' -print0 ;;
     images-edit) find "$project/src/Api" -type f -name '*.elm' -print0 ;;
     demo-data) find "$project/graphql_client" -type f -name '*.py' -print0 ;;
   esac
