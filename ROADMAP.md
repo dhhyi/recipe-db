@@ -104,7 +104,17 @@ TODO: address the gap where a recipe mutation succeeds but publishing its notifi
 
 ### Caching and updating
 
-Message queue notify on update -> pre-render and cache page again.
+Add a temporary disk-backed HTML cache inside `browse`, reusing its existing Go/templ rendering. Assume the search entry's NATS JetStream message bus is available. Start with one `browse` replica and recipe detail pages only; keep Traefik routing, authentication, and compression unchanged. Do not introduce a separate cache service.
+
+Implementation plan:
+
+1. **Cache on demand.** Clear only the dedicated cache directory on every `browse` process start, before accepting requests. Serve valid cached HTML without querying GraphQL. On a miss, fetch the recipe, render the page, atomically save the completed HTML, and serve it. Coalesce concurrent misses for the same recipe. Do not cache failed or incomplete renders; return an explicit error if fresh rendering fails.
+2. **Invalidate on updates.** Give `browse` its own durable JetStream consumer, independent of search. Recipe, aggregate-rating, image, deletion, and other changes affecting cached content must identify the affected recipe and invalidate its detail page. Acknowledge events only after successful invalidation; retry failures and make repeated delivery safe. Use per-recipe generations or equivalent coordination so an invalidation during rendering prevents an older result from repopulating the cache. Invalidate locally after successful mutations handled by `browse`, such as rating submissions, rather than waiting for bus delivery.
+3. **Separate cached and live content.** Cache the document layout, recipe content, image URLs, and aggregate ratings. Keep service-availability-dependent edit controls live via HTMX, and retain lazy-loaded inspirations without gating their placeholder on cached service health. Mutation responses, widget endpoints, GraphQL, and health checks remain uncached. Shared HTML must contain no user-specific content, and authentication must precede access to cached pages.
+4. **Bound staleness.** Use a short fixed TTL measured from the successful fetch, not extended by cache hits, to recover from missed notifications and the mutation-to-publication gap. During bus outages, keep serving valid entries until expiry; expired or invalidated entries require fresh rendering, with no stale fallback on failure. Choose the TTL during implementation. Target invalidation within five seconds under healthy conditions. Ensure browser caching does not hide server-side invalidation, for example with `Cache-Control: no-cache` and a content-derived ETag.
+5. **Validate the behavior.** Verify cache hits avoid GraphQL calls, concurrent misses share a render, updates invalidate all variants of the affected page, and in-flight renders cannot restore invalidated content. Test duplicate events, confirmed deletions, rendering and invalidation failures, process restarts, and bus outages with TTL expiry. Ensure temporary optional-service failures cannot silently replace a complete page with incomplete HTML. Add a storage limit and observable cache hits, misses, invalidations, and failures.
+
+Disk storage is disposable and used only during the current process lifetime, not for recovery across restarts. No eager prerendering, full rebuild jobs, extra in-memory cache, multiple replicas, or automatic updates to already-open browser pages initially. Image bytes and browser image-cache invalidation are separate from HTML caching.
 
 ### Resilience
 
