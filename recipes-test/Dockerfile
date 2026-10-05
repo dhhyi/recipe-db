@@ -3,7 +3,7 @@
 # Versions are supplied by the generated Compose build arguments.
 ARG MAVEN_VERSION
 ARG JAVA_VERSION
-FROM maven:${MAVEN_VERSION}-eclipse-temurin-${JAVA_VERSION}
+FROM maven:${MAVEN_VERSION}-eclipse-temurin-${JAVA_VERSION}@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320
 
 WORKDIR /app
 COPY pom.xml eclipse-formatter.xml ./
