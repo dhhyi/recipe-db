@@ -1,6 +1,6 @@
 FROM node:lts-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS node
 
-FROM clojure:temurin-21-tools-deps-bookworm-slim@sha256:1acb1f4f441b14b0cf321afcb838f52ccc55eb76b3bab0746aa83a9aed27b5d5 AS builder
+FROM clojure:temurin-21-tools-deps-bookworm-slim@sha256:e48483f1b95d7e6384a4dff27811bcc78df06ccb5d91e51423a5f078954a4961 AS builder
 COPY --from=node /usr/local /usr/local
 RUN npm install --global pnpm@12.6.0
 
