@@ -1,11 +1,23 @@
 require "airborne"
 require "base64"
 require "cgi"
+require "net/http"
+require "uri"
 
 RSpec.describe "image-inline" do
   before(:all) do
     Airborne.configure do |config|
       config.base_url = ENV.fetch("REST_API")
+    end
+
+    fixture = URI("#{ENV.fetch("FIXTURE_API")}/tiny.png")
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 30
+    loop do
+      response = Net::HTTP.get_response(fixture)
+      break if response.is_a?(Net::HTTPSuccess)
+      raise "Fixture #{fixture} returned HTTP #{response.code}" if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+
+      sleep 0.2
     end
   end
 
