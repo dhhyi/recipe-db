@@ -47,11 +47,16 @@ ci=false
 if [ -n "${CI:-}" ]; then
   ci=true
 fi
+disable_registry_cache=false
+if [ "${DISABLE_REGISTRY_CACHE:-false}" = true ]; then
+  disable_registry_cache=true
+fi
 jq -n \
   --argjson production "$production" \
   --argjson backendOnly "$backend_only" \
   --argjson ci "$ci" \
-  '{production: $production, backendOnly: $backendOnly, ci: $ci, projects: []}' \
+  --argjson disableRegistryCache "$disable_registry_cache" \
+  '{production: $production, backendOnly: $backendOnly, ci: $ci, disableRegistryCache: $disableRegistryCache, projects: []}' \
   > "$data_values"
 repository=$(yq -r '.repository // ""' "$project_root/package.json")
 

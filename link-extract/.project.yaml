@@ -17,7 +17,7 @@ devcontainer:
       - pkg-config
       - zlib1g-dev
     user:
-      - RUN mise use -g crystal@1.17.1
+      - RUN mise use -g crystal@1.20.3
   ports:
     - 8081
   environment:

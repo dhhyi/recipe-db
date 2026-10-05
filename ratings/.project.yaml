@@ -20,7 +20,10 @@ devcontainer:
       IO_VERSION: 8d1566b5edf8f378618fc7739518d7a5c56de654
       PCRE_VERSION: "8.45"
     root:
-      - RUN git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io && cd /tmp/io && git checkout $IO_VERSION && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=/usr/local .. && make && make install
+      - RUN git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io && cd /tmp/io && git checkout $IO_VERSION
+      # Match the Linux ARM64 ucontext fix in the application Dockerfile.
+      - RUN sed -i 's/^#if !defined(__arm64__) \&\& !defined(__aarch64__)$/#if defined(__linux__) || (!defined(__arm64__) \&\& !defined(__aarch64__))/' /tmp/io/libs/coroutine/source/Coro.c && sed -i 's/^#if defined(__arm64__) || defined(__aarch64__)$/#if !defined(__linux__) \&\& (defined(__arm64__) || defined(__aarch64__))/' /tmp/io/libs/coroutine/source/Coro_arm64.c
+      - RUN cd /tmp/io && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=/usr/local .. && make && make install
       - RUN chown -R vscode:vscode /tmp/io
       # trixie dropped the PCRE1 dev package; the Io Regex addon still uses the old
       # pcre.h API, so build it from source
@@ -71,4 +74,6 @@ category: backend
 prettier:
   ignore:
     - "*.io"
-check: io --version
+check: |
+  io --version
+  timeout 10 io tests/coroutines.io

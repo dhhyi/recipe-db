@@ -6,13 +6,15 @@ on:
   push:
     branches:
       - main
+permissions:
+  contents: read
 
 jobs:
-  test-and-publish:
-    permissions: write-all
-    runs-on: ubuntu-latest
+  quality-checks:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
     env:
-      DOCKER_BUILDKIT: 1
       COMPOSE_PARALLEL_LIMIT: 1
     steps:
       - name: checkout
@@ -23,16 +25,6 @@ jobs:
         with:
           install: false
           cache: true
-
-      - name: login to ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: create buildx builder
-        run: docker buildx create --use
 
       - name: install tools and synchronize
         run: mise install
@@ -66,38 +58,140 @@ jobs:
           done
           git diff --exit-code
 
-      - name: build dev images
-        run: |
-          echo "::group::docker-compose.yml"
-          cat docker-compose.yml
-          echo "::endgroup::"
-          echo "::group::docker compose build"
-          docker compose --profile development build
-          echo "::endgroup::"
-
-      - name: test projects
-        env:
-          VERBOSE: "true"
-        run: |
-          echo "::group::docker-compose.yml"
-          cat docker-compose.yml
-          echo "::endgroup::"
-          echo "::group::docker compose up"
-          docker compose up -d --wait || (docker compose logs && exit 1)
-          echo "::endgroup::"
-          echo "::group::docker compose ps"
-          docker compose ps
-          echo "::endgroup::"
-          mise run integration-tests -- --development || (docker compose logs --no-color && exit 1)
-
-      - name: Bazel precommit check
+      - name: Bazel precommit checks and unit tests
         run: |
           mise run --raw generate-bazel-build
           mise exec -- bazelisk build --action_env=PATH --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
-      - name: build and push prod images
+  arm64-validation:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04-arm
+    env:
+      COMPOSE_PARALLEL_LIMIT: 1
+      DISABLE_REGISTRY_CACHE: "true"
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: setup mise
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+          cache: true
+
+      - name: install Compose generation tools
+        run: mise --no-hooks install jq yq ytt
+
+      - name: prepare ARM64 build context without devcontainers
         run: |
-          echo "::group::generate prod docker-compose.yml"
+          set -euo pipefail
+          case "$(uname -m)" in
+            aarch64|arm64) ;;
+            *) echo "Expected a native ARM64 runner, got $(uname -m)." >&2; exit 1 ;;
+          esac
+          case "$(docker info --format '{{.Architecture}}')" in
+            aarch64|arm64) ;;
+            *) echo "Expected a native ARM64 Docker daemon." >&2; exit 1 ;;
+          esac
+          docker buildx create --use
+          docker buildx inspect --bootstrap
+          mise run --raw sync-files
+          mise run --raw generate-docker-compose
+          mise run create-intranet
+
+      - name: build development and standalone test images
+        run: docker compose --profile development --profile test build
+
+      - name: start development stack and run standalone integration tests
+        env:
+          VERBOSE: "true"
+        run: |
+          docker compose up -d --wait --wait-timeout 120 || { docker compose logs --no-color; exit 1; }
+          docker compose ps
+          mise run integration-tests -- --development || { docker compose logs --no-color; exit 1; }
+
+      - name: verify development and test images are native ARM64
+        run: |
+          set -euo pipefail
+          mapfile -t images < <(docker compose --profile development --profile test config --images | sort -u)
+          for image in "${images[@]}"; do
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")
+            if [[ $platform != linux/arm64 ]]; then
+              echo "$image was built for $platform, expected linux/arm64." >&2
+              exit 1
+            fi
+          done
+
+      - name: clean up development and test stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+      - name: generate production Compose configuration
+        run: mise run generate-docker-compose prod
+
+      - name: validate production configuration and build ARM64 images
+        run: |
+          docker compose config --quiet
+          docker compose build
+          mapfile -t images < <(docker compose config --images | sort -u)
+          for image in "${images[@]}"; do
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")
+            if [[ $platform != linux/arm64 ]]; then
+              echo "$image was built for $platform, expected linux/arm64." >&2
+              exit 1
+            fi
+          done
+
+      - name: upload integration reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-integration-reports
+          path: |
+            **/target/integration-tests/**
+            **/target/surefire-reports/**
+            **/target/junit.xml
+          if-no-files-found: ignore
+
+  publish:
+    needs:
+      - quality-checks
+      - arm64-validation
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-24.04
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_PARALLEL_LIMIT: 1
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+
+      - name: setup mise tools
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+          cache: true
+
+      - name: login to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: create buildx builder
+        run: docker buildx create --use
+
+      - name: install tools and synchronize
+        run: mise install
+
+      - name: build and push production images
+        run: |
+          echo "::group::generate production docker-compose.yml"
           mise run generate-docker-compose prod
           echo "::endgroup::"
           echo "::group::docker-compose.yml"

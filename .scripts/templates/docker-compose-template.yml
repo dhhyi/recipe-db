@@ -19,7 +19,8 @@
 #@ )
 #@ options = struct.make(
 #@   production=data.values.production,
-#@   ci=data.values.ci
+#@   ci=data.values.ci,
+#@   disableRegistryCache=data.values.disableRegistryCache
 #@ )
 #@
 #@ deploy_projects = projects.backend + projects.api
@@ -37,7 +38,7 @@
 #@     if len(projects.fixtures) != 1:
 #@       fail("Expected exactly one static fixtures project")
 #@     end
-#@     services.update(fixtures_service(projects.fixtures[0]))
+#@     services.update(fixtures_service(projects.fixtures[0], options))
 #@   end
 #@   for project in deploy_projects:
 #@     services.update(service(project, options, projects))

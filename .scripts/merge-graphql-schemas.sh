@@ -2,11 +2,15 @@
 set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$project_root"
 temporary_directory=$(mktemp -d)
 trap 'rm -rf "$temporary_directory"' EXIT
 
 printed_type_defs="$temporary_directory/recipe-db.graphqls"
-mise run --raw in-devcontainer graphql cargo run --release -- print-schema > "$printed_type_defs"
+mise run --raw generate-docker-compose prepare
+mise run --raw create-intranet
+docker compose build graphql
+docker compose run --rm --no-deps --entrypoint /app/graphql graphql print-schema > "$printed_type_defs"
 
 for project_file in "$project_root"/*/.project.yaml; do
   [ -f "$project_file" ] || continue
