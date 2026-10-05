@@ -10,7 +10,24 @@ The images frontend should be the only place where the full-size image is loaded
 
 ### Check for ARM64 build
 
-Check that all production images can be built for ARM.
+Verify ARM64 compatibility in CI without requiring a Raspberry Pi. Test the existing development stack on a native GitHub-hosted `ubuntu-24.04-arm` runner, and separately verify that all production images build for `linux/arm64`. Reuse the current development Compose setup, fixture routing, and devcontainer-based test execution; do not introduce a production-runtime test harness for this milestone.
+
+Split CI into jobs in one workflow:
+
+- **Quality checks (AMD64, `ubuntu-24.04`):** formatting verification, linting, static checks, and existing Bazel precommit checks. Classify checks that execute application code individually and move meaningful runtime validation to ARM64.
+- **ARM64 validation (`ubuntu-24.04-arm`):** build the development stack, run the existing integration tests, and build production images without deploying or publishing them. Run the full integration suite only here, not again in the AMD64 publishing job.
+- **Publish (AMD64, `ubuntu-24.04`):** build and publish production images and devcontainers only on `main`, after both validation jobs succeed. Use job-level `needs` dependencies so publishing is gated by validation of the same commit.
+
+Trigger the workflow only on pushes to `main`, matching the repository's main-branch-only workflow; no pull-request or manual-dispatch triggers are needed. Quality checks and ARM64 validation run in parallel. Give validation jobs read-only permissions and no registry publishing credentials; grant publishing permissions only to the publish job.
+
+Implementation plan:
+
+1. **Make required development tooling ARM64-compatible.** Audit devcontainer base images and pinned digests, downloaded binaries, and CI bootstrap tools for architecture assumptions. Make downloads architecture-aware where necessary, preserving AMD64 support. Formatting and static-analysis tools need not run on ARM64, but their installation must not prevent required development or test containers from building; separate their installation from required test tooling where necessary rather than porting unrelated utilities. Change `.project.yaml` sources and run `mise run sync`; do not edit generated devcontainer files directly.
+2. **Split quality checks, ARM64 validation, and publishing.** Keep formatting and static checks on AMD64. For ARM64, follow the existing publish workflow's development validation sequence: set up tools and synchronize configuration, build development images, start the development Compose stack and wait for readiness, then run existing tests through `mise run --raw in-devcontainer <project> test`. Remove duplicate integration-test execution from AMD64 publishing and gate publishing on both jobs as described above.
+3. **Build production images separately.** On the native ARM64 runner, generate the production Compose configuration and build every production image without deploying or publishing it. Keep this check separate from development validation so failures are distinguishable. Audit production build and runtime base images and fix architecture-specific compiler targets and output paths, including the hardcoded x86-64 Rust target in `graphql/Dockerfile`.
+4. **Validate and document the boundary.** Confirm that containers execute natively on ARM64 without an emulation fallback and that production images target `linux/arm64`. Retain container logs and test reports on failures, use bounded readiness waits, and always clean up the CI test stack and disposable data. Record successful ARM64 development validation and production builds separately from pending production-runtime and Pi-specific validation.
+
+Done means quality checks pass on AMD64, development integration tests and runtime checks pass on native ARM64, all production images build for ARM64, and AMD64 builds and publishing remain gated by both validation jobs. AMD64 runtime compatibility is not proven by ARM64 tests alone. Multi-architecture publishing, production-image runtime tests, any additional AMD64 runtime smoke tests, k3d/k3s deployment, and Raspberry Pi memory, startup, storage, and thermal measurements are follow-up work.
 
 ### Protect web frontend with login mechanism
 
