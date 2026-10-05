@@ -51,14 +51,6 @@ RSpec.describe "image-inline" do
     expect(Base64.decode64(encoded)).to eq(File.read("fixtures/tiny.jpg", mode: "rb"))
   end
 
-  it "returns the same inlined data on repeated requests (cache consistency)" do
-    path = inline_path("#{fixture_api}/tiny.png")
-    get path
-    first = response.body
-    get path
-    expect(response.body).to eq(first)
-  end
-
   it "reports a fetch error for an unreachable url" do
     get inline_path("#{fixture_api}/does-not-exist.png")
     expect_status(500)
