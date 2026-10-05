@@ -24,6 +24,17 @@
 #@   return result
 #@ end
 
+#@ def project_labels(project):
+#@   if "labels" not in project.traefik:
+#@     return []
+#@   end
+#@   labels = ["traefik.enable=true"]
+#@   for key, value in flatten_labels(project.traefik.labels):
+#@     labels.append(("traefik." if not key.startswith("traefik.") else "") + key + "=" + value)
+#@   end
+#@   return labels
+#@ end
+
 #@ def service(project, options, projects):
 #@   context = project.dockerContext if "dockerContext" in project else project.name
 #@   dockerfile = "Dockerfile" if context == project.name else project.name + "/Dockerfile"
@@ -71,17 +82,21 @@
 #@     end
 #@   else:
 #@     if "labels" in project.traefik:
-#@       labels = ["traefik.enable=true"]
-#@       for key, value in flatten_labels(project.traefik.labels):
-#@         labels.append(("traefik." if not key.startswith("traefik.") else "") + key + "=" + value)
-#@       end
-#@       service["labels"] = labels
+#@       service["labels"] = project_labels(project)
 #@     end
 #@   end
 #@   if project.category == "job":
 #@     service["profiles"] = ["development"]
 #@     service["restart"] = "no"
 #@     service.setdefault("environment", {})["SERVICES"] = ",".join([p.name for p in projects.backend + projects.api])
+#@   elif project.category == "test":
+#@     service["profiles"] = ["test"]
+#@     service["restart"] = "no"
+#@     service["user"] = "${HOST_UID:-1000}:${HOST_GID:-1000}"
+#@     service.setdefault("environment", {})["HOME"] = "/tmp"
+#@     service["volumes"] = ["./" + project.name + "/target:/app/target"]
+#@     service["working_dir"] = "/app"
+#@     service["command"] = ["/bin/sh", "-c", project.test]
 #@   end
 #@   return {project.name: service}
 #@ end

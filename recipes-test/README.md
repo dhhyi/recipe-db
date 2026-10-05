@@ -5,5 +5,7 @@ Integration tests for the recipes service, implemented with [Rest-Assured](https
 Run the tests with:
 
 ```sh
-mise run in-devcontainer recipes-test test
+mise run integration-tests -- --development recipes-test
 ```
+
+The standalone job image prefetches Maven dependencies during build and runs the suite offline. Its Surefire report is retained under `target/`.

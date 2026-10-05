@@ -1,0 +1,32 @@
+#@ load("service-template.lib.yml", "project_labels")
+
+#@ def fixtures_service(project):
+#@   service = {
+#@     "build": {
+#@       "context": project.name,
+#@       "cache_from": ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache"],
+#@     },
+#@     "image": "ghcr.io/dhhyi/recipe-db-" + project.name + ":latest",
+#@     "container_name": project.name,
+#@     "networks": ["intranet"],
+#@     "profiles": ["test"],
+#@     "read_only": True,
+#@     "tmpfs": ["/var/cache/nginx", "/var/run"],
+#@   }
+#@   if "labels" in project.traefik:
+#@     service["labels"] = project_labels(project)
+#@   end
+#@   if "environment" in project.devcontainer:
+#@     environment = {}
+#@     for key in project.devcontainer.environment:
+#@       value = project.devcontainer.environment[key]
+#@       if "${" not in value:
+#@         environment[key] = value
+#@       end
+#@     end
+#@     if len(environment) > 0:
+#@       service["environment"] = environment
+#@     end
+#@   end
+#@   return {project.name: service}
+#@ end

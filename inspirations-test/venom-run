@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+if [ -z "${REST_API:-}" ]; then
+  echo "REST_API is not set" >&2
+  exit 1
+fi
+if [ "$#" -eq 0 ]; then
+  set -- .
+fi
+
+mkdir -p target
+exec venom run --var "REST_API=$REST_API" --stop-on-failure --output-dir target "$@"

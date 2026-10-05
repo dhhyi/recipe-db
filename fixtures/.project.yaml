@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-fixtures
+  ports:
+    - 80
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-fixtures:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /
+      routers:
+        recipe-db-fixtures:
+          rule: PathPrefix(`/graphql-test-fixture`) || PathPrefix(`/link-extract-test-fixture`) || PathPrefix(`/image-inline-test-fixture`) || PathPrefix(`/mcp-test-fixture`)
+          entrypoints: rest-internal
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: static

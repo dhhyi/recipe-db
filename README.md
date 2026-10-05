@@ -29,9 +29,16 @@ docker compose up
 
 To supply your own recipes, you can use the [demo-data project](demo-data/README.md) to generate demo recipes, ratings, inspirations and images via the GraphQL API.
 
-Run a subproject command in its devcontainer with `mise run in-devcontainer <project> <command>`, for example `mise run in-devcontainer graphql cargo build`. Use `format`, `check`, or `test` to run the corresponding script from the second document of the project's `.project.yaml`.
+Run a subproject command in its devcontainer with `mise run --raw in-devcontainer <project> <command>`, for example `mise run --raw in-devcontainer graphql cargo build`. Use `format`, `check`, or `test` to run the corresponding script from the second document of the project's `.project.yaml`.
 
 Use the devcontainers for development. They are set up with all necessary dependencies and configurations for file watchers and tasks for running watch serve commands efficiently.
+
+Integration tests run as standalone Compose jobs. Start the development stack first, then explicitly target it when running tests:
+
+```sh
+docker compose up -d --wait
+mise run integration-tests -- --development
+```
 
 # Technologies / Building Blocks
 

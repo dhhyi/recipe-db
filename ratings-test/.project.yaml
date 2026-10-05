@@ -21,9 +21,8 @@ devcontainer:
       - type: script
         path: /usr/local/bin/karate
         content: |
-          #!/bin/bash
-          java -jar /opt/karate.jar "$@"
-  selftest: karate -h
+          #!/bin/sh
+          exec java -jar /opt/karate.jar "$@"
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000
@@ -45,8 +44,10 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 format: ghokin fmt replace .
-check: ghokin version
-test: karate -T 1 .
+check: |
+  ghokin version
+  sh karate -h
+test: sh karate -T 1 .
 prettier:
   ignore:
     - "*.feature"

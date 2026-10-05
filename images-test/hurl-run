@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+if [ -z "${REST_API:-}" ]; then
+  echo "REST_API is not set" >&2
+  exit 1
+fi
+if [ -z "${WEB_API:-}" ]; then
+  echo "WEB_API is not set" >&2
+  exit 1
+fi
+if [ "$#" -eq 0 ]; then
+  set -- *.hurl
+fi
+
+mkdir -p target
+exec hurl --test --jobs 1 --report-junit target/junit.xml \
+  --variable REST_API="$REST_API" --variable WEB_API="$WEB_API" "$@"
