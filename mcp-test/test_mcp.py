@@ -1,13 +1,34 @@
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 
+import httpx
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fixture_server_ready():
+    url = f"{FIXTURE_API}/test.jpg"
+    deadline = time.monotonic() + 30
+    last_error = None
+    with httpx.Client(timeout=1) as client:
+        while time.monotonic() < deadline:
+            try:
+                response = client.get(url)
+                if response.is_success:
+                    return
+                last_error = f"HTTP {response.status_code}"
+            except httpx.RequestError as error:
+                last_error = str(error)
+            time.sleep(0.2)
+
+    pytest.fail(f"Fixture {url} did not become ready within 30 seconds: {last_error}")
 
 
 @asynccontextmanager

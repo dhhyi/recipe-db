@@ -21,6 +21,12 @@ Feature: inspirations
     * def pageUrl = fixtureApi + '/'
     * def canonicalUrl = fixtureApi + '/canonical'
     * def faviconUrl = fixtureApi + '/favicon.ico'
+    * configure retry = { count: 30, interval: 1000 }
+    * url pageUrl
+    * retry until responseStatus == 200
+    * method get
+    * status 200
+    * url graphqlApi
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['#(pageUrl)'] } } }
     * method post
     * status 200

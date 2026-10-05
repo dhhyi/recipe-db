@@ -2,7 +2,7 @@
 Library         Collections
 Library         RequestsLibrary
 
-Suite Setup     Create Session    link_extract    %{REST_API}
+Suite Setup     Wait For Fixture
 
 
 *** Test Cases ***
@@ -49,3 +49,17 @@ Non Html Response Fails
     ${body}=    Set Variable    ${response.json()}
     Dictionary Should Contain Item    ${body}    detail    Response is not HTML
     Dictionary Should Contain Item    ${body}    code    fetch-error
+
+
+*** Keywords ***
+Wait For Fixture
+    Create Session    link_extract    %{REST_API}
+    Create Session    fixture    %{FIXTURE_API}
+    Wait Until Keyword Succeeds
+    ...    30s
+    ...    200ms
+    ...    GET On Session
+    ...    fixture
+    ...    /page
+    ...    expected_status=200
+    ...    timeout=1
