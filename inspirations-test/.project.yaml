@@ -7,8 +7,10 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    args:
+      VENOM_VERSION: "intercloud-beta-11"
     root:
-      - ADD --chmod=711 https://github.com/intercloud/venom/releases/download/intercloud-beta-11/venom.linux-amd64 /usr/local/bin/venom
+      - ADD --chmod=711 https://github.com/intercloud/venom/releases/download/${VENOM_VERSION}/venom.linux-amd64 /usr/local/bin/venom
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000

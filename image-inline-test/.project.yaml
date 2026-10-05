@@ -7,13 +7,14 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
-    packages:
-      - ruby
-      - ruby-dev
-      - build-essential
-    root:
-      - RUN gem install rspec -v 3.13.0
-      - RUN gem install airborne -v 0.3.6
+    args:
+      RUBY_VERSION: "3"
+      RSPEC_VERSION: "3.13.0"
+      AIRBORNE_VERSION: "0.3.6"
+    user:
+      - RUN mise use -g ruby@$RUBY_VERSION
+      - RUN gem install rspec -v $RSPEC_VERSION
+      - RUN gem install airborne -v $AIRBORNE_VERSION
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     REST_API: http://traefik:3000

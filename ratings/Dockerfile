@@ -3,10 +3,10 @@ FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2
 RUN apt-get update \
   && apt-get install -y build-essential git cmake
 
-ARG IO_VERSION=8d1566b5edf8f378618fc7739518d7a5c56de654
+ARG IO_VERSION
 ENV HOME=/root
 
-RUN git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io
+RUN test -n "$IO_VERSION" && git clone --branch native --recursive https://github.com/IoLanguage/io.git /tmp/io
 RUN cd /tmp/io && git checkout $IO_VERSION
 RUN cd /tmp/io && mkdir build && cd build \
   && cmake -DCMAKE_BUILD_TYPE=release -DCMAKE_INSTALL_PREFIX=${HOME}/.local .. \

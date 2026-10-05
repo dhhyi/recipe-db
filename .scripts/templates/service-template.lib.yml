@@ -51,6 +51,9 @@
 #@   if dockerfile != "Dockerfile":
 #@     build["dockerfile"] = dockerfile
 #@   end
+#@   if "build" in project.devcontainer and "args" in project.devcontainer.build:
+#@     build["args"] = {key: str(project.devcontainer.build.args[key]) for key in project.devcontainer.build.args}
+#@   end
 #@   if "environment" in project.devcontainer:
 #@     environment = {}
 #@     for key in project.devcontainer.environment:

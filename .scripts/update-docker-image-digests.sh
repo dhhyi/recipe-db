@@ -8,46 +8,7 @@ output_file=
 trap 'rm -rf "$temporary_directory"; [ -z "$output_file" ] || rm -f "$output_file"' 0
 trap 'exit 1' 1 2 3 15
 
-# List external images, recording each named stage after its FROM line.
-# shellcheck disable=SC2016
-scan_awk='
-{
-  if (toupper($1) == "FROM" && NF >= 2) {
-    image = $2
-    if (tolower(image) != "scratch" && !stages[tolower(image)]) {
-      sub(/@sha256:[[:xdigit:]]+$/, "", image)
-      print image
-    }
-    if (toupper($3) == "AS") stages[tolower($4)] = 1
-  }
-}'
-
-# Replace image tokens using digests resolved before any Dockerfile is changed.
-# shellcheck disable=SC2016
-write_awk='
-BEGIN {
-  while ((getline entry < digest_file) > 0) {
-    split(entry, fields, "\t")
-    digests[fields[1]] = fields[2]
-  }
-  close(digest_file)
-}
-{
-  if (toupper($1) == "FROM" && NF >= 2) {
-    image = $2
-    if (tolower(image) != "scratch" && !stages[tolower(image)]) {
-      # Remove an existing pin, keeping the tag for the registry lookup.
-      sub(/@sha256:[[:xdigit:]]+$/, "", image)
-      if (!(image in digests)) exit 1
-      # Rebuild only the image token, preserving spacing and any AS alias.
-      match($0, /^[[:space:]]*[Ff][Rr][Oo][Mm][[:space:]]+/)
-      prefix = substr($0, 1, RLENGTH)
-      $0 = prefix image "@" digests[image] substr($0, RLENGTH + length($2) + 1)
-    }
-    if (toupper($3) == "AS") stages[tolower($4)] = 1
-  }
-  print
-}'
+scanner="$project_root/.scripts/docker-base-images.awk"
 
 # Collect unique external base images from projects with production Dockerfiles.
 : > "$temporary_directory/images"
@@ -55,7 +16,11 @@ for project_file in "$project_root"/*/.project.yaml; do
   [ -f "$project_file" ] || continue
   dockerfile="$(dirname "$project_file")/Dockerfile"
   [ -f "$dockerfile" ] || continue
-  awk "$scan_awk" "$dockerfile" >> "$temporary_directory/images"
+  args_file="$temporary_directory/$(basename "$(dirname "$project_file")").args"
+  mise exec -- yq eval-all -r \
+    'select(documentIndex == 0) | .devcontainer.build.args // {} | to_entries | .[] | [.key, (.value | tostring)] | @tsv' \
+    "$project_file" > "$args_file"
+  awk -v mode=scan -v args_file="$args_file" -f "$scanner" "$dockerfile" >> "$temporary_directory/images"
 done
 sort -u "$temporary_directory/images" > "$temporary_directory/unique-images"
 
@@ -75,7 +40,9 @@ for project_file in "$project_root"/*/.project.yaml; do
   [ -f "$dockerfile" ] || continue
   output_file=$(mktemp "$dockerfile.XXXXXX")
   cp -p "$dockerfile" "$output_file"
-  awk -v digest_file="$temporary_directory/digests" "$write_awk" "$dockerfile" > "$output_file"
+  args_file="$temporary_directory/$(basename "$(dirname "$project_file")").args"
+  awk -v mode=write -v args_file="$args_file" -v digest_file="$temporary_directory/digests" \
+    -f "$scanner" "$dockerfile" > "$output_file"
   if ! cmp -s "$dockerfile" "$output_file"; then
     mv "$output_file" "$dockerfile"
     echo "Updated $dockerfile"
