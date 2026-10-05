@@ -1,4 +1,5 @@
 [tools]
+"aqua:bats-core/bats-core" = "1.13.0"
 jq = "latest"
 node = "26"
 "npm:@devcontainers/cli" = "latest"
@@ -26,6 +27,10 @@ run = [
 
 [tasks.check-forbidden-files]
 run = "sh .scripts/check-forbidden-files.sh"
+
+[tasks.test-scripts]
+description = "Run repository script regression tests with Bats"
+run = "mise exec -- bats --print-output-on-failure .scripts/tests"
 
 [tasks.sync-tailwind]
 run = "sh .scripts/sync-tailwind.sh"

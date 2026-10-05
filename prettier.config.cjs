@@ -7,6 +7,7 @@ module.exports = {
   ],
   overrides: [
     { files: ["LICENSE"], options: { parser: "markdown" } },
+    { files: ["*.bats"], options: { parser: "sh", variant: 3 } },
     {
       files: ["*.svg"],
       options: {

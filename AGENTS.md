@@ -1,5 +1,9 @@
 # Agent instructions
 
+## README changes
+
+Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.
+
 ## Running commands for a project
 
 Never run project tooling (elm, go, gradle, cargo, pnpm, ...) directly on the host. Always go through the devcontainer:
@@ -43,8 +47,8 @@ mise run --raw in-devcontainer --rm recipes true
 When working on Bazel scripts, run their checks, linting, and regression tests directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules. For example:
 
 ```sh
-mise exec -- bash .scripts/tests/bazel-generation.sh
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck
+mise run test-scripts
+mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 ```
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.

@@ -78,7 +78,7 @@ if ((${#bazel_targets[@]} > 0)); then
   done
 fi
 
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck
+mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 
 for file in "${staged_files[@]}"; do
   if ! git diff --quiet -- "$file"; then
