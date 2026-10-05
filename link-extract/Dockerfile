@@ -1,4 +1,6 @@
-FROM crystallang/crystal:1.17-alpine@sha256:1d880b289d76091d6c252676f401183d1003700cf88afc0d586570ef216235fc AS builder
+# When updating this image pin, align the Crystal version in .project.yaml with Alpine's package.
+FROM alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS builder
+RUN apk --no-cache add crystal libevent-dev libxml2-dev openssl-dev
 WORKDIR /link-extract
 COPY main.cr shard.yml /link-extract/
 RUN crystal build --release -o link-extract main.cr

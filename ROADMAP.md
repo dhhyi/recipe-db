@@ -29,6 +29,8 @@ Implementation plan:
 
 Done means quality checks and existing unit tests pass on AMD64, standalone `-test` integration jobs pass against the development-configured stack on native ARM64 without devcontainers, all production images build for ARM64, and AMD64 builds and publishing remain gated by both validation jobs. Production caching is not covered by the non-production integration suite, and AMD64 runtime compatibility is not proven by ARM64 tests alone. Multi-architecture publishing, production-configuration runtime tests, any additional AMD64 runtime smoke tests, k3d/k3s deployment, and Raspberry Pi memory, startup, storage, and thermal measurements are follow-up work.
 
+CI now contains the AMD64 quality, native ARM64 validation, and gated publishing jobs. Ratings uses Io's existing glibc `ucontext` implementation on Linux ARM64 rather than its macOS-specific assembly, with an actor-switching smoke test in both application image builds and project checks. Devcontainer commands for the same project are serialized through cleanup so overlapping Bazel checks cannot stop each other's containers. Local AMD64 ratings integration tests and an emulated ARM64 Io smoke test pass, but the first successful native `arm64-validation` run is still required before recording ARM64 development tests and production image builds as verified; it does not validate production runtime behavior or Raspberry Pi deployment.
+
 ### Protect web frontend with login mechanism
 
 The web frontend should be protected with a login mechanism, so that it is not publicly accessible. This should either be simple HTTP basic auth or a more complex solution with OAuth via Google.
