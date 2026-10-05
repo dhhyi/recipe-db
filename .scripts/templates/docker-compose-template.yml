@@ -1,6 +1,7 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:template", "template")
 #@ load("service-template.lib.yml", "service")
+#@ load("fixtures-service-template.lib.yml", "fixtures_service")
 #@ load("traefik-service-template.lib.yml", "traefik_service")
 #@ load("@ytt:struct", "struct")
 #@
@@ -12,7 +13,9 @@
 #@   backend=filter_projects("backend"),
 #@   api=filter_projects("api"),
 #@   frontend=filter_projects("frontend"),
-#@   job=filter_projects("job")
+#@   job=filter_projects("job"),
+#@   test=filter_projects("test"),
+#@   fixtures=filter_projects("static")
 #@ )
 #@ options = struct.make(
 #@   production=data.values.production,
@@ -25,10 +28,17 @@
 #@ end
 #@ if not options.production:
 #@   deploy_projects += projects.job
+#@   deploy_projects += projects.test
 #@ end
 #@
 #@ def service_map():
 #@   services = {"traefik": traefik_service(options.production)}
+#@   if not options.production:
+#@     if len(projects.fixtures) != 1:
+#@       fail("Expected exactly one static fixtures project")
+#@     end
+#@     services.update(fixtures_service(projects.fixtures[0]))
+#@   end
 #@   for project in deploy_projects:
 #@     services.update(service(project, options, projects))
 #@   end

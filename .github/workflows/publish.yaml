@@ -80,19 +80,7 @@ jobs:
           echo "::group::docker compose ps"
           docker compose ps
           echo "::endgroup::"
-          for project in $(ls */.project.yaml | xargs dirname); do
-            test_cmd=$(mise exec -- yq eval 'select(documentIndex==1) | .test // ""' $project/.project.yaml)
-            if [ -n "$test_cmd" ]; then
-              echo "::group::test $project"
-              if ! mise run --raw in-devcontainer "$project" test; then
-                echo "::group::docker compose logs"
-                docker compose logs --no-color
-                echo "::endgroup::"
-                exit 1
-              fi
-              echo "::endgroup::"
-            fi
-          done
+          mise run integration-tests -- --development || (docker compose logs --no-color && exit 1)
 
       - name: Bazel precommit check
         run: |
@@ -117,6 +105,10 @@ jobs:
       - name: build and push devcontainers
         run: |
           for project in $(ls */.project.yaml | xargs dirname); do
+            has_publish=$(mise exec -- yq eval 'select(documentIndex==0) | .devcontainer.publish.image // ""' "$project/.project.yaml")
+            if [ -z "$has_publish" ]; then
+              continue
+            fi
             echo "::group::build and push devcontainer $project"
             sh $project/.update_devcontainer.sh --build --push-cache -vv
             echo "::endgroup::"

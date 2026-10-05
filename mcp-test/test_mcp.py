@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import httpx
 import pytest
 from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import streamablehttp_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
@@ -33,7 +33,7 @@ def fixture_server_ready():
 
 @asynccontextmanager
 async def mcp_session():
-    async with streamable_http_client(MCP_URL) as (read_stream, write_stream):
+    async with streamablehttp_client(MCP_URL) as (read_stream, write_stream, _):
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             yield session
