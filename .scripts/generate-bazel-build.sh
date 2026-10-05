@@ -39,7 +39,7 @@ emit_rule() {
       printf ' %s' "\$(location :$dependency)"
     fi
     printf '",\n'
-    printf '    tags = ["local"],\n'
+    printf '    tags = ["no-sandbox", "no-remote"],\n'
     printf ')\n'
   } >> "$output"
 }
@@ -133,7 +133,7 @@ done
   printf '    tools = ["mise.toml"],\n'
   printf '    outs = ["shellcheck.ok"],\n'
   printf '    cmd = "mise exec -- shellcheck %s && touch %s",\n' "\$(SRCS)" "\$@"
-  printf '    tags = ["local"],\n'
+  printf '    tags = ["no-sandbox", "no-remote"],\n'
   printf ')\n'
 } >> "$output"
 
@@ -149,7 +149,7 @@ done
   printf '    tools = ["mise.toml", ".bazelversion"],\n'
   printf '    outs = ["test-scripts.ok"],\n'
   printf '    cmd = "mise run --raw test-scripts && touch %s",\n' "\$@"
-  printf '    tags = ["local"],\n'
+  printf '    tags = ["no-sandbox", "no-remote"],\n'
   printf ')\n'
 } >> "$output"
 
