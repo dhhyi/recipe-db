@@ -7,8 +7,10 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    args:
+      PYTHON_VERSION: "3"
     user:
-      - RUN mise use -g python@3
+      - RUN mise use -g python@$PYTHON_VERSION
       - RUN pip install --break-system-packages pytest==8.4.2 pytest-asyncio==1.2.0 mcp==1.12.4 httpx==0.28.1
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"

@@ -1,10 +1,11 @@
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS download
 ARG TARGETARCH
+ARG VENOM_VERSION
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://github.com/intercloud/venom/releases/download/intercloud-beta-11/venom.linux-${TARGETARCH}" -o /tmp/venom \
+RUN curl -fsSL "https://github.com/intercloud/venom/releases/download/${VENOM_VERSION}/venom.linux-${TARGETARCH}" -o /tmp/venom \
   && chmod 755 /tmp/venom
 
 FROM debian:bookworm-slim

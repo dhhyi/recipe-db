@@ -1,4 +1,9 @@
-FROM maven:3.9.16-eclipse-temurin-21
+# check=skip=InvalidDefaultArgInFrom
+
+# Versions are supplied by the generated Compose build arguments.
+ARG MAVEN_VERSION
+ARG JAVA_VERSION
+FROM maven:${MAVEN_VERSION}-eclipse-temurin-${JAVA_VERSION}
 
 WORKDIR /app
 COPY pom.xml eclipse-formatter.xml ./

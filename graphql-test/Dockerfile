@@ -1,6 +1,10 @@
-FROM eclipse-temurin:21-jre
+# check=skip=InvalidDefaultArgInFrom
 
-ARG KARATE_VERSION=2.1.2
+# Versions are supplied by the generated Compose build arguments.
+ARG JAVA_VERSION
+FROM eclipse-temurin:${JAVA_VERSION}-jre
+
+ARG KARATE_VERSION
 ADD https://github.com/karatelabs/karate/releases/download/v${KARATE_VERSION}/karate-${KARATE_VERSION}.jar /opt/karate.jar
 RUN chmod a+r /opt/karate.jar
 

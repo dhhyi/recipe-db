@@ -1,5 +1,5 @@
 ARG TARGETARCH
-ARG HURL_VERSION=8.0.1
+ARG HURL_VERSION
 
 FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS downloader
 RUN apt-get update \

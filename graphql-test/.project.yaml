@@ -8,8 +8,9 @@ devcontainer:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     user:
-      - RUN mise use -g java@21
+      - RUN mise use -g java@$JAVA_VERSION
     args:
+      JAVA_VERSION: "21"
       KARATE_VERSION: 2.1.2
       GHOKIN_VERSION: 3.10.0
     root:
