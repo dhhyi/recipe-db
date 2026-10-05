@@ -8,10 +8,6 @@ The images frontend should be the only place where the full-size image is loaded
 
 ## Raspberry Pi deployment
 
-### Add tests for repository scripts
-
-Add automated regression tests for repository scripts, especially Compose generation and integration-test orchestration. Cover successful and failing paths, relevant side effects, and cleanup behavior. Ensure the Compose-generation test target invoked by CI is implemented and runs successfully.
-
 ### Check for ARM64 build
 
 With the standalone test-job prerequisite implemented, verify ARM64 compatibility in CI without requiring a Raspberry Pi. Run the existing development Compose configuration on a native GitHub-hosted `ubuntu-24.04-arm` runner and execute tests as standalone jobs, without building or starting devcontainers. The Compose service images already use the project Dockerfiles rather than devcontainer images; development versus production configuration mainly changes routing, environment, and persistence. Also verify production-configuration image builds, but do not introduce a separate production-runtime test harness for this milestone.

@@ -128,11 +128,27 @@ done
   while IFS= read -r -d '' file; do
     [[ -f "$file" ]] || continue
     printf '        %s,\n' "$(quote "$file")"
-  done < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '*.bash' | sort -zu)
+  done < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '*.bash' '*.bats' | sort -zu)
   printf '    ],\n'
   printf '    tools = ["mise.toml"],\n'
   printf '    outs = ["shellcheck.ok"],\n'
   printf '    cmd = "mise exec -- shellcheck %s && touch %s",\n' "\$(SRCS)" "\$@"
+  printf '    tags = ["local"],\n'
+  printf ')\n'
+} >> "$output"
+
+{
+  printf '\ngenrule(\n'
+  printf '    name = "test_scripts",\n'
+  printf '    srcs = [\n'
+  while IFS= read -r -d '' file; do
+    [[ -f "$file" ]] || continue
+    printf '        %s,\n' "$(quote "$file")"
+  done < <(git ls-files --cached --others --exclude-standard -z -- .scripts/ | sort -zu)
+  printf '    ],\n'
+  printf '    tools = ["mise.toml", ".bazelversion"],\n'
+  printf '    outs = ["test-scripts.ok"],\n'
+  printf '    cmd = "mise run --raw test-scripts && touch %s",\n' "\$@"
   printf '    tags = ["local"],\n'
   printf ')\n'
 } >> "$output"

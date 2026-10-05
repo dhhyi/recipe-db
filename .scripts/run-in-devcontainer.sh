@@ -77,15 +77,18 @@ trap 'exit 143' 15
 
 config_file=$project_dir/.devcontainer/devcontainer.json
 label=devcontainer.config_file=$config_file
-container_id=$(docker ps --filter "label=$label" --format '{{.ID}}' | sed -n '1p')
+containers=$(docker ps --filter "label=$label" --format '{{.ID}}')
+container_id=$(printf '%s\n' "$containers" | sed -n '1p')
 if [ -n "$container_id" ]; then
   echo "Using existing running container $container_id" >&2
 else
-  container_id=$(docker ps -a --filter "label=$label" --format '{{.ID}}' | sed -n '1p')
+  containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
+  container_id=$(printf '%s\n' "$containers" | sed -n '1p')
   if [ -n "$container_id" ]; then
     echo "Starting existing stopped container $container_id" >&2
   fi
-  container_id=$(devcontainer up --workspace-folder "$project_dir" | jq -er '.containerId')
+  container_result=$(devcontainer up --workspace-folder "$project_dir")
+  container_id=$(printf '%s\n' "$container_result" | jq -er '.containerId')
   stop_after=true
 fi
 
