@@ -27,10 +27,23 @@ EOF
   done
   grep -Fx '    tools = ["mise.toml", ".bazelversion"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts && touch $@",' test-rule
-  grep -Fx '    tags = ["local"],' test-rule
+  grep -Fx '    tags = ["no-sandbox", "no-remote"],' test-rule
 
   sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
   grep -Fx '        ".scripts/tests/example.bats",' lint-rule
+}
+
+@test "all rules allow disk caching while disabling sandboxing and remote execution" {
+  printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  for target in example_generate example_format example_check example_precommit shellcheck test_scripts; do
+    sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
+    grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
+  done
+  run -1 grep -F '"local"' BUILD.bazel
 }
 
 @test "includes new untracked tests but excludes ignored files" {

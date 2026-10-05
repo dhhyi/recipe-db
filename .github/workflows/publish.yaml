@@ -45,13 +45,21 @@ jobs:
           docker --version
           docker compose version
 
+      - name: restore Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-
+
       - name: format project files
         run: |
           pnpm exec prettier --log-level warn --write .
           mise run --raw generate-bazel-build
           targets=$(mise exec -- bazelisk query 'attr(name, "_format$", //:all)')
           mapfile -t format_targets <<< "$targets"
-          mise exec -- bazelisk build --action_env=PATH --jobs=1 "${format_targets[@]}"
+          mise exec -- bazelisk build --action_env=PATH --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
           for target in "${format_targets[@]}"; do
             project=${target#//:}
             tar -xf "bazel-bin/${project%_format}-format.tar"
@@ -85,7 +93,7 @@ jobs:
       - name: Bazel precommit check
         run: |
           mise run --raw generate-bazel-build
-          mise exec -- bazelisk build --action_env=PATH --jobs=1 //:all
+          mise exec -- bazelisk build --action_env=PATH --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
       - name: build and push prod images
         run: |
