@@ -71,8 +71,8 @@ problem st title detail code = do
       ]
   setHeader "Content-Type" "application/problem+json"
 
-app :: FilePath -> Manager -> ScottyM ()
-app db manager = do
+app :: Bool -> FilePath -> Manager -> ScottyM ()
+app cacheEnabled db manager = do
   get "/health" $ status status204
 
   get "/image-inline/" $ do
@@ -82,7 +82,7 @@ app db manager = do
       Just url -> do
         let urlStr = TL.unpack url
             cacheFile = db </> md5Hex urlStr
-        cached <- liftIO $ doesFileExist cacheFile
+        cached <- if cacheEnabled then liftIO $ doesFileExist cacheFile else return False
         if cached
           then do
             content <- liftIO $ readFile cacheFile
@@ -94,13 +94,15 @@ app db manager = do
               Left err ->
                 problem status500 "Internal Server Error" (TL.pack (displayException err)) "fetch-error"
               Right dataUri -> do
-                liftIO $ writeFile cacheFile dataUri
+                if cacheEnabled then liftIO $ writeFile cacheFile dataUri else return ()
                 setHeader "Content-Type" "text/plain"
                 text (TL.pack dataUri)
 
 main :: IO ()
 main = do
-  db <- fromMaybe "db" <$> lookupEnv "DATA_LOCATION"
-  createDirectoryIfMissing True db
+  cacheEnabled <- (== Just "true") <$> lookupEnv "PRODUCTION"
+  configuredLocation <- lookupEnv "DATA_LOCATION"
+  let db = fromMaybe "db" configuredLocation
+  if cacheEnabled then createDirectoryIfMissing True db else return ()
   manager <- newManager tlsManagerSettings
-  scotty 3000 (app db manager)
+  scotty 3000 (app cacheEnabled db manager)

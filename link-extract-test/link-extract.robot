@@ -30,19 +30,6 @@ Html Metadata Is Extracted
     Dictionary Should Contain Item    ${body}    description    Fixture page for link extraction
     Dictionary Should Contain Item    ${body}    canonical    %{FIXTURE_API}/canonical
 
-Canonical Url Uses Cached Metadata
-    &{page_params}=    Create Dictionary    url=%{FIXTURE_API}/page
-    GET On Session    link_extract    /link-extract    params=${page_params}    expected_status=200
-    &{canonical_params}=    Create Dictionary    url=%{FIXTURE_API}/canonical
-    ${response}=    GET On Session
-    ...    link_extract
-    ...    /link-extract
-    ...    params=${canonical_params}
-    ...    expected_status=200
-    ${body}=    Set Variable    ${response.json()}
-    Dictionary Should Contain Item    ${body}    url    %{FIXTURE_API}/canonical
-    Dictionary Should Contain Item    ${body}    title    Link Extract Fixture
-
 Non Html Response Fails
     &{params}=    Create Dictionary    url=%{FIXTURE_API}/plain
     ${response}=    GET On Session    link_extract    /link-extract    params=${params}    expected_status=500

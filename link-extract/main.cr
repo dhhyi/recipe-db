@@ -173,7 +173,7 @@ def get_page_meta_data(url : URI) : PageMetaData
   )
 end
 
-cache = Cache.new(ENV["DATA_LOCATION"]?)
+cache = Cache.new(ENV["DATA_LOCATION"]?) if ENV["PRODUCTION"]? == "true"
 
 server = HTTP::Server.new do |context|
   request = context.request
@@ -192,20 +192,22 @@ server = HTTP::Server.new do |context|
     begin
       url = validate_url(URI.decode_www_form(url_query))
       puts "URL\t#{url}" if ENV["VERBOSE"]? == "true"
-      meta = cache.find_one(url.to_s)
+      meta = cache.try &.find_one(url.to_s)
       if meta
         puts "CACHED\t#{meta.canonical}" if ENV["VERBOSE"]? == "true"
       else
         meta = get_page_meta_data(url)
-        cache.insert_one(meta)
-        if meta.canonical && meta.canonical != meta.url
-          cache.insert_one(PageMetaData.new(
-            url: meta.canonical.not_nil!,
-            favicon: meta.favicon,
-            title: meta.title,
-            description: meta.description,
-            canonical: meta.canonical,
-          ))
+        if cache
+          cache.insert_one(meta)
+          if meta.canonical && meta.canonical != meta.url
+            cache.insert_one(PageMetaData.new(
+              url: meta.canonical.not_nil!,
+              favicon: meta.favicon,
+              title: meta.title,
+              description: meta.description,
+              canonical: meta.canonical,
+            ))
+          end
         end
         puts "FETCHED\t#{meta.canonical}" if ENV["VERBOSE"]? == "true"
       end
