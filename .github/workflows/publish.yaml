@@ -66,10 +66,11 @@ jobs:
   arm64-validation:
     permissions:
       contents: read
+      packages: write
     runs-on: ubuntu-24.04-arm
     env:
       COMPOSE_PARALLEL_LIMIT: 1
-      DISABLE_REGISTRY_CACHE: "true"
+      REGISTRY_CACHE_SUFFIX: "-arm64"
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -82,6 +83,13 @@ jobs:
 
       - name: install Compose generation tools
         run: mise --no-hooks install jq yq ytt
+
+      - name: login to ghcr.io for ARM64 build cache
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: "${{ secrets.GITHUB_TOKEN }}"
 
       - name: prepare ARM64 build context without devcontainers
         run: |

@@ -39,9 +39,8 @@
 #@   context = project.dockerContext if "dockerContext" in project else project.name
 #@   dockerfile = "Dockerfile" if context == project.name else project.name + "/Dockerfile"
 #@   build = {"context": context}
-#@   if not options.disableRegistryCache:
-#@     build["cache_from"] = ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache"]
-#@   end
+#@   cache_ref = "ghcr.io/dhhyi/recipe-db-" + project.name + "-cache" + options.registryCacheSuffix
+#@   build["cache_from"] = ["type=registry,ref=" + cache_ref]
 #@   service = {
 #@     "build": build,
 #@     "image": "ghcr.io/dhhyi/recipe-db-" + project.name + ":latest",
@@ -68,8 +67,8 @@
 #@   end
 #@   if options.production:
 #@     service.setdefault("environment", {})["PRODUCTION"] = "true"
-#@     if options.ci and not options.disableRegistryCache:
-#@       build["cache_to"] = ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache"]
+#@     if options.ci:
+#@       build["cache_to"] = ["type=registry,mode=max,ref=" + cache_ref]
 #@     end
 #@     if project.repository.startswith("github:"):
 #@       build["labels"] = {"org.opencontainers.image.source": "https://github.com/" + project.repository[7:]}

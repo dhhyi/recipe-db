@@ -10,9 +10,7 @@
 #@     "read_only": True,
 #@     "tmpfs": ["/var/cache/nginx", "/var/run"],
 #@   }
-#@   if not options.disableRegistryCache:
-#@     service["build"]["cache_from"] = ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache"]
-#@   end
+#@   service["build"]["cache_from"] = ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache" + options.registryCacheSuffix]
 #@   if "labels" in project.traefik:
 #@     service["labels"] = project_labels(project)
 #@   end

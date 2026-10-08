@@ -6,7 +6,7 @@ setup() {
   setup_fixture generate-docker-compose.sh
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   use_mise_tools
-  unset CI
+  unset CI REGISTRY_CACHE_SUFFIX
   printf '%s\n' '{"repository":"github:example/fixture"}' > package.json
   mkdir fixtures
   cat > fixtures/.project.yaml << 'EOF'
@@ -72,6 +72,9 @@ assert_compose() {
     and .services.test.profiles == ["test"]
     and .services.test.command == ["/bin/sh", "-c", "echo tested"]
     and .services.test.volumes == ["./test/target:/app/target"]
+    and all(.services | to_entries[] | select(.value | has("build"));
+      .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + .key + "-cache"]
+      and (.value.build | has("cache_to") | not))
     and (has("volumes") | not)
   '
 }
@@ -138,7 +141,8 @@ assert_compose() {
 
   [ "$status" -eq 0 ]
   assert_compose '
-    .services.backend.build.cache_to == ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-backend-cache"]
+    .services.backend.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-backend-cache"]
+    and .services.backend.build.cache_to == ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-backend-cache"]
   '
 
   run env CI=true sh .scripts/generate-docker-compose.sh
@@ -147,20 +151,29 @@ assert_compose() {
   assert_compose '(.services.backend.build | has("cache_to") | not)'
 }
 
-@test "registry caching can be disabled for CI validation" {
-  run env CI=true DISABLE_REGISTRY_CACHE=true sh .scripts/generate-docker-compose.sh
+@test "ARM64 cache namespace is reused in development and exported only in production CI" {
+  run env CI=true REGISTRY_CACHE_SUFFIX=-arm64 sh .scripts/generate-docker-compose.sh
 
   [ "$status" -eq 0 ]
   assert_compose '
-    all(.services[] | select(has("build")); (.build | has("cache_from") | not) and (.build | has("cache_to") | not))
+    all(.services | to_entries[] | select(.value | has("build"));
+      .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + .key + "-cache-arm64"]
+      and (.value.build | has("cache_to") | not))
   '
 
-  run env CI=true DISABLE_REGISTRY_CACHE=true sh .scripts/generate-docker-compose.sh prod
+  run env CI=true REGISTRY_CACHE_SUFFIX=-arm64 sh .scripts/generate-docker-compose.sh prod
 
   [ "$status" -eq 0 ]
   assert_compose '
-    all(.services[] | select(has("build")); (.build | has("cache_from") | not) and (.build | has("cache_to") | not))
+    all(.services | to_entries[] | select(.value | has("build"));
+      .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + .key + "-cache-arm64"]
+      and .value.build.cache_to == ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-" + .key + "-cache-arm64"])
   '
+
+  run env REGISTRY_CACHE_SUFFIX=-arm64 sh .scripts/generate-docker-compose.sh prod
+
+  [ "$status" -eq 0 ]
+  assert_compose 'all(.services[] | select(has("build")); (.build | has("cache_to") | not))'
 }
 
 @test "fixtures use a dedicated read-only service" {
