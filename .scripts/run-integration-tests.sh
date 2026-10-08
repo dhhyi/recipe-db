@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+#USAGE flag "--development" help="Required before project names: acknowledge tests may modify and delete development data"
+#USAGE arg "[projects]" var=#true help="Test project names; defaults to all qualifying test projects"
 set -Eeuo pipefail
 
 if [[ ${1:-} != --development ]]; then
