@@ -3,6 +3,7 @@
 #@ load("service-template.lib.yml", "service")
 #@ load("fixtures-service-template.lib.yml", "fixtures_service")
 #@ load("traefik-service-template.lib.yml", "traefik_service")
+#@ load("nats-service-template.lib.yml", "nats_services")
 #@ load("@ytt:struct", "struct")
 #@
 #@ def filter_projects(category):
@@ -43,8 +44,16 @@
 #@   for project in deploy_projects:
 #@     services.update(service(project, options, projects))
 #@   end
+#@   services.update(nats_services())
+#@   if "graphql" in services:
+#@     graphql = services["graphql"]
+#@     graphql.setdefault("environment", {}).update({
+#@       "NATS_URL": "nats://nats:4222",
+#@     })
+#@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
+#@   end
 #@   for name in services:
-#@     services[name].setdefault("environment", {})["VERBOSE"] = None
+#@     services[name].setdefault("environment", {}).setdefault("VERBOSE", None)
 #@   end
 #@   return services
 #@ end
@@ -55,8 +64,10 @@ networks:
   intranet:
     name: intranet
     external: true
-#@ if options.production:
 volumes:
+  nats-data:
+    name: recipe-db-nats-data
+  #@ if options.production:
   data:
     name: recipe-db-data
 #@ end

@@ -1,6 +1,7 @@
 use async_graphql::{Context, Error, Object, SimpleObject, ID};
 use serde::Deserialize;
 
+use crate::events::{EventKind, EventPublisher};
 use crate::rest_client::{RestClient, RestError};
 
 #[derive(Clone, Debug, Deserialize, SimpleObject)]
@@ -28,11 +29,15 @@ impl RatingsApi {
         }
     }
 
-    pub async fn delete_ratings_for_testing(&self) -> Result<bool, Error> {
+    pub async fn delete_ratings_for_testing(
+        &self,
+        publisher: &EventPublisher,
+    ) -> Result<bool, Error> {
         self.client
             .delete("")
             .await
             .map_err(RestError::into_error)?;
+        publisher.notify(None, EventKind::RatingsReset).await;
         Ok(true)
     }
 
@@ -45,13 +50,20 @@ impl RatingsApi {
         })
     }
 
-    pub async fn add_rating(&self, id: &str, rating: i32, login: &str) -> Result<Rating, Error> {
+    pub async fn add_rating(
+        &self,
+        id: &str,
+        rating: i32,
+        login: &str,
+        publisher: &EventPublisher,
+    ) -> Result<Rating, Error> {
         let body = format!("rating={rating}&login={login}");
         let result: RestRating = self
             .client
             .put_form(id, body)
             .await
             .map_err(RestError::into_error)?;
+        publisher.notify(Some(id), EventKind::RatingChanged).await;
         Ok(Rating {
             recipe_id: ID::from(id.to_string()),
             average: Some(result.rating),
@@ -76,7 +88,9 @@ pub struct RatingsMutation;
 #[Object]
 impl RatingsMutation {
     async fn delete_ratings_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<RatingsApi>()?.delete_ratings_for_testing().await
+        ctx.data::<RatingsApi>()?
+            .delete_ratings_for_testing(ctx.data::<EventPublisher>()?)
+            .await
     }
 
     async fn rate(
@@ -87,7 +101,7 @@ impl RatingsMutation {
         login: String,
     ) -> Result<Rating, Error> {
         ctx.data::<RatingsApi>()?
-            .add_rating(id.as_str(), rating, &login)
+            .add_rating(id.as_str(), rating, &login, ctx.data::<EventPublisher>()?)
             .await
     }
 }

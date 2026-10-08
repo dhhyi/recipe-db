@@ -53,6 +53,10 @@ mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scr
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 
+## Changing scripts or Bats tests
+
+Whenever changing scripts or `.bats` files, run `mise run test-scripts` and `mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck` from the repository root.
+
 ## Modifying .project.yaml files
 
 When modifying `.project.yaml` files, run `mise run sync` to apply the changes. Do not modify files in .devcontainer directories directly.

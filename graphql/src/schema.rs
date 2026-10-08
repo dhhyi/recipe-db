@@ -1,5 +1,6 @@
 use async_graphql::{EmptySubscription, MergedObject, Schema};
 
+use crate::events::EventPublisher;
 use crate::image_inline::ImageInlineApi;
 use crate::images::{ImagesApi, ImagesMutation};
 use crate::inspirations::{InspirationsApi, InspirationsMutation};
@@ -21,7 +22,7 @@ pub struct MutationRoot(
 
 pub type ApiSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
-pub fn build_schema() -> ApiSchema {
+pub fn build_schema(publisher: Option<EventPublisher>) -> ApiSchema {
     let production = std::env::var("PRODUCTION").as_deref() == Ok("true");
 
     let mut builder = Schema::build(
@@ -36,6 +37,10 @@ pub fn build_schema() -> ApiSchema {
     .data(LinkExtractApi::new())
     .data(ImageInlineApi::new())
     .data(TraefikApi::new());
+
+    if let Some(publisher) = publisher {
+        builder = builder.data(publisher);
+    }
 
     if production {
         builder = builder.disable_introspection();

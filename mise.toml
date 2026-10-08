@@ -42,6 +42,10 @@ file = ".scripts/check-forbidden-files.sh"
 description = "Run repository script regression tests with Bats"
 run = "bats --print-output-on-failure .scripts/tests"
 
+[tasks.test-message-bus]
+description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"
+run = "sh .scripts/test-message-bus.sh"
+
 [tasks.sync-tailwind]
 description = "Generate shared Tailwind sources and Docker build inputs"
 file = ".scripts/sync-tailwind.sh"
