@@ -60,6 +60,8 @@ mkdir -p "$project_dir/.devcontainer"
 exec 9> "$project_dir/.devcontainer/.lifecycle.lock"
 flock -x 9
 
+group_open=false
+
 cleanup() {
   status=$?
   trap - 0
@@ -72,6 +74,9 @@ cleanup() {
       docker stop "$container_id" >&2 || status=1
     fi
   fi
+  if [ "$group_open" = true ]; then
+    echo "::endgroup::" >&2
+  fi
   exit "$status"
 }
 trap cleanup 0
@@ -79,6 +84,11 @@ trap 'exit 129' 1
 trap 'exit 130' 2
 trap 'exit 131' 3
 trap 'exit 143' 15
+
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+  echo "::group::$project: $*" >&2
+  group_open=true
+fi
 
 config_file=$project_dir/.devcontainer/devcontainer.json
 label=devcontainer.config_file=$config_file

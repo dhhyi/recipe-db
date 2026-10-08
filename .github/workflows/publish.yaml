@@ -10,6 +10,7 @@ permissions:
   contents: read
 
 env:
+  BUILDKIT_PROGRESS: quiet
   COMPOSE_PROGRESS: quiet
 
 jobs:
@@ -51,20 +52,38 @@ jobs:
       - name: format project files
         run: |
           pnpm exec prettier --log-level warn --write .
+          echo "::group::generate format targets"
           mise run --raw generate-bazel-build
           targets=$(mise exec -- bazelisk query 'attr(name, "_format$", //:all)')
           mapfile -t format_targets <<< "$targets"
-          mise exec -- bazelisk build --action_env=PATH --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
+          echo "::endgroup::"
+          mise exec -- bazelisk build \
+            --action_env=PATH \
+            --action_env=CI \
+            --action_env=GITHUB_ACTIONS \
+            --action_env=BUILDKIT_PROGRESS \
+            --action_env=COMPOSE_PROGRESS \
+            --action_env=COMPOSE_PARALLEL_LIMIT \
+            --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
+          echo "::group::extract formatted files and check diff"
           for target in "${format_targets[@]}"; do
             project=${target#//:}
             tar -xf "bazel-bin/${project%_format}-format.tar"
           done
           git diff --exit-code
+          echo "::endgroup::"
 
       - name: Bazel precommit checks and unit tests
         run: |
           mise run --raw generate-bazel-build
-          mise exec -- bazelisk build --action_env=PATH --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
+          mise exec -- bazelisk build \
+            --action_env=PATH \
+            --action_env=CI \
+            --action_env=GITHUB_ACTIONS \
+            --action_env=BUILDKIT_PROGRESS \
+            --action_env=COMPOSE_PROGRESS \
+            --action_env=COMPOSE_PARALLEL_LIMIT \
+            --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
   arm64-validation:
     permissions:
@@ -96,6 +115,7 @@ jobs:
 
       - name: prepare ARM64 build context without devcontainers
         run: |
+          echo "::group::verify ARM64 runner and Docker daemon"
           set -euo pipefail
           case "$(uname -m)" in
             aarch64|arm64) ;;
@@ -105,11 +125,14 @@ jobs:
             aarch64|arm64) ;;
             *) echo "Expected a native ARM64 Docker daemon." >&2; exit 1 ;;
           esac
+          echo "::endgroup::"
+          echo "::group::prepare ARM64 build context"
           docker buildx create --use
           docker buildx inspect --bootstrap
           mise run --raw sync-files
           mise run --raw generate-docker-compose
           mise run create-intranet
+          echo "::endgroup::"
 
       - name: build development and standalone test images
         run: docker compose --profile development --profile test build
@@ -118,8 +141,10 @@ jobs:
         env:
           VERBOSE: "true"
         run: |
+          echo "::group::start development stack"
           docker compose up -d --wait --wait-timeout 120 || { docker compose logs --no-color; exit 1; }
           docker compose ps
+          echo "::endgroup::"
           mise run integration-tests -- --development || { docker compose logs --no-color; exit 1; }
 
       - name: verify development and test images are native ARM64
@@ -143,8 +168,11 @@ jobs:
 
       - name: validate production configuration and build ARM64 images
         run: |
+          echo "::group::validate production Compose configuration and build images"
           docker compose config --quiet
           docker compose build
+          echo "::endgroup::"
+          echo "::group::verify production image architectures"
           mapfile -t images < <(docker compose config --images | sort -u)
           for image in "${images[@]}"; do
             platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")
@@ -153,6 +181,7 @@ jobs:
               exit 1
             fi
           done
+          echo "::endgroup::"
 
       - name: upload integration reports on failure
         if: failure()
@@ -176,7 +205,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       DOCKER_BUILDKIT: 1
-      BUILDKIT_PROGRESS: quiet
       COMPOSE_PARALLEL_LIMIT: 1
     steps:
       - name: checkout

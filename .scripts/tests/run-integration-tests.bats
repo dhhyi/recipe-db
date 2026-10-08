@@ -93,6 +93,16 @@ EOF
   done
 }
 
+@test "groups each project's test output in GitHub Actions" {
+  run --separate-stderr env GITHUB_ACTIONS=true bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^::group::integration tests: ' <<< "$stderr")" -eq 2 ]
+  [ "$(grep -c '^::endgroup::$' <<< "$stderr")" -eq 2 ]
+  [[ "$stderr" == *"::group::integration tests: recipes-test"* ]]
+  [[ "$stderr" == *"::group::integration tests: ratings-test"* ]]
+}
+
 @test "runs discovered jobs in alphabetical order including their API and fixture readiness checks" {
   run bash .scripts/run-integration-tests.sh --development
 

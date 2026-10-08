@@ -67,6 +67,7 @@ fi
 echo "WARNING: integration tests modify and delete application data. No application data or volumes will be reset."
 
 fixture_started=false
+group_open=false
 cleanup() {
   local status=$?
   if [[ $fixture_started == true ]]; then
@@ -74,6 +75,9 @@ cleanup() {
       echo "Failed to stop the fixture service started by this test run." >&2
       ((status == 0)) && status=1
     fi
+  fi
+  if [[ $group_open == true ]]; then
+    echo "::endgroup::" >&2
   fi
   exit "$status"
 }
@@ -199,12 +203,20 @@ done
 
 for project in "${projects[@]}"; do
   mkdir -p "$project/target/integration-tests"
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    echo "::group::integration tests: $project" >&2
+    group_open=true
+  fi
   echo "Running $project; report log: $project/target/integration-tests/run.log"
   set +e
   docker compose --profile test run --rm "$project" 2>&1 \
     | tee "$project/target/integration-tests/run.log"
   status=${PIPESTATUS[0]}
   set -e
+  if [[ $group_open == true ]]; then
+    echo "::endgroup::" >&2
+    group_open=false
+  fi
   if ((status != 0)); then
     exit "$status"
   fi
