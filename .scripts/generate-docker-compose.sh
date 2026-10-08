@@ -1,4 +1,7 @@
 #!/bin/sh
+#USAGE arg "[modes]" var=#true help="Combine production/prod, backend (no frontends), and prepare (keep existing configuration)" {
+#USAGE   choices "prod" "production" "backend" "prepare"
+#USAGE }
 set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd)

@@ -17,7 +17,7 @@ mise exec -- jq -n --args '
   {
     "extensions.ignoreRecommendations": true,
     "task.autoDetect": "off",
-    "runOnSave.commands": [
+    "runOnSave.commands": ([
       {
         match: "(^|/)\\.gitignore$",
         command: "cd ${workspaceFolder} && mise run sync-ignore-files",
@@ -35,6 +35,6 @@ mise exec -- jq -n --args '
       command: "cd ${workspaceFolder} && mise run sync-files && sh \(.)/.update_devcontainer.sh",
       runningStatusMessage: "\(.) devcontainer...",
       finishStatusMessage: "\(.) devcontainer ✔"
-    }))
+    })))
   }
 ' "$@" > .vscode/settings.json

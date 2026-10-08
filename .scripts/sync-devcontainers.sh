@@ -1,4 +1,5 @@
 #!/bin/sh
+#USAGE arg "[projects]" var=#true help="Project names; defaults to all projects"
 set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd)

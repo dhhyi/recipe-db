@@ -12,79 +12,104 @@ ytt = "latest"
 postinstall = { task = "setup" }
 
 [tasks.install-deps]
+description = "Install repository tooling dependencies from the lockfile"
 run = "pnpm install --frozen-lockfile"
 
 [tasks.install-precommit]
+description = "Install the repository precommit hook"
 run = "printf '%s\\n' '#!/bin/sh' 'exec bash .scripts/precommit.sh \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
+sources = ["mise.toml"]
+outputs = [".git/hooks/pre-commit"]
 
 [tasks.setup]
+description = "Install dependencies and hooks, then synchronize repository configuration"
+depends = ["install-deps", "install-precommit"]
 run = [
-  "mise run install-deps",
-  "mise run install-precommit",
-  "mise run sync",
-  "mise run generate-docker-compose prepare",
+  { task = "sync" },
+  { task = "generate-docker-compose", args = ["prepare"] },
 ]
 
 [tasks.check-forbidden-files]
-run = "sh .scripts/check-forbidden-files.sh"
+description = "Check tracked files for forbidden ignore-file locations"
+file = ".scripts/check-forbidden-files.sh"
 
 [tasks.test-scripts]
 description = "Run repository script regression tests with Bats"
-run = "mise exec -- bats --print-output-on-failure .scripts/tests"
+run = "bats --print-output-on-failure .scripts/tests"
 
 [tasks.sync-tailwind]
-run = "sh .scripts/sync-tailwind.sh"
+description = "Generate shared Tailwind sources and Docker build inputs"
+file = ".scripts/sync-tailwind.sh"
 
 [tasks.sync-ignore-files]
-run = "sh .scripts/sync-ignore-files.sh"
+description = "Regenerate Docker and Prettier ignore files"
+file = ".scripts/sync-ignore-files.sh"
 
 [tasks.sync-vscode-settings]
-run = "sh .scripts/sync-vscode-settings.sh"
+description = "Generate repository VS Code settings"
+file = ".scripts/sync-vscode-settings.sh"
+sources = [".scripts/sync-vscode-settings.sh", "*/.project.yaml"]
+outputs = [".vscode/settings.json"]
 
 [tasks.sync-files]
+description = "Validate file layout and synchronize shared generated files"
+depends = ["check-forbidden-files"]
 run = [
-  "mise run check-forbidden-files",
-  "mise run --jobs 3 sync-tailwind ::: sync-ignore-files ::: sync-vscode-settings",
+  { tasks = ["sync-tailwind", "sync-ignore-files", "sync-vscode-settings"] },
 ]
 
 [tasks.sync-devcontainers]
-run = "sh .scripts/sync-devcontainers.sh"
+description = "Regenerate devcontainer configuration for selected projects or all projects"
+file = ".scripts/sync-devcontainers.sh"
 
 [tasks.generate-bazel-build]
-run = "bash .scripts/generate-bazel-build.sh"
+description = "Generate Bazel build rules from project metadata and repository files"
+file = ".scripts/generate-bazel-build.sh"
 
 [tasks.sync]
+description = "Synchronize shared files, devcontainers, GraphQL schemas and Bazel rules"
+depends = ["create-intranet"]
 run = [
-  "mise run create-intranet",
-  "mise run sync-files",
-  "mise run sync-devcontainers",
-  "mise run merge-graphql-schemas",
-  "mise run generate-bazel-build",
+  { task = "sync-files" },
+  { task = "sync-devcontainers" },
+  { task = "merge-graphql-schemas" },
+  { task = "generate-bazel-build" },
 ]
 
 [tasks.generate-docker-compose]
-run = "sh .scripts/generate-docker-compose.sh"
+description = "Generate Compose configuration; defaults to development"
+file = ".scripts/generate-docker-compose.sh"
 
 [tasks.merge-graphql-schemas]
-run = "sh .scripts/merge-graphql-schemas.sh"
+description = "Export the GraphQL application schema into consuming projects"
+file = ".scripts/merge-graphql-schemas.sh"
 
 [tasks.in-devcontainer]
-run = "sh .scripts/run-in-devcontainer.sh"
+description = "Run a command in a project devcontainer: [--rm] <project> <command> [args...]"
+file = ".scripts/run-in-devcontainer.sh"
+raw_args = true
 
 [tasks.create-intranet]
+description = "Create the shared Docker network if it does not exist"
 run = "docker network inspect intranet >/dev/null 2>&1 || docker network create intranet"
 
 [tasks.seed-demodata]
+description = "Generate demo data against the development stack"
 run = "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
 
 [tasks.start-test-fixtures]
+description = "Start the shared integration-test fixture service"
 run = "docker compose --profile test up -d fixtures"
 
 [tasks.integration-tests]
-run = "bash .scripts/run-integration-tests.sh"
+description = "Run destructive integration tests against the development stack"
+file = ".scripts/run-integration-tests.sh"
 
 [tasks.update-docker-image-digests]
-run = "sh .scripts/update-docker-image-digests.sh"
+description = "Refresh pinned production Docker base-image digests from their registries"
+file = ".scripts/update-docker-image-digests.sh"
+confirm = { message = "Update pinned base-image digests in production Dockerfiles?", default = "no" }
 
 [settings]
 idiomatic_version_file_enable_tools = ["npm", "pnpm"]
+task.source_freshness_hash_contents = true
