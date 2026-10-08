@@ -32,6 +32,51 @@ EOF
   run -1 grep -E '^(devcontainer up|docker (stop|rm))' "$MOCK_LOG"
 }
 
+@test "serializes overlapping invocations through container cleanup" {
+  gate="$FIXTURE_ROOT/exec-gate"
+  env EXEC_GATE="$gate" timeout 10 sh .scripts/run-in-devcontainer.sh example echo first > first.log 2>&1 &
+  first_pid=$!
+  for _ in {1..100}; do
+    [ ! -f "$gate.started" ] || break
+    sleep 0.05
+  done
+
+  # Hold the first execution while a second invocation tries to discover Docker.
+  timeout 10 sh .scripts/run-in-devcontainer.sh example echo second > second.log 2>&1 &
+  second_pid=$!
+  sleep 0.2
+  discoveries=$(grep -c '^docker ps --filter' "$MOCK_LOG")
+  touch "$gate.release"
+  wait "$first_pid"
+  wait "$second_pid"
+
+  [ -f "$gate.started" ]
+  [ "$discoveries" -eq 1 ]
+  grep -E '^(docker ps --filter|docker stop|devcontainer exec)' "$MOCK_LOG" > lifecycle.log
+  cat > expected.log << EOF
+docker ps --filter label=devcontainer.config_file=$FIXTURE_ROOT/example/.devcontainer/devcontainer.json --format {{.ID}}
+devcontainer exec --container-id started-container --workspace-folder $FIXTURE_ROOT/example fish -c echo first
+docker stop started-container
+docker ps --filter label=devcontainer.config_file=$FIXTURE_ROOT/example/.devcontainer/devcontainer.json --format {{.ID}}
+devcontainer exec --container-id started-container --workspace-folder $FIXTURE_ROOT/example fish -c echo second
+docker stop started-container
+EOF
+  diff -u expected.log lifecycle.log
+}
+
+@test "different projects do not share a lifecycle lock" {
+  mkdir another
+  cp example/.project.yaml another/.project.yaml
+  mkdir -p example/.devcontainer
+  exec 8> example/.devcontainer/.lifecycle.lock
+  flock -x 8
+
+  run timeout 5 sh .scripts/run-in-devcontainer.sh another echo hello
+
+  [ "$status" -eq 0 ]
+  grep -Fx "devcontainer exec --container-id started-container --workspace-folder $FIXTURE_ROOT/another fish -c echo hello" "$MOCK_LOG"
+}
+
 @test "restarts stopped containers and stops them after successful commands" {
   export STOPPED_CONTAINER=stopped-container
 

@@ -55,6 +55,11 @@ else
   run_command=$*
 fi
 
+# Keep discovery, execution and cleanup atomic for each project's container.
+mkdir -p "$project_dir/.devcontainer"
+exec 9> "$project_dir/.devcontainer/.lifecycle.lock"
+flock -x 9
+
 cleanup() {
   status=$?
   trap - 0
