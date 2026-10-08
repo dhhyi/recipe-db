@@ -1,9 +1,9 @@
 {
-  "servers": {
+  "mcpServers": {
     "recipe-db-mcp": {
+      "type": "http",
       "url": "http://localhost:8080/mcp",
-      "type": "http"
+      "tools": ["*"]
     }
-  },
-  "inputs": []
+  }
 }
