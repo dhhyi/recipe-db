@@ -12,6 +12,12 @@ case "$1" in
     exit "${UP_STATUS:-0}"
     ;;
   exec)
+    if [[ -n ${EXEC_GATE:-} ]]; then
+      touch "$EXEC_GATE.started"
+      while [[ ! -f "$EXEC_GATE.release" ]]; do
+        sleep 0.05
+      done
+    fi
     printf '%s\n' 'command output'
     exit "${EXEC_STATUS:-0}"
     ;;
