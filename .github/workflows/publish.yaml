@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  COMPOSE_PROGRESS: quiet
+
 jobs:
   quality-checks:
     permissions:
@@ -173,6 +176,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       DOCKER_BUILDKIT: 1
+      BUILDKIT_PROGRESS: quiet
       COMPOSE_PARALLEL_LIMIT: 1
     steps:
       - name: checkout
