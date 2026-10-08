@@ -2,6 +2,7 @@ use async_graphql::{Context, Error, Object, SimpleObject, Upload, ID};
 use reqwest::StatusCode;
 use serde::Deserialize;
 
+use crate::events::{EventKind, EventPublisher};
 use crate::rest_client::{RestClient, RestError};
 
 #[derive(Clone, Debug, Deserialize, SimpleObject)]
@@ -44,19 +45,27 @@ impl ImagesApi {
         recipe_id: &str,
         mimetype: &str,
         content: Vec<u8>,
+        publisher: &EventPublisher,
     ) -> Result<bool, Error> {
         self.client
             .post_bytes::<serde_json::Value>(recipe_id, mimetype, content)
             .await
             .map_err(RestError::into_error)?;
+        publisher
+            .notify(Some(recipe_id), EventKind::ImageChanged)
+            .await;
         Ok(true)
     }
 
-    pub async fn delete_images_for_testing(&self) -> Result<bool, Error> {
+    pub async fn delete_images_for_testing(
+        &self,
+        publisher: &EventPublisher,
+    ) -> Result<bool, Error> {
         self.client
             .delete("")
             .await
             .map_err(RestError::into_error)?;
+        publisher.notify(None, EventKind::ImagesReset).await;
         Ok(true)
     }
 }
@@ -67,7 +76,9 @@ pub struct ImagesMutation;
 #[Object]
 impl ImagesMutation {
     async fn delete_images_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<ImagesApi>()?.delete_images_for_testing().await
+        ctx.data::<ImagesApi>()?
+            .delete_images_for_testing(ctx.data::<EventPublisher>()?)
+            .await
     }
 
     async fn set_image(
@@ -91,7 +102,12 @@ impl ImagesMutation {
         .await
         .map_err(|err| Error::new(err.to_string()))??;
         ctx.data::<ImagesApi>()?
-            .upload_image(recipe_id.as_str(), &mimetype, content)
+            .upload_image(
+                recipe_id.as_str(),
+                &mimetype,
+                content,
+                ctx.data::<EventPublisher>()?,
+            )
             .await
     }
 }

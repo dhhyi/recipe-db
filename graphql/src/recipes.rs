@@ -1,6 +1,7 @@
 use async_graphql::{Context, Error, Object, ID};
 use reqwest::StatusCode;
 
+use crate::events::{EventKind, EventPublisher};
 use crate::recipe::{Recipe, RecipeInput};
 use crate::rest_client::{RestClient, RestError};
 
@@ -15,11 +16,15 @@ impl RecipesApi {
         }
     }
 
-    pub async fn delete_recipes_for_testing(&self) -> Result<bool, Error> {
+    pub async fn delete_recipes_for_testing(
+        &self,
+        publisher: &EventPublisher,
+    ) -> Result<bool, Error> {
         self.client
             .delete("")
             .await
             .map_err(RestError::into_error)?;
+        publisher.notify(None, EventKind::RecipesReset).await;
         Ok(true)
     }
 
@@ -35,23 +40,43 @@ impl RecipesApi {
         }
     }
 
-    pub async fn create_recipe(&self, value: &RecipeInput) -> Result<Recipe, Error> {
-        self.client
+    pub async fn create_recipe(
+        &self,
+        value: &RecipeInput,
+        publisher: &EventPublisher,
+    ) -> Result<Recipe, Error> {
+        let recipe: Recipe = self
+            .client
             .post("", &value.base())
             .await
-            .map_err(RestError::into_error)
+            .map_err(RestError::into_error)?;
+        publisher
+            .notify(Some(recipe.id.as_str()), EventKind::RecipeChanged)
+            .await;
+        Ok(recipe)
     }
 
-    pub async fn update_recipe(&self, id: &str, value: &RecipeInput) -> Result<Recipe, Error> {
-        self.client
+    pub async fn update_recipe(
+        &self,
+        id: &str,
+        value: &RecipeInput,
+        publisher: &EventPublisher,
+    ) -> Result<Recipe, Error> {
+        let recipe = self
+            .client
             .patch(id, &value.base())
             .await
-            .map_err(RestError::into_error)
+            .map_err(RestError::into_error)?;
+        publisher.notify(Some(id), EventKind::RecipeChanged).await;
+        Ok(recipe)
     }
 
-    pub async fn delete_recipe(&self, id: &str) -> Result<bool, Error> {
+    pub async fn delete_recipe(&self, id: &str, publisher: &EventPublisher) -> Result<bool, Error> {
         match self.client.delete(id).await {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                publisher.notify(Some(id), EventKind::RecipeDeleted).await;
+                Ok(true)
+            }
             Err(err) if err.status == StatusCode::NOT_FOUND => Ok(false),
             Err(err) => Err(err.into_error()),
         }
@@ -83,11 +108,14 @@ async fn apply_inspirations(
     inspirations: &async_graphql::MaybeUndefined<Vec<String>>,
 ) -> Result<(), Error> {
     let inspirations_api = ctx.data::<crate::inspirations::InspirationsApi>()?;
+    let publisher = ctx.data::<EventPublisher>()?;
     match inspirations {
         async_graphql::MaybeUndefined::Undefined => Ok(()),
-        async_graphql::MaybeUndefined::Null => inspirations_api.set_inspirations(id, &[]).await,
+        async_graphql::MaybeUndefined::Null => {
+            inspirations_api.set_inspirations(id, &[], publisher).await
+        }
         async_graphql::MaybeUndefined::Value(urls) => {
-            inspirations_api.set_inspirations(id, urls).await
+            inspirations_api.set_inspirations(id, urls, publisher).await
         }
     }
 }
@@ -95,7 +123,9 @@ async fn apply_inspirations(
 #[Object]
 impl RecipesMutation {
     async fn delete_recipes_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<RecipesApi>()?.delete_recipes_for_testing().await
+        ctx.data::<RecipesApi>()?
+            .delete_recipes_for_testing(ctx.data::<EventPublisher>()?)
+            .await
     }
 
     // `Option<Result<T>>` (not `Result<Option<T>>`) is what makes async-graphql resolve this
@@ -107,7 +137,11 @@ impl RecipesMutation {
     ) -> Option<Result<Recipe, Error>> {
         Some(
             async {
-                let recipe = ctx.data::<RecipesApi>()?.create_recipe(&value).await?;
+                let publisher = ctx.data::<EventPublisher>()?;
+                let recipe = ctx
+                    .data::<RecipesApi>()?
+                    .create_recipe(&value, publisher)
+                    .await?;
                 apply_inspirations(ctx, recipe.id.as_str(), &value.inspirations).await?;
                 Ok(recipe)
             }
@@ -125,7 +159,7 @@ impl RecipesMutation {
             async {
                 apply_inspirations(ctx, id.as_str(), &value.inspirations).await?;
                 ctx.data::<RecipesApi>()?
-                    .update_recipe(id.as_str(), &value)
+                    .update_recipe(id.as_str(), &value, ctx.data::<EventPublisher>()?)
                     .await
             }
             .await,
@@ -133,6 +167,8 @@ impl RecipesMutation {
     }
 
     async fn delete_recipe(&self, ctx: &Context<'_>, id: ID) -> Result<bool, Error> {
-        ctx.data::<RecipesApi>()?.delete_recipe(id.as_str()).await
+        ctx.data::<RecipesApi>()?
+            .delete_recipe(id.as_str(), ctx.data::<EventPublisher>()?)
+            .await
     }
 }

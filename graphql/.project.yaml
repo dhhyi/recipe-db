@@ -22,6 +22,7 @@ devcontainer:
   environment:
     REST_ENDPOINT: http://traefik:3000
     TRAEFIK_ENTRYPOINTS: web,rest-internal
+    NATS_URL: nats://nats:4222
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
 vscode:
   settings:
@@ -70,6 +71,7 @@ format: cargo fmt
 check: |
   cargo --version
   cargo clippy --all-targets -- -D warnings
+  cargo test
   cargo build --release
 prettier:
   ignore:

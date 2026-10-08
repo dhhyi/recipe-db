@@ -1,0 +1,31 @@
+#@ def nats_services():
+#@   return {
+#@     "nats": {
+#@       "image": "nats:2.11.10-alpine",
+#@       "command": ["--config", "/etc/nats/nats.conf"],
+#@       "networks": ["intranet"],
+#@       "restart": "unless-stopped",
+#@       "mem_limit": "128m",
+#@       "volumes": ["./message-bus/nats.conf:/etc/nats/nats.conf:ro", "nats-data:/data"],
+#@       "environment": {
+#@         "VERBOSE": "${VERBOSE:-false}",
+#@       },
+#@       "healthcheck": {
+#@         "test": ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz?js-enabled-only=true"],
+#@         "interval": "5s",
+#@         "timeout": "2s",
+#@         "retries": 12,
+#@       },
+#@     },
+#@     "nats-init": {
+#@       "image": "ghcr.io/dhhyi/recipe-db-graphql:latest",
+#@       "command": ["provision-events"],
+#@       "networks": ["intranet"],
+#@       "restart": "no",
+#@       "environment": {
+#@         "NATS_URL": "nats://nats:4222",
+#@       },
+#@       "depends_on": {"nats": {"condition": "service_healthy"}},
+#@     },
+#@   }
+#@ end

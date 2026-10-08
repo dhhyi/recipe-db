@@ -86,13 +86,19 @@ Add recipes to collections (public and private)
 
 Probably [Google oAuth via traefik](https://www.libe.net/traefik-auth).
 
+### Message bus
+
+The shared NATS JetStream infrastructure and GraphQL publisher are implemented as the prerequisite for search and HTML caching. See [the message bus contract and operations guide](message-bus/CONTRACT.md) for setup, versioned events, independent durable consumers, bounded retention, publication failure reporting, and recovery requirements.
+
+Only confirmed writes performed through GraphQL publish notifications, including successful writes within partially failed mutations. Delivery is at least once; atomic delivery across backend writes and publication is not guaranteed. Search reindexing and cache TTLs remain required recovery mechanisms. Raspberry Pi 3 startup, memory, and load measurements remain to be completed on the target hardware.
+
 ### searching
 
 Build a dedicated search platform using [Typesense](https://typesense.org/) and a thin Zig service. Target a Raspberry Pi 3 with about 100 recipes initially; verify ARM64 compatibility, memory use, and startup time on the target device.
 
 Index current recipe data exposed by GraphQL, with room to add fields such as tags as they become available. Search German text with full-text search, typo tolerance, facets, and pagination; highlighting is not needed. The service should forward composable Typesense query options and return ordered recipe IDs plus facet and pagination metadata. GraphQL remains the source of precise recipe data. Defer user-specific rating search.
 
-Use NATS JetStream for queued, durable recipe-change notifications. Only mutations performed through GraphQL publish events. The Zig service consumes them with a durable consumer, reloads the recipe through GraphQL, then replaces its Typesense document; confirmed recipe deletions remove the document. Repeated delivery must be safe. If an optional source service is unavailable while rebuilding a document, retain its fields from the previous indexed document rather than erasing them.
+Use the shared message bus for queued, durable recipe-change notifications. Only mutations performed through GraphQL publish events. The Zig service consumes them with the independent `search-index-v1` durable consumer, reloads the recipe through GraphQL, then replaces its Typesense document; confirmed recipe deletions remove the document. Repeated delivery must be safe. If an optional source service is unavailable while rebuilding a document, retain its fields from the previous indexed document rather than erasing them.
 
 Provide a daily scheduled reindex and a way to trigger one manually. Rebuilds may make search unavailable while running. Start with the backend only; frontend integration is separate work.
 
@@ -100,7 +106,7 @@ TODO: address the gap where a recipe mutation succeeds but publishing its notifi
 
 ### Caching and updating
 
-Add a temporary disk-backed HTML cache inside `browse`, reusing its existing Go/templ rendering. Assume the search entry's NATS JetStream message bus is available. Start with one `browse` replica and recipe detail pages only; keep Traefik routing, authentication, and compression unchanged. Do not introduce a separate cache service.
+Add a temporary disk-backed HTML cache inside `browse`, reusing its existing Go/templ rendering. Depend on the shared message bus, independently of search, using the `browse-cache-v1` durable consumer. Start with one `browse` replica and recipe detail pages only; keep Traefik routing, authentication, and compression unchanged. Do not introduce a separate cache service.
 
 Implementation plan:
 

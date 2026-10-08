@@ -66,7 +66,7 @@ assert_compose() {
   [ "$status" -eq 0 ]
   [ ! -e traefik.yml ]
   assert_compose '
-    (.services | keys) == ["backend", "fixtures", "frontend", "job", "test", "traefik"]
+    (.services | keys) == ["backend", "fixtures", "frontend", "job", "nats", "nats-init", "test", "traefik"]
     and .services.traefik.ports == ["8080:80", "3000:3000"]
     and .services.job.profiles == ["development"]
     and .services.test.profiles == ["test"]
@@ -75,7 +75,8 @@ assert_compose() {
     and all(.services | to_entries[] | select(.value | has("build"));
       .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + .key + "-cache"]
       and (.value.build | has("cache_to") | not))
-    and (has("volumes") | not)
+    and .volumes["nats-data"].name == "recipe-db-nats-data"
+    and (.volumes | has("data") | not)
   '
 }
 
@@ -84,7 +85,7 @@ assert_compose() {
 
   [ "$status" -eq 0 ]
   assert_compose '
-    (.services | keys) == ["backend", "frontend", "traefik"]
+    (.services | keys) == ["backend", "frontend", "nats", "nats-init", "traefik"]
     and .services.traefik.ports == ["8080:80"]
     and .services.backend.environment.PRODUCTION == "true"
     and .services.backend.environment.DATA_LOCATION == "/app/data/backend"
@@ -104,7 +105,7 @@ assert_compose() {
   run sh .scripts/generate-docker-compose.sh backend
 
   [ "$status" -eq 0 ]
-  assert_compose '(.services | keys) == ["backend", "fixtures", "job", "test", "traefik"]'
+  assert_compose '(.services | keys) == ["backend", "fixtures", "job", "nats", "nats-init", "test", "traefik"]'
 }
 
 @test "prepare leaves existing configuration files untouched" {
@@ -190,4 +191,59 @@ assert_compose() {
     and (.services.fixtures | has("user") | not)
     and .services.fixtures.labels == ["traefik.enable=true", "traefik.http.routers.fixtures.rule=PathPrefix(`/fixture`)", "traefik.http.routers.fixtures.entrypoints=rest-internal", "traefik.http.services.fixtures.loadBalancer.healthCheck.path=/"]
   '
+}
+
+@test "bus is private, bounded and persistent in every deployment mode" {
+  for mode in "" production backend; do
+    run sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    # shellcheck disable=SC2016
+    assert_compose '
+      .services.nats.image == "nats:2.11.10-alpine"
+      and (.services.nats | has("ports") | not)
+      and (.services.nats | has("labels") | not)
+      and .services.nats.environment.VERBOSE == "${VERBOSE:-false}"
+      and .services.nats.mem_limit == "128m"
+      and .services.nats.volumes == ["./message-bus/nats.conf:/etc/nats/nats.conf:ro", "nats-data:/data"]
+      and .services.nats.healthcheck.test[-1] == "http://127.0.0.1:8222/healthz?js-enabled-only=true"
+      and .services["nats-init"].command == ["provision-events"]
+      and .services["nats-init"].depends_on.nats.condition == "service_healthy"
+      and .volumes["nats-data"].name == "recipe-db-nats-data"
+    '
+  done
+}
+
+@test "bus clients need only a URL and GraphQL waits for provisioning" {
+  mkdir graphql
+  cat > graphql/.project.yaml << 'EOF'
+devcontainer:
+  ports: [4000]
+traefik:
+  labels:
+    http:
+      services:
+        graphql:
+          loadBalancer:
+            healthCheck:
+              path: /health
+      routers:
+        graphql:
+          rule: "PathPrefix(`/graphql`)"
+          entrypoints: web
+---
+category: api
+EOF
+  for mode in "" production backend; do
+    run sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    assert_compose '
+      .services.graphql.environment.NATS_URL == "nats://nats:4222"
+      and (.services.graphql.environment | has("NATS_USER") | not)
+      and (.services.graphql.environment | has("NATS_PASSWORD") | not)
+      and .services["nats-init"].environment.NATS_URL == "nats://nats:4222"
+      and (.services["nats-init"].environment | keys) == ["NATS_URL", "VERBOSE"]
+      and (.services.nats.environment | keys) == ["VERBOSE"]
+      and .services.graphql.depends_on["nats-init"].condition == "service_completed_successfully"
+    '
+  done
 }

@@ -85,6 +85,9 @@ jobs:
             --action_env=COMPOSE_PARALLEL_LIMIT \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
+      - name: validate message bus integration and recovery
+        run: mise run test-message-bus
+
   arm64-validation:
     permissions:
       contents: read
