@@ -23,7 +23,7 @@ EOF
 }
 
 @test "reuses running containers and keeps lifecycle messages off stdout" {
-  run --separate-stderr env RUNNING_CONTAINER=running-container sh .scripts/run-in-devcontainer.sh example echo hello
+  run --separate-stderr env -u GITHUB_ACTIONS RUNNING_CONTAINER=running-container sh .scripts/run-in-devcontainer.sh example echo hello
 
   [ "$status" -eq 0 ]
   [ "$output" = "command output" ]
@@ -164,7 +164,7 @@ EOF
 }
 
 @test "Docker discovery failures stop before startup or execution" {
-  run --separate-stderr env PS_STATUS=24 sh .scripts/run-in-devcontainer.sh example test
+  run --separate-stderr env -u GITHUB_ACTIONS PS_STATUS=24 sh .scripts/run-in-devcontainer.sh example test
 
   [ "$status" -eq 24 ]
   [ "$stderr" = "Docker discovery failed" ]
