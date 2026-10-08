@@ -11,7 +11,7 @@ devcontainer:
       PYTHON_VERSION: "3"
     user:
       - RUN mise use -g python@$PYTHON_VERSION
-      - RUN pip install --break-system-packages pytest==8.4.2 pytest-asyncio==1.2.0 mcp==1.12.4 httpx==0.28.1
+      - RUN pip install --break-system-packages pytest==8.4.2 pytest-asyncio==1.2.0 mcp==1.12.4 httpx==0.28.1 pydantic==2.13.5
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     MCP_URL: http://traefik/mcp
