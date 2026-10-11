@@ -7,6 +7,8 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    packages:
+      - build-essential
     user:
       - RUN mise use -g go@1.25 watchexec
       - RUN go install github.com/a-h/templ/cmd/templ@latest
@@ -15,6 +17,7 @@ devcontainer:
     - 3000
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    NATS_URL: "nats://nats:4222"
   initialize: |
     go mod download -x
     templ generate
@@ -88,8 +91,10 @@ format: go fmt ./...
 check: |
   go version
   go vet ./...
+  env CGO_ENABLED=1 go test -race ./...
   go build -o main
   stat main
+test: env CGO_ENABLED=1 go test -race ./...
 prettier:
   ignore:
     - go.mod

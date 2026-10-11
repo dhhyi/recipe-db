@@ -35,7 +35,7 @@ impl RecipesApi {
     pub async fn get_recipe(&self, id: &str) -> Result<Option<Recipe>, Error> {
         match self.client.get(id).await {
             Ok(recipe) => Ok(Some(recipe)),
-            Err(err) if err.status == StatusCode::NOT_FOUND => Ok(None),
+            Err(err) if err.confirms_absence("recipe-not-found") => Ok(None),
             Err(err) => Err(err.into_error()),
         }
     }

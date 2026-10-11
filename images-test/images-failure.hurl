@@ -37,6 +37,11 @@ HTTP 404
 
 GET {{REST_API}}/images/unknown/meta
 HTTP 404
+[Asserts]
+header "Content-Type" contains "application/problem+json"
+jsonpath "$.type" == "about:blank"
+jsonpath "$.status" == 404
+jsonpath "$.code" == "image-not-found"
 
 DELETE {{REST_API}}/images/unknown
 HTTP 404

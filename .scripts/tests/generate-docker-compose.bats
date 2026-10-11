@@ -247,3 +247,35 @@ EOF
     '
   done
 }
+
+@test "browse waits for provisioning and retains its bus URL in development and production" {
+  mkdir browse
+  cat > browse/.project.yaml << 'EOF'
+devcontainer:
+  ports: [3000]
+  environment:
+    NATS_URL: nats://nats:4222
+traefik:
+  labels:
+    http:
+      services:
+        browse:
+          loadBalancer:
+            healthCheck:
+              path: /health
+      routers:
+        browse:
+          rule: "PathPrefix(`/`)"
+          entrypoints: web
+---
+category: frontend
+EOF
+  for mode in "" production; do
+    run sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    assert_compose '
+      .services.browse.environment.NATS_URL == "nats://nats:4222"
+      and .services.browse.depends_on["nats-init"].condition == "service_completed_successfully"
+    '
+  done
+}

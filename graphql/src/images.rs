@@ -1,9 +1,12 @@
 use async_graphql::{Context, Error, Object, SimpleObject, Upload, ID};
-use reqwest::StatusCode;
 use serde::Deserialize;
 
 use crate::events::{EventKind, EventPublisher};
 use crate::rest_client::{RestClient, RestError};
+
+#[cfg(test)]
+#[path = "images_test.rs"]
+mod tests;
 
 #[derive(Clone, Debug, Deserialize, SimpleObject)]
 #[serde(rename_all = "camelCase")]
@@ -26,17 +29,14 @@ impl ImagesApi {
         }
     }
 
-    /// `None` covers both "no image yet" (404) and "images service unavailable" - callers can't
-    /// tell them apart, which matches how the field degrades gracefully when the service is down.
-    pub async fn get_image_metadata(&self, recipe_id: &str) -> Option<ImageMetadata> {
+    pub async fn get_image_metadata(
+        &self,
+        recipe_id: &str,
+    ) -> Result<Option<ImageMetadata>, Error> {
         match self.client.get(&format!("{recipe_id}/meta")).await {
-            Ok(meta) => Some(meta),
-            Err(err) => {
-                if err.status != StatusCode::NOT_FOUND {
-                    eprintln!("images service unavailable: {err}");
-                }
-                None
-            }
+            Ok(meta) => Ok(Some(meta)),
+            Err(err) if err.confirms_absence("image-not-found") => Ok(None),
+            Err(err) => Err(err.into_error()),
         }
     }
 

@@ -124,7 +124,7 @@ router imagesRouter:
 
     let path = imageFile(recipeId)
     if not fileExists(path):
-      resp Http404, "Not found"
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
 
     info "GET meta for '", recipeId, "'"
     try:
