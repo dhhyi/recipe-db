@@ -1,3 +1,8 @@
+[env]
+COMPOSE_PROGRESS = "quiet"
+BUILDKIT_PROGRESS = "quiet"
+COMPOSE_PARALLEL_LIMIT = "2"
+
 [tools]
 "aqua:bats-core/bats-core" = "1.13.0"
 jq = "latest"
@@ -96,6 +101,17 @@ run = "docker network inspect intranet >/dev/null 2>&1 || docker network create 
 [tasks.seed-demodata]
 description = "Generate demo data against the development stack"
 run = "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
+
+[tasks.dev-up]
+description = "Start the development stack detached and wait for readiness; accepts extra Compose up arguments"
+depends = ["create-intranet", "generate-docker-compose"]
+run = "docker compose up -d --wait"
+raw_args = true
+
+[tasks.dev-down]
+description = "Stop the development stack and remove orphan containers; accepts extra Compose down arguments"
+run = "docker compose down --remove-orphans"
+raw_args = true
 
 [tasks.start-test-fixtures]
 description = "Start the shared integration-test fixture service"
