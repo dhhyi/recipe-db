@@ -22,7 +22,7 @@ After checkout, run these commands in order:
 
 ```sh
 mise install
-docker compose up
+mise run dev-up
 ```
 
 `mise install` installs the required tools and runs the project's setup tasks. The project will be available on http://localhost:8080. Traefik is listening on http://localhost:3000/dashboard/. GraphQL is available on http://localhost:8080/graphql.
@@ -36,7 +36,7 @@ Use the devcontainers for development. They are set up with all necessary depend
 Integration tests run as standalone Compose jobs. Start the development stack first, then explicitly target it when running tests:
 
 ```sh
-docker compose up -d --wait
+mise run dev-up
 mise run integration-tests -- --development
 ```
 

@@ -123,6 +123,26 @@ EOF
   [ "$(cat docker-compose.yml)" = existing-compose ]
 }
 
+@test "dev-down removes orphans and forwards arguments and exit status" {
+  setup_mock_bin
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+printf '<%s>\n' "$@" > "$MOCK_LOG"
+exit "${DOCKER_STATUS:-0}"
+EOF
+  chmod +x bin/docker
+
+  run mise run --raw dev-down
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--remove-orphans>' ]
+
+  run env DOCKER_STATUS=23 mise run --raw dev-down --timeout 120 "two words"
+
+  [ "$status" -eq 23 ]
+  [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--remove-orphans>\n<--timeout>\n<120>\n<two words>' ]
+}
+
 @test "devcontainer sync usage supports selected projects and defaults to all" {
   mkdir second
   cp example/.project.yaml second/.project.yaml
