@@ -290,6 +290,28 @@ EOF
 
   [ "$status" -eq 0 ]
   [ -f generate-docker-compose.done ]
+  [ -s .secrets/typesense-api-key ]
+}
+
+@test "development search key is private, random and preserved across setup runs" {
+  run mise run --raw create-search-key
+  [ "$status" -eq 0 ]
+  key=$(cat .secrets/typesense-api-key)
+  [[ "$key" =~ ^[0-9a-f]{64}$ ]]
+  [ "$(stat -c %a .secrets/typesense-api-key)" = 600 ]
+
+  run mise run --raw create-search-key
+  [ "$status" -eq 0 ]
+  [ "$(cat .secrets/typesense-api-key)" = "$key" ]
+}
+
+@test "empty development search key fails explicitly without replacement" {
+  mkdir .secrets
+  touch .secrets/typesense-api-key
+  run mise run --raw create-search-key
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"key is empty"* ]]
+  [ ! -s .secrets/typesense-api-key ]
 }
 
 @test "forbidden-file failure prevents all sync-files writers" {

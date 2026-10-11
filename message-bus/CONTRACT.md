@@ -1,6 +1,6 @@
 # Recipe change message bus
 
-NATS JetStream is shared infrastructure for the planned search index and the [disposable browse HTML cache](../browse/CACHE.md). GraphQL is the only application publisher. No separate notification HTTP service or search implementation is included.
+NATS JetStream is shared infrastructure for the [search index](../search/OPERATIONS.md) and the [disposable browse HTML cache](../browse/CACHE.md). GraphQL is the only application publisher. No separate notification HTTP service is included.
 
 ## Version 1 events
 
