@@ -5,6 +5,6 @@ operations:
   - operations.graphql
 generated: src/generated/graphql.go
 package: gql
-context_type: "-"
+context_type: "context.Context"
 flatten: true
 optional: pointer

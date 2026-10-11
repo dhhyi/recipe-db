@@ -41,20 +41,18 @@ fragment RecipeDetail on Recipe {
   rating {
     ...Rating
   }
-  inspirations {
-    url
-  }
 }
 
 query RecipeById($id: ID!) {
   recipe(id: $id) {
     ...RecipeDetail
   }
+}
+
+query RecipeControls {
   recipeEditOnline: isServiceOnline(name: "recipes-edit")
   imagesOnline: isServiceOnline(name: "images")
   imageEditOnline: isServiceOnline(name: "images-edit")
-  ratingsOnline: isServiceOnline(name: "ratings")
-  inspirationsOnline: isServiceOnline(name: "inspirations")
 }
 
 fragment InspirationsLink on Link {

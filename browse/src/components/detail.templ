@@ -19,6 +19,10 @@ templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	}
 }
 
+templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
+	@editFields(id, resp.RecipeEditOnline, resp.ImagesOnline, resp.ImageEditOnline)
+}
+
 templ image(recipe *gql.RecipeDetail) {
 	<figure class="contents!">
 		<img
@@ -79,27 +83,17 @@ templ method(recipe *gql.RecipeDetail) {
 	}
 }
 
-templ inspirations(recipeId string) {
-	<section>
-		<header>
-			<h2>Inspirationen</h2>
-		</header>
-		@InspirationsStub(recipeId)
-		// @Inspirations(recipe.Inspirations)
-	</section>
-}
-
 templ Detail(resp *gql.RecipeByIdResponse) {
 	{{ recipe := resp.Recipe }}
 	<div itemscope itemtype="https://schema.org/Recipe" class="contents">
 		<div class="flex flex-col sm:flex-row pt-1">
 			<hgroup>
 				<h1 itemprop="name">{ recipe.Name }</h1>
-				if resp.RatingsOnline && recipe.Rating != nil {
+				if recipe.Rating != nil {
 					@Rating(recipe.Rating, true, nil)
 				}
 			</hgroup>
-			@editFields(recipe.Id, resp.RecipeEditOnline, resp.ImagesOnline, resp.ImageEditOnline)
+			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
 		<div class="grid">
 			if recipe.Image != nil {
@@ -112,9 +106,7 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		if recipe.Method != nil && len(*recipe.Method) > 0 {
 			@method(recipe)
 		}
-		if resp.InspirationsOnline && len(recipe.Inspirations) > 0 {
-			@inspirations(recipe.Id)
-		}
+		@InspirationsStub(recipe.Id)
 	</div>
 	<a href="/" role="button">Zur Startseite</a>
 }

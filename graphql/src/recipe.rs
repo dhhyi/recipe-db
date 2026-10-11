@@ -140,10 +140,9 @@ impl Recipe {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<crate::images::ImageMetadata>> {
-        Ok(ctx
-            .data::<ImagesApi>()?
+        ctx.data::<ImagesApi>()?
             .get_image_metadata(self.id.as_str())
-            .await)
+            .await
     }
 
     /// `null` means the inspirations service is unavailable (as opposed to `[]`, which means the

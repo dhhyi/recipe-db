@@ -30,8 +30,13 @@ templ inspiration(in gql.InspirationsLink) {
 }
 
 templ InspirationsLazy(in *gql.RecipeInspirationsResponse) {
-	if in.Recipe != nil {
-		@inspirationsList(in.Recipe.Inspirations)
+	if in.InspirationsOnline && in.Recipe != nil && len(in.Recipe.Inspirations) > 0 {
+		<section>
+			<header>
+				<h2>Inspirationen</h2>
+			</header>
+			@inspirationsList(in.Recipe.Inspirations)
+		</section>
 	}
 }
 

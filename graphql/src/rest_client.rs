@@ -32,6 +32,12 @@ impl std::fmt::Display for RestError {
 }
 
 impl RestError {
+    pub fn confirms_absence(&self, code: &str) -> bool {
+        self.status == StatusCode::NOT_FOUND
+            && serde_json::from_str::<ProblemDetails>(&self.body)
+                .is_ok_and(|problem| problem.code == code)
+    }
+
     /// Converts to a GraphQL error, forwarding a backend's Problem Details as structured
     /// `extensions` (`code`, `status`, `field`) instead of just a flat message. Falls back to
     /// `status: body` for backends that don't send Problem Details.

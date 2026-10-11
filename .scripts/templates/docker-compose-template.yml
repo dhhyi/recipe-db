@@ -52,6 +52,9 @@
 #@     })
 #@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@   end
+#@   if "browse" in services:
+#@     services["browse"].setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
+#@   end
 #@   for name in services:
 #@     services[name].setdefault("environment", {}).setdefault("VERBOSE", None)
 #@   end
