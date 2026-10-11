@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-search
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-search
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - libcurl4-openssl-dev
+      - libnats-dev
+    user:
+      - RUN mise use -g zig@0.14.1
+  ports:
+    - 3000
+  environment:
+    GRAPHQL_URL: http://graphql:4000/graphql
+    TYPESENSE_URL: http://typesense:8108
+    TYPESENSE_API_KEY_FILE: /run/secrets/typesense-api-key
+    NATS_URL: nats://nats:4222
+    STATE_DIRECTORY: /tmp/recipe-db-search-state
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+vscode:
+  settings:
+    peacock.remoteColor: "#dba694"
+    "[zig]":
+      editor.defaultFormatter: ziglang.vscode-zig
+  extensions:
+    - johnpapa.vscode-peacock
+    - ziglang.vscode-zig
+  tasks:
+    - label: Run server
+      command: zig build run
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-search:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        search:
+          rule: PathPrefix(`/search`)
+          entrypoints: rest-internal
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: api
+format: zig fmt build.zig src
+check: zig version && zig fmt --check build.zig src && zig build test && zig build -Doptimize=ReleaseSafe
+prettier:
+  ignore:
+    - "*.zig"
+    - .zig-cache
+    - zig-out

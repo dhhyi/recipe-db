@@ -94,6 +94,8 @@ Only confirmed writes performed through GraphQL publish notifications, including
 
 ### searching
 
+The backend-only Typesense/Zig platform is implemented; see [search operations and validation](search/OPERATIONS.md). Frontend integration and actual Raspberry Pi 3 resource/startup measurements remain outstanding.
+
 Build a dedicated search platform using [Typesense](https://typesense.org/) and a thin Zig service. Target a Raspberry Pi 3 with about 100 recipes initially; verify ARM64 compatibility, memory use, and startup time on the target device.
 
 Index current recipe data exposed by GraphQL, with room to add fields such as tags as they become available. Search German text with full-text search, typo tolerance, facets, and pagination; highlighting is not needed. The service should forward composable Typesense query options and return ordered recipe IDs plus facet and pagination metadata. GraphQL remains the source of precise recipe data. Defer user-specific rating search.
@@ -103,6 +105,14 @@ Use the shared message bus for queued, durable recipe-change notifications. Only
 Provide a daily scheduled reindex and a way to trigger one manually. Rebuilds may make search unavailable while running. Start with the backend only; frontend integration is separate work.
 
 TODO: address the gap where a recipe mutation succeeds but publishing its notification fails. For the initial happy path, the scheduled reindex provides eventual recovery.
+
+#### Schema-checked GraphQL operations
+
+Search currently constructs GraphQL query strings without build-time schema checking. Introduce named queries in `operations.graphql`, keeping optional-source queries separate. Investigated Zig clients ([softprops/zig-graphql](https://github.com/softprops/zig-graphql), [xqtc161/graphql-zig](https://github.com/xqtc161/graphql-zig)) use handwritten response types; no suitable schema-checked Zig client generator was found, and compatibility with Zig 0.14.1 is unverified. Suggested first step: validate operations against the synchronized schema using the JavaScript `graphql` package and generate Zig query constants through the existing project-generation pipeline; defer full typed client generation.
+
+#### Readable REST integration tests
+
+`search-test` is currently a freestyle Python `unittest` suite issuing raw HTTP requests, which makes scenarios hard to read. Migrate it to a proper REST testing framework with declarative, readable request/response tests. Pick one from the framework candidates listed in [AGENTS.md](AGENTS.md) and remove it from that list. Keep the existing coverage and the deployed-stack, non-disruptive approach.
 
 ### Resilience
 

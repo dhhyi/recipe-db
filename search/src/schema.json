@@ -1,0 +1,23 @@
+{
+  "name": "recipes_v1",
+  "fields": [
+    { "name": "name", "type": "string", "locale": "de" },
+    { "name": "method", "type": "string", "locale": "de", "optional": true },
+    {
+      "name": "ingredients",
+      "type": "string[]",
+      "locale": "de",
+      "facet": true
+    },
+    { "name": "ingredient_units", "type": "string[]", "facet": true },
+    { "name": "inspiration_urls", "type": "string[]", "optional": true },
+    {
+      "name": "rating_average",
+      "type": "float",
+      "optional": true,
+      "facet": true
+    },
+    { "name": "rating_count", "type": "int32", "optional": true },
+    { "name": "has_image", "type": "bool", "optional": true, "facet": true }
+  ]
+}

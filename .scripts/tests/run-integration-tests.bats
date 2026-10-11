@@ -134,6 +134,20 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "search tests use deployed GraphQL, search and shared image fixture" {
+  add_test_project search-test
+  jq '.services["search-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development search-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'curl http://127.0.0.1:8080/graphql' "$MOCK_LOG"
+  grep -Fx 'curl http://127.0.0.1:3000/search/reindex' "$MOCK_LOG"
+  grep -Fx 'curl http://127.0.0.1:3000/mcp-test-fixture/test.jpg' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm search-test' "$MOCK_LOG"
+}
+
 @test "excludes untracked, nested, non-test and incorrectly configured folders" {
   add_test_project untracked-test
   git rm --cached untracked-test/.project.yaml

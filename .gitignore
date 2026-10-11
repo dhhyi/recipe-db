@@ -29,3 +29,4 @@ traefik.yml
 
 # data
 /data
+/.secrets

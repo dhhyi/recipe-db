@@ -12,6 +12,7 @@ permissions:
 env:
   BUILDKIT_PROGRESS: quiet
   COMPOSE_PROGRESS: quiet
+  TYPESENSE_API_KEY_FILE: /tmp/recipe-db-typesense-ci-api-key
 
 jobs:
   quality-checks:
@@ -23,6 +24,11 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+
+      - name: create private search key for Compose validation
+        run: |
+          umask 077
+          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2
@@ -99,6 +105,11 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+
+      - name: create private search key for Compose validation
+        run: |
+          umask 077
+          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise
         uses: jdx/mise-action@v2
@@ -212,6 +223,11 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+
+      - name: create private search key for Compose validation
+        run: |
+          umask 077
+          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2

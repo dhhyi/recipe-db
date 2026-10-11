@@ -279,3 +279,59 @@ EOF
     '
   done
 }
+
+@test "search uses private persistent Typesense and file-backed API-key secrets" {
+  mkdir search
+  cat > search/.project.yaml << 'EOF'
+devcontainer:
+  ports: [3000]
+  environment:
+    NATS_URL: nats://nats:4222
+    TYPESENSE_API_KEY_FILE: /run/secrets/typesense-api-key
+traefik:
+  labels:
+    http:
+      services:
+        search:
+          loadBalancer:
+            healthCheck:
+              path: /health
+      routers:
+        search:
+          rule: "PathPrefix(`/search`)"
+          entrypoints: rest-internal
+---
+category: api
+EOF
+  for mode in "" production backend; do
+    run sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    assert_compose '
+      .services.typesense.image | startswith("typesense/typesense:29.0@sha256:")
+    '
+    # shellcheck disable=SC2016
+    assert_compose '
+      (.services.typesense | has("ports") | not)
+      and (.services.typesense | has("labels") | not)
+      and (.services.typesense.environment | has("TYPESENSE_API_KEY") | not)
+      and .services.typesense.secrets == ["typesense-api-key"]
+      and .services.typesense.volumes == ["typesense-data:/data"]
+      and .services.search.secrets == ["typesense-api-key"]
+      and .services.search.volumes == ["search-data:/data"]
+      and .services.search.environment.STATE_DIRECTORY == "/data"
+      and .services.search.environment.TYPESENSE_API_KEY_FILE == "/run/secrets/typesense-api-key"
+      and .services.search.depends_on["nats-init"].condition == "service_completed_successfully"
+      and .services.search.depends_on.typesense.condition == "service_started"
+      and .volumes["typesense-data"].name == "recipe-db-typesense-data"
+      and .volumes["search-data"].name == "recipe-db-search-data"
+      and (.secrets["typesense-api-key"].file | startswith("${TYPESENSE_API_KEY_FILE:"))
+    '
+    if [ "$mode" = production ]; then
+      # shellcheck disable=SC2016
+      assert_compose '.secrets["typesense-api-key"].file == "${TYPESENSE_API_KEY_FILE:?Set TYPESENSE_API_KEY_FILE to a private Typesense API key file}"'
+    else
+      # shellcheck disable=SC2016
+      assert_compose '.secrets["typesense-api-key"].file == "${TYPESENSE_API_KEY_FILE:-./.secrets/typesense-api-key}"'
+    fi
+  done
+}

@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-search-test
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-search-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    args:
+      PYTHON_VERSION: "3"
+    user:
+      - RUN mise use -g python@$PYTHON_VERSION
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    GRAPHQL_API: http://traefik/graphql
+    REST_API: http://traefik:3000
+    NATS_HOST: nats
+    FIXTURE_API: http://traefik:3000/mcp-test-fixture
+vscode:
+  settings:
+    peacock.remoteColor: "#c9785d"
+  extensions:
+    - johnpapa.vscode-peacock
+    - ms-python.python
+extras:
+  - traefik
+traefik:
+  network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
+test: python3 -m unittest -v test_search
+check: python3 -m py_compile test_search.py
+prettier:
+  ignore:
+    - "*.py"

@@ -198,6 +198,11 @@ for project in "${projects[@]}"; do
       wait_for_mcp
       wait_for_fixture "$project" mcp-test-fixture/test.jpg
       ;;
+    search-test)
+      wait_for_graphql "GraphQL API"
+      wait_for_http "search API" http://127.0.0.1:3000/search/reindex 200
+      wait_for_fixture "$project" mcp-test-fixture/test.jpg
+      ;;
   esac
 done
 

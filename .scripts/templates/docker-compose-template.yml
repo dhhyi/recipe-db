@@ -45,6 +45,24 @@
 #@     services.update(service(project, options, projects))
 #@   end
 #@   services.update(nats_services())
+#@   if "search" in services:
+#@     services["typesense"] = {
+#@       "image": "typesense/typesense:29.0@sha256:316b7e71c21f7e5e5caa8daa150e1b3f2be8c876081ee1f77bc2d92cd7f137d0",
+#@       "entrypoint": ["/bin/sh", "-ec", 'export TYPESENSE_API_KEY="$$(cat /run/secrets/typesense-api-key)"; exec /opt/typesense-server --data-dir=/data'],
+#@       "networks": ["intranet"],
+#@       "restart": "unless-stopped",
+#@       "volumes": ["typesense-data:/data"],
+#@       "secrets": ["typesense-api-key"],
+#@     }
+#@     services["search"]["secrets"] = ["typesense-api-key"]
+#@     services["search"]["restart"] = "unless-stopped"
+#@     services["search"]["volumes"] = ["search-data:/data"]
+#@     services["search"].setdefault("environment", {})["STATE_DIRECTORY"] = "/data"
+#@     services["search"].setdefault("depends_on", {}).update({
+#@       "nats-init": {"condition": "service_completed_successfully"},
+#@       "typesense": {"condition": "service_started"},
+#@     })
+#@   end
 #@   if "graphql" in services:
 #@     graphql = services["graphql"]
 #@     graphql.setdefault("environment", {}).update({
@@ -68,9 +86,24 @@ networks:
     name: intranet
     external: true
 volumes:
+  #@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
+  typesense-data:
+    name: recipe-db-typesense-data
+  search-data:
+    name: recipe-db-search-data
+  #@ end
   nats-data:
     name: recipe-db-nats-data
   #@ if options.production:
   data:
     name: recipe-db-data
+#@ end
+#@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
+secrets:
+  typesense-api-key:
+    #@ if options.production:
+    file: ${TYPESENSE_API_KEY_FILE:?Set TYPESENSE_API_KEY_FILE to a private Typesense API key file}
+    #@ else:
+    file: ${TYPESENSE_API_KEY_FILE:-./.secrets/typesense-api-key}
+    #@ end
 #@ end
