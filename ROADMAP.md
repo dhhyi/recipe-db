@@ -106,10 +106,6 @@ Provide a daily scheduled reindex and a way to trigger one manually. Rebuilds ma
 
 TODO: address the gap where a recipe mutation succeeds but publishing its notification fails. For the initial happy path, the scheduled reindex provides eventual recovery.
 
-#### Schema-checked GraphQL operations
-
-Search currently constructs GraphQL query strings without build-time schema checking. Introduce named queries in `operations.graphql`, keeping optional-source queries separate. Investigated Zig clients ([softprops/zig-graphql](https://github.com/softprops/zig-graphql), [xqtc161/graphql-zig](https://github.com/xqtc161/graphql-zig)) use handwritten response types; no suitable schema-checked Zig client generator was found, and compatibility with Zig 0.14.1 is unverified. Suggested first step: validate operations against the synchronized schema using the JavaScript `graphql` package and generate Zig query constants through the existing project-generation pipeline; defer full typed client generation.
-
 ### Resilience
 
 Maybe later.

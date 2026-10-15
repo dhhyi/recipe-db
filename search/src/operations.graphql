@@ -1,0 +1,29 @@
+query RecipeIds {
+  recipes {
+    id
+  }
+}
+
+query IndexRecipe($id: ID!) {
+  recipe(id: $id) {
+    id
+    name
+    method
+    ingredients {
+      name
+      amount
+      unit
+      optional
+    }
+    rating {
+      average
+      count
+    }
+    image {
+      __typename
+    }
+    inspirations {
+      url
+    }
+  }
+}

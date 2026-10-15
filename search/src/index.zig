@@ -14,9 +14,38 @@ const str = json.str;
 const get = json.get;
 const text = json.text;
 const array = json.array;
+const operations = @import("operations.zig");
 
 pub const collection = "/collections/recipes_v1";
-const fields = "id name method ingredients { name amount unit optional }";
+
+const OptionalSource = enum { rating, image, inspirations };
+const GraphqlResponse = struct {
+    data: Value,
+    failed: std.EnumSet(OptionalSource) = std.EnumSet(OptionalSource).initEmpty(),
+};
+
+fn graphqlResponse(root: Value, allow_optional_errors: bool) !GraphqlResponse {
+    if (root != .object) return error.InvalidDependencyResponse;
+    var result = GraphqlResponse{ .data = try get(root, "data") };
+    if (root.object.get("errors")) |errors| {
+        for (try array(errors)) |err| {
+            if (!allow_optional_errors) return error.GraphqlError;
+            _ = try text(try get(err, "message"));
+            const path = try array(try get(err, "path"));
+            if (path.len < 2 or !std.mem.eql(u8, try text(path[0]), "recipe")) return error.GraphqlError;
+            const source = std.meta.stringToEnum(OptionalSource, try text(path[1])) orelse return error.GraphqlError;
+            for (path[2..]) |segment| switch (segment) {
+                .string => {},
+                .integer => |index| if (index < 0) return error.InvalidDependencyResponse,
+                else => return error.InvalidDependencyResponse,
+            };
+            result.failed.insert(source);
+        }
+    }
+    // Only an error-free null recipe confirms deletion.
+    if (result.failed.count() != 0 and try get(result.data, "recipe") == .null) return error.GraphqlError;
+    return result;
+}
 
 pub const Index = struct {
     cfg: Config,
@@ -44,16 +73,11 @@ pub const Index = struct {
         try self.progress();
         return http(a, method, try std.mem.concat(a, u8, &.{ self.cfg.typesense, path }), body, self.cfg.key);
     }
-    fn gql(self: *Index, a: Allocator, query: []const u8, variables: Value) !Value {
+    fn gql(self: *Index, a: Allocator, query: []const u8, variables: Value, allow_optional_errors: bool) !GraphqlResponse {
         try self.progress();
         const response = try http(a, "POST", self.cfg.graphql, try encode(a, .{ .query = query, .variables = variables }), null);
         if (response.status != 200) return error.GraphqlUnavailable;
-        const root = try parse(a, response.body);
-        if (root != .object) return error.InvalidDependencyResponse;
-        if (root.object.get("errors")) |errs| {
-            if (errs != .array or errs.array.items.len != 0) return error.GraphqlError;
-        }
-        return get(root, "data");
+        return graphqlResponse(try parse(a, response.body), allow_optional_errors);
     }
     fn schema(self: *Index, a: Allocator) !void {
         const existing = try self.typesense(a, "GET", collection, null);
@@ -72,72 +96,26 @@ pub const Index = struct {
         const response = try self.typesense(a, "DELETE", try docPath(a, id), null);
         if (response.status != 200 and response.status != 404) return error.TypesenseUnavailable;
     }
-    fn optional(self: *Index, a: Allocator, doc: *Value, old: ?Value, vars: Value, source: []const u8, names: []const []const u8) !void {
-        const selection = if (std.mem.eql(u8, source, "rating")) "rating { average count }" else if (std.mem.eql(u8, source, "image")) "image { __typename }" else "inspirations { url }";
-        const query = try std.fmt.allocPrint(a, "query($id: ID!) {{ recipe(id: $id) {{ {s} }} }}", .{selection});
-        const data = self.gql(a, query, vars) catch |err| {
-            std.log.err("optional source {s} unavailable: {s}", .{ source, @errorName(err) });
-            return preserve(doc, old, names);
-        };
-        const recipe = try get(data, "recipe");
-        // A core recipe disappearing between requests is retried, never interpreted as optional absence.
-        if (recipe == .null) return error.SourceChangedDuringReload;
-        const value = try get(recipe, source);
-        if (value == .null and !std.mem.eql(u8, source, "image")) {
-            std.log.err("optional source {s} unavailable (GraphQL null)", .{source});
-            return preserve(doc, old, names);
-        }
-        if (std.mem.eql(u8, source, "image")) {
-            if (value != .null and value != .object) return error.InvalidDependencyResponse;
-            try doc.object.put("has_image", .{ .bool = value != .null });
-        } else if (std.mem.eql(u8, source, "inspirations")) {
-            var urls = std.ArrayList(Value).init(a);
-            for (try array(value)) |link| try urls.append(str(try text(try get(link, "url"))));
-            try doc.object.put("inspiration_urls", .{ .array = urls });
-        } else {
-            for ([_][]const u8{ "average", "count" }, names) |field, name| {
-                const v = try get(value, field);
-                if (v != .null) try doc.object.put(name, v);
-            }
-        }
-    }
     pub fn reload(self: *Index, a: Allocator, id: []const u8) !bool {
         var vars = object(a);
         try vars.object.put("id", str(id));
-        const query = "query($id: ID!) { recipe(id: $id) { " ++ fields ++ " } }";
-        const recipe = try get(try self.gql(a, query, vars), "recipe");
+        const response = try self.gql(a, operations.IndexRecipe, vars, true);
+        const recipe = try get(response.data, "recipe");
         if (recipe == .null) {
             try self.remove(a, id);
             return false;
         }
-        if (!std.mem.eql(u8, try text(try get(recipe, "id")), id)) return error.InvalidDependencyResponse;
         const old = try self.previous(a, id);
-        var doc = object(a);
-        try doc.object.put("id", str(id));
-        try doc.object.put("name", str(try text(try get(recipe, "name"))));
-        const method = try get(recipe, "method");
-        if (method != .null) try doc.object.put("method", str(try text(method)));
-        var ingredients = std.ArrayList(Value).init(a);
-        var units = std.ArrayList(Value).init(a);
-        const items = try get(recipe, "ingredients");
-        if (items != .null) for (try array(items)) |ingredient| {
-            try ingredients.append(str(try text(try get(ingredient, "name"))));
-            const unit = try get(ingredient, "unit");
-            if (unit != .null) try units.append(str(try text(unit)));
-        };
-        try doc.object.put("ingredients", .{ .array = ingredients });
-        try doc.object.put("ingredient_units", .{ .array = units });
-        try self.optional(a, &doc, old, vars, "rating", &.{ "rating_average", "rating_count" });
-        try self.optional(a, &doc, old, vars, "image", &.{"has_image"});
-        try self.optional(a, &doc, old, vars, "inspirations", &.{"inspiration_urls"});
+        const doc = try recipeDocument(a, recipe, response.failed, old, id);
         // POST upsert replaces the whole document, unlike PATCH which retains omitted fields.
-        const response = try self.typesense(a, "POST", collection ++ "/documents?action=upsert", try encode(a, doc));
-        if (response.status != 200 and response.status != 201) return error.TypesenseWriteFailed;
+        const written = try self.typesense(a, "POST", collection ++ "/documents?action=upsert", try encode(a, doc));
+        if (written.status != 200 and written.status != 201) return error.TypesenseWriteFailed;
         return true;
     }
     pub fn rebuild(self: *Index, a: Allocator) !void {
         try self.schema(a);
-        const recipes = try array(try get(try self.gql(a, "{ recipes { id } }", object(a)), "recipes"));
+        const response = try self.gql(a, operations.RecipeIds, object(a), false);
+        const recipes = try array(try get(response.data, "recipes"));
         var ids = std.StringHashMap(void).init(a);
         for (recipes) |recipe| {
             const id = try text(try get(recipe, "id"));
@@ -159,6 +137,58 @@ pub const Index = struct {
     }
 };
 
+fn recipeDocument(a: Allocator, recipe: Value, failed: std.EnumSet(OptionalSource), old: ?Value, id: []const u8) !Value {
+    if (!std.mem.eql(u8, try text(try get(recipe, "id")), id)) return error.InvalidDependencyResponse;
+    var doc = object(a);
+    try doc.object.put("id", str(id));
+    try doc.object.put("name", str(try text(try get(recipe, "name"))));
+    const method = try get(recipe, "method");
+    if (method != .null) try doc.object.put("method", str(try text(method)));
+    var ingredients = std.ArrayList(Value).init(a);
+    var units = std.ArrayList(Value).init(a);
+    const items = try get(recipe, "ingredients");
+    if (items != .null) for (try array(items)) |ingredient| {
+        try ingredients.append(str(try text(try get(ingredient, "name"))));
+        const unit = try get(ingredient, "unit");
+        if (unit != .null) try units.append(str(try text(unit)));
+    };
+    try doc.object.put("ingredients", .{ .array = ingredients });
+    try doc.object.put("ingredient_units", .{ .array = units });
+    try optional(a, &doc, old, recipe, failed, .rating, &.{ "rating_average", "rating_count" });
+    try optional(a, &doc, old, recipe, failed, .image, &.{"has_image"});
+    try optional(a, &doc, old, recipe, failed, .inspirations, &.{"inspiration_urls"});
+    return doc;
+}
+
+fn optional(a: Allocator, doc: *Value, old: ?Value, recipe: Value, failed: std.EnumSet(OptionalSource), source: OptionalSource, names: []const []const u8) !void {
+    if (failed.contains(source)) {
+        std.log.warn("optional source {s} unavailable (GraphQL error)", .{@tagName(source)});
+        return preserve(doc, old, names);
+    }
+    const value = try get(recipe, @tagName(source));
+    if (value == .null and source != .image) {
+        std.log.warn("optional source {s} unavailable (GraphQL null)", .{@tagName(source)});
+        return preserve(doc, old, names);
+    }
+    switch (source) {
+        .image => {
+            if (value != .null and value != .object) return error.InvalidDependencyResponse;
+            try doc.object.put("has_image", .{ .bool = value != .null });
+        },
+        .inspirations => {
+            var urls = std.ArrayList(Value).init(a);
+            for (try array(value)) |link| try urls.append(str(try text(try get(link, "url"))));
+            try doc.object.put("inspiration_urls", .{ .array = urls });
+        },
+        .rating => {
+            for ([_][]const u8{ "average", "count" }, names) |field, name| {
+                const v = try get(value, field);
+                if (v != .null) try doc.object.put(name, v);
+            }
+        },
+    }
+}
+
 fn preserve(doc: *Value, old: ?Value, names: []const []const u8) !void {
     const previous = old orelse return error.OptionalSourceUnavailableWithoutPreviousDocument;
     if (previous != .object) return error.InvalidDependencyResponse;
@@ -177,6 +207,212 @@ pub fn escape(a: Allocator, value: []const u8) ![]const u8 {
 }
 fn docPath(a: Allocator, id: []const u8) ![]const u8 {
     return std.mem.concat(a, u8, &.{ collection, "/documents/", try escape(a, id) });
+}
+
+const recipeFixture =
+    \\{"id":"r1","name":"Updated","method":null,"ingredients":[],
+    \\"rating":{"average":5,"count":2},"image":null,"inspirations":[]}
+;
+const previousFixture =
+    \\{"id":"r1","name":"Old","method":"Old method","rating_average":3,"rating_count":1,
+    \\"has_image":true,"inspiration_urls":["https://old.example"]}
+;
+
+test "mixed GraphQL success updates healthy sources and preserves only failed sources" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const old = try parse(a, previousFixture);
+    for ([_][]const u8{
+        \\["recipe","image"]
+        ,
+        \\["recipe","rating","average"]
+        ,
+        \\["recipe","inspirations",0,"url"]
+        ,
+    }, [_]OptionalSource{ .image, .rating, .inspirations }) |path, source| {
+        const root = try parse(a, try std.fmt.allocPrint(a,
+            \\{{"data":{{"recipe":{s}}},"errors":[{{"message":"source failed","path":{s}}}]}}
+        , .{ recipeFixture, path }));
+        const response = try graphqlResponse(root, true);
+        var recipe = try get(response.data, "recipe");
+        // async-graphql can omit failed fields instead of serializing them as null.
+        _ = recipe.object.swapRemove(@tagName(source));
+        const doc = try recipeDocument(a, recipe, response.failed, old, "r1");
+        try std.testing.expectEqualStrings("Updated", try text(try get(doc, "name")));
+        try std.testing.expect(!doc.object.contains("method"));
+        try std.testing.expectEqual(source == .image, (try get(doc, "has_image")).bool);
+        try std.testing.expectEqual(@as(i64, if (source == .rating) 3 else 5), (try get(doc, "rating_average")).integer);
+        try std.testing.expectEqual(@as(i64, if (source == .rating) 1 else 2), (try get(doc, "rating_count")).integer);
+        const urls = try array(try get(doc, "inspiration_urls"));
+        try std.testing.expectEqual(@as(usize, if (source == .inspirations) 1 else 0), urls.len);
+        if (urls.len != 0) try std.testing.expectEqualStrings("https://old.example", try text(urls[0]));
+        try std.testing.expectError(error.OptionalSourceUnavailableWithoutPreviousDocument, recipeDocument(a, recipe, response.failed, null, "r1"));
+        try std.testing.expectError(error.GraphqlError, graphqlResponse(root, false));
+    }
+}
+
+test "null optional sources preserve old values while confirmed absence clears them" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const old = try parse(a, previousFixture);
+    var recipe = try parse(a, recipeFixture);
+    try recipe.object.put("rating", .null);
+    try recipe.object.put("inspirations", .null);
+    const failed = std.EnumSet(OptionalSource).initEmpty();
+    const doc = try recipeDocument(a, recipe, failed, old, "r1");
+    try std.testing.expectEqual(@as(i64, 3), (try get(doc, "rating_average")).integer);
+    try std.testing.expectEqual(@as(i64, 1), (try get(doc, "rating_count")).integer);
+    try std.testing.expect(!(try get(doc, "has_image")).bool);
+    try std.testing.expectEqualStrings("https://old.example", try text((try array(try get(doc, "inspiration_urls")))[0]));
+    try std.testing.expectError(error.OptionalSourceUnavailableWithoutPreviousDocument, recipeDocument(a, recipe, failed, null, "r1"));
+    const fresh = try recipeDocument(a, try parse(a, recipeFixture), failed, null, "r1");
+    try std.testing.expect(!(try get(fresh, "has_image")).bool);
+    try std.testing.expectEqual(@as(usize, 0), (try array(try get(fresh, "inspiration_urls"))).len);
+}
+
+test "multiple optional errors preserve all affected sources without hiding core errors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try parse(a,
+        \\{"data":{"recipe":{"id":"r1","name":"Updated","method":null,"ingredients":[]}},
+        \\"errors":[{"message":"offline","path":["recipe","image"]},
+        \\{"message":"offline","path":["recipe","rating"]},
+        \\{"message":"offline","path":["recipe","inspirations"]}]}
+    );
+    const response = try graphqlResponse(root, true);
+    const doc = try recipeDocument(a, try get(response.data, "recipe"), response.failed, try parse(a, previousFixture), "r1");
+    try std.testing.expectEqualStrings("Updated", try text(try get(doc, "name")));
+    try std.testing.expect((try get(doc, "has_image")).bool);
+    try std.testing.expectEqual(@as(i64, 3), (try get(doc, "rating_average")).integer);
+    try std.testing.expectEqual(@as(usize, 1), (try array(try get(doc, "inspiration_urls"))).len);
+    try std.testing.expectError(error.InvalidDependencyResponse, recipeDocument(a, try get(response.data, "recipe"), response.failed, null, "wrong-id"));
+    var mixed = root;
+    var errors = try get(mixed, "errors");
+    try errors.array.append(try parse(a,
+        \\{"message":"core failed","path":["recipe","name"]}
+    ));
+    try mixed.object.put("errors", errors);
+    try std.testing.expectError(error.GraphqlError, graphqlResponse(mixed, true));
+}
+
+test "only error-free null recipes confirm deletion and malformed errors fail closed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const deleted = try graphqlResponse(try parse(a,
+        \\{"data":{"recipe":null},"errors":[]}
+    ), true);
+    try std.testing.expect(try get(deleted.data, "recipe") == .null);
+    for ([_][]const u8{
+        \\{"data":{"recipe":null},"errors":[{"message":"failed","path":["recipe","image"]}]}
+        ,
+        \\{"data":{"recipe":null},"errors":[{"message":"failed","path":["recipe"]}]}
+        ,
+        \\{"data":{},"errors":[{"message":"failed","path":["other","image"]}]}
+        ,
+        \\{"data":{},"errors":[{"message":"failed","path":["recipe","unknown"]}]}
+        ,
+    }) |bytes| {
+        try std.testing.expectError(error.GraphqlError, graphqlResponse(try parse(a, bytes), true));
+    }
+    for ([_][]const u8{
+        \\{"data":{},"errors":null}
+        ,
+        \\{"data":{},"errors":[{"message":"failed"}]}
+        ,
+        \\{"data":{},"errors":[{"message":"failed","path":["recipe","image",false]}]}
+        ,
+        \\{"data":{},"errors":[{"message":"failed","path":["recipe","inspirations",-1]}]}
+        ,
+        \\{"data":{},"errors":[{"path":["recipe","image"]}]}
+        ,
+    }) |bytes| {
+        try std.testing.expectError(error.InvalidDependencyResponse, graphqlResponse(try parse(a, bytes), true));
+    }
+}
+
+test "reload uses one GraphQL request and writes a mixed-success document" {
+    const Fixture = struct {
+        server: *std.net.Server,
+        failure: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.failure = err;
+            };
+        }
+        fn serve(self: *@This()) !void {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            for (0..3) |step| {
+                var fds = [_]std.posix.pollfd{.{ .fd = self.server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+                if (try std.posix.poll(&fds, 5000) == 0) return error.FixtureTimeout;
+                const connection = try self.server.accept();
+                defer connection.stream.close();
+                var buffer: [8192]u8 = undefined;
+                var server = std.http.Server.init(connection, &buffer);
+                var request = try server.receiveHead();
+                const body = try (try request.reader()).readAllAlloc(a, 8192);
+                switch (step) {
+                    0 => {
+                        try std.testing.expectEqualStrings("/graphql", request.head.target);
+                        try std.testing.expectEqual(.POST, request.head.method);
+                        const payload = try parse(a, body);
+                        try std.testing.expectEqualStrings(operations.IndexRecipe, try text(try get(payload, "query")));
+                        try std.testing.expectEqualStrings("r1", try text(try get(try get(payload, "variables"), "id")));
+                        try request.respond(
+                            \\{"data":{"recipe":{"id":"r1","name":"Updated","method":null,"ingredients":[],
+                            \\"rating":{"average":5,"count":2},"inspirations":[]}},
+                            \\"errors":[{"message":"images unavailable","path":["recipe","image"]}]}
+                        , .{ .keep_alive = false });
+                    },
+                    1 => {
+                        try std.testing.expectEqualStrings(collection ++ "/documents/r1", request.head.target);
+                        try std.testing.expectEqual(.GET, request.head.method);
+                        try request.respond(previousFixture, .{ .keep_alive = false });
+                    },
+                    2 => {
+                        try std.testing.expectEqualStrings(collection ++ "/documents?action=upsert", request.head.target);
+                        try std.testing.expectEqual(.POST, request.head.method);
+                        const doc = try parse(a, body);
+                        try std.testing.expectEqualStrings("Updated", try text(try get(doc, "name")));
+                        try std.testing.expect((try get(doc, "has_image")).bool);
+                        try std.testing.expectEqual(@as(i64, 5), (try get(doc, "rating_average")).integer);
+                        try std.testing.expectEqual(@as(usize, 0), (try array(try get(doc, "inspiration_urls"))).len);
+                        try request.respond("{}", .{ .keep_alive = false });
+                    },
+                    else => unreachable,
+                }
+            }
+        }
+    };
+    if (c.curl_global_init(c.CURL_GLOBAL_DEFAULT) != c.CURLE_OK) return error.CurlInit;
+    defer c.curl_global_cleanup();
+    var server = try (try std.net.Address.parseIp("127.0.0.1", 0)).listen(.{});
+    defer server.deinit();
+    var fixture = Fixture{ .server = &server };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}", .{server.listen_address.getPort()});
+    var index = Index{ .cfg = .{
+        .graphql = try std.mem.concat(a, u8, &.{ base, "/graphql" }),
+        .typesense = base,
+        .key = "",
+        .nats = "",
+        .port = 0,
+        .state_dir = "",
+        .checkpoint = 0,
+    } };
+    const thread = try std.Thread.spawn(.{}, Fixture.run, .{&fixture});
+    const result = index.reload(a, "r1");
+    thread.join();
+    if (fixture.failure) |err| return err;
+    try std.testing.expect(try result);
 }
 
 test "unavailable optional source requires a previous document, including known absence" {

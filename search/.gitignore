@@ -1,2 +1,4 @@
 zig-out
 .zig-cache
+__pycache__
+src/operations.zig
