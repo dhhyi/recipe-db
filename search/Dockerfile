@@ -5,7 +5,7 @@ ARG BUILDARCH
 ARG TARGETARCH
 RUN test "$BUILDARCH" = "$TARGETARCH" \
   && apt-get update && apt-get install -y --no-install-recommends \
-  ca-certificates curl xz-utils pkg-config libc6-dev libcurl4-openssl-dev libnats-dev && rm -rf /var/lib/apt/lists/*
+  ca-certificates curl xz-utils pkg-config libc6-dev libcurl4-openssl-dev libnats-dev python3 python3-pip && rm -rf /var/lib/apt/lists/*
 
 FROM downloader AS download-amd64
 ENV ZIG_ARCH=x86_64 ZIG_CPU=baseline
@@ -22,10 +22,15 @@ RUN curl -fsSL "https://ziglang.org/download/0.14.1/zig-${ZIG_ARCH}-linux-0.14.1
   && tar -xJf /tmp/zig.tar.xz --strip-components=1 -C /opt/zig
 WORKDIR /ws
 ENV PATH="/opt/zig:${PATH}"
+COPY requirements.txt .
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 COPY build.zig .
+COPY generate_operations.py test_generate_operations.py recipe-db.graphqls ./
 COPY src src
 ENV PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
-RUN zig build test -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe \
+RUN python3 generate_operations.py \
+  && python3 -m unittest -v \
+  && zig build test -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe \
   && zig build -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe
 
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587

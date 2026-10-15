@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const validate = b.addSystemCommand(&.{ "python3", "generate_operations.py", "--check" });
     const exe = b.addExecutable(.{
         .name = "search",
         .root_source_file = b.path("src/main.zig"),
@@ -10,6 +11,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.linkLibC();
+    exe.step.dependOn(&validate.step);
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("nats");
     b.installArtifact(exe);
@@ -21,6 +23,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     tests.linkLibC();
+    tests.step.dependOn(&validate.step);
     tests.linkSystemLibrary("curl");
     tests.linkSystemLibrary("nats");
     const test_step = b.step("test", "Run unit tests");

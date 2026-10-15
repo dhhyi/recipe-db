@@ -11,7 +11,9 @@ devcontainer:
       - libcurl4-openssl-dev
       - libnats-dev
     user:
-      - RUN mise use -g zig@0.14.1
+      - RUN mise use -g zig@0.14.1 python@3
+      - RUN pip install --break-system-packages graphql-core==3.2.6
+  initialize: python3 generate_operations.py
   ports:
     - 3000
   environment:
@@ -52,10 +54,15 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
+graphqlSchema: "."
+generate:
+  - command: python3 generate_operations.py
+    output: src/operations.zig
 format: zig fmt build.zig src
-check: zig version && zig fmt --check build.zig src && zig build test && zig build -Doptimize=ReleaseSafe
+check: python3 -m unittest -v && zig version && zig fmt --check build.zig src && zig build test && zig build -Doptimize=ReleaseSafe
 prettier:
   ignore:
     - "*.zig"
     - .zig-cache
     - zig-out
+    - "*.py"
