@@ -112,7 +112,7 @@ Search currently constructs GraphQL query strings without build-time schema chec
 
 #### Readable REST integration tests
 
-`search-test` is currently a freestyle Python `unittest` suite issuing raw HTTP requests, which makes scenarios hard to read. Migrate it to a proper REST testing framework with declarative, readable request/response tests. Pick one from the framework candidates listed in [AGENTS.md](AGENTS.md) and remove it from that list. Keep the existing coverage and the deployed-stack, non-disruptive approach.
+Implemented in `search-test` with [Behave](https://behave.readthedocs.io/): [Gherkin scenarios](search-test/features/search.feature) describe requests, expected search results, event delivery, and rebuild recovery. Python steps reuse the existing HTTP, GraphQL, and NATS helpers. Each scenario uses a unique ingredient scope and registers cleanup before creating data, preserving the deployed-stack, non-disruptive approach. Run with `mise run --raw in-devcontainer search-test test` against a ready development stack and shared fixture service; JUnit reports are written to `search-test/target/behave/`.
 
 ### Resilience
 
