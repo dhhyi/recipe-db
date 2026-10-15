@@ -107,4 +107,3 @@ If you pick one for a new project, make sure to remove it from this list.
 - https://gettaurus.org/
 - https://github.com/svanoort/pyresttest
 - https://rest-assured.io/
-- https://www.baeldung.com/cucumber-rest-api-testing

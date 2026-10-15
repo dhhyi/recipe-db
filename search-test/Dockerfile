@@ -4,5 +4,8 @@
 ARG PYTHON_VERSION
 FROM python:${PYTHON_VERSION}-slim-bookworm@sha256:c8137f4c460908c8763f281c8f22c431eb5c538514ba9553fc3a89c06b7cfb88
 WORKDIR /app
-COPY test_search.py .
-CMD ["python3", "-m", "unittest", "-v", "test_search"]
+COPY requirements.txt .
+RUN pip install --no-cache-dir --requirement requirements.txt
+COPY search_support.py .
+COPY features ./features
+CMD ["python3", "-m", "behave", "--no-color", "--junit", "--junit-directory", "target/behave"]

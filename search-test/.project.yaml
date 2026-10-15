@@ -11,6 +11,7 @@ devcontainer:
       PYTHON_VERSION: "3"
     user:
       - RUN mise use -g python@$PYTHON_VERSION
+      - RUN pip install --break-system-packages behave==1.3.3
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     GRAPHQL_API: http://traefik/graphql
@@ -30,8 +31,11 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: python3 -m unittest -v test_search
-check: python3 -m py_compile test_search.py
+test: python3 -m behave --no-color --junit --junit-directory target/behave
+check: |
+  python3 -m py_compile search_support.py features/environment.py features/steps/search_steps.py
+  python3 -m behave --no-color --dry-run
 prettier:
   ignore:
     - "*.py"
+    - "*.feature"
