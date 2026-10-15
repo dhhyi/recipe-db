@@ -94,9 +94,9 @@ Only confirmed writes performed through GraphQL publish notifications, including
 
 ### searching
 
-The backend-only Typesense/Zig platform is implemented; see [search operations and validation](search/OPERATIONS.md). Frontend integration and actual Raspberry Pi 3 resource/startup measurements remain outstanding.
+The Typesense/Zig platform and GraphQL `searchRecipes(options: JSON!)` integration are implemented; see [search operations and validation](search/OPERATIONS.md). The gateway hydrates ordered hits with current recipe data, drops confirmed missing recipes without changing the search count, and forwards other backend errors.
 
-Build a dedicated search platform using [Typesense](https://typesense.org/) and a thin Zig service. Target a Raspberry Pi 3 with about 100 recipes initially; verify ARM64 compatibility, memory use, and startup time on the target device.
+Build a dedicated search platform using [Typesense](https://typesense.org/) and a thin Zig service.
 
 Index current recipe data exposed by GraphQL, with room to add fields such as tags as they become available. Search German text with full-text search, typo tolerance, facets, and pagination; highlighting is not needed. The service should forward composable Typesense query options and return ordered recipe IDs plus facet and pagination metadata. GraphQL remains the source of precise recipe data. Defer user-specific rating search.
 

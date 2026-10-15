@@ -19,6 +19,7 @@
         wiring (-> (RuntimeWiring/newRuntimeWiring)
                    (.scalar (scalar "StringOrInt"))
                    (.scalar (scalar "Upload"))
+                   (.scalar (scalar "JSON"))
                    (.build))]
     (.makeExecutableSchema (SchemaGenerator.) registry wiring)))
 

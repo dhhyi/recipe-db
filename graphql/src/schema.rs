@@ -7,10 +7,11 @@ use crate::inspirations::{InspirationsApi, InspirationsMutation};
 use crate::link_extract::LinkExtractApi;
 use crate::ratings::{RatingsApi, RatingsMutation, RatingsQuery};
 use crate::recipes::{RecipesApi, RecipesMutation, RecipesQuery};
+use crate::search::{SearchApi, SearchQuery};
 use crate::traefik::{TraefikApi, TraefikQuery};
 
 #[derive(MergedObject, Default)]
-pub struct QueryRoot(RecipesQuery, RatingsQuery, TraefikQuery);
+pub struct QueryRoot(RecipesQuery, RatingsQuery, TraefikQuery, SearchQuery);
 
 #[derive(MergedObject, Default)]
 pub struct MutationRoot(
@@ -31,6 +32,7 @@ pub fn build_schema(publisher: Option<EventPublisher>) -> ApiSchema {
         EmptySubscription,
     )
     .data(RecipesApi::new())
+    .data(SearchApi::new())
     .data(RatingsApi::new())
     .data(ImagesApi::new())
     .data(InspirationsApi::new())
