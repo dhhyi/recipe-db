@@ -4,6 +4,12 @@
 
 Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.
 
+## ROADMAP changes
+
+When implementing things described in the ROADMAP, delete the corresponding items from the ROADMAP to keep it up to date. If an item is no longer relevant or feasible, remove it as well.
+
+Add follow-up items to the roadmap if they come up during implementation.
+
 ## Running commands for a project
 
 Never run project tooling (elm, go, gradle, cargo, pnpm, ...) directly on the host. Always go through the devcontainer:

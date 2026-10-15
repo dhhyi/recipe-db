@@ -110,10 +110,6 @@ TODO: address the gap where a recipe mutation succeeds but publishing its notifi
 
 Search currently constructs GraphQL query strings without build-time schema checking. Introduce named queries in `operations.graphql`, keeping optional-source queries separate. Investigated Zig clients ([softprops/zig-graphql](https://github.com/softprops/zig-graphql), [xqtc161/graphql-zig](https://github.com/xqtc161/graphql-zig)) use handwritten response types; no suitable schema-checked Zig client generator was found, and compatibility with Zig 0.14.1 is unverified. Suggested first step: validate operations against the synchronized schema using the JavaScript `graphql` package and generate Zig query constants through the existing project-generation pipeline; defer full typed client generation.
 
-#### Readable REST integration tests
-
-Implemented in `search-test` with [Behave](https://behave.readthedocs.io/): [Gherkin scenarios](search-test/features/search.feature) describe requests, expected search results, event delivery, and rebuild recovery. Python steps reuse the existing HTTP, GraphQL, and NATS helpers. Each scenario uses a unique ingredient scope and registers cleanup before creating data, preserving the deployed-stack, non-disruptive approach. Run with `mise run --raw in-devcontainer search-test test` against a ready development stack and shared fixture service; JUnit reports are written to `search-test/target/behave/`.
-
 ### Resilience
 
 Maybe later.
