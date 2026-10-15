@@ -96,15 +96,7 @@ Only confirmed writes performed through GraphQL publish notifications, including
 
 The Typesense/Zig platform and GraphQL `searchRecipes(options: JSON!)` integration are implemented; see [search operations and validation](search/OPERATIONS.md). The gateway hydrates ordered hits with current recipe data, drops confirmed missing recipes without changing the search count, and forwards other backend errors.
 
-Build a dedicated search platform using [Typesense](https://typesense.org/) and a thin Zig service.
-
-Index current recipe data exposed by GraphQL, with room to add fields such as tags as they become available. Search German text with full-text search, typo tolerance, facets, and pagination; highlighting is not needed. The service should forward composable Typesense query options and return ordered recipe IDs plus facet and pagination metadata. GraphQL remains the source of precise recipe data. Defer user-specific rating search.
-
-Use the shared message bus for queued, durable recipe-change notifications. Only mutations performed through GraphQL publish events. The Zig service consumes them with the independent `search-index-v1` durable consumer, reloads the recipe through GraphQL, then replaces its Typesense document; confirmed recipe deletions remove the document. Repeated delivery must be safe. If an optional source service is unavailable while rebuilding a document, retain its fields from the previous indexed document rather than erasing them.
-
-Provide a daily scheduled reindex and a way to trigger one manually. Rebuilds may make search unavailable while running. Start with the backend only; frontend integration is separate work.
-
-TODO: address the gap where a recipe mutation succeeds but publishing its notification fails. For the initial happy path, the scheduled reindex provides eventual recovery.
+TODO: Integrate recipe search into the frontend.
 
 ### Resilience
 
