@@ -1,0 +1,12 @@
+query ($options: JSON!) {
+  searchRecipes(options: $options) {
+    recipes {
+      id
+      name
+    }
+    found
+    page
+    perPage
+    facets
+  }
+}

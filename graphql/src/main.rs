@@ -16,6 +16,7 @@ mod recipe;
 mod recipes;
 mod rest_client;
 mod schema;
+mod search;
 mod traefik;
 
 #[tokio::main]
