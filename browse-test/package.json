@@ -1,0 +1,22 @@
+{
+  "name": "browse-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack browser tests with Google Chrome and Playwright",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "license": "MIT",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.6.0",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.6.0",
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}
