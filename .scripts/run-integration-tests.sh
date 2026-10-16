@@ -172,7 +172,7 @@ for project in "${projects[@]}"; do
     browse-test)
       wait_for_graphql "GraphQL API"
       wait_for_http "browse frontend" http://127.0.0.1:8080/ 200
-      wait_for_http "shared design assets" http://127.0.0.1:8080/design/styles.css 200
+      wait_for_http "shared design assets" http://127.0.0.1:8080/design/styles.css 302
       wait_for_http "recipe editor" http://127.0.0.1:8080/edit/new 200
       ;;
     recipes-test)

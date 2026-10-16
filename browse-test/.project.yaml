@@ -43,5 +43,5 @@ check: |
   node --check playwright.config.js
   node --check tests/recipes.spec.js
   node --check tests/fixtures.js
-  pnpm exec playwright test --list
+  pnpm exec playwright test --list --reporter=list
 test: pnpm test

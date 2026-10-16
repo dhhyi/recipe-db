@@ -95,7 +95,7 @@ jobs:
         run: mise run test-message-bus
 
       - name: start full stack for Chrome browser tests
-        run: mise run dev-up -- --wait-timeout 120
+        run: mise run dev-up -- --build --wait-timeout 120
 
       - name: run seeded Playwright tests in the browser devcontainer
         run: mise run --raw in-devcontainer browse-test test

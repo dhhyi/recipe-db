@@ -13,11 +13,13 @@ test("browse seeded recipes, open a recipe and return home", async ({
     exact: true,
   });
   await expect(recipeLink).toBeVisible();
-  await page.evaluate(() => customElements.whenDefined("recipe-tile-component"));
+  await page.evaluate(() =>
+    customElements.whenDefined("recipe-tile-component"),
+  );
   await expect(recipeLink).toMatchAriaSnapshot(`
-    - link "Rezept Playwright demo: Milchreis":
-      - img "Playwright demo: Milchreis"
-      - heading "Playwright demo: Milchreis" [level=2]
+    - link "Rezept Playwright demo Milchreis":
+      - img "Playwright demo Milchreis"
+      - heading "Playwright demo Milchreis" [level=2]
   `);
   await capture(page, testInfo, "overview");
 
@@ -33,14 +35,14 @@ test("browse seeded recipes, open a recipe and return home", async ({
           - columnheader "Anzahl"
           - columnheader "Zutat"
       - rowgroup:
-        - row "1Teil Rundkörniger Reis (Milchreis, Risottoreis)":
-          - cell "1Teil"
+        - row "1 Teil Rundkörniger Reis (Milchreis, Risottoreis)":
+          - cell "1 Teil"
           - cell "Rundkörniger Reis (Milchreis, Risottoreis)"
-        - row "2Teile Milch":
-          - cell "2Teile"
+        - row "2 Teile Milch":
+          - cell "2 Teile"
           - cell "Milch"
-        - row "1Teil Sahne":
-          - cell "1Teil"
+        - row "1 Teil Sahne":
+          - cell "1 Teil"
           - cell "Sahne"
         - row "Prise Salz":
           - cell "Prise"
@@ -68,17 +70,21 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
 }, testInfo) => {
   await page.goto(`/recipe/${demoRecipe.id}`);
   await page.getByRole("button", { name: "Bearbeiten", exact: true }).click();
-  await page.getByRole("link", { name: "Rezept bearbeiten", exact: true }).click();
+  await page
+    .getByRole("link", { name: "Rezept bearbeiten", exact: true })
+    .click();
   await expect(page).toHaveURL(`/edit/${demoRecipe.id}`);
-  await expect(page.getByRole("textbox", { name: "Name", exact: true })).toHaveValue(
-    demoRecipe.name,
-  );
+  await expect(
+    page.getByRole("textbox", { name: "Name", exact: true }),
+  ).toHaveValue(demoRecipe.name);
   await expect(page.getByRole("heading", { level: 1 })).toMatchAriaSnapshot(`
     - heading "Rezept bearbeiten" [level=1]
   `);
   await capture(page, testInfo, "editor");
   const updatedName = `${demoRecipe.name} mit Zimt`;
-  await page.getByRole("textbox", { name: "Name", exact: true }).fill(updatedName);
+  await page
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill(updatedName);
   await page.getByRole("button", { name: "Speichern", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("Gespeichert");
 

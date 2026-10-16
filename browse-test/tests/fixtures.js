@@ -19,7 +19,7 @@ export const test = base.extend({
     const value = JSON.parse(
       await readFile(new URL("recipe1.json", demo), "utf8"),
     );
-    value.name = "Playwright demo: Milchreis";
+    value.name = "Playwright demo Milchreis";
     value.method = await readFile(new URL("recipe1.method.md", demo), "utf8");
     const { createRecipe: recipe } = await graphql(
       request,
@@ -50,16 +50,19 @@ export const test = base.extend({
       expect(result.data.setImage).toBe(true);
       await use(recipe);
     } finally {
-      const image = await request.delete(
-        new URL(
-          `/images/${recipe.id}`,
-          process.env.REST_API || "http://traefik:3000",
-        ).href,
-      );
-      expect([200, 204, 404]).toContain(image.status());
-      await graphql(request, "mutation($id: ID!) { deleteRecipe(id: $id) }", {
-        id: recipe.id,
-      });
+      try {
+        const image = await request.delete(
+          new URL(
+            `/images/${recipe.id}`,
+            process.env.REST_API || "http://traefik:3000",
+          ).href,
+        );
+        expect([200, 204, 404]).toContain(image.status());
+      } finally {
+        await graphql(request, "mutation($id: ID!) { deleteRecipe(id: $id) }", {
+          id: recipe.id,
+        });
+      }
     }
   },
 });
@@ -69,9 +72,11 @@ export async function capture(page, testInfo, name) {
   await page.evaluate(() => document.fonts.ready);
   await expect
     .poll(() =>
-      page.locator("main img").evaluateAll((images) =>
-        images.every((image) => image.complete && image.naturalWidth > 0),
-      ),
+      page
+        .locator("main img")
+        .evaluateAll((images) =>
+          images.every((image) => image.complete && image.naturalWidth > 0),
+        ),
     )
     .toBe(true);
   await testInfo.attach(`${name}-screenshot`, {
