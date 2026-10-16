@@ -10,6 +10,7 @@ if [[ ${CURL_FAIL_ONCE:-false} == true && ! -e "$MOCK_LOG.curl-failed" ]]; then
   exit 7
 fi
 case "$url" in
+  */design/styles.css) printf 302 ;;
   */images/nonexistent/meta) printf '404 application/problem+json' ;;
   */link-extract | */image-inline/) printf 400 ;;
   *) printf 200 ;;

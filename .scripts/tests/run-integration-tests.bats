@@ -148,6 +148,21 @@ EOF
   grep -Fx 'docker compose --profile test run --rm search-test' "$MOCK_LOG"
 }
 
+@test "browser tests wait for the full frontend stack before running" {
+  add_test_project browse-test
+  jq '.services["browse-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development browse-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'curl http://127.0.0.1:8080/graphql' "$MOCK_LOG"
+  grep -Fx 'curl http://127.0.0.1:8080/' "$MOCK_LOG"
+  grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
+  grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm browse-test' "$MOCK_LOG"
+}
+
 @test "excludes untracked, nested, non-test and incorrectly configured folders" {
   add_test_project untracked-test
   git rm --cached untracked-test/.project.yaml
