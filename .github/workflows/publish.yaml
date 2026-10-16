@@ -1,4 +1,4 @@
-name: Publish
+name: CI
 concurrency:
   group: publish
   cancel-in-progress: true
@@ -119,7 +119,6 @@ jobs:
   arm64-validation:
     permissions:
       contents: read
-      packages: write
     runs-on: ubuntu-24.04-arm
     env:
       COMPOSE_PARALLEL_LIMIT: 1
@@ -141,13 +140,6 @@ jobs:
 
       - name: install Compose generation tools
         run: mise --no-hooks install jq yq ytt
-
-      - name: login to ghcr.io for ARM64 build cache
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: "${{ secrets.GITHUB_TOKEN }}"
 
       - name: prepare ARM64 build context without devcontainers
         run: |
@@ -208,6 +200,9 @@ jobs:
         run: docker compose down --volumes --remove-orphans
 
       - name: generate production Compose configuration
+        env:
+          # Keep production builds local instead of exporting registry caches.
+          CI: ""
         run: mise run generate-docker-compose prod
 
       - name: validate production configuration and build ARM64 images
@@ -237,70 +232,3 @@ jobs:
             **/target/surefire-reports/**
             **/target/junit.xml
           if-no-files-found: ignore
-
-  publish:
-    needs:
-      - quality-checks
-      - arm64-validation
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      packages: write
-    runs-on: ubuntu-24.04
-    env:
-      DOCKER_BUILDKIT: 1
-      COMPOSE_PARALLEL_LIMIT: 1
-    steps:
-      - name: checkout
-        uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
-
-      - name: setup mise tools
-        uses: jdx/mise-action@v2
-        with:
-          install: false
-          cache: true
-
-      - name: login to ghcr.io
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: "${{ secrets.GITHUB_TOKEN }}"
-
-      - name: create buildx builder
-        run: docker buildx create --use
-
-      - name: install tools and synchronize
-        run: mise install
-
-      - name: build and push production images
-        run: |
-          echo "::group::generate production docker-compose.yml"
-          mise run generate-docker-compose prod
-          echo "::endgroup::"
-          echo "::group::docker-compose.yml"
-          cat docker-compose.yml
-          echo "::endgroup::"
-          echo "::group::docker compose build"
-          docker compose build
-          echo "::endgroup::"
-          echo "::group::docker compose push"
-          docker compose push
-          echo "::endgroup::"
-
-      - name: build and push devcontainers
-        run: |
-          for project in $(ls */.project.yaml | xargs dirname); do
-            has_publish=$(mise exec -- yq eval 'select(documentIndex==0) | .devcontainer.publish.image // ""' "$project/.project.yaml")
-            if [ -z "$has_publish" ]; then
-              continue
-            fi
-            echo "::group::build and push devcontainer $project"
-            sh $project/.update_devcontainer.sh --build --push-cache -vv
-            echo "::endgroup::"
-          done
