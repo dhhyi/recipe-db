@@ -115,15 +115,15 @@ wait_for_http() {
 wait_for_images() {
   local deadline=$((SECONDS + 40)) response
   while ((SECONDS < deadline)); do
-    response=$(curl --silent --output - --write-out $'\n%{http_code}' \
+    response=$(curl --silent --output /dev/null --write-out '%{http_code} %{content_type}' \
       --connect-timeout 1 --max-time 2 \
       http://127.0.0.1:3000/images/nonexistent/meta 2> /dev/null || true)
-    if [[ $response == $'Not found\n404' ]]; then
+    if [[ $response == "404 application/problem+json" ]]; then
       return 0
     fi
     sleep 0.5
   done
-  echo "Timed out waiting for images API at http://127.0.0.1:3000/images/nonexistent/meta (expected its application-level 404 response)." >&2
+  echo "Timed out waiting for images API at http://127.0.0.1:3000/images/nonexistent/meta (expected HTTP 404 with application/problem+json, last got ${response:-no response})." >&2
   return 1
 }
 
