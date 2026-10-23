@@ -21,6 +21,8 @@ devcontainer:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     BASE_URL: http://traefik
     REST_API: http://traefik:3000
+  ports:
+    - 9323
   instantiate: mise -y install
   initialize: |
     mise exec -- pnpm install --frozen-lockfile
@@ -35,6 +37,10 @@ vscode:
   tasks:
     - label: Run end-to-end tests
       command: pnpm test
+    - label: Update e2e snapshots
+      command: pnpm test -u
+    - label: Show e2e reports
+      command: pnpm exec playwright show-report target/playwright-report --host 0.0.0.0
 extras:
   - traefik
 traefik:

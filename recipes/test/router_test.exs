@@ -39,6 +39,23 @@ defmodule Recipes.RouterTest do
     assert created.status == 201
     assert ["application/json; charset=utf-8"] = get_resp_header(created, "content-type")
     recipe = Jason.decode!(created.resp_body)
+    assert recipe["createdAt"] == recipe["updatedAt"]
+
+    listed =
+      :get
+      |> conn("/recipes")
+      |> Router.call(@options)
+
+    assert listed.status == 200
+    assert [listed_recipe] = Jason.decode!(listed.resp_body)
+    assert listed_recipe == recipe
+
+    fetched =
+      :get
+      |> conn("/recipes/#{recipe["id"]}")
+      |> Router.call(@options)
+
+    assert Jason.decode!(fetched.resp_body) == recipe
 
     patched =
       :patch
@@ -56,6 +73,42 @@ defmodule Recipes.RouterTest do
     body = Jason.decode!(patched.resp_body)
     refute Map.has_key?(body, "servings")
     assert body["metadata"] == %{"source" => "family", "season" => "autumn"}
+    assert body["createdAt"] == recipe["createdAt"]
+    assert body["updatedAt"] == recipe["updatedAt"]
+  end
+
+  test "rejects client-supplied timestamps including null values" do
+    for field <- ["createdAt", "updatedAt"] do
+      created =
+        :post
+        |> conn("/recipes", Jason.encode!(%{"name" => "Rice Pudding"}))
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(@options)
+
+      recipe = Jason.decode!(created.resp_body)
+
+      post_response =
+        :post
+        |> conn("/recipes", Jason.encode!(%{"name" => "Rice Pudding", field => nil}))
+        |> put_req_header("content-type", "application/json")
+        |> Router.call(@options)
+
+      assert post_response.status == 422
+
+      assert %{"code" => "reserved-field", "field" => ^field} =
+               Jason.decode!(post_response.resp_body)
+
+      patch_response =
+        :patch
+        |> conn("/recipes/#{recipe["id"]}", Jason.encode!(%{field => nil}))
+        |> put_req_header("content-type", "application/merge-patch+json")
+        |> Router.call(@options)
+
+      assert patch_response.status == 422
+
+      assert %{"code" => "reserved-field", "field" => ^field} =
+               Jason.decode!(patch_response.resp_body)
+    end
   end
 
   test "returns problem details for invalid recipes" do

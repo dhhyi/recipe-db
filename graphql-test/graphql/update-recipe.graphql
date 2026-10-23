@@ -2,5 +2,7 @@ mutation ($id: ID!, $value: RecipeInput!) {
   updateRecipe(id: $id, value: $value) {
     id
     name
+    createdAt
+    updatedAt
   }
 }

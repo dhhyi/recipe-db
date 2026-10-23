@@ -30,25 +30,39 @@ Feature: recipes
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: '#(variables)' }
     * method post
     * status 200
-    * match response.data.createRecipe == { id: '#string', name: 'test' }
+    * match response.data.createRecipe.id == '#string'
+    * match response.data.createRecipe.name == 'test'
+    * match response.data.createRecipe.createdAt == '#regex \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z'
+    * match response.data.createRecipe.updatedAt == response.data.createRecipe.createdAt
     * def recipeId = response.data.createRecipe.id
+    * def createdAt = response.data.createRecipe.createdAt
+    * def updatedAt = response.data.createRecipe.updatedAt
     * match recipeId == '#regex [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 
     * request { query: '#(read("graphql/recipe-by-id.graphql"))', variables: { id: '#(recipeId)' } }
     * method post
     * status 200
-    * match response.data.recipe == { id: '#string', name: 'test', method: '#string', ingredients: '#array' }
+    * match response.data.recipe.id == '#string'
+    * match response.data.recipe.name == 'test'
+    * match response.data.recipe.method == '#string'
+    * match response.data.recipe.ingredients == '#array'
+    * match response.data.recipe.createdAt == createdAt
+    * match response.data.recipe.updatedAt == updatedAt
 
     * request { query: '#(read("graphql/all-recipes.graphql"))' }
     * method post
     * status 200
     * match response.data.recipes == '#[1]'
+    * match response.data.recipes[0].createdAt == createdAt
+    * match response.data.recipes[0].updatedAt == updatedAt
 
   Scenario: should be able to edit a recipe
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', method: 'cook it', ingredients: [{ name: 'ingredient', amount: 1 }] } } }
     * method post
     * status 200
     * def recipeId = response.data.createRecipe.id
+    * def createdAt = response.data.createRecipe.createdAt
+    * def initialUpdatedAt = response.data.createRecipe.updatedAt
     * match recipeId == '#present'
 
     * request { query: '#(read("graphql/recipe-by-id.graphql"))', variables: { id: '#(recipeId)' } }
@@ -57,10 +71,16 @@ Feature: recipes
     * match response.data.recipe.name == 'test'
     * match response.data.recipe.method == 'cook it'
     * match response.data.recipe.ingredients == '#[1]'
+    * match response.data.recipe.createdAt == createdAt
+    * match response.data.recipe.updatedAt == initialUpdatedAt
 
     * request { query: '#(read("graphql/update-recipe.graphql"))', variables: { id: '#(recipeId)', value: { name: 'test2' } } }
     * method post
     * status 200
+    * match response.data.updateRecipe.createdAt == createdAt
+    * match response.data.updateRecipe.updatedAt == '#regex \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z'
+    * def changedAt = response.data.updateRecipe.updatedAt
+    * match changedAt != initialUpdatedAt
 
     * request { query: '#(read("graphql/recipe-by-id.graphql"))', variables: { id: '#(recipeId)' } }
     * method post
@@ -68,10 +88,16 @@ Feature: recipes
     * match response.data.recipe.name == 'test2'
     * match response.data.recipe.method == 'cook it'
     * match response.data.recipe.ingredients == '#[1]'
+    * match response.data.recipe.createdAt == createdAt
+    * match response.data.recipe.updatedAt == changedAt
 
     * request { query: '#(read("graphql/update-recipe.graphql"))', variables: { id: '#(recipeId)', value: { method: null } } }
     * method post
     * status 200
+    * match response.data.updateRecipe.createdAt == createdAt
+    * match response.data.updateRecipe.updatedAt == '#regex \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z'
+    * match response.data.updateRecipe.updatedAt != changedAt
+    * def clearedMethodAt = response.data.updateRecipe.updatedAt
 
     * request { query: '#(read("graphql/recipe-by-id.graphql"))', variables: { id: '#(recipeId)' } }
     * method post
@@ -79,6 +105,8 @@ Feature: recipes
     * match response.data.recipe.name == 'test2'
     * match response.data.recipe.method == null
     * match response.data.recipe.ingredients == '#[1]'
+    * match response.data.recipe.createdAt == createdAt
+    * match response.data.recipe.updatedAt == clearedMethodAt
 
   Scenario: should be able to delete a recipe
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test' } } }
