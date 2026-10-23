@@ -135,9 +135,9 @@ proc metadata*(store: ImageStorage, id: string): JsonNode =
       if outputHash(bytes) != parsed.hash or
           (key == "url" and bytes.len != result["size"].getInt):
         raise newException(StorageError, "Invalid stored output")
-      let image = decodeImage(bytes)
-      if image.width != (if parsed.thumb: 300 else: 650) or
-          image.height != (if parsed.thumb: 225 else: 488):
+      let dimensions = decodeImageDimensions(bytes)
+      if dimensions.width != (if parsed.thumb: 300 else: 650) or
+          dimensions.height != (if parsed.thumb: 225 else: 488):
         raise newException(StorageError, "Invalid stored output dimensions")
   except StorageError:
     raise
