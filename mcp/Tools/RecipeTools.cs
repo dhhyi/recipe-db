@@ -257,7 +257,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
             return $"Failed to upload image: {string.Join("; ", response.Errors.Select(e => e.Message))}";
         }
 
-        return response.Data?.SetImage == true ? "Image uploaded" : "Failed to upload image";
+        return response.Data?.SetImage is not null ? "Image uploaded" : "Failed to upload image";
     }
 
     [McpServerTool(Name = "add_rating")]

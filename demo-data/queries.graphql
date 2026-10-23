@@ -39,5 +39,7 @@ mutation DeleteImages {
 }
 
 mutation AddImage($id: ID!, $file: Upload!) {
-  setImage(recipeId: $id, file: $file)
+  setImage(recipeId: $id, file: $file) {
+    url
+  }
 }

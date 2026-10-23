@@ -46,15 +46,16 @@ impl ImagesApi {
         mimetype: &str,
         content: Vec<u8>,
         publisher: &EventPublisher,
-    ) -> Result<bool, Error> {
-        self.client
-            .post_bytes::<serde_json::Value>(recipe_id, mimetype, content)
+    ) -> Result<ImageMetadata, Error> {
+        let metadata = self
+            .client
+            .post_bytes::<ImageMetadata>(recipe_id, mimetype, content)
             .await
             .map_err(RestError::into_error)?;
         publisher
             .notify(Some(recipe_id), EventKind::ImageChanged)
             .await;
-        Ok(true)
+        Ok(metadata)
     }
 
     pub async fn delete_images_for_testing(
@@ -86,7 +87,7 @@ impl ImagesMutation {
         ctx: &Context<'_>,
         recipe_id: ID,
         file: Upload,
-    ) -> Result<bool, Error> {
+    ) -> Result<ImageMetadata, Error> {
         let mut upload = file.value(ctx)?;
         let mimetype = upload
             .content_type

@@ -1,4 +1,4 @@
-module RecipeDB exposing (RecipeData, RecipeModel, UploadModel, makeRecipeRequest, makeUploadRequest)
+module RecipeDB exposing (RecipeData, RecipeModel, UploadModel, UploadedImage, makeRecipeRequest, makeUploadRequest)
 
 import Api.Object exposing (Recipe)
 import Api.Object.ImageMetadata as ImageMetadata
@@ -10,7 +10,8 @@ import Graphql.Http
 import Graphql.Operation exposing (RootQuery)
 import Graphql.SelectionSet as SelectionSet exposing (SelectionSet)
 import Http
-import Json.Decode exposing (Decoder, bool, field, null, oneOf)
+import Json.Decode exposing (Decoder, field, int, map5, string)
+import Json.Encode as Encode
 import RemoteData exposing (RemoteData)
 
 
@@ -43,7 +44,16 @@ makeRecipeRequest recipeId targetMsg =
 
 
 type alias UploadModel =
-    RemoteData.RemoteData Http.Error Bool
+    RemoteData.RemoteData Http.Error UploadedImage
+
+
+type alias UploadedImage =
+    { url : String
+    , thumbUrl : String
+    , size : Int
+    , width : Int
+    , height : Int
+    }
 
 
 makeUploadRequest : String -> File -> (UploadModel -> msg) -> Cmd msg
@@ -53,7 +63,18 @@ makeUploadRequest recipeId file targetMsg =
         query =
             -- per the GraphQL multipart request spec, "variables" must already contain a `null`
             -- placeholder for every Upload variable the "map" below then overwrites
-            "{ \"query\": \"mutation ($file: Upload!) { setImage(recipeId: \\\"" ++ recipeId ++ "\\\", file: $file) }\", \"variables\": { \"file\": null } }"
+            Encode.object
+                [ ( "query"
+                  , Encode.string "mutation ($recipeId: ID!, $file: Upload!) { setImage(recipeId: $recipeId, file: $file) { url thumbUrl size width height } }"
+                  )
+                , ( "variables"
+                  , Encode.object
+                        [ ( "recipeId", Encode.string recipeId )
+                        , ( "file", Encode.null )
+                        ]
+                  )
+                ]
+                |> Encode.encode 0
 
         map : String
         map =
@@ -72,9 +93,18 @@ makeUploadRequest recipeId file targetMsg =
             [ Http.header "apollo-require-preflight" "true"
             ]
 
-        uploadImageDecoder : Decoder Bool
+        uploadImageDecoder : Decoder UploadedImage
         uploadImageDecoder =
-            field "data" (oneOf [ null False, field "setImage" bool ])
+            field "data"
+                (field "setImage"
+                    (map5 UploadedImage
+                        (field "url" string)
+                        (field "thumbUrl" string)
+                        (field "size" int)
+                        (field "width" int)
+                        (field "height" int)
+                    )
+                )
     in
     Http.request
         { method = "POST"

@@ -1,7 +1,8 @@
-import std/[httpcore, json, logging, os, strutils, times]
+import std/[httpcore, json, logging, os, strutils, uri]
 
 import jester
 import pixie
+import storage
 
 const
   ratio = 4.0 / 3.0
@@ -16,29 +17,10 @@ let
   verbose = getEnv("VERBOSE") == "true"
   documentRoot = getEnv("DATA_LOCATION", "public")
   dataFolder = documentRoot / imagesSubfolder
+  store = ImageStorage(root: documentRoot)
   port = parseInt(getEnv("PORT", "8000"))
   maxUploadBytes = parseInt(getEnv("MAX_UPLOAD_BYTES", $(10 * 1024 * 1024)))
   maxPixels = parseInt(getEnv("MAX_PIXELS", $(40_000_000)))
-
-proc isSafeSegment(segment: string): bool =
-  ## Rejects anything that could escape the data folder or confuse the file system.
-  if segment.len == 0 or segment.len > 128:
-    return false
-  if ".." in segment:
-    return false
-  for c in segment:
-    if c in {'/', '\\', '\0'} or c < ' ':
-      return false
-  true
-
-proc imageFileName(recipeId: string, thumb = false): string =
-  if thumb: recipeId & "-thumb.png" else: recipeId & ".png"
-
-proc imageFile(recipeId: string, thumb = false): string =
-  dataFolder / imageFileName(recipeId, thumb)
-
-proc imageUrl(recipeId: string, thumb = false): string =
-  "/" & imagesSubfolder & "/" & imageFileName(recipeId, thumb)
 
 proc cropToRatio(image: Image): Image =
   ## Centered crop so the result has the thumbnail's aspect ratio.
@@ -72,25 +54,45 @@ proc problemDetails(status: HttpCode, title, detail, code: string): string =
   })
 
 template respProblem(status: HttpCode, title, detail, code: string) =
-  resp status, problemDetails(status, title, detail, code), "application/problem+json"
+  resp status, @[("Content-Type", "application/problem+json"),
+      ("Cache-Control", "no-store")], problemDetails(status, title, detail, code)
 
 router imagesRouter:
   get "/health":
     resp Http204, ""
 
   get "/public/@name":
-    let name = @"name"
-    if not isSafeSegment(name):
-      resp Http404, "Not found"
+    let name = decodeUrl(@"name", decodePlus = false)
+    let parsed = parseImageName(name)
+    if not parsed.valid:
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
     let path = dataFolder / name
     if not fileExists(path):
-      resp Http404, "Not found"
-    info "GET public image '", name, "'"
-    sendFile(path)
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    try:
+      let bytes = readFile(path)
+      if outputHash(bytes) != parsed.hash:
+        raise newException(StorageError, "Invalid stored output")
+      let etag = "\"" & parsed.hash & "\""
+      let headers = @[
+        ("Content-Type", "image/png"),
+        ("Cache-Control", "public, max-age=31536000, immutable"),
+        ("ETag", etag)]
+      var unchanged = false
+      for candidate in ($request.headers.getOrDefault("If-None-Match")).split(','):
+        let value = candidate.strip()
+        if value == etag or value == "W/" & etag or value == "*":
+          unchanged = true
+      if unchanged:
+        resp Http304, headers, ""
+      resp Http200, headers, bytes
+    except CatchableError:
+      error "GET public image '", name, "' failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error", "Cannot read stored image", "storage-error")
 
   post "/images/@recipeId":
-    let recipeId = @"recipeId"
-    if not isSafeSegment(recipeId):
+    let recipeId = decodeUrl(@"recipeId", decodePlus = false)
+    if not validRecipeId(recipeId):
       respProblem(Http400, "Bad Request", "Invalid recipe id", "invalid-recipe-id")
 
     let contentType = ($request.headers.getOrDefault(
@@ -100,70 +102,66 @@ router imagesRouter:
       respProblem(Http400, "Bad Request",
           "Unsupported content type '" & contentType & "'", "unsupported-content-type")
 
+    var image: Image
     try:
       let dimensions = decodeImageDimensions(body)
       if dimensions.width * dimensions.height > maxPixels:
         respProblem(Http400, "Bad Request",
             "Image exceeds the maximum of " & $maxPixels & " pixels", "image-too-large")
 
-      let image = decodeImage(body)
-      image.cropToRatio().resize(normalWidth, toInt(normalWidth /
-          ratio)).writeFile(imageFile(recipeId))
-      image.cropToRatio().resize(thumbWidth, toInt(thumbWidth /
-          ratio)).writeFile(imageFile(recipeId, true))
-      info "POST upload of '", recipeId, "' succeeded"
-      resp Http201, ""
-    except PixieError, IOError, OSError:
+      image = decodeImage(body)
+    except PixieError:
       error "Upload of '", recipeId, "' failed: ", getCurrentExceptionMsg()
       respProblem(Http400, "Bad Request", getCurrentExceptionMsg(), "invalid-image")
+    try:
+      let cropped = image.cropToRatio()
+      let normal = cropped.resize(normalWidth, 488).encodeImage(PngFormat)
+      let thumbnail = cropped.resize(thumbWidth, 225).encodeImage(PngFormat)
+      let metadata = store.publish(recipeId, normal, thumbnail)
+      info "POST upload of '", recipeId, "' succeeded"
+      resp Http201, @[("Content-Type", "application/json"),
+          ("Cache-Control", "no-store")], $metadata
+    except CatchableError:
+      error "Publication of '", recipeId, "' failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error", "Cannot publish image", "storage-error")
 
   get "/images/@recipeId/meta":
-    let recipeId = @"recipeId"
-    if not isSafeSegment(recipeId):
-      resp Http404, "Not found"
-
-    let path = imageFile(recipeId)
-    if not fileExists(path):
+    let recipeId = decodeUrl(@"recipeId", decodePlus = false)
+    if not validRecipeId(recipeId):
       respProblem(Http404, "Not Found", "Image not found", "image-not-found")
-
     info "GET meta for '", recipeId, "'"
     try:
-      let
-        imageInfo = getFileInfo(path)
-        dimensions = readImageDimensions(path)
-      resp Http200, $(%*{
-        "recipeId": recipeId,
-        "height": dimensions.height,
-        "width": dimensions.width,
-        "size": imageInfo.size,
-        "modified": imageInfo.lastWriteTime.utc.format(
-            "yyyy-MM-dd'T'HH:mm:ss'.'fff"),
-        "url": imageUrl(recipeId),
-        "thumbUrl": imageUrl(recipeId, true),
-      }), "application/json"
-    except PixieError, OSError:
+      let metadata = store.metadata(recipeId)
+      resp Http200, @[("Content-Type", "application/json"),
+          ("Cache-Control", "no-store")], $metadata
+    except ImageNotFound:
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    except CatchableError:
       error "Meta of '", recipeId, "' failed: ", getCurrentExceptionMsg()
-      respProblem(Http500, "Internal Server Error", getCurrentExceptionMsg(), "metadata-error")
+      respProblem(Http500, "Internal Server Error",
+          "Cannot read image metadata", "metadata-error")
 
   delete "/images/?":
     if productionMode:
-      resp Http404, "Not found"
+      respProblem(Http404, "Not Found", "Not found", "not-found")
     info "DELETE all images"
-    removeDir(dataFolder)
-    createDir(dataFolder)
+    try:
+      store.wipe()
+    except CatchableError:
+      error "Image wipe failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error", "Cannot delete images", "storage-error")
     resp Http204, ""
 
   delete "/images/@recipeId":
-    let recipeId = @"recipeId"
-    if not isSafeSegment(recipeId):
-      resp Http404, "Not found"
-
-    let path = imageFile(recipeId)
-    if not fileExists(path):
-      resp Http404, "Not found"
-    info "DELETE image '", recipeId, "'"
-    removeFile(path)
-    removeFile(imageFile(recipeId, true))
+    let recipeId = decodeUrl(@"recipeId", decodePlus = false)
+    if not validRecipeId(recipeId):
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    try:
+      if not store.deleteRecipe(recipeId):
+        respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    except CatchableError:
+      error "Delete of '", recipeId, "' failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error", "Cannot delete image", "storage-error")
     resp Http204, ""
 
 proc main() =
@@ -171,7 +169,7 @@ proc main() =
     levelThreshold = if verbose: lvlInfo else: lvlWarn,
     fmtStr = "$levelname ",
   ))
-  createDir(dataFolder)
+  store.initialize()
   info "Data location '", dataFolder, "'"
   if productionMode:
     info "Running in PRODUCTION mode"

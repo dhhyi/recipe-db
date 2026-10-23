@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,8 @@ import (
 )
 
 func TestDetailHTTPAndLiveWidgets(t *testing.T) {
+	const imageURL = "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two"
+	const thumbURL = "/assets/unrelated/thumb-token.png?rev=opaque&size=small"
 	var recipeCalls atomic.Int32
 	var version atomic.Int32
 	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool
@@ -27,6 +30,14 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		}
 		var data any
 		switch request.OperationName {
+		case "Overview":
+			data = map[string]any{
+				"recipes": []any{map[string]any{
+					"id": "42", "name": "Original",
+					"image": map[string]any{"url": imageURL, "thumbUrl": thumbURL},
+				}},
+				"ratingsOnline": false, "recipeEditOnline": false,
+			}
 		case "RecipeById":
 			recipeCalls.Add(1)
 			var recipe any
@@ -42,7 +53,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				recipe = map[string]any{
 					"id": "42", "name": name, "method": "Cook", "ingredients": []any{},
 					"createdAt": "2020-01-01T00:00:00.123456Z", "updatedAt": "2020-01-01T00:00:00.123456Z",
-					"rating": rating, "image": map[string]any{"url": "/public/image", "thumbUrl": "/public/thumb"},
+					"rating": rating, "image": map[string]any{"url": imageURL, "thumbUrl": thumbURL},
 				}
 			}
 			if imagesOffline.Load() {
@@ -93,20 +104,27 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
+	overview := request("GET", "/", "")
+	if overview.Code != 200 || !strings.Contains(html.UnescapeString(overview.Body.String()), `src="`+thumbURL+`"`) {
+		t.Fatalf("overview did not preserve opaque backend thumbnail URL: %d %s", overview.Code, overview.Body.String())
+	}
 	first := request("GET", "/recipe/42?variant=1", "")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), "Original") {
 		t.Fatalf("detail failed: %d %s", first.Code, first.Body.String())
 	}
-	html := first.Body.String()
-	if !strings.Contains(html, "Zuletzt aktualisiert: vor langer Zeit") {
+	pageHTML := first.Body.String()
+	if !strings.Contains(html.UnescapeString(pageHTML), `src="`+imageURL+`"`) {
+		t.Fatal("detail did not preserve opaque backend image URL")
+	}
+	if !strings.Contains(pageHTML, "Zuletzt aktualisiert: vor langer Zeit") {
 		t.Fatal("recipe update time must be displayed in German")
 	}
-	if strings.Contains(html, "Inspirationen") {
+	if strings.Contains(pageHTML, "Inspirationen") {
 		t.Fatal("shared page must not contain the lazy inspirations heading")
 	}
-	if !strings.Contains(html, "/recipe/42/controls") || !strings.Contains(html, "/recipe/42/inspirations") ||
-		strings.Contains(html, "Rezept bearbeiten") || !strings.Contains(html, "/public/image") ||
-		!strings.Contains(html, "aggregateRating") || strings.Contains(html, "test") {
+	if !strings.Contains(pageHTML, "/recipe/42/controls") || !strings.Contains(pageHTML, "/recipe/42/inspirations") ||
+		strings.Contains(pageHTML, "Rezept bearbeiten") || !strings.Contains(html.UnescapeString(pageHTML), imageURL) ||
+		!strings.Contains(pageHTML, "aggregateRating") || strings.Contains(pageHTML, `value="test"`) {
 		t.Fatal("shared page does not separate live content or contains user data")
 	}
 	etag := first.Header().Get("ETag")
