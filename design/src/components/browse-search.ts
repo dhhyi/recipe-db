@@ -96,13 +96,19 @@ class BrowseSearch {
       PerformanceNavigationTiming | undefined;
     if (freshDocument && saved && navigation?.type !== "back_forward") {
       saved = {
-        ...saved, q: this.input.value, sort: this.sort.value,
+        ...saved,
+        q: this.input.value,
+        sort: this.sort.value,
         explicit: Boolean(new URL(location.href).searchParams.get("sort")),
-        page: 1, scroll: 0, stopped: false,
+        page: 1,
+        scroll: 0,
+        stopped: false,
       };
     }
     this.entry = saved || {
-      id: Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16)).join("-"),
+      id: Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) =>
+        value.toString(16),
+      ).join("-"),
       q: this.input.value,
       sort: this.sort.value,
       explicit: Boolean(new URL(location.href).searchParams.get("sort")),
@@ -250,7 +256,11 @@ class BrowseSearch {
     const generation = this.generation;
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (this.root.isConnected && active === this && generation === this.generation) {
+        if (
+          this.root.isConnected &&
+          active === this &&
+          generation === this.generation
+        ) {
           window.scrollTo(0, top);
           restored?.();
         }
@@ -334,7 +344,10 @@ class BrowseSearch {
     );
     if (generation !== this.generation || !this.root.isConnected) return;
     const region = document.querySelector<HTMLElement>("#browse-results");
-    if (!region || !["search", "fallback", "error"].includes(region.dataset.kind || "")) {
+    if (
+      !region ||
+      !["search", "fallback", "error"].includes(region.dataset.kind || "")
+    ) {
       throw new Error("Missing or invalid browse results");
     }
     if (!response.ok && region.dataset.kind !== "error")
@@ -379,9 +392,11 @@ class BrowseSearch {
       this.region.replaceWith(region);
     }
     this.controls();
-    const htmx = (window as Window & {
-      htmx?: { process(element: Element): void };
-    }).htmx;
+    const htmx = (
+      window as Window & {
+        htmx?: { process(element: Element): void };
+      }
+    ).htmx;
     htmx?.process(this.region);
   }
 

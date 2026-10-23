@@ -236,11 +236,17 @@ test("search controls fit the content area without horizontal overflow", async (
       Math.abs(input.x + input.width / 2 - content.x - content.width / 2),
     ).toBeLessThan(2);
     expect(
-      await page.locator("[data-browse-grid]").evaluate(
-        (grid) => getComputedStyle(grid).gridTemplateColumns.split(/\s+/).length,
-      ),
+      await page
+        .locator("[data-browse-grid]")
+        .evaluate(
+          (grid) =>
+            getComputedStyle(grid).gridTemplateColumns.split(/\s+/).length,
+        ),
     ).toBe(page.viewportSize().width >= 1280 ? 4 : 3);
-    await expect(page.locator("[data-add-recipe]")).toHaveCSS("display", "contents");
+    await expect(page.locator("[data-add-recipe]")).toHaveCSS(
+      "display",
+      "contents",
+    );
   }
 });
 
