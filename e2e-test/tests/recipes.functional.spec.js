@@ -570,10 +570,22 @@ test("the image editor disables file selection while an upload is pending", asyn
   await page.route("**/graphql", async (route) => {
     if (isImageUpload(route.request())) {
       uploadRequests += 1;
-      const response = await route.fetch();
       uploadStarted.resolve();
       await releaseUpload.promise;
-      await route.fulfill({ response });
+      await route.fulfill({
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({
+          data: {
+            setImage: {
+              url: "/public/pending.png",
+              thumbUrl: "/public/pending-thumb.png",
+              size: 1,
+              width: 1,
+              height: 1,
+            },
+          },
+        }),
+      });
     } else {
       await route.continue();
     }
@@ -584,9 +596,12 @@ test("the image editor disables file selection while an upload is pending", asyn
     const uploaded = page.waitForResponse((response) =>
       isImageUpload(response.request()),
     );
-    await input.setInputFiles(
-      fileURLToPath(new URL("../../demo-data/recipe2.jpg", import.meta.url)),
-    );
+    const pattern = await imagePattern(page, "#2040d0");
+    await input.setInputFiles({
+      name: "pending.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(pattern.split(",")[1], "base64"),
+    });
     await uploadStarted.promise;
     await expect(input).toBeDisabled();
     await expect(
