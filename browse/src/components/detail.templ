@@ -92,9 +92,6 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 				if recipe.Rating != nil {
 					@Rating(recipe.Rating, true, nil)
 				}
-				<p class="text-sm">
-					Zuletzt aktualisiert: { util.RelativeTimeInGerman(recipe.UpdatedAt) }
-				</p>
 			</hgroup>
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
@@ -111,5 +108,10 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		}
 		@InspirationsStub(recipe.Id)
 	</div>
+	<p>
+		<small>
+			Zuletzt aktualisiert: { util.RelativeTimeInGerman(recipe.UpdatedAt) }
+		</small>
+	</p>
 	<a href="/" role="button">Zur Startseite</a>
 }
