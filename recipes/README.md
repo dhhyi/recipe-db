@@ -15,6 +15,8 @@ Create requests use `application/json`. Updates implement JSON Merge Patch (RFC 
 
 The database defaults to `db/recipes.sqlite3`. Set `DATA_LOCATION` to change its directory. When `TESTING=true`, `DELETE /recipes` clears all recipes for integration tests.
 
+Recipes stored before timestamp metadata was introduced do not have `createdAt` or `updatedAt`. Reset or reseed development data (for example, with `mise run seed-demodata`) before using the updated service; it does not backfill or invent timestamps for existing rows.
+
 Run unit tests with:
 
 ```sh

@@ -21,6 +21,28 @@ defmodule Recipes.RecipeTest do
              Recipe.validate(%{"id" => "client-id", "name" => "Rice Pudding"})
   end
 
+  test "rejects client-supplied timestamps on create and patch" do
+    for field <- ["createdAt", "updatedAt"] do
+      assert {:error, :reserved_field, _, ^field} =
+               Recipe.validate(%{"name" => "Rice Pudding", field => nil})
+
+      assert {:error, :reserved_field, _, ^field} =
+               Recipe.validate_patch(%{field => nil})
+    end
+  end
+
+  test "detects changes to effective core values" do
+    original = %{"name" => "Rice Pudding", "ingredients" => [%{"name" => "Rice"}]}
+
+    refute Recipe.core_changed?(original, Map.put(original, "method", nil))
+    refute Recipe.core_changed?(original, Map.put(original, "name", "Rice Pudding"))
+
+    assert Recipe.core_changed?(
+             original,
+             Map.put(original, "ingredients", [%{"name" => "Milk"}, %{"name" => "Rice"}])
+           )
+  end
+
   test "applies recursive JSON merge patch semantics" do
     recipe = %{
       "name" => "Rice Pudding",

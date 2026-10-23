@@ -61,7 +61,12 @@ async fn create_recipe(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
     };
     (
         StatusCode::OK,
-        Json(json!({"id": id, "name": body["name"]})),
+        Json(json!({
+            "id": id,
+            "name": body["name"],
+            "createdAt": "2026-10-23T13:00:00.123456Z",
+            "updatedAt": "2026-10-23T13:00:00.123456Z"
+        })),
     )
 }
 
@@ -74,7 +79,12 @@ async fn update_recipe(
     }
     (
         StatusCode::OK,
-        Json(json!({"id": id, "name": body["name"]})),
+        Json(json!({
+            "id": id,
+            "name": body["name"],
+            "createdAt": "2026-10-23T13:00:00.123456Z",
+            "updatedAt": "2026-10-23T13:00:00.123456Z"
+        })),
     )
 }
 
@@ -96,7 +106,14 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
         )
         .route(
             "/recipes/{id}",
-            get(|| async { Json(json!({"id": "42", "name": "Recipe"})) })
+            get(|| async {
+                Json(json!({
+                    "id": "42",
+                    "name": "Recipe",
+                    "createdAt": "2026-10-23T13:00:00.123456Z",
+                    "updatedAt": "2026-10-23T13:00:00.123456Z"
+                }))
+            })
                 .patch(update_recipe)
                 .delete(|Path(id): Path<String>| async move {
                     if id == "missing" {
