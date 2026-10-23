@@ -68,13 +68,16 @@ update msg model =
         newModel =
             case msg of
                 GotRecipeResponse recipe ->
-                    { model | recipe = recipe }
+                    { model | recipe = applyUpload model.uploaded recipe }
 
                 GotFile _ ->
                     { model | uploaded = RemoteData.Loading }
 
                 GotUploadResponse upload ->
-                    { model | uploaded = upload }
+                    { model
+                        | uploaded = upload
+                        , recipe = applyUpload upload model.recipe
+                    }
 
         cmd : Cmd Msg
         cmd =
@@ -89,6 +92,16 @@ update msg model =
                     Cmd.none
     in
     ( newModel, cmd )
+
+
+applyUpload : RecipeDB.UploadModel -> RecipeDB.RecipeModel -> RecipeDB.RecipeModel
+applyUpload upload recipe =
+    case upload of
+        RemoteData.Success image ->
+            RemoteData.map (Maybe.map (\data -> { data | url = Just image.url })) recipe
+
+        _ ->
+            recipe
 
 
 main : Program { recipeId : String } Model Msg
@@ -168,11 +181,8 @@ uploadFeedback model =
             feedback (Failure "Fehler beim Hochladen")
     in
     case model.uploaded of
-        RemoteData.Success True ->
+        RemoteData.Success _ ->
             Just (feedback (Success "Bild hochgeladen"))
-
-        RemoteData.Success False ->
-            Just uploadError
 
         RemoteData.Failure _ ->
             Just uploadError
@@ -220,7 +230,7 @@ backToRecipeLink model =
         buttonText : String
         buttonText =
             case model.uploaded of
-                RemoteData.Success True ->
+                RemoteData.Success _ ->
                     "Zurück"
 
                 _ ->

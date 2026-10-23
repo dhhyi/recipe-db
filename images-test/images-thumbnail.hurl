@@ -14,13 +14,16 @@ POST {{REST_API}}/images/landscape
 Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 201
+[Captures]
+normal: jsonpath "$.url"
+thumb: jsonpath "$.thumbUrl"
 
-GET {{WEB_API}}/public/landscape.png
+GET {{WEB_API}}{{normal}}
 HTTP 200
 [Asserts]
 bytes contains hex,494844520000028a000001e8;
 
-GET {{WEB_API}}/public/landscape-thumb.png
+GET {{WEB_API}}{{thumb}}
 HTTP 200
 [Asserts]
 bytes contains hex,494844520000012c000000e1;
@@ -31,13 +34,16 @@ POST {{REST_API}}/images/portrait
 Content-Type: image/png
 file,fixtures/portrait.png;
 HTTP 201
+[Captures]
+normal: jsonpath "$.url"
+thumb: jsonpath "$.thumbUrl"
 
-GET {{WEB_API}}/public/portrait.png
+GET {{WEB_API}}{{normal}}
 HTTP 200
 [Asserts]
 bytes contains hex,494844520000028a000001e8;
 
-GET {{WEB_API}}/public/portrait-thumb.png
+GET {{WEB_API}}{{thumb}}
 HTTP 200
 [Asserts]
 bytes contains hex,494844520000012c000000e1;

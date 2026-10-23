@@ -15,7 +15,8 @@ export async function graphql(request, query, variables = {}) {
 
 export const test = base.extend({
   demoRecipeCount: [1, { option: true }],
-  demoRecipes: async ({ request, demoRecipeCount }, use) => {
+  demoRecipeWithImage: [true, { option: true }],
+  demoRecipes: async ({ request, demoRecipeCount, demoRecipeWithImage }, use) => {
     const demo = new URL("../../demo-data/", import.meta.url);
     const value = JSON.parse(
       await readFile(new URL("recipe1.json", demo), "utf8"),
@@ -38,12 +39,15 @@ export const test = base.extend({
         );
         expect(recipe).toBeTruthy();
         recipes.push(recipe);
+        if (!demoRecipeWithImage) {
+          continue;
+        }
         const response = await request.post("/graphql", {
           headers: { "apollo-require-preflight": "true" },
           multipart: {
             operations: JSON.stringify({
               query:
-                "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) }",
+                "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url size width height } }",
               variables: { id: recipe.id, file: null },
             }),
             map: JSON.stringify({ 0: ["variables.file"] }),
@@ -57,7 +61,12 @@ export const test = base.extend({
         expect(response.ok(), await response.text()).toBeTruthy();
         const result = await response.json();
         expect(result.errors).toBeUndefined();
-        expect(result.data.setImage).toBe(true);
+        expect(result.data.setImage).toMatchObject({
+          url: expect.any(String),
+          size: expect.any(Number),
+          width: expect.any(Number),
+          height: expect.any(Number),
+        });
       }
       await use(recipes);
     } finally {

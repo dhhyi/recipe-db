@@ -118,7 +118,28 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
             }),
         )
         .route("/images", delete(|| async { StatusCode::NO_CONTENT }))
-        .route("/images/{id}", post(|| async { Json(json!({})) }))
+        .route(
+            "/images/{id}",
+            post(|Path(id): Path<String>| async move {
+                match id.as_str() {
+                    "invalid" => (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "detail": "Invalid image", "code": "invalid-image", "field": "file"
+                        })),
+                    ),
+                    "malformed" => (StatusCode::CREATED, Json(json!({}))),
+                    _ => (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "recipeId": id, "modified": "2026-10-23T10:00:00Z",
+                            "url": "/opaque/full.avif", "thumbUrl": "/opaque/thumb.webp",
+                            "width": 640, "height": 480, "size": 12345
+                        })),
+                    ),
+                }
+            }),
+        )
         .route(
             "/inspirations/",
             delete(|| async { StatusCode::NO_CONTENT }),
@@ -197,19 +218,30 @@ async fn bus_contract() {
     )
     .await;
 
-    let mut request =
-        Request::new("mutation($file: Upload!) { setImage(recipeId: \"42\", file: $file) }")
-            .variables(Variables::from_json(json!({"file": null})));
-    request.set_upload(
-        "variables.file",
-        UploadValue {
-            filename: "image.svg".into(),
-            content_type: Some("image/svg+xml".into()),
-            content: std::fs::File::open("testdata/image.svg").unwrap(),
-        },
-    );
-    let response = schema.execute(request).await;
-    assert!(response.errors.is_empty(), "{response:?}");
+    for id in ["invalid", "malformed", "42"] {
+        let mut request = Request::new(
+            "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl width height size } }"
+        ).variables(Variables::from_json(json!({"id": id, "file": null})));
+        request.set_upload(
+            "variables.file",
+            UploadValue {
+                filename: "image.svg".into(),
+                content_type: Some("image/svg+xml".into()),
+                content: std::fs::File::open("testdata/image.svg").unwrap(),
+            },
+        );
+        let response = schema.execute(request).await;
+        assert_eq!(response.errors.is_empty(), id == "42", "{response:?}");
+        if id == "42" {
+            assert_eq!(
+                response.data.into_json().unwrap(),
+                json!({"setImage": {
+                    "url": "/opaque/full.avif", "thumbUrl": "/opaque/thumb.webp",
+                    "width": 640, "height": 480, "size": 12345
+                }})
+            );
+        }
+    }
 
     execute(&schema, r#"mutation { deleteRecipe(id: "42") }"#, true).await;
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
