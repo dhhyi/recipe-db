@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && cp node_modules/htmx.org/dist/htmx.min.js dist/design/htmx.min.js && cp node_modules/htmx.org/LICENSE dist/design/htmx.LICENSE",
     "preview": "vite preview",
     "start": "storybook dev -p 6006 --no-open",
     "lint": "eslint .",
@@ -23,6 +23,7 @@
     "@tailwindcss/vite": "^4.3.3",
     "eslint": "^10.9.1",
     "eslint-plugin-storybook": "^10.5.10",
+    "htmx.org": "2.0.10",
     "http-server": "^14.1.1",
     "storybook": "^10.5.10",
     "typescript": "~6.0.2",

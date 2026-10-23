@@ -1,0 +1,22 @@
+{
+  "name": "e2e-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Responsive full-stack end-to-end tests with Playwright Chromium",
+  "scripts": {
+    "check": "for file in playwright.config.js tests/*.js; do node --check \"$file\" || exit; done",
+    "test": "playwright test"
+  },
+  "license": "MIT",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.6.0",
+      "onFail": "download"
+    }
+  },
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

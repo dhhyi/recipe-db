@@ -101,5 +101,3 @@ TODO: Integrate recipe search into the frontend.
 ### Resilience
 
 Maybe later.
-
-## Misc
