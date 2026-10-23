@@ -153,7 +153,7 @@ class SearchSession:
         parts = []
         for name, content in (
             ("operations", json.dumps({
-                "query": "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) }",
+                "query": "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl width height size } }",
                 "variables": {"id": recipe_id, "file": None},
             }).encode()),
             ("map", b'{"0":["variables.file"]}'),
@@ -167,4 +167,4 @@ class SearchSession:
         assert status == 200, (status, raw)
         result = json.loads(raw)
         assert not result.get("errors"), result
-        assert result["data"]["setImage"], result
+        assert result["data"]["setImage"]["url"], result

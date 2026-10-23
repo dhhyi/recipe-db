@@ -13,7 +13,13 @@ mutation UpdateRecipe($id: ID!, $value: RecipeInput!) {
 }
 
 mutation SetImage($recipeId: ID!, $file: Upload!) {
-  setImage(recipeId: $recipeId, file: $file)
+  setImage(recipeId: $recipeId, file: $file) {
+    url
+    thumbUrl
+    width
+    height
+    size
+  }
 }
 
 mutation Rate($id: ID!, $rating: Int!, $login: String!) {
