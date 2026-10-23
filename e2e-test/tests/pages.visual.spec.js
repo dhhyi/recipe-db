@@ -27,6 +27,9 @@ test.describe("overview", () => {
 test("recipe detail", async ({ page, demoRecipe }) => {
   await page.goto(`/recipe/${demoRecipe.id}`);
   await expect(
+    page.getByText(/^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/),
+  ).toBeVisible();
+  await expect(
     page.getByRole("button", { name: "Bearbeiten", exact: true }),
   ).toBeVisible();
   await expect(

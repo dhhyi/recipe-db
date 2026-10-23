@@ -98,9 +98,9 @@ defmodule Recipes.Repository do
              document = current |> Map.delete("id") |> Recipe.merge_patch(patch),
              :ok <- Recipe.validate(Map.drop(document, ["createdAt", "updatedAt"])),
              document =
-               if Recipe.core_changed?(current, document),
-                 do: Map.put(document, "updatedAt", timestamp()),
-                 else: document,
+               (if Recipe.core_changed?(current, document),
+                  do: Map.put(document, "updatedAt", timestamp()),
+                  else: document),
              {:ok, encoded} <- Jason.encode(document),
              {:ok, _result} <-
                Exqlite.query(transaction, "UPDATE recipes SET document = ? WHERE id = ?", [
