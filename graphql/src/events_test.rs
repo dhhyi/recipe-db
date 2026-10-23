@@ -133,7 +133,7 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
                         StatusCode::CREATED,
                         Json(json!({
                             "recipeId": id, "modified": "2026-10-23T10:00:00Z",
-                            "url": "/opaque/full.avif", "thumbUrl": "/opaque/thumb.webp",
+                            "url": "/opaque/full.png", "thumbUrl": "/opaque/thumb.png",
                             "width": 640, "height": 480, "size": 12345
                         })),
                     ),
@@ -236,7 +236,7 @@ async fn bus_contract() {
             assert_eq!(
                 response.data.into_json().unwrap(),
                 json!({"setImage": {
-                    "url": "/opaque/full.avif", "thumbUrl": "/opaque/thumb.webp",
+                    "url": "/opaque/full.png", "thumbUrl": "/opaque/thumb.png",
                     "width": 640, "height": 480, "size": 12345
                 }})
             );

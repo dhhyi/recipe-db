@@ -15,8 +15,8 @@ import (
 )
 
 func TestDetailHTTPAndLiveWidgets(t *testing.T) {
-	const imageURL = "https://cdn.example.test/opaque/full-token.avif?signature=abc&version=two"
-	const thumbURL = "/assets/unrelated/thumb-token.webp?rev=opaque&size=small"
+	const imageURL = "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two"
+	const thumbURL = "/assets/unrelated/thumb-token.png?rev=opaque&size=small"
 	var recipeCalls atomic.Int32
 	var version atomic.Int32
 	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool

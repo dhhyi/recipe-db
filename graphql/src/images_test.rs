@@ -11,8 +11,8 @@ fn metadata() -> serde_json::Value {
     json!({
         "recipeId": "present",
         "modified": "2026-10-23T10:00:00Z",
-        "url": "https://cdn.example.test/opaque/full-token.avif?signature=abc&version=two",
-        "thumbUrl": "/assets/unrelated/thumb-token.webp?rev=opaque",
+        "url": "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two",
+        "thumbUrl": "/assets/unrelated/thumb-token.png?rev=opaque",
         "width": 640, "height": 480, "size": 12345
     })
 }
