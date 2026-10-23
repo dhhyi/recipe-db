@@ -11,7 +11,7 @@ devcontainer:
       PLAYWRIGHT_VERSION: "1.64.1"
     root:
       - RUN sed -i 's|http://download.opensuse.org|https://download.opensuse.org|g' /etc/apt/sources.list.d/*.list
-      - RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 && apt-get clean && rm -rf /var/lib/apt/lists/*
+      - RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 fonts-dejavu-core && apt-get clean && rm -rf /var/lib/apt/lists/*
     user:
       - RUN mise use -g node@26
       - RUN mise use -g npm:playwright@$PLAYWRIGHT_VERSION

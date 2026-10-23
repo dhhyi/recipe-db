@@ -25,7 +25,9 @@ test("recipe detail", async ({ page, demoRecipe }) => {
   await expect(
     page.getByRole("img", { name: demoRecipe.name, exact: true }),
   ).toHaveJSProperty("complete", true);
-  await page.getByRole("button", { name: "Zur Startseite" }).scrollIntoViewIfNeeded();
+  await page
+    .getByRole("button", { name: "Zur Startseite" })
+    .scrollIntoViewIfNeeded();
   await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
   await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
   await expect(page).toHaveScreenshot("recipe.png", { fullPage: true });
