@@ -21,9 +21,10 @@ devcontainer:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     BASE_URL: http://traefik
     REST_API: http://traefik:3000
+  instantiate: mise -y install
   initialize: |
-    pnpm install --frozen-lockfile
-    pnpm exec playwright install chromium
+    mise exec -- pnpm install --frozen-lockfile
+    mise exec -- pnpm exec playwright install chromium
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
@@ -43,9 +44,6 @@ traefik:
 category: test
 dockerContext: "."
 check: |
-  node --check playwright.config.js
-  node --check tests/recipes.functional.spec.js
-  node --check tests/pages.visual.spec.js
-  node --check tests/fixtures.js
+  pnpm check
   pnpm exec playwright test --list --reporter=list
 test: pnpm test

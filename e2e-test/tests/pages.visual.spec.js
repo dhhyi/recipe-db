@@ -1,17 +1,27 @@
 import { test, expect } from "./fixtures.js";
 
-test("recipe overview", async ({ page, demoRecipe }) => {
-  await page.goto("/");
-  await page.evaluate(() =>
-    customElements.whenDefined("recipe-tile-component"),
-  );
-  await expect(
-    page.getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("img", { name: demoRecipe.name, exact: true }),
-  ).toHaveJSProperty("complete", true);
-  await expect(page).toHaveScreenshot("overview.png", { fullPage: true });
+test.describe("overview", () => {
+  test.use({ demoRecipeCount: 12 });
+
+  test("recipe overview", async ({ page, demoRecipes }) => {
+    await page.goto("/");
+    await page.evaluate(() =>
+      customElements.whenDefined("recipe-tile-component"),
+    );
+    for (const recipe of demoRecipes) {
+      const tile = page.getByRole("link", {
+        name: `Rezept ${recipe.name}`,
+        exact: true,
+      });
+      await expect(tile).toBeVisible();
+      await tile.scrollIntoViewIfNeeded();
+      await expect(
+        tile.getByRole("img", { name: recipe.name, exact: true }),
+      ).toHaveJSProperty("complete", true);
+    }
+    await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+    await expect(page).toHaveScreenshot("overview.png", { fullPage: true });
+  });
 });
 
 test("recipe detail", async ({ page, demoRecipe }) => {

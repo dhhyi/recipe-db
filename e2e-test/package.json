@@ -4,6 +4,7 @@
   "private": true,
   "description": "Responsive full-stack end-to-end tests with Playwright Chromium",
   "scripts": {
+    "check": "for file in playwright.config.js tests/*.js; do node --check \"$file\" || exit; done",
     "test": "playwright test"
   },
   "license": "MIT",
@@ -14,7 +15,6 @@
       "onFail": "download"
     }
   },
-  "packageManager": "pnpm@12.6.0",
   "type": "module",
   "devDependencies": {
     "@playwright/test": "1.64.1"

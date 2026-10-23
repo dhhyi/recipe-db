@@ -38,12 +38,21 @@ export default defineConfig({
       },
     },
     {
+      name: "mobile-landscape",
+      testMatch: "**/*.visual.spec.js",
+      use: {
+        ...devices["Pixel 7 landscape"],
+        viewport: { width: 844, height: 390 },
+      },
+    },
+    {
       name: "tablet",
       testMatch: "**/*.visual.spec.js",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 768, height: 1024 },
         hasTouch: true,
+        colorScheme: "dark",
       },
     },
     {
