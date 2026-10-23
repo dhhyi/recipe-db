@@ -15,7 +15,7 @@ devcontainer:
     user:
       - RUN mise use -g node@26
       - RUN mise use -g npm:playwright@$PLAYWRIGHT_VERSION
-      - RUN npm install -g pnpm@12.6.0
+      - RUN mise settings idiomatic_version_file_enable_tools=pnpm
       - RUN playwright install --with-deps chromium
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
