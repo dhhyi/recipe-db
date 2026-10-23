@@ -4,11 +4,11 @@
 
 Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.
 
-## ROADMAP changes
+## GitHub issue planning
 
-When implementing things described in the ROADMAP, delete the corresponding items from the ROADMAP to keep it up to date. If an item is no longer relevant or feasible, remove it as well.
+Use GitHub issues to plan work in this repository. Apply the `spec` label to issues that are ready to hand to an agent for implementation, and the `idea` label to issues that need further refinement before implementation.
 
-Add follow-up items to the roadmap if they come up during implementation.
+When asked to mark an issue as blocked by another issue, use GitHub's native issue dependency ("blocked by") feature rather than a label.
 
 ## Running commands for a project
 

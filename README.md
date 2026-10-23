@@ -56,7 +56,7 @@ Even though the frontend parts have access to a unified GraphQL API, I want to i
 
 ### Heavy interaction
 
-Parts with heavy interaction like the pages for adding and editing recipes will be implemented in a different solution.
+Pages for adding and editing recipes and images are implemented as dedicated frontends.
 
 #### Recipe Adding and Editing — see [`recipes-edit`](./recipes-edit/README.md)
 
