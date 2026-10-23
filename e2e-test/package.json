@@ -1,8 +1,8 @@
 {
-  "name": "browse-test",
+  "name": "e2e-test",
   "version": "1.0.0",
   "private": true,
-  "description": "Full-stack browser tests with Google Chrome and Playwright",
+  "description": "Responsive full-stack end-to-end tests with Playwright Chromium",
   "scripts": {
     "test": "playwright test"
   },

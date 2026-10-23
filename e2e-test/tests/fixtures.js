@@ -66,25 +66,3 @@ export const test = base.extend({
     }
   },
 });
-
-export async function capture(page, testInfo, name) {
-  await expect(page.locator("main")).toBeVisible();
-  await page.evaluate(() => document.fonts.ready);
-  await expect
-    .poll(() =>
-      page
-        .locator("main img")
-        .evaluateAll((images) =>
-          images.every((image) => image.complete && image.naturalWidth > 0),
-        ),
-    )
-    .toBe(true);
-  await testInfo.attach(`${name}-screenshot`, {
-    body: await page.screenshot({ fullPage: true, animations: "disabled" }),
-    contentType: "image/png",
-  });
-  await testInfo.attach(`${name}-aria`, {
-    body: await page.locator("main").ariaSnapshot(),
-    contentType: "text/yaml",
-  });
-}

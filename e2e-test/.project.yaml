@@ -1,35 +1,38 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
 extends: dcc://debian
 devcontainer:
-  name: recipe-db-browse-test
+  name: recipe-db-e2e-test
   publish:
-    image: ghcr.io/dhhyi/recipe-db-devcontainer-browse-test
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-e2e-test
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
     args:
-      CHROME_VERSION: "155.0.8059.84"
+      PLAYWRIGHT_VERSION: "1.64.1"
     root:
-      - RUN apt-get update -o Dir::Etc::sourcelist=sources.list.d/debian.sources -o Dir::Etc::sourceparts=- && apt-get install -y --no-install-recommends chromium libatomic1 fonts-noto-color-emoji unzip && apt-get clean && rm -rf /var/lib/apt/lists/*
-      - RUN sh -c 'if [ "$(dpkg --print-architecture)" = amd64 ]; then curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip && unzip -q /tmp/chrome.zip -d /opt/google && mv /opt/google/chrome-linux64 /opt/google/chrome && rm /tmp/chrome.zip; fi'
+      - RUN sed -i 's|http://download.opensuse.org|https://download.opensuse.org|g' /etc/apt/sources.list.d/*.list
+      - RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 && apt-get clean && rm -rf /var/lib/apt/lists/*
     user:
       - RUN mise use -g node@26
+      - RUN mise use -g npm:playwright@$PLAYWRIGHT_VERSION
       - RUN npm install -g pnpm@12.6.0
+      - RUN playwright install --with-deps chromium
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     BASE_URL: http://traefik
     REST_API: http://traefik:3000
   initialize: |
-    if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; fi
+    pnpm install --frozen-lockfile
+    pnpm exec playwright install chromium
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
-    peacock.remoteColor: "#a3c95d"
+    peacock.remoteColor: "#c9785d"
   extensions:
     - johnpapa.vscode-peacock
     - ms-playwright.playwright
   tasks:
-    - label: Run browser tests
+    - label: Run end-to-end tests
       command: pnpm test
 extras:
   - traefik
@@ -41,7 +44,8 @@ category: test
 dockerContext: "."
 check: |
   node --check playwright.config.js
-  node --check tests/recipes.spec.js
+  node --check tests/recipes.functional.spec.js
+  node --check tests/pages.visual.spec.js
   node --check tests/fixtures.js
   pnpm exec playwright test --list --reporter=list
 test: pnpm test

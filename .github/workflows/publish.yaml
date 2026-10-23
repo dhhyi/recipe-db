@@ -163,12 +163,12 @@ jobs:
           echo "::endgroup::"
           mise run integration-tests -- --development || { docker compose logs --no-color; exit 1; }
 
-      - name: upload ARM64 Chromium screenshots, ARIA snapshots and reports
+      - name: upload ARM64 end-to-end screenshots, ARIA snapshots and reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: arm64-browser-reports
-          path: browse-test/target/
+          name: arm64-e2e-reports
+          path: e2e-test/target/
           if-no-files-found: ignore
 
       - name: verify development and test images are native ARM64
