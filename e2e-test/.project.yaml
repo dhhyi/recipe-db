@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-e2e-test
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-e2e-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    args:
+      PLAYWRIGHT_VERSION: "1.64.1"
+    root:
+      - RUN sed -i 's|http://download.opensuse.org|https://download.opensuse.org|g' /etc/apt/sources.list.d/*.list
+      - RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 fonts-dejavu-core && apt-get clean && rm -rf /var/lib/apt/lists/*
+    user:
+      - RUN mise use -g node@26
+      - RUN mise use -g npm:playwright@$PLAYWRIGHT_VERSION
+      - RUN mise settings idiomatic_version_file_enable_tools=pnpm
+      - RUN playwright install --with-deps chromium
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    BASE_URL: http://traefik
+    REST_API: http://traefik:3000
+  instantiate: mise -y install
+  initialize: |
+    mise exec -- pnpm install --frozen-lockfile
+    mise exec -- pnpm exec playwright install chromium
+vscode:
+  settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
+    peacock.remoteColor: "#c9785d"
+  extensions:
+    - johnpapa.vscode-peacock
+    - ms-playwright.playwright
+  tasks:
+    - label: Run end-to-end tests
+      command: pnpm test
+extras:
+  - traefik
+traefik:
+  network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
+dockerContext: "."
+check: |
+  pnpm check
+  pnpm exec playwright test --list --reporter=list
+test: pnpm test
