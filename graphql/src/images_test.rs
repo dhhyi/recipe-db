@@ -13,7 +13,15 @@ async fn image_lookup_returns_graphql_errors_for_upstream_failures() {
                         Json(json!({"detail": "Recipe not found", "code": "recipe-not-found"})),
                     ),
                     "unrouted-recipe" => (StatusCode::NOT_FOUND, Json(json!({}))),
-                    _ => (StatusCode::OK, Json(json!({"id": id, "name": "Test"}))),
+                    _ => (
+                        StatusCode::OK,
+                        Json(json!({
+                            "id": id,
+                            "name": "Test",
+                            "createdAt": "2026-10-23T13:00:00.123456Z",
+                            "updatedAt": "2026-10-23T13:00:00.123456Z"
+                        })),
+                    ),
                 }
             }),
         )

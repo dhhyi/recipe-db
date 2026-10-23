@@ -41,6 +41,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				}
 				recipe = map[string]any{
 					"id": "42", "name": name, "method": "Cook", "ingredients": []any{},
+					"createdAt": "2020-01-01T00:00:00.123456Z", "updatedAt": "2020-01-01T00:00:00.123456Z",
 					"rating": rating, "image": map[string]any{"url": "/public/image", "thumbUrl": "/public/thumb"},
 				}
 			}
@@ -97,6 +98,9 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatalf("detail failed: %d %s", first.Code, first.Body.String())
 	}
 	html := first.Body.String()
+	if !strings.Contains(html, "Zuletzt aktualisiert: vor langer Zeit") {
+		t.Fatal("recipe update time must be displayed in German")
+	}
 	if strings.Contains(html, "Inspirationen") {
 		t.Fatal("shared page must not contain the lazy inspirations heading")
 	}

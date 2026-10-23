@@ -58,10 +58,13 @@ defmodule Recipes.Repository do
   end
 
   def handle_call({:create, document}, _from, connection) do
-    id = Recipe.new_id()
-
     reply =
-      with {:ok, encoded} <- Jason.encode(document),
+      with :ok <- Recipe.validate_reserved_fields(document),
+           id = Recipe.new_id(),
+           timestamp = timestamp(),
+           document =
+             document |> Map.put("createdAt", timestamp) |> Map.put("updatedAt", timestamp),
+           {:ok, encoded} <- Jason.encode(document),
            {:ok, _result} <-
              Exqlite.query(connection, "INSERT INTO recipes (id, document) VALUES (?, ?)", [
                id,
@@ -92,8 +95,10 @@ defmodule Recipes.Repository do
     reply =
       Exqlite.transaction(connection, fn transaction ->
         with {:ok, current} <- get_recipe(transaction, id),
+             :ok <- Recipe.validate_patch(patch),
              document = current |> Map.delete("id") |> Recipe.merge_patch(patch),
-             :ok <- Recipe.validate(document),
+             :ok <- Recipe.validate(Map.drop(document, ["createdAt", "updatedAt"])),
+             document = update_timestamp(current, document),
              {:ok, encoded} <- Jason.encode(document),
              {:ok, _result} <-
                Exqlite.query(transaction, "UPDATE recipes SET document = ? WHERE id = ?", [
@@ -147,4 +152,14 @@ defmodule Recipes.Repository do
       {:error, error} -> {:error, error}
     end
   end
+
+  defp update_timestamp(current, document) do
+    if Recipe.core_changed?(current, document) do
+      Map.put(document, "updatedAt", timestamp())
+    else
+      document
+    end
+  end
+
+  defp timestamp, do: DateTime.utc_now() |> DateTime.to_iso8601()
 end

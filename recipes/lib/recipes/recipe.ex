@@ -4,36 +4,48 @@ defmodule Recipes.Recipe do
   """
 
   @type document :: %{String.t() => Jason.OrderedObject.value()}
+  @core_fields ["name", "ingredients", "method"]
 
   @spec new_id() :: String.t()
   def new_id, do: Uniq.UUID.uuid4()
 
   @spec validate(document()) :: :ok | {:error, atom(), String.t(), String.t() | nil}
   def validate(document) when is_map(document) do
-    cond do
-      Map.has_key?(document, "id") ->
-        {:error, :reserved_field, "Reserved field: id", "id"}
-
-      valid_name?(Map.get(document, "name")) ->
+    with :ok <- validate_reserved_fields(document) do
+      if valid_name?(Map.get(document, "name")) do
         :ok
-
-      true ->
+      else
         {:error, :required_field, "Missing field value for name", "name"}
+      end
     end
   end
 
   def validate(_document), do: {:error, :invalid_json_object, "Expected a JSON object", nil}
 
   @spec validate_patch(document()) :: :ok | {:error, atom(), String.t(), String.t() | nil}
-  def validate_patch(patch) when is_map(patch) do
-    if Map.has_key?(patch, "id") do
-      {:error, :reserved_field, "Reserved field: id", "id"}
-    else
-      :ok
+  def validate_patch(patch) when is_map(patch), do: validate_reserved_fields(patch)
+
+  def validate_patch(_patch), do: {:error, :invalid_json_object, "Expected a JSON object", nil}
+
+  @spec validate_reserved_fields(document()) ::
+          :ok | {:error, atom(), String.t(), String.t() | nil}
+  def validate_reserved_fields(document) when is_map(document) do
+    case Enum.find(["id", "createdAt", "updatedAt"], &Map.has_key?(document, &1)) do
+      nil -> :ok
+      field -> {:error, :reserved_field, "Reserved field: #{field}", field}
     end
   end
 
-  def validate_patch(_patch), do: {:error, :invalid_json_object, "Expected a JSON object", nil}
+  def validate_reserved_fields(_document),
+    do: {:error, :invalid_json_object, "Expected a JSON object", nil}
+
+  @spec core_changed?(document(), document()) :: boolean()
+  def core_changed?(before_document, after_document) do
+    Enum.any?(
+      @core_fields,
+      &(Map.get(before_document, &1) != Map.get(after_document, &1))
+    )
+  end
 
   @spec merge_patch(Jason.OrderedObject.value(), Jason.OrderedObject.value()) ::
           Jason.OrderedObject.value()

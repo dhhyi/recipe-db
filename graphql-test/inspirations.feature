@@ -30,7 +30,7 @@ Feature: inspirations
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['#(pageUrl)'] } } }
     * method post
     * status 200
-    * match response.data.createRecipe == { id: '#string', name: 'test' }
+    * match response.data.createRecipe == { id: '#string', name: 'test', createdAt: '#string', updatedAt: '#string' }
     * def recipeId = response.data.createRecipe.id
 
     * request { query: '#(read("graphql/recipe-by-id-with-inspirations.graphql"))', variables: { id: '#(recipeId)' } }

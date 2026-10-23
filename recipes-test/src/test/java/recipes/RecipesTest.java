@@ -7,6 +7,8 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.startsWith;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import io.restassured.RestAssured;
 import io.restassured.http.ContentType;
@@ -18,6 +20,7 @@ class RecipesTest {
   private static final String JSON = "application/json";
   private static final String MERGE_PATCH = "application/merge-patch+json";
   private static final String UUID_V4 = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+  private static final String RFC3339_MICROSECONDS = "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z";
 
   @BeforeAll
   static void configureApi() {
@@ -40,7 +43,7 @@ class RecipesTest {
   }
 
   private static String createRecipe(String body) {
-    return given().header("Connection", "close")
+    var response = given().header("Connection", "close")
         .contentType(ContentType.JSON)
         .body(body)
         .post("/recipes")
@@ -48,8 +51,15 @@ class RecipesTest {
         .statusCode(201)
         .contentType(startsWith("application/json"))
         .body("id", matchesPattern(UUID_V4))
+        .body("createdAt", matchesPattern(RFC3339_MICROSECONDS))
+        .body("updatedAt", matchesPattern(RFC3339_MICROSECONDS))
         .extract()
-        .path("id");
+        .response();
+    assertEquals(response.jsonPath()
+        .getString("createdAt"),
+        response.jsonPath()
+            .getString("updatedAt"));
+    return response.path("id");
   }
 
   @Test
@@ -109,6 +119,32 @@ class RecipesTest {
         .body("detail", equalTo("Missing field value for name"))
         .body("code", equalTo("required-field"))
         .body("field", equalTo("name"));
+  }
+
+  @Test
+  void rejectsClientSuppliedTimestampsIncludingNull() {
+    for (String field : new String[]{"createdAt", "updatedAt"}) {
+      given().header("Connection", "close")
+          .contentType(ContentType.JSON)
+          .body("{\"name\":\"Rice Pudding\",\"" + field + "\":null}")
+          .post("/recipes")
+          .then()
+          .statusCode(422)
+          .contentType(startsWith("application/problem+json"))
+          .body("code", equalTo("reserved-field"))
+          .body("field", equalTo(field));
+
+      String recipeId = createRecipe("{\"name\":\"Rice Pudding\"}");
+      given().header("Connection", "close")
+          .contentType(MERGE_PATCH)
+          .body("{\"" + field + "\":null}")
+          .patch("/recipes/{id}", recipeId)
+          .then()
+          .statusCode(422)
+          .contentType(startsWith("application/problem+json"))
+          .body("code", equalTo("reserved-field"))
+          .body("field", equalTo(field));
+    }
   }
 
   @Test
@@ -175,6 +211,24 @@ class RecipesTest {
         }
         """);
 
+    var initial = given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("createdAt", matchesPattern(RFC3339_MICROSECONDS))
+        .body("updatedAt", matchesPattern(RFC3339_MICROSECONDS))
+        .extract()
+        .response();
+
+    given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"metadata\":{\"season\":\"autumn\"}}")
+        .patch("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("createdAt", equalTo(initial.path("createdAt")))
+        .body("updatedAt", equalTo(initial.path("updatedAt")));
+
     given().header("Connection", "close")
         .get("/recipes")
         .then()
@@ -188,9 +242,11 @@ class RecipesTest {
         .statusCode(200)
         .body("id", equalTo(recipeId))
         .body("name", equalTo("Rice Pudding"))
+        .body("createdAt", equalTo(initial.path("createdAt")))
+        .body("updatedAt", equalTo(initial.path("updatedAt")))
         .body("servings", equalTo(4));
 
-    given().header("Connection", "close")
+    var changed = given().header("Connection", "close")
         .contentType(MERGE_PATCH)
         .body("""
             {
@@ -209,10 +265,18 @@ class RecipesTest {
         .then()
         .statusCode(200)
         .body("name", equalTo("Rice Pudding with Cinnamon"))
+        .body("createdAt", equalTo(initial.path("createdAt")))
+        .body("updatedAt", matchesPattern(RFC3339_MICROSECONDS))
         .body("servings", nullValue())
         .body("metadata.source", equalTo("family"))
         .body("metadata.season", equalTo("autumn"))
-        .body("steps", hasSize(2));
+        .body("steps", hasSize(2))
+        .extract()
+        .response();
+    assertNotEquals(initial.jsonPath()
+        .getString("updatedAt"),
+        changed.jsonPath()
+            .getString("updatedAt"));
 
     given().header("Connection", "close")
         .get("/recipes/{id}", recipeId)
@@ -222,6 +286,8 @@ class RecipesTest {
         .body("servings", nullValue())
         .body("metadata.source", equalTo("family"))
         .body("metadata.season", equalTo("autumn"))
+        .body("createdAt", equalTo(initial.path("createdAt")))
+        .body("updatedAt", equalTo(changed.path("updatedAt")))
         .body("steps", hasSize(2));
   }
 

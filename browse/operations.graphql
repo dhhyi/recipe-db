@@ -27,6 +27,7 @@ query Overview {
 fragment RecipeDetail on Recipe {
   id
   name
+  updatedAt
   method
   image {
     url

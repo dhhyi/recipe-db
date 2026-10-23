@@ -108,5 +108,10 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		}
 		@InspirationsStub(recipe.Id)
 	</div>
+	<p>
+		<small>
+			Zuletzt aktualisiert: { util.RelativeTimeInGerman(recipe.UpdatedAt) }
+		</small>
+	</p>
 	<a href="/" role="button">Zur Startseite</a>
 }
