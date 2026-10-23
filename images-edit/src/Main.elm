@@ -175,17 +175,12 @@ recipeThumbnail recipe =
 
 uploadFeedback : Model -> Maybe (Html Msg)
 uploadFeedback model =
-    let
-        uploadError : Html Msg
-        uploadError =
-            feedback (Failure "Fehler beim Hochladen")
-    in
     case model.uploaded of
         RemoteData.Success _ ->
             Just (feedback (Success "Bild hochgeladen"))
 
         RemoteData.Failure _ ->
-            Just uploadError
+            Just (feedback (Failure "Fehler beim Hochladen"))
 
         _ ->
             Nothing
