@@ -117,6 +117,12 @@ pub struct Recipe {
     pub name: String,
     pub method: Option<String>,
     pub ingredients: Option<Vec<Ingredient>>,
+    /// UTC RFC 3339 timestamp with microsecond precision.
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    /// UTC RFC 3339 timestamp with microsecond precision.
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
 }
 
 #[ComplexObject]

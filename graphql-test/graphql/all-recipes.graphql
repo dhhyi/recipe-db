@@ -2,5 +2,7 @@ query {
   recipes {
     id
     name
+    createdAt
+    updatedAt
   }
 }
