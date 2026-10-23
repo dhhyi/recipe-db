@@ -589,7 +589,9 @@ test("the image editor disables file selection while an upload is pending", asyn
     );
     await uploadStarted.promise;
     await expect(input).toBeDisabled();
-
+    await expect(
+      page.getByRole("button", { name: "Lade hoch...", exact: true }),
+    ).toHaveAttribute("aria-busy", "true");
     await page.locator('label[for="upload-image"]').dispatchEvent("click");
     expect(uploadRequests).toBe(1);
 
