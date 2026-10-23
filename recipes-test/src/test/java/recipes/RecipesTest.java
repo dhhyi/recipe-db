@@ -55,7 +55,10 @@ class RecipesTest {
         .body("updatedAt", matchesPattern(RFC3339_MICROSECONDS))
         .extract()
         .response();
-    assertEquals(response.path("createdAt"), response.path("updatedAt"));
+    assertEquals(response.jsonPath()
+        .getString("createdAt"),
+        response.jsonPath()
+            .getString("updatedAt"));
     return response.path("id");
   }
 
@@ -120,7 +123,7 @@ class RecipesTest {
 
   @Test
   void rejectsClientSuppliedTimestampsIncludingNull() {
-    for (String field : new String[] {"createdAt", "updatedAt"}) {
+    for (String field : new String[]{"createdAt", "updatedAt"}) {
       given().header("Connection", "close")
           .contentType(ContentType.JSON)
           .body("{\"name\":\"Rice Pudding\",\"" + field + "\":null}")
@@ -270,7 +273,10 @@ class RecipesTest {
         .body("steps", hasSize(2))
         .extract()
         .response();
-    assertNotEquals(initial.path("updatedAt"), changed.path("updatedAt"));
+    assertNotEquals(initial.jsonPath()
+        .getString("updatedAt"),
+        changed.jsonPath()
+            .getString("updatedAt"));
 
     given().header("Connection", "close")
         .get("/recipes/{id}", recipeId)

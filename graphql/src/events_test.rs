@@ -114,14 +114,14 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
                     "updatedAt": "2026-10-23T13:00:00.123456Z"
                 }))
             })
-                .patch(update_recipe)
-                .delete(|Path(id): Path<String>| async move {
-                    if id == "missing" {
-                        StatusCode::NOT_FOUND
-                    } else {
-                        StatusCode::NO_CONTENT
-                    }
-                }),
+            .patch(update_recipe)
+            .delete(|Path(id): Path<String>| async move {
+                if id == "missing" {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::NO_CONTENT
+                }
+            }),
         )
         .route("/ratings", delete(|| async { StatusCode::NO_CONTENT }))
         .route(

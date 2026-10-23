@@ -62,7 +62,8 @@ defmodule Recipes.Repository do
       with :ok <- Recipe.validate_reserved_fields(document),
            id = Recipe.new_id(),
            timestamp = timestamp(),
-           document = document |> Map.put("createdAt", timestamp) |> Map.put("updatedAt", timestamp),
+           document =
+             document |> Map.put("createdAt", timestamp) |> Map.put("updatedAt", timestamp),
            {:ok, encoded} <- Jason.encode(document),
            {:ok, _result} <-
              Exqlite.query(connection, "INSERT INTO recipes (id, document) VALUES (?, ?)", [
@@ -97,10 +98,7 @@ defmodule Recipes.Repository do
              :ok <- Recipe.validate_patch(patch),
              document = current |> Map.delete("id") |> Recipe.merge_patch(patch),
              :ok <- Recipe.validate(Map.drop(document, ["createdAt", "updatedAt"])),
-             document =
-               (if Recipe.core_changed?(current, document),
-                  do: Map.put(document, "updatedAt", timestamp()),
-                  else: document),
+             document = update_timestamp(current, document),
              {:ok, encoded} <- Jason.encode(document),
              {:ok, _result} <-
                Exqlite.query(transaction, "UPDATE recipes SET document = ? WHERE id = ?", [
@@ -152,6 +150,14 @@ defmodule Recipes.Repository do
     case Exqlite.query(connection, statement, parameters) do
       {:ok, _result} -> :ok
       {:error, error} -> {:error, error}
+    end
+  end
+
+  defp update_timestamp(current, document) do
+    if Recipe.core_changed?(current, document) do
+      Map.put(document, "updatedAt", timestamp())
+    else
+      document
     end
   end
 

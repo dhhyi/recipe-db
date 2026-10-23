@@ -94,6 +94,7 @@ defmodule Recipes.RouterTest do
         |> Router.call(@options)
 
       assert post_response.status == 422
+
       assert %{"code" => "reserved-field", "field" => ^field} =
                Jason.decode!(post_response.resp_body)
 
@@ -104,6 +105,7 @@ defmodule Recipes.RouterTest do
         |> Router.call(@options)
 
       assert patch_response.status == 422
+
       assert %{"code" => "reserved-field", "field" => ^field} =
                Jason.decode!(patch_response.resp_body)
     end
