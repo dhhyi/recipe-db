@@ -2,7 +2,7 @@
 
 Image server for recipe-db, implemented in [Nim](https://nim-lang.org/) using [Jester](https://github.com/dom96/jester) and [Pixie](https://github.com/treeform/pixie).
 
-An uploaded image is decoded, center-cropped to 4:3, and resized to a 650x488 normal image and a 300x225 thumbnail. Each output is encoded once as PNG and independently SHA-256 hashed. Public filenames are `<recipe-id>-<64 lowercase hex hash>.png` and `<recipe-id>-<64 lowercase hex hash>-thumb.png`, served under `/public/`.
+An uploaded image is normalized for EXIF orientation, cropped once in oriented source coordinates, and independently resized to a 648x486 normal image and a 300x225 thumbnail, preserving PNG transparency. Omitted crops use centered automatic cropping, including for small legacy sources. Originals are discarded. Existing 650x488 images remain readable without migration. Each output is encoded once as PNG and independently SHA-256 hashed. Public filenames are `<recipe-id>-<64 lowercase hex hash>.png` and `<recipe-id>-<64 lowercase hex hash>-thumb.png`, served under `/public/`.
 
 Both complete outputs are stored in the data root's `public` directory before atomically replacing a private per-recipe JSON manifest in its `manifests` directory. The manifest preserves the current URLs and metadata across restarts. Identical output reuses existing files without changing their bytes or modification times. Superseded versions remain readable until explicit recipe deletion or a non-production wipe; retained versions intentionally consume disk space. Deletion cannot revoke copies already cached by browsers or CDNs.
 
@@ -14,7 +14,7 @@ Integration testing (in [`images-test`](../images-test)) uses [Hurl](https://hur
 
 | Route | Description |
 | --- | --- |
-| `POST /images/:recipeId` | Raw image body, `Content-Type` must be `image/jpeg`, `image/jpg` or `image/png`. Returns `201` with the published metadata as JSON, `400` for an unsupported or mismatching type, undecodable data or an oversized image, or `500` on storage failure. |
+| `POST /images/:recipeId` | Raw image body, `Content-Type` must be `image/jpeg`, `image/jpg` or `image/png`. Optional query parameters `cropX`, `cropY`, `cropWidth`, `cropHeight` must occur once each, all together, as nonnegative decimal integers. Dimensions must be positive, in bounds in oriented source pixels, exact 4:3 and at least 300x225. Invalid crops return `400` with codes `invalid-crop` (and the offending/missing `field`), `invalid-crop-aspect-ratio`, `crop-out-of-bounds`, or `crop-too-small`; they never fall back to automatic cropping. Returns `201` with the published metadata as JSON, `400` for an unsupported or mismatching type, undecodable data or excessive pixel count, `413` for excessive encoded bytes, or `500` on storage failure. |
 | `GET /images/:recipeId/meta` | Current metadata with `Cache-Control: no-store`, or `404` for no manifest. Malformed manifests or missing/corrupt outputs produce a logged `500` Problem Details response. Fields remain `recipeId`, `width`, `height`, `size` (normal PNG bytes), `modified` (last successful publication), `url`, and `thumbUrl`. |
 | `DELETE /images/:recipeId` | Removes the manifest and all retained versions of exactly that recipe. Returns `204`, or `404`. |
 | `DELETE /images` | Removes all manifests and versions. Only available outside production. |

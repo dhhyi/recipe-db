@@ -237,8 +237,11 @@ async fn bus_contract() {
 
     for id in ["invalid", "malformed", "42"] {
         let mut request = Request::new(
-            "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl width height size } }"
-        ).variables(Variables::from_json(json!({"id": id, "file": null})));
+            "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl width height size } }"
+        ).variables(Variables::from_json(json!({
+            "id": id, "file": null,
+            "crop": {"x": 17, "y": 29, "width": 101, "height": 83}
+        })));
         request.set_upload(
             "variables.file",
             UploadValue {

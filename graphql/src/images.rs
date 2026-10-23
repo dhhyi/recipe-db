@@ -1,5 +1,5 @@
-use async_graphql::{Context, Error, Object, SimpleObject, Upload, ID};
-use serde::Deserialize;
+use async_graphql::{Context, Error, InputObject, Object, SimpleObject, Upload, ID};
+use serde::{Deserialize, Serialize};
 
 use crate::events::{EventKind, EventPublisher};
 use crate::rest_client::{RestClient, RestError};
@@ -16,6 +16,19 @@ pub struct ImageMetadata {
     pub thumb_url: String,
     pub url: String,
     pub width: i32,
+}
+
+/// A crop rectangle in visually oriented source pixels.
+#[derive(InputObject, Serialize)]
+pub struct ImageCropInput {
+    #[serde(rename = "cropX")]
+    pub x: i32,
+    #[serde(rename = "cropY")]
+    pub y: i32,
+    #[serde(rename = "cropWidth")]
+    pub width: i32,
+    #[serde(rename = "cropHeight")]
+    pub height: i32,
 }
 
 pub struct ImagesApi {
@@ -45,11 +58,12 @@ impl ImagesApi {
         recipe_id: &str,
         mimetype: &str,
         content: Vec<u8>,
+        crop: Option<ImageCropInput>,
         publisher: &EventPublisher,
     ) -> Result<ImageMetadata, Error> {
         let metadata = self
             .client
-            .post_bytes::<ImageMetadata>(recipe_id, mimetype, content)
+            .post_bytes::<ImageMetadata>(recipe_id, mimetype, content, crop.as_ref())
             .await
             .map_err(RestError::into_error)?;
         publisher
@@ -87,6 +101,7 @@ impl ImagesMutation {
         ctx: &Context<'_>,
         recipe_id: ID,
         file: Upload,
+        crop: Option<ImageCropInput>,
     ) -> Result<ImageMetadata, Error> {
         let mut upload = file.value(ctx)?;
         let mimetype = upload
@@ -107,6 +122,7 @@ impl ImagesMutation {
                 recipe_id.as_str(),
                 &mimetype,
                 content,
+                crop,
                 ctx.data::<EventPublisher>()?,
             )
             .await

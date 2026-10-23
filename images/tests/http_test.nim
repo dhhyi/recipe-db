@@ -1,4 +1,4 @@
-import std/[httpclient, json, os, osproc, strtabs, strutils, unittest, uri]
+import std/[httpclient, json, os, osproc, sequtils, strtabs, strutils, unittest, uri]
 import pixie
 import ../storage
 
@@ -6,13 +6,16 @@ const
   root = "tests/http-test-data"
   base = "http://127.0.0.1:18432"
 
-proc startServer(production = false): Process =
+proc startServer(production = false, maxPixels = 40_000_000,
+    maxUploadBytes = 10 * 1024 * 1024): Process =
   var environment = newStringTable(modeCaseSensitive)
   for key, value in envPairs():
     environment[key] = value
   environment["PORT"] = "18432"
   environment["DATA_LOCATION"] = root
   environment["PRODUCTION"] = $production
+  environment["MAX_PIXELS"] = $maxPixels
+  environment["MAX_UPLOAD_BYTES"] = $maxUploadBytes
   result = startProcess("./server", env = environment,
       options = {poParentStreams})
   let client = newHttpClient(timeout = 100)
@@ -35,6 +38,116 @@ proc stopServer(server: Process) =
   server.close()
 
 suite "backend HTTP publication contract":
+  test "off-center crop pixels, strict errors and failed saves preserve the complete pair":
+    if dirExists(root):
+      removeDir(root)
+    var server = startServer()
+    let client = newHttpClient(timeout = 5000)
+    defer:
+      client.close()
+      server.stopServer()
+      if dirExists(root):
+        removeDir(root)
+    let source = newImage(1200, 900)
+    source.fill(parseHtmlColor("#ff0000"))
+    for y in 200 ..< 650:
+      for x in 600 ..< 1200:
+        source[x, y] = parseHtmlColor(
+            if x < 900: "#00ff00" else: "#0000ff").rgbx
+    let body = source.encodeImage(PngFormat)
+    let query = "?cropX=600&cropY=200&cropWidth=600&cropHeight=450"
+    proc upload(query: string, bytes = body, mime = "image/png"): Response =
+      client.request(base & "/images/crop" & query, httpMethod = HttpPost,
+          body = bytes, headers = newHttpHeaders({"Content-Type": mime}))
+    let response = upload(query)
+    check response.code == Http201
+    let saved = parseJson(response.body)
+    var savedBytes: array[2, string]
+    for i, key in ["url", "thumbUrl"]:
+      let bytes = client.getContent(base & saved[key].getStr)
+      savedBytes[i] = bytes
+      let image = decodeImage(bytes)
+      check image.width == (if i == 0: 648 else: 300)
+      check image.height == (if i == 0: 486 else: 225)
+      check image[image.width div 4, image.height div 2] ==
+          parseHtmlColor("#00ff00").rgbx
+      check image[image.width * 3 div 4, image.height div 2] ==
+          parseHtmlColor("#0000ff").rgbx
+    let store = ImageStorage(root: root)
+    check toSeq(walkDir(store.publicFolder)).len == 2
+    for (query, code, field) in [
+        ("?cropX=0", "invalid-crop", "cropY"),
+        ("?cropX=-1&cropY=0&cropWidth=300&cropHeight=225", "invalid-crop",
+            "cropX"),
+        ("?cropX=1.5&cropY=0&cropWidth=300&cropHeight=225", "invalid-crop",
+            "cropX"),
+        ("?cropX=&cropY=0&cropWidth=300&cropHeight=225", "invalid-crop",
+            "cropX"),
+        ("?cropX=0&cropY=0&cropWidth=0&cropHeight=225", "invalid-crop",
+            "cropWidth"),
+        ("?cropX=0&cropX=1&cropY=0&cropWidth=300&cropHeight=225",
+            "invalid-crop", "cropX"),
+        ("?cropX=999999999999999999999999&cropY=0&cropWidth=300&cropHeight=225",
+          "invalid-crop", "cropX"),
+        ("?cropX=0&cropY=0&cropWidth=301&cropHeight=225",
+            "invalid-crop-aspect-ratio", ""),
+        ("?cropX=0&cropY=0&cropWidth=296&cropHeight=222", "crop-too-small", ""),
+        ("?cropX=901&cropY=0&cropWidth=300&cropHeight=225",
+            "crop-out-of-bounds", ""),
+        ("?cropX=0&cropY=676&cropWidth=300&cropHeight=225",
+            "crop-out-of-bounds", ""),
+        ("?cropX=9223372036854775807&cropY=0&cropWidth=300&cropHeight=225",
+          "crop-out-of-bounds", "")]:
+      let rejected = upload(query)
+      check rejected.code == Http400
+      check rejected.headers["Content-Type"] == "application/problem+json"
+      check rejected.headers["Cache-Control"] == "no-store"
+      let problem = parseJson(rejected.body)
+      check problem["type"].getStr == "about:blank"
+      check problem["status"].getInt == 400
+      check problem["code"].getStr == code
+      if field.len > 0:
+        check problem["field"].getStr == field
+      check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+    for (bytes, mime, code) in [
+        ("not an image", "image/png", "unsupported-content-type"),
+        ("\x89PNG\r\n\x1A\nbroken", "image/png", "invalid-image"),
+        (body, "image/jpeg", "unsupported-content-type")]:
+      let rejected = upload(query, bytes, mime)
+      check rejected.code == Http400
+      check parseJson(rejected.body)["code"].getStr == code
+    let replacement = newImage(600, 450)
+    replacement.fill(parseHtmlColor("#ffffff"))
+    let blockedThumb = replacement.resize(300, 225).encodeImage(PngFormat)
+    let blockedPath = store.publicFolder /
+        ("crop-" & outputHash(blockedThumb) & "-thumb.png")
+    createDir(blockedPath)
+    let failed = upload("?cropX=0&cropY=0&cropWidth=600&cropHeight=450",
+        replacement.encodeImage(PngFormat))
+    check failed.code == Http500
+    check parseJson(failed.body)["code"].getStr == "storage-error"
+    check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+    for i, key in ["url", "thumbUrl"]:
+      check client.getContent(base & saved[key].getStr) == savedBytes[i]
+    for kind, path in walkDir(store.publicFolder):
+      check ".pending-" notin path
+    for kind, path in walkDir(store.manifestFolder):
+      check ".pending-" notin path
+    client.close()
+    server.stopServer()
+    server = startServer(maxPixels = 100)
+    let tooManyPixels = upload(query)
+    check tooManyPixels.code == Http400
+    check parseJson(tooManyPixels.body)["code"].getStr == "image-too-large"
+    check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+    client.close()
+    server.stopServer()
+    server = startServer(maxUploadBytes = 64)
+    let tooManyBytes = upload(query)
+    check tooManyBytes.code == Http413
+    discard tooManyBytes.body
+    check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+
   test "metadata, immutable headers, private files, errors, restart and production wipe guard":
     if dirExists(root):
       removeDir(root)
@@ -55,8 +168,8 @@ suite "backend HTTP publication contract":
     check uploaded.code == Http201
     check uploaded.headers["Content-Type"] == "application/json"
     let published = parseJson(uploaded.body)
-    check published["width"].getInt == 650
-    check published["height"].getInt == 488
+    check published["width"].getInt == 648
+    check published["height"].getInt == 486
     let metadata = client.get(base & "/images/" & id & "/meta")
     check metadata.code == Http200
     check metadata.headers["Cache-Control"] == "no-store"
