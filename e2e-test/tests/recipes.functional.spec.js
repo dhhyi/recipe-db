@@ -351,10 +351,17 @@ test.describe("first image", () => {
       name: `Rezept ${demoRecipe.name}`,
       exact: true,
     });
-    const thumbnail = tile.getByRole("img");
+    const thumbnail = tile.getByRole("img", {
+      name: demoRecipe.name,
+      exact: true,
+    });
     await expect(thumbnail).toHaveAttribute("src", thumbUrls.B);
     await expectPixels(thumbnail, patterns.B, { width: 300, height: 225 });
-    expectImmutableUrl(await thumbnail.getAttribute("src"), demoRecipe.id, true);
+    expectImmutableUrl(
+      await thumbnail.getAttribute("src"),
+      demoRecipe.id,
+      true,
+    );
   });
 });
 
@@ -406,9 +413,11 @@ test("replace a recipe image in the image editor and view the uploaded image", a
     const uploaded = page.waitForResponse((response) =>
       isImageUpload(response.request()),
     );
-    await page.locator("#upload-image").setInputFiles(
-      fileURLToPath(new URL(`../../demo-data/${filename}`, import.meta.url)),
-    );
+    await page
+      .locator("#upload-image")
+      .setInputFiles(
+        fileURLToPath(new URL(`../../demo-data/${filename}`, import.meta.url)),
+      );
     const result = await (await uploaded).json();
     expect(result.errors).toBeUndefined();
     const metadata = result.data.setImage;
@@ -461,7 +470,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
   await page.getByRole("button", { name: "Zur Startseite" }).click();
   const thumbnail = page
     .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
-    .getByRole("img");
+    .getByRole("img", { name: demoRecipe.name, exact: true });
   await expect(thumbnail).toHaveAttribute("src", repeated.thumbUrl);
   const thumbnailResponse = await page.request.get(repeated.thumbUrl);
   expect(thumbnailResponse.ok()).toBe(true);

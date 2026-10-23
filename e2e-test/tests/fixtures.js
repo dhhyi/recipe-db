@@ -16,7 +16,10 @@ export async function graphql(request, query, variables = {}) {
 export const test = base.extend({
   demoRecipeCount: [1, { option: true }],
   demoRecipeWithImage: [true, { option: true }],
-  demoRecipes: async ({ request, demoRecipeCount, demoRecipeWithImage }, use) => {
+  demoRecipes: async (
+    { request, demoRecipeCount, demoRecipeWithImage },
+    use,
+  ) => {
     const demo = new URL("../../demo-data/", import.meta.url);
     const value = JSON.parse(
       await readFile(new URL("recipe1.json", demo), "utf8"),
