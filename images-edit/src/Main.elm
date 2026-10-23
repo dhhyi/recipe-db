@@ -4,7 +4,7 @@ import Accessibility.Role as Role
 import Browser
 import File exposing (File)
 import Html exposing (Html, a, div, figure, h1, img, input, label, p, text)
-import Html.Attributes exposing (attribute, class, for, hidden, href, id, multiple, src, type_)
+import Html.Attributes exposing (attribute, class, disabled, for, hidden, href, id, multiple, src, type_)
 import Html.Events exposing (on)
 import Json.Decode as D
 import Maybe.Extra exposing (toList)
@@ -211,6 +211,14 @@ uploadImageButton model =
             [ id "upload-image"
             , type_ "file"
             , multiple False
+            , disabled
+                (case model.uploaded of
+                    RemoteData.Loading ->
+                        True
+
+                    _ ->
+                        False
+                )
             , on "change" (D.map GotFile fileDecoder)
             , hidden True
             ]

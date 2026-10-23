@@ -559,3 +559,46 @@ test("a failed image upload preserves the previous image and shows feedback", as
     page.getByRole("button", { name: "Abbrechen", exact: true }),
   ).toBeVisible();
 });
+
+test("the image editor disables file selection while an upload is pending", async ({
+  page,
+  demoRecipe,
+}) => {
+  const uploadStarted = Promise.withResolvers();
+  const releaseUpload = Promise.withResolvers();
+  let uploadRequests = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageUpload(route.request())) {
+      uploadRequests += 1;
+      const response = await route.fetch();
+      uploadStarted.resolve();
+      await releaseUpload.promise;
+      await route.fulfill({ response });
+    } else {
+      await route.continue();
+    }
+  });
+  try {
+    await page.goto(`/images-edit/${demoRecipe.id}`);
+    const input = page.locator("#upload-image");
+    const uploaded = page.waitForResponse((response) =>
+      isImageUpload(response.request()),
+    );
+    await input.setInputFiles(
+      fileURLToPath(new URL("../../demo-data/recipe2.jpg", import.meta.url)),
+    );
+    await uploadStarted.promise;
+    await expect(input).toBeDisabled();
+
+    await page.locator('label[for="upload-image"]').click();
+    expect(uploadRequests).toBe(1);
+
+    releaseUpload.resolve();
+    const result = await (await uploaded).json();
+    expect(result.errors).toBeUndefined();
+    await expect(input).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveText("Bild hochgeladen");
+  } finally {
+    releaseUpload.resolve();
+  }
+});
