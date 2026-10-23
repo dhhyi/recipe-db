@@ -85,6 +85,7 @@ class BrowseSearch {
     this.form = root.querySelector<HTMLFormElement>("form")!;
     this.input = this.form.querySelector<HTMLInputElement>('[name="q"]')!;
     this.sort = this.form.querySelector<HTMLSelectElement>('[name="sort"]')!;
+    this.sort.setAttribute("aria-label", "Sortieren nach");
     this.form.setAttribute("hx-boost", "false");
     const status = this.region.querySelector("[data-browse-status]");
     if (status) this.form.after(status);
@@ -94,10 +95,14 @@ class BrowseSearch {
     const navigation = performance.getEntriesByType("navigation")[0] as
       PerformanceNavigationTiming | undefined;
     if (freshDocument && saved && navigation?.type !== "back_forward") {
-      saved = { ...saved, page: 1, scroll: 0, stopped: false };
+      saved = {
+        ...saved, q: this.input.value, sort: this.sort.value,
+        explicit: Boolean(new URL(location.href).searchParams.get("sort")),
+        page: 1, scroll: 0, stopped: false,
+      };
     }
     this.entry = saved || {
-      id: crypto.randomUUID(),
+      id: Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString(16)).join("-"),
       q: this.input.value,
       sort: this.sort.value,
       explicit: Boolean(new URL(location.href).searchParams.get("sort")),
@@ -228,20 +233,33 @@ class BrowseSearch {
     }
     this.region.dataset.searchKey = this.signature;
     this.controls();
-    this.observe();
-    if (saved) this.scroll(saved.scroll);
-    this.save();
+    if (saved) {
+      this.restoring = true;
+      this.scroll(saved.scroll, () => {
+        this.restoring = false;
+        this.save();
+        this.observe();
+      });
+    } else {
+      this.observe();
+      this.save();
+    }
   }
 
-  private scroll(top: number) {
+  private scroll(top: number, restored?: () => void) {
+    const generation = this.generation;
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (this.root.isConnected && active === this) window.scrollTo(0, top);
+        if (this.root.isConnected && active === this && generation === this.generation) {
+          window.scrollTo(0, top);
+          restored?.();
+        }
       }),
     );
   }
 
   private controls() {
+    this.sort.dataset.autoSort = String(!this.explicit);
     const automatic =
       this.sort.querySelector<HTMLOptionElement>('option[value=""]');
     const effective = this.sort.querySelector<HTMLOptionElement>(
@@ -315,8 +333,10 @@ class BrowseSearch {
       "text/html",
     );
     if (generation !== this.generation || !this.root.isConnected) return;
-    const region = document.querySelector<HTMLElement>(regionSelector);
-    if (!region) throw new Error("Missing browse results");
+    const region = document.querySelector<HTMLElement>("#browse-results");
+    if (!region || !["search", "fallback", "error"].includes(region.dataset.kind || "")) {
+      throw new Error("Missing or invalid browse results");
+    }
     if (!response.ok && region.dataset.kind !== "error")
       throw new Error("Browse request failed");
     region.dataset.searchKey = this.signature;
@@ -359,6 +379,10 @@ class BrowseSearch {
       this.region.replaceWith(region);
     }
     this.controls();
+    const htmx = (window as Window & {
+      htmx?: { process(element: Element): void };
+    }).htmx;
+    htmx?.process(this.region);
   }
 
   private async replace() {
@@ -382,21 +406,7 @@ class BrowseSearch {
     } catch {
       if (generation !== this.generation) return;
       this.stopped = true;
-      this.pending = false;
-      this.region.querySelector(itemsSelector)?.replaceChildren();
-      this.region
-        .querySelectorAll(`${moreSelector}, [data-sentinel]`)
-        .forEach((element) => element.remove());
-      Object.assign(this.region.dataset, {
-        kind: "error",
-        fallback: "false",
-        page: "1",
-        found: "0",
-        query: this.input.value.trim(),
-        sort: this.explicit ? this.sort.value : "",
-        searchKey: this.signature,
-      });
-      this.controls();
+      this.clearResults();
       this.status(errorMessage);
       this.save();
     } finally {
@@ -406,6 +416,24 @@ class BrowseSearch {
         this.observe();
       }
     }
+  }
+
+  private clearResults() {
+    this.pending = false;
+    this.region.querySelector(itemsSelector)?.replaceChildren();
+    this.region
+      .querySelectorAll(`${moreSelector}, [data-sentinel]`)
+      .forEach((element) => element.remove());
+    Object.assign(this.region.dataset, {
+      kind: "error",
+      fallback: "false",
+      page: "1",
+      found: "0",
+      query: this.input.value.trim(),
+      sort: this.explicit ? this.sort.value : "",
+      searchKey: this.signature,
+    });
+    this.controls();
   }
 
   private hasMore() {
@@ -490,6 +518,8 @@ class BrowseSearch {
   private async restore(saved: BrowseEntry) {
     this.restoring = true;
     const generation = this.generation;
+    let restoredPage = 0;
+    let failed = false;
     this.root.setAttribute("aria-busy", "true");
     this.status("Rezepte werden wiederhergestellt…");
     try {
@@ -499,6 +529,7 @@ class BrowseSearch {
         if (region.dataset.kind === "error")
           throw new Error("Browse restoration failed");
         this.install(region, page > 1);
+        restoredPage = page;
         if (!this.hasMore()) break;
       }
       this.pending = false;
@@ -506,12 +537,15 @@ class BrowseSearch {
       this.status(this.fallback ? fallbackMessage : this.resultMessage());
     } catch {
       if (generation === this.generation) {
+        failed = true;
         this.stopped = true;
+        if (restoredPage === 0) this.clearResults();
         this.status(errorMessage);
       }
     } finally {
       if (generation === this.generation) {
         this.restoring = false;
+        if (failed) this.save();
         this.request = undefined;
         this.root.removeAttribute("aria-busy");
         this.observe();

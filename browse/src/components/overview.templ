@@ -28,7 +28,7 @@ templ Browse(state BrowseState) {
 			</label>
 			<label>
 				Sortieren nach
-				<select name="sort" data-auto-sort={ strconv.FormatBool(state.Sort == "") } disabled?={ state.Kind == "fallback" }>
+				<select name="sort" aria-label="Sortieren nach" data-auto-sort={ strconv.FormatBool(state.Sort == "") } disabled?={ state.Kind == "fallback" }>
 					<option value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
 					for _, option := range browseSortOptions {
 						<option value={ option.Token } selected?={ state.Sort == option.Token }>{ option.Label }</option>

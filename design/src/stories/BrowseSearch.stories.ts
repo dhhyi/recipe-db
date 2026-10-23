@@ -44,11 +44,14 @@ const render = (state: State) => {
           <label>
             Sortieren nach
             <select name="sort" ?disabled=${fallback}>
-              <option value="" selected>Automatisch: Neueste zuerst</option>
+              <option value="" hidden selected>Automatisch: Neueste zuerst</option>
               <option value="relevance">Relevanz</option>
+              <option value="rating">Beste Bewertung</option>
+              <option value="rating-count">Meiste Bewertungen</option>
               <option value="name-asc">Name A-Z</option>
               <option value="name-desc">Name Z-A</option>
               <option value="newest">Neueste zuerst</option>
+              <option value="updated">Zuletzt bearbeitet</option>
             </select>
           </label>
           <button type="submit" ?disabled=${fallback}>Suchen</button>

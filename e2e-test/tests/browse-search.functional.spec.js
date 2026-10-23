@@ -235,6 +235,12 @@ test("search controls fit the content area without horizontal overflow", async (
     expect(
       Math.abs(input.x + input.width / 2 - content.x - content.width / 2),
     ).toBeLessThan(2);
+    expect(
+      await page.locator("[data-browse-grid]").evaluate(
+        (grid) => getComputedStyle(grid).gridTemplateColumns.split(/\s+/).length,
+      ),
+    ).toBe(page.viewportSize().width >= 1280 ? 4 : 3);
+    await expect(page.locator("[data-add-recipe]")).toHaveCSS("display", "contents");
   }
 });
 
@@ -569,7 +575,7 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
   page,
 }) => {
   await manualSentinel(page);
-  await page.clock.install();
+  await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   const queries = [];
   await page.route("**/browse/results?**", async (route) => {
     const url = new URL(route.request().url());
@@ -580,6 +586,7 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
     });
   });
   await page.goto("/");
+  await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
   const input = page.getByRole("searchbox");
   await input.fill("boundary");
   await page.clock.runFor(299);
@@ -633,3 +640,78 @@ for (const status of [502, 503]) {
     ).toHaveCount(0);
   });
 }
+
+test.describe("unenhanced pagination", () => {
+  test.use({ demoRecipeCount: 25, demoRecipeWithImage: false });
+
+  test("ordinary links preserve the query and advance to the next page", async ({
+    browser,
+    baseURL,
+    demoRecipes,
+  }) => {
+    const context = await browser.newContext({
+      javaScriptEnabled: false,
+      baseURL,
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto(
+        `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
+      );
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+      await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+      await page.getByRole("link", { name: "Mehr laden" }).click();
+      await expect(page).toHaveURL(/page=2.*sort=newest/);
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
+      await expect(page.locator("[data-recipe-id]")).toHaveAttribute(
+        "data-recipe-id",
+        demoRecipes[0].id,
+      );
+      await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(
+        0,
+      );
+      await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+test("a failed history reconstruction clears a mismatched snapshot", async ({
+  page,
+  demoRecipe,
+}) => {
+  await manualSentinel(page);
+  let restoring = false;
+  await page.route("**/browse/results?**", async (route) => {
+    await route.fulfill({
+      status: restoring ? 502 : 200,
+      contentType: "text/html",
+      body: resultsFragment({
+        kind: restoring ? "error" : "search",
+        found: restoring ? 0 : 2,
+        ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
+      }),
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("searchbox").fill("boundary");
+  await page.getByRole("searchbox").press("Enter");
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
+  await page.locator("#browse-results").evaluate((region) => {
+    region.dataset.searchKey = JSON.stringify(["older query", "", false]);
+  });
+  await page.locator(`[data-recipe-id="${demoRecipe.id}"]`).click();
+  await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+  restoring = true;
+  await page.goBack();
+  await expect(
+    page.getByText("Rezepte konnten nicht geladen werden.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
+  await expect(page.locator("#browse-results")).toHaveAttribute(
+    "data-kind",
+    "error",
+  );
+  await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+});
