@@ -194,6 +194,9 @@ importers:
       eslint-plugin-storybook:
         specifier: ^10.5.10
         version: 10.5.10(eslint@10.9.1(jiti@2.7.0)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@6.0.3)
+      htmx.org:
+        specifier: 2.0.10
+        version: 2.0.10
       http-server:
         specifier: ^14.1.1
         version: 14.1.1(debug@4.4.3(supports-color@7.2.0))(supports-color@7.2.0)
@@ -1416,6 +1419,9 @@ packages:
   html-encoding-sniffer@3.0.0:
     resolution: {integrity: sha512-oWv4T4yJ52iKrufjnyZPkrN0CH3QnrUqdB6In1g5Fe1mia8GmF36gnfNySxoZtxD5+NmYw1EElVXiBk93UeskA==}
     engines: {node: '>=12'}
+
+  htmx.org@2.0.10:
+    resolution: {integrity: sha512-kdeJe7ZVwaS6QMz/ebBIVtZdpwen6L0OQ5GOhPV9MKBb196TCZeZu4yA7ZIQsaLKv7EpXz+So7KSXNuHXhj7Cw==}
 
   http-proxy@1.18.1:
     resolution: {integrity: sha512-7mz/721AbnJwIVbnaSv1Cz3Am0ZLT/UBwkC92VlxhXv/k/BBQfM2fXElQNC27BVGr0uwUpplYPQM9LnaBMR5NQ==}
@@ -3055,6 +3061,8 @@ snapshots:
   html-encoding-sniffer@3.0.0:
     dependencies:
       whatwg-encoding: 2.0.0
+
+  htmx.org@2.0.10: {}
 
   http-proxy@1.18.1(debug@4.4.3(supports-color@7.2.0)):
     dependencies:

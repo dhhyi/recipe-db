@@ -101,9 +101,3 @@ TODO: Integrate recipe search into the frontend.
 ### Resilience
 
 Maybe later.
-
-## Misc
-
-### Self-host browser dependencies
-
-Serve htmx from the shared design assets instead of the external CDN so the frontend and full-stack browser tests also work without outbound internet access.
