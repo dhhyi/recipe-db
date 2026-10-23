@@ -16,7 +16,7 @@ const text = json.text;
 const array = json.array;
 const operations = @import("operations.zig");
 
-pub const collection = "/collections/recipes_v1";
+pub const collection = "/collections/recipes_v2";
 
 const OptionalSource = enum { rating, image, inspirations };
 const GraphqlResponse = struct {
@@ -141,7 +141,16 @@ fn recipeDocument(a: Allocator, recipe: Value, failed: std.EnumSet(OptionalSourc
     if (!std.mem.eql(u8, try text(try get(recipe, "id")), id)) return error.InvalidDependencyResponse;
     var doc = object(a);
     try doc.object.put("id", str(id));
+    try doc.object.put("recipe_id_sort", str(id));
     try doc.object.put("name", str(try text(try get(recipe, "name"))));
+    try doc.object.put("name_sort", str(try text(try get(recipe, "nameSortKey"))));
+    inline for (.{ .{ "createdAt", "created_at" }, .{ "updatedAt", "updated_at" } }) |fields| {
+        const value = sourceTimestamp(recipe, fields[0]) catch |err| {
+            std.log.warn("recipe {s}: invalid required metadata {s}: {s}", .{ id, fields[0], @errorName(err) });
+            return err;
+        };
+        try doc.object.put(fields[1], .{ .integer = value });
+    }
     const method = try get(recipe, "method");
     if (method != .null) try doc.object.put("method", str(try text(method)));
     var ingredients = std.ArrayList(Value).init(a);
@@ -183,7 +192,7 @@ fn optional(a: Allocator, doc: *Value, old: ?Value, recipe: Value, failed: std.E
         .rating => {
             for ([_][]const u8{ "average", "count" }, names) |field, name| {
                 const v = try get(value, field);
-                if (v != .null) try doc.object.put(name, v);
+                try doc.object.put(name, if (v == .null) .{ .integer = 0 } else v);
             }
         },
     }
@@ -195,6 +204,49 @@ fn preserve(doc: *Value, old: ?Value, names: []const []const u8) !void {
     for (names) |name| if (previous.object.get(name)) |v| {
         try doc.object.put(name, v);
     };
+}
+
+fn sourceTimestamp(recipe: Value, field: []const u8) !i64 {
+    return @import("timestamp.zig").microseconds(try text(try get(recipe, field)));
+}
+
+test "required source metadata and name key are copied, never synthesized" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const failed = std.EnumSet(OptionalSource).initEmpty();
+    var recipe = try parse(a, recipeFixture);
+    const doc = try recipeDocument(a, recipe, failed, null, "r1");
+    try std.testing.expectEqualStrings("updated", try text(try get(doc, "name_sort")));
+    try std.testing.expectEqualStrings("r1", try text(try get(doc, "recipe_id_sort")));
+    try std.testing.expectEqual(@as(i64, 1791464400123456), (try get(doc, "created_at")).integer);
+    try std.testing.expectEqual(try sourceTimestamp(recipe, "updatedAt"), (try get(doc, "updated_at")).integer);
+    for ([_][]const u8{ "createdAt", "updatedAt", "nameSortKey" }) |field| {
+        const original = try get(recipe, field);
+        _ = recipe.object.swapRemove(field);
+        try std.testing.expectError(error.InvalidDependencyResponse, recipeDocument(a, recipe, failed, doc, "r1"));
+        try recipe.object.put(field, .null);
+        try std.testing.expectError(error.InvalidDependencyResponse, recipeDocument(a, recipe, failed, doc, "r1"));
+        try recipe.object.put(field, original);
+    }
+    try recipe.object.put("createdAt", str("not a timestamp"));
+    try std.testing.expectError(error.InvalidTimestamp, recipeDocument(a, recipe, failed, doc, "r1"));
+}
+
+test "unrated values become sortable zeros and optional reloads preserve source dates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var recipe = try parse(a, recipeFixture);
+    try recipe.object.put("rating", try parse(a, "{\"average\":null,\"count\":0}"));
+    const doc = try recipeDocument(a, recipe, std.EnumSet(OptionalSource).initEmpty(), null, "r1");
+    try std.testing.expectEqual(@as(i64, 0), (try get(doc, "rating_average")).integer);
+    try std.testing.expectEqual(@as(i64, 0), (try get(doc, "rating_count")).integer);
+    try recipe.object.put("rating", .null);
+    const reloaded = try recipeDocument(a, recipe, std.EnumSet(OptionalSource).initEmpty(), doc, "r1");
+    for ([_][]const u8{ "created_at", "updated_at", "rating_average", "rating_count" }) |field| {
+        try std.testing.expectEqual((try get(doc, field)).integer, (try get(reloaded, field)).integer);
+    }
 }
 pub fn escape(a: Allocator, value: []const u8) ![]const u8 {
     var out = std.ArrayList(u8).init(a);
@@ -210,7 +262,8 @@ fn docPath(a: Allocator, id: []const u8) ![]const u8 {
 }
 
 const recipeFixture =
-    \\{"id":"r1","name":"Updated","method":null,"ingredients":[],
+    \\{"id":"r1","name":"Updated","nameSortKey":"updated","createdAt":"2026-10-08T13:00:00.123456Z",
+    \\"updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],
     \\"rating":{"average":5,"count":2},"image":null,"inspirations":[]}
 ;
 const previousFixture =
@@ -277,7 +330,8 @@ test "multiple optional errors preserve all affected sources without hiding core
     defer arena.deinit();
     const a = arena.allocator();
     const root = try parse(a,
-        \\{"data":{"recipe":{"id":"r1","name":"Updated","method":null,"ingredients":[]}},
+        \\{"data":{"recipe":{"id":"r1","name":"Updated","nameSortKey":"updated",
+        \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[]}},
         \\"errors":[{"message":"offline","path":["recipe","image"]},
         \\{"message":"offline","path":["recipe","rating"]},
         \\{"message":"offline","path":["recipe","inspirations"]}]}
@@ -365,7 +419,8 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
                         try std.testing.expectEqualStrings(operations.IndexRecipe, try text(try get(payload, "query")));
                         try std.testing.expectEqualStrings("r1", try text(try get(try get(payload, "variables"), "id")));
                         try request.respond(
-                            \\{"data":{"recipe":{"id":"r1","name":"Updated","method":null,"ingredients":[],
+                            \\{"data":{"recipe":{"id":"r1","name":"Updated","nameSortKey":"updated",
+                            \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],
                             \\"rating":{"average":5,"count":2},"inspirations":[]}},
                             \\"errors":[{"message":"images unavailable","path":["recipe","image"]}]}
                         , .{ .keep_alive = false });
@@ -380,6 +435,10 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
                         try std.testing.expectEqual(.POST, request.head.method);
                         const doc = try parse(a, body);
                         try std.testing.expectEqualStrings("Updated", try text(try get(doc, "name")));
+                        try std.testing.expectEqualStrings("updated", try text(try get(doc, "name_sort")));
+                        try std.testing.expectEqualStrings("r1", try text(try get(doc, "recipe_id_sort")));
+                        try std.testing.expectEqual(@as(i64, 1791464400123456), (try get(doc, "created_at")).integer);
+                        try std.testing.expectEqual(try @import("timestamp.zig").microseconds("2026-10-09T14:00:00.654321Z"), (try get(doc, "updated_at")).integer);
                         try std.testing.expect((try get(doc, "has_image")).bool);
                         try std.testing.expectEqual(@as(i64, 5), (try get(doc, "rating_average")).integer);
                         try std.testing.expectEqual(@as(usize, 0), (try array(try get(doc, "inspiration_urls"))).len);
@@ -413,6 +472,71 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
     thread.join();
     if (fixture.failure) |err| return err;
     try std.testing.expect(try result);
+}
+
+test "startup rebuild creates v2 without reading or altering the old collection" {
+    const Fixture = struct {
+        server: *std.net.Server,
+        failure: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.failure = err;
+            };
+        }
+        fn serve(self: *@This()) !void {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            // The only allowed calls create/reconcile v2. A pre-existing v1 is irrelevant.
+            const paths = [_][]const u8{ "/collections/recipes_v2", "/collections", "/graphql", "/collections/recipes_v2/documents/export" };
+            for (paths, 0..) |path, step| {
+                var fds = [_]std.posix.pollfd{.{ .fd = self.server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+                if (try std.posix.poll(&fds, 5000) == 0) return error.FixtureTimeout;
+                const connection = try self.server.accept();
+                defer connection.stream.close();
+                var buffer: [8192]u8 = undefined;
+                var server = std.http.Server.init(connection, &buffer);
+                var request = try server.receiveHead();
+                const body = try (try request.reader()).readAllAlloc(a, 8192);
+                try std.testing.expectEqualStrings(path, request.head.target);
+                try std.testing.expectEqual(if (step == 1 or step == 2) std.http.Method.POST else std.http.Method.GET, request.head.method);
+                switch (step) {
+                    0 => try request.respond("{}", .{ .status = .not_found, .keep_alive = false }),
+                    1 => {
+                        try std.testing.expectEqualStrings("recipes_v2", try text(try get(try parse(a, body), "name")));
+                        try request.respond("{}", .{ .status = .created, .keep_alive = false });
+                    },
+                    2 => try request.respond("{\"data\":{\"recipes\":[]}}", .{ .keep_alive = false }),
+                    3 => try request.respond("", .{ .keep_alive = false }),
+                    else => unreachable,
+                }
+            }
+        }
+    };
+    if (c.curl_global_init(c.CURL_GLOBAL_DEFAULT) != c.CURLE_OK) return error.CurlInit;
+    defer c.curl_global_cleanup();
+    var server = try (try std.net.Address.parseIp("127.0.0.1", 0)).listen(.{});
+    defer server.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}", .{server.listen_address.getPort()});
+    var index = Index{ .cfg = .{
+        .graphql = try std.mem.concat(a, u8, &.{ base, "/graphql" }),
+        .typesense = base,
+        .key = "",
+        .nats = "",
+        .port = 0,
+        .state_dir = "",
+        .checkpoint = 0,
+    } };
+    var fixture = Fixture{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Fixture.run, .{&fixture});
+    const result = index.rebuild(a);
+    thread.join();
+    if (fixture.failure) |err| return err;
+    try result;
 }
 
 test "unavailable optional source requires a previous document, including known absence" {

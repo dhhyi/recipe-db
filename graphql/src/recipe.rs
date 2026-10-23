@@ -6,6 +6,10 @@ use crate::images::ImagesApi;
 use crate::inspirations::InspirationsApi;
 use crate::ratings::RatingsApi;
 
+#[cfg(test)]
+#[path = "recipe_test.rs"]
+mod tests;
+
 /// Custom scalar accepting either a JSON number or string, matching `recipe-db.graphqls`'s
 /// `StringOrInt` (used for ingredient amounts like `"1"` or `1`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -115,6 +119,8 @@ impl RecipeInput {
 pub struct Recipe {
     pub id: async_graphql::ID,
     pub name: String,
+    #[serde(rename = "nameSortKey")]
+    pub name_sort_key: String,
     pub method: Option<String>,
     pub ingredients: Option<Vec<Ingredient>>,
     /// UTC RFC 3339 timestamp with microsecond precision.

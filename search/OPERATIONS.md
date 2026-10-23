@@ -18,6 +18,8 @@ docker compose up -d --build --wait
 
 Named queries live in [operations.graphql](src/operations.graphql). Each recipe reload uses one query for core data, ratings, image presence, and inspirations, without service-health queries. GraphQL errors under a known optional field preserve that source's previous indexed values while successful sources update; core, unrecognized, and unscoped errors fail the reload. Null ratings or inspirations also preserve previous values, while an error-free null image confirms absence. Only an error-free null recipe authorizes deletion. [generate_operations.py](generate_operations.py) uses the pinned Python `graphql-core` dependency to validate every operation against the synchronized schema and generate independent Zig constants, including any required fragments. It does not generate response types or validate runtime variable values.
 
+`IndexRecipe` also reads required `createdAt`, `updatedAt`, and `nameSortKey`. Dates are strictly parsed from RFC 3339 and stored as `created_at`/`updated_at` int64 Unix microseconds, never indexing time or a default. Malformed/missing dates fail the reload with the recipe ID and source field in diagnostics. Fractional precision beyond microseconds is truncated. Leap seconds are rejected because Unix time cannot represent them distinctly. Rebuilds and optional-source events reuse source dates unchanged. `name_sort` copies the recipes service's German base-letter key; `recipe_id_sort` copies the stable ID. Both strings enable Typesense sorting explicitly. Confirmed unrated values index as zero average/count; source outages still preserve previous ratings or fail for new documents.
+
 After changing operations or the GraphQL schema, synchronize and regenerate:
 
 ```sh
@@ -40,7 +42,13 @@ curl --fail-with-body http://localhost:3000/search \
 
 The response contains ordered `recipeIds`, `facetCounts`, `found`, `outOf`, `page` and `perPage`. Grouped hits are flattened in group/hit order. Fetch recipe details through GraphQL. Errors use RFC 9457 Problem Details: invalid options return 400, unavailable dependencies or an incomplete index return 503.
 
-A rebuild runs on startup and every 24 hours after success; failures retry after 30 seconds. To trigger and inspect one:
+Offset pagination is not a snapshot during writes. Browse deduplicates IDs client-side, but concurrent index updates can still cause skipped hits across pages; snapshot consistency is not guaranteed.
+
+A rebuild runs on startup and every 24 hours after success; failures retry after 30 seconds.
+
+The active collection is **`recipes_v2`**. Upgrading from `recipes_v1` creates and populates the new collection through the normal startup rebuild; the old collection is neither altered nor deleted. Existing collections do not acquire fields by editing the schema file. Search remains not ready until the new collection is fully rebuilt. Keep the old collection for rollback and remove it only through a separate operator decision.
+
+To trigger and inspect a rebuild:
 
 ```sh
 curl --fail-with-body -X POST http://localhost:3000/search/reindex
@@ -53,3 +61,21 @@ Job lookup returns 202 while pending/running, 200 on success and 500 on failure.
 Events queue during rebuilds. Active rebuild requests queue another pass; pending requests coalesce. Daily reconciliation recovers missed events and direct backend writes.
 
 Source outages never authorize deletion. Optional fields retain their previous indexed values; without a previous document, an optional-source outage blocks indexing. Restore the dependency and retry/rebuild. Malformed events remain unfinished and require recovery under the [message-bus contract](../message-bus/CONTRACT.md). Inspect status and service logs. For a corrupt/unreadable checkpoint, repair permissions or remove the checkpoint from the search data volume and restart for a full baseline; never advance it manually.
+
+## Sort contract
+
+Typesense 29.0 accepts at most three sort fields. Browse uses these fixed expressions (no browser-supplied Typesense options):
+
+| Sort | `sort_by` |
+| --- | --- |
+| Relevance with text | `_text_match:desc,created_at:desc,recipe_id_sort:asc` |
+| Newest / relevance without text | `created_at:desc,recipe_id_sort:asc` |
+| Highest rated | `rating_average:desc,rating_count:desc,recipe_id_sort:asc` |
+| Most rated | `rating_count:desc,rating_average:desc,recipe_id_sort:asc` |
+| Name A–Z | `name_sort:asc,recipe_id_sort:asc` |
+| Name Z–A | `name_sort:desc,recipe_id_sort:asc` |
+| Recently updated | `updated_at:desc,recipe_id_sort:asc` |
+
+Zero-valued unrated recipes follow positive ratings without missing-value directives. Explicit sorts prioritize the chosen field over relevance. ID breaks equal keys deterministically.
+
+`test_typesense.py` verifies every expression, equal keys, German keys, unrated values, and microsecond storage against the pinned engine using a uniquely named disposable collection. Run it inside the search devcontainer with `TYPESENSE_TEST_KEY_FILE` pointing to a private mounted key file; no key contents are logged. Normal checks skip these opt-in engine tests when that variable is absent. `search-test` covers source metadata, event reloads, and rebuild preservation on the full deployed stack.

@@ -8,3 +8,6 @@ package: gql
 context_type: "context.Context"
 flatten: true
 optional: pointer
+bindings:
+  JSON:
+    type: encoding/json.RawMessage

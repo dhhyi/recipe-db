@@ -134,4 +134,112 @@ a > recipe-tile-component {
   &:hover {
     outline: 3px solid currentColor;
   }
+
+  [data-browse-form],
+  browse-search > form {
+    align-items: end;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+    margin: 2rem auto 1rem;
+    max-width: 56rem;
+
+    label {
+      margin: 0;
+      min-width: 0;
+    }
+
+    label:has([name="q"]) {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    label:has([name="sort"]) {
+      grid-column: 3;
+      grid-row: 1;
+    }
+
+    > div:has([name="sort"]) {
+      grid-column: 3;
+      grid-row: 1;
+      min-width: 0;
+    }
+
+    button[type="submit"] {
+      grid-column: 2;
+      justify-self: center;
+    }
+
+    input,
+    select,
+    button {
+      margin-bottom: 0;
+    }
+  }
+
+  browse-search {
+    display: block;
+  }
+
+  [data-browse-status] {
+    margin: 0 auto 1.5rem;
+    max-width: 56rem;
+    min-height: 1.5em;
+    text-align: center;
+  }
+
+  [data-browse-grid] {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+  }
+
+  [data-browse-items] {
+    display: contents;
+  }
+
+  [data-browse-add] {
+    align-items: center;
+    aspect-ratio: 4 / 3;
+    border: 2px dashed var(--pico-primary);
+    border-radius: 1rem;
+    display: flex;
+    font-size: 1.25rem;
+    justify-content: center;
+    text-decoration: none;
+  }
+
+  [data-browse-more],
+  [data-load-more] {
+    display: block;
+    margin: 1.5rem auto;
+    width: fit-content;
+  }
+
+  [data-browse-more][hidden],
+  [data-load-more][hidden] {
+    display: none;
+  }
+
+  [data-browse-message] {
+    padding: 2rem 1rem;
+    text-align: center;
+  }
+
+  @media (max-width: 767px) {
+    [data-browse-form],
+    browse-search > form {
+      align-items: stretch;
+      grid-template-columns: minmax(0, 1fr);
+      margin-top: 1rem;
+
+      label:has([name]),
+      > div:has([name="sort"]),
+      button[type="submit"] {
+        grid-column: auto;
+        grid-row: auto;
+        justify-self: stretch;
+      }
+    }
+  }
 }

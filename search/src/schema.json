@@ -1,7 +1,11 @@
 {
-  "name": "recipes_v1",
+  "name": "recipes_v2",
   "fields": [
     { "name": "name", "type": "string", "locale": "de" },
+    { "name": "name_sort", "type": "string", "sort": true },
+    { "name": "recipe_id_sort", "type": "string", "sort": true },
+    { "name": "created_at", "type": "int64" },
+    { "name": "updated_at", "type": "int64" },
     { "name": "method", "type": "string", "locale": "de", "optional": true },
     {
       "name": "ingredients",
@@ -14,10 +18,9 @@
     {
       "name": "rating_average",
       "type": "float",
-      "optional": true,
       "facet": true
     },
-    { "name": "rating_count", "type": "int32", "optional": true },
+    { "name": "rating_count", "type": "int32" },
     { "name": "has_image", "type": "bool", "optional": true, "facet": true }
   ]
 }

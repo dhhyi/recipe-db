@@ -1,9 +1,10 @@
 package components
 
 import "frontend/src/generated"
+import "strconv"
 
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<a href={ "/recipe/" + item.Id } aria-label={ "Rezept " + item.Name } hx-boost="true">
+	<a href={ "/recipe/" + item.Id } aria-label={ "Rezept " + item.Name } hx-boost="true" data-recipe-id={ item.Id }>
 		<recipe-tile-component itemscope itemtype="https://schema.org/Recipe">
 			<h2 slot="title" class="font-bold" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 			if item.Image != nil {
@@ -17,16 +18,64 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 	</a>
 }
 
-templ Overview(resp *gql.OverviewResponse) {
+templ Browse(state BrowseState) {
 	<h1>Alle Rezepte</h1>
-	<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4 mx-auto max-w-[350px] sm:max-w-none">
-		for _, recipe := range resp.Recipes {
-			@recipeTile(recipe, resp.RatingsOnline)
+	<browse-search data-browse-search>
+		<form action="/" method="get" role="search" hx-boost="false" data-browse-form>
+			<label>
+				Rezepte suchen
+				<input type="search" name="q" placeholder="Rezepte suchen" value={ state.Query } disabled?={ state.Kind == "fallback" }/>
+			</label>
+			<label>
+				Sortieren nach
+				<select name="sort" data-auto-sort={ strconv.FormatBool(state.Sort == "") } disabled?={ state.Kind == "fallback" }>
+					<option value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
+					for _, option := range browseSortOptions {
+						<option value={ option.Token } selected?={ state.Sort == option.Token }>{ option.Label }</option>
+					}
+				</select>
+			</label>
+			<button type="submit" disabled?={ state.Kind == "fallback" }>Suchen</button>
+		</form>
+		@browseStatus(state)
+		@BrowseResults(state, false)
+	</browse-search>
+}
+
+templ browseStatus(state BrowseState) {
+	<p data-browse-status role="status" aria-live="polite" aria-atomic="true">
+		if state.Message != "" {
+			{ state.Message }
+		} else if state.Found == 0 {
+			Keine Rezepte gefunden.
+		} else {
+			{ strconv.Itoa(state.Found) } Rezepte gefunden.
 		}
-		if resp.RecipeEditOnline {
-			<a href="/edit/new" class="contents" aria-label="Neues Rezept hinzufügen">
-				<article class="flex items-center justify-center" style="font-size: 3rem; text-decoration: none;">+</article>
-			</a>
+	</p>
+}
+
+templ BrowseResults(state BrowseState, includeStatus bool) {
+	<section id="browse-results" data-browse-results data-kind={ state.Kind } data-fallback={ strconv.FormatBool(state.Kind == "fallback") } data-page={ strconv.Itoa(state.Page) } data-per-page={ strconv.Itoa(state.PerPage) } data-found={ strconv.Itoa(state.Found) } data-query={ state.Query } data-sort={ state.Sort }>
+		if includeStatus {
+			@browseStatus(state)
 		}
-	</div>
+		<div data-browse-grid class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4 mx-auto max-w-[350px] sm:max-w-none">
+			<div data-recipe-list data-browse-items class="contents">
+				for _, recipe := range state.Recipes {
+					@recipeTile(recipe, state.RatingsOnline)
+				}
+			</div>
+			if state.EditorOnline {
+				<a href="/edit/new" data-add-recipe data-browse-add class="contents" aria-label="Neues Rezept hinzufügen">
+					<article class="flex items-center justify-center" style="font-size: 3rem; text-decoration: none;">+</article>
+				</a>
+			}
+		</div>
+		if state.NextURL != "" {
+			<nav aria-label="Weitere Rezepte">
+				<a href={ templ.SafeURL(state.NextURL) } data-load-more data-browse-more>Mehr laden</a>
+			</nav>
+			<div data-sentinel aria-hidden="true"></div>
+		}
+	</section>
 }
