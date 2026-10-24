@@ -18,8 +18,8 @@ modified_a: jsonpath "$.modified"
 header "Content-Type" contains "application/json"
 header "Cache-Control" == "no-store"
 jsonpath "$.recipeId" == "rice-pudding"
-jsonpath "$.width" == 650
-jsonpath "$.height" == 488
+jsonpath "$.width" == 648
+jsonpath "$.height" == 486
 jsonpath "$.url" matches /^\/public\/rice-pudding-[0-9a-f]{64}\.png$/
 jsonpath "$.thumbUrl" matches /^\/public\/rice-pudding-[0-9a-f]{64}-thumb\.png$/
 
@@ -29,8 +29,8 @@ HTTP 200
 header "Content-Type" contains "application/json"
 header "Cache-Control" == "no-store"
 jsonpath "$.recipeId" == "rice-pudding"
-jsonpath "$.width" == 650
-jsonpath "$.height" == 488
+jsonpath "$.width" == 648
+jsonpath "$.height" == 486
 jsonpath "$.size" isInteger
 jsonpath "$.size" > 0
 jsonpath "$.modified" matches /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/
@@ -101,8 +101,8 @@ jsonpath "$.thumbUrl" != "{{thumb_a}}"
 GET {{REST_API}}/images/rice-pudding/meta
 HTTP 200
 [Asserts]
-jsonpath "$.width" == 650
-jsonpath "$.height" == 488
+jsonpath "$.width" == 648
+jsonpath "$.height" == 486
 jsonpath "$.url" == "{{normal_b}}"
 jsonpath "$.thumbUrl" == "{{thumb_b}}"
 
