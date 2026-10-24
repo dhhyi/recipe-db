@@ -705,7 +705,7 @@ test("a failed history reconstruction clears a mismatched snapshot", async ({
   await page.getByRole("searchbox").press("Enter");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
   await page.locator("#browse-results").evaluate((region) => {
-    region.dataset.searchKey = JSON.stringify(["older query", "", false]);
+    region.dataset.searchKey = JSON.stringify(["older query", ""]);
   });
   await page.locator(`[data-recipe-id="${demoRecipe.id}"]`).click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"log"
@@ -20,6 +21,9 @@ import (
 	"frontend/src/components"
 	gql "frontend/src/generated"
 )
+
+//go:embed assets/search.js
+var browseSearchJS []byte
 
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
@@ -42,6 +46,10 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 
 func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /browse/search.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		_, _ = w.Write(browseSearchJS)
+	})
 	mux.HandleFunc("GET /{$}", browseHandler(client, false))
 	mux.HandleFunc("GET /browse/results", browseHandler(client, true))
 
