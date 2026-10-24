@@ -18,6 +18,7 @@ import (
 )
 
 const browsePageSize = 24
+const browseRestorePageLimit = 20
 
 var browseSorts = map[string]string{
 	"relevance":    "_text_match:desc,created_at:desc,recipe_id_sort:asc",
@@ -149,6 +150,11 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 								state.SeenIDs = append(state.SeenIDs, id)
 							}
 						}
+					} else if request.page > browseRestorePageLimit {
+						// Very deep native/history navigation remains usable without an
+						// unbounded fan-out: render its current page and disclose the limit.
+						firstPage = request.page
+						state.Message = "Es wird nur die aktuelle Ergebnisseite angezeigt."
 					}
 					for page := firstPage; page <= request.page; page++ {
 						pageRequest := request
@@ -188,6 +194,9 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 		if status >= 500 {
 			state.Message = "Rezepte konnten nicht geladen werden."
 			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
+		}
+		if appendPage && state.Kind == "search" && state.NextURL == "" {
+			state.Message = fmt.Sprintf("%d Rezepte gefunden. Alle Rezepte geladen.", state.Found)
 		}
 		var component templ.Component
 		if appendPage && status >= 500 {

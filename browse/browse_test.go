@@ -332,7 +332,7 @@ func TestBrowseHTTP(t *testing.T) {
 					t.Fatal("fallback must warn and disable controls")
 				}
 				more := tc.kind == "search" && tc.page*24 < tc.hits
-				if strings.Contains(body, "data-load-more") != more || strings.Contains(body, "data-sentinel") != more {
+				if strings.Contains(body, " data-load-more") != more || strings.Contains(body, " data-sentinel") != more {
 					t.Fatal("pagination used card count instead of API metadata")
 				}
 				if more && !strings.Contains(body, `href="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort=rating"`) {

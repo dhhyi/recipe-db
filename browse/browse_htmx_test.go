@@ -7,6 +7,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,7 +33,10 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 				t.Error(err)
 			}
 			pages = append(pages, options.Page)
-			ids := [][]string{{"a", "b"}, {"b", "c"}, {"c", "d"}}[options.Page-1]
+			ids := []string{"c", "d"}
+			if options.Page < 3 {
+				ids = [][]string{{"a", "b"}, {"b", "c"}}[options.Page-1]
+			}
 			var recipes []any
 			for _, id := range ids {
 				recipes = append(recipes, map[string]any{"id": id, "name": id})
@@ -47,30 +51,45 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 	}))
 	defer upstream.Close()
 	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
-	for _, mode := range []string{"native", "fragment", "history", "append"} {
+	for _, mode := range []string{"native", "fragment", "history", "append", "deep-history", "deep-append"} {
 		t.Run(mode, func(t *testing.T) {
 			pages = nil
-			request := httptest.NewRequest("GET", "/?page=3&q=Apfel", nil)
+			page := 3
+			if strings.HasPrefix(mode, "deep-") {
+				page = browseRestorePageLimit + 1
+			}
+			pageToken := strconv.Itoa(page)
+			request := httptest.NewRequest("GET", "/?page="+pageToken+"&q=Apfel", nil)
 			if mode != "native" {
 				request.Header.Set("HX-Request", "true")
 			}
-			if mode == "history" {
+			if mode == "history" || mode == "deep-history" {
 				request.Header.Set("HX-History-Restore-Request", "true")
 			}
-			if mode == "append" {
+			if strings.HasSuffix(mode, "append") {
 				request.Header.Set("HX-Target", "browse-pagination")
 				request.URL.RawQuery += "&seen=a&seen=b&seen=c"
 			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			body := html.UnescapeString(response.Body.String())
-			if mode == "append" {
-				if response.Code != 200 || len(pages) != 1 || pages[0] != 3 ||
+			if mode == "deep-history" {
+				if response.Code != 200 || len(pages) != 1 || pages[0] != page ||
+					strings.Count(body, "data-recipe-id=") != 2 || !strings.Contains(body, "<html") ||
+					!strings.Contains(body, "Es wird nur die aktuelle Ergebnisseite angezeigt.") ||
+					!strings.Contains(body, `data-page="`+pageToken+`"`) {
+					t.Fatalf("deep history must remain bounded and disclose current-page restoration: pages=%v %s", pages, body)
+				}
+				return
+			}
+			if strings.HasSuffix(mode, "append") {
+				if response.Code != 200 || len(pages) != 1 || pages[0] != page ||
 					strings.Count(body, "data-recipe-id=") != 1 || !strings.Contains(body, `data-recipe-id="d"`) ||
 					strings.Contains(body, "data-add-recipe") || strings.Contains(body, `<section`) ||
 					!strings.Contains(body, `hx-swap-oob="outerHTML"`) ||
-					!strings.Contains(body, `data-page="3" data-per-page="24" data-found="49"`) ||
-					response.Header().Get("HX-Replace-Url") != "/?page=3&q=Apfel" {
+					!strings.Contains(body, "49 Rezepte gefunden. Alle Rezepte geladen.") ||
+					!strings.Contains(body, `data-page="`+pageToken+`" data-per-page="24" data-found="49"`) ||
+					response.Header().Get("HX-Replace-Url") != "/?page="+pageToken+"&q=Apfel" {
 					t.Fatalf("append must query only the next page and leave existing cards intact: pages=%v %s", pages, body)
 				}
 				return
@@ -104,9 +123,11 @@ func TestBrowseHTMXContract(t *testing.T) {
 		`id="browse-query"`, `hx-get="/"`, `hx-target="#browse-results"`,
 		`delay:300ms`, `compositionend`, `event.isComposing`, `htmx:abort`,
 		`hx-on::config-request=`,
+		`hx-on::send-error=`, `hx-on::response-error=`, `hx-on:browse-error=`,
 		`hx-sync="this:replace"`, `hx-sync="#browse-form:abort"`,
 		`hx-trigger="intersect once, click"`, `href="/?page=2"`,
 		`hx-target="#browse-pagination"`,
+		`col-span-full order-1`,
 	} {
 		if !strings.Contains(html.UnescapeString(body.String()), attribute) {
 			t.Errorf("missing HTMX contract: %s", attribute)

@@ -21,7 +21,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 // Restore live controls and loaded depth from the server instead of a snapshot
 // whose form value attributes may predate the last search.
 templ Browse(state BrowseState) {
-	<div id="browse-content" data-browse-search hx-history="false">
+	<div id="browse-content" data-browse-search hx-history="false" hx-on::send-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on::response-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on:browse-error="const target = event.detail.target, status = this.querySelector('#browse-metadata'); if (target.id === 'browse-results') { target.querySelector('[data-recipe-list]').replaceChildren(); status.dataset.kind = 'error'; status.textContent = 'Rezepte konnten nicht geladen werden.'; document.title = 'Rezepte konnten nicht geladen werden | RezeptDB'; } else if (target.id === 'browse-pagination') { status.textContent = 'Weitere Rezepte konnten nicht geladen werden.'; target.querySelector('[data-load-more]').textContent = 'Erneut versuchen'; }">
 		<h1>Alle Rezepte</h1>
 		<form id="browse-form" action="/" method="get" role="search" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::config-request="if (this.dataset.composing) event.preventDefault()" class="grid! grid-cols-1 md:grid-cols-[1fr_2fr_1fr] gap-2 items-end my-3">
 			<label class="min-w-0 md:col-start-2">
@@ -79,7 +79,7 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 templ browsePagination(state BrowseState) {
 	if state.NextURL != "" {
 		<div id="browse-pagination" class="contents">
-			<nav aria-label="Weitere Rezepte" class="justify-center" style="grid-column: 1 / -1; order: 1;">
+			<nav aria-label="Weitere Rezepte" class="justify-center col-span-full order-1">
 				<a href={ templ.SafeURL(state.NextURL) } hx-get={ state.NextURL } hx-vals={ state.PaginationValues() } hx-trigger="intersect once, click" hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more data-sentinel>Mehr laden</a>
 			</nav>
 		</div>
@@ -110,7 +110,7 @@ templ BrowseFallbackFragment(state BrowseState) {
 
 templ BrowsePageError(state BrowseState, retryURL string) {
 	<div id="browse-pagination" class="contents">
-		<nav aria-label="Weitere Rezepte" class="justify-center" style="grid-column: 1 / -1; order: 1;">
+		<nav aria-label="Weitere Rezepte" class="justify-center col-span-full order-1">
 			<p role="status" aria-live="polite">Weitere Rezepte konnten nicht geladen werden.</p>
 			<a href={ templ.SafeURL(retryURL) } hx-get={ retryURL } hx-vals={ state.PaginationValues() } hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more>Erneut versuchen</a>
 		</nav>

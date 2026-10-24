@@ -10,15 +10,17 @@ function resultsFragment({
   append = false,
   seen = [],
 } = {}) {
+  const next = kind === "search" && page * 24 < found;
   const message =
     kind === "fallback"
       ? "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
       : kind === "error"
         ? "Rezepte konnten nicht geladen werden."
-        : found === 0
-          ? "Keine Rezepte gefunden."
-          : `${found} Rezepte gefunden.`;
-  const next = kind === "search" && page * 24 < found;
+        : append && !next
+          ? `${found} Rezepte gefunden. Alle Rezepte geladen.`
+          : found === 0
+            ? "Keine Rezepte gefunden."
+            : `${found} Rezepte gefunden.`;
   const nextURL = `/?page=${page + 1}&q=${query}${sort ? `&sort=${sort}` : ""}`;
   const metadata = `<p id="browse-metadata" ${append ? 'hx-swap-oob="outerHTML"' : ""} data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="${sort}" data-browse-status role="status" aria-live="polite">${message}</p>`;
   const values = JSON.stringify({ seen: [...new Set([...seen, ...ids])] });
@@ -462,6 +464,9 @@ test("sentinel and keyboard loading serialize requests, deduplicate and stop at 
     "4",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
+  await expect(page.getByRole("status")).toHaveText(
+    "73 Rezepte gefunden. Alle Rezepte geladen.",
+  );
   await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(0);
   await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
   expect(requested).toEqual([1, 2, 3, 4]);
@@ -834,6 +839,91 @@ test("rendered online failure removes previous-query cards without fallback", as
   ).toHaveCount(0);
 });
 
+for (const failure of ["network", "502"]) {
+  const fail = (route) =>
+    failure === "network"
+      ? route.abort("failed")
+      : route.fulfill({
+          status: 502,
+          contentType: "text/plain",
+          body: "Bad Gateway",
+        });
+
+  test(`first-page ${failure} failure clears stale cards and reports failure`, async ({
+    page,
+  }) => {
+    await manualSentinel(page);
+    await page.route(/\/\?[^#]*\bq=/, async (route) => {
+      if (new URL(route.request().url()).searchParams.get("q") === "failure")
+        await fail(route);
+      else await fulfillBrowse(route, { ids: ["previous-query"] });
+    });
+    await page.goto("/");
+    const input = page.getByRole("searchbox");
+    await input.fill("boundary");
+    await input.press("Enter");
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
+    await input.fill("failure");
+    await input.press("Enter");
+    await expect(page.getByRole("status")).toHaveText(
+      "Rezepte konnten nicht geladen werden.",
+    );
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
+    await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
+      "data-kind",
+      "error",
+    );
+    await expect(page).toHaveTitle(
+      "Rezepte konnten nicht geladen werden | RezeptDB",
+    );
+    await expect(input).toBeFocused();
+  });
+
+  test(`append ${failure} failure retains cards/title, stops auto-loading and permits retry`, async ({
+    page,
+  }) => {
+    await manualSentinel(page);
+    const requested = [];
+    let failed = false;
+    await page.route(/\/\?[^#]*\bq=/, async (route) => {
+      const number = Number(
+        new URL(route.request().url()).searchParams.get("page") || 1,
+      );
+      requested.push(number);
+      if (number === 2 && !failed) {
+        failed = true;
+        await fail(route);
+      } else
+        await fulfillBrowse(route, {
+          page: number,
+          found: 48,
+          ids: number === 1 ? ["filtered"] : ["filtered", "next"],
+        });
+    });
+    await page.goto("/");
+    await page.getByRole("searchbox").fill("boundary");
+    await page.getByRole("searchbox").press("Enter");
+    await expect(page.locator("[data-recipe-id=filtered]")).toBeVisible();
+    await triggerSentinel(page);
+    await expect(page.getByRole("status")).toHaveText(
+      "Weitere Rezepte konnten nicht geladen werden.",
+    );
+    await expect(page.locator("[data-recipe-id=filtered]")).toHaveCount(1);
+    await expect(page).toHaveTitle("48 Rezepte für 'boundary' | RezeptDB");
+    await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+    await triggerSentinel(page);
+    expect(requested).toEqual([1, 2]);
+    await page.getByRole("link", { name: "Erneut versuchen" }).click();
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
+      "data-page",
+      "2",
+    );
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
+    expect(requested).toEqual([1, 2, 2]);
+  });
+}
+
 test.describe("pagination with and without JavaScript", () => {
   test.use({ demoRecipeCount: 25, demoRecipeWithImage: false });
 
@@ -846,6 +936,11 @@ test.describe("pagination with and without JavaScript", () => {
       `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
     );
     await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+    const pagination = page.getByRole("navigation", {
+      name: "Weitere Rezepte",
+    });
+    await expect(pagination).toHaveCSS("grid-column", "1 / -1");
+    await expect(pagination).toHaveCSS("order", "1");
     const first = page.locator("[data-recipe-id]").first();
     const firstID = await first.getAttribute("data-recipe-id");
     await first.evaluate((card) => {
@@ -857,6 +952,9 @@ test.describe("pagination with and without JavaScript", () => {
       "2",
     );
     await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+    await expect(page.getByRole("status")).toHaveText(
+      "25 Rezepte gefunden. Alle Rezepte geladen.",
+    );
     await expect(page.locator(`[data-recipe-id="${firstID}"]`)).toHaveAttribute(
       "data-original-node",
       "true",
