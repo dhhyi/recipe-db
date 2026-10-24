@@ -138,6 +138,33 @@ async function triggerSentinel(page) {
   await page.evaluate(() => window.triggerBrowseSentinel());
 }
 
+test("banner resets search without losing the header or form", async ({
+  page,
+}) => {
+  await page.goto("/?q=banner-reset&sort=rating");
+  const banner = page.locator("header-component a[href='/']");
+  await expect(banner).toBeVisible();
+  const response = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/" &&
+      response.request().headers()["hx-boosted"] === "true",
+  );
+  await banner.click();
+  expect((await response).ok()).toBeTruthy();
+  await expect(page).toHaveURL("/");
+  await expect(banner).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Alle Rezepte" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("searchbox", { name: "Rezepte suchen" }),
+  ).toHaveValue("");
+  await expect(page.getByLabel("Sortieren nach", { exact: true })).toHaveValue(
+    "",
+  );
+  await expect(page.locator("#browse-results")).toBeVisible();
+});
+
 test("search retains explicit sorting, focus and composition state", async ({
   page,
   demoRecipe,

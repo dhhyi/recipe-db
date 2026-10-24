@@ -102,7 +102,9 @@ func (request browseRequest) pageURL(page int) string {
 
 func browseHandler(client graphql.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fragment := r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") != "true"
+		fragment := r.Header.Get("HX-Request") == "true" &&
+			r.Header.Get("HX-Boosted") != "true" &&
+			r.Header.Get("HX-History-Restore-Request") != "true"
 		appendPage := fragment && r.Header.Get("HX-Target") == "browse-pagination"
 		request, err := parseBrowseRequest(r.URL.Query())
 		if err == nil && !fragment && r.Header.Get("HX-History-Restore-Request") != "true" &&

@@ -254,7 +254,8 @@ func TestBrowseHTTP(t *testing.T) {
 			}))
 			defer upstream.Close()
 			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
-			for _, fragment := range []bool{false, true} {
+			for _, mode := range []string{"native", "fragment", "boosted", "history"} {
+				fragment := mode == "fragment"
 				operations = nil
 				query := url.Values{"q": {"Apfel"}, "sort": {"rating"}, "page": {strconv.Itoa(tc.page)}}.Encode()
 				if tc.page == 1 {
@@ -262,8 +263,15 @@ func TestBrowseHTTP(t *testing.T) {
 				}
 				recorder := httptest.NewRecorder()
 				request := httptest.NewRequest("GET", "/?"+query, nil)
-				if fragment {
+				if mode != "native" {
 					request.Header.Set("HX-Request", "true")
+				}
+				if mode == "boosted" {
+					request.Header.Set("HX-Boosted", "true")
+					request.Header.Set("HX-Target", "body")
+				}
+				if mode == "history" {
+					request.Header.Set("HX-History-Restore-Request", "true")
 				}
 				if fragment && tc.page > 1 {
 					request.Header.Set("HX-Target", "browse-pagination")
@@ -271,7 +279,7 @@ func TestBrowseHTTP(t *testing.T) {
 				handler.ServeHTTP(recorder, request)
 				body := html.UnescapeString(recorder.Body.String())
 				wantCode := tc.code
-				if fragment {
+				if fragment || mode == "history" {
 					wantCode = 200
 				}
 				pageError := fragment && tc.kind == "error" && tc.page > 1
@@ -312,6 +320,12 @@ func TestBrowseHTTP(t *testing.T) {
 				}
 				if strings.Contains(body, "<html") == fragment {
 					t.Fatal("fragment/full page contract broken")
+				}
+				if !fragment && (!strings.Contains(body, "<header-component>") ||
+					!strings.Contains(body, `id="browse-form"`) ||
+					recorder.Header().Get("HX-Retarget") != "" ||
+					recorder.Header().Get("HX-Replace-Url") != "") {
+					t.Fatalf("%s navigation must retain the header and search form without fragment headers: %s", mode, body)
 				}
 				if tc.kind == "error" {
 					if !strings.Contains(body, "Rezepte konnten nicht geladen werden.") || strings.Contains(body, "data-recipe-id") {
