@@ -1039,9 +1039,7 @@ test("a failed history cache miss renders a truthful error page", async ({
       ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
     });
   });
-  await page.goto("/");
-  await page.getByRole("searchbox").fill("boundary");
-  await page.getByRole("searchbox").press("Enter");
+  await page.goto("/?q=boundary");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
   await page.evaluate(() => {
     window.htmx.config.historyCacheSize = 0;
