@@ -1,11 +1,19 @@
-import { test, expect, graphql, waitForRecipeIndexed } from "./fixtures.js";
+import {
+  test,
+  expect,
+  waitForRecipeIndexed,
+  waitForRecipePageHeading,
+  waitForRecipePageText,
+} from "./fixtures.js";
 import { fileURLToPath } from "node:url";
 import { crop, drag, handle, saveButton } from "./image-editor.helpers.js";
 
 test("browse seeded recipes, open a recipe and return home", async ({
   page,
+  request,
   demoRecipe,
 }) => {
+  await waitForRecipeIndexed(request, demoRecipe.id);
   await page.goto("/");
   await expect(
     page.getByRole("heading", { name: "Alle Rezepte", exact: true }),
@@ -19,9 +27,9 @@ test("browse seeded recipes, open a recipe and return home", async ({
     customElements.whenDefined("recipe-tile-component"),
   );
   await expect(recipeLink).toMatchAriaSnapshot(`
-    - link "Rezept Playwright demo Milchreis":
-      - img "Playwright demo Milchreis"
-      - heading "Playwright demo Milchreis" [level=2]
+    - link "Rezept E2E Milchreis":
+      - img "E2E Milchreis"
+      - heading "E2E Milchreis" [level=2]
   `);
 
   await recipeLink.click();
@@ -36,24 +44,17 @@ test("browse seeded recipes, open a recipe and return home", async ({
           - columnheader "Anzahl"
           - columnheader "Zutat"
       - rowgroup:
-        - row "1 Teil Rundkörniger Reis (Milchreis, Risottoreis)":
-          - cell "1 Teil"
-          - cell "Rundkörniger Reis (Milchreis, Risottoreis)"
-        - row "2 Teile Milch":
-          - cell "2 Teile"
+        - row "200 g Milchreis":
+          - cell "200 g"
+          - cell "Milchreis"
+        - row "500 ml Milch":
+          - cell "500 ml"
           - cell "Milch"
-        - row "1 Teil Sahne":
-          - cell "1 Teil"
-          - cell "Sahne"
-        - row "Prise Salz":
-          - cell "Prise"
+        - row "Salz":
           - cell "Salz"
-        - row "(optional) Butter":
+        - row "(optional) Zimt":
           - cell "(optional)"
-          - cell "Butter"
-        - row "(optional) Zimtzucker":
-          - cell "(optional)"
-          - cell "Zimtzucker"
+          - cell "Zimt"
   `);
   await expect(
     page.getByRole("heading", { name: "Zubereitung", exact: true }),
@@ -66,6 +67,8 @@ test("browse seeded recipes, open a recipe and return home", async ({
 
 test("edit a seeded recipe and see the saved changes in the browser", async ({
   page,
+  browser,
+  baseURL,
   demoRecipe,
 }) => {
   await page.goto(`/recipe/${demoRecipe.id}`);
@@ -89,65 +92,71 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
   await page.getByRole("button", { name: "Speichern", exact: true }).click();
   await expect(page.getByRole("alert")).toHaveText("Gespeichert");
 
-  await page.goto(`/recipe/${demoRecipe.id}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(updatedName);
-  await expect(
-    page.getByRole("cell", { name: "Hafermilch", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Mit Zimt und Hafermilch kochen.", { exact: true }),
-  ).toBeVisible();
+  await waitForRecipePageText(
+    page.request,
+    demoRecipe.id,
+    "Mit Zimt und Hafermilch kochen.",
+  );
+  await waitForRecipePageHeading(page.request, demoRecipe.id, updatedName);
+  const context = await browser.newContext({
+    baseURL,
+    viewport: page.viewportSize(),
+  });
+  try {
+    const detailPage = await context.newPage();
+    await detailPage.goto(`/recipe/${demoRecipe.id}`);
+    await expect(detailPage.getByRole("heading", { level: 1 })).toHaveText(
+      updatedName,
+    );
+    await expect(
+      detailPage.getByRole("cell", { name: "Hafermilch", exact: true }),
+    ).toBeVisible();
+    await expect(
+      detailPage.getByText("Mit Zimt und Hafermilch kochen.", { exact: true }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
 });
 
 test("create a recipe in the editor and find it in the overview", async ({
   page,
   request,
 }) => {
-  let id;
-  try {
-    await page.goto("/");
-    await page.getByRole("link", { name: "Neues Rezept hinzufügen" }).click();
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-      "Neues Rezept",
-    );
-    await page
-      .getByRole("textbox", { name: "Name", exact: true })
-      .fill("Playwright Zimtmilch");
-    await page.locator("#ingredient-amount-unit-0").fill("250 ml");
-    await page.locator("#ingredient-name-0").fill("Milch");
-    await page
-      .locator("#method")
-      .fill("Milch erwärmen und mit Zimt servieren.");
+  await page.goto("/");
+  await page.getByRole("link", { name: "Neues Rezept hinzufügen" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "Neues Rezept",
+  );
+  await page
+    .getByRole("textbox", { name: "Name", exact: true })
+    .fill("E2E Zimtmilch");
+  await page.locator("#ingredient-amount-unit-0").fill("250 ml");
+  await page.locator("#ingredient-name-0").fill("Milch");
+  await page.locator("#method").fill("Milch erwärmen und mit Zimt servieren.");
 
-    await page.getByRole("button", { name: "Speichern", exact: true }).click();
-    await expect(page).toHaveURL(/\/edit\/[0-9a-f-]{36}$/);
-    id = new URL(page.url()).pathname.split("/").at(-1);
+  await page.getByRole("button", { name: "Speichern", exact: true }).click();
+  await expect(page).toHaveURL(/\/edit\/[0-9a-f-]{36}$/);
+  const id = new URL(page.url()).pathname.split("/").at(-1);
 
-    await page.goto(`/recipe/${id}`);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-      "Playwright Zimtmilch",
-    );
-    await expect(
-      page.getByRole("cell", { name: "Milch", exact: true }),
-    ).toBeVisible();
-    await expect(
-      page.getByText("Milch erwärmen und mit Zimt servieren.", { exact: true }),
-    ).toBeVisible();
-    await waitForRecipeIndexed(request, id);
-    await page.getByRole("button", { name: "Zur Startseite" }).click();
-    await expect(
-      page.getByRole("link", {
-        name: "Rezept Playwright Zimtmilch",
-        exact: true,
-      }),
-    ).toBeVisible();
-  } finally {
-    if (id) {
-      await graphql(request, "mutation($id: ID!) { deleteRecipe(id: $id) }", {
-        id,
-      });
-    }
-  }
+  await page.goto(`/recipe/${id}`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "E2E Zimtmilch",
+  );
+  await expect(
+    page.getByRole("cell", { name: "Milch", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Milch erwärmen und mit Zimt servieren.", { exact: true }),
+  ).toBeVisible();
+  await waitForRecipeIndexed(request, id);
+  await page.getByRole("button", { name: "Zur Startseite" }).click();
+  await expect(
+    page.getByRole("link", {
+      name: "Rezept E2E Zimtmilch",
+      exact: true,
+    }),
+  ).toBeVisible();
 });
 
 async function imagePattern(page, color) {
@@ -263,12 +272,11 @@ async function waitForPublishedImage(page, recipeId, url, thumbUrl) {
 }
 
 test.describe("first image", () => {
-  test.use({ demoRecipeWithImage: false });
-
   test("explicitly saves A B A B sources and shows fresh detail and overview pixels", async ({
     page,
-    demoRecipe,
+    recipeWithoutImage,
   }) => {
+    const demoRecipe = recipeWithoutImage;
     test.setTimeout(120_000);
     await page.goto(`/images-edit/${demoRecipe.id}`);
     await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
@@ -419,7 +427,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
     await page
       .locator("#upload-image")
       .setInputFiles(
-        fileURLToPath(new URL(`../../demo-data/${filename}`, import.meta.url)),
+        fileURLToPath(new URL(`./assets/${filename}`, import.meta.url)),
       );
     await page.getByRole("button", { name: "Speichern", exact: true }).click();
     const result = await (await uploaded).json();
@@ -434,7 +442,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
     return metadata;
   };
 
-  const replacement = await upload("recipe2.jpg");
+  const replacement = await upload("image-b.png");
   expect(replacement.url).not.toBe(originalUrl);
   await expect
     .poll(async () => {
@@ -446,11 +454,11 @@ test("replace a recipe image in the image editor and view the uploaded image", a
   const uploadedImage = await displayedImage();
   expect(uploadedImage).not.toBeNull();
 
-  const restored = await upload("recipe1.jpg");
+  const restored = await upload("milchreis.png");
   expect(restored.url).toBe(originalUrl);
   await expect.poll(displayedImage).toBe(originalImage);
 
-  const repeated = await upload("recipe2.jpg");
+  const repeated = await upload("image-b.png");
   expect(repeated.url).toBe(replacement.url);
   await expect.poll(displayedImage).toBe(uploadedImage);
   expect(queries, "upload must not refetch GraphQL image metadata").toEqual([]);
