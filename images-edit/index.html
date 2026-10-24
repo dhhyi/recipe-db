@@ -226,56 +226,52 @@
           if (source.url) URL.revokeObjectURL(source.url);
         }
 
-        async function load(token) {
+        function clearInput() {
           const input = document.getElementById("upload-image");
           const file = input && input.files[0];
           if (input) input.value = "";
-          const source = {};
+          return file;
+        }
+
+        async function inspect(token) {
+          const source = { file: clearInput() };
           sources.set(token, source);
-          let error =
-            "Das Bild konnte nicht gelesen werden. Bitte eine gültige JPEG- oder PNG-Datei auswählen.";
           try {
-            if (!file || !["image/jpeg", "image/png"].includes(file.type))
-              throw new Error();
-            if (file.size > 10 * 1024 * 1024) {
-              error = "Die Datei ist zu groß. Erlaubt sind höchstens 10 MiB.";
-              throw new Error();
-            }
-            const size = metadata(await file.arrayBuffer(), file.type);
+            source.size = metadata(
+              await source.file.arrayBuffer(),
+              source.file.type,
+            );
             if (sources.get(token) !== source) return;
-            if (size.width * size.height > 40000000) {
-              error =
-                "Das Bild ist zu groß. Erlaubt sind höchstens 40 Millionen Pixel.";
-              throw new Error();
-            }
-            if (
-              Math.min(
-                Math.floor(size.width / 4),
-                Math.floor(size.height / 3),
-              ) < 75
-            ) {
-              error =
-                "Das Bild ist zu klein. Mindestens 300 × 225 Pixel im 4:3-Zuschnitt sind erforderlich.";
-              throw new Error();
-            }
-            source.url = URL.createObjectURL(file);
+            // Elm must authorize the dimensions before any pixel buffer is allocated.
+            send({ kind: "metadata", token, ...source.size });
+          } catch {
+            if (sources.get(token) !== source) return;
+            release(token);
+            send({ kind: "failed", token });
+          }
+        }
+
+        async function decode(token) {
+          const source = sources.get(token);
+          if (!source?.size || source.image) return;
+          try {
+            source.url = URL.createObjectURL(source.file);
             source.image = new Image();
             source.image.src = source.url;
             await source.image.decode();
             if (sources.get(token) !== source) return;
-            if (
-              source.image.naturalWidth !== size.width ||
-              source.image.naturalHeight !== size.height
-            ) {
-              error =
-                "Die Bildausrichtung konnte nicht zuverlässig gelesen werden. Bitte ein anderes JPEG- oder PNG-Bild auswählen.";
-              throw new Error();
-            }
-            send({ kind: "loaded", token, url: source.url, ...size });
+            send({
+              kind: "loaded",
+              token,
+              url: source.url,
+              ...source.size,
+              naturalWidth: source.image.naturalWidth,
+              naturalHeight: source.image.naturalHeight,
+            });
           } catch {
             if (sources.get(token) !== source) return;
             release(token);
-            send({ kind: "failed", token, error });
+            send({ kind: "failed", token });
           }
         }
 
@@ -408,9 +404,16 @@
         });
         app.ports.editorCommand.subscribe((message) => {
           switch (message.action) {
-            case "load":
+            case "inspect":
               endPointer();
-              load(message.token);
+              inspect(message.token);
+              break;
+            case "clear":
+              endPointer();
+              clearInput();
+              break;
+            case "decode":
+              decode(message.token);
               break;
             case "release":
               endPointer();
@@ -423,11 +426,6 @@
                 const header = document.querySelector("header-component");
                 if (header) header.inert = saving;
               }
-              break;
-            case "focus":
-              window.requestAnimationFrame(() => {
-                document.getElementById(message.id)?.focus();
-              });
               break;
             case "navigate":
               if (

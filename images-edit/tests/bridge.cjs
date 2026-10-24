@@ -61,6 +61,7 @@ function png(width, height, orientation = null) {
 
 function harness(options = {}) {
   const events = [];
+  const metadata = [];
   const revoked = [];
   const decoded = [];
   const header = { inert: false };
@@ -72,7 +73,10 @@ function harness(options = {}) {
   const app = {
     ports: {
       editorCommand: { subscribe: (fn) => (receive = fn) },
-      editorEvent: { send: (event) => events.push(event) },
+      editorEvent: {
+        send: (event) =>
+          (event.kind === "metadata" ? metadata : events).push(event),
+      },
     },
   };
   class Image {
@@ -117,6 +121,7 @@ function harness(options = {}) {
   });
   return {
     events,
+    metadata,
     revoked,
     decoded,
     header,
@@ -152,8 +157,12 @@ function harness(options = {}) {
           ...overrides,
         },
       ];
-      receive({ action: "load", token: 1 });
+      receive({ action: "inspect", token: 1 });
       await new Promise(setImmediate);
+      if (metadata.length && options.authorize !== false) {
+        receive({ action: "decode", token: 1 });
+        await new Promise(setImmediate);
+      }
     },
   };
 }
@@ -268,42 +277,41 @@ test("PNG eXIf dimensions use native orientation", async () => {
   assert.equal(bridge.events[0].height, 1200);
 });
 
-test("byte limit checked before reading or decoding", async () => {
+test("clearing a file rejected by Elm neither reads nor decodes it", async () => {
   const bridge = harness();
-  await bridge.load(jpeg(1200, 900), {
-    size: 10 * 1024 * 1024 + 1,
-    arrayBuffer() {
-      throw new Error("Must not read oversized file");
-    },
-  });
-  assert.match(bridge.events[0].error, /10 MiB/);
+  bridge.receive({ action: "clear" });
+  bridge.receive({ action: "decode", token: 1 });
+  assert.deepEqual(bridge.events, []);
+  assert.deepEqual(bridge.metadata, []);
   assert.equal(bridge.decoded.length, 0);
 });
 
-test("decoded pixel limit checked before decoding", async () => {
-  const bridge = harness();
-  await bridge.load(jpeg(10000, 5000));
-  assert.match(bridge.events[0].error, /40 Millionen/);
-  assert.equal(bridge.decoded.length, 0);
-});
-
-test("undersized source cannot become editable", async () => {
-  const bridge = harness();
-  await bridge.load(jpeg(299, 900));
-  assert.match(bridge.events[0].error, /300 × 225/);
-  assert.equal(bridge.decoded.length, 0);
-});
-
-test("unsupported MIME and corrupt metadata are rejected", async () => {
-  for (const [buffer, overrides] of [
-    [jpeg(1200, 900), { type: "image/webp" }],
-    [new ArrayBuffer(32), {}],
+test("metadata cannot allocate pixels until Elm authorizes decoding", async () => {
+  for (const [width, height] of [
+    [1200, 900],
+    [10000, 5000],
+    [299, 900],
   ]) {
-    const bridge = harness();
-    await bridge.load(buffer, overrides);
-    assert.equal(bridge.events[0].kind, "failed");
+    const bridge = harness({ authorize: false });
+    await bridge.load(jpeg(width, height));
+    assert.equal(bridge.metadata[0].width, width);
+    assert.equal(bridge.metadata[0].height, height);
     assert.equal(bridge.decoded.length, 0);
+    assert.deepEqual(bridge.events, []);
+    bridge.receive({ action: "release", token: 1 });
+    bridge.receive({ action: "decode", token: 1 });
+    assert.equal(bridge.decoded.length, 0);
+    assert.deepEqual(bridge.revoked, []);
   }
+});
+
+test("corrupt metadata reports a read failure for Elm to explain", async () => {
+  const bridge = harness();
+  await bridge.load(new ArrayBuffer(32));
+  assert.equal(bridge.events[0].kind, "failed");
+  assert.equal(bridge.events[0].token, 1);
+  assert.equal(bridge.decoded.length, 0);
+  assert.deepEqual(bridge.metadata, []);
 });
 
 test("decoder failure revokes the candidate URL", async () => {
@@ -315,11 +323,37 @@ test("decoder failure revokes the candidate URL", async () => {
   assert.deepEqual(bridge.revoked, ["blob:original"]);
 });
 
-test("unexpected native orientation is rejected rather than oriented twice", async () => {
+test("native dimensions are reported for Elm to validate orientation", async () => {
   const bridge = harness();
   await bridge.load(jpeg(1200, 900, 6));
-  assert.equal(bridge.events[0].kind, "failed");
-  assert.match(bridge.events[0].error, /Bildausrichtung/);
+  assert.equal(bridge.events[0].kind, "loaded");
+  assert.equal(bridge.events[0].width, 900);
+  assert.equal(bridge.events[0].height, 1200);
+  assert.equal(bridge.events[0].naturalWidth, 1200);
+  assert.equal(bridge.events[0].naturalHeight, 900);
+});
+
+test("duplicate authorization decodes a source only once", async () => {
+  const bridge = harness();
+  await bridge.load(jpeg(1200, 900));
+  bridge.receive({ action: "decode", token: 1 });
+  await new Promise(setImmediate);
+  assert.equal(bridge.decoded.length, 1);
+  assert.equal(bridge.events.length, 1);
+});
+
+test("abandoned metadata read cannot authorize a released source", async () => {
+  let complete;
+  const bridge = harness();
+  await bridge.load(jpeg(1200, 900), {
+    arrayBuffer: () => new Promise((resolve) => (complete = resolve)),
+  });
+  bridge.receive({ action: "release", token: 1 });
+  complete(jpeg(1200, 900));
+  await new Promise(setImmediate);
+  assert.deepEqual(bridge.metadata, []);
+  assert.deepEqual(bridge.events, []);
+  assert.equal(bridge.decoded.length, 0);
 });
 
 test("abandoned pending decode cannot restore a released source", async () => {

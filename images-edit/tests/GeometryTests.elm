@@ -1,6 +1,11 @@
 port module GeometryTests exposing (main)
 
 import Crop exposing (Crop, Handle(..), Point, Size)
+import Editor.Bridge as Bridge
+import Editor.Source as Source exposing (Problem(..))
+import Editor.State
+import Editor.Types as Editor exposing (Msg(..))
+import Json.Decode as D
 import Json.Encode as E
 import Platform
 import RecipeDB
@@ -143,6 +148,7 @@ tests =
             ]
       )
     ]
+        ++ sourceTests
         ++ List.concatMap
             (\( name, handle ) ->
                 [ ( name ++ ": bounds, exact ratio and fixed anchor for 49 pointer deltas"
@@ -178,3 +184,59 @@ tests =
                 ]
             )
             Crop.handles
+
+
+sourceTests : List ( String, Bool )
+sourceTests =
+    [ ( "JPEG at exactly 10 MiB is accepted", Source.file "image/jpeg" (10 * 1024 * 1024) == Ok () )
+    , ( "PNG at exactly 10 MiB is accepted", Source.file "image/png" (10 * 1024 * 1024) == Ok () )
+    , ( "one byte over limit is rejected", Source.file "image/png" (10 * 1024 * 1024 + 1) == Err TooManyBytes )
+    , ( "unsupported MIME is rejected", Source.file "image/webp" 100 == Err Unreadable )
+    , ( "empty MIME is rejected", Source.file "" 100 == Err Unreadable )
+    , ( "MIME failure takes priority over byte limit", Source.file "image/gif" (11 * 1024 * 1024) == Err Unreadable )
+    , ( "exactly 40 MP is accepted", Source.dimensions { width = 10000, height = 4000 } |> Result.toMaybe |> (/=) Nothing )
+    , ( "over 40 MP is rejected before decode", Source.dimensions { width = 10000, height = 4001 } == Err TooManyPixels )
+    , ( "pixel limit takes priority over minimum crop", Source.dimensions { width = 200000, height = 224 } == Err TooManyPixels )
+    , ( "large PNG dimensions cannot overflow the pixel guard", Source.dimensions { width = 4294967295, height = 4294967295 } == Err TooManyPixels )
+    , ( "exact minimum crop is accepted", Source.dimensions { width = 300, height = 225 } == Ok { x = 0, y = 0, width = 300, height = 225 } )
+    , ( "short width is rejected", Source.dimensions { width = 299, height = 900 } == Err TooSmall )
+    , ( "short height is rejected", Source.dimensions { width = 1200, height = 224 } == Err TooSmall )
+    , ( "zero dimensions are unreadable", Source.dimensions { width = 0, height = 900 } == Err Unreadable )
+    , ( "matching decoded dimensions produce the crop", Source.decoded size size == Source.dimensions size )
+    , ( "unexpected native orientation is rejected", Source.decoded size { width = 900, height = 1200 } == Err OrientationMismatch )
+    , ( "validation feedback remains German and specific"
+      , List.map Source.message [ Unreadable, TooManyBytes, TooManyPixels, TooSmall, OrientationMismatch ]
+            == [ "Das Bild konnte nicht gelesen werden. Bitte eine gültige JPEG- oder PNG-Datei auswählen."
+               , "Die Datei ist zu groß. Erlaubt sind höchstens 10 MiB."
+               , "Das Bild ist zu groß. Erlaubt sind höchstens 40 Millionen Pixel."
+               , "Das Bild ist zu klein. Mindestens 300 × 225 Pixel im 4:3-Zuschnitt sind erforderlich."
+               , "Die Bildausrichtung konnte nicht zuverlässig gelesen werden. Bitte ein anderes JPEG- oder PNG-Bild auswählen."
+               ]
+      )
+    , ( "metadata decoder retains oriented dimensions"
+      , D.decodeString Bridge.incoming """{"kind":"metadata","token":3,"width":900,"height":1200}"""
+            == Ok (Bridge.Metadata 3 { width = 900, height = 1200 })
+      )
+    , ( "metadata decoder retains unsigned PNG dimensions for rejection"
+      , D.decodeString Bridge.incoming """{"kind":"metadata","token":3,"width":4294967295,"height":4294967295}"""
+            == Ok (Bridge.Metadata 3 { width = 4294967295, height = 4294967295 })
+      )
+    , ( "load decoder retains metadata and native dimensions"
+      , D.decodeString Bridge.incoming """{"kind":"loaded","token":3,"url":"blob:source","width":900,"height":1200,"naturalWidth":1200,"naturalHeight":900}"""
+            == Ok (Bridge.Loaded 3 "blob:source" { width = 900, height = 1200 } size)
+      )
+    , ( "stale metadata and failures cannot change the editor"
+      , let
+            model : Editor.Model
+            model =
+                Editor.init "recipe"
+        in
+        List.all
+            (\event ->
+                Editor.State.update (Bridge event) model |> Tuple.first |> (==) model
+            )
+            [ E.object [ ( "kind", E.string "metadata" ), ( "token", E.int -1 ), ( "width", E.int 1200 ), ( "height", E.int 900 ) ]
+            , E.object [ ( "kind", E.string "failed" ), ( "token", E.int -1 ) ]
+            ]
+      )
+    ]
