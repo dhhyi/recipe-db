@@ -1029,7 +1029,9 @@ test.describe("pagination with and without JavaScript", () => {
 test("a failed history cache miss renders a truthful error page", async ({
   page,
   demoRecipe,
+  request,
 }) => {
+  await waitForRecipeIndexed(request, demoRecipe.id);
   await manualSentinel(page);
   let restoring = false;
   await page.route(/\/\?[^#]*\bq=/, async (route) => {
