@@ -40,6 +40,8 @@ mise run dev-up
 mise run integration-tests -- --development
 ```
 
+The browser-based end-to-end suite is in [`e2e-test`](./e2e-test/).
+
 # Technologies / Building Blocks
 
 The project is organized in a mono repo. All individual projects provide docker images that can be built independently.
@@ -84,11 +86,13 @@ A GraphQL gateway is used to combine all backend REST services into a single API
 
 ### Inspiration — see [`inspirations`](./inspirations/README.md) ([`inspirations-test`](./inspirations-test/README.md))
 
+### Search — see [`search`](./search/OPERATIONS.md) ([`search-test`](./search-test/))
+
 ### Utility Services
 
 Services with utility character.
 
-#### Link Extract — see [`link-extract`](./link-extract/README.md)
+#### Link Extract — see [`link-extract`](./link-extract/README.md) ([`link-extract-test`](./link-extract-test/README.md))
 
 #### Image Inline — see [`image-inline`](./image-inline/README.md) ([`image-inline-test`](./image-inline-test/README.md))
 
