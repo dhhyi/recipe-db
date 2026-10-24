@@ -1,7 +1,9 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:struct", "struct")
+#@ load("browse-maintenance-template.lib.yml", "browse_maintenance_http")
 #@ def deploy_projects():
-#@   return [project for project in data.values.projects if project.category in ["backend", "api", "frontend"]]
+#@   categories = ["backend", "api"] if data.values.backendOnly else ["backend", "api", "frontend"]
+#@   return [project for project in data.values.projects if project.category in categories]
 #@ end
 #@ def traefik_config():
 #@   routers = {"traefik": {"rule": "PathPrefix(`/api`)", "entrypoints": ["rest-internal"], "service": "api@internal"}}
@@ -40,6 +42,9 @@
 #@       if "middlewares" in router:
 #@         router_config["middlewares"] = router["middlewares"].split(",")
 #@       end
+#@       if "priority" in router:
+#@         router_config["priority"] = router["priority"]
+#@       end
 #@       if router_name in routers:
 #@         fail("Router " + router_name + " already exists")
 #@       end
@@ -54,6 +59,12 @@
 #@         middlewares[middleware_name] = middleware_configs[middleware_name]
 #@       end
 #@     end
+#@   end
+#@   if len([project for project in deploy_projects() if project.name == "browse"]) > 0:
+#@     maintenance = browse_maintenance_http(True)
+#@     routers.update(maintenance["routers"])
+#@     middlewares.update(maintenance["middlewares"])
+#@     services.update(maintenance["services"])
 #@   end
 #@   return {"http": {"routers": routers, "middlewares": middlewares, "services": services}}
 #@ end

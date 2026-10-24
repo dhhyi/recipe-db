@@ -81,10 +81,11 @@ render() {
   echo "Rendering $render_output..."
   set -- \
     -f "$project_root/.scripts/templates/$render_template-template.yml" \
+    -f "$project_root/.scripts/templates/browse-maintenance-template.lib.yml" \
+    -f "$project_root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$data_values"
   if [ "$render_template" = docker-compose ]; then
     set -- "$@" \
-      -f "$project_root/.scripts/templates/service-template.lib.yml" \
       -f "$project_root/.scripts/templates/fixtures-service-template.lib.yml" \
       -f "$project_root/.scripts/templates/traefik-service-template.lib.yml" \
       -f "$project_root/.scripts/templates/nats-service-template.lib.yml"
