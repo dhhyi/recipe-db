@@ -25,6 +25,7 @@ defmodule Recipes.RepositoryTest do
 
     assert {:ok, fetched} = Repository.get(created["id"], repository)
     assert fetched == created
+    assert created["nameSortKey"] == "rice pudding"
     assert created["createdAt"] == created["updatedAt"]
     assert {:ok, datetime, 0} = DateTime.from_iso8601(created["createdAt"])
     assert elem(datetime.microsecond, 1) == 6
@@ -106,21 +107,86 @@ defmodule Recipes.RepositoryTest do
     refute Map.has_key?(method_cleared, "method")
   end
 
-  test "rejects direct attempts to write server-owned timestamps", %{repository: repository} do
-    for field <- ["createdAt", "updatedAt"] do
+  test "rejects direct attempts to write server-owned fields", %{repository: repository} do
+    for field <- ["createdAt", "updatedAt", "nameSortKey"], value <- [nil, "client value"] do
       assert {:error, :reserved_field, _, ^field} =
-               Repository.create(%{"name" => "Rice Pudding", field => nil}, repository)
+               Repository.create(%{"name" => "Rice Pudding", field => value}, repository)
     end
 
     assert {:ok, created} = Repository.create(%{"name" => "Rice Pudding"}, repository)
 
-    for field <- ["createdAt", "updatedAt"] do
+    for field <- ["createdAt", "updatedAt", "nameSortKey"], value <- [nil, "client value"] do
       assert {:error, :reserved_field, _, ^field} =
-               Repository.patch(created["id"], %{field => nil}, repository)
+               Repository.patch(created["id"], %{field => value}, repository)
     end
 
     assert {:ok, stored} = Repository.get(created["id"], repository)
     assert stored == created
+  end
+
+  test "derives keys on every response without persisting them", %{repository: repository} do
+    assert {:ok, created} = Repository.create(%{"name" => " Äpfel "}, repository)
+    assert created["nameSortKey"] == "apfel"
+    connection = :sys.get_state(repository)
+
+    assert {:ok, %{rows: [[encoded]]}} =
+             Exqlite.query(connection, "SELECT document FROM recipes WHERE id = ?", [
+               created["id"]
+             ])
+
+    refute Map.has_key?(Jason.decode!(encoded), "nameSortKey")
+
+    assert {:ok, patched} = Repository.patch(created["id"], %{"metadata" => true}, repository)
+    assert patched["nameSortKey"] == "apfel"
+    assert patched["createdAt"] == created["createdAt"]
+    assert patched["updatedAt"] == created["updatedAt"]
+    assert {:ok, ^patched} = Repository.get(created["id"], repository)
+    assert {:ok, [^patched]} = Repository.all(repository)
+
+    assert {:ok, renamed} =
+             Repository.patch(created["id"], %{"name" => " ÖL Straße "}, repository)
+
+    assert renamed["name"] == " ÖL Straße "
+    assert renamed["nameSortKey"] == "ol strasse"
+
+    assert {:ok, %{rows: [[encoded]]}} =
+             Exqlite.query(connection, "SELECT document FROM recipes WHERE id = ?", [
+               created["id"]
+             ])
+
+    refute Map.has_key?(Jason.decode!(encoded), "nameSortKey")
+  end
+
+  test "derives keys for existing documents without altering stored data", %{
+    repository: repository
+  } do
+    connection = :sys.get_state(repository)
+    timestamp = "2026-10-23T13:00:00.123456Z"
+
+    document =
+      Jason.encode!(%{
+        "name" => "A\u0308pfel",
+        "createdAt" => timestamp,
+        "updatedAt" => timestamp
+      })
+
+    assert {:ok, _} =
+             Exqlite.query(connection, "INSERT INTO recipes (id, document) VALUES (?, ?)", [
+               "existing",
+               document
+             ])
+
+    assert {:ok, recipe} = Repository.get("existing", repository)
+    assert recipe["nameSortKey"] == "apfel"
+    assert recipe["createdAt"] == timestamp
+    assert recipe["updatedAt"] == timestamp
+    assert {:ok, [^recipe]} = Repository.all(repository)
+
+    assert {:ok, %{rows: [[^document]]}} =
+             Exqlite.query(connection, "SELECT document FROM recipes WHERE id = ?", ["existing"])
+
+    assert {:ok, patched} = Repository.patch("existing", %{}, repository)
+    assert patched == recipe
   end
 
   test "persists timestamps across repository restarts" do

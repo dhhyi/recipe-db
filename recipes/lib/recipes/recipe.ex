@@ -30,7 +30,7 @@ defmodule Recipes.Recipe do
   @spec validate_reserved_fields(document()) ::
           :ok | {:error, atom(), String.t(), String.t() | nil}
   def validate_reserved_fields(document) when is_map(document) do
-    case Enum.find(["id", "createdAt", "updatedAt"], &Map.has_key?(document, &1)) do
+    case Enum.find(["id", "createdAt", "updatedAt", "nameSortKey"], &Map.has_key?(document, &1)) do
       nil -> :ok
       field -> {:error, :reserved_field, "Reserved field: #{field}", field}
     end
@@ -38,6 +38,23 @@ defmodule Recipes.Recipe do
 
   def validate_reserved_fields(_document),
     do: {:error, :invalid_json_object, "Expected a JSON object", nil}
+
+  @spec with_derived_fields(document()) :: document()
+  def with_derived_fields(document) do
+    Map.put(document, "nameSortKey", name_sort_key(Map.fetch!(document, "name")))
+  end
+
+  @spec name_sort_key(String.t()) :: String.t()
+  def name_sort_key(name) do
+    name
+    |> String.trim()
+    |> String.normalize(:nfc)
+    |> String.downcase()
+    |> String.replace("ä", "a")
+    |> String.replace("ö", "o")
+    |> String.replace("ü", "u")
+    |> String.replace("ß", "ss")
+  end
 
   @spec core_changed?(document(), document()) :: boolean()
   def core_changed?(before_document, after_document) do

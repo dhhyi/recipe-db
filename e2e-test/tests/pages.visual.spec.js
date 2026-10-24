@@ -6,7 +6,9 @@ test.describe("overview", () => {
   test.use({ demoRecipeCount: 12 });
 
   test("recipe overview", async ({ page, demoRecipes }) => {
-    await page.goto("/");
+    await page.goto(
+      `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
+    );
     await page.evaluate(() =>
       customElements.whenDefined("recipe-tile-component"),
     );

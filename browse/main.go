@@ -42,17 +42,7 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 
 func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		resp, err := gql.Overview(r.Context(), client)
-		if err != nil {
-			log.Printf("failed to fetch overview: %v", err)
-			http.Error(w, "failed to fetch recipes", http.StatusInternalServerError)
-			return
-		}
-		ctx := templ.WithChildren(r.Context(), components.Overview(resp))
-		title := "Alle Rezepte | RezeptDB"
-		templ.Handler(components.Layout(title)).ServeHTTP(w, r.WithContext(ctx))
-	})
+	mux.HandleFunc("GET /{$}", browseHandler(client))
 
 	mux.HandleFunc("/recipe/{id}/rate", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

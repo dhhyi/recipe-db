@@ -64,6 +64,7 @@ async fn create_recipe(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
         Json(json!({
             "id": id,
             "name": body["name"],
+            "nameSortKey": body["name"].as_str().unwrap().to_lowercase(),
             "createdAt": "2026-10-23T13:00:00.123456Z",
             "updatedAt": "2026-10-23T13:00:00.123456Z"
         })),
@@ -82,6 +83,7 @@ async fn update_recipe(
         Json(json!({
             "id": id,
             "name": body["name"],
+            "nameSortKey": body["name"].as_str().unwrap().to_lowercase(),
             "createdAt": "2026-10-23T13:00:00.123456Z",
             "updatedAt": "2026-10-23T13:00:00.123456Z"
         })),
@@ -110,6 +112,7 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
                 Json(json!({
                     "id": "42",
                     "name": "Recipe",
+                    "nameSortKey": "recipe",
                     "createdAt": "2026-10-23T13:00:00.123456Z",
                     "updatedAt": "2026-10-23T13:00:00.123456Z"
                 }))

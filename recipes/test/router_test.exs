@@ -39,6 +39,7 @@ defmodule Recipes.RouterTest do
     assert created.status == 201
     assert ["application/json; charset=utf-8"] = get_resp_header(created, "content-type")
     recipe = Jason.decode!(created.resp_body)
+    assert recipe["nameSortKey"] == "rice pudding"
     assert recipe["createdAt"] == recipe["updatedAt"]
 
     listed =
@@ -75,10 +76,11 @@ defmodule Recipes.RouterTest do
     assert body["metadata"] == %{"source" => "family", "season" => "autumn"}
     assert body["createdAt"] == recipe["createdAt"]
     assert body["updatedAt"] == recipe["updatedAt"]
+    assert body["nameSortKey"] == "rice pudding"
   end
 
-  test "rejects client-supplied timestamps including null values" do
-    for field <- ["createdAt", "updatedAt"] do
+  test "rejects client-supplied server-owned fields including null values" do
+    for field <- ["createdAt", "updatedAt", "nameSortKey"], value <- [nil, "client value"] do
       created =
         :post
         |> conn("/recipes", Jason.encode!(%{"name" => "Rice Pudding"}))
@@ -89,7 +91,7 @@ defmodule Recipes.RouterTest do
 
       post_response =
         :post
-        |> conn("/recipes", Jason.encode!(%{"name" => "Rice Pudding", field => nil}))
+        |> conn("/recipes", Jason.encode!(%{"name" => "Rice Pudding", field => value}))
         |> put_req_header("content-type", "application/json")
         |> Router.call(@options)
 
@@ -100,7 +102,7 @@ defmodule Recipes.RouterTest do
 
       patch_response =
         :patch
-        |> conn("/recipes/#{recipe["id"]}", Jason.encode!(%{field => nil}))
+        |> conn("/recipes/#{recipe["id"]}", Jason.encode!(%{field => value}))
         |> put_req_header("content-type", "application/merge-patch+json")
         |> Router.call(@options)
 
@@ -108,6 +110,8 @@ defmodule Recipes.RouterTest do
 
       assert %{"code" => "reserved-field", "field" => ^field} =
                Jason.decode!(patch_response.resp_body)
+
+      assert {:ok, ^recipe} = Repository.get(recipe["id"])
     end
   end
 

@@ -122,8 +122,8 @@ class RecipesTest {
   }
 
   @Test
-  void rejectsClientSuppliedTimestampsIncludingNull() {
-    for (String field : new String[]{"createdAt", "updatedAt"}) {
+  void rejectsClientSuppliedServerOwnedFieldsIncludingNull() {
+    for (String field : new String[]{"createdAt", "updatedAt", "nameSortKey"}) {
       given().header("Connection", "close")
           .contentType(ContentType.JSON)
           .body("{\"name\":\"Rice Pudding\",\"" + field + "\":null}")
@@ -145,6 +145,51 @@ class RecipesTest {
           .body("code", equalTo("reserved-field"))
           .body("field", equalTo(field));
     }
+  }
+
+  @Test
+  void derivesNormalizedNameSortKeyWithoutChangingTimestamps() {
+    String recipeId = createRecipe("{\"name\":\"  A\\u0308pfel ÖL Straße  \"}");
+    var initial = given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("name", equalTo("  A\u0308pfel ÖL Straße  "))
+        .body("nameSortKey", equalTo("apfel ol strasse"))
+        .extract()
+        .response();
+
+    given().header("Connection", "close")
+        .get("/recipes")
+        .then()
+        .statusCode(200)
+        .body("[0].nameSortKey", equalTo("apfel ol strasse"));
+
+    given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"metadata\":{\"source\":\"family\"}}")
+        .patch("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("nameSortKey", equalTo("apfel ol strasse"))
+        .body("createdAt", equalTo(initial.path("createdAt")))
+        .body("updatedAt", equalTo(initial.path("updatedAt")));
+
+    given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("{\"nameSortKey\":\"override\"}")
+        .patch("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(422)
+        .body("code", equalTo("reserved-field"))
+        .body("field", equalTo("nameSortKey"));
+
+    given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("nameSortKey", equalTo("apfel ol strasse"))
+        .body("updatedAt", equalTo(initial.path("updatedAt")));
   }
 
   @Test

@@ -1,4 +1,4 @@
-import { test, expect, graphql } from "./fixtures.js";
+import { test, expect, graphql, waitForRecipeIndexed } from "./fixtures.js";
 import { fileURLToPath } from "node:url";
 import { crop, drag, handle, saveButton } from "./image-editor.helpers.js";
 
@@ -133,6 +133,7 @@ test("create a recipe in the editor and find it in the overview", async ({
     await expect(
       page.getByText("Milch erwärmen und mit Zimt servieren.", { exact: true }),
     ).toBeVisible();
+    await waitForRecipeIndexed(request, id);
     await page.getByRole("button", { name: "Zur Startseite" }).click();
     await expect(
       page.getByRole("link", {

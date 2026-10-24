@@ -59,7 +59,7 @@ defmodule Recipes.Repository do
 
   def handle_call({:create, document}, _from, connection) do
     reply =
-      with :ok <- Recipe.validate_reserved_fields(document),
+      with :ok <- Recipe.validate(document),
            id = Recipe.new_id(),
            timestamp = timestamp(),
            document =
@@ -70,7 +70,7 @@ defmodule Recipes.Repository do
                id,
                encoded
              ]) do
-        {:ok, Map.put(document, "id", id)}
+        {:ok, document |> Map.put("id", id) |> Recipe.with_derived_fields()}
       end
 
     {:reply, reply, connection}
@@ -96,7 +96,7 @@ defmodule Recipes.Repository do
       Exqlite.transaction(connection, fn transaction ->
         with {:ok, current} <- get_recipe(transaction, id),
              :ok <- Recipe.validate_patch(patch),
-             document = current |> Map.delete("id") |> Recipe.merge_patch(patch),
+             document = current |> Map.drop(["id", "nameSortKey"]) |> Recipe.merge_patch(patch),
              :ok <- Recipe.validate(Map.drop(document, ["createdAt", "updatedAt"])),
              document = update_timestamp(current, document),
              {:ok, encoded} <- Jason.encode(document),
@@ -105,7 +105,7 @@ defmodule Recipes.Repository do
                  encoded,
                  id
                ]) do
-          {:ok, Map.put(document, "id", id)}
+          {:ok, document |> Map.put("id", id) |> Recipe.with_derived_fields()}
         else
           :not_found ->
             Exqlite.rollback(transaction, :not_found)
@@ -136,6 +136,7 @@ defmodule Recipes.Repository do
     document
     |> Jason.decode!()
     |> Map.put("id", id)
+    |> Recipe.with_derived_fields()
   end
 
   defp get_recipe(connection, id) do

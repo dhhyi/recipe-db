@@ -8,6 +8,9 @@ query IndexRecipe($id: ID!) {
   recipe(id: $id) {
     id
     name
+    nameSortKey
+    createdAt
+    updatedAt
     method
     ingredients {
       name

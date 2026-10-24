@@ -104,6 +104,8 @@ class GenerateOperationsTests(unittest.TestCase):
         )
         for name in ("RecipeIds", "IndexRecipe"):
             self.assertIn(f"pub const {name} =", generated)
+        for field in ("createdAt", "updatedAt", "nameSortKey"):
+            self.assertIn(field, generated)
 
 
 if __name__ == "__main__":
