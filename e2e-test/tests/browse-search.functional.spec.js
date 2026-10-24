@@ -169,6 +169,7 @@ test("search retains explicit sorting, focus and composition state", async ({
   page,
   demoRecipe,
 }) => {
+  await waitForRecipeIndexed(page.request, demoRecipe.id);
   const sentQueries = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -245,6 +246,7 @@ test("automatic sorting and document titles follow the current query", async ({
   page,
   demoRecipe,
 }) => {
+  await waitForRecipeIndexed(page.request, demoRecipe.id);
   await page.goto("/");
   const sort = page.getByLabel("Sortieren nach", { exact: true });
   const search = page.getByRole("searchbox");
@@ -287,66 +289,58 @@ test("German name keys preserve names and use IDs to break ties", async ({
     "Apfel",
   ];
   const recipes = [];
-  try {
-    for (const name of names) {
-      const { createRecipe } = await graphql(
-        request,
-        "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name createdAt } }",
-        { value: { name, method: marker } },
-      );
-      recipes.push(createRecipe);
-    }
-    for (const recipe of recipes)
-      await waitForRecipeIndexed(request, recipe.id);
-    const tied = recipes
-      .filter((recipe) => ["Strasse", "Straße"].includes(recipe.name))
-      .sort((left, right) => left.id.localeCompare(right.id))
-      .map((recipe) => recipe.name);
-    await page.goto(`/?q=${marker}&sort=name-asc`);
-    const titles = page.locator("main recipe-tile-component [slot=title]");
-    await expect(titles).toHaveText([
-      "Apfel",
-      "Äpfelsuppe",
-      "Banane",
-      "Ölsuppe",
-      ...tied,
-      "Zwiebel",
-    ]);
-    await page
-      .getByLabel("Sortieren nach", { exact: true })
-      .selectOption("name-desc");
-    await expect(titles).toHaveText([
-      "Zwiebel",
-      ...tied,
-      "Ölsuppe",
-      "Banane",
-      "Äpfelsuppe",
-      "Apfel",
-    ]);
-    await page
-      .getByLabel("Sortieren nach", { exact: true })
-      .selectOption("newest");
-    await expect(titles).toHaveText([...names].reverse());
-  } finally {
-    for (const recipe of recipes) {
-      await graphql(request, "mutation($id: ID!) { deleteRecipe(id: $id) }", {
-        id: recipe.id,
-      });
-    }
+  for (const name of names) {
+    const { createRecipe } = await graphql(
+      request,
+      "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name createdAt } }",
+      { value: { name, method: marker } },
+    );
+    recipes.push(createRecipe);
   }
+  for (const recipe of recipes) await waitForRecipeIndexed(request, recipe.id);
+  const tied = recipes
+    .filter((recipe) => ["Strasse", "Straße"].includes(recipe.name))
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((recipe) => recipe.name);
+  await page.goto(`/?q=${marker}&sort=name-asc`);
+  const titles = page.locator("main recipe-tile-component [slot=title]");
+  await expect(titles).toHaveText([
+    "Apfel",
+    "Äpfelsuppe",
+    "Banane",
+    "Ölsuppe",
+    ...tied,
+    "Zwiebel",
+  ]);
+  await page
+    .getByLabel("Sortieren nach", { exact: true })
+    .selectOption("name-desc");
+  await expect(titles).toHaveText([
+    "Zwiebel",
+    ...tied,
+    "Ölsuppe",
+    "Banane",
+    "Äpfelsuppe",
+    "Apfel",
+  ]);
+  await page
+    .getByLabel("Sortieren nach", { exact: true })
+    .selectOption("newest");
+  await expect(titles).toHaveText([...names].reverse());
 });
 
 test("explicit relevance survives an empty query and reload", async ({
   page,
   demoRecipe,
 }) => {
+  await waitForRecipeIndexed(page.request, demoRecipe.id);
   await page.goto("/?sort=relevance");
   const search = page.getByRole("searchbox");
   const sort = page.getByLabel("Sortieren nach", { exact: true });
   await expect(sort).toHaveValue("relevance");
   await search.fill(demoRecipe.name);
   await search.press("Enter");
-  await expect(page).toHaveURL(/q=Playwright.*sort=relevance/);
+  await expect(page).toHaveURL(/q=E2E.*sort=relevance/);
   await search.fill("   ");
   await search.press("Enter");
   await expect(page).toHaveURL("/?sort=relevance");
@@ -411,8 +405,10 @@ test("search controls fit the content area without horizontal overflow", async (
 test("ordinary GET search works without JavaScript", async ({
   browser,
   baseURL,
+  request,
   demoRecipe,
 }) => {
+  await waitForRecipeIndexed(request, demoRecipe.id);
   const context = await browser.newContext({
     javaScriptEnabled: false,
     baseURL,
@@ -429,7 +425,7 @@ test("ordinary GET search works without JavaScript", async ({
     await page
       .getByRole("searchbox", { name: "Rezepte suchen" })
       .press("Enter");
-    await expect(page).toHaveURL(/q=Playwright.*sort=name-asc/);
+    await expect(page).toHaveURL(/q=E2E.*sort=name-asc/);
     await expect(
       page.getByRole("link", {
         name: `Rezept ${demoRecipe.name}`,
@@ -955,16 +951,12 @@ for (const failure of ["network", "502"]) {
 }
 
 test.describe("pagination with and without JavaScript", () => {
-  test.use({ demoRecipeCount: 25, demoRecipeWithImage: false });
-
   test("HTMX inserts the next server page without replacing earlier tiles", async ({
     page,
-    demoRecipes,
+    searchRecipes,
   }) => {
     await manualSentinel(page);
-    await page.goto(
-      `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
-    );
+    await page.goto(`/?q=${encodeURIComponent("E2E Suchrezept")}&sort=newest`);
     await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
     const pagination = page.getByRole("navigation", {
       name: "Weitere Rezepte",
@@ -1004,7 +996,7 @@ test.describe("pagination with and without JavaScript", () => {
   test("ordinary links preserve the query and advance to the next page", async ({
     browser,
     baseURL,
-    demoRecipes,
+    searchRecipes,
   }) => {
     const context = await browser.newContext({
       javaScriptEnabled: false,
@@ -1013,7 +1005,7 @@ test.describe("pagination with and without JavaScript", () => {
     try {
       const page = await context.newPage();
       await page.goto(
-        `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
+        `/?q=${encodeURIComponent("E2E Suchrezept")}&sort=newest`,
       );
       await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
       await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
@@ -1022,7 +1014,7 @@ test.describe("pagination with and without JavaScript", () => {
       await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
       await expect(page.locator("[data-recipe-id]").last()).toHaveAttribute(
         "data-recipe-id",
-        demoRecipes[0].id,
+        searchRecipes[0].id,
       );
       await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(
         0,
