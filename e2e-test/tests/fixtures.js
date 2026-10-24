@@ -3,14 +3,62 @@ import { readFile } from "node:fs/promises";
 
 export { expect };
 
-export async function graphql(request, query, variables = {}) {
+export async function graphql(
+  request,
+  query,
+  variables = {},
+  context = "GraphQL request",
+) {
   const response = await request.post("/graphql", {
     data: { query, variables },
   });
-  expect(response.ok(), await response.text()).toBeTruthy();
-  const result = await response.json();
-  expect(result.errors).toBeUndefined();
+  const body = await response.text();
+  expect(
+    response.ok(),
+    `${context} failed with HTTP ${response.status()}: ${body}`,
+  ).toBeTruthy();
+  const result = JSON.parse(body);
+  expect(result.errors, `${context} returned GraphQL errors`).toBeUndefined();
   return result.data;
+}
+
+async function reset(request, mutation) {
+  const response = await request.post("/graphql", {
+    data: { query: `mutation { ${mutation} }` },
+  });
+  const body = await response.text();
+  expect(response.ok(), `Reset ${mutation} failed: ${body}`).toBeTruthy();
+  const result = JSON.parse(body);
+  expect(
+    result.errors,
+    `Reset ${mutation} returned GraphQL errors`,
+  ).toBeUndefined();
+  expect(result.data?.[mutation], `Reset ${mutation} did not succeed`).toBe(
+    true,
+  );
+}
+
+async function resetApplicationData(request) {
+  for (const mutation of [
+    "deleteRecipesForTesting",
+    "deleteRatingsForTesting",
+    "deleteImagesForTesting",
+    "deleteInspirationsForTesting",
+  ]) {
+    await reset(request, mutation);
+  }
+  await expect
+    .poll(
+      async () => {
+        const { recipes } = await graphql(request, "query { recipes { id } }");
+        return recipes.map((recipe) => recipe.id);
+      },
+      {
+        message: "Application recipes are empty after the E2E reset",
+        timeout: 30_000,
+      },
+    )
+    .toEqual([]);
 }
 
 export async function waitForRecipeIndexed(request, id) {
@@ -28,109 +76,186 @@ export async function waitForRecipeIndexed(request, id) {
         });
         if (!response.ok()) return [];
         const result = await response.json();
+        if (result.errors) return [];
         return (
           result.data?.searchRecipes?.recipes?.map((recipe) => recipe.id) ?? []
         );
       },
-      { message: `Recipe ${id} is indexed`, timeout: 60_000 },
+      {
+        message: `Recipe ${id} converges in search`,
+        timeout: 60_000,
+      },
     )
     .toEqual([id]);
 }
 
+export async function waitForRecipePageText(request, id, text) {
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(`/recipe/${id}`);
+        return response.ok() && (await response.text()).includes(text);
+      },
+      {
+        message: `Recipe page ${id} converges to "${text}"`,
+        timeout: 15_000,
+      },
+    )
+    .toBe(true);
+}
+
+export async function waitForRecipePageHeading(request, id, name) {
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(`/recipe/${id}`);
+        return (
+          response.ok() &&
+          (await response.text()).includes(`<h1 itemprop="name">${name}</h1>`)
+        );
+      },
+      {
+        message: `Recipe page ${id} heading converges to "${name}"`,
+        timeout: 15_000,
+      },
+    )
+    .toBe(true);
+}
+
+export async function waitForImageDecoded(image) {
+  await expect
+    .poll(
+      () => image.evaluate((element) => element.decode().then(() => true)),
+      {
+        message: `Image ${await image.getAttribute("src")} decodes successfully`,
+        timeout: 15_000,
+      },
+    )
+    .toBe(true);
+}
+
+async function createRecipe(request, name) {
+  const { createRecipe: recipe } = await graphql(
+    request,
+    "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }",
+    {
+      value: {
+        name,
+        ingredients: [
+          { amount: "200", unit: "g", name: "Milchreis" },
+          { amount: "500", unit: "ml", name: "Milch" },
+          { name: "Salz" },
+          { name: "Zimt", optional: true },
+        ],
+        method:
+          "Milchreis und Milch langsam aufkochen.\n\nUnter Rühren garen und mit Salz abschmecken.",
+      },
+    },
+    `Seed recipe "${name}"`,
+  );
+  expect(recipe, `Recipe ${name} was created`).toMatchObject({
+    id: expect.any(String),
+    name,
+  });
+  return recipe;
+}
+
+async function uploadImage(request, recipe, filename) {
+  const buffer = await readFile(
+    new URL(`./assets/${filename}`, import.meta.url),
+  );
+  const response = await request.post("/graphql", {
+    headers: { "apollo-require-preflight": "true" },
+    multipart: {
+      operations: JSON.stringify({
+        query:
+          "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url size width height } }",
+        variables: { id: recipe.id, file: null },
+      }),
+      map: JSON.stringify({ 0: ["variables.file"] }),
+      0: {
+        name: filename,
+        mimeType: "image/png",
+        buffer,
+      },
+    },
+  });
+  const body = await response.text();
+  expect(
+    response.ok(),
+    `Image seed for ${recipe.name} failed: ${body}`,
+  ).toBeTruthy();
+  const result = JSON.parse(body);
+  expect(
+    result.errors,
+    `Image seed for ${recipe.name} returned GraphQL errors`,
+  ).toBeUndefined();
+  expect(
+    result.data?.setImage,
+    `Image seed for ${recipe.name} returned no metadata`,
+  ).toMatchObject({
+    url: expect.any(String),
+    size: expect.any(Number),
+    width: expect.any(Number),
+    height: expect.any(Number),
+  });
+}
+
 export const test = base.extend({
-  demoRecipeCount: [1, { option: true }],
-  demoRecipeWithImage: [true, { option: true }],
-  demoRecipes: async (
-    { request, demoRecipeCount, demoRecipeWithImage },
-    use,
-  ) => {
-    const demo = new URL("../../demo-data/", import.meta.url);
-    const value = JSON.parse(
-      await readFile(new URL("recipe1.json", demo), "utf8"),
-    );
-    value.name = "Playwright demo Milchreis";
-    value.method = await readFile(new URL("recipe1.method.md", demo), "utf8");
-    const recipes = [];
-    const imageBuffer = await readFile(new URL("recipe1.jpg", demo));
-    try {
-      for (let index = 0; index < demoRecipeCount; index++) {
-        const { createRecipe: recipe } = await graphql(
-          request,
-          "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }",
-          {
-            value: {
-              ...value,
-              name: index === 0 ? value.name : `${value.name} ${index + 1}`,
-            },
-          },
-        );
-        expect(recipe).toBeTruthy();
-        recipes.push(recipe);
-        if (!demoRecipeWithImage) {
-          continue;
-        }
-        const response = await request.post("/graphql", {
-          headers: { "apollo-require-preflight": "true" },
-          multipart: {
-            operations: JSON.stringify({
-              query:
-                "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url size width height } }",
-              variables: { id: recipe.id, file: null },
-            }),
-            map: JSON.stringify({ 0: ["variables.file"] }),
-            0: {
-              name: "milchreis.jpg",
-              mimeType: "image/jpeg",
-              buffer: imageBuffer,
-            },
-          },
-        });
-        expect(response.ok(), await response.text()).toBeTruthy();
-        const result = await response.json();
-        expect(result.errors).toBeUndefined();
-        expect(result.data.setImage).toMatchObject({
-          url: expect.any(String),
-          size: expect.any(Number),
-          width: expect.any(Number),
-          height: expect.any(Number),
-        });
-      }
-      for (const recipe of recipes) {
-        await waitForRecipeIndexed(request, recipe.id);
-      }
-      await use(recipes);
-    } finally {
-      const results = await Promise.allSettled(
-        recipes.map(async (recipe) => {
-          try {
-            const image = await request.delete(
-              new URL(
-                `/images/${recipe.id}`,
-                process.env.REST_API || "http://traefik:3000",
-              ).href,
-            );
-            expect([200, 204, 404]).toContain(image.status());
-          } finally {
-            await graphql(
-              request,
-              "mutation($id: ID!) { deleteRecipe(id: $id) }",
-              {
-                id: recipe.id,
-              },
-            );
-          }
-        }),
-      );
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length) {
-        throw new AggregateError(
-          failures.map((result) => result.reason),
-          "Failed to clean up demo recipes",
-        );
-      }
-    }
+  resetApplicationData: [
+    async ({ request }, use) => {
+      await resetApplicationData(request);
+      await use();
+    },
+    { auto: true },
+  ],
+  basicRecipe: async ({ request }, use) => {
+    await use(await createRecipe(request, "E2E Milchreis"));
   },
-  demoRecipe: async ({ demoRecipes }, use) => {
-    await use(demoRecipes[0]);
+  recipeWithImage: async ({ request, basicRecipe }, use) => {
+    await uploadImage(request, basicRecipe, "milchreis.png");
+    await use(basicRecipe);
+  },
+  recipeWithoutImage: async ({ basicRecipe }, use) => {
+    await use(basicRecipe);
+  },
+  overviewRecipes: async ({ request }, use) => {
+    const recipes = [];
+    for (let index = 1; index <= 12; index++) {
+      const recipe = await createRecipe(
+        request,
+        index === 1
+          ? "E2E Milchreis"
+          : `E2E Milchreis ${String(index).padStart(2, "0")}`,
+      );
+      await uploadImage(
+        request,
+        recipe,
+        index % 2 === 0 ? "image-b.png" : "milchreis.png",
+      );
+      recipes.push(recipe);
+    }
+    for (const recipe of recipes) {
+      await waitForRecipeIndexed(request, recipe.id);
+    }
+    await use(recipes);
+  },
+  searchRecipes: async ({ request }, use) => {
+    const recipes = [];
+    for (let index = 1; index <= 25; index++) {
+      recipes.push(
+        await createRecipe(
+          request,
+          `E2E Suchrezept ${String(index).padStart(2, "0")}`,
+        ),
+      );
+    }
+    for (const recipe of recipes) {
+      await waitForRecipeIndexed(request, recipe.id);
+    }
+    await use(recipes);
+  },
+  demoRecipe: async ({ recipeWithImage }, use) => {
+    await use(recipeWithImage);
   },
 });

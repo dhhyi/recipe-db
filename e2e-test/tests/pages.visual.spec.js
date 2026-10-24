@@ -1,27 +1,25 @@
-import { test, expect } from "./fixtures.js";
+import { test, expect, waitForImageDecoded } from "./fixtures.js";
 import { saveButton, selectSource, selection } from "./image-editor.helpers.js";
 import { fileURLToPath } from "node:url";
 
 test.describe("overview", () => {
-  test.use({ demoRecipeCount: 12 });
-
-  test("recipe overview", async ({ page, demoRecipes }) => {
+  test("recipe overview", async ({ page, overviewRecipes }) => {
     await page.goto(
-      `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
+      `/?q=${encodeURIComponent(overviewRecipes[0].name)}&sort=newest`,
     );
     await page.evaluate(() =>
       customElements.whenDefined("recipe-tile-component"),
     );
-    for (const recipe of demoRecipes) {
+    for (const recipe of overviewRecipes) {
       const tile = page.getByRole("link", {
         name: `Rezept ${recipe.name}`,
         exact: true,
       });
       await expect(tile).toBeVisible();
       await tile.scrollIntoViewIfNeeded();
-      await expect(
+      await waitForImageDecoded(
         tile.getByRole("img", { name: recipe.name, exact: true }),
-      ).toHaveJSProperty("complete", true);
+      );
     }
     await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
     await expect(page).toHaveScreenshot("overview.png", { fullPage: true });
@@ -30,24 +28,26 @@ test.describe("overview", () => {
 
 test("recipe detail", async ({ page, demoRecipe }) => {
   await page.goto(`/recipe/${demoRecipe.id}`);
-  await expect(
-    page.getByText(
-      /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
-    ),
-  ).toBeVisible();
+  const updatedAt = page.getByText(
+    /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
+  );
+  await expect(updatedAt).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Bearbeiten", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Zubereitung", exact: true }),
   ).toBeVisible();
-  await expect(
+  await waitForImageDecoded(
     page.getByRole("img", { name: demoRecipe.name, exact: true }),
-  ).toHaveJSProperty("complete", true);
+  );
   await page
     .getByRole("button", { name: "Zur Startseite" })
     .scrollIntoViewIfNeeded();
   await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+  await updatedAt.evaluate((element) => {
+    element.textContent = "Zuletzt aktualisiert: gerade eben";
+  });
   await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
   await expect(page).toHaveScreenshot("recipe.png", { fullPage: true });
 });
@@ -82,7 +82,7 @@ test("image editor", async ({ page, demoRecipe }) => {
   await expect(
     page.getByLabel("JPEG- oder PNG-Bild auswählen (maximal 10 MiB)"),
   ).toBeVisible();
-  await expect(page.locator("main img")).toHaveJSProperty("complete", true);
+  await waitForImageDecoded(page.locator("main img"));
   await expect(page).toHaveScreenshot("image-editor.png", { fullPage: true });
 });
 
@@ -93,7 +93,7 @@ test("image editor with a local source and eight crop handles", async ({
   await selectSource(
     page,
     demoRecipe,
-    fileURLToPath(new URL("../../demo-data/recipe1.jpg", import.meta.url)),
+    fileURLToPath(new URL("./assets/milchreis.png", import.meta.url)),
   );
   await expect(page.locator(".crop-handle")).toHaveCount(8);
   await selection(page).scrollIntoViewIfNeeded();
