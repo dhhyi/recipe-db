@@ -197,6 +197,14 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			state.Message = "Rezepte konnten nicht geladen werden."
 			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
 		}
+		if !fragment && status >= 400 {
+			title, message := "Rezepte konnten nicht geladen werden | RezeptDB", "Rezepte konnten nicht geladen werden."
+			if status == http.StatusBadRequest {
+				title, message = "Ungültige Suchparameter | RezeptDB", "Ungültige Suchparameter."
+			}
+			writeErrorPage(w, r, status, title, message)
+			return
+		}
 		if appendPage && state.Kind == "search" && state.NextURL == "" {
 			state.Message = fmt.Sprintf("%d Rezepte gefunden. Alle Rezepte geladen.", state.Found)
 		}
@@ -232,7 +240,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 		var body bytes.Buffer
 		if err := component.Render(r.Context(), &body); err != nil {
 			log.Printf("failed to render browse: %v", err)
-			http.Error(w, "Rezepte konnten nicht geladen werden.", http.StatusInternalServerError)
+			writeErrorPage(w, r, http.StatusInternalServerError, "Rezepte konnten nicht geladen werden | RezeptDB", "Rezepte konnten nicht geladen werden.")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

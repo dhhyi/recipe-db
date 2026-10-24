@@ -1,6 +1,7 @@
 import { test, expect, waitForImageDecoded } from "./fixtures.js";
 import { saveButton, selectSource, selection } from "./image-editor.helpers.js";
 import { fileURLToPath } from "node:url";
+import { allowDesignAssets } from "./browse-error.helpers.js";
 
 test.describe("overview", () => {
   test("recipe overview", async ({ page, overviewRecipes }) => {
@@ -50,6 +51,18 @@ test("recipe detail", async ({ page, demoRecipe }) => {
   });
   await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
   await expect(page).toHaveScreenshot("recipe.png", { fullPage: true });
+});
+
+test("styled full-page error", async ({ page }) => {
+  await allowDesignAssets(page);
+  const response = await page.goto("/does-not-exist");
+  expect(response.status()).toBe(404);
+  await expect(page).toHaveTitle("page not found | RezeptDB");
+  await expect(page.locator("header-component")).toHaveCount(1);
+  await expect(page.locator("main")).toHaveCount(1);
+  await expect(page.locator("main > p")).toHaveText("page not found");
+  await expect(page.locator("main")).toBeInViewport();
+  await expect(page).toHaveScreenshot("browse-error.png", { fullPage: true });
 });
 
 test("recipe editor", async ({ page, demoRecipe }) => {

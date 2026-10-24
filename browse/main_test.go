@@ -14,6 +14,69 @@ import (
 	"github.com/Khan/genqlient/graphql"
 )
 
+func assertStyledErrorPage(t *testing.T, response *httptest.ResponseRecorder, status int, title, message string, head bool) {
+	t.Helper()
+	body := response.Body.String()
+	if response.Code != status || response.Header().Get("Content-Type") != "text/html; charset=utf-8" ||
+		response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("ETag") != "" {
+		t.Fatalf("incorrect styled error response headers: status=%d headers=%v", response.Code, response.Header())
+	}
+	if head {
+		if body != "" {
+			t.Fatalf("HEAD error response has a body: %s", body)
+		}
+		return
+	}
+	if strings.Count(body, "<header-component>") != 1 || strings.Count(body, "<main>") != 1 ||
+		!strings.Contains(body, `<link rel="stylesheet" href="/design/styles.css">`) ||
+		!strings.Contains(body, `<script src="/design/htmx.min.js"></script>`) ||
+		!strings.Contains(body, "<title>"+title+"</title>") {
+		t.Fatalf("incorrect styled error response body: %s", body)
+	}
+	if !strings.Contains(body, "<p>"+message+"</p>") || strings.Contains(body, "<form") ||
+		strings.Contains(body, "data-recipe-id") || strings.Contains(body, "<script>alert") {
+		t.Fatalf("error page is not message-only or escaped: %s", body)
+	}
+}
+
+func TestUnknownBrowseURLAndEscapedError(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		t.Error("unknown URL queried GraphQL")
+	}))
+	defer upstream.Close()
+	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+
+	for _, method := range []string{"GET", "HEAD"} {
+		request := httptest.NewRequest(method, "/does-not-exist", nil)
+		request.Header.Set("If-None-Match", "*")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		assertStyledErrorPage(t, response, http.StatusNotFound, "page not found | RezeptDB", "page not found", method == "HEAD")
+	}
+	if calls.Load() != 0 {
+		t.Fatal("unknown URL queried backend")
+	}
+	for _, testCase := range []struct {
+		path string
+		code int
+	}{
+		{path: "/does-not-exist", code: http.StatusNotFound},
+		{path: "/recipe/42", code: http.StatusMethodNotAllowed},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("POST", testCase.path, nil))
+		if response.Code != testCase.code {
+			t.Fatalf("unexpected POST response for %s: %d", testCase.path, response.Code)
+		}
+	}
+
+	response := httptest.NewRecorder()
+	writeErrorPage(response, httptest.NewRequest("GET", "/", nil), http.StatusBadRequest, "error | RezeptDB", `<script>alert(1)</script>`)
+	assertStyledErrorPage(t, response, http.StatusBadRequest, "error | RezeptDB", "&lt;script&gt;alert(1)&lt;/script&gt;", false)
+}
+
 func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	const imageURL = "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two"
 	const thumbURL = "/assets/unrelated/thumb-token.png?rev=opaque&size=small"
@@ -202,8 +265,12 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			t.Fatal(err)
 		}
 		offline.Store(true)
-		if page := request("GET", "/recipe/42", etag); page.Code != 500 {
-			t.Fatal("optional-service outage cached partial HTML or served stale page")
+		page := request("GET", "/recipe/42", etag)
+		assertStyledErrorPage(t, page, http.StatusInternalServerError, "failed to fetch recipe | RezeptDB", "failed to fetch recipe", false)
+		head := request("HEAD", "/recipe/42", etag)
+		assertStyledErrorPage(t, head, http.StatusInternalServerError, "failed to fetch recipe | RezeptDB", "failed to fetch recipe", true)
+		if page.Header().Get("ETag") != "" {
+			t.Fatal("failed recipe response retained a successful-page ETag")
 		}
 		offline.Store(false)
 		if page := request("GET", "/recipe/42", ""); page.Code != 200 {
@@ -214,9 +281,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	if err := c.invalidate("42"); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if page := request("GET", "/recipe/42", etag); page.Code != 404 {
-			t.Fatal("confirmed deletion must return 404")
-		}
+	for _, method := range []string{"GET", "HEAD"} {
+		page := request(method, "/recipe/42", etag)
+		assertStyledErrorPage(t, page, http.StatusNotFound, "recipe not found | RezeptDB", "recipe not found", method == "HEAD")
 	}
 }

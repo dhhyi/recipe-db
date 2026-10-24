@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -38,6 +39,40 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 		return nil, err
 	}
 	return html.Bytes(), nil
+}
+
+func writeErrorPage(w http.ResponseWriter, r *http.Request, status int, title, message string) {
+	ctx := templ.WithChildren(r.Context(), components.ErrorContent(message))
+	var body bytes.Buffer
+	if err := components.Layout(title).Render(ctx, &body); err != nil {
+		log.Printf("failed to render error page: %v", err)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Del("ETag")
+		w.WriteHeader(http.StatusInternalServerError)
+		if r.Method != http.MethodHead {
+			if _, writeErr := io.WriteString(w, "failed to render error page\n"); writeErr != nil {
+				log.Printf("failed to serve error rendering failure: %v", writeErr)
+			}
+		}
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Del("ETag")
+	if r.Header.Get("HX-Boosted") == "true" || r.Header.Get("HX-History-Restore-Request") == "true" {
+		w.Header().Set("X-Browse-Full-Page-Error", "true")
+		w.Header().Set("HX-Retarget", "main")
+		w.Header().Set("HX-Reswap", "innerHTML")
+		w.Header().Set("HX-Reselect", "main > *")
+	}
+	w.WriteHeader(status)
+	if r.Method != http.MethodHead {
+		if _, err := w.Write(body.Bytes()); err != nil {
+			log.Printf("failed to serve error page: %v", err)
+		}
+	}
 }
 
 func newHandler(client graphql.Client, cache *pageCache) http.Handler {
@@ -116,10 +151,10 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 		if err != nil {
 			log.Printf("failed to fetch recipe: %v", err)
 			if errors.Is(err, errRecipeNotFound) {
-				http.Error(w, "recipe not found", http.StatusNotFound)
+				writeErrorPage(w, r, http.StatusNotFound, "recipe not found | RezeptDB", "recipe not found")
 				return
 			}
-			http.Error(w, "failed to fetch recipe", http.StatusInternalServerError)
+			writeErrorPage(w, r, http.StatusInternalServerError, "failed to fetch recipe | RezeptDB", "failed to fetch recipe")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -141,6 +176,19 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			id := strings.TrimPrefix(r.URL.Path, "/recipe/")
+			if r.URL.Path == "/" || id != r.URL.Path && id != "" && !strings.Contains(id, "/") {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
+		writeErrorPage(w, r, http.StatusNotFound, "page not found | RezeptDB", "page not found")
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
