@@ -30,61 +30,81 @@
      :on-click #(rf/dispatch [::events/remove-ingredient index])}
     "-"]])
 
-(defn- recipe-form [{:keys [form status name-error? feedback inspirations-online]}]
-  (let [saving? (= :saving status)]
+(defn- return-action [{:keys [route status]}]
+  [:a.secondary
+   {:href (if (= :edit (:page route)) (str "/recipe/" (:id route)) "/")
+    :role "button"
+    :aria-disabled (= :saving status)
+    :tab-index (when (= :saving status) -1)}
+   (if (= :edit (:page route)) "Zurück zum Rezept" "Zurück zur Übersicht")])
+
+(defn- recipe-form [{:keys [form baseline status name-error? feedback inspirations-online save-failed?] :as state}]
+  (let [saving? (= :saving status)
+        dirty? (model/dirty? form baseline)]
     [:form
      {:on-submit (fn [event]
                    (.preventDefault event)
                    (rf/dispatch [::events/save]))}
-     [:fieldset
-      [:label
-       [:span#name-label "Name"]
-       [:input
-        (cond-> {:type "text"
-                 :id "name"
-                 :name "name"
-                 :aria-labelledby "name-label"
-                 :value (:name form)
-                 :on-change #(rf/dispatch [::events/set-name (.. % -target -value)])}
-          name-error? (assoc :aria-invalid "true" :aria-describedby "name-helper"))]
-       (when name-error?
-         [:small#name-helper "Name darf nicht leer sein."])]]
-     [:h2 "Zutaten"]
-     (doall (map-indexed ingredient-row (:ingredients form)))
-     [:h2 "Zubereitung"]
-     [:textarea
-      {:id "method"
-       :name "method"
-       :rows 4
-       :value (:method form)
-       :style {:scrollbar-width "none"}
-       :ref resize-textarea!
-       :on-change (fn [event]
-                    (resize-textarea! (.-target event))
-                    (rf/dispatch [::events/set-method (.. event -target -value)]))}]
-     (when inspirations-online
-       [:<>
-        [:h2 "Inspirationen"]
-        (doall
-         (map-indexed
-          (fn [index inspiration]
-            [:div {:key index}
-             [:input
-              {:type "url"
-               :id (str "inspiration-" index)
-               :placeholder "Link"
-               :value inspiration
-               :on-change #(rf/dispatch [::events/set-inspiration index (.. % -target -value)])}]])
-          (:inspirations form)))])
-     (when feedback
-       [:p.feedback
-        {:class (name (:kind feedback)) :role "alert"}
-        (:message feedback)])
-     [:div.grid
-      [:button
-       {:type "submit" :disabled saving? :aria-busy saving?}
-       "Speichern"]
-      [:a.secondary {:href "/" :role "button"} "Abbrechen"]]]))
+     [:fieldset {:disabled saving?}
+      [:fieldset
+       [:label
+        [:span#name-label "Name"]
+        [:input
+         (cond-> {:type "text"
+                  :id "name"
+                  :name "name"
+                  :aria-labelledby "name-label"
+                  :value (:name form)
+                  :on-change #(rf/dispatch [::events/set-name (.. % -target -value)])}
+           name-error? (assoc :aria-invalid "true" :aria-describedby "name-helper"))]
+        (when name-error?
+          [:small#name-helper {:role "alert"} "Name darf nicht leer sein."])]]
+      [:h2 "Zutaten"]
+      (doall (map-indexed ingredient-row (:ingredients form)))
+      [:h2 "Zubereitung"]
+      [:textarea
+       {:id "method"
+        :name "method"
+        :rows 4
+        :value (:method form)
+        :style {:scrollbar-width "none"}
+        :ref #(resize-textarea! %)
+        :on-change (fn [event]
+                     (resize-textarea! (.-target event))
+                     (rf/dispatch [::events/set-method (.. event -target -value)]))}]
+      (when inspirations-online
+        [:<>
+         [:h2 "Inspirationen"]
+         (doall
+          (map-indexed
+           (fn [index inspiration]
+             [:div {:key index}
+              [:input
+               {:type "url"
+                :id (str "inspiration-" index)
+                :placeholder "Link"
+                :value inspiration
+                :on-change #(rf/dispatch [::events/set-inspiration index (.. % -target -value)])}]])
+           (:inspirations form)))])]
+     (when (= :error (:kind feedback))
+       [:p.feedback.error {:role "alert"} (:message feedback)])
+     [:p {:role "status" :aria-live "polite"}
+      (cond
+        saving? "Änderungen werden gespeichert. Bitte warten …"
+        dirty? "Ungespeicherte Änderungen."
+        (= :success (:kind feedback)) (:message feedback)
+        :else "Keine ungespeicherten Änderungen.")]
+     [:div.editor-actions
+      [:div.editor-buttons
+       [:button
+        {:type "submit" :disabled (or saving? (not dirty?)) :aria-busy saving?}
+        (cond saving? "Speichert …" save-failed? "Erneut speichern" :else "Speichern")]
+       [:button.secondary
+        {:type "button"
+         :disabled (or saving? (not dirty?))
+         :on-click #(rf/dispatch [::events/discard])}
+        "Änderungen verwerfen"]]
+      [return-action state]]]))
 
 (defn app []
   (let [{:keys [route status feedback] :as state} @(rf/subscribe [::subs/state])]
@@ -93,8 +113,8 @@
       :edit [:<>
              [:h1 "Rezept bearbeiten"]
              (case status
-               :loading [:p "Lädt…"]
-               :not-found [:p "Rezept nicht gefunden."]
-               :error [:p (:message feedback)]
+               :loading [:<> [:p {:role "status"} "Lädt…"] [return-action state]]
+               :not-found [:<> [:p "Rezept nicht gefunden."] [return-action state]]
+               :error [:<> [:p.feedback.error {:role "alert"} (:message feedback)] [return-action state]]
                [recipe-form state])]
       "Page not found.")))
