@@ -1,0 +1,44 @@
+#@ load("service-template.lib.yml", "flatten_labels")
+
+#@ def browse_maintenance_http(production):
+#@   load_balancer = {"servers": [{"url": "http://browse-maintenance:80"}]} if production else {"server": {"port": 80}}
+#@   return {
+#@     "routers": {
+#@       "browse-maintenance": {
+#@         "rule": "PathPrefix(`/`) && !PathPrefix(`/graphql`) && !PathPrefix(`/mcp`) && !PathPrefix(`/public`) && !PathPrefix(`/images`) && !PathPrefix(`/edit`) && !PathPrefix(`/design`) && (Method(`GET`) || Method(`HEAD`)) && HeaderRegexp(`Accept`, `(?i)text/html`)",
+#@         "entrypoints": ["web"] if production else "web",
+#@         "priority": 1,
+#@         "service": "browse-maintenance",
+#@       },
+#@     },
+#@     "middlewares": {
+#@       "browse-unavailable": {
+#@         "errors": {
+#@           "status": ["502-504"] if production else "502-504",
+#@           "statusRewrites": {"502-504": 503},
+#@           "service": "browse-maintenance",
+#@           "query": "/unavailable.html",
+#@         },
+#@       },
+#@     },
+#@     "services": {"browse-maintenance": {"loadBalancer": load_balancer}},
+#@   }
+#@ end
+
+#@ def browse_maintenance_service(production):
+#@   service = {
+#@     "image": "nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94",
+#@     "networks": ["intranet"],
+#@     "restart": "unless-stopped",
+#@     "read_only": True,
+#@     "tmpfs": ["/var/cache/nginx", "/var/run"],
+#@     "volumes": [
+#@       "./browse-maintenance/nginx.conf:/etc/nginx/conf.d/default.conf:ro",
+#@       "./browse-maintenance/unavailable.html:/usr/share/nginx/html/unavailable.html:ro",
+#@     ],
+#@   }
+#@   if not production:
+#@     service["labels"] = ["traefik.enable=true"] + ["traefik." + key + "=" + value for key, value in flatten_labels({"http": browse_maintenance_http(False)})]
+#@   end
+#@   return {"browse-maintenance": service}
+#@ end
