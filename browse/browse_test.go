@@ -199,6 +199,8 @@ func TestBrowseHTTP(t *testing.T) {
 		{name: "empty batch with more hits", kind: "search", searchOnline: true, hits: 49, page: 2, code: 200},
 		{name: "last page", kind: "search", searchOnline: true, hits: 49, page: 3, ids: []string{"last"}, code: 200},
 		{name: "no results", kind: "search", searchOnline: true, editor: true, page: 1, code: 200},
+		{name: "one result", kind: "search", searchOnline: true, hits: 1, page: 1, ids: []string{"only"}, code: 200},
+		{name: "one result on append", kind: "search", searchOnline: true, hits: 1, page: 2, ids: []string{"only"}, code: 200},
 		{name: "offline only fallback", kind: "fallback", editor: true, rating: true, page: 2, ids: []string{"unfiltered"}, code: 200},
 		{name: "status failure", kind: "error", searchOnline: true, statusError: true, page: 1, code: 502},
 		{name: "search failure no fallback", kind: "error", searchOnline: true, editor: true, searchError: true, page: 1, code: 502},
@@ -396,12 +398,23 @@ func TestBrowseHTTP(t *testing.T) {
 					t.Fatal("empty successful search not distinguished")
 				}
 				if !fragment && !fullPageError && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
-					!strings.Contains(body, "Alle Rezepte") || !strings.Contains(body, "header-component")) {
+					!strings.Contains(body, `id="browse-heading"`) || !strings.Contains(body, "header-component")) {
 					t.Fatal("full replacement did not retain controls/header")
 				}
 				wantTitle := "Alle Rezepte | RezeptDB"
 				if tc.kind == "search" {
-					wantTitle = strconv.Itoa(tc.hits) + " Rezepte für 'Apfel' | RezeptDB"
+					noun := "Rezepte"
+					if tc.hits == 1 {
+						noun = "Rezept"
+						if !strings.Contains(body, "1 Rezept gefunden.") || strings.Contains(body, "1 Rezepte") {
+							t.Fatalf("incorrect singular result count: %s", body)
+						}
+					}
+					heading := strconv.Itoa(tc.hits) + " " + noun + " für 'Apfel'"
+					if !strings.Contains(body, ">"+heading+"</h1>") {
+						t.Fatalf("incorrect query-aware heading: %s", body)
+					}
+					wantTitle = heading + " | RezeptDB"
 				} else if tc.kind == "error" {
 					wantTitle = "Rezepte konnten nicht geladen werden | RezeptDB"
 				}

@@ -12,16 +12,17 @@ function resultsFragment({
   seen = [],
 } = {}) {
   const next = kind === "search" && page * 24 < found;
+  const count = `${found} ${found === 1 ? "Rezept" : "Rezepte"}`;
   const message =
     kind === "fallback"
       ? "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
       : kind === "error"
         ? "Rezepte konnten nicht geladen werden."
         : append && !next
-          ? `${found} Rezepte gefunden. Alle Rezepte geladen.`
+          ? `${count} gefunden. Alle Rezepte geladen.`
           : found === 0
             ? "Keine Rezepte gefunden."
-            : `${found} Rezepte gefunden.`;
+            : `${count} gefunden.`;
   const nextURL = `/?page=${page + 1}&q=${query}${sort ? `&sort=${sort}` : ""}`;
   const metadata = `<p id="browse-metadata" ${append ? 'hx-swap-oob="outerHTML"' : ""} data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="${sort}" data-browse-status role="status" aria-live="polite">${message}</p>`;
   const values = JSON.stringify({ seen: [...new Set([...seen, ...ids])] });
@@ -60,20 +61,28 @@ async function fulfillBrowse(route, options = {}) {
     kind === "search" &&
     route.request().headers()["hx-target"] === "browse-pagination";
   const seen = url.searchParams.getAll("seen");
+  const found = options.found ?? 1;
+  const heading =
+    kind === "search" && query
+      ? `${found} ${found === 1 ? "Rezept" : "Rezepte"} für '${query}'`
+      : "Alle Rezepte";
+  const headingHTML = `<h1 id="browse-heading" hx-swap-oob="outerHTML">${heading}</h1>`;
   const title =
     kind === "error"
       ? "Rezepte konnten nicht geladen werden | RezeptDB"
-      : kind === "fallback" || !query
-        ? "Alle Rezepte | RezeptDB"
-        : `${options.found ?? 1} Rezepte für '${query}' | RezeptDB`;
+      : `${heading} | RezeptDB`;
   let body = (await response.text())
     .replace(
       /<section id="browse-results"[\s\S]*?<\/section>/,
       resultsFragment({ page: number, query, sort, ...options }),
     )
-    .replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`);
+    .replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`)
+    .replace(
+      /(<h1 id="browse-heading"[^>]*>)[\s\S]*?<\/h1>/,
+      `$1${heading}</h1>`,
+    );
   if (append)
-    body = `<title>${title}</title>${resultsFragment({
+    body = `<title>${title}</title>${headingHTML}${resultsFragment({
       page: number,
       query,
       sort,
@@ -191,7 +200,7 @@ test("search retains explicit sorting, focus and composition state", async ({
   );
   await expect(search).toBeFocused();
   await expect(page).toHaveTitle(
-    `1 Rezepte für '${demoRecipe.name}' | RezeptDB`,
+    `1 Rezept für '${demoRecipe.name}' | RezeptDB`,
   );
   await expect(
     page.getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true }),
@@ -243,7 +252,7 @@ test("search retains explicit sorting, focus and composition state", async ({
   ).toHaveCount(1);
 });
 
-test("automatic sorting and document titles follow the current query", async ({
+test("automatic sorting, titles and headings follow the current query", async ({
   page,
   demoRecipe,
 }) => {
@@ -255,6 +264,9 @@ test("automatic sorting and document titles follow the current query", async ({
     "Automatisch: Neueste zuerst",
   );
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "Alle Rezepte",
+  );
   await search.fill(demoRecipe.name);
   await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-query",
@@ -264,7 +276,17 @@ test("automatic sorting and document titles follow the current query", async ({
     "Automatisch: Relevanz",
   );
   await expect(page).toHaveTitle(
-    `1 Rezepte für '${demoRecipe.name}' | RezeptDB`,
+    `1 Rezept für '${demoRecipe.name}' | RezeptDB`,
+  );
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    `1 Rezept für '${demoRecipe.name}'`,
+  );
+  await expect(page.locator("#browse-metadata")).toHaveText(
+    "1 Rezept gefunden.",
+  );
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    `1 Rezept für '${demoRecipe.name}'`,
   );
   await search.fill("");
   await search.press("Enter");
@@ -273,6 +295,9 @@ test("automatic sorting and document titles follow the current query", async ({
     "Automatisch: Neueste zuerst",
   );
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    "Alle Rezepte",
+  );
 });
 
 test("German name keys preserve names and use IDs to break ties", async ({
@@ -790,7 +815,7 @@ test("returning to the same query cannot revive its older response", async ({
   await finished;
   await expect(page.locator("[data-recipe-id=stale]")).toHaveCount(0);
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
-  await expect(page).toHaveTitle("1 Rezepte für 'old' | RezeptDB");
+  await expect(page).toHaveTitle("1 Rezept für 'old' | RezeptDB");
 });
 
 test("typing debounces by 300ms while Enter and sorting submit immediately", async ({
