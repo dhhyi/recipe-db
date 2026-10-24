@@ -94,7 +94,7 @@ description = "Export the GraphQL application schema into consuming projects"
 file = ".scripts/merge-graphql-schemas.sh"
 
 [tasks.in-devcontainer]
-description = "Run a command in a project devcontainer: [--rm] <project> <command> [args...]"
+description = "Run a command in a project devcontainer: [--rm | --keep-running] <project> [--rm | --keep-running] <command> [args...]; retention also via DEVCONTAINER_KEEP_RUNNING=true"
 file = ".scripts/run-in-devcontainer.sh"
 raw_args = true
 
