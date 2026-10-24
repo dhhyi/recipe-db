@@ -1,4 +1,4 @@
-# The uploaded image is normalized to 4:3 and stored at 650x488, while the
+# The uploaded image is normalized to 4:3 and stored at 648x486, while the
 # thumbnail is scaled to 300x225.
 #
 # Dimensions are asserted on the raw PNG bytes: the 8 byte signature is followed
@@ -21,7 +21,7 @@ thumb: jsonpath "$.thumbUrl"
 GET {{WEB_API}}{{normal}}
 HTTP 200
 [Asserts]
-bytes contains hex,494844520000028a000001e8;
+bytes contains hex,4948445200000288000001e6;
 
 GET {{WEB_API}}{{thumb}}
 HTTP 200
@@ -41,7 +41,7 @@ thumb: jsonpath "$.thumbUrl"
 GET {{WEB_API}}{{normal}}
 HTTP 200
 [Asserts]
-bytes contains hex,494844520000028a000001e8;
+bytes contains hex,4948445200000288000001e6;
 
 GET {{WEB_API}}{{thumb}}
 HTTP 200
