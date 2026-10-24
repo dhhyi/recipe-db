@@ -58,6 +58,37 @@ assert_compose() {
   jq -e "$1" <<< "$output"
 }
 
+setup_browse() {
+  mv frontend browse
+  cat > browse/.project.yaml << 'EOF'
+devcontainer:
+  ports: [3000]
+  environment:
+    NATS_URL: nats://nats:4222
+traefik:
+  labels:
+    http:
+      services:
+        recipe-db-frontend:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        frontend:
+          rule: "PathPrefix(`/`)"
+          entrypoints: web
+          priority: 2
+          middlewares: frontend-compress,browse-unavailable
+      middlewares:
+        frontend-compress:
+          compress: true
+---
+category: frontend
+EOF
+}
+
 @test "development includes jobs and test runners and removes stale Traefik config" {
   printf '%s\n' stale > traefik.yml
 
@@ -249,27 +280,7 @@ EOF
 }
 
 @test "browse waits for provisioning and retains its bus URL in development and production" {
-  mkdir browse
-  cat > browse/.project.yaml << 'EOF'
-devcontainer:
-  ports: [3000]
-  environment:
-    NATS_URL: nats://nats:4222
-traefik:
-  labels:
-    http:
-      services:
-        browse:
-          loadBalancer:
-            healthCheck:
-              path: /health
-      routers:
-        browse:
-          rule: "PathPrefix(`/`)"
-          entrypoints: web
----
-category: frontend
-EOF
+  setup_browse
   for mode in "" production; do
     run sh .scripts/generate-docker-compose.sh $mode
     [ "$status" -eq 0 ]
@@ -277,6 +288,117 @@ EOF
       .services.browse.environment.NATS_URL == "nats://nats:4222"
       and .services.browse.depends_on["nats-init"].condition == "service_completed_successfully"
     '
+  done
+}
+
+@test "browse maintenance is independent pinned read-only infrastructure whenever browse is included" {
+  setup_browse
+  for mode in "" production prepare; do
+    rm -f docker-compose.yml
+    run sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    assert_compose '
+      .services["browse-maintenance"].image == "nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94"
+      and .services["browse-maintenance"].networks == ["intranet"]
+      and .services["browse-maintenance"].restart == "unless-stopped"
+      and .services["browse-maintenance"].read_only == true
+      and .services["browse-maintenance"].tmpfs == ["/var/cache/nginx", "/var/run"]
+      and .services["browse-maintenance"].volumes == [
+        "./browse-maintenance/nginx.conf:/etc/nginx/conf.d/default.conf:ro",
+        "./browse-maintenance/unavailable.html:/usr/share/nginx/html/unavailable.html:ro"
+      ]
+      and (.services["browse-maintenance"] | has("ports") or has("build") or has("depends_on") or has("secrets") or has("profiles") | not)
+    '
+  done
+}
+
+@test "development keeps browse errors and browser-only fallback on maintenance infrastructure" {
+  setup_browse
+  run sh .scripts/generate-docker-compose.sh
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  assert_compose '
+    (.services | keys) == ["backend", "browse", "browse-maintenance", "fixtures", "job", "nats", "nats-init", "test", "traefik"]
+    and (.services.browse.labels | index("traefik.http.routers.frontend.middlewares=frontend-compress,browse-unavailable") != null)
+    and (.services.browse.labels | index("traefik.http.routers.frontend.priority=2") != null)
+    and (.services.browse.labels | index("traefik.http.routers.frontend.rule=PathPrefix(`/`)") != null)
+    and (.services.browse.labels | index("traefik.http.middlewares.frontend-compress.compress=True") != null)
+    and (.services.browse.labels | index("traefik.http.services.recipe-db-frontend.loadBalancer.healthCheck.interval=10s") != null)
+    and (.services.browse.labels | index("traefik.http.services.recipe-db-frontend.loadBalancer.healthCheck.timeout=1s") != null)
+    and (.services.browse.labels | index("traefik.http.services.recipe-db-frontend.loadBalancer.healthCheck.path=/health") != null)
+    and .services["browse-maintenance"].labels == [
+      "traefik.enable=true",
+      "traefik.http.routers.browse-maintenance.rule=PathPrefix(`/`) && !PathPrefix(`/graphql`) && !PathPrefix(`/mcp`) && !PathPrefix(`/public`) && !PathPrefix(`/images`) && !PathPrefix(`/edit`) && !PathPrefix(`/design`) && (Method(`GET`) || Method(`HEAD`)) && HeaderRegexp(`Accept`, `(?i)text/html`)",
+      "traefik.http.routers.browse-maintenance.entrypoints=web",
+      "traefik.http.routers.browse-maintenance.priority=1",
+      "traefik.http.routers.browse-maintenance.service=browse-maintenance",
+      "traefik.http.middlewares.browse-unavailable.errors.status=502-504",
+      "traefik.http.middlewares.browse-unavailable.errors.statusRewrites.502-504=503",
+      "traefik.http.middlewares.browse-unavailable.errors.service=browse-maintenance",
+      "traefik.http.middlewares.browse-unavailable.errors.query=/unavailable.html",
+      "traefik.http.services.browse-maintenance.loadBalancer.server.port=80"
+    ]
+    and (.services.backend.labels | all(.[]; contains("browse-unavailable") | not))
+    and (.services.traefik.command | all(.[]; test("allowEmptyServices|allowNonRunning|middlewares") | not))
+  '
+}
+
+@test "production preserves compression and cross-service errors with explicit fallback priority" {
+  setup_browse
+  run sh .scripts/generate-docker-compose.sh production
+  [ "$status" -eq 0 ]
+  assert_compose '
+    (.services | keys) == ["backend", "browse", "browse-maintenance", "nats", "nats-init", "traefik"]
+    and (.services["browse-maintenance"] | has("labels") | not)
+  '
+  run yq -o=json '.' traefik.yml
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  jq -e '
+    .http.routers.frontend == {
+      "service": "recipe-db-frontend", "rule": "PathPrefix(`/`)", "entrypoints": ["web"],
+      "middlewares": ["frontend-compress", "browse-unavailable"], "priority": 2
+    }
+    and .http.routers["browse-maintenance"] == {
+      "service": "browse-maintenance", "entrypoints": ["web"], "priority": 1,
+      "rule": "PathPrefix(`/`) && !PathPrefix(`/graphql`) && !PathPrefix(`/mcp`) && !PathPrefix(`/public`) && !PathPrefix(`/images`) && !PathPrefix(`/edit`) && !PathPrefix(`/design`) && (Method(`GET`) || Method(`HEAD`)) && HeaderRegexp(`Accept`, `(?i)text/html`)"
+    }
+    and .http.routers.frontend.priority > .http.routers["browse-maintenance"].priority
+    and .http.middlewares["browse-unavailable"].errors == {
+      "status": ["502-504"], "statusRewrites": {"502-504": 503},
+      "service": "browse-maintenance", "query": "/unavailable.html"
+    }
+    and .http.services["browse-maintenance"].loadBalancer.servers == [{"url": "http://browse-maintenance:80"}]
+    and .http.services["recipe-db-frontend"].loadBalancer.healthCheck == {"interval": "10s", "timeout": "1s", "path": "/health"}
+    and .http.middlewares["frontend-compress"].compress == true
+    and .http.routers.backend.entrypoints == ["rest-internal"]
+    and .http.routers.backend.service == "backend"
+    and (.http.routers.backend | has("middlewares") | not)
+    and (tostring | contains("@docker") | not)
+  ' <<< "$output"
+}
+
+@test "backend combinations omit browse maintenance and all dangling frontend routing" {
+  setup_browse
+  for mode in backend "production backend" "backend prod" "backend prepare"; do
+    rm -f docker-compose.yml
+    read -r -a mode_args <<< "$mode"
+    run sh .scripts/generate-docker-compose.sh "${mode_args[@]}"
+    [ "$status" -eq 0 ]
+    assert_compose '
+      (.services | has("browse") or has("browse-maintenance") | not)
+      and (tostring | contains("browse-unavailable") | not)
+    '
+    if [ -e traefik.yml ]; then
+      run yq -o=json '.' traefik.yml
+      [ "$status" -eq 0 ]
+      jq -e '
+        (.http.routers | keys) == ["backend", "traefik"]
+        and (.http.services | keys) == ["backend"]
+        and .http.middlewares == {}
+        and (tostring | contains("browse") | not)
+      ' <<< "$output"
+    fi
   done
 }
 

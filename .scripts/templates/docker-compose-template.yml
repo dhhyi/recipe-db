@@ -4,6 +4,7 @@
 #@ load("fixtures-service-template.lib.yml", "fixtures_service")
 #@ load("traefik-service-template.lib.yml", "traefik_service")
 #@ load("nats-service-template.lib.yml", "nats_services")
+#@ load("browse-maintenance-template.lib.yml", "browse_maintenance_service")
 #@ load("@ytt:struct", "struct")
 #@
 #@ def filter_projects(category):
@@ -71,6 +72,7 @@
 #@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@   end
 #@   if "browse" in services:
+#@     services.update(browse_maintenance_service(options.production))
 #@     services["browse"].setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@   end
 #@   for name in services:
