@@ -8,6 +8,8 @@ Do not add new content to README.md files unless the user explicitly asks for it
 
 Use GitHub issues to plan work in this repository. Apply the `spec` label to issues that are ready to hand to an agent for implementation, and the `idea` label to issues that need further refinement before implementation.
 
+Use `spec` only for implementation-ready issues with settled scope, decisions, and acceptance criteria. Research, exploration, and requirements-definition tasks remain `idea`, even when their research deliverables are clearly defined.
+
 When asked to mark an issue as blocked by another issue, use GitHub's native issue dependency ("blocked by") feature rather than a label.
 
 ## Running commands for a project
