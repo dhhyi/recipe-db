@@ -3,6 +3,7 @@
 load test_helper
 
 setup() {
+  unset DEVCONTAINER_KEEP_RUNNING
   setup_fixture sync-vscode-settings.sh
   cp "$BATS_TEST_DIRNAME"/../*.sh .scripts/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
@@ -176,11 +177,43 @@ EOF
   install_mock devcontainer-cli.sh devcontainer
 
   run env RUNNING_CONTAINER=running-container EXEC_STATUS=23 \
-    mise run --raw in-devcontainer --rm example pnpm --help -h --unknown
+    mise run --raw in-devcontainer --rm example pnpm --help -h --unknown --rm --keep-running
 
   [ "$status" -eq 23 ]
-  grep -Fx "devcontainer exec --container-id running-container --workspace-folder $FIXTURE_ROOT/example fish -c pnpm --help -h --unknown" "$MOCK_LOG"
+  grep -Fx "devcontainer exec --container-id running-container --workspace-folder $FIXTURE_ROOT/example fish -c pnpm --help -h --unknown --rm --keep-running" "$MOCK_LOG"
   grep -Fx 'docker rm -f running-container' "$MOCK_LOG"
+}
+
+@test "devcontainer passthrough accepts retention in either position and from the environment" {
+  setup_mock_bin
+  install_mock devcontainer-docker.sh docker
+  install_mock devcontainer-cli.sh devcontainer
+
+  for position in before after environment; do
+    : > "$MOCK_LOG"
+    case "$position" in
+      before) run mise run --raw in-devcontainer --keep-running example echo --rm ;;
+      after) run mise run --raw in-devcontainer example --keep-running echo --rm ;;
+      environment) run env DEVCONTAINER_KEEP_RUNNING=true mise run --raw in-devcontainer example echo --rm ;;
+    esac
+
+    [ "$status" -eq 0 ]
+    grep -Fx "devcontainer exec --container-id started-container --workspace-folder $FIXTURE_ROOT/example fish -c echo --rm" "$MOCK_LOG"
+    run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+  done
+}
+
+@test "CI retention is scoped to quality-checks and forwarded by both Bazel builds" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  [ "$(yq '.jobs.quality-checks.env.DEVCONTAINER_KEEP_RUNNING' "$workflow")" = true ]
+  [ "$(yq '[.. | select(tag == "!!map" and has("DEVCONTAINER_KEEP_RUNNING"))] | length' "$workflow")" -eq 1 ]
+  builds=0
+  while IFS= read -r script; do
+    [[ "$script" == *'--action_env=DEVCONTAINER_KEEP_RUNNING'* ]]
+    builds=$((builds + 1))
+  done < <(yq -o=json -I=0 '.jobs.quality-checks.steps[].run | select(contains("bazelisk build"))' "$workflow")
+  [ "$builds" -eq 2 ]
+  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "validate message bus integration and recovery") | .run' "$workflow")" = "mise run test-message-bus" ]
 }
 
 @test "VS Code settings skip unchanged inputs and regenerate after changes or missing output" {

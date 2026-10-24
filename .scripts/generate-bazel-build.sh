@@ -141,6 +141,7 @@ done
   printf '\ngenrule(\n'
   printf '    name = "test_scripts",\n'
   printf '    srcs = [\n'
+  printf '        ".github/workflows/publish.yaml",\n'
   while IFS= read -r -d '' file; do
     [[ -f "$file" ]] || continue
     printf '        %s,\n' "$(quote "$file")"

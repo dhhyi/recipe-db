@@ -3,6 +3,7 @@
 load test_helper
 
 setup() {
+  unset DEVCONTAINER_KEEP_RUNNING
   setup_fixture run-in-devcontainer.sh
   setup_mock_bin
   install_mock devcontainer-docker.sh docker
@@ -111,6 +112,140 @@ EOF
     [ "$(tail -n 1 "$MOCK_LOG")" = "docker rm -f running-container" ]
     run -1 grep -F 'docker stop' "$MOCK_LOG"
   done
+}
+
+@test "keep-running works in both positions for new, stopped and running containers" {
+  for state in new stopped running; do
+    for position in before after; do
+      : > "$MOCK_LOG"
+      container_env=()
+      case "$state" in
+        stopped) container_env=(STOPPED_CONTAINER=stopped-container) ;;
+        running) container_env=(RUNNING_CONTAINER=running-container) ;;
+      esac
+      if [ "$position" = before ]; then
+        run env "${container_env[@]}" sh .scripts/run-in-devcontainer.sh --keep-running example echo hello
+      else
+        run env "${container_env[@]}" sh .scripts/run-in-devcontainer.sh example --keep-running echo hello
+      fi
+
+      [ "$status" -eq 0 ]
+      grep -F 'devcontainer exec' "$MOCK_LOG"
+      if [ "$state" = running ]; then
+        run -1 grep -F 'devcontainer up' "$MOCK_LOG"
+      else
+        grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/example" "$MOCK_LOG"
+      fi
+      run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+    done
+  done
+}
+
+@test "environment retention is explicit and CLI keep-running overrides false" {
+  for setting in '' false true; do
+    : > "$MOCK_LOG"
+    run env DEVCONTAINER_KEEP_RUNNING="$setting" sh .scripts/run-in-devcontainer.sh example test
+
+    [ "$status" -eq 0 ]
+    if [ "$setting" = true ]; then
+      run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+    else
+      [ "$(tail -n 1 "$MOCK_LOG")" = "docker stop started-container" ]
+    fi
+  done
+
+  : > "$MOCK_LOG"
+  run env DEVCONTAINER_KEEP_RUNNING=false sh .scripts/run-in-devcontainer.sh example --keep-running test
+  [ "$status" -eq 0 ]
+  run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+}
+
+@test "CI and GitHub Actions do not implicitly retain containers" {
+  run env CI=true GITHUB_ACTIONS=true sh .scripts/run-in-devcontainer.sh example test
+
+  [ "$status" -eq 0 ]
+  [ "$(tail -n 1 "$MOCK_LOG")" = "docker stop started-container" ]
+}
+
+@test "invalid environment settings fail before Docker even with explicit removal" {
+  for setting in TRUE 1 yes invalid; do
+    run --separate-stderr env DEVCONTAINER_KEEP_RUNNING="$setting" \
+      sh .scripts/run-in-devcontainer.sh --rm example test
+
+    [ "$status" -eq 1 ]
+    [ "$stderr" = "DEVCONTAINER_KEEP_RUNNING must be true, false, or empty" ]
+    [ ! -s "$MOCK_LOG" ]
+  done
+}
+
+@test "explicit removal overrides environment retention for every container state" {
+  for state in new stopped running; do
+    : > "$MOCK_LOG"
+    container_env=()
+    case "$state" in
+      stopped) container_env=(STOPPED_CONTAINER=stopped-container) ;;
+      running) container_env=(RUNNING_CONTAINER=running-container) ;;
+    esac
+    run env "${container_env[@]}" DEVCONTAINER_KEEP_RUNNING=true sh .scripts/run-in-devcontainer.sh example --rm test
+
+    [ "$status" -eq 0 ]
+    grep -E '^docker rm -f (started|running)-container$' "$MOCK_LOG"
+    run -1 grep -F 'docker stop' "$MOCK_LOG"
+  done
+}
+
+@test "explicit retention and removal conflict in either order and placement" {
+  for first in --rm --keep-running; do
+    second=--rm
+    [ "$first" != --rm ] || second=--keep-running
+    for placement in before after split; do
+      case "$placement" in
+        before) args=("$first" "$second" example) ;;
+        after) args=(example "$first" "$second") ;;
+        split) args=("$first" example "$second") ;;
+      esac
+      run --separate-stderr sh .scripts/run-in-devcontainer.sh "${args[@]}" test
+
+      [ "$status" -eq 1 ]
+      [ "$stderr" = "--rm and --keep-running cannot be combined" ]
+      [ ! -s "$MOCK_LOG" ]
+    done
+  done
+}
+
+@test "lifecycle flags after the command are preserved" {
+  run sh .scripts/run-in-devcontainer.sh example --keep-running echo --rm --keep-running
+
+  [ "$status" -eq 0 ]
+  grep -Fx "devcontainer exec --container-id started-container --workspace-folder $FIXTURE_ROOT/example fish -c echo --rm --keep-running" "$MOCK_LOG"
+  run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+}
+
+@test "retention preserves failure status, stdout separation and GitHub group closure" {
+  run --separate-stderr env GITHUB_ACTIONS=true DEVCONTAINER_KEEP_RUNNING=true EXEC_STATUS=17 \
+    sh .scripts/run-in-devcontainer.sh example test
+
+  [ "$status" -eq 17 ]
+  [ "$output" = "command output" ]
+  [ "$stderr" = $'::group::example: test\n::endgroup::' ]
+  [ "$(grep -c '^devcontainer exec' "$MOCK_LOG")" -eq 1 ]
+  run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+}
+
+@test "retention does not hide startup, discovery or missing container ID failures" {
+  run env DEVCONTAINER_KEEP_RUNNING=true UP_STATUS=23 sh .scripts/run-in-devcontainer.sh example test
+  [ "$status" -eq 23 ]
+  run -1 grep -F 'devcontainer exec' "$MOCK_LOG"
+
+  : > "$MOCK_LOG"
+  run env DEVCONTAINER_KEEP_RUNNING=true PS_STATUS=24 sh .scripts/run-in-devcontainer.sh example test
+  [ "$status" -eq 24 ]
+  run -1 grep -F 'devcontainer ' "$MOCK_LOG"
+
+  : > "$MOCK_LOG"
+  run env DEVCONTAINER_KEEP_RUNNING=true UP_JSON='{}' sh .scripts/run-in-devcontainer.sh example test
+  [ "$status" -ne 0 ]
+  run -1 grep -F 'devcontainer exec' "$MOCK_LOG"
 }
 
 @test "joins generator commands from the second YAML document" {

@@ -22,7 +22,7 @@ EOF
   [ "$status" -eq 0 ]
   sed -n '/name = "test_scripts"/,/^)/p' BUILD.bazel > test-rule
   for file in .scripts/generate-bazel-build.sh .scripts/tests/example.bats \
-    .scripts/tests/helper.bash .scripts/templates/example.yml; do
+    .scripts/tests/helper.bash .scripts/templates/example.yml .github/workflows/publish.yaml; do
     grep -Fx "        \"$file\"," test-rule
   done
   grep -Fx '    tools = ["mise.toml", ".bazelversion"],' test-rule

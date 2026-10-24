@@ -3,13 +3,27 @@ set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd -P)
 remove_after=false
+keep_running=false
 stop_after=false
 container_id=
 
-if [ "${1:-}" = --rm ]; then
-  remove_after=true
+case ${DEVCONTAINER_KEEP_RUNNING:-} in
+  '' | false) retain=false ;;
+  true) retain=true ;;
+  *)
+    echo "DEVCONTAINER_KEEP_RUNNING must be true, false, or empty" >&2
+    exit 1
+    ;;
+esac
+
+while :; do
+  case ${1:-} in
+    --rm) remove_after=true ;;
+    --keep-running) keep_running=true ;;
+    *) break ;;
+  esac
   shift
-fi
+done
 project=${1:-}
 case $project in
   '' | . | .. | */*)
@@ -18,9 +32,20 @@ case $project in
     ;;
 esac
 shift
-if [ "${1:-}" = --rm ]; then
-  remove_after=true
+while :; do
+  case ${1:-} in
+    --rm) remove_after=true ;;
+    --keep-running) keep_running=true ;;
+    *) break ;;
+  esac
   shift
+done
+if [ "$remove_after" = true ] && [ "$keep_running" = true ]; then
+  echo "--rm and --keep-running cannot be combined" >&2
+  exit 1
+fi
+if [ "$keep_running" = true ]; then
+  retain=true
 fi
 if [ "$#" -eq 0 ]; then
   echo "Missing command" >&2
@@ -104,7 +129,9 @@ else
   fi
   container_result=$(devcontainer up --workspace-folder "$project_dir")
   container_id=$(printf '%s\n' "$container_result" | jq -er '.containerId')
-  stop_after=true
+  if [ "$retain" = false ]; then
+    stop_after=true
+  fi
 fi
 
 devcontainer exec --container-id "$container_id" --workspace-folder "$project_dir" fish -c "$run_command"

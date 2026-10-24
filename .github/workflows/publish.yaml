@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       COMPOSE_PARALLEL_LIMIT: 1
+      DEVCONTAINER_KEEP_RUNNING: "true"
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -71,6 +72,7 @@ jobs:
             --action_env=BUILDKIT_PROGRESS \
             --action_env=COMPOSE_PROGRESS \
             --action_env=COMPOSE_PARALLEL_LIMIT \
+            --action_env=DEVCONTAINER_KEEP_RUNNING \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
           echo "::group::extract formatted files and check diff"
           for target in "${format_targets[@]}"; do
@@ -90,6 +92,7 @@ jobs:
             --action_env=BUILDKIT_PROGRESS \
             --action_env=COMPOSE_PROGRESS \
             --action_env=COMPOSE_PARALLEL_LIMIT \
+            --action_env=DEVCONTAINER_KEEP_RUNNING \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
       - name: validate message bus integration and recovery
