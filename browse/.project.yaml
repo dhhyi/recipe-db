@@ -72,7 +72,8 @@ traefik:
         frontend:
           rule: PathPrefix(`/`)
           entrypoints: web
-          middlewares: frontend-compress
+          priority: 2
+          middlewares: frontend-compress,browse-unavailable
       middlewares:
         frontend-compress:
           compress: true
