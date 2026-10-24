@@ -39,7 +39,7 @@ templ ingredients(recipe *gql.RecipeDetail) {
 		<header>
 			<h2>Zutaten</h2>
 		</header>
-		<table>
+		<table class="mb-0!">
 			<thead>
 				<tr>
 					<th>Anzahl</th>
@@ -95,14 +95,14 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 			</hgroup>
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
-		<div class="grid">
+		<section class="grid">
 			if recipe.Image != nil {
 				@image(recipe)
 			}
 			if len(recipe.Ingredients) > 0 {
 				@ingredients(recipe)
 			}
-		</div>
+		</section>
 		if recipe.Method != nil && len(*recipe.Method) > 0 {
 			@method(recipe)
 		}
