@@ -1,5 +1,5 @@
 {
-  "name": "recipes_v2",
+  "name": "recipes",
   "fields": [
     { "name": "name", "type": "string", "locale": "de" },
     { "name": "name_sort", "type": "string", "sort": true },

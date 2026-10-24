@@ -46,7 +46,7 @@ Offset pagination is not a snapshot during writes. Browse deduplicates IDs clien
 
 A rebuild runs on startup and every 24 hours after success; failures retry after 30 seconds.
 
-The active collection is **`recipes_v2`**. Upgrading from `recipes_v1` creates and populates the new collection through the normal startup rebuild; the old collection is neither altered nor deleted. Existing collections do not acquire fields by editing the schema file. Search remains not ready until the new collection is fully rebuilt. Keep the old collection for rollback and remove it only through a separate operator decision.
+The collection is **`recipes`**, defined directly by `schema.json`; there is no deployed collection to migrate or retain for rollback. Startup creates it if absent and rebuilds its documents before search becomes ready. Editing `schema.json` does not alter an already-created local collection: after schema changes, remove that disposable development collection before restarting search.
 
 To trigger and inspect a rebuild:
 

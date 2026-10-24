@@ -16,7 +16,7 @@ const text = json.text;
 const array = json.array;
 const operations = @import("operations.zig");
 
-pub const collection = "/collections/recipes_v2";
+pub const collection = "/collections/recipes";
 
 const OptionalSource = enum { rating, image, inspirations };
 const GraphqlResponse = struct {
@@ -474,7 +474,7 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
     try std.testing.expect(try result);
 }
 
-test "startup rebuild creates v2 without reading or altering the old collection" {
+test "startup rebuild creates the recipe collection from the current schema" {
     const Fixture = struct {
         server: *std.net.Server,
         failure: ?anyerror = null,
@@ -488,8 +488,7 @@ test "startup rebuild creates v2 without reading or altering the old collection"
             var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
             defer arena.deinit();
             const a = arena.allocator();
-            // The only allowed calls create/reconcile v2. A pre-existing v1 is irrelevant.
-            const paths = [_][]const u8{ "/collections/recipes_v2", "/collections", "/graphql", "/collections/recipes_v2/documents/export" };
+            const paths = [_][]const u8{ "/collections/recipes", "/collections", "/graphql", "/collections/recipes/documents/export" };
             for (paths, 0..) |path, step| {
                 var fds = [_]std.posix.pollfd{.{ .fd = self.server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 }};
                 if (try std.posix.poll(&fds, 5000) == 0) return error.FixtureTimeout;
@@ -504,7 +503,8 @@ test "startup rebuild creates v2 without reading or altering the old collection"
                 switch (step) {
                     0 => try request.respond("{}", .{ .status = .not_found, .keep_alive = false }),
                     1 => {
-                        try std.testing.expectEqualStrings("recipes_v2", try text(try get(try parse(a, body), "name")));
+                        try std.testing.expectEqualStrings(@embedFile("schema.json"), body);
+                        try std.testing.expectEqualStrings("recipes", try text(try get(try parse(a, body), "name")));
                         try request.respond("{}", .{ .status = .created, .keep_alive = false });
                     },
                     2 => try request.respond("{\"data\":{\"recipes\":[]}}", .{ .keep_alive = false }),
