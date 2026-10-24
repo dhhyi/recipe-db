@@ -10,6 +10,14 @@ templ Layout(title string) {
 			<link rel="stylesheet" href="/design/styles.css"/>
 			<script type="module" src="/design/components.js"></script>
 			<script src="/design/htmx.min.js"></script>
+			<script>
+				document.addEventListener("htmx:beforeSwap", (event) => {
+					if (event.detail.xhr?.getResponseHeader("X-Browse-Full-Page-Error") !== "true") return;
+					event.detail.shouldSwap = true;
+					event.detail.isError = false;
+					event.detail.target = document.querySelector("main");
+				});
+			</script>
 		</head>
 		<body class="container">
 			<header-component></header-component>

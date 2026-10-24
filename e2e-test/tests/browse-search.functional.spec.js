@@ -1,4 +1,5 @@
 import { test, expect, graphql, waitForRecipeIndexed } from "./fixtures.js";
+import { allowDesignAssets } from "./browse-error.helpers.js";
 
 function resultsFragment({
   page = 1,
@@ -1029,7 +1030,10 @@ test.describe("pagination with and without JavaScript", () => {
 test("a failed history cache miss renders a truthful error page", async ({
   page,
   demoRecipe,
+  request,
 }) => {
+  await waitForRecipeIndexed(request, demoRecipe.id);
+  await allowDesignAssets(page);
   await manualSentinel(page);
   let restoring = false;
   await page.route(/\/\?[^#]*\bq=/, async (route) => {
@@ -1039,13 +1043,18 @@ test("a failed history cache miss renders a truthful error page", async ({
       ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
     });
   });
-  await page.goto("/");
-  await page.getByRole("searchbox").fill("boundary");
-  await page.getByRole("searchbox").press("Enter");
+  await page.goto("/?q=boundary");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
   await page.evaluate(() => {
     window.htmx.config.historyCacheSize = 0;
   });
+  await page.route(`**/recipe/${demoRecipe.id}`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html; charset=utf-8",
+      body: '<!doctype html><html lang="de"><head><title>Rezept | RezeptDB</title></head><body><header-component></header-component><main><h1>Rezept</h1></main></body></html>',
+    }),
+  );
   await page.locator(`[data-recipe-id="${demoRecipe.id}"]`).click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
   restoring = true;

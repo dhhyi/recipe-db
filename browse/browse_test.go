@@ -113,12 +113,21 @@ func TestBrowseValidation(t *testing.T) {
 				if fragment {
 					wantStatus = 200
 				}
-				if recorder.Code != wantStatus || !strings.Contains(body, `data-kind="error"`) || !strings.Contains(body, "Ungültige Suchparameter.") ||
-					!strings.Contains(body, "data-browse-status") || strings.Contains(body, "data-recipe-id") {
+				if recorder.Code != wantStatus || !strings.Contains(body, "Ungültige Suchparameter.") || strings.Contains(body, "data-recipe-id") {
 					t.Fatalf("invalid request missing usable error: %d %s", recorder.Code, body)
 				}
-				if !fragment && !strings.Contains(body, `name="q"`) {
-					t.Fatal("full error page missing controls")
+				if fragment {
+					if !strings.Contains(body, `data-kind="error"`) || !strings.Contains(body, "data-browse-status") {
+						t.Fatal("invalid fragment lost its existing error state")
+					}
+				} else if strings.Count(body, "<header-component>") != 1 ||
+					strings.Count(body, "<main>") != 1 ||
+					strings.Contains(body, `name="q"`) ||
+					!strings.Contains(body, "<title>Ungültige Suchparameter | RezeptDB</title>") ||
+					recorder.Header().Get("Content-Type") != "text/html; charset=utf-8" ||
+					recorder.Header().Get("Cache-Control") != "no-store" ||
+					recorder.Header().Get("ETag") != "" {
+					t.Fatalf("invalid full-page error is not a styled message-only page: %s", body)
 				}
 			}
 			if calls != 0 {
@@ -279,11 +288,12 @@ func TestBrowseHTTP(t *testing.T) {
 				handler.ServeHTTP(recorder, request)
 				body := html.UnescapeString(recorder.Body.String())
 				wantCode := tc.code
-				if fragment || mode == "history" {
+				if fragment {
 					wantCode = 200
 				}
 				pageError := fragment && tc.kind == "error" && tc.page > 1
-				if recorder.Code != wantCode || (!pageError && !strings.Contains(body, `data-kind="`+tc.kind+`"`)) ||
+				fullPageError := !fragment && tc.kind == "error"
+				if recorder.Code != wantCode || (!pageError && !fullPageError && !strings.Contains(body, `data-kind="`+tc.kind+`"`)) ||
 					recorder.Header().Get("Cache-Control") != "no-store" || recorder.Header().Get("ETag") != "" {
 					t.Fatalf("incorrect browse response: %d %s", recorder.Code, body)
 				}
@@ -321,11 +331,34 @@ func TestBrowseHTTP(t *testing.T) {
 				if strings.Contains(body, "<html") == fragment {
 					t.Fatal("fragment/full page contract broken")
 				}
-				if !fragment && (!strings.Contains(body, "<header-component>") ||
-					!strings.Contains(body, `id="browse-form"`) ||
-					recorder.Header().Get("HX-Retarget") != "" ||
-					recorder.Header().Get("HX-Replace-Url") != "") {
-					t.Fatalf("%s navigation must retain the header and search form without fragment headers: %s", mode, body)
+				if !fragment {
+					if strings.Count(body, "<header-component>") != 1 || strings.Count(body, "<main>") != 1 ||
+						recorder.Header().Get("HX-Replace-Url") != "" {
+						t.Fatalf("%s navigation must retain one shared layout without fragment headers: %s", mode, body)
+					}
+					if fullPageError {
+						if strings.Contains(body, `id="browse-form"`) || strings.Contains(body, "data-recipe-id") ||
+							!strings.Contains(body, "Rezepte konnten nicht geladen werden.") ||
+							recorder.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+							t.Fatalf("%s error must be message-only HTML: %s", mode, body)
+						}
+						wantMarker := mode == "boosted" || mode == "history"
+						if (recorder.Header().Get("X-Browse-Full-Page-Error") == "true") != wantMarker {
+							t.Fatalf("%s navigation has incorrect HTMX error marker", mode)
+						}
+						if wantMarker {
+							if recorder.Header().Get("HX-Retarget") != "main" ||
+								recorder.Header().Get("HX-Reswap") != "innerHTML" ||
+								recorder.Header().Get("HX-Reselect") != "main > *" {
+								t.Fatalf("%s navigation must only swap the error content: %v", mode, recorder.Header())
+							}
+						} else if recorder.Header().Get("HX-Retarget") != "" ||
+							recorder.Header().Get("HX-Reswap") != "" || recorder.Header().Get("HX-Reselect") != "" {
+							t.Fatalf("%s direct error unexpectedly has fragment headers: %v", mode, recorder.Header())
+						}
+					} else if !strings.Contains(body, `id="browse-form"`) {
+						t.Fatalf("%s successful navigation lost the search form: %s", mode, body)
+					}
 				}
 				if tc.kind == "error" {
 					if !strings.Contains(body, "Rezepte konnten nicht geladen werden.") || strings.Contains(body, "data-recipe-id") {
@@ -353,7 +386,7 @@ func TestBrowseHTTP(t *testing.T) {
 					t.Fatalf("missing ordinary GET pagination: %s", body)
 				}
 				wantAdd := 0
-				if tc.editor && !tc.statusError {
+				if !fullPageError && tc.editor && !tc.statusError {
 					wantAdd = 1
 				}
 				if strings.Count(body, "data-add-recipe") != wantAdd {
@@ -362,7 +395,7 @@ func TestBrowseHTTP(t *testing.T) {
 				if tc.kind == "search" && tc.hits == 0 && !strings.Contains(body, "Keine Rezepte gefunden.") {
 					t.Fatal("empty successful search not distinguished")
 				}
-				if !fragment && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
+				if !fragment && !fullPageError && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
 					!strings.Contains(body, "Alle Rezepte") || !strings.Contains(body, "header-component")) {
 					t.Fatal("full replacement did not retain controls/header")
 				}
