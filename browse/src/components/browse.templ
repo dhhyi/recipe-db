@@ -5,6 +5,10 @@ import "encoding/json"
 import "fmt"
 import "strconv"
 
+templ ErrorContent(message string) {
+	<p>{ message }</p>
+}
+
 type BrowseState struct {
 	Query, Sort, Kind, Message  string
 	Page, PerPage, Found        int
