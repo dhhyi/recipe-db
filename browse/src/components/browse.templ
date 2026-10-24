@@ -73,21 +73,22 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 templ Browse(state BrowseState) {
 	<div id="browse-content" data-browse-search hx-history="false" hx-on::send-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on::response-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on:browse-error="const target = event.detail.target, status = this.querySelector('#browse-metadata'); if (target.id === 'browse-results') { target.querySelector('[data-recipe-list]').replaceChildren(); status.dataset.kind = 'error'; status.textContent = 'Rezepte konnten nicht geladen werden.'; document.title = 'Rezepte konnten nicht geladen werden | RezeptDB'; } else if (target.id === 'browse-pagination') { status.textContent = 'Weitere Rezepte konnten nicht geladen werden.'; target.querySelector('[data-load-more]').textContent = 'Erneut versuchen'; }">
 		<h1>Alle Rezepte</h1>
-		<form id="browse-form" action="/" method="get" role="search" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::config-request="if (this.dataset.composing) event.preventDefault()" class="grid! grid-cols-1 md:grid-cols-[1fr_2fr_1fr] gap-2 items-end my-3">
-			<label class="min-w-0 md:col-start-2">
-				Rezepte suchen
+		<form id="browse-form" action="/" method="get" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::config-request="if (this.dataset.composing) event.preventDefault()" class="my-3 grid! grid-cols-1 md:grid-cols-2 md:gap-3">
+			<fieldset role="search">
 				<input id="browse-query" type="search" name="q" placeholder="Rezepte suchen" value={ state.Query } disabled?={ state.Kind == "fallback" }/>
-			</label>
-			<label class="min-w-0">
-				Sortieren nach
-				<select id="browse-sort" name="sort" aria-label="Sortieren nach" disabled?={ state.Kind == "fallback" }>
-					<option id="browse-automatic" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
-					for _, option := range browseSortOptions {
-						<option value={ option.Token } selected?={ state.Sort == option.Token }>{ option.Label }</option>
-					}
-				</select>
-			</label>
-			<button type="submit" class="md:col-start-2" disabled?={ state.Kind == "fallback" }>Suchen</button>
+				<button type="submit" aria-label="Suchen" disabled?={ state.Kind == "fallback" }>
+					<svg aria-hidden="true" focusable="false" class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="11" cy="11" r="8"></circle>
+						<path d="m21 21-4.35-4.35"></path>
+					</svg>
+				</button>
+			</fieldset>
+			<select class="md:max-w-[350px] md:ml-auto! rounded-full!" id="browse-sort" name="sort" aria-label="Sortieren nach" disabled?={ state.Kind == "fallback" }>
+				<option id="browse-automatic" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
+				for _, option := range browseSortOptions {
+					<option value={ option.Token } selected?={ state.Sort == option.Token }>{ option.Label }</option>
+				}
+			</select>
 		</form>
 		@BrowseResults(state, true)
 	</div>

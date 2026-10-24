@@ -385,10 +385,13 @@ test("search controls fit the content area without horizontal overflow", async (
     ),
   ).toBeTruthy();
   if (page.viewportSize().width >= 1024) {
-    const input = await search.boundingBox();
+    const searchControls = await page.getByRole("search").boundingBox();
+    const sort = await page.getByLabel("Sortieren nach", { exact: true });
+    const sortControls = await sort.boundingBox();
     const content = await page.locator("main").boundingBox();
+    expect(Math.abs(searchControls.x - content.x)).toBeLessThan(2);
     expect(
-      Math.abs(input.x + input.width / 2 - content.x - content.width / 2),
+      Math.abs(sortControls.x + sortControls.width - content.x - content.width),
     ).toBeLessThan(2);
     expect(
       await page
