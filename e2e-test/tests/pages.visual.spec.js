@@ -1,4 +1,6 @@
 import { test, expect } from "./fixtures.js";
+import { saveButton, selectSource, selection } from "./image-editor.helpers.js";
+import { fileURLToPath } from "node:url";
 
 test.describe("overview", () => {
   test.use({ demoRecipeCount: 12 });
@@ -76,8 +78,45 @@ test("image editor", async ({ page, demoRecipe }) => {
     `Bild für ${demoRecipe.name} bearbeiten`,
   );
   await expect(
-    page.getByRole("button", { name: "Bild hochladen", exact: true }),
+    page.getByLabel("JPEG- oder PNG-Bild auswählen (maximal 10 MiB)"),
   ).toBeVisible();
   await expect(page.locator("main img")).toHaveJSProperty("complete", true);
   await expect(page).toHaveScreenshot("image-editor.png", { fullPage: true });
+});
+
+test("image editor with a local source and eight crop handles", async ({
+  page,
+  demoRecipe,
+}) => {
+  await selectSource(
+    page,
+    demoRecipe,
+    fileURLToPath(new URL("../../demo-data/recipe1.jpg", import.meta.url)),
+  );
+  await expect(page.locator(".crop-handle")).toHaveCount(8);
+  await selection(page).scrollIntoViewIfNeeded();
+  const area = await page.locator(".editor-image-area").boundingBox();
+  for (const handle of await page.locator(".crop-handle").all()) {
+    const box = await handle.boundingBox();
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(area.x);
+    expect(box.y).toBeGreaterThanOrEqual(area.y);
+    expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(area.y + area.height);
+  }
+  await saveButton(page).scrollIntoViewIfNeeded();
+  await expect(saveButton(page)).toBeInViewport();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    )
+    .toBe(true);
+  await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(page).toHaveScreenshot("image-editor-open.png", {
+    fullPage: true,
+  });
 });

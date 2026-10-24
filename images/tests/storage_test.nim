@@ -5,7 +5,7 @@ import ../storage
 const testRoot = "tests/storage-test-data"
 
 proc outputs(color: string): tuple[normal, thumb: string] =
-  let normal = newImage(650, 488)
+  let normal = newImage(648, 486)
   normal.fill(parseHtmlColor(color))
   let thumb = newImage(300, 225)
   thumb.fill(parseHtmlColor(color))
@@ -53,8 +53,8 @@ suite "immutable image storage":
     check parseImageName(first.filename("thumbUrl")).hash == outputHash(a.thumb)
     check parseImageName(first.filename("url")).hash !=
         parseImageName(first.filename("thumbUrl")).hash
-    check first["width"].getInt == 650
-    check first["height"].getInt == 488
+    check first["width"].getInt == 648
+    check first["height"].getInt == 486
     check first["size"].getInt == a.normal.len
     check ImageStorage(root: testRoot).metadata("recipe") == first
     let identical = store.publish("recipe", a.normal, a.thumb)
@@ -91,6 +91,24 @@ suite "immutable image storage":
     check parseImageName(published.filename("url")).recipeId == id
     check store.metadata(id) == published
     check store.deleteRecipe(id)
+
+  test "existing 650x488 manifests remain readable and retained after replacement":
+    let legacy = newImage(650, 488)
+    legacy.fill(parseHtmlColor("#ff0000"))
+    let bytes = legacy.encodeImage(PngFormat)
+    let current = outputs("#0000ff")
+    var metadata = store.publish("recipe", current.normal, current.thumb)
+    let name = "recipe-" & outputHash(bytes) & ".png"
+    writeFile(store.publicFolder / name, bytes)
+    metadata["url"] = %("/public/" & name)
+    metadata["width"] = %650
+    metadata["height"] = %488
+    metadata["size"] = %bytes.len
+    writeFile(store.manifestPath("recipe"), $metadata)
+    check store.metadata("recipe") == metadata
+    discard store.publish("recipe", current.normal, current.thumb)
+    check store.metadata("recipe")["width"].getInt == 648
+    check readFile(store.publicFolder / name) == bytes
 
   test "malformed or incorrectly sized output cannot replace a good publication":
     let a = outputs("#ff0000")

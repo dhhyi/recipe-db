@@ -1,11 +1,12 @@
 use async_graphql::{Request, UploadValue, Variables};
 use axum::{
-    extract::Path,
-    http::StatusCode,
+    extract::{Path, Query},
+    http::{header, HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
+use std::collections::HashMap;
 
 fn metadata() -> serde_json::Value {
     json!({
@@ -68,12 +69,34 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                 }
             }),
         )
-        .route("/images/{id}", post(|Path(id): Path<String>, body: axum::body::Bytes| async move {
-            assert!(!body.is_empty());
+        .route("/images/{id}", post(|Path(id): Path<String>, Query(query): Query<HashMap<String, String>>, headers: HeaderMap, body: axum::body::Bytes| async move {
+            assert_eq!(body.as_ref(), std::fs::read("testdata/image.svg").unwrap());
+            assert_eq!(headers[header::CONTENT_TYPE], "image/svg+xml");
+            if id.starts_with("crop") {
+                assert_eq!(query, HashMap::from([
+                    ("cropX".into(), "17".into()), ("cropY".into(), "29".into()),
+                    ("cropWidth".into(), "101".into()), ("cropHeight".into(), "83".into()),
+                ]));
+            } else if id == "negative-crop" {
+                assert_eq!(query, HashMap::from([
+                    ("cropX".into(), "-1".into()), ("cropY".into(), "0".into()),
+                    ("cropWidth".into(), "0".into()), ("cropHeight".into(), "-2".into()),
+                ]));
+            } else {
+                assert!(query.is_empty(), "{query:?}");
+            }
             match id.as_str() {
                 "invalid" => (StatusCode::BAD_REQUEST, Json(json!({
                     "type": "about:blank", "title": "Bad Request", "status": 400,
                     "detail": "Unsupported image", "code": "invalid-image", "field": "file"
+                }))),
+                "crop-invalid" | "negative-crop" => (StatusCode::BAD_REQUEST, Json(json!({
+                    "type": "about:blank", "title": "Bad Request", "status": 400,
+                    "detail": "Invalid crop rectangle", "code": "invalid-crop", "field": "crop"
+                }))),
+                "crop-outside" => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
+                    "type": "about:blank", "title": "Unprocessable Content", "status": 422,
+                    "detail": "Crop exceeds image bounds", "code": "crop-out-of-bounds"
                 }))),
                 "malformed" => (StatusCode::CREATED, Json(json!({"url": "incomplete"}))),
                 _ => (StatusCode::CREATED, Json(uploaded_metadata())),
@@ -141,10 +164,31 @@ async fn image_metadata_passthrough_and_upstream_errors() {
         "url": uploaded_metadata()["url"], "thumbUrl": uploaded_metadata()["thumbUrl"],
         "width": 650, "height": 488, "size": 54321
     });
-    for id in ["invalid", "malformed", "present"] {
-        let mut request = Request::new(
+    let mut successful_uploads = 0;
+    for id in [
+        "invalid",
+        "malformed",
+        "crop-invalid",
+        "crop-outside",
+        "negative-crop",
+        "present",
+        "null-crop",
+        "crop-present",
+    ] {
+        let mut variables = json!({"id": id, "file": null});
+        if id.starts_with("crop") {
+            variables["crop"] = json!({"x": 17, "y": 29, "width": 101, "height": 83});
+        } else if id == "negative-crop" {
+            variables["crop"] = json!({"x": -1, "y": 0, "width": 0, "height": -2});
+        } else if id == "null-crop" {
+            variables["crop"] = serde_json::Value::Null;
+        }
+        let mutation = if id == "present" {
             "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl width height size } }"
-        ).variables(Variables::from_json(json!({"id": id, "file": null})));
+        } else {
+            "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl width height size } }"
+        };
+        let mut request = Request::new(mutation).variables(Variables::from_json(variables));
         request.set_upload(
             "variables.file",
             UploadValue {
@@ -154,7 +198,8 @@ async fn image_metadata_passthrough_and_upstream_errors() {
             },
         );
         let response = schema.execute(request).await;
-        if id == "present" {
+        if ["present", "null-crop", "crop-present"].contains(&id) {
+            successful_uploads += 1;
             assert!(response.errors.is_empty(), "{response:?}");
             assert_eq!(
                 response.data.into_json().unwrap(),
@@ -175,9 +220,66 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                     Some(&async_graphql::value!("file"))
                 );
             }
+            if ["crop-invalid", "crop-outside", "negative-crop"].contains(&id) {
+                let extensions = response.errors[0].extensions.as_ref().unwrap();
+                let outside = id == "crop-outside";
+                assert_eq!(
+                    response.errors[0].message,
+                    if outside {
+                        "Crop exceeds image bounds"
+                    } else {
+                        "Invalid crop rectangle"
+                    }
+                );
+                assert_eq!(
+                    extensions.get("code"),
+                    Some(&async_graphql::value!(if outside {
+                        "crop-out-of-bounds"
+                    } else {
+                        "invalid-crop"
+                    }))
+                );
+                assert_eq!(
+                    extensions.get("status"),
+                    Some(&async_graphql::value!(if outside { 422 } else { 400 }))
+                );
+                assert_eq!(
+                    extensions.get("field").cloned(),
+                    if outside {
+                        None
+                    } else {
+                        Some(async_graphql::value!("crop"))
+                    }
+                );
+            }
         }
         let notifications = serde_json::to_value(publisher.status()).unwrap();
-        assert_eq!(notifications["failed"], u64::from(id == "present"));
+        assert_eq!(notifications["failed"], successful_uploads);
+        assert_eq!(notifications["published"], 0);
+    }
+    for crop in [
+        json!({}),
+        json!({"x": 1, "y": 2, "width": 3}),
+        json!({"x": null, "y": 2, "width": 3, "height": 4}),
+        json!({"x": 1.5, "y": 2, "width": 3, "height": 4}),
+        json!({"x": "1", "y": 2, "width": 3, "height": 4}),
+    ] {
+        let mut request = Request::new(
+            "mutation($file: Upload!, $crop: ImageCropInput) { setImage(recipeId: \"graphql-invalid\", file: $file, crop: $crop) { url } }",
+        )
+        .variables(Variables::from_json(json!({"file": null, "crop": crop})));
+        request.set_upload(
+            "variables.file",
+            UploadValue {
+                filename: "image.svg".into(),
+                content_type: Some("image/svg+xml".into()),
+                content: std::fs::File::open("testdata/image.svg").unwrap(),
+            },
+        );
+        let response = schema.execute(request).await;
+        assert!(!response.errors.is_empty(), "{response:?}");
+        let notifications = serde_json::to_value(publisher.status()).unwrap();
+        assert_eq!(notifications["failed"], successful_uploads);
         assert_eq!(notifications["published"], 0);
     }
     task.abort();

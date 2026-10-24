@@ -4,6 +4,7 @@
   "scripts": {
     "codegen": "elm-graphql --schema-file recipe-db.graphqls",
     "build": "elm make src/Main.elm --output elm.js",
+    "test": "elm make tests/GeometryTests.elm --output elm-stuff/geometry-tests.js && node tests/geometry.cjs && node --test tests/bridge.cjs",
     "lint": "elm-review --ignore-dirs src/Api"
   },
   "devDependencies": {

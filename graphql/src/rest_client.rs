@@ -159,19 +159,21 @@ impl RestClient {
         path: &str,
         content_type: &str,
         body: Vec<u8>,
+        query: Option<&impl Serialize>,
     ) -> Result<T, RestError> {
         let url = self.url(path);
-        let response = self
+        let mut request = self
             .client
             .post(url)
             .header("Content-Type", content_type)
-            .body(body)
-            .send()
-            .await
-            .map_err(|err| RestError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                body: err.to_string(),
-            })?;
+            .body(body);
+        if let Some(query) = query {
+            request = request.query(query);
+        }
+        let response = request.send().await.map_err(|err| RestError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: err.to_string(),
+        })?;
         Self::parse_response(response).await
     }
 

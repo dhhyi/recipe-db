@@ -81,7 +81,7 @@ proc publish*(store: ImageStorage, id, normal, thumbnail: string): JsonNode =
     thumbDimensions = decodeImageDimensions(thumbnail)
     normalName = id & "-" & outputHash(normal) & ".png"
     thumbName = id & "-" & outputHash(thumbnail) & "-thumb.png"
-  if dimensions.width != 650 or dimensions.height != 488 or
+  if dimensions.width != 648 or dimensions.height != 486 or
       thumbDimensions.width != 300 or thumbDimensions.height != 225:
     raise newException(StorageError, "Invalid output dimensions")
   result = %*{
@@ -117,8 +117,11 @@ proc metadata*(store: ImageStorage, id: string): JsonNode =
     for key in ["width", "height", "size"]:
       if not result.hasKey(key) or result[key].kind != JInt:
         raise newException(StorageError, "Invalid manifest field: " & key)
-    if result["recipeId"].getStr != id or result["width"].getInt != 650 or
-        result["height"].getInt != 488 or result["size"].getInt <= 0:
+    let width = result["width"].getInt
+    let height = result["height"].getInt
+    if result["recipeId"].getStr != id or
+        not ((width == 650 and height == 488) or
+        (width == 648 and height == 486)) or result["size"].getInt <= 0:
       raise newException(StorageError, "Invalid manifest metadata")
     discard parse(result["modified"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff",
         utc())
@@ -136,8 +139,8 @@ proc metadata*(store: ImageStorage, id: string): JsonNode =
           (key == "url" and bytes.len != result["size"].getInt):
         raise newException(StorageError, "Invalid stored output")
       let dimensions = decodeImageDimensions(bytes)
-      if dimensions.width != (if parsed.thumb: 300 else: 650) or
-          dimensions.height != (if parsed.thumb: 225 else: 488):
+      if dimensions.width != (if parsed.thumb: 300 else: width) or
+          dimensions.height != (if parsed.thumb: 225 else: height):
         raise newException(StorageError, "Invalid stored output dimensions")
   except StorageError:
     raise

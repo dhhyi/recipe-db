@@ -14,7 +14,9 @@ task test, "Run deterministic storage tests":
   try:
     exec "nimble build -d:release -y --threads:off"
     exec "nim c -r --threads:off --hints:off tests/storage_test.nim"
+    exec "nim c -r --threads:off --hints:off tests/processing_test.nim"
     exec "nim c -r --threads:off --hints:off tests/http_test.nim"
   finally:
     rmFile "tests/storage_test"
+    rmFile "tests/processing_test"
     rmFile "tests/http_test"

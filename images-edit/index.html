@@ -6,18 +6,443 @@
     <link rel="stylesheet" href="/design/styles.css" />
     <script type="module" src="/design/components.js"></script>
     <title>Bilder bearbeiten | RezeptDB</title>
+    <style>
+      .image-editor .editor-image-area {
+        display: flex;
+        justify-content: center;
+        padding: 24px;
+        background: #252525;
+        border-radius: 4px;
+      }
+      .image-editor .crop-stage {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+        line-height: 0;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .image-editor .crop-stage > img {
+        display: block;
+        width: auto;
+        height: auto;
+        max-width: 100%;
+        max-height: min(65vh, 800px);
+        margin: 0;
+      }
+      .image-editor .crop-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .image-editor .crop-shade {
+        position: absolute;
+        background: rgb(0 0 0 / 60%);
+      }
+      .image-editor .crop-selection {
+        position: absolute;
+        box-sizing: border-box;
+        outline: 2px solid white;
+        outline-offset: -2px;
+        cursor: move;
+        pointer-events: auto;
+        touch-action: none;
+      }
+      .image-editor .crop-handle {
+        position: absolute;
+        width: 44px;
+        height: 44px;
+        transform: translate(-50%, -50%);
+        display: grid;
+        place-items: center;
+        touch-action: none;
+      }
+      .image-editor .crop-handle::after {
+        content: "";
+        display: block;
+        width: 12px;
+        height: 12px;
+        background: white;
+        border: 2px solid #252525;
+        border-radius: 2px;
+      }
+      .image-editor .crop-n,
+      .image-editor .crop-s {
+        cursor: ns-resize;
+      }
+      .image-editor .crop-e,
+      .image-editor .crop-w {
+        cursor: ew-resize;
+      }
+      .image-editor .crop-nw,
+      .image-editor .crop-se {
+        cursor: nwse-resize;
+      }
+      .image-editor .crop-ne,
+      .image-editor .crop-sw {
+        cursor: nesw-resize;
+      }
+      .image-editor [data-editable="false"] .crop-selection {
+        pointer-events: none;
+        cursor: default;
+      }
+      .image-editor .editor-actions {
+        display: grid;
+        gap: 12px;
+        margin-block: 16px;
+      }
+      .image-editor .editor-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .image-editor input[type="file"] {
+        max-width: 100%;
+      }
+      .image-editor .crop-dimensions {
+        overflow-wrap: anywhere;
+      }
+      .image-editor .warning {
+        border-left: 4px solid #946400;
+        padding-left: 12px;
+      }
+    </style>
   </head>
 
   <body class="container">
     <header-component></header-component>
-    <script src="elm.js"></script>
+    <script src="/images-edit/elm.js"></script>
     <main></main>
     <script>
       var app = Elm.Main.init({
         node: document.querySelector("main"),
         flags: { recipeId: window.location.href.replace(/.*\//g, "") },
       });
-      // you can use ports and stuff here
+      (() => {
+        const sources = new Map();
+        let guarded = false;
+        let saving = false;
+        let pointer = null;
+        const send = (event) => app.ports.editorEvent.send(event);
+
+        // Read dimensions and EXIF without allocating a decoded pixel buffer.
+        // The browser then displays the original using its native orientation.
+        function metadata(buffer, type) {
+          const view = new DataView(buffer);
+          const bytes = new Uint8Array(buffer);
+          let width = 0;
+          let height = 0;
+          let orientation = 1;
+          function exif(start, length) {
+            const end = start + length;
+            if (length < 8 || end > view.byteLength) throw new Error();
+            const little = view.getUint16(start) === 0x4949;
+            if (
+              (!little && view.getUint16(start) !== 0x4d4d) ||
+              view.getUint16(start + 2, little) !== 42
+            )
+              throw new Error();
+            const offset = start + view.getUint32(start + 4, little);
+            if (offset < start + 8 || offset + 2 > end) throw new Error();
+            const count = view.getUint16(offset, little);
+            if (offset + 2 + count * 12 > end) throw new Error();
+            for (let i = 0; i < count; i++) {
+              const entry = offset + 2 + i * 12;
+              if (view.getUint16(entry, little) === 0x112) {
+                if (
+                  view.getUint16(entry + 2, little) !== 3 ||
+                  view.getUint32(entry + 4, little) !== 1
+                )
+                  throw new Error();
+                orientation = view.getUint16(entry + 8, little);
+                if (orientation < 1 || orientation > 8) throw new Error();
+              }
+            }
+          }
+          if (
+            type === "image/png" &&
+            bytes.length >= 33 &&
+            view.getUint32(0) === 0x89504e47 &&
+            view.getUint32(4) === 0x0d0a1a0a &&
+            view.getUint32(8) === 13 &&
+            view.getUint32(12) === 0x49484452
+          ) {
+            width = view.getUint32(16);
+            height = view.getUint32(20);
+            let offset = 8;
+            while (offset + 12 <= bytes.length) {
+              const length = view.getUint32(offset);
+              if (offset + 12 + length > bytes.length) throw new Error();
+              if (view.getUint32(offset + 4) === 0x65584966)
+                exif(offset + 8, length);
+              offset += length + 12;
+            }
+          } else if (
+            type === "image/jpeg" &&
+            bytes.length >= 4 &&
+            view.getUint16(0) === 0xffd8
+          ) {
+            let offset = 2;
+            while (offset + 4 <= bytes.length) {
+              if (bytes[offset++] !== 0xff) throw new Error();
+              while (bytes[offset] === 0xff) offset++;
+              const marker = bytes[offset++];
+              if (marker === 0xda || marker === 0xd9) break;
+              const length = view.getUint16(offset);
+              if (length < 2 || offset + length > bytes.length)
+                throw new Error();
+              if (
+                marker === 0xe1 &&
+                length >= 8 &&
+                view.getUint32(offset + 2) === 0x45786966 &&
+                view.getUint16(offset + 6) === 0
+              )
+                exif(offset + 8, length - 8);
+              if (
+                marker >= 0xc0 &&
+                marker <= 0xcf &&
+                ![0xc4, 0xc8, 0xcc].includes(marker)
+              ) {
+                if (length < 8) throw new Error();
+                height = view.getUint16(offset + 3);
+                width = view.getUint16(offset + 5);
+              }
+              offset += length;
+            }
+          } else {
+            throw new Error();
+          }
+          if (!width || !height) throw new Error();
+          return orientation >= 5
+            ? { width: height, height: width }
+            : { width, height };
+        }
+
+        function release(token) {
+          const source = sources.get(token);
+          if (!source) return;
+          sources.delete(token);
+          if (source.image) source.image.src = "";
+          if (source.url) URL.revokeObjectURL(source.url);
+        }
+
+        function clearInput() {
+          const input = document.getElementById("upload-image");
+          const file = input && input.files[0];
+          if (input) input.value = "";
+          return file;
+        }
+
+        async function inspect(token) {
+          const source = { file: clearInput() };
+          sources.set(token, source);
+          try {
+            source.size = metadata(
+              await source.file.arrayBuffer(),
+              source.file.type,
+            );
+            if (sources.get(token) !== source) return;
+            // Elm must authorize the dimensions before any pixel buffer is allocated.
+            send({ kind: "metadata", token, ...source.size });
+          } catch {
+            if (sources.get(token) !== source) return;
+            release(token);
+            send({ kind: "failed", token });
+          }
+        }
+
+        async function decode(token) {
+          const source = sources.get(token);
+          if (!source?.size || source.image) return;
+          try {
+            source.url = URL.createObjectURL(source.file);
+            source.image = new Image();
+            source.image.src = source.url;
+            await source.image.decode();
+            if (sources.get(token) !== source) return;
+            send({
+              kind: "loaded",
+              token,
+              url: source.url,
+              ...source.size,
+              naturalWidth: source.image.naturalWidth,
+              naturalHeight: source.image.naturalHeight,
+            });
+          } catch {
+            if (sources.get(token) !== source) return;
+            release(token);
+            send({ kind: "failed", token });
+          }
+        }
+
+        function endPointer(notify = true) {
+          if (!pointer) return;
+          const previous = pointer;
+          pointer = null;
+          if (previous.stage.hasPointerCapture(previous.id))
+            previous.stage.releasePointerCapture(previous.id);
+          if (notify) send({ kind: "end" });
+        }
+
+        function position(event, current) {
+          const box = current.box;
+          return {
+            kind: "pointer",
+            handle: current.handle,
+            x: event.clientX - box.left,
+            y: event.clientY - box.top,
+            displayWidth: box.width,
+            displayHeight: box.height,
+          };
+        }
+
+        document.addEventListener("pointerdown", (event) => {
+          const target = event.target.closest("[data-handle]");
+          const stage = target && target.closest(".crop-stage");
+          if (
+            pointer ||
+            !stage ||
+            stage.dataset.editable !== "true" ||
+            !event.isPrimary ||
+            event.button !== 0
+          )
+            return;
+          event.preventDefault();
+          pointer = {
+            id: event.pointerId,
+            stage,
+            handle: target.dataset.handle,
+            box: stage.getBoundingClientRect(),
+          };
+          stage.setPointerCapture(event.pointerId);
+          send({ ...position(event, pointer), event: "start" });
+        });
+        document.addEventListener(
+          "pointermove",
+          (event) => {
+            if (!pointer || event.pointerId !== pointer.id) return;
+            if (pointer.stage.dataset.editable !== "true") {
+              endPointer();
+              return;
+            }
+            event.preventDefault();
+            send({ ...position(event, pointer), event: "move" });
+          },
+          { passive: false },
+        );
+        document.addEventListener("pointerup", (event) => {
+          if (!pointer || event.pointerId !== pointer.id) return;
+          send({ ...position(event, pointer), event: "move" });
+          endPointer();
+        });
+        for (const name of ["pointercancel", "lostpointercapture"])
+          document.addEventListener(name, (event) => {
+            if (pointer && event.pointerId === pointer.id) endPointer();
+          });
+        window.addEventListener("resize", endPointer);
+        window.addEventListener("blur", endPointer);
+        document.addEventListener(
+          "click",
+          (event) => {
+            const anchor = event
+              .composedPath()
+              .find((node) => node?.matches?.("a[href]"));
+            if (!anchor) return;
+            const destination = new URL(anchor.href, window.location.href);
+            const current = new URL(window.location.href);
+            if (destination.origin !== current.origin) return;
+            if (saving) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              return;
+            }
+            if (
+              !guarded ||
+              event.button !== 0 ||
+              event.ctrlKey ||
+              event.metaKey ||
+              event.shiftKey ||
+              event.altKey ||
+              anchor.target === "_blank" ||
+              anchor.hasAttribute("download") ||
+              (destination.pathname === current.pathname &&
+                destination.search === current.search &&
+                destination.hash)
+            )
+              return;
+            if (
+              !window.confirm(
+                "Ungespeicherte Änderungen verwerfen und Seite verlassen?",
+              )
+            ) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+              return;
+            }
+            endPointer(false);
+            for (const token of sources.keys()) release(token);
+            setGuard(false);
+          },
+          true,
+        );
+        function beforeUnload(event) {
+          if (!guarded) return;
+          event.preventDefault();
+          event.returnValue = "";
+        }
+        function setGuard(value) {
+          if (guarded === value) return;
+          guarded = value;
+          if (guarded) window.addEventListener("beforeunload", beforeUnload);
+          else window.removeEventListener("beforeunload", beforeUnload);
+        }
+        window.addEventListener("pagehide", (event) => {
+          endPointer();
+          if (event.persisted) return;
+          setGuard(false);
+          for (const token of sources.keys()) release(token);
+        });
+        app.ports.editorCommand.subscribe((message) => {
+          switch (message.action) {
+            case "inspect":
+              endPointer();
+              inspect(message.token);
+              break;
+            case "clear":
+              endPointer();
+              clearInput();
+              break;
+            case "decode":
+              decode(message.token);
+              break;
+            case "release":
+              endPointer();
+              release(message.token);
+              break;
+            case "guard":
+              setGuard(message.dirty);
+              saving = message.saving === true;
+              {
+                const header = document.querySelector("header-component");
+                if (header) header.inert = saving;
+              }
+              break;
+            case "navigate":
+              if (
+                !message.dirty ||
+                window.confirm(
+                  "Ungespeicherte Änderungen verwerfen und zum Rezept zurückkehren?",
+                )
+              ) {
+                endPointer(false);
+                for (const token of sources.keys()) release(token);
+                setGuard(false);
+                window.location.assign(message.url);
+              }
+              break;
+          }
+        });
+      })();
     </script>
   </body>
 </html>
