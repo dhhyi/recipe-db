@@ -26,10 +26,25 @@ func (state BrowseState) Title() string {
 	if state.Kind == "error" {
 		return "Rezepte konnten nicht geladen werden | RezeptDB"
 	}
-	if state.Kind == "search" && state.Query != "" {
-		return fmt.Sprintf("%d Rezepte für '%s' | RezeptDB", state.Found, state.Query)
+	return state.Heading() + " | RezeptDB"
+}
+
+func (state BrowseState) RecipeCount() string {
+	if state.Found == 1 {
+		return "1 Rezept"
 	}
-	return "Alle Rezepte | RezeptDB"
+	return fmt.Sprintf("%d Rezepte", state.Found)
+}
+
+func (state BrowseState) Heading() string {
+	if state.Kind == "search" && state.Query != "" {
+		return fmt.Sprintf("%s für '%s'", state.RecipeCount(), state.Query)
+	}
+	return "Alle Rezepte"
+}
+
+templ browseHeading(state BrowseState, attributes templ.Attributes) {
+	<h1 id="browse-heading" { attributes... }>{ state.Heading() }</h1>
 }
 
 type browseSortOption struct {
@@ -72,7 +87,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 // whose form value attributes may predate the last search.
 templ Browse(state BrowseState) {
 	<div id="browse-content" data-browse-search hx-history="false" hx-on::send-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on::response-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on:browse-error="const target = event.detail.target, status = this.querySelector('#browse-metadata'); if (target.id === 'browse-results') { target.querySelector('[data-recipe-list]').replaceChildren(); status.dataset.kind = 'error'; status.textContent = 'Rezepte konnten nicht geladen werden.'; document.title = 'Rezepte konnten nicht geladen werden | RezeptDB'; } else if (target.id === 'browse-pagination') { status.textContent = 'Weitere Rezepte konnten nicht geladen werden.'; target.querySelector('[data-load-more]').textContent = 'Erneut versuchen'; }">
-		<h1>Alle Rezepte</h1>
+		@browseHeading(state, nil)
 		<form id="browse-form" action="/" method="get" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::config-request="if (this.dataset.composing) event.preventDefault()" class="my-3 grid! grid-cols-1 md:grid-cols-2 md:gap-3">
 			<fieldset role="search">
 				<input id="browse-query" type="search" name="q" placeholder="Rezepte suchen" value={ state.Query } disabled?={ state.Kind == "fallback" }/>
@@ -101,7 +116,7 @@ templ browseStatus(state BrowseState, attributes templ.Attributes) {
 		} else if state.Found == 0 {
 			Keine Rezepte gefunden.
 		} else {
-			{ strconv.Itoa(state.Found) } Rezepte gefunden.
+			{ state.RecipeCount() } gefunden.
 		}
 	</p>
 }
@@ -139,6 +154,7 @@ templ browsePagination(state BrowseState) {
 
 templ BrowsePage(state BrowseState) {
 	<title>{ state.Title() }</title>
+	@browseHeading(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	@browseStatus(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	for _, recipe := range state.Recipes {
 		@recipeTile(recipe, state.RatingsOnline)
@@ -148,6 +164,7 @@ templ BrowsePage(state BrowseState) {
 
 templ BrowseFragment(state BrowseState) {
 	<title>{ state.Title() }</title>
+	@browseHeading(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	<template>
 		<option id="browse-automatic" hx-swap-oob="outerHTML" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
 	</template>

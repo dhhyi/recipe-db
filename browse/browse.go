@@ -206,7 +206,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			return
 		}
 		if appendPage && state.Kind == "search" && state.NextURL == "" {
-			state.Message = fmt.Sprintf("%d Rezepte gefunden. Alle Rezepte geladen.", state.Found)
+			state.Message = state.RecipeCount() + " gefunden. Alle Rezepte geladen."
 		}
 		var component templ.Component
 		if appendPage && status >= 500 {

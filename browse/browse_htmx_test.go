@@ -12,9 +12,64 @@ import (
 	"testing"
 
 	"github.com/Khan/genqlient/graphql"
+	"github.com/a-h/templ"
 
 	"frontend/src/components"
 )
+
+func TestBrowseHeadingsAndCounts(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, query, heading, status string
+		found                              int
+	}{
+		{"singular", "search", "milch", "1 Rezept für 'milch'", "1 Rezept gefunden.", 1},
+		{"plural", "search", "milch", "2 Rezepte für 'milch'", "2 Rezepte gefunden.", 2},
+		{"zero", "search", "milch", "0 Rezepte für 'milch'", "Keine Rezepte gefunden.", 0},
+		{"unfiltered", "search", "", "Alle Rezepte", "1 Rezept gefunden.", 1},
+		{"fallback", "fallback", "milch", "Alle Rezepte", "1 Rezept gefunden.", 1},
+		{"escaped query", "search", "<milch>&", "1 Rezept für '<milch>&'", "1 Rezept gefunden.", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := components.BrowseState{Kind: tc.kind, Query: tc.query, Found: tc.found}
+			if got := state.Title(); got != tc.heading+" | RezeptDB" {
+				t.Fatalf("unexpected title: %s", got)
+			}
+			for _, mode := range []struct {
+				name      string
+				component templ.Component
+				oob       bool
+			}{
+				{"full", components.Browse(state), false},
+				{"search", components.BrowseFragment(state), true},
+				{"pagination", components.BrowsePage(state), true},
+				{"fallback", components.BrowseFallbackFragment(state), false},
+			} {
+				t.Run(mode.name, func(t *testing.T) {
+					var body bytes.Buffer
+					if err := mode.component.Render(context.Background(), &body); err != nil {
+						t.Fatal(err)
+					}
+					rendered := html.UnescapeString(body.String())
+					heading := `<h1 id="browse-heading"`
+					if mode.oob {
+						heading += ` hx-swap-oob="outerHTML"`
+					}
+					heading += `>` + tc.heading + `</h1>`
+					if strings.Count(rendered, "<h1 ") != 1 || !strings.Contains(rendered, heading) ||
+						!strings.Contains(rendered, tc.status) {
+						t.Fatalf("heading or result count missing: %s", rendered)
+					}
+					if mode.name != "full" && !strings.Contains(rendered, "<title>"+state.Title()+"</title>") {
+						t.Fatalf("fragment title missing: %s", rendered)
+					}
+					if tc.name == "escaped query" && strings.Contains(body.String(), "<milch>") {
+						t.Fatal("search query must be HTML escaped")
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestBrowseCumulativeHistory(t *testing.T) {
 	var pages []int

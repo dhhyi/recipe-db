@@ -22,6 +22,9 @@ test.describe("overview", () => {
         tile.getByRole("img", { name: recipe.name, exact: true }),
       );
     }
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+      `${overviewRecipes.length} Rezepte für '${overviewRecipes[0].name}'`,
+    );
     await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
     await expect(page).toHaveScreenshot("overview.png", { fullPage: true });
   });
