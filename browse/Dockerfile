@@ -8,7 +8,6 @@ RUN go install github.com/a-h/templ/cmd/templ@latest
 
 COPY *.go *.templ genqlient.yaml recipe-db.graphqls operations.graphql /ws/
 COPY src /ws/src
-COPY assets /ws/assets
 RUN go run github.com/Khan/genqlient@main
 RUN templ generate
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .

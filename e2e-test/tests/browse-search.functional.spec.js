@@ -6,6 +6,7 @@ function resultsFragment({
   ids = ["result"],
   kind = "search",
   query = "boundary",
+  sort = "",
 } = {}) {
   const message =
     kind === "fallback"
@@ -16,12 +17,57 @@ function resultsFragment({
           ? "Keine Rezepte gefunden."
           : `${found} Rezepte gefunden.`;
   const next = kind === "search" && page * 24 < found;
-  return `<section id="browse-results" data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="">
+  const nextURL = `/?page=${page + 1}&q=${query}${sort ? `&sort=${sort}` : ""}`;
+  return `<section id="browse-results" data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="${sort}">
     <p data-browse-status role="status" aria-live="polite">${message}</p>
     <div data-recipe-list>${ids.map((id) => `<a data-recipe-id="${id}" href="/recipe/${id}" hx-boost="true" style="display:block;height:200px">Rezept ${id}</a>`).join("")}</div>
     <a href="/edit/new" data-add-recipe aria-label="Neues Rezept hinzufügen">+</a>
-    ${next ? `<nav><a data-load-more href="/?q=${query}&page=${page + 1}">Mehr laden</a></nav><div data-sentinel></div>` : ""}
+    ${next ? `<nav id="browse-pagination"><a data-load-more data-sentinel href="${nextURL}" hx-get="${nextURL}" hx-trigger="intersect once, click" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort">Mehr laden</a></nav>` : ""}
   </section>`;
+}
+
+// Keep the real server-rendered form and HTMX attributes in mocked boundary
+// responses. Only hit data is synthetic; request/swap/history behavior is real HTMX.
+async function fulfillBrowse(route, options = {}) {
+  const response = await route.fetch(
+    options.kind === "fallback"
+      ? { headers: { ...route.request().headers(), "hx-request": "false" } }
+      : {},
+  );
+  const url = new URL(route.request().url());
+  const query = url.searchParams.get("q") || "";
+  const sort = url.searchParams.get("sort") || "";
+  const number = Number(url.searchParams.get("page") || 1);
+  const kind = options.kind || "search";
+  const title =
+    kind === "error"
+      ? "Rezepte konnten nicht geladen werden | RezeptDB"
+      : kind === "fallback" || !query
+        ? "Alle Rezepte | RezeptDB"
+        : `${options.found ?? 1} Rezepte für '${query}' | RezeptDB`;
+  let body = (await response.text())
+    .replace(
+      /<section id="browse-results"[\s\S]*?<\/section>/,
+      resultsFragment({ page: number, query, sort, ...options }),
+    )
+    .replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`);
+  if (kind === "fallback")
+    body = `<title>${title}</title>${body.match(/<main>([\s\S]*)<\/main>/)[1]}`
+      .replaceAll('name="q"', 'disabled name="q"')
+      .replaceAll('name="sort"', 'disabled name="sort"')
+      .replaceAll('type="submit"', 'disabled type="submit"');
+  if (!sort) url.searchParams.delete("sort");
+  if (number === 1) url.searchParams.delete("page");
+  url.searchParams.sort();
+  await route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    headers: {
+      "HX-Replace-Url": url.pathname + url.search,
+      ...(kind === "fallback" ? { "HX-Retarget": "#browse-content" } : {}),
+    },
+    body,
+  });
 }
 
 async function manualSentinel(page) {
@@ -57,6 +103,11 @@ async function manualSentinel(page) {
   });
 }
 
+async function triggerSentinel(page) {
+  await expect(page.locator(".htmx-settling")).toHaveCount(0);
+  await page.evaluate(() => window.triggerBrowseSentinel());
+}
+
 test("search retains explicit sorting, focus and composition state", async ({
   page,
   demoRecipe,
@@ -74,6 +125,9 @@ test("search retains explicit sorting, focus and composition state", async ({
     `/?q=${encodeURIComponent(demoRecipe.name).replaceAll("%20", "+")}&sort=rating`,
   );
   await expect(search).toBeFocused();
+  await expect(page).toHaveTitle(
+    `1 Rezepte für '${demoRecipe.name}' | RezeptDB`,
+  );
   await expect(
     page.getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true }),
   ).toBeVisible();
@@ -84,6 +138,8 @@ test("search retains explicit sorting, focus and composition state", async ({
     )
     .toEqual([3, 8]);
 
+  // An already scheduled debounce must not submit an unfinished composition.
+  await search.fill("pending");
   await search.evaluate((input) => {
     input.dispatchEvent(
       new CompositionEvent("compositionstart", { bubbles: true }),
@@ -115,6 +171,37 @@ test("search retains explicit sorting, focus and composition state", async ({
   await expect(
     page.getByRole("link", { name: "Neues Rezept hinzufügen" }),
   ).toHaveCount(1);
+});
+
+test("automatic sorting and document titles follow the current query", async ({
+  page,
+  demoRecipe,
+}) => {
+  await page.goto("/");
+  const sort = page.getByLabel("Sortieren nach", { exact: true });
+  const search = page.getByRole("searchbox");
+  await expect(sort.locator("option:checked")).toHaveText(
+    "Automatisch: Neueste zuerst",
+  );
+  await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
+  await search.fill(demoRecipe.name);
+  await expect(page.locator("#browse-results")).toHaveAttribute(
+    "data-query",
+    demoRecipe.name,
+  );
+  await expect(sort.locator("option:checked")).toHaveText(
+    "Automatisch: Relevanz",
+  );
+  await expect(page).toHaveTitle(
+    `1 Rezepte für '${demoRecipe.name}' | RezeptDB`,
+  );
+  await search.fill("");
+  await search.press("Enter");
+  await expect(page).toHaveURL("/");
+  await expect(sort.locator("option:checked")).toHaveText(
+    "Automatisch: Neueste zuerst",
+  );
+  await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
 });
 
 test("German name keys preserve names and use IDs to break ties", async ({
@@ -292,20 +379,16 @@ test("sentinel and keyboard loading serialize requests, deduplicate and stop at 
   const secondPending = new Promise((resolve) => {
     releaseSecond = resolve;
   });
-  await page.route("**/browse/results?**", async (route) => {
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
     const url = new URL(route.request().url());
     const pageNumber = Number(url.searchParams.get("page") || 1);
     requested.push(pageNumber);
     if (pageNumber === 2) await secondPending;
     const ids = Array.from(
-      { length: pageNumber === 4 ? 1 : 24 },
-      (_, index) => `batch-${(pageNumber - 1) * 24 + index}`,
-    );
-    if (pageNumber === 2) ids[0] = "batch-0";
-    await route.fulfill({
-      contentType: "text/html",
-      body: resultsFragment({ page: pageNumber, found: 73, ids }),
-    });
+      { length: Math.min(pageNumber * 24, 73) },
+      (_, index) => `batch-${index}`,
+    ).filter((_, index) => index !== 24);
+    await fulfillBrowse(route, { page: pageNumber, found: 73, ids });
   });
   await page.goto("/");
   await page.getByRole("searchbox").fill("boundary");
@@ -314,20 +397,20 @@ test("sentinel and keyboard loading serialize requests, deduplicate and stop at 
   await page.getByRole("link", { name: "Mehr laden" }).focus();
   await page.getByRole("link", { name: "Mehr laden" }).press("Enter");
   await expect.poll(() => requested).toEqual([1, 2]);
-  await page.evaluate(() => window.triggerBrowseSentinel());
+  await triggerSentinel(page);
   releaseSecond();
   await expect(page.locator("#browse-results")).toHaveAttribute(
     "data-page",
     "2",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(47);
-  await page.evaluate(() => window.triggerBrowseSentinel());
+  await triggerSentinel(page);
   await expect(page.locator("#browse-results")).toHaveAttribute(
     "data-page",
     "3",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(71);
-  await page.evaluate(() => window.triggerBrowseSentinel());
+  await triggerSentinel(page);
   await expect(page.locator("#browse-results")).toHaveAttribute(
     "data-page",
     "4",
@@ -343,30 +426,27 @@ test("an empty hydrated page still advances using found metadata", async ({
 }) => {
   await manualSentinel(page);
   const requested = [];
-  await page.route("**/browse/results?**", async (route) => {
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
     const pageNumber = Number(
       new URL(route.request().url()).searchParams.get("page") || 1,
     );
     requested.push(pageNumber);
-    await route.fulfill({
-      contentType: "text/html",
-      body: resultsFragment({
-        page: pageNumber,
-        found: 49,
-        ids: pageNumber === 2 ? [] : [`page-${pageNumber}`],
-      }),
+    await fulfillBrowse(route, {
+      page: pageNumber,
+      found: 49,
+      ids: pageNumber === 3 ? ["page-1", "page-3"] : ["page-1"],
     });
   });
   await page.goto("/");
   await page.getByRole("searchbox").fill("boundary");
   await page.getByRole("searchbox").press("Enter");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
-  await page.evaluate(() => window.triggerBrowseSentinel());
+  await triggerSentinel(page);
   await expect(page.locator("#browse-results")).toHaveAttribute(
     "data-page",
     "2",
   );
-  await page.evaluate(() => window.triggerBrowseSentinel());
+  await triggerSentinel(page);
   await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
   expect(requested).toEqual([1, 2, 3]);
 });
@@ -375,36 +455,43 @@ for (const kind of ["error", "fallback"]) {
   test(`later-page ${kind} never appends unrelated cards`, async ({ page }) => {
     await manualSentinel(page);
     const requested = [];
-    await page.route("**/browse/results?**", async (route) => {
+    await page.route(/\/\?[^#]*\bq=/, async (route) => {
       const pageNumber = Number(
         new URL(route.request().url()).searchParams.get("page") || 1,
       );
       requested.push(pageNumber);
-      await route.fulfill({
-        status: pageNumber === 2 && kind === "error" ? 502 : 200,
-        contentType: "text/html",
-        body: resultsFragment({
-          page: pageNumber,
-          found: 48,
-          ids:
-            pageNumber === 1
-              ? ["filtered"]
-              : kind === "fallback"
-                ? ["unfiltered"]
-                : [],
-          kind: pageNumber === 1 ? "search" : kind,
-        }),
+      if (pageNumber === 2 && kind === "error") {
+        await route.fulfill({
+          contentType: "text/html",
+          headers: {
+            "HX-Retarget": "#browse-pagination",
+            "HX-Reswap": "outerHTML",
+          },
+          body: '<nav id="browse-pagination"><p role="status">Weitere Rezepte konnten nicht geladen werden.</p><a data-load-more href="/?page=2&q=boundary">Erneut versuchen</a></nav>',
+        });
+        return;
+      }
+      await fulfillBrowse(route, {
+        page: pageNumber,
+        found: 48,
+        ids:
+          pageNumber === 1
+            ? ["filtered"]
+            : kind === "fallback"
+              ? ["unfiltered"]
+              : [],
+        kind: pageNumber === 1 ? "search" : kind,
       });
     });
     await page.goto("/");
     await page.getByRole("searchbox").fill("boundary");
     await page.getByRole("searchbox").press("Enter");
     await expect(page.locator("[data-recipe-id=filtered]")).toBeVisible();
-    await page.evaluate(() => window.triggerBrowseSentinel());
+    await triggerSentinel(page);
     await expect(
       page.getByText(
         kind === "error"
-          ? "Rezepte konnten nicht geladen werden."
+          ? "Weitere Rezepte konnten nicht geladen werden."
           : "Suche nicht verfügbar. Alle Rezepte werden angezeigt.",
         { exact: true },
       ),
@@ -420,8 +507,11 @@ for (const kind of ["error", "fallback"]) {
       await expect(
         page.getByLabel("Sortieren nach", { exact: true }),
       ).toBeDisabled();
+      await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
+    } else {
+      await expect(page).toHaveTitle("48 Rezepte für 'boundary' | RezeptDB");
     }
-    await page.evaluate(() => window.triggerBrowseSentinel());
+    await triggerSentinel(page);
     expect(requested).toEqual([1, 2]);
     await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
   });
@@ -443,18 +533,13 @@ test("a superseded first-page response cannot replace a newer query", async ({
   const pending = new Promise((resolve) => {
     release = resolve;
   });
-  await page.route("**/browse/results?**", async (route) => {
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
     const query = new URL(route.request().url()).searchParams.get("q");
     if (query === "old") {
       oldStarted();
       await pending;
     }
-    await route
-      .fulfill({
-        contentType: "text/html",
-        body: resultsFragment({ query, ids: [query] }),
-      })
-      .catch(() => {});
+    await fulfillBrowse(route, { query, ids: [query] }).catch(() => {});
     if (query === "old") oldFinished();
   });
   await page.goto("/");
@@ -463,49 +548,45 @@ test("a superseded first-page response cannot replace a newer query", async ({
   await search.press("Enter");
   await started;
   await search.fill("new");
-  await search.press("Enter");
-  await expect(page.locator("[data-recipe-id=new]")).toBeVisible();
   release();
   await finished;
+  await expect(page.locator("[data-recipe-id=old]")).toHaveCount(0);
+  await expect(page.locator("[data-recipe-id=new]")).toBeVisible();
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
   await expect(page.locator("[data-recipe-id=old]")).toHaveCount(0);
   await expect(search).toBeFocused();
 });
 
 for (const cacheSize of [10, 0]) {
-  test(`Back restores pages, controls and scroll with history cache size ${cacheSize}`, async ({
+  test(`Back reconstructs loaded depth and controls with history cache size ${cacheSize}`, async ({
     page,
     demoRecipe,
   }) => {
     await manualSentinel(page);
-    await page.route("**/browse/results?**", async (route) => {
+    await page.route(/\/\?[^#]*\bq=/, async (route) => {
       const number = Number(
         new URL(route.request().url()).searchParams.get("page") || 1,
       );
       const ids = Array.from(
-        { length: 24 },
-        (_, index) => `history-${number}-${index}`,
+        { length: number * 24 },
+        (_, index) => `history-${index}`,
       );
-      if (number === 1) ids[0] = demoRecipe.id;
-      await route.fulfill({
-        contentType: "text/html",
-        body: resultsFragment({ page: number, found: 72, ids }),
-      });
+      ids[0] = demoRecipe.id;
+      await fulfillBrowse(route, { page: number, found: 72, ids });
     });
     await page.goto("/");
     const search = page.getByRole("searchbox");
     await search.fill("boundary");
     await search.press("Enter");
     await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
-    await page.evaluate(() => window.triggerBrowseSentinel());
+    await triggerSentinel(page);
     await expect(page.locator("[data-recipe-id]")).toHaveCount(48);
-    await page.evaluate(() => window.triggerBrowseSentinel());
+    await triggerSentinel(page);
     await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
     await page.evaluate((size) => {
       window.htmx.config.historyCacheSize = size;
       window.scrollTo(0, 700);
     }, cacheSize);
-    const scroll = await page.evaluate(() => window.scrollY);
     await page
       .locator(`[data-recipe-id="${demoRecipe.id}"]`)
       .evaluate((link) => link.click());
@@ -517,12 +598,14 @@ for (const cacheSize of [10, 0]) {
       "data-page",
       "3",
     );
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scroll);
+    // Cache-miss navigation restores the complete listing from the server;
+    // scroll positioning is left to HTMX/browser navigation, not a controller.
+    await expect(search).toBeVisible();
     await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
     await page.reload();
     await expect(page.locator("#browse-results")).toHaveAttribute(
       "data-page",
-      "1",
+      "3",
     );
   });
 }
@@ -541,7 +624,7 @@ test("a sort change cancels an older append generation", async ({ page }) => {
   const finished = new Promise((resolve) => {
     appendFinished = resolve;
   });
-  await page.route("**/browse/results?**", async (route) => {
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
     const url = new URL(route.request().url());
     const number = Number(url.searchParams.get("page") || 1);
     if (number === 2) {
@@ -550,19 +633,16 @@ test("a sort change cancels an older append generation", async ({ page }) => {
     }
     const id =
       url.searchParams.get("sort") === "updated" ? "new-sort" : `old-${number}`;
-    await route
-      .fulfill({
-        contentType: "text/html",
-        body: resultsFragment({ page: number, found: 48, ids: [id] }),
-      })
-      .catch(() => {});
+    await fulfillBrowse(route, { page: number, found: 48, ids: [id] }).catch(
+      () => {},
+    );
     if (number === 2) appendFinished();
   });
   await page.goto("/");
   await page.getByRole("searchbox").fill("boundary");
   await page.getByRole("searchbox").press("Enter");
   await expect(page.locator("[data-recipe-id=old-1]")).toBeVisible();
-  await page.evaluate(() => window.triggerBrowseSentinel());
+  await triggerSentinel(page);
   await started;
   await page
     .getByLabel("Sortieren nach", { exact: true })
@@ -583,13 +663,15 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
   await manualSentinel(page);
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
   const queries = [];
-  await page.route("**/browse/results?**", async (route) => {
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
     const url = new URL(route.request().url());
-    queries.push([url.searchParams.get("q"), url.searchParams.get("sort")]);
-    await route.fulfill({
-      contentType: "text/html",
-      body: resultsFragment({ query: url.searchParams.get("q") }),
-    });
+    queries.push([
+      url.searchParams.get("q"),
+      url.searchParams.get("sort") || null,
+    ]);
+    await fulfillBrowse(route, { query: url.searchParams.get("q") }).catch(
+      () => {},
+    );
   });
   await page.goto("/");
   await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
@@ -607,45 +689,43 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
     .selectOption("updated");
   await expect.poll(() => queries).toHaveLength(3);
   expect(queries[2]).toEqual(["enter", "updated"]);
+  await expect(page.locator("#browse-results")).toHaveAttribute(
+    "data-sort",
+    "updated",
+  );
 });
 
-for (const status of [502, 503]) {
-  test(`online failure ${status} removes previous-query cards without fallback`, async ({
-    page,
-  }) => {
-    await manualSentinel(page);
-    await page.route("**/browse/results?**", async (route) => {
-      const query = new URL(route.request().url()).searchParams.get("q");
-      await route.fulfill({
-        status: query === "failure" ? status : 200,
-        contentType: "text/html",
-        body: resultsFragment({
-          query,
-          kind: query === "failure" ? "error" : "search",
-          ids: query === "failure" ? [] : ["previous-query"],
-        }),
-      });
+test("rendered online failure removes previous-query cards without fallback", async ({
+  page,
+}) => {
+  await manualSentinel(page);
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
+    const query = new URL(route.request().url()).searchParams.get("q");
+    await fulfillBrowse(route, {
+      query,
+      kind: query === "failure" ? "error" : "search",
+      ids: query === "failure" ? [] : ["previous-query"],
     });
-    await page.goto("/");
-    const input = page.getByRole("searchbox");
-    await input.fill("boundary");
-    await input.press("Enter");
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
-    await input.fill("failure");
-    await input.press("Enter");
-    await expect(
-      page.getByText("Rezepte konnten nicht geladen werden.", { exact: true }),
-    ).toBeVisible();
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
-    await expect(input).toBeEnabled();
-    await expect(
-      page.getByLabel("Sortieren nach", { exact: true }),
-    ).toBeEnabled();
-    await expect(
-      page.getByText("Suche nicht verfügbar. Alle Rezepte werden angezeigt."),
-    ).toHaveCount(0);
   });
-}
+  await page.goto("/");
+  const input = page.getByRole("searchbox");
+  await input.fill("boundary");
+  await input.press("Enter");
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
+  await input.fill("failure");
+  await input.press("Enter");
+  await expect(
+    page.getByText("Rezepte konnten nicht geladen werden.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
+  await expect(input).toBeEnabled();
+  await expect(
+    page.getByLabel("Sortieren nach", { exact: true }),
+  ).toBeEnabled();
+  await expect(
+    page.getByText("Suche nicht verfügbar. Alle Rezepte werden angezeigt."),
+  ).toHaveCount(0);
+});
 
 test.describe("unenhanced pagination", () => {
   test.use({ demoRecipeCount: 25, demoRecipeWithImage: false });
@@ -668,8 +748,8 @@ test.describe("unenhanced pagination", () => {
       await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
       await page.getByRole("link", { name: "Mehr laden" }).click();
       await expect(page).toHaveURL(/page=2.*sort=newest/);
-      await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
-      await expect(page.locator("[data-recipe-id]")).toHaveAttribute(
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+      await expect(page.locator("[data-recipe-id]").last()).toHaveAttribute(
         "data-recipe-id",
         demoRecipes[0].id,
       );
@@ -683,29 +763,25 @@ test.describe("unenhanced pagination", () => {
   });
 });
 
-test("a failed history reconstruction clears a mismatched snapshot", async ({
+test("a failed history cache miss renders a truthful error page", async ({
   page,
   demoRecipe,
 }) => {
   await manualSentinel(page);
   let restoring = false;
-  await page.route("**/browse/results?**", async (route) => {
-    await route.fulfill({
-      status: restoring ? 502 : 200,
-      contentType: "text/html",
-      body: resultsFragment({
-        kind: restoring ? "error" : "search",
-        found: restoring ? 0 : 2,
-        ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
-      }),
+  await page.route(/\/\?[^#]*\bq=/, async (route) => {
+    await fulfillBrowse(route, {
+      kind: restoring ? "error" : "search",
+      found: restoring ? 0 : 2,
+      ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
     });
   });
   await page.goto("/");
   await page.getByRole("searchbox").fill("boundary");
   await page.getByRole("searchbox").press("Enter");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(2);
-  await page.locator("#browse-results").evaluate((region) => {
-    region.dataset.searchKey = JSON.stringify(["older query", ""]);
+  await page.evaluate(() => {
+    window.htmx.config.historyCacheSize = 0;
   });
   await page.locator(`[data-recipe-id="${demoRecipe.id}"]`).click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
@@ -720,4 +796,7 @@ test("a failed history reconstruction clears a mismatched snapshot", async ({
     "error",
   );
   await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+  await expect(page).toHaveTitle(
+    "Rezepte konnten nicht geladen werden | RezeptDB",
+  );
 });

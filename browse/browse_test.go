@@ -101,15 +101,23 @@ func TestBrowseValidation(t *testing.T) {
 			}))
 			defer upstream.Close()
 			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
-			for _, route := range []string{"/", "/browse/results"} {
+			for _, fragment := range []bool{false, true} {
 				recorder := httptest.NewRecorder()
-				handler.ServeHTTP(recorder, httptest.NewRequest("GET", route+"?"+query, nil))
+				request := httptest.NewRequest("GET", "/?"+query, nil)
+				if fragment {
+					request.Header.Set("HX-Request", "true")
+				}
+				handler.ServeHTTP(recorder, request)
 				body := recorder.Body.String()
-				if recorder.Code != 400 || !strings.Contains(body, `data-kind="error"`) || !strings.Contains(body, "Ungültige Suchparameter.") ||
+				wantStatus := 400
+				if fragment {
+					wantStatus = 200
+				}
+				if recorder.Code != wantStatus || !strings.Contains(body, `data-kind="error"`) || !strings.Contains(body, "Ungültige Suchparameter.") ||
 					!strings.Contains(body, "data-browse-status") || strings.Contains(body, "data-recipe-id") {
 					t.Fatalf("invalid request missing usable error: %d %s", recorder.Code, body)
 				}
-				if route == "/" && !strings.Contains(body, `name="q"`) {
+				if !fragment && !strings.Contains(body, `name="q"`) {
 					t.Fatal("full error page missing controls")
 				}
 			}
@@ -148,7 +156,6 @@ func TestBrowseCanonicalFormURL(t *testing.T) {
 		{"/?q=&sort=relevance", "/?sort=relevance", false},
 		{"/?q=&sort=newest&page=2", "/?page=2&sort=newest", false},
 		{"/?q=&sort=", "", true},
-		{"/browse/results?q=&sort=", "", false},
 	} {
 		t.Run(tc.path+strconv.FormatBool(tc.history), func(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.path, nil)
@@ -199,6 +206,7 @@ func TestBrowseHTTP(t *testing.T) {
 					"rating": map[string]any{"recipeId": id, "average": 4, "count": 2},
 				})
 			}
+
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request struct {
 					OperationName string
@@ -220,7 +228,7 @@ func TestBrowseHTTP(t *testing.T) {
 					if err := json.Unmarshal(request.Variables["options"], &options); err != nil {
 						t.Errorf("options must be a JSON object, not a quoted string: %s", request.Variables["options"])
 					}
-					if options.Query != "Apfel" || options.SortBy != browseSorts["rating"] || options.Page != tc.page || options.PerPage != 24 {
+					if options.Query != "Apfel" || options.SortBy != browseSorts["rating"] || options.Page > tc.page || options.PerPage != 24 {
 						t.Errorf("incorrect options: %+v", options)
 					}
 					pageSize := 24
@@ -228,7 +236,7 @@ func TestBrowseHTTP(t *testing.T) {
 						pageSize = 1
 					}
 					data = map[string]any{"searchRecipes": map[string]any{
-						"recipes": recipes, "found": tc.hits, "page": tc.page, "perPage": pageSize,
+						"recipes": recipes, "found": tc.hits, "page": options.Page, "perPage": pageSize,
 					}}
 				case "Overview":
 					fail = tc.overviewError
@@ -246,15 +254,36 @@ func TestBrowseHTTP(t *testing.T) {
 			}))
 			defer upstream.Close()
 			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
-			for _, route := range []string{"/", "/browse/results"} {
+			for _, fragment := range []bool{false, true} {
 				operations = nil
 				query := url.Values{"q": {"Apfel"}, "sort": {"rating"}, "page": {strconv.Itoa(tc.page)}}.Encode()
+				if tc.page == 1 {
+					query = url.Values{"q": {"Apfel"}, "sort": {"rating"}}.Encode()
+				}
 				recorder := httptest.NewRecorder()
-				handler.ServeHTTP(recorder, httptest.NewRequest("GET", route+"?"+query, nil))
+				request := httptest.NewRequest("GET", "/?"+query, nil)
+				if fragment {
+					request.Header.Set("HX-Request", "true")
+				}
+				handler.ServeHTTP(recorder, request)
 				body := html.UnescapeString(recorder.Body.String())
-				if recorder.Code != tc.code || !strings.Contains(body, `data-kind="`+tc.kind+`"`) ||
+				wantCode := tc.code
+				if fragment {
+					wantCode = 200
+				}
+				pageError := fragment && tc.kind == "error" && tc.page > 1
+				if recorder.Code != wantCode || (!pageError && !strings.Contains(body, `data-kind="`+tc.kind+`"`)) ||
 					recorder.Header().Get("Cache-Control") != "no-store" || recorder.Header().Get("ETag") != "" {
 					t.Fatalf("incorrect browse response: %d %s", recorder.Code, body)
+				}
+				if pageError {
+					if recorder.Header().Get("HX-Retarget") != "#browse-pagination" ||
+						!strings.Contains(body, "Erneut versuchen") || strings.Contains(body, "intersect") ||
+						strings.Contains(body, "data-recipe-id") || strings.Contains(body, "<title>") ||
+						recorder.Header().Get("HX-Replace-Url") != "" {
+						t.Fatalf("load-more error must retain cards/title/URL and stop automatic loading: %s", body)
+					}
+					continue
 				}
 				if len(operations) == 0 || operations[0] != "BrowseServices" {
 					t.Fatalf("every request must first check availability: %v", operations)
@@ -263,6 +292,11 @@ func TestBrowseHTTP(t *testing.T) {
 				if !tc.statusError {
 					if tc.searchOnline {
 						wantOperations = append(wantOperations, "BrowseSearch")
+						if tc.kind == "search" {
+							for page := 2; page <= tc.page && (page-1)*24 < tc.hits; page++ {
+								wantOperations = append(wantOperations, "BrowseSearch")
+							}
+						}
 					} else {
 						wantOperations = append(wantOperations, "Overview")
 					}
@@ -273,7 +307,7 @@ func TestBrowseHTTP(t *testing.T) {
 				if strings.Join(operations, ",") != strings.Join(wantOperations, ",") {
 					t.Fatalf("unexpected fallback/search: %v", operations)
 				}
-				if strings.Contains(body, "<html") != (route == "/") {
+				if strings.Contains(body, "<html") == fragment {
 					t.Fatal("fragment/full page contract broken")
 				}
 				if tc.kind == "error" {
@@ -291,7 +325,7 @@ func TestBrowseHTTP(t *testing.T) {
 					}
 				}
 				if tc.kind == "fallback" && (!strings.Contains(body, "Suche nicht verfügbar. Alle Rezepte werden angezeigt.") ||
-					(route == "/" && strings.Count(body, " disabled") != 3)) {
+					strings.Count(body, " disabled") != 3) {
 					t.Fatal("fallback must warn and disable controls")
 				}
 				more := tc.kind == "search" && tc.page*24 < tc.hits
@@ -311,9 +345,18 @@ func TestBrowseHTTP(t *testing.T) {
 				if tc.kind == "search" && tc.hits == 0 && !strings.Contains(body, "Keine Rezepte gefunden.") {
 					t.Fatal("empty successful search not distinguished")
 				}
-				if route == "/" && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
+				if !fragment && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
 					!strings.Contains(body, "Alle Rezepte") || !strings.Contains(body, "header-component")) {
 					t.Fatal("full replacement did not retain controls/header")
+				}
+				wantTitle := "Alle Rezepte | RezeptDB"
+				if tc.kind == "search" {
+					wantTitle = strconv.Itoa(tc.hits) + " Rezepte für 'Apfel' | RezeptDB"
+				} else if tc.kind == "error" {
+					wantTitle = "Rezepte konnten nicht geladen werden | RezeptDB"
+				}
+				if !strings.Contains(body, "<title>"+wantTitle+"</title>") {
+					t.Fatalf("incorrect query-aware title: %s", body)
 				}
 			}
 		})

@@ -18,19 +18,20 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 	</a>
 }
 
+// Restore live controls and loaded depth from the server instead of a snapshot
+// whose form value attributes may predate the last search.
 templ Browse(state BrowseState) {
-	<h1>Alle Rezepte</h1>
-	<script type="module" src="/browse/search.js"></script>
-	<div data-browse-search>
-		<form action="/" method="get" role="search" hx-boost="false" class="grid! grid-cols-1 md:grid-cols-[1fr_2fr_1fr] gap-2 items-end my-3">
+	<div id="browse-content" data-browse-search hx-history="false">
+		<h1>Alle Rezepte</h1>
+		<form id="browse-form" action="/" method="get" role="search" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::before-request="if (this.dataset.composing) event.preventDefault()" class="grid! grid-cols-1 md:grid-cols-[1fr_2fr_1fr] gap-2 items-end my-3">
 			<label class="min-w-0 md:col-start-2">
 				Rezepte suchen
-				<input type="search" name="q" placeholder="Rezepte suchen" value={ state.Query } disabled?={ state.Kind == "fallback" }/>
+				<input id="browse-query" type="search" name="q" placeholder="Rezepte suchen" value={ state.Query } disabled?={ state.Kind == "fallback" }/>
 			</label>
 			<label class="min-w-0">
 				Sortieren nach
-				<select name="sort" aria-label="Sortieren nach" disabled?={ state.Kind == "fallback" }>
-					<option value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
+				<select id="browse-sort" name="sort" aria-label="Sortieren nach" disabled?={ state.Kind == "fallback" }>
+					<option id="browse-automatic" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
 					for _, option := range browseSortOptions {
 						<option value={ option.Token } selected?={ state.Sort == option.Token }>{ option.Label }</option>
 					}
@@ -38,8 +39,7 @@ templ Browse(state BrowseState) {
 			</label>
 			<button type="submit" class="md:col-start-2" disabled?={ state.Kind == "fallback" }>Suchen</button>
 		</form>
-		@browseStatus(state)
-		@BrowseResults(state, false)
+		@BrowseResults(state, true)
 	</div>
 }
 
@@ -73,10 +73,29 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 			}
 		</div>
 		if state.NextURL != "" {
-			<nav aria-label="Weitere Rezepte" class="justify-center">
-				<a href={ templ.SafeURL(state.NextURL) } data-load-more>Mehr laden</a>
+			<nav id="browse-pagination" aria-label="Weitere Rezepte" class="justify-center">
+				<a href={ templ.SafeURL(state.NextURL) } hx-get={ state.NextURL } hx-trigger="intersect once, click" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more data-sentinel>Mehr laden</a>
 			</nav>
-			<div data-sentinel aria-hidden="true"></div>
 		}
 	</section>
+}
+
+templ BrowseFragment(state BrowseState) {
+	<title>{ state.Title() }</title>
+	<template>
+		<option id="browse-automatic" hx-swap-oob="outerHTML" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
+	</template>
+	@BrowseResults(state, true)
+}
+
+templ BrowseFallbackFragment(state BrowseState) {
+	<title>{ state.Title() }</title>
+	@Browse(state)
+}
+
+templ BrowsePageError(retryURL string) {
+	<nav id="browse-pagination" aria-label="Weitere Rezepte" class="justify-center">
+		<p role="status" aria-live="polite">Weitere Rezepte konnten nicht geladen werden.</p>
+		<a href={ templ.SafeURL(retryURL) } hx-get={ retryURL } hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more>Erneut versuchen</a>
+	</nav>
 }

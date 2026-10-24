@@ -1,6 +1,7 @@
 package components
 
 import gql "frontend/src/generated"
+import "fmt"
 
 type BrowseState struct {
 	Query, Sort, Kind, Message  string
@@ -8,6 +9,16 @@ type BrowseState struct {
 	EditorOnline, RatingsOnline bool
 	Recipes                     []gql.RecipeStub
 	NextURL                     string
+}
+
+func (state BrowseState) Title() string {
+	if state.Kind == "error" {
+		return "Rezepte konnten nicht geladen werden | RezeptDB"
+	}
+	if state.Kind == "search" && state.Query != "" {
+		return fmt.Sprintf("%d Rezepte für '%s' | RezeptDB", state.Found, state.Query)
+	}
+	return "Alle Rezepte | RezeptDB"
 }
 
 type browseSortOption struct {

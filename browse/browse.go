@@ -90,36 +90,23 @@ func (request browseRequest) pageURL(page int) string {
 	if request.sort != "" {
 		values.Set("sort", request.sort)
 	}
-	values.Set("page", strconv.Itoa(page))
+	if page > 1 {
+		values.Set("page", strconv.Itoa(page))
+	}
+	if len(values) == 0 {
+		return "/"
+	}
 	return "/?" + values.Encode()
 }
 
-func browseHandler(client graphql.Client, fragment bool) http.HandlerFunc {
+func browseHandler(client graphql.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		fragment := r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") != "true"
 		request, err := parseBrowseRequest(r.URL.Query())
-		if err == nil && !fragment && r.Header.Get("HX-History-Restore-Request") != "true" {
-			values := r.URL.Query()
-			changed := false
-			if values.Has("q") && (values.Get("q") != request.query || request.query == "") {
-				changed = true
-				if request.query == "" {
-					values.Del("q")
-				} else {
-					values.Set("q", request.query)
-				}
-			}
-			if values.Has("sort") && request.sort == "" {
-				values.Del("sort")
-				changed = true
-			}
-			if changed {
-				target := "/"
-				if query := values.Encode(); query != "" {
-					target += "?" + query
-				}
-				http.Redirect(w, r, target, http.StatusFound)
-				return
-			}
+		if err == nil && !fragment && r.Header.Get("HX-History-Restore-Request") != "true" &&
+			r.URL.RequestURI() != request.pageURL(request.page) {
+			http.Redirect(w, r, request.pageURL(request.page), http.StatusFound)
+			return
 		}
 		state := components.BrowseState{
 			Query: request.query, Sort: request.sort, Page: request.page,
@@ -149,20 +136,37 @@ func browseHandler(client graphql.Client, fragment bool) http.HandlerFunc {
 						state.Message = "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
 					}
 				} else {
-					response, searchErr := gql.BrowseSearch(r.Context(), client, request.options())
-					if searchErr != nil {
-						log.Printf("failed to search recipes: %v", searchErr)
-						status = http.StatusBadGateway
-					} else {
+					// Render the loaded depth on the server, including on native navigation
+					// and HTMX history cache misses. Deduplicate hydrated hits across pages.
+					seen := make(map[string]bool)
+					for page := 1; page <= request.page; page++ {
+						pageRequest := request
+						pageRequest.page = page
+						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
+						if searchErr != nil {
+							log.Printf("failed to search recipes: %v", searchErr)
+							status = http.StatusBadGateway
+							break
+						}
 						result := response.SearchRecipes
-						if result.Page != request.page || result.PerPage != browsePageSize || result.Found < 0 {
+						if result.Page != page || result.PerPage != browsePageSize || result.Found < 0 {
 							log.Printf("invalid browse search metadata: page=%d perPage=%d found=%d", result.Page, result.PerPage, result.Found)
 							status = http.StatusBadGateway
+							break
 						} else {
-							state.Kind, state.Recipes, state.Found = "search", result.Recipes, result.Found
+							state.Kind, state.Found, state.Page = "search", result.Found, page
+							for _, recipe := range result.Recipes {
+								if !seen[recipe.Id] {
+									state.Recipes = append(state.Recipes, recipe)
+									seen[recipe.Id] = true
+								}
+							}
 							// Use hit metadata, not the number of successfully hydrated cards.
 							if int64(result.Page)*int64(result.PerPage) < int64(result.Found) {
-								state.NextURL = request.pageURL(request.page + 1)
+								state.NextURL = request.pageURL(page + 1)
+							} else {
+								state.NextURL = ""
+								break
 							}
 						}
 					}
@@ -171,12 +175,34 @@ func browseHandler(client graphql.Client, fragment bool) http.HandlerFunc {
 		}
 		if status >= 500 {
 			state.Message = "Rezepte konnten nicht geladen werden."
+			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
 		}
-		var component templ.Component = components.BrowseResults(state, true)
-		if !fragment {
+		var component templ.Component
+		if fragment && status >= 500 && request.page > 1 {
+			// A failed load-more only replaces its trigger. Existing cards and the
+			// successful title/URL survive, and retries never auto-trigger.
+			component = components.BrowsePageError(request.pageURL(request.page))
+			w.Header().Set("HX-Retarget", "#browse-pagination")
+			w.Header().Set("HX-Reswap", "outerHTML")
+			status = http.StatusOK
+		} else if fragment {
+			if state.Kind == "fallback" {
+				w.Header().Set("HX-Retarget", "#browse-content")
+				component = components.BrowseFallbackFragment(state)
+			} else {
+				component = components.BrowseFragment(state)
+			}
+			w.Header().Set("HX-Replace-Url", request.pageURL(state.Page))
+			// HTMX swaps successful HTML by default; application errors are rendered
+			// as an explicit error state rather than leaving old-query cards visible.
+			status = http.StatusOK
+		} else {
 			ctx := templ.WithChildren(r.Context(), components.Browse(state))
 			r = r.WithContext(ctx)
-			component = components.Layout("Alle Rezepte | RezeptDB")
+			component = components.Layout(state.Title())
+			if r.Header.Get("HX-History-Restore-Request") == "true" {
+				status = http.StatusOK
+			}
 		}
 		var body bytes.Buffer
 		if err := component.Render(r.Context(), &body); err != nil {
