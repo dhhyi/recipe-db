@@ -23,7 +23,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 templ Browse(state BrowseState) {
 	<div id="browse-content" data-browse-search hx-history="false">
 		<h1>Alle Rezepte</h1>
-		<form id="browse-form" action="/" method="get" role="search" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::before-request="if (this.dataset.composing) event.preventDefault()" class="grid! grid-cols-1 md:grid-cols-[1fr_2fr_1fr] gap-2 items-end my-3">
+		<form id="browse-form" action="/" method="get" role="search" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::config-request="if (this.dataset.composing) event.preventDefault()" class="grid! grid-cols-1 md:grid-cols-[1fr_2fr_1fr] gap-2 items-end my-3">
 			<label class="min-w-0 md:col-start-2">
 				Rezepte suchen
 				<input id="browse-query" type="search" name="q" placeholder="Rezepte suchen" value={ state.Query } disabled?={ state.Kind == "fallback" }/>
@@ -43,8 +43,8 @@ templ Browse(state BrowseState) {
 	</div>
 }
 
-templ browseStatus(state BrowseState) {
-	<p data-browse-status role="status" aria-live="polite" aria-atomic="true" class="text-center">
+templ browseStatus(state BrowseState, attributes templ.Attributes) {
+	<p { attributes... } id="browse-metadata" data-kind={ state.Kind } data-page={ strconv.Itoa(state.Page) } data-per-page={ strconv.Itoa(state.PerPage) } data-found={ strconv.Itoa(state.Found) } data-query={ state.Query } data-sort={ state.Sort } data-browse-status role="status" aria-live="polite" aria-atomic="true" class="text-center">
 		if state.Message != "" {
 			{ state.Message }
 		} else if state.Found == 0 {
@@ -56,15 +56,16 @@ templ browseStatus(state BrowseState) {
 }
 
 templ BrowseResults(state BrowseState, includeStatus bool) {
-	<section id="browse-results" data-kind={ state.Kind } data-page={ strconv.Itoa(state.Page) } data-per-page={ strconv.Itoa(state.PerPage) } data-found={ strconv.Itoa(state.Found) } data-query={ state.Query } data-sort={ state.Sort }>
+	<section id="browse-results">
 		if includeStatus {
-			@browseStatus(state)
+			@browseStatus(state, nil)
 		}
 		<div data-browse-grid class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4 mx-auto max-w-[350px] sm:max-w-none">
 			<div data-recipe-list class="contents">
 				for _, recipe := range state.Recipes {
 					@recipeTile(recipe, state.RatingsOnline)
 				}
+				@browsePagination(state)
 			</div>
 			if state.EditorOnline {
 				<a href="/edit/new" data-add-recipe class="contents" aria-label="Neues Rezept hinzufügen">
@@ -72,12 +73,26 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 				</a>
 			}
 		</div>
-		if state.NextURL != "" {
-			<nav id="browse-pagination" aria-label="Weitere Rezepte" class="justify-center">
-				<a href={ templ.SafeURL(state.NextURL) } hx-get={ state.NextURL } hx-trigger="intersect once, click" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more data-sentinel>Mehr laden</a>
-			</nav>
-		}
 	</section>
+}
+
+templ browsePagination(state BrowseState) {
+	if state.NextURL != "" {
+		<div id="browse-pagination" class="contents">
+			<nav aria-label="Weitere Rezepte" class="justify-center" style="grid-column: 1 / -1; order: 1;">
+				<a href={ templ.SafeURL(state.NextURL) } hx-get={ state.NextURL } hx-vals={ state.PaginationValues() } hx-trigger="intersect once, click" hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more data-sentinel>Mehr laden</a>
+			</nav>
+		</div>
+	}
+}
+
+templ BrowsePage(state BrowseState) {
+	<title>{ state.Title() }</title>
+	@browseStatus(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
+	for _, recipe := range state.Recipes {
+		@recipeTile(recipe, state.RatingsOnline)
+	}
+	@browsePagination(state)
 }
 
 templ BrowseFragment(state BrowseState) {
@@ -93,9 +108,11 @@ templ BrowseFallbackFragment(state BrowseState) {
 	@Browse(state)
 }
 
-templ BrowsePageError(retryURL string) {
-	<nav id="browse-pagination" aria-label="Weitere Rezepte" class="justify-center">
-		<p role="status" aria-live="polite">Weitere Rezepte konnten nicht geladen werden.</p>
-		<a href={ templ.SafeURL(retryURL) } hx-get={ retryURL } hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more>Erneut versuchen</a>
-	</nav>
+templ BrowsePageError(state BrowseState, retryURL string) {
+	<div id="browse-pagination" class="contents">
+		<nav aria-label="Weitere Rezepte" class="justify-center" style="grid-column: 1 / -1; order: 1;">
+			<p role="status" aria-live="polite">Weitere Rezepte konnten nicht geladen werden.</p>
+			<a href={ templ.SafeURL(retryURL) } hx-get={ retryURL } hx-vals={ state.PaginationValues() } hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more>Erneut versuchen</a>
+		</nav>
+	</div>
 }

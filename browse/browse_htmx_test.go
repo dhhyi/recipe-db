@@ -47,7 +47,7 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 	}))
 	defer upstream.Close()
 	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
-	for _, mode := range []string{"native", "fragment", "history"} {
+	for _, mode := range []string{"native", "fragment", "history", "append"} {
 		t.Run(mode, func(t *testing.T) {
 			pages = nil
 			request := httptest.NewRequest("GET", "/?page=3&q=Apfel", nil)
@@ -57,9 +57,24 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 			if mode == "history" {
 				request.Header.Set("HX-History-Restore-Request", "true")
 			}
+			if mode == "append" {
+				request.Header.Set("HX-Target", "browse-pagination")
+				request.URL.RawQuery += "&seen=a&seen=b&seen=c"
+			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			body := html.UnescapeString(response.Body.String())
+			if mode == "append" {
+				if response.Code != 200 || len(pages) != 1 || pages[0] != 3 ||
+					strings.Count(body, "data-recipe-id=") != 1 || !strings.Contains(body, `data-recipe-id="d"`) ||
+					strings.Contains(body, "data-add-recipe") || strings.Contains(body, `<section`) ||
+					!strings.Contains(body, `hx-swap-oob="outerHTML"`) ||
+					!strings.Contains(body, `data-page="3" data-per-page="24" data-found="49"`) ||
+					response.Header().Get("HX-Replace-Url") != "/?page=3&q=Apfel" {
+					t.Fatalf("append must query only the next page and leave existing cards intact: pages=%v %s", pages, body)
+				}
+				return
+			}
 			if response.Code != 200 || len(pages) != 3 || pages[0] != 1 || pages[1] != 2 || pages[2] != 3 ||
 				strings.Count(body, "data-recipe-id=") != 4 || strings.Count(body, "data-add-recipe") != 1 ||
 				!strings.Contains(body, `data-page="3" data-per-page="24" data-found="49"`) ||
@@ -88,8 +103,10 @@ func TestBrowseHTMXContract(t *testing.T) {
 	for _, attribute := range []string{
 		`id="browse-query"`, `hx-get="/"`, `hx-target="#browse-results"`,
 		`delay:300ms`, `compositionend`, `event.isComposing`, `htmx:abort`,
+		`hx-on::config-request=`,
 		`hx-sync="this:replace"`, `hx-sync="#browse-form:abort"`,
 		`hx-trigger="intersect once, click"`, `href="/?page=2"`,
+		`hx-target="#browse-pagination"`,
 	} {
 		if !strings.Contains(html.UnescapeString(body.String()), attribute) {
 			t.Errorf("missing HTMX contract: %s", attribute)

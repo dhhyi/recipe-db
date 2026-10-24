@@ -7,6 +7,8 @@ function resultsFragment({
   kind = "search",
   query = "boundary",
   sort = "",
+  append = false,
+  seen = [],
 } = {}) {
   const message =
     kind === "fallback"
@@ -18,11 +20,23 @@ function resultsFragment({
           : `${found} Rezepte gefunden.`;
   const next = kind === "search" && page * 24 < found;
   const nextURL = `/?page=${page + 1}&q=${query}${sort ? `&sort=${sort}` : ""}`;
-  return `<section id="browse-results" data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="${sort}">
-    <p data-browse-status role="status" aria-live="polite">${message}</p>
-    <div data-recipe-list>${ids.map((id) => `<a data-recipe-id="${id}" href="/recipe/${id}" hx-boost="true" style="display:block;height:200px">Rezept ${id}</a>`).join("")}</div>
+  const metadata = `<p id="browse-metadata" ${append ? 'hx-swap-oob="outerHTML"' : ""} data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="${sort}" data-browse-status role="status" aria-live="polite">${message}</p>`;
+  const values = JSON.stringify({ seen: [...new Set([...seen, ...ids])] });
+  const cards = [...new Set(ids)]
+    .filter((id) => !append || !seen.includes(id))
+    .map(
+      (id) =>
+        `<a data-recipe-id="${id}" href="/recipe/${id}" hx-boost="true" style="display:block;height:200px">Rezept ${id}</a>`,
+    )
+    .join("");
+  const pagination = next
+    ? `<div id="browse-pagination"><nav><a data-load-more data-sentinel href="${nextURL}" hx-get="${nextURL}" hx-vals='${values}' hx-trigger="intersect once, click" hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort">Mehr laden</a></nav></div>`
+    : "";
+  if (append) return metadata + cards + pagination;
+  return `<section id="browse-results">
+    ${metadata}
+    <div data-recipe-list>${cards}${pagination}</div>
     <a href="/edit/new" data-add-recipe aria-label="Neues Rezept hinzufügen">+</a>
-    ${next ? `<nav id="browse-pagination"><a data-load-more data-sentinel href="${nextURL}" hx-get="${nextURL}" hx-trigger="intersect once, click" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort">Mehr laden</a></nav>` : ""}
   </section>`;
 }
 
@@ -39,6 +53,10 @@ async function fulfillBrowse(route, options = {}) {
   const sort = url.searchParams.get("sort") || "";
   const number = Number(url.searchParams.get("page") || 1);
   const kind = options.kind || "search";
+  const append =
+    kind === "search" &&
+    route.request().headers()["hx-target"] === "browse-pagination";
+  const seen = url.searchParams.getAll("seen");
   const title =
     kind === "error"
       ? "Rezepte konnten nicht geladen werden | RezeptDB"
@@ -51,12 +69,22 @@ async function fulfillBrowse(route, options = {}) {
       resultsFragment({ page: number, query, sort, ...options }),
     )
     .replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`);
+  if (append)
+    body = `<title>${title}</title>${resultsFragment({
+      page: number,
+      query,
+      sort,
+      ...options,
+      append,
+      seen,
+    })}`;
   if (kind === "fallback")
     body = `<title>${title}</title>${body.match(/<main>([\s\S]*)<\/main>/)[1]}`
       .replaceAll('name="q"', 'disabled name="q"')
       .replaceAll('name="sort"', 'disabled name="sort"')
       .replaceAll('type="submit"', 'disabled type="submit"');
   if (!sort) url.searchParams.delete("sort");
+  url.searchParams.delete("seen");
   if (number === 1) url.searchParams.delete("page");
   url.searchParams.sort();
   await route.fulfill({
@@ -112,6 +140,12 @@ test("search retains explicit sorting, focus and composition state", async ({
   page,
   demoRecipe,
 }) => {
+  const sentQueries = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/" && request.headers()["hx-request"] === "true")
+      sentQueries.push(url.searchParams.get("q"));
+  });
   await page.goto("/");
   const search = page.getByRole("searchbox", { name: "Rezepte suchen" });
   const sort = page.getByLabel("Sortieren nach", { exact: true });
@@ -139,6 +173,7 @@ test("search retains explicit sorting, focus and composition state", async ({
     .toEqual([3, 8]);
 
   // An already scheduled debounce must not submit an unfinished composition.
+  const beforeComposition = sentQueries.length;
   await search.fill("pending");
   await search.evaluate((input) => {
     input.dispatchEvent(
@@ -150,8 +185,10 @@ test("search retains explicit sorting, focus and composition state", async ({
     );
   });
   await page.waitForTimeout(400);
+  expect(sentQueries).toHaveLength(beforeComposition);
   await search.press("Enter");
   expect(new URL(page.url()).searchParams.get("q")).toBe(demoRecipe.name);
+  expect(sentQueries).toHaveLength(beforeComposition);
   await search.evaluate((input) =>
     input.dispatchEvent(
       new CompositionEvent("compositionend", { bubbles: true }),
@@ -162,6 +199,8 @@ test("search retains explicit sorting, focus and composition state", async ({
   await expect(
     page.getByText("Keine Rezepte gefunden.", { exact: true }),
   ).toBeVisible();
+  await page.waitForTimeout(400);
+  expect(sentQueries.slice(beforeComposition)).toEqual(["Unfertige Eingabe"]);
   await search.fill("");
   await search.press("Enter");
   await expect(page).toHaveURL("/?sort=rating");
@@ -185,7 +224,7 @@ test("automatic sorting and document titles follow the current query", async ({
   );
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
   await search.fill(demoRecipe.name);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-query",
     demoRecipe.name,
   );
@@ -394,24 +433,31 @@ test("sentinel and keyboard loading serialize requests, deduplicate and stop at 
   await page.getByRole("searchbox").fill("boundary");
   await page.getByRole("searchbox").press("Enter");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+  await page.locator("[data-recipe-id=batch-0]").evaluate((card) => {
+    card.dataset.originalNode = "true";
+  });
   await page.getByRole("link", { name: "Mehr laden" }).focus();
   await page.getByRole("link", { name: "Mehr laden" }).press("Enter");
   await expect.poll(() => requested).toEqual([1, 2]);
   await triggerSentinel(page);
   releaseSecond();
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-page",
     "2",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(47);
+  await expect(page.locator("[data-recipe-id=batch-0]")).toHaveAttribute(
+    "data-original-node",
+    "true",
+  );
   await triggerSentinel(page);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-page",
     "3",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(71);
   await triggerSentinel(page);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-page",
     "4",
   );
@@ -442,7 +488,7 @@ test("an empty hydrated page still advances using found metadata", async ({
   await page.getByRole("searchbox").press("Enter");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
   await triggerSentinel(page);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-page",
     "2",
   );
@@ -594,7 +640,7 @@ for (const cacheSize of [10, 0]) {
     await page.goBack();
     await expect(search).toHaveValue("boundary");
     await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
-    await expect(page.locator("#browse-results")).toHaveAttribute(
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
       "data-page",
       "3",
     );
@@ -603,58 +649,116 @@ for (const cacheSize of [10, 0]) {
     await expect(search).toBeVisible();
     await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
     await page.reload();
-    await expect(page.locator("#browse-results")).toHaveAttribute(
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
       "data-page",
       "3",
     );
   });
 }
 
-test("a sort change cancels an older append generation", async ({ page }) => {
+for (const action of ["sort", "query"]) {
+  test(`a ${action} change cancels an older append generation`, async ({
+    page,
+  }) => {
+    await manualSentinel(page);
+    let release;
+    let appendStarted;
+    let appendFinished;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise((resolve) => {
+      appendStarted = resolve;
+    });
+    const finished = new Promise((resolve) => {
+      appendFinished = resolve;
+    });
+    await page.route(/\/\?[^#]*\bq=/, async (route) => {
+      const url = new URL(route.request().url());
+      const number = Number(url.searchParams.get("page") || 1);
+      if (number === 2) {
+        appendStarted();
+        await pending;
+      }
+      const id =
+        url.searchParams.get("sort") === "updated" ||
+        url.searchParams.get("q") === "new"
+          ? "new-state"
+          : `old-${number}`;
+      await fulfillBrowse(route, { page: number, found: 48, ids: [id] }).catch(
+        () => {},
+      );
+      if (number === 2) appendFinished();
+    });
+    await page.goto("/");
+    await page.getByRole("searchbox").fill("boundary");
+    await page.getByRole("searchbox").press("Enter");
+    await expect(page.locator("[data-recipe-id=old-1]")).toBeVisible();
+    await triggerSentinel(page);
+    await started;
+    if (action === "sort")
+      await page
+        .getByLabel("Sortieren nach", { exact: true })
+        .selectOption("updated");
+    else await page.getByRole("searchbox").fill("new");
+    release();
+    await finished;
+    await expect(page.locator("[data-recipe-id=old-2]")).toHaveCount(0);
+    await expect(page.locator("[data-recipe-id=new-state]")).toBeVisible();
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
+      "data-page",
+      "1",
+    );
+  });
+}
+
+test("returning to the same query cannot revive its older response", async ({
+  page,
+}) => {
   await manualSentinel(page);
   let release;
-  let appendStarted;
-  let appendFinished;
+  let oldStarted;
+  let oldFinished;
+  let oldRequests = 0;
   const pending = new Promise((resolve) => {
     release = resolve;
   });
   const started = new Promise((resolve) => {
-    appendStarted = resolve;
+    oldStarted = resolve;
   });
   const finished = new Promise((resolve) => {
-    appendFinished = resolve;
+    oldFinished = resolve;
   });
   await page.route(/\/\?[^#]*\bq=/, async (route) => {
-    const url = new URL(route.request().url());
-    const number = Number(url.searchParams.get("page") || 1);
-    if (number === 2) {
-      appendStarted();
+    const query = new URL(route.request().url()).searchParams.get("q");
+    const stale = query === "old" && ++oldRequests === 1;
+    if (stale) {
+      oldStarted();
       await pending;
     }
-    const id =
-      url.searchParams.get("sort") === "updated" ? "new-sort" : `old-${number}`;
-    await fulfillBrowse(route, { page: number, found: 48, ids: [id] }).catch(
-      () => {},
-    );
-    if (number === 2) appendFinished();
+    await fulfillBrowse(route, {
+      query,
+      found: stale ? 99 : 1,
+      ids: [stale ? "stale" : query],
+    }).catch(() => {});
+    if (stale) oldFinished();
   });
   await page.goto("/");
-  await page.getByRole("searchbox").fill("boundary");
-  await page.getByRole("searchbox").press("Enter");
-  await expect(page.locator("[data-recipe-id=old-1]")).toBeVisible();
-  await triggerSentinel(page);
+  const input = page.getByRole("searchbox");
+  await input.fill("old");
+  await input.press("Enter");
   await started;
-  await page
-    .getByLabel("Sortieren nach", { exact: true })
-    .selectOption("updated");
-  await expect(page.locator("[data-recipe-id=new-sort]")).toBeVisible();
+  await input.fill("new");
+  await expect(page.locator("[data-recipe-id=new]")).toBeVisible();
+  await input.fill("old");
+  await input.press("Enter");
+  await expect(page.locator("[data-recipe-id=old]")).toBeVisible();
   release();
   await finished;
+  await expect(page.locator("[data-recipe-id=stale]")).toHaveCount(0);
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
-    "data-page",
-    "1",
-  );
+  await expect(page).toHaveTitle("1 Rezepte für 'old' | RezeptDB");
 });
 
 test("typing debounces by 300ms while Enter and sorting submit immediately", async ({
@@ -689,10 +793,13 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
     .selectOption("updated");
   await expect.poll(() => queries).toHaveLength(3);
   expect(queries[2]).toEqual(["enter", "updated"]);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-sort",
     "updated",
   );
+  await input.blur();
+  await page.clock.runFor(400);
+  expect(queries).toHaveLength(3);
 });
 
 test("rendered online failure removes previous-query cards without fallback", async ({
@@ -727,8 +834,44 @@ test("rendered online failure removes previous-query cards without fallback", as
   ).toHaveCount(0);
 });
 
-test.describe("unenhanced pagination", () => {
+test.describe("pagination with and without JavaScript", () => {
   test.use({ demoRecipeCount: 25, demoRecipeWithImage: false });
+
+  test("HTMX inserts the next server page without replacing earlier tiles", async ({
+    page,
+    demoRecipes,
+  }) => {
+    await manualSentinel(page);
+    await page.goto(
+      `/?q=${encodeURIComponent(demoRecipes[0].name)}&sort=newest`,
+    );
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+    const first = page.locator("[data-recipe-id]").first();
+    const firstID = await first.getAttribute("data-recipe-id");
+    await first.evaluate((card) => {
+      card.dataset.originalNode = "true";
+    });
+    await triggerSentinel(page);
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
+      "data-page",
+      "2",
+    );
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+    await expect(page.locator(`[data-recipe-id="${firstID}"]`)).toHaveAttribute(
+      "data-original-node",
+      "true",
+    );
+    await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+    await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(0);
+    await expect(page).toHaveURL(/page=2.*sort=newest/);
+    expect(new URL(page.url()).searchParams.has("seen")).toBe(false);
+    await page.reload();
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
+      "data-page",
+      "2",
+    );
+  });
 
   test("ordinary links preserve the query and advance to the next page", async ({
     browser,
@@ -791,7 +934,7 @@ test("a failed history cache miss renders a truthful error page", async ({
     page.getByText("Rezepte konnten nicht geladen werden.", { exact: true }),
   ).toBeVisible();
   await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
-  await expect(page.locator("#browse-results")).toHaveAttribute(
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-kind",
     "error",
   );

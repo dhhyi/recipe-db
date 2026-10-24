@@ -265,6 +265,9 @@ func TestBrowseHTTP(t *testing.T) {
 				if fragment {
 					request.Header.Set("HX-Request", "true")
 				}
+				if fragment && tc.page > 1 {
+					request.Header.Set("HX-Target", "browse-pagination")
+				}
 				handler.ServeHTTP(recorder, request)
 				body := html.UnescapeString(recorder.Body.String())
 				wantCode := tc.code
@@ -292,7 +295,7 @@ func TestBrowseHTTP(t *testing.T) {
 				if !tc.statusError {
 					if tc.searchOnline {
 						wantOperations = append(wantOperations, "BrowseSearch")
-						if tc.kind == "search" {
+						if tc.kind == "search" && !fragment {
 							for page := 2; page <= tc.page && (page-1)*24 < tc.hits; page++ {
 								wantOperations = append(wantOperations, "BrowseSearch")
 							}

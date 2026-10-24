@@ -2,6 +2,7 @@ package components
 
 import gql "frontend/src/generated"
 import "fmt"
+import "encoding/json"
 
 type BrowseState struct {
 	Query, Sort, Kind, Message  string
@@ -9,6 +10,15 @@ type BrowseState struct {
 	EditorOnline, RatingsOnline bool
 	Recipes                     []gql.RecipeStub
 	NextURL                     string
+	SeenIDs                     []string
+}
+
+func (state BrowseState) PaginationValues() string {
+	if len(state.SeenIDs) == 0 {
+		return `{"seen":[]}`
+	}
+	values, _ := json.Marshal(map[string][]string{"seen": state.SeenIDs})
+	return string(values)
 }
 
 func (state BrowseState) Title() string {

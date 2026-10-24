@@ -102,6 +102,7 @@ func (request browseRequest) pageURL(page int) string {
 func browseHandler(client graphql.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fragment := r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") != "true"
+		appendPage := fragment && r.Header.Get("HX-Target") == "browse-pagination"
 		request, err := parseBrowseRequest(r.URL.Query())
 		if err == nil && !fragment && r.Header.Get("HX-History-Restore-Request") != "true" &&
 			r.URL.RequestURI() != request.pageURL(request.page) {
@@ -136,10 +137,20 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						state.Message = "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
 					}
 				} else {
-					// Render the loaded depth on the server, including on native navigation
-					// and HTMX history cache misses. Deduplicate hydrated hits across pages.
+					// Load-more fetches only its next batch. Native navigation and history
+					// cache misses reconstruct the loaded depth without a client controller.
 					seen := make(map[string]bool)
-					for page := 1; page <= request.page; page++ {
+					firstPage := 1
+					if appendPage {
+						firstPage = request.page
+						for _, id := range r.URL.Query()["seen"] {
+							if !seen[id] {
+								seen[id] = true
+								state.SeenIDs = append(state.SeenIDs, id)
+							}
+						}
+					}
+					for page := firstPage; page <= request.page; page++ {
 						pageRequest := request
 						pageRequest.page = page
 						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
@@ -159,6 +170,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 								if !seen[recipe.Id] {
 									state.Recipes = append(state.Recipes, recipe)
 									seen[recipe.Id] = true
+									state.SeenIDs = append(state.SeenIDs, recipe.Id)
 								}
 							}
 							// Use hit metadata, not the number of successfully hydrated cards.
@@ -178,10 +190,10 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
 		}
 		var component templ.Component
-		if fragment && status >= 500 && request.page > 1 {
+		if appendPage && status >= 500 {
 			// A failed load-more only replaces its trigger. Existing cards and the
 			// successful title/URL survive, and retries never auto-trigger.
-			component = components.BrowsePageError(request.pageURL(request.page))
+			component = components.BrowsePageError(state, request.pageURL(request.page))
 			w.Header().Set("HX-Retarget", "#browse-pagination")
 			w.Header().Set("HX-Reswap", "outerHTML")
 			status = http.StatusOK
@@ -189,6 +201,8 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			if state.Kind == "fallback" {
 				w.Header().Set("HX-Retarget", "#browse-content")
 				component = components.BrowseFallbackFragment(state)
+			} else if appendPage {
+				component = components.BrowsePage(state)
 			} else {
 				component = components.BrowseFragment(state)
 			}
