@@ -1,0 +1,10 @@
+package components
+
+templ BrowsePageError(state BrowseState, retryURL string) {
+	<div id="browse-pagination" class="contents">
+		<nav aria-label="Weitere Rezepte" class="justify-center col-span-full order-1">
+			<p role="status" aria-live="polite">Weitere Rezepte konnten nicht geladen werden.</p>
+			<a href={ templ.SafeURL(retryURL) } hx-get={ retryURL } hx-vals={ state.PaginationValues() } hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" data-load-more>Erneut versuchen</a>
+		</nav>
+	</div>
+}
