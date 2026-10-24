@@ -158,3 +158,37 @@ Feature: Search recipes on the deployed stack
       | options                              |
       | {"q": []}                            |
       | {"q": "*", "filter_by": "missing:=1"} |
+
+  Scenario: German name keys, unrated recipes and every fixed sort
+    When I update "soup" through GraphQL:
+      """
+      {"name": "Äpfelsuppe"}
+      """
+    And I update "salad" through GraphQL:
+      """
+      {"name": "Apfel"}
+      """
+    And I update "cake" through GraphQL:
+      """
+      {"name": "Banane"}
+      """
+    And these recipes exist in an isolated test scope:
+      | recipe  | name    | ingredient | rating |
+      | oil     | Ölsuppe | Öl         |        |
+      | street1 | Strasse | Salz       | 4      |
+      | street2 | Straße  | Salz       | 4      |
+      | onion   | Zwiebel | Zwiebeln   |        |
+    And all scoped recipes have been indexed
+    Then every explicit sort follows the source metadata and stable ID ties
+    When I rebuild the search index successfully
+    Then every explicit sort follows the source metadata and stable ID ties
+
+  Scenario: Source timestamp microseconds survive optional events and rebuilds
+    When I record the exact source recipe metadata
+    And I change only the rating of "soup"
+    And I give "soup" a unique inspiration URL
+    And I upload the fixture image to "soup" through GraphQL
+    And all search events have been acknowledged
+    Then indexed timestamps retain the exact recorded source microseconds
+    When I rebuild the search index successfully
+    Then indexed timestamps retain the exact recorded source microseconds

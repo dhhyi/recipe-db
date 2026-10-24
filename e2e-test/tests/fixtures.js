@@ -13,6 +13,30 @@ export async function graphql(request, query, variables = {}) {
   return result.data;
 }
 
+export async function waitForRecipeIndexed(request, id) {
+  await expect
+    .poll(
+      async () => {
+        const response = await request.post("/graphql", {
+          data: {
+            query:
+              "query($options: JSON!) { searchRecipes(options: $options) { recipes { id } } }",
+            variables: {
+              options: { q: "*", filter_by: `id:=${id}`, per_page: 1 },
+            },
+          },
+        });
+        if (!response.ok()) return [];
+        const result = await response.json();
+        return (
+          result.data?.searchRecipes?.recipes?.map((recipe) => recipe.id) ?? []
+        );
+      },
+      { message: `Recipe ${id} is indexed`, timeout: 60_000 },
+    )
+    .toEqual([id]);
+}
+
 export const test = base.extend({
   demoRecipeCount: [1, { option: true }],
   demoRecipeWithImage: [true, { option: true }],
@@ -70,6 +94,9 @@ export const test = base.extend({
           width: expect.any(Number),
           height: expect.any(Number),
         });
+      }
+      for (const recipe of recipes) {
+        await waitForRecipeIndexed(request, recipe.id);
       }
       await use(recipes);
     } finally {

@@ -13,6 +13,33 @@ Feature: recipes
     * status 200
     * match response.data == { recipes: [] }
 
+  Scenario: should expose a derived read-only name sort key
+    * request { query: 'mutation { createRecipe(value: {name: "  A\\u0308pfel ÖL Straße  "}) { id name nameSortKey createdAt updatedAt } }' }
+    * method post
+    * status 200
+    * match response.errors == '#notpresent'
+    * def recipe = response.data.createRecipe
+    * match recipe.name == '  A\u0308pfel ÖL Straße  '
+    * match recipe.nameSortKey == 'apfel ol strasse'
+    * match recipe.updatedAt == recipe.createdAt
+
+    * request { query: 'query($id: ID!) { recipe(id: $id) { nameSortKey createdAt updatedAt } recipes { nameSortKey } }', variables: { id: '#(recipe.id)' } }
+    * method post
+    * status 200
+    * match response.data.recipe == { nameSortKey: 'apfel ol strasse', createdAt: '#(recipe.createdAt)', updatedAt: '#(recipe.updatedAt)' }
+    * match response.data.recipes == [{ nameSortKey: 'apfel ol strasse' }]
+
+    * request { query: 'mutation($id: ID!) { updateRecipe(id: $id, value: {}) { nameSortKey createdAt updatedAt } }', variables: { id: '#(recipe.id)' } }
+    * method post
+    * status 200
+    * match response.data.updateRecipe == { nameSortKey: 'apfel ol strasse', createdAt: '#(recipe.createdAt)', updatedAt: '#(recipe.updatedAt)' }
+
+    * request { query: 'mutation { createRecipe(value: {name: "test", nameSortKey: "override"}) { id } }' }
+    * method post
+    * status 200
+    * match response.errors[0].message contains 'nameSortKey'
+    * match response.errors[0].message contains 'RecipeInput'
+
   Scenario: should have a recipe after adding one
     * def variables =
       """

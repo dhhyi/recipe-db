@@ -1,9 +1,10 @@
 import json
+import datetime
 import uuid
 
 from behave import given, then, when
 
-from search_support import REST, publish, request, wait_for
+from search_support import REST, gql, publish, request, wait_for
 
 
 def recipe_ids(context, recipes):
@@ -36,10 +37,11 @@ def service_ready(context):
 def create_recipes(context):
     for row in context.table:
         context.recipes[row["recipe"]] = context.client.create(
-            row["name"], row["ingredient"], int(row["rating"]))
+            row["name"], row["ingredient"], int(row["rating"]) if row["rating"] else None)
 
 
 @given("all scoped recipes have been indexed")
+@when("all scoped recipes have been indexed")
 def recipes_indexed(context):
     wait_for(lambda: set(context.client.search()["recipeIds"]) == set(context.client.ids))
 
@@ -241,3 +243,73 @@ def invalid_search(context):
 def response_status(context, status, content_type):
     assert context.status == status, (context.status, context.result)
     assert context.headers["Content-Type"] == content_type, context.headers
+
+
+def source_recipes(context):
+    return [gql(
+        "query($id: ID!) { recipe(id: $id) { id name nameSortKey createdAt updatedAt "
+        "rating { average count } } }", {"id": recipe_id})["recipe"]
+        for recipe_id in context.client.ids]
+
+
+def micros(timestamp):
+    parsed = datetime.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    delta = parsed - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+    return (delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+@then("every explicit sort follows the source metadata and stable ID ties")
+def check_sorts(context):
+    recipes = source_recipes(context)
+    cases = [
+        ("rating_average:desc,rating_count:desc,recipe_id_sort:asc",
+         lambda r: (-(r["rating"]["average"] or 0), -r["rating"]["count"], r["id"])),
+        ("rating_count:desc,rating_average:desc,recipe_id_sort:asc",
+         lambda r: (-r["rating"]["count"], -(r["rating"]["average"] or 0), r["id"])),
+        ("name_sort:asc,recipe_id_sort:asc", lambda r: (r["nameSortKey"], r["id"])),
+        ("created_at:desc,recipe_id_sort:asc", lambda r: (-micros(r["createdAt"]), r["id"])),
+        ("updated_at:desc,recipe_id_sort:asc", lambda r: (-micros(r["updatedAt"]), r["id"])),
+    ]
+    for sort, key in cases:
+        expected = [r["id"] for r in sorted(recipes, key=key)]
+        search(context, sort_by=sort)
+        eventually(context, lambda actual: actual == expected)
+    # Stable two-pass sorting reverses names without reversing the ID tie-break.
+    descending = sorted(sorted(recipes, key=lambda r: r["id"]),
+                        key=lambda r: r["nameSortKey"], reverse=True)
+    search(context, sort_by="name_sort:desc,recipe_id_sort:asc")
+    eventually(context, lambda actual: actual == [r["id"] for r in descending])
+    search(context, q="Zwiebeln", query_by="method",
+           sort_by="_text_match:desc,created_at:desc,recipe_id_sort:asc")
+    expected = [r["id"] for r in sorted(recipes, key=lambda r: (-micros(r["createdAt"]), r["id"]))]
+    eventually(context, lambda actual: actual == expected)
+
+
+@when("I record the exact source recipe metadata")
+def record_metadata(context):
+    context.source_metadata = {r["id"]: r for r in source_recipes(context)}
+    for recipe_id, recipe in context.source_metadata.items():
+        status, raw, _ = request(REST + "/recipes/" + recipe_id)
+        assert status == 200, (status, raw)
+        rest = json.loads(raw)
+        for field in ("createdAt", "updatedAt"):
+            assert micros(rest[field]) == micros(recipe[field]), (rest, recipe)
+
+
+@then("indexed timestamps retain the exact recorded source microseconds")
+def preserved_metadata(context):
+    current = {r["id"]: r for r in source_recipes(context)}
+    for recipe_id, recipe in context.source_metadata.items():
+        for field in ("createdAt", "updatedAt"):
+            assert current[recipe_id][field] == recipe[field], (recipe, current[recipe_id])
+        search(context, filter_by=context.client.filter
+               + f" && recipe_id_sort:={recipe_id}"
+               + f" && created_at:={micros(recipe['createdAt'])}"
+               + f" && updated_at:={micros(recipe['updatedAt'])}")
+        eventually(context, lambda actual: actual == [recipe_id])
+
+
+@when('I change only the rating of "{recipe}"')
+def rate_only(context, recipe):
+    gql('mutation($id: ID!) { rate(id: $id, rating: 2, login: "search-test") { count } }',
+        {"id": context.recipes[recipe]})

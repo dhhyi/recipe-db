@@ -24,6 +24,23 @@ query Overview {
   ratingsOnline: isServiceOnline(name: "ratings")
 }
 
+query BrowseServices {
+  searchOnline: isServiceOnline(name: "search")
+  recipeEditOnline: isServiceOnline(name: "recipes-edit")
+  ratingsOnline: isServiceOnline(name: "ratings")
+}
+
+query BrowseSearch($options: JSON!) {
+  searchRecipes(options: $options) {
+    recipes {
+      ...RecipeStub
+    }
+    found
+    page
+    perPage
+  }
+}
+
 fragment RecipeDetail on Recipe {
   id
   name

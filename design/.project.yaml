@@ -68,7 +68,7 @@ vscode:
     - bradlc.vscode-tailwindcss
   tasks:
     - label: Run Storybook
-      command: npm start
+      command: pnpm start
 extras:
   - named-volumes
   - traefik

@@ -30,6 +30,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		}
 		var data any
 		switch request.OperationName {
+		case "BrowseServices":
+			data = map[string]any{"searchOnline": false, "recipeEditOnline": false, "ratingsOnline": false}
 		case "Overview":
 			data = map[string]any{
 				"recipes": []any{map[string]any{

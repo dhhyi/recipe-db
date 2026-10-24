@@ -45,6 +45,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                         Json(json!({
                             "id": id,
                             "name": "Test",
+                            "nameSortKey": "test",
                             "createdAt": "2026-10-23T13:00:00.123456Z",
                             "updatedAt": "2026-10-23T13:00:00.123456Z"
                         })),
