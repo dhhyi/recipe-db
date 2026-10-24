@@ -160,6 +160,13 @@ EOF
   run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
 }
 
+@test "CI and GitHub Actions do not implicitly retain containers" {
+  run env CI=true GITHUB_ACTIONS=true sh .scripts/run-in-devcontainer.sh example test
+
+  [ "$status" -eq 0 ]
+  [ "$(tail -n 1 "$MOCK_LOG")" = "docker stop started-container" ]
+}
+
 @test "invalid environment settings fail before Docker even with explicit removal" {
   for setting in TRUE 1 yes invalid; do
     run --separate-stderr env DEVCONTAINER_KEEP_RUNNING="$setting" \
