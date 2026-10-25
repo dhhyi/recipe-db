@@ -514,6 +514,7 @@ fn bearer_secret(header: &HeaderValue) -> Result<&str, AuthContextError> {
     let (scheme, secret) = value
         .split_once(' ')
         .ok_or_else(AuthContextError::invalid_credentials)?;
+    let secret = secret.trim_start_matches(' ');
     if !scheme.eq_ignore_ascii_case("Bearer")
         || secret.is_empty()
         || secret.contains(',')
