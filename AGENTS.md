@@ -16,6 +16,10 @@ When asked to mark an issue as blocked by another issue, use GitHub's native iss
 
 Umbrella issues use the `umbrella` label and track larger outcomes through native sub-issues. Whenever a child issue changes, update its umbrella's main description in the same task to reflect current decisions, progress, open questions, and next steps rather than relying only on comments. Keep refinement distinct from implementation, link durable decision records, and close the umbrella only when its overall completion criteria are met.
 
+Only issues labeled `umbrella` may have sub-issues. Attach sub-issues directly to the appropriate umbrella; do not nest them under ordinary issues. If a non-umbrella issue already has sub-issues, move those children to its umbrella.
+
+Every umbrella issue must include a Mermaid `flowchart TD` showing implementation order and dependencies among its direct sub-issues. Use prerequisite-to-dependent arrows, matching native GitHub "blocked by" dependencies; clearly mark any cross-umbrella or non-blocking coordination separately rather than implying it is a native blocker. Update the diagram in the same task whenever sub-issues, their dependencies, or implementation order change. Prefer a flowchart over a Gantt chart because these plans express dependencies, not dates.
+
 ## Running commands for a project
 
 Never run project tooling (elm, go, gradle, cargo, pnpm, ...) directly on the host. Always go through the devcontainer:
