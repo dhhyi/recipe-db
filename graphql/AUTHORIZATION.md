@@ -4,6 +4,7 @@ At startup, GraphQL reads the read-only mounted file `/run/secrets/auth-accounts
 
 ```json
 {
+  "$schema": "../graphql/auth-accounts.schema.json",
   "anonymous": { "role": "anonymous", "displayName": "Guest" },
   "tokens": [
     {
@@ -19,7 +20,9 @@ At startup, GraphQL reads the read-only mounted file `/run/secrets/auth-accounts
 }
 ```
 
-All three top-level sections are required. Roles are `anonymous`, `member`, or `owner`; the anonymous principal can intentionally have any of those roles in every environment. Token and Google-account collections may be empty, and no owner entry is required. Token IDs and secrets must be unique and nonempty. Optional `displayName` values are descriptive only; identity is never based on a display name, email, or token secret. Configuration errors do not include config values or token secrets.
+The JSON Schema at [`auth-accounts.schema.json`](auth-accounts.schema.json) provides editor validation; the `$schema` path above is relative to `.secrets/auth-accounts.json`. All three top-level sections are required. Roles are `anonymous`, `member`, or `owner`; the anonymous principal can intentionally have any of those roles in every environment. Token and Google-account collections may be empty, and no owner entry is required. Token IDs and secrets must be unique and nonempty. Optional `displayName` values are descriptive only; identity is never based on a display name, email, or token secret. Configuration errors do not include config values or token secrets.
+
+GraphQL validates the configuration at startup using its strict Serde parser; the JSON Schema is for IDE feedback and is not a second runtime validator. The email-key pattern in the schema is intentionally a basic editor check; runtime validation is stricter and authoritative. Enforcing JSON Schema at startup would require adding a schema-validation dependency and keeping its rules synchronized with the existing semantic checks (for duplicate normalized email keys and token values, for example). A separate mini binary would duplicate the same validation and add another tool to maintain, so it is not needed for startup safety.
 
 Google email keys and incoming addresses use conservative ASCII dot-atom local parts and DNS-style domains with at least two labels. Addresses are lowercased for lookup; no provider-specific aliases are merged. Google identity uses a namespaced, unambiguous issuer/subject key, so email changes preserve identity and different subjects remain distinct. `AUTH_TRUSTED_ISSUER` must be explicitly configured. Only an exactly verified email can receive its configured Google role; an outsider or unverified identity receives the effective `anonymous` role, not the credential-free principal's configured role.
 

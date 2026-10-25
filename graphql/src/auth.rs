@@ -230,6 +230,8 @@ struct AnonymousConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawConfig {
+    #[serde(rename = "$schema", default)]
+    schema: Option<String>,
     anonymous: RawAnonymous,
     tokens: Vec<RawToken>,
     google_accounts: RawGoogleAccounts,
@@ -324,6 +326,7 @@ impl AuthPolicy {
         let raw = serde_json::from_str::<RawConfig>(json).map_err(|_| {
             "authorization configuration is malformed or contains duplicate keys".to_owned()
         })?;
+        let _ = raw.schema;
         let anonymous = AnonymousConfig {
             role: parse_role(&raw.anonymous.role)?,
             display_name: raw.anonymous.display_name,
@@ -338,9 +341,9 @@ impl AuthPolicy {
             }
             let unpadded_secret = token.secret.trim_end_matches('=');
             if unpadded_secret.is_empty()
-                || !unpadded_secret.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || b"-._~+/".contains(&byte)
-                })
+                || !unpadded_secret
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-._~+/".contains(&byte))
             {
                 return Err("token secrets must match RFC 6750 b64token syntax".to_owned());
             }
@@ -676,6 +679,10 @@ mod tests {
 
     #[test]
     fn parses_read_only_token_only_and_privileged_anonymous_configurations() {
+        let schema_annotated = policy(
+            r#"{"$schema":"../graphql/auth-accounts.schema.json","anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
+        );
+        assert_eq!(schema_annotated.tokens.len(), 0);
         let token_only = policy(
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"one","secret":"s","role":"owner"}],"googleAccounts":{}}"#,
         );
@@ -718,6 +725,7 @@ mod tests {
             r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{},"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous","role":"owner"},"tokens":[],"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{},"unknown":1}"#,
+            r#"{"$schema":42,"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
         ];
         for json in invalid {
             let error = AuthPolicy::from_json(json, ISSUER).unwrap_err();
