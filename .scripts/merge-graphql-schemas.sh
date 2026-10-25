@@ -8,9 +8,8 @@ trap 'rm -rf "$temporary_directory"' EXIT
 
 printed_type_defs="$temporary_directory/recipe-db.graphqls"
 mise run --raw generate-docker-compose prepare
-mise run --raw create-intranet
 docker compose build graphql
-docker compose run --rm --no-deps --entrypoint /app/graphql graphql print-schema > "$printed_type_defs"
+docker run --rm --entrypoint /app/graphql ghcr.io/dhhyi/recipe-db-graphql:latest print-schema > "$printed_type_defs"
 
 for project_file in "$project_root"/*/.project.yaml; do
   [ -f "$project_file" ] || continue

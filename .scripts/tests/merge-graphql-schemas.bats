@@ -17,7 +17,7 @@ if [ "$1" = exec ] && [ "$2" = -- ] && [ "$3" = yq ]; then
   printf '%s\n' .
 else
   case "$*" in
-    "run --raw generate-docker-compose prepare" | "run --raw create-intranet")
+    "run --raw generate-docker-compose prepare")
       printf '%s\n' "$*" >> "$MOCK_LOG"
       ;;
     *)
@@ -32,7 +32,7 @@ EOF
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case "$*" in
   "compose build graphql") exit "${BUILD_STATUS:-0}" ;;
-  "compose run --rm --no-deps --entrypoint /app/graphql graphql print-schema")
+  "run --rm --entrypoint /app/graphql ghcr.io/dhhyi/recipe-db-graphql:latest print-schema")
     printf '%s\n' 'type Query { ready: Boolean! }'
     exit "${SCHEMA_STATUS:-0}"
     ;;
@@ -50,9 +50,9 @@ EOF
   run sh .scripts/merge-graphql-schemas.sh
 
   [ "$status" -eq 0 ]
-  [ "$(cat "$MOCK_LOG")" = $'run --raw generate-docker-compose prepare\nrun --raw create-intranet' ]
+  [ "$(cat "$MOCK_LOG")" = "run --raw generate-docker-compose prepare" ]
   [ "$(cat mcp/recipe-db.graphqls)" = "type Query { ready: Boolean! }" ]
-  [ "$(cat "$DOCKER_LOG")" = $'compose build graphql\ncompose run --rm --no-deps --entrypoint /app/graphql graphql print-schema' ]
+  [ "$(cat "$DOCKER_LOG")" = $'compose build graphql\nrun --rm --entrypoint /app/graphql ghcr.io/dhhyi/recipe-db-graphql:latest print-schema' ]
   [[ $output != *in-devcontainer* ]]
 }
 

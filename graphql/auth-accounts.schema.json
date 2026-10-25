@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Recipe DB authorization configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["anonymous", "tokens", "googleAccounts"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "anonymous": {
+      "$ref": "#/$defs/account"
+    },
+    "tokens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "secret", "role"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "secret": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._~+/\\-]+={0,}$"
+          },
+          "role": {
+            "$ref": "#/$defs/role"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "googleAccounts": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 254,
+        "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/role"
+      }
+    }
+  },
+  "$defs": {
+    "role": {
+      "type": "string",
+      "enum": ["anonymous", "member", "owner"]
+    },
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/role"
+        },
+        "displayName": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
