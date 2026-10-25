@@ -12,6 +12,10 @@ Use `spec` only for implementation-ready issues with settled scope, decisions, a
 
 When asked to mark an issue as blocked by another issue, use GitHub's native issue dependency ("blocked by") feature rather than a label.
 
+### Keeping umbrella issues current
+
+Umbrella issues use the `umbrella` label and track larger outcomes through native sub-issues. Whenever a child issue changes, update its umbrella's main description in the same task to reflect current decisions, progress, open questions, and next steps rather than relying only on comments. Keep refinement distinct from implementation, link durable decision records, and close the umbrella only when its overall completion criteria are met.
+
 ## Running commands for a project
 
 Never run project tooling (elm, go, gradle, cargo, pnpm, ...) directly on the host. Always go through the devcontainer:
