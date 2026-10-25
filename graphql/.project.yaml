@@ -24,6 +24,7 @@ devcontainer:
     TRAEFIK_ENTRYPOINTS: web,rest-internal
     NATS_URL: nats://nats:4222
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    AUTH_TRUSTED_ISSUER: https://accounts.google.com
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
@@ -36,7 +37,7 @@ vscode:
     - GraphQL.vscode-graphql
   tasks:
     - label: Run watch server
-      command: watchexec -r -e rs,toml,lock -- cargo run
+      command: sudo install -D -o root -g root -m 0444 ../.secrets/auth-accounts.json /run/secrets/auth-accounts.json && watchexec -r -e rs,toml,lock -- cargo run
 extras:
   - named-volumes
   - traefik
