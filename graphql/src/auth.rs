@@ -336,6 +336,14 @@ impl AuthPolicy {
             if token.id.is_empty() || token.secret.is_empty() {
                 return Err("token IDs and secrets must be nonempty".to_owned());
             }
+            let unpadded_secret = token.secret.trim_end_matches('=');
+            if unpadded_secret.is_empty()
+                || !unpadded_secret.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || b"-._~+/".contains(&byte)
+                })
+            {
+                return Err("token secrets must match RFC 6750 b64token syntax".to_owned());
+            }
             if !token_ids.insert(token.id.clone()) {
                 return Err("authorization configuration contains duplicate token IDs".to_owned());
             }
