@@ -1,5 +1,6 @@
 (ns recipes-edit.views
   (:require [re-frame.core :as rf]
+            [reagent.core :as r]
             [recipes-edit.events :as events]
             [recipes-edit.model :as model]
             [recipes-edit.subs :as subs]))
@@ -7,17 +8,51 @@
 (defn- resize-textarea! [textarea]
   (when textarea
     (set! (.. textarea -style -height) "auto")
-    (set! (.. textarea -style -height) (str (.-scrollHeight textarea) "px"))))
+    (let [style (js/window.getComputedStyle textarea)
+          adjustment (if (= "border-box" (.-boxSizing style))
+                       (+ (js/parseFloat (.-borderTopWidth style))
+                          (js/parseFloat (.-borderBottomWidth style)))
+                       (- (+ (js/parseFloat (.-paddingTop style))
+                             (js/parseFloat (.-paddingBottom style)))))]
+      (set! (.. textarea -style -height)
+            (str (+ (.-scrollHeight textarea) adjustment) "px")))))
+
+(defn- auto-sizing-textarea []
+  (let [textarea (atom nil)
+        frame (atom nil)
+        cancel! (fn []
+                  (when @frame
+                    (js/cancelAnimationFrame @frame)
+                    (reset! frame nil)))
+        resize! (fn [_]
+                  (resize-textarea! @textarea)
+                  (cancel!)
+                  ;; Controlled input reconciliation can finish after commit.
+                  (reset! frame
+                          (js/requestAnimationFrame
+                           (fn []
+                             (reset! frame nil)
+                             (when (some-> @textarea .-isConnected)
+                               (resize-textarea! @textarea))))))]
+    (r/create-class
+     {:component-did-mount resize!
+      :component-did-update resize!
+      :component-will-unmount (fn [_]
+                                (cancel!)
+                                (reset! textarea nil))
+      :reagent-render
+      (fn [props]
+        [:textarea (assoc props :ref #(reset! textarea %))])})))
 
 (defn- ingredient-row [index ingredient]
   [:div.flex.flex-row.gap-1.items-center {:key index}
-   [:input.w-20!.sm:w-28!
+   [:input.w-20!.sm:w-28!.min-w-0
     {:type "text"
      :id (str "ingredient-amount-unit-" index)
      :placeholder "Menge/Einheit"
      :value (model/format-amount-unit ingredient)
      :on-change #(rf/dispatch [::events/set-ingredient-amount-unit index (.. % -target -value)])}]
-   [:input
+   [:input.min-w-0
     {:type "text"
      :id (str "ingredient-name-" index)
      :placeholder "Zutat"
@@ -49,7 +84,7 @@
       [:fieldset
        [:label
         [:span#name-label "Name"]
-        [:input
+        [:input.min-w-0
          (cond-> {:type "text"
                   :id "name"
                   :name "name"
@@ -62,13 +97,12 @@
       [:h2 "Zutaten"]
       (doall (map-indexed ingredient-row (:ingredients form)))
       [:h2 "Zubereitung"]
-      [:textarea
+      [auto-sizing-textarea
        {:id "method"
         :name "method"
         :rows 4
         :value (:method form)
         :style {:scrollbar-width "none"}
-        :ref #(resize-textarea! %)
         :on-change (fn [event]
                      (resize-textarea! (.-target event))
                      (rf/dispatch [::events/set-method (.. event -target -value)]))}]
@@ -79,7 +113,7 @@
           (map-indexed
            (fn [index inspiration]
              [:div {:key index}
-              [:input
+              [:input.min-w-0
                {:type "url"
                 :id (str "inspiration-" index)
                 :placeholder "Link"
@@ -94,12 +128,12 @@
         dirty? "Ungespeicherte Änderungen."
         (= :success (:kind feedback)) (:message feedback)
         :else "Keine ungespeicherten Änderungen.")]
-     [:div.editor-actions
-      [:div.editor-buttons
-       [:button
+     [:div.editor-actions {:class "grid! gap-[12px] my-[16px]"}
+      [:div.editor-buttons.flex.flex-wrap {:class "gap-[12px]"}
+       [:button.w-auto!.max-w-full
         {:type "submit" :disabled (or saving? (not dirty?)) :aria-busy saving?}
         (cond saving? "Speichert …" save-failed? "Erneut speichern" :else "Speichern")]
-       [:button.secondary
+       [:button.secondary.w-auto!.max-w-full
         {:type "button"
          :disabled (or saving? (not dirty?))
          :on-click #(rf/dispatch [::events/discard])}
