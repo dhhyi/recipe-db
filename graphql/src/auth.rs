@@ -4,19 +4,23 @@ use std::fs;
 use std::path::Path;
 
 use async_graphql::{Error, ErrorExtensions};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+use subtle::ConstantTimeEq;
 
 pub const ACCOUNTS_FILE: &str = "/run/secrets/auth-accounts.json";
 const SUBJECT_HEADER: &str = "x-auth-request-user";
 const ISSUER_HEADER: &str = "x-auth-request-issuer";
 const EMAIL_HEADER: &str = "x-auth-request-email";
 const EMAIL_VERIFIED_HEADER: &str = "x-auth-request-email-verified";
+const AUTHORIZATION_HEADER: &str = "authorization";
+const ANONYMOUS_ID: &str = "credential-free:v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
+    Anonymous,
     Member,
     Owner,
 }
@@ -24,6 +28,7 @@ pub enum Role {
 impl Role {
     fn parse(value: &str) -> Option<Self> {
         match value {
+            "anonymous" => Some(Self::Anonymous),
             "member" => Some(Self::Member),
             "owner" => Some(Self::Owner),
             _ => None,
@@ -49,40 +54,71 @@ impl AccountIdentity {
         Ok(Self { issuer, subject })
     }
 
-    #[allow(dead_code)]
     pub fn issuer(&self) -> &str {
         &self.issuer
     }
 
-    #[allow(dead_code)]
     pub fn subject(&self) -> &str {
         &self.subject
     }
 
-    pub fn stable_key(&self) -> String {
-        format!("v1:{}:{}{}", self.issuer.len(), self.issuer, self.subject)
+    pub fn stable_id(&self) -> StablePrincipalId {
+        StablePrincipalId(format!(
+            "google:v1:{}:{}{}",
+            self.issuer.len(),
+            self.issuer,
+            self.subject
+        ))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct StablePrincipalId(String);
+
+impl StablePrincipalId {
+    fn token(id: &str) -> Self {
+        Self(format!("token:v1:{}:{id}", id.len()))
     }
 
-    pub fn from_stable_key(key: &str) -> Result<Self, &'static str> {
-        let encoded = key.strip_prefix("v1:").ok_or("invalid identity key")?;
-        let (length, value) = encoded.split_once(':').ok_or("invalid identity key")?;
-        if length.is_empty() || !length.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err("invalid identity key");
-        }
-        let issuer_length = length
-            .parse::<usize>()
-            .map_err(|_| "invalid identity key")?;
-        if length != issuer_length.to_string() {
-            return Err("invalid identity key");
-        }
-        if issuer_length == 0
-            || issuer_length > value.len()
-            || !value.is_char_boundary(issuer_length)
-        {
-            return Err("invalid identity key");
-        }
-        let (issuer, subject) = value.split_at(issuer_length);
-        Self::new(issuer.to_owned(), subject.to_owned())
+    fn credential_free() -> Self {
+        Self(ANONYMOUS_ID.to_owned())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrincipalSource {
+    CredentialFree,
+    Google,
+    Token,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Principal {
+    id: StablePrincipalId,
+    role: Role,
+    display_name: Option<String>,
+    source: PrincipalSource,
+}
+
+impl Principal {
+    pub fn id(&self) -> &StablePrincipalId {
+        &self.id
+    }
+
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+
+    pub fn source(&self) -> PrincipalSource {
+        self.source
     }
 }
 
@@ -97,18 +133,6 @@ pub enum Capability {
     ManageRecipes,
     ManageImports,
     ManageImages,
-    AdministerAccountPolicy,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Principal {
-    Anonymous,
-    Authenticated {
-        identity: AccountIdentity,
-        email: String,
-        email_verified: bool,
-        role: Option<Role>,
-    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,40 +141,19 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
-    pub fn anonymous() -> Self {
-        Self {
-            principal: Principal::Anonymous,
-        }
-    }
-
     pub fn principal(&self) -> &Principal {
         &self.principal
     }
 
     pub fn require(&self, capability: Capability) -> Result<(), AuthorizationError> {
-        let role = match &self.principal {
-            Principal::Anonymous => {
-                if matches!(
-                    capability,
-                    Capability::ReadPublic | Capability::ReadAggregateRatings
-                ) {
-                    return Ok(());
-                }
-                return Err(AuthorizationError::authentication_required());
-            }
-            Principal::Authenticated { role, .. } => *role,
-        };
-
+        let role = self.principal.role;
         let allowed = match role {
-            Some(Role::Owner) => true,
-            Some(Role::Member) => !matches!(
+            Role::Owner => true,
+            Role::Member => !matches!(
                 capability,
-                Capability::ManageRecipes
-                    | Capability::ManageImports
-                    | Capability::ManageImages
-                    | Capability::AdministerAccountPolicy
+                Capability::ManageRecipes | Capability::ManageImports | Capability::ManageImages
             ),
-            None => matches!(
+            Role::Anonymous => matches!(
                 capability,
                 Capability::ReadPublic | Capability::ReadAggregateRatings
             ),
@@ -158,6 +161,10 @@ impl RequestContext {
 
         if allowed {
             Ok(())
+        } else if self.principal.source == PrincipalSource::CredentialFree
+            && role == Role::Anonymous
+        {
+            Err(AuthorizationError::authentication_required())
         } else {
             Err(AuthorizationError::forbidden())
         }
@@ -199,9 +206,94 @@ impl AuthorizationError {
 }
 
 #[derive(Clone, Debug)]
+struct Token {
+    id: String,
+    secret: String,
+    role: Role,
+    display_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub struct AuthPolicy {
     trusted_issuer: String,
-    accounts: HashMap<String, Role>,
+    anonymous: AnonymousConfig,
+    tokens: Vec<Token>,
+    google_accounts: HashMap<String, Role>,
+}
+
+#[derive(Clone, Debug)]
+struct AnonymousConfig {
+    role: Role,
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawConfig {
+    anonymous: RawAnonymous,
+    tokens: Vec<RawToken>,
+    google_accounts: RawGoogleAccounts,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawAnonymous {
+    role: String,
+    #[serde(default, deserialize_with = "deserialize_display_name")]
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RawToken {
+    id: String,
+    secret: String,
+    role: String,
+    #[serde(default, deserialize_with = "deserialize_display_name")]
+    display_name: Option<String>,
+}
+
+fn deserialize_display_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
+}
+
+struct RawGoogleAccounts(Vec<(String, Value)>);
+
+impl<'de> Deserialize<'de> for RawGoogleAccounts {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct GoogleAccountsVisitor;
+
+        impl<'de> Visitor<'de> for GoogleAccountsVisitor {
+            type Value = RawGoogleAccounts;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object mapping email addresses to roles")
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut seen = HashSet::new();
+                let mut entries = Vec::new();
+                while let Some(email) = map.next_key::<String>()? {
+                    if !seen.insert(email.clone()) {
+                        return Err(serde::de::Error::custom("duplicate Google email key"));
+                    }
+                    entries.push((email, map.next_value::<Value>()?));
+                }
+                Ok(RawGoogleAccounts(entries))
+            }
+        }
+
+        deserializer.deserialize_map(GoogleAccountsVisitor)
+    }
 }
 
 impl AuthPolicy {
@@ -214,7 +306,7 @@ impl AuthPolicy {
     fn load_from(path: &Path, trusted_issuer: &str) -> Result<Self, String> {
         let contents = fs::read_to_string(path).map_err(|_| {
             format!(
-                "could not read authorization account map at {}",
+                "could not read authorization configuration at {}",
                 path.display()
             )
         })?;
@@ -225,110 +317,168 @@ impl AuthPolicy {
         if trusted_issuer.is_empty()
             || trusted_issuer.trim() != trusted_issuer
             || trusted_issuer == "*"
+            || trusted_issuer.chars().any(char::is_control)
         {
             return Err("trusted issuer must be explicit and nonempty".to_owned());
         }
-
-        let raw = serde_json::from_str::<RawAccounts>(json).map_err(|error| {
-            if error.to_string().starts_with("duplicate email key") {
-                "authorization account map contains duplicate email keys".to_owned()
-            } else {
-                "authorization account map is malformed JSON".to_owned()
-            }
+        let raw = serde_json::from_str::<RawConfig>(json).map_err(|_| {
+            "authorization configuration is malformed or contains duplicate keys".to_owned()
         })?;
-        let mut accounts = HashMap::new();
-        let mut owners = 0;
+        let anonymous = AnonymousConfig {
+            role: parse_role(&raw.anonymous.role)?,
+            display_name: raw.anonymous.display_name,
+        };
 
-        for (email, role) in raw.0 {
-            let normalized = normalize_email(&email)
-                .ok_or_else(|| "authorization account map contains an invalid email".to_owned())?;
-            let role = role
-                .as_str()
-                .ok_or_else(|| "authorization account map roles must be strings".to_owned())?;
-            let role = Role::parse(role)
-                .ok_or_else(|| "authorization account map contains an unknown role".to_owned())?;
-            if accounts.insert(normalized, role).is_some() {
+        let mut token_ids = HashSet::new();
+        let mut token_secrets = HashSet::new();
+        let mut tokens = Vec::with_capacity(raw.tokens.len());
+        for token in raw.tokens {
+            if token.id.is_empty() || token.secret.is_empty() {
+                return Err("token IDs and secrets must be nonempty".to_owned());
+            }
+            if !token_ids.insert(token.id.clone()) {
+                return Err("authorization configuration contains duplicate token IDs".to_owned());
+            }
+            if !token_secrets.insert(token.secret.clone()) {
                 return Err(
-                    "authorization account map contains colliding normalized emails".to_owned(),
+                    "authorization configuration contains duplicate token secrets".to_owned(),
                 );
             }
-            owners += usize::from(role == Role::Owner);
+            tokens.push(Token {
+                id: token.id,
+                secret: token.secret,
+                role: parse_role(&token.role)?,
+                display_name: token.display_name,
+            });
         }
 
-        if owners == 0 {
-            return Err("authorization account map must contain an owner".to_owned());
+        let mut google_accounts = HashMap::new();
+        for (email, role) in raw.google_accounts.0 {
+            let email = normalize_email(&email).ok_or_else(|| {
+                "authorization configuration contains an invalid Google email".to_owned()
+            })?;
+            let role = role.as_str().ok_or_else(|| {
+                "authorization configuration Google roles must be strings".to_owned()
+            })?;
+            let role = parse_role(role)?;
+            if google_accounts.insert(email, role).is_some() {
+                return Err(
+                    "authorization configuration contains colliding normalized emails".to_owned(),
+                );
+            }
         }
 
         Ok(Self {
             trusted_issuer: trusted_issuer.to_owned(),
-            accounts,
+            anonymous,
+            tokens,
+            google_accounts,
         })
     }
 
     pub fn request_context(&self, headers: &HeaderMap) -> Result<RequestContext, AuthContextError> {
-        let values = [
-            (SUBJECT_HEADER, single_header(headers, SUBJECT_HEADER)?),
-            (ISSUER_HEADER, single_header(headers, ISSUER_HEADER)?),
-            (EMAIL_HEADER, single_header(headers, EMAIL_HEADER)?),
-            (
-                EMAIL_VERIFIED_HEADER,
-                single_header(headers, EMAIL_VERIFIED_HEADER)?,
-            ),
-        ];
-
-        if values.iter().all(|(_, value)| value.is_none()) {
-            return Ok(RequestContext::anonymous());
+        let authorization = single_header(headers, AUTHORIZATION_HEADER)?;
+        let google_headers = google_context_headers(headers)?;
+        if let Some(authorization) = authorization {
+            if google_headers.any_present() {
+                return Err(AuthContextError::mixed_credentials());
+            }
+            let secret = bearer_secret(authorization)?;
+            let mut matched_index = 0_usize;
+            let mut match_count = 0_u8;
+            for (index, token) in self.tokens.iter().enumerate() {
+                let equal = secret.as_bytes().ct_eq(token.secret.as_bytes()).unwrap_u8();
+                match_count = match_count.saturating_add(equal);
+                let mask = 0_usize.wrapping_sub(usize::from(equal));
+                matched_index = (matched_index & !mask) | (index & mask);
+            }
+            if match_count != 1 {
+                return Err(AuthContextError::invalid_credentials());
+            }
+            let token = &self.tokens[matched_index];
+            return Ok(RequestContext {
+                principal: Principal {
+                    id: StablePrincipalId::token(&token.id),
+                    role: token.role,
+                    display_name: token.display_name.clone(),
+                    source: PrincipalSource::Token,
+                },
+            });
         }
 
-        let subject = header_text(values[0].1)?;
-        let issuer = header_text(values[1].1)?;
-        let email = header_text(values[2].1)?;
-        let email_verified = values[3]
-            .1
-            .map(|value| {
-                value
-                    .to_str()
-                    .map(|value| value == "true")
-                    .map_err(|_| AuthContextError::invalid())
-            })
-            .transpose()?
-            .unwrap_or(false);
-
-        if issuer != self.trusted_issuer {
-            return Err(AuthContextError::invalid());
+        if !google_headers.any_present() {
+            return Ok(RequestContext {
+                principal: Principal {
+                    id: StablePrincipalId::credential_free(),
+                    role: self.anonymous.role,
+                    display_name: self.anonymous.display_name.clone(),
+                    source: PrincipalSource::CredentialFree,
+                },
+            });
         }
-        let email = normalize_email(email).ok_or_else(AuthContextError::invalid)?;
-        let identity = AccountIdentity::new(issuer.to_owned(), subject.to_owned())
-            .map_err(|_| AuthContextError::invalid())?;
+
+        let (identity, email, email_verified) = google_headers.validate(&self.trusted_issuer)?;
         let role = if email_verified {
-            self.accounts.get(&email).copied()
+            self.google_accounts
+                .get(&normalize_email(email).ok_or_else(AuthContextError::invalid)?)
+                .copied()
+                .unwrap_or(Role::Anonymous)
         } else {
-            None
+            Role::Anonymous
         };
-
         Ok(RequestContext {
-            principal: Principal::Authenticated {
-                identity,
-                email,
-                email_verified,
+            principal: Principal {
+                id: identity.stable_id(),
                 role,
+                display_name: None,
+                source: PrincipalSource::Google,
             },
         })
     }
 }
 
+fn parse_role(value: &str) -> Result<Role, String> {
+    Role::parse(value)
+        .ok_or_else(|| "authorization configuration contains an unknown role".to_owned())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AuthContextError;
+pub struct AuthContextError {
+    status: u16,
+    code: &'static str,
+}
 
 impl AuthContextError {
     fn invalid() -> Self {
-        Self
+        Self {
+            status: 400,
+            code: "invalid-auth-context",
+        }
+    }
+
+    fn invalid_credentials() -> Self {
+        Self {
+            status: 401,
+            code: "invalid-credentials",
+        }
+    }
+
+    fn mixed_credentials() -> Self {
+        Self {
+            status: 400,
+            code: "mixed-auth-context",
+        }
     }
 
     pub fn into_graphql_error(self) -> Error {
-        Error::new("Invalid authentication context").extend_with(|_, extensions| {
-            extensions.set("status", 400);
-            extensions.set("code", "invalid-auth-context");
+        let title = if self.status == 401 {
+            "Invalid credentials"
+        } else {
+            "Invalid authentication context"
+        };
+        Error::new(title).extend_with(|_, extensions| {
+            extensions.set("status", self.status);
+            extensions.set("code", self.code);
         })
     }
 }
@@ -336,34 +486,100 @@ impl AuthContextError {
 fn single_header<'a>(
     headers: &'a HeaderMap,
     name: &'static str,
-) -> Result<Option<&'a axum::http::HeaderValue>, AuthContextError> {
+) -> Result<Option<&'a HeaderValue>, AuthContextError> {
     let mut values = headers.get_all(name).iter();
     let first = values.next();
     if values.next().is_some() {
-        return Err(AuthContextError::invalid());
+        return Err(if name == AUTHORIZATION_HEADER {
+            AuthContextError::invalid_credentials()
+        } else {
+            AuthContextError::invalid()
+        });
     }
     Ok(first)
 }
 
-fn header_text(value: Option<&axum::http::HeaderValue>) -> Result<&str, AuthContextError> {
-    value
+fn bearer_secret(header: &HeaderValue) -> Result<&str, AuthContextError> {
+    let value = header
+        .to_str()
+        .map_err(|_| AuthContextError::invalid_credentials())?;
+    let (scheme, secret) = value
+        .split_once(' ')
+        .ok_or_else(AuthContextError::invalid_credentials)?;
+    if !scheme.eq_ignore_ascii_case("Bearer")
+        || secret.is_empty()
+        || secret.contains(',')
+        || secret.chars().any(char::is_control)
+    {
+        return Err(AuthContextError::invalid_credentials());
+    }
+    Ok(secret)
+}
+
+struct GoogleHeaders<'a> {
+    subject: Option<&'a HeaderValue>,
+    issuer: Option<&'a HeaderValue>,
+    email: Option<&'a HeaderValue>,
+    verified: Option<&'a HeaderValue>,
+}
+
+impl GoogleHeaders<'_> {
+    fn any_present(&self) -> bool {
+        self.subject.is_some()
+            || self.issuer.is_some()
+            || self.email.is_some()
+            || self.verified.is_some()
+    }
+
+    fn validate<'a>(
+        &'a self,
+        trusted_issuer: &str,
+    ) -> Result<(AccountIdentity, &'a str, bool), AuthContextError> {
+        let subject = required_header(self.subject)?;
+        let issuer = required_header(self.issuer)?;
+        let email = required_header(self.email)?;
+        if issuer != trusted_issuer || normalize_email(email).is_none() {
+            return Err(AuthContextError::invalid());
+        }
+        let verified = self
+            .verified
+            .map(|value| {
+                let value = value.to_str().map_err(|_| AuthContextError::invalid())?;
+                Ok::<_, AuthContextError>(value == "true")
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let identity = AccountIdentity::new(issuer.to_owned(), subject.to_owned())
+            .map_err(|_| AuthContextError::invalid())?;
+        Ok((identity, email, verified))
+    }
+}
+
+fn google_context_headers(headers: &HeaderMap) -> Result<GoogleHeaders<'_>, AuthContextError> {
+    Ok(GoogleHeaders {
+        subject: single_header(headers, SUBJECT_HEADER)?,
+        issuer: single_header(headers, ISSUER_HEADER)?,
+        email: single_header(headers, EMAIL_HEADER)?,
+        verified: single_header(headers, EMAIL_VERIFIED_HEADER)?,
+    })
+}
+
+fn required_header(value: Option<&HeaderValue>) -> Result<&str, AuthContextError> {
+    let value = value
         .ok_or_else(AuthContextError::invalid)?
         .to_str()
-        .map_err(|_| AuthContextError::invalid())
-        .and_then(|text| {
-            if text.is_empty() {
-                Err(AuthContextError::invalid())
-            } else {
-                Ok(text)
-            }
-        })
+        .map_err(|_| AuthContextError::invalid())?;
+    if value.is_empty() {
+        Err(AuthContextError::invalid())
+    } else {
+        Ok(value)
+    }
 }
 
 fn normalize_email(email: &str) -> Option<String> {
     if email.trim() != email || !email.is_ascii() || email.chars().any(char::is_control) {
         return None;
     }
-
     let (local, domain) = email.split_once('@')?;
     if local.is_empty()
         || domain.is_empty()
@@ -373,16 +589,12 @@ fn normalize_email(email: &str) -> Option<String> {
         || local.starts_with('.')
         || local.ends_with('.')
         || local.contains("..")
+        || !local
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".!#$%&'*+/=?^_`{|}~-".contains(&byte))
     {
         return None;
     }
-    if !local
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || b".!#$%&'*+/=?^_`{|}~-".contains(&byte))
-    {
-        return None;
-    }
-
     let labels = domain.split('.').collect::<Vec<_>>();
     if labels.len() < 2
         || labels.iter().any(|label| {
@@ -397,45 +609,7 @@ fn normalize_email(email: &str) -> Option<String> {
     {
         return None;
     }
-
     Some(email.to_ascii_lowercase())
-}
-
-struct RawAccounts(Vec<(String, Value)>);
-
-impl<'de> Deserialize<'de> for RawAccounts {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct AccountsVisitor;
-
-        impl<'de> Visitor<'de> for AccountsVisitor {
-            type Value = RawAccounts;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("an object mapping email addresses to roles")
-            }
-
-            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
-            where
-                M: MapAccess<'de>,
-            {
-                let mut seen = HashSet::new();
-                let mut entries = Vec::new();
-                while let Some(email) = map.next_key::<String>()? {
-                    if !seen.insert(email.clone()) {
-                        return Err(serde::de::Error::custom("duplicate email key"));
-                    }
-                    let role = map.next_value::<Value>()?;
-                    entries.push((email, role));
-                }
-                Ok(RawAccounts(entries))
-            }
-        }
-
-        deserializer.deserialize_map(AccountsVisitor)
-    }
 }
 
 #[cfg(test)]
@@ -444,6 +618,18 @@ mod tests {
     use axum::http::{HeaderName, HeaderValue};
 
     const ISSUER: &str = "https://accounts.example.test";
+    const FULL_CONFIG: &str = r#"{
+      "anonymous":{"role":"anonymous","displayName":"Guest"},
+      "tokens":[
+        {"id":"member-token","secret":"secret-one","role":"member","displayName":"E2E"},
+        {"id":"owner-token","secret":"secret-two","role":"owner"}
+      ],
+      "googleAccounts":{
+        "owner@example.com":"owner",
+        "member@example.com":"member",
+        "alias+tag@example.com":"member"
+      }
+    }"#;
 
     fn policy(json: &str) -> AuthPolicy {
         AuthPolicy::from_json(json, ISSUER).unwrap()
@@ -460,295 +646,318 @@ mod tests {
         headers
     }
 
-    fn identity_headers(email: &str) -> HeaderMap {
-        headers(&[
+    fn google_headers(email: &str, verified: Option<&str>) -> HeaderMap {
+        let mut entries = vec![
             (SUBJECT_HEADER, "subject-1"),
             (ISSUER_HEADER, ISSUER),
             (EMAIL_HEADER, email),
-            (EMAIL_VERIFIED_HEADER, "true"),
-        ])
+        ];
+        if let Some(verified) = verified {
+            entries.push((EMAIL_VERIFIED_HEADER, verified));
+        }
+        headers(&entries)
+    }
+
+    fn bearer(secret: &str) -> HeaderMap {
+        let mut authorization = String::from("Be");
+        authorization.push_str("arer ");
+        authorization.push_str(secret);
+        headers(&[(AUTHORIZATION_HEADER, &authorization)])
     }
 
     #[test]
-    fn validates_owner_member_maps_and_normalizes_email_case() {
-        let policy = policy(
-            r#"{"OWNER@example.com":"owner","Member+tag@example.com":"member","other@example.com":"owner"}"#,
+    fn parses_read_only_token_only_and_privileged_anonymous_configurations() {
+        let token_only = policy(
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"one","secret":"s","role":"owner"}],"googleAccounts":{}}"#,
         );
-        assert_eq!(policy.accounts.len(), 3);
-        assert_eq!(policy.accounts["owner@example.com"], Role::Owner);
-        assert_eq!(policy.accounts["member+tag@example.com"], Role::Member);
-        assert!(matches!(
-            policy
-                .request_context(&identity_headers("member@example.com"))
-                .unwrap()
-                .principal(),
-            Principal::Authenticated { role: None, .. }
-        ));
+        assert_eq!(token_only.tokens.len(), 1);
+        let no_tokens = policy(
+            r#"{"anonymous":{"role":"owner","displayName":"Shared"},"tokens":[],"googleAccounts":{}}"#,
+        );
+        let principal = no_tokens
+            .request_context(&HeaderMap::new())
+            .unwrap()
+            .principal()
+            .clone();
+        assert_eq!(principal.role(), Role::Owner);
+        assert_eq!(principal.display_name(), Some("Shared"));
+        assert!(principal.id().as_str().starts_with("credential-free:"));
     }
 
     #[test]
-    fn rejects_invalid_account_maps() {
-        for (json, trusted_issuer) in [
-            (r#"{"owner@example.com":"owner"}"#, ""),
-            (r#"{"owner@example.com":"owner"}"#, "*"),
-            (r#"{"owner@example.com":"owner""#, ISSUER),
-            (
-                r#"{"owner@example.com":"owner","OWNER@example.com":"member"}"#,
-                ISSUER,
-            ),
-            (r#"{" bad@example.com":"owner"}"#, ISSUER),
-            (r#"{"bad..dot@example.com":"owner"}"#, ISSUER),
-            (r#"{"a@-bad.example":"owner"}"#, ISSUER),
-            (r#"{"owner@example.com":1}"#, ISSUER),
-            (r#"{"owner@example.com":"admin"}"#, ISSUER),
-            (r#"{"member@example.com":"member"}"#, ISSUER),
-        ] {
-            assert!(
-                AuthPolicy::from_json(json, trusted_issuer).is_err(),
-                "{json}"
-            );
+    fn strict_configuration_rejects_invalid_shapes_keys_and_values() {
+        let invalid = [
+            "{",
+            "[]",
+            r#"{"anonymous":{"role":"nope"},"tokens":[],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous","extra":true},"tokens":[],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous","displayName":null},"tokens":[],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"member","extra":true}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"member","displayName":null}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","id":"y","secret":"s","role":"member"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"","secret":"s","role":"member"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"","role":"member"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"bad"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"bad..dot@example.com":"member"}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{" owner@example.com":"owner"}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"owner@example.com":5}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"owner@example.com":"admin"}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"owner@example.com":"owner","OWNER@example.com":"member"}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"owner@example.com":"owner","owner@example.com":"member"}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"member"},{"id":"x","secret":"z","role":"owner"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"member"},{"id":"y","secret":"s","role":"owner"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{},"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous","role":"owner"},"tokens":[],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{},"unknown":1}"#,
+        ];
+        for json in invalid {
+            let error = AuthPolicy::from_json(json, ISSUER).unwrap_err();
+            assert!(!error.contains("secret-one"), "{error}");
+            assert!(!error.contains("owner@example.com"), "{error}");
         }
     }
 
     #[test]
-    fn rejects_duplicate_json_keys_before_map_overwrite() {
+    fn missing_file_fails_with_safe_diagnostic() {
+        let root = std::env::temp_dir().join(format!("auth-config-{}", uuid::Uuid::new_v4()));
+        let error = AuthPolicy::load_from(&root, ISSUER).unwrap_err();
+        assert!(!error.contains("secret"));
+    }
+
+    #[test]
+    fn resolves_credential_free_google_and_token_principals() {
+        let policy = policy(FULL_CONFIG);
+        let guest = policy.request_context(&HeaderMap::new()).unwrap();
+        assert_eq!(guest.principal().role(), Role::Anonymous);
+        assert_eq!(guest.principal().display_name(), Some("Guest"));
         assert_eq!(
-            AuthPolicy::from_json(
-                r#"{"owner@example.com":"owner","owner@example.com":"member"}"#,
-                ISSUER
-            )
-            .unwrap_err(),
-            "authorization account map contains duplicate email keys"
+            guest.principal().id().as_str(),
+            policy
+                .request_context(&headers(&[]))
+                .unwrap()
+                .principal()
+                .id()
+                .as_str()
         );
-    }
 
-    #[test]
-    fn reports_specific_account_map_validation_failures() {
-        for (json, expected) in [
-            (
-                r#"{"owner@example.com":"owner","OWNER@example.com":"member"}"#,
-                "authorization account map contains colliding normalized emails",
-            ),
-            (
-                r#"{"owner@example.com":1}"#,
-                "authorization account map roles must be strings",
-            ),
-            (
-                r#"{"owner@example.com":"unknown"}"#,
-                "authorization account map contains an unknown role",
-            ),
-            (
-                r#"{"member@example.com":"member"}"#,
-                "authorization account map must contain an owner",
-            ),
-            (
-                r#"{"owner@example.com":"owner""#,
-                "authorization account map is malformed JSON",
-            ),
-        ] {
-            assert_eq!(
-                AuthPolicy::from_json(json, ISSUER).unwrap_err(),
-                expected,
-                "{json}"
-            );
-        }
-    }
+        let member = policy.request_context(&bearer("secret-one")).unwrap();
+        assert_eq!(member.principal().role(), Role::Member);
+        assert_eq!(member.principal().display_name(), Some("E2E"));
+        assert_eq!(member.principal().id().as_str(), "token:v1:12:member-token");
 
-    #[test]
-    fn missing_and_unreadable_files_fail_without_exposing_contents() {
-        let root = std::env::temp_dir().join(format!("auth-policy-{}", uuid::Uuid::new_v4()));
-        let missing = root.join("missing.json");
-        let missing_error = AuthPolicy::load_from(&missing, ISSUER).unwrap_err();
-        assert!(!missing_error.contains("owner@example.com"));
+        let owner = policy.request_context(&bearer("secret-two")).unwrap();
+        assert_eq!(owner.principal().role(), Role::Owner);
 
-        fs::create_dir_all(&root).unwrap();
-        let unreadable_error = AuthPolicy::load_from(&root, ISSUER).unwrap_err();
-        assert!(!unreadable_error.contains("owner@example.com"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn anonymous_and_approved_request_contexts_are_distinguished() {
-        let policy = policy(r#"{"owner@example.com":"owner","member@example.com":"member"}"#);
-        assert_eq!(
-            policy
-                .request_context(&HeaderMap::new())
-                .unwrap()
-                .principal(),
-            &Principal::Anonymous
-        );
-        assert!(matches!(
-            policy.request_context(&identity_headers("MEMBER@example.com")).unwrap().principal(),
-            Principal::Authenticated { role: Some(Role::Member), email, email_verified: true, .. }
-                if email == "member@example.com"
-        ));
-        assert!(matches!(
-            policy
-                .request_context(&identity_headers("owner@example.com"))
-                .unwrap()
-                .principal(),
-            Principal::Authenticated {
-                role: Some(Role::Owner),
-                ..
-            }
-        ));
-        assert!(matches!(
-            policy
-                .request_context(&identity_headers("outsider@example.com"))
-                .unwrap()
-                .principal(),
-            Principal::Authenticated { role: None, .. }
-        ));
-    }
-
-    #[test]
-    fn unverified_identity_is_authenticated_but_never_gets_a_role() {
-        let policy = policy(r#"{"member@example.com":"member","owner@example.com":"owner"}"#);
-        for verification in [None, Some("false")] {
-            let mut entries = vec![
-                (SUBJECT_HEADER, "subject-1"),
-                (ISSUER_HEADER, ISSUER),
-                (EMAIL_HEADER, "member@example.com"),
-            ];
-            if let Some(verification) = verification {
-                entries.push((EMAIL_VERIFIED_HEADER, verification));
-            }
-            assert!(matches!(
-                policy
-                    .request_context(&headers(&entries))
-                    .unwrap()
-                    .principal(),
-                Principal::Authenticated {
-                    email_verified: false,
-                    role: None,
-                    ..
-                }
-            ));
-        }
-    }
-
-    #[test]
-    fn rejects_invalid_issuer_missing_or_empty_claims_and_duplicate_headers() {
-        let policy = policy(r#"{"member@example.com":"member","owner@example.com":"owner"}"#);
-        for request_headers in [
-            headers(&[
-                (SUBJECT_HEADER, "subject-1"),
-                (ISSUER_HEADER, "https://untrusted.example"),
-                (EMAIL_HEADER, "member@example.com"),
-            ]),
-            headers(&[(SUBJECT_HEADER, "subject-1"), (ISSUER_HEADER, ISSUER)]),
-            headers(&[
-                (SUBJECT_HEADER, ""),
-                (ISSUER_HEADER, ISSUER),
-                (EMAIL_HEADER, "member@example.com"),
-            ]),
-            headers(&[
-                (SUBJECT_HEADER, "subject-1"),
-                (ISSUER_HEADER, ISSUER),
-                (EMAIL_HEADER, "member@example.com "),
-            ]),
-        ] {
-            assert!(policy.request_context(&request_headers).is_err());
-        }
-
-        for name in [
-            SUBJECT_HEADER,
-            ISSUER_HEADER,
-            EMAIL_HEADER,
-            EMAIL_VERIFIED_HEADER,
-        ] {
-            let mut duplicate = identity_headers("member@example.com");
-            duplicate.append(name, HeaderValue::from_static("duplicate"));
-            assert!(policy.request_context(&duplicate).is_err());
-        }
-        assert!(policy
-            .request_context(&headers(&[(EMAIL_VERIFIED_HEADER, "true")]))
-            .is_err());
-    }
-
-    #[test]
-    fn identity_binding_survives_email_changes_but_not_subject_changes() {
-        let initial_policy =
-            policy(r#"{"first@example.com":"member","second@example.com":"owner"}"#);
-        let first = initial_policy
-            .request_context(&identity_headers("first@example.com"))
+        let google = policy
+            .request_context(&google_headers("OWNER@example.com", Some("true")))
             .unwrap();
-        let second = initial_policy
-            .request_context(&identity_headers("second@example.com"))
+        assert_eq!(google.principal().role(), Role::Owner);
+        assert!(google.principal().id().as_str().starts_with("google:v1:"));
+        assert_ne!(google.principal().id(), member.principal().id());
+        assert_ne!(google.principal().id(), guest.principal().id());
+    }
+
+    #[test]
+    fn stable_ids_preserve_google_email_changes_and_token_secret_rotation() {
+        let auth_policy = policy(FULL_CONFIG);
+        let first_email = auth_policy
+            .request_context(&google_headers("member@example.com", Some("true")))
             .unwrap();
-        let first_identity = match first.principal() {
-            Principal::Authenticated { identity, .. } => identity,
-            _ => unreachable!(),
-        };
-        let second_identity = match second.principal() {
-            Principal::Authenticated { identity, .. } => identity,
-            _ => unreachable!(),
-        };
-        assert_eq!(first_identity, second_identity);
-        assert!(matches!(
-            first.principal(),
-            Principal::Authenticated {
-                role: Some(Role::Member),
-                ..
-            }
-        ));
-        assert!(matches!(
-            second.principal(),
-            Principal::Authenticated {
-                role: Some(Role::Owner),
-                ..
-            }
-        ));
-        assert_ne!(
-            AccountIdentity::new(ISSUER.to_owned(), "subject-1".to_owned()).unwrap(),
-            AccountIdentity::new(ISSUER.to_owned(), "subject-2".to_owned()).unwrap()
-        );
-        let same_email_different_subject = initial_policy
+        let changed_email = auth_policy
+            .request_context(&google_headers("owner@example.com", Some("true")))
+            .unwrap();
+        assert_eq!(first_email.principal().id(), changed_email.principal().id());
+        assert_eq!(first_email.principal().role(), Role::Member);
+        assert_eq!(changed_email.principal().role(), Role::Owner);
+        let different_subject = auth_policy
             .request_context(&headers(&[
                 (SUBJECT_HEADER, "subject-2"),
                 (ISSUER_HEADER, ISSUER),
-                (EMAIL_HEADER, "first@example.com"),
+                (EMAIL_HEADER, "member@example.com"),
                 (EMAIL_VERIFIED_HEADER, "true"),
             ]))
             .unwrap();
-        assert!(matches!(
-            same_email_different_subject.principal(),
-            Principal::Authenticated { identity, .. } if identity != first_identity
-        ));
+        assert_ne!(
+            first_email.principal().id(),
+            different_subject.principal().id()
+        );
 
-        let removed_policy =
-            policy(r#"{"first@example.com":"member","owner@example.com":"owner"}"#);
-        assert!(matches!(
-            removed_policy
-                .request_context(&identity_headers("second@example.com"))
+        let original = auth_policy.request_context(&bearer("secret-one")).unwrap();
+        let rotated = policy(
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"member-token","secret":"rotated-secret","role":"owner"}],"googleAccounts":{}}"#,
+        );
+        let after_rotation = rotated.request_context(&bearer("rotated-secret")).unwrap();
+        assert_eq!(original.principal().id(), after_rotation.principal().id());
+        assert_eq!(after_rotation.principal().role(), Role::Owner);
+        assert_ne!(
+            after_rotation.principal().id(),
+            &StablePrincipalId::token("other-token")
+        );
+        let removed = AuthPolicy::from_json(
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
+            ISSUER,
+        )
+        .unwrap();
+        assert_eq!(
+            removed
+                .request_context(&bearer("secret-one"))
+                .unwrap_err()
+                .code,
+            "invalid-credentials"
+        );
+    }
+
+    #[test]
+    fn fresh_policy_changes_existing_context_permissions_on_the_next_request() {
+        let headers = google_headers("member@example.com", Some("true"));
+        let member_policy = policy(
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"member@example.com":"owner"}}"#,
+        );
+        let demoted_policy = policy(
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"member@example.com":"member"}}"#,
+        );
+        let before_restart = member_policy.request_context(&headers).unwrap();
+        let after_restart = demoted_policy.request_context(&headers).unwrap();
+        assert_eq!(
+            before_restart.principal().id(),
+            after_restart.principal().id()
+        );
+        assert_eq!(before_restart.principal().role(), Role::Owner);
+        assert_eq!(after_restart.principal().role(), Role::Member);
+    }
+
+    #[test]
+    fn stable_identity_namespaces_and_google_components_do_not_collide() {
+        let google_a = AccountIdentity::new("issuer:one".to_owned(), "subject".to_owned())
+            .unwrap()
+            .stable_id();
+        let google_b = AccountIdentity::new("issuer".to_owned(), "one:subject".to_owned())
+            .unwrap()
+            .stable_id();
+        let token = StablePrincipalId::token("issuer:one");
+        let credential_free = StablePrincipalId::credential_free();
+        assert_ne!(google_a, google_b);
+        assert_ne!(google_a, token);
+        assert_ne!(google_b, token);
+        assert_ne!(token, credential_free);
+        assert!(!token.as_str().contains("secret"));
+    }
+
+    #[test]
+    fn unknown_google_identity_never_inherits_privileged_anonymous_role() {
+        let policy = policy(r#"{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}"#);
+        let mut headers = google_headers("outsider@example.com", Some("true"));
+        headers.insert("x-auth-request-role", HeaderValue::from_static("owner"));
+        let unknown = policy.request_context(&headers).unwrap();
+        assert_eq!(unknown.principal().role(), Role::Anonymous);
+        assert_ne!(unknown.principal().id().as_str(), ANONYMOUS_ID);
+    }
+
+    #[test]
+    fn unverified_google_identity_is_unprivileged() {
+        let auth_policy = policy(FULL_CONFIG);
+        for verified in [None, Some("false"), Some("TRUE")] {
+            let context = auth_policy
+                .request_context(&google_headers("owner@example.com", verified))
+                .unwrap();
+            assert_eq!(context.principal().role(), Role::Anonymous);
+        }
+    }
+
+    #[test]
+    fn invalid_or_mixed_credentials_never_downgrade_to_anonymous() {
+        let policy = policy(
+            r#"{"anonymous":{"role":"owner"},"tokens":[{"id":"known","secret":"correct","role":"member"}],"googleAccounts":{"owner@example.com":"owner"}}"#,
+        );
+        for header in [
+            "not-a-bearer",
+            "Bearer ",
+            "Basic correct",
+            concat!("Be", "arer wrong"),
+        ] {
+            let error = policy
+                .request_context(&headers(&[(AUTHORIZATION_HEADER, header)]))
+                .unwrap_err();
+            assert_eq!(error.code, "invalid-credentials");
+        }
+
+        let mut duplicate = bearer("correct");
+        duplicate.append(
+            AUTHORIZATION_HEADER,
+            HeaderValue::from_static(concat!("Be", "arer other")),
+        );
+        assert_eq!(
+            policy.request_context(&duplicate).unwrap_err().code,
+            "invalid-credentials"
+        );
+
+        let mut mixed = bearer("correct");
+        mixed.extend(google_headers("owner@example.com", Some("true")));
+        assert_eq!(
+            policy.request_context(&mixed).unwrap_err().code,
+            "mixed-auth-context"
+        );
+
+        assert_eq!(
+            policy
+                .request_context(&bearer("correct"))
                 .unwrap()
-                .principal(),
-            Principal::Authenticated { role: None, .. }
-        ));
+                .principal()
+                .role(),
+            Role::Member
+        );
     }
 
     #[test]
-    fn stable_identity_encoding_is_unambiguous_and_round_trips() {
-        let first =
-            AccountIdentity::new("issuer:with:colons".to_owned(), "subject".to_owned()).unwrap();
-        let second =
-            AccountIdentity::new("issuer".to_owned(), "with:colons:subject".to_owned()).unwrap();
-        assert_ne!(first.stable_key(), second.stable_key());
+    fn malformed_google_context_is_rejected_without_fallback() {
+        let policy = policy(r#"{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}"#);
+        for request_headers in [
+            headers(&[(SUBJECT_HEADER, "subject")]),
+            headers(&[
+                (SUBJECT_HEADER, "subject"),
+                (ISSUER_HEADER, "https://wrong.example"),
+                (EMAIL_HEADER, "owner@example.com"),
+            ]),
+            headers(&[
+                (SUBJECT_HEADER, ""),
+                (ISSUER_HEADER, ISSUER),
+                (EMAIL_HEADER, "owner@example.com"),
+            ]),
+            headers(&[
+                (SUBJECT_HEADER, "subject"),
+                (ISSUER_HEADER, ISSUER),
+                (EMAIL_HEADER, "owner@example.com "),
+            ]),
+        ] {
+            assert_eq!(
+                policy.request_context(&request_headers).unwrap_err().code,
+                "invalid-auth-context"
+            );
+        }
+        let mut duplicate = google_headers("owner@example.com", Some("true"));
+        duplicate.append(SUBJECT_HEADER, HeaderValue::from_static("second"));
         assert_eq!(
-            AccountIdentity::from_stable_key(&first.stable_key()).unwrap(),
-            first
+            policy.request_context(&duplicate).unwrap_err().code,
+            "invalid-auth-context"
         );
-        assert_eq!(
-            AccountIdentity::from_stable_key(&second.stable_key()).unwrap(),
-            second
-        );
-        assert!(AccountIdentity::from_stable_key("v1:01:issuer-subject").is_err());
-        assert_eq!(first.issuer(), "issuer:with:colons");
-        assert_eq!(first.subject(), "subject");
     }
 
     #[test]
-    fn capability_guards_enforce_the_fixed_role_matrix() {
+    fn capabilities_follow_effective_role_for_all_principal_sources() {
+        let auth_policy = policy(FULL_CONFIG);
+        let cases = [
+            (HeaderMap::new(), Role::Anonymous),
+            (bearer("secret-one"), Role::Member),
+            (bearer("secret-two"), Role::Owner),
+            (
+                google_headers("member@example.com", Some("true")),
+                Role::Member,
+            ),
+            (
+                google_headers("owner@example.com", Some("true")),
+                Role::Owner,
+            ),
+        ];
         let capabilities = [
             Capability::ReadPublic,
             Capability::ReadAggregateRatings,
@@ -759,124 +968,57 @@ mod tests {
             Capability::ManageRecipes,
             Capability::ManageImports,
             Capability::ManageImages,
-            Capability::AdministerAccountPolicy,
         ];
-        let member_capabilities = [
-            Capability::ReadPublic,
-            Capability::ReadAggregateRatings,
-            Capability::ReadComments,
-            Capability::WriteComments,
-            Capability::ReadIndividualRatings,
-            Capability::WriteRatings,
-        ];
-        let owner = RequestContext {
-            principal: Principal::Authenticated {
-                identity: AccountIdentity::new(ISSUER.to_owned(), "owner".to_owned()).unwrap(),
-                email: "owner@example.com".to_owned(),
-                email_verified: true,
-                role: Some(Role::Owner),
-            },
-        };
-        let member = RequestContext {
-            principal: Principal::Authenticated {
-                identity: AccountIdentity::new(ISSUER.to_owned(), "member".to_owned()).unwrap(),
-                email: "member@example.com".to_owned(),
-                email_verified: true,
-                role: Some(Role::Member),
-            },
-        };
-        let outsider = RequestContext {
-            principal: Principal::Authenticated {
-                identity: AccountIdentity::new(ISSUER.to_owned(), "outsider".to_owned()).unwrap(),
-                email: "outsider@example.com".to_owned(),
-                email_verified: true,
-                role: None,
-            },
-        };
-
-        for capability in capabilities {
-            assert!(owner.require(capability).is_ok());
-            assert_eq!(
-                member.require(capability).is_ok(),
-                member_capabilities.contains(&capability)
-            );
-            assert_eq!(
-                RequestContext::anonymous().require(capability).is_ok(),
-                matches!(
-                    capability,
-                    Capability::ReadPublic | Capability::ReadAggregateRatings
-                )
-            );
-            assert_eq!(
-                outsider.require(capability).is_ok(),
-                matches!(
-                    capability,
-                    Capability::ReadPublic | Capability::ReadAggregateRatings
-                )
-            );
+        for (headers, role) in cases {
+            let context = auth_policy.request_context(&headers).unwrap();
+            assert_eq!(context.principal().role(), role);
+            for capability in capabilities {
+                let expected = match role {
+                    Role::Owner => true,
+                    Role::Member => !matches!(
+                        capability,
+                        Capability::ManageRecipes
+                            | Capability::ManageImports
+                            | Capability::ManageImages
+                    ),
+                    Role::Anonymous => matches!(
+                        capability,
+                        Capability::ReadPublic | Capability::ReadAggregateRatings
+                    ),
+                };
+                assert_eq!(context.require(capability).is_ok(), expected);
+            }
         }
-        assert_eq!(
-            RequestContext::anonymous().require(Capability::WriteComments),
-            Err(AuthorizationError {
-                status: 401,
-                code: "authentication-required"
-            })
-        );
-        assert_eq!(
-            member.require(Capability::ManageRecipes),
-            Err(AuthorizationError {
-                status: 403,
-                code: "forbidden"
-            })
-        );
+
+        let credential_free =
+            policy(r#"{"anonymous":{"role":"member"},"tokens":[],"googleAccounts":{}}"#)
+                .request_context(&HeaderMap::new())
+                .unwrap();
+        assert!(credential_free.require(Capability::WriteRatings).is_ok());
+        assert!(credential_free.require(Capability::ManageRecipes).is_err());
     }
 
     #[test]
-    fn role_headers_cannot_grant_privileges() {
-        let policy = policy(r#"{"member@example.com":"member","owner@example.com":"owner"}"#);
-        assert_eq!(
-            policy
-                .request_context(&headers(&[("authorization", "invalid")]))
-                .unwrap()
-                .principal(),
-            &Principal::Anonymous
-        );
-        let request_headers = headers(&[
-            (SUBJECT_HEADER, "subject-1"),
-            (ISSUER_HEADER, ISSUER),
-            (EMAIL_HEADER, "outsider@example.com"),
-            (EMAIL_VERIFIED_HEADER, "true"),
-            ("x-auth-request-role", "owner"),
-        ]);
-        let context = policy.request_context(&request_headers).unwrap();
-        assert!(matches!(
-            context.principal(),
-            Principal::Authenticated { role: None, .. }
-        ));
-    }
-
-    #[test]
-    fn authorization_errors_have_structured_status_and_code() {
-        let unauthenticated = RequestContext::anonymous()
-            .require(Capability::WriteRatings)
-            .unwrap_err();
-        let error = unauthenticated.into_graphql_error();
+    fn auth_errors_are_structured_and_unknown_authorization_never_gets_guest_role() {
+        let policy = policy(r#"{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}"#);
+        let error = policy
+            .request_context(&bearer("wrong"))
+            .unwrap_err()
+            .into_graphql_error();
         assert_eq!(
             error.extensions.as_ref().unwrap().get("status"),
             Some(&async_graphql::Value::from(401))
         );
         assert_eq!(
             error.extensions.as_ref().unwrap().get("code"),
-            Some(&async_graphql::Value::from("authentication-required"))
+            Some(&async_graphql::Value::from("invalid-credentials"))
         );
-        let forbidden = AuthorizationError::forbidden().into_graphql_error();
-        assert_eq!(
-            forbidden.extensions.as_ref().unwrap().get("status"),
-            Some(&async_graphql::Value::from(403))
-        );
-        assert_eq!(
-            forbidden.extensions.as_ref().unwrap().get("code"),
-            Some(&async_graphql::Value::from("forbidden"))
-        );
+        let forbidden = policy
+            .request_context(&google_headers("outsider@example.com", Some("true")))
+            .unwrap()
+            .require(Capability::ManageRecipes)
+            .unwrap_err();
+        assert_eq!(forbidden.status, 403);
+        assert_eq!(forbidden.code, "forbidden");
     }
 }
