@@ -231,7 +231,7 @@ struct AnonymousConfig {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct RawConfig {
     #[serde(rename = "$schema", default)]
-    schema: Option<String>,
+    schema: String,
     anonymous: RawAnonymous,
     tokens: Vec<RawToken>,
     google_accounts: RawGoogleAccounts,
@@ -726,6 +726,7 @@ mod tests {
             r#"{"anonymous":{"role":"anonymous","role":"owner"},"tokens":[],"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{},"unknown":1}"#,
             r#"{"$schema":42,"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
+            r#"{"$schema":null,"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
         ];
         for json in invalid {
             let error = AuthPolicy::from_json(json, ISSUER).unwrap_err();
