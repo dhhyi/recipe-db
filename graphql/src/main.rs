@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let production = std::env::var("PRODUCTION").as_deref() == Ok("true");
     let graphql_route = if production {
-        post(graphql)
+        post(graphql).get(graphql)
     } else {
         get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) }).post(graphql)
     };
