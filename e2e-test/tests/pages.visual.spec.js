@@ -76,6 +76,7 @@ test("recipe editor", async ({ page, demoRecipe }) => {
   await expect(
     page.getByRole("heading", { name: "Inspirationen", exact: true }),
   ).toBeVisible();
+  await assertNoHorizontalOverflow(page);
   await expect(page).toHaveScreenshot("recipe-editor.png", { fullPage: true });
 });
 
@@ -87,6 +88,7 @@ test("new recipe form", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1 })).toMatchAriaSnapshot(`
     - heading "Neues Rezept" [level=1]
   `);
+  await assertNoHorizontalOverflow(page);
   await expect(page).toHaveScreenshot("new-recipe.png", { fullPage: true });
 });
 
@@ -138,3 +140,13 @@ test("image editor with a local source and eight crop handles", async ({
     fullPage: true,
   });
 });
+
+async function assertNoHorizontalOverflow(page) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    )
+    .toBe(true);
+}

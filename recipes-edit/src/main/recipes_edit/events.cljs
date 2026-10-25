@@ -14,8 +14,10 @@
   {:route route
    :status (if (= :edit (:page route)) :loading :idle)
    :form (model/blank-form)
+   :baseline (model/blank-form)
    :name-error? false
    :inspirations-online nil
+   :save-failed? false
    :feedback nil})
 
 (defn initialize-db [db route]
@@ -29,9 +31,16 @@
      :else (js->clj response))))
 
 (rf/reg-fx
- ::navigate
+ ::replace-url
  (fn [url]
-   (.assign js/location url)))
+   (when-let [history (.-history js/window)]
+     (.replaceState history #js {} "" url))))
+
+(defn- clear-saved-feedback-when-dirty [db]
+  (if (and (= :success (get-in db [:feedback :kind]))
+           (model/dirty? (:form db) (:baseline db)))
+    (assoc db :feedback nil)
+    db))
 
 (rf/reg-event-fx
  ::initialize
@@ -44,10 +53,10 @@
                           :query recipe-query
                           :variables {:id (:id route)}
                           :callback [::recipe-loaded]}]
-                  :new  [::re-graph/query
-                         {:id :service-online
-                          :query service-online-query
-                          :callback [::service-online-loaded]}]
+                  :new [::re-graph/query
+                        {:id :service-online
+                         :query service-online-query
+                         :callback [::service-online-loaded]}]
                   nil)})))
 
 (rf/reg-event-db
@@ -57,7 +66,12 @@
      (cond
        (seq errors) (assoc db :status :error :feedback {:kind :error :message (model/error-message errors)})
        (nil? (:recipe data)) (assoc db :status :not-found)
-       :else (assoc db :status :idle :inspirations-online (:inspirationsOnline data) :form (model/recipe->form (:recipe data)))))))
+       :else (let [form (model/recipe->form (:recipe data))]
+               (assoc db
+                      :status :idle
+                      :inspirations-online (:inspirationsOnline data)
+                      :form form
+                      :baseline form))))))
 
 (rf/reg-event-db
  ::service-online-loaded
@@ -70,55 +84,80 @@
 (rf/reg-event-db
  ::set-name
  (fn [db [_ value]]
-   (-> db
-       (assoc-in [:form :name] value)
-       (assoc :name-error? false))))
+   (if (= :saving (:status db))
+     db
+     (-> db
+         (assoc-in [:form :name] value)
+         (assoc :name-error? false)
+         clear-saved-feedback-when-dirty))))
 
 (rf/reg-event-db
  ::set-method
  (fn [db [_ value]]
-   (assoc-in db [:form :method] value)))
+   (if (= :saving (:status db))
+     db
+     (-> (assoc-in db [:form :method] value)
+         clear-saved-feedback-when-dirty))))
 
 (rf/reg-event-db
  ::set-inspiration
  (fn [db [_ index value]]
-   (update-in db [:form :inspirations]
-              #(model/normalize-inspirations (assoc % index value)))))
+   (if (= :saving (:status db))
+     db
+     (-> (update-in db [:form :inspirations]
+                    #(model/normalize-inspirations (assoc % index value)))
+         clear-saved-feedback-when-dirty))))
 
 (rf/reg-event-db
  ::set-ingredient-name
  (fn [db [_ index value]]
-   (update-in db [:form :ingredients]
-              #(model/normalize-ingredients (assoc-in % [index :name] value)))))
+   (if (= :saving (:status db))
+     db
+     (-> (update-in db [:form :ingredients]
+                    #(model/normalize-ingredients (assoc-in % [index :name] value)))
+         clear-saved-feedback-when-dirty))))
 
 (rf/reg-event-db
  ::set-ingredient-amount-unit
  (fn [db [_ index value]]
-   (let [[amount unit optional] (model/parse-amount-unit value)]
-     (update-in db [:form :ingredients]
-                #(model/normalize-ingredients
-                  (assoc % index (assoc (get % index)
-                                        :amount amount
-                                        :unit unit
-                                        :optional optional)))))))
+   (if (= :saving (:status db))
+     db
+     (let [[amount unit optional] (model/parse-amount-unit value)]
+       (-> (update-in db [:form :ingredients]
+                      #(model/normalize-ingredients
+                        (assoc % index (assoc (get % index)
+                                              :amount amount
+                                              :unit unit
+                                              :optional optional))))
+           clear-saved-feedback-when-dirty)))))
 
 (rf/reg-event-db
  ::remove-ingredient
  (fn [db [_ index]]
-   (update-in db [:form :ingredients]
-              #(model/normalize-ingredients
-                (vec (concat (subvec % 0 index) (subvec % (inc index))))))))
+   (if (= :saving (:status db))
+     db
+     (-> (update-in db [:form :ingredients]
+                    #(model/normalize-ingredients
+                      (vec (concat (subvec % 0 index) (subvec % (inc index))))))
+         clear-saved-feedback-when-dirty))))
 
 (rf/reg-event-fx
  ::save
  (fn [{:keys [db]} _]
-   (let [{:keys [page id]} (:route db)
-         request {:query (if (= :new page) create-mutation update-mutation)
-                  :variables (cond-> {:input (model/form->input (:form db) {:inspirations-online (:inspirations-online db)})}
-                               (= :edit page) (assoc :id id))
-                  :callback [::saved]}]
-     {:db (assoc db :status :saving :name-error? false :feedback nil)
-      :dispatch [::re-graph/mutate request]})))
+   (let [status (:status db)]
+     (if (or (= :saving status)
+             (= :loading status)
+             (= :not-found status)
+             (= :error status)
+             (not (model/dirty? (:form db) (:baseline db))))
+       {}
+       (let [{:keys [page]} (:route db)
+             request {:query (if (= :new page) create-mutation update-mutation)
+                      :variables (cond-> {:input (model/form->input (:form db) {:inspirations-online (:inspirations-online db)})}
+                                   (= :edit page) (assoc :id (get-in db [:route :id])))
+                      :callback [::saved]}]
+         {:db (assoc db :status :saving :name-error? false :feedback nil :save-failed? false)
+          :dispatch [::re-graph/mutate request]})))))
 
 (rf/reg-event-fx
  ::saved
@@ -126,19 +165,43 @@
    (let [{:keys [data errors]} (normalize-response response)]
      (cond
        (some model/empty-name-error? errors)
-       {:db (assoc db :status :idle :name-error? true)}
+       {:db (assoc db :status :idle :name-error? true :save-failed? true :feedback nil)}
 
        (seq errors)
        {:db (assoc db :status :idle
+                   :name-error? false
+                   :save-failed? true
                    :feedback {:kind :error :message (model/error-message errors)})}
 
        (= :new (get-in db [:route :page]))
        (if-let [id (get-in data [:createRecipe :id])]
-         {:db (assoc db :status :idle)
-          ::navigate (str "/edit/" id)}
+         {:db (assoc db
+                     :status :idle
+                     :name-error? false
+                     :route (assoc (:route db) :page :edit :id id)
+                     :baseline (:form db)
+                     :save-failed? false
+                     :feedback {:kind :success :message "Gespeichert"})
+          ::replace-url (str "/edit/" id)}
          {:db (assoc db :status :idle
+                     :save-failed? true
                      :feedback {:kind :error :message "no recipe created"})})
+
+       (get-in data [:updateRecipe :id])
+       {:db (assoc db :status :idle
+                   :name-error? false
+                   :baseline (:form db)
+                   :save-failed? false
+                   :feedback {:kind :success :message "Gespeichert"})}
 
        :else
        {:db (assoc db :status :idle
-                   :feedback {:kind :success :message "Gespeichert"})}))))
+                   :save-failed? true
+                   :feedback {:kind :error :message "Save failed"})}))))
+
+(rf/reg-event-db
+ ::discard
+ (fn [db _]
+   (if (= :saving (:status db))
+     db
+     (assoc db :form (:baseline db) :name-error? false :save-failed? false :feedback nil))))

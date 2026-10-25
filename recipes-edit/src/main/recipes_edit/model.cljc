@@ -69,6 +69,25 @@
                                         (seq unit) (assoc :unit unit)))))}
      inspirations-online (assoc :inspirations (vec (remove empty? inspirations))))))
 
+(defn- normalize-form-for-comparison [form]
+  {:name (:name form)
+   :method (:method form)
+   :ingredients (->> (:ingredients form)
+                     (remove blank-ingredient?)
+                     (mapv (fn [ingredient]
+                             (-> (select-keys ingredient [:name :amount :unit :optional])
+                                 (update :amount #(or % ""))
+                                 (update :unit #(or % ""))
+                                 (update :optional boolean)))))
+   :inspirations (vec (remove str/blank? (:inspirations form)))})
+
+(defn dirty?
+  "Check if form differs meaningfully from baseline.
+   Ignores auto-added blank rows and trailing blanks."
+  [form baseline]
+  (not= (normalize-form-for-comparison form)
+        (normalize-form-for-comparison baseline)))
+
 (defn empty-name-error? [{:keys [extensions]}]
   (and (= "required-field" (:code extensions))
        (= "name" (:field extensions))))

@@ -90,7 +90,7 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
   await page.locator("#ingredient-name-1").fill("Hafermilch");
   await page.locator("#method").fill("Mit Zimt und Hafermilch kochen.");
   await page.getByRole("button", { name: "Speichern", exact: true }).click();
-  await expect(page.getByRole("alert")).toHaveText("Gespeichert");
+  await expect(page.getByRole("status")).toHaveText("Gespeichert");
 
   await waitForRecipePageText(
     page.request,
