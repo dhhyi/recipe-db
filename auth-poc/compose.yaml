@@ -1,0 +1,128 @@
+# Isolated OAuth2 Proxy optional-authentication PoC (#64). Started only by run.sh.
+# AUTH_POC_SECRETS is an ephemeral directory created by run.sh.
+x-node: &node
+  image: node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+  networks: [private]
+  healthcheck:
+    test:
+      ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+    interval: 1s
+    timeout: 2s
+    retries: 30
+
+services:
+  traefik:
+    image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
+    command:
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --entryPoints.web.address=:80
+      - --entryPoints.web.http.aliasHeadersStrategy=delete
+      - --ping=true
+      - --accessLog=true
+      - --log.level=INFO
+    volumes:
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    networks:
+      edge:
+        aliases: [app.poc.test, idp.poc.test]
+      private:
+        aliases: [idp.poc.test, graphql.internal]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
+    command:
+      - --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+      - --alpha-config=/etc/oauth2-proxy/alpha.yaml
+    volumes:
+      - ./oauth2-proxy/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+      - ./oauth2-proxy/alpha.yaml:/etc/oauth2-proxy/alpha.yaml:ro
+      - ${AUTH_POC_SECRETS:?}/cookie-secret:/run/secrets/cookie-secret:ro
+      - ${AUTH_POC_SECRETS:?}/oidc-client-secret:/run/secrets/oidc-client-secret:ro
+    networks: [private]
+    depends_on:
+      redis:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+      mock-oidc:
+        condition: service_healthy
+
+  redis:
+    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+    command: [redis-server, --appendonly, "yes", --appendfsync, always]
+    volumes:
+      - redis-data:/data
+    networks: [private]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  mock-oidc:
+    <<: *node
+    command: [node, /app/mock-oidc.mjs]
+    environment:
+      ISSUER: http://idp.poc.test
+      CLIENT_ID: recipe-db-auth-poc
+      CLIENT_SECRET_FILE: /run/secrets/oidc-client-secret
+      TOKEN_TTL_SECONDS: "30"
+    volumes:
+      - ./doubles:/app:ro
+      - ${AUTH_POC_SECRETS:?}/oidc-client-secret:/run/secrets/oidc-client-secret:ro
+
+  target:
+    <<: *node
+    command: [node, /app/target.mjs]
+    environment:
+      EXPECTED_ISSUER: http://idp.poc.test
+      ALLOWED_ORIGINS: http://app.poc.test
+      EFFECTS_FILE: /effects/log.jsonl
+    volumes:
+      - ./doubles:/app:ro
+      - ${AUTH_POC_SECRETS:?}/auth-accounts.json:/run/secrets/auth-accounts.json:ro
+      - effects:/effects
+
+  browse:
+    <<: *node
+    command: [node, /app/browse.mjs]
+    environment:
+      GRAPHQL_URL: http://graphql.internal/graphql
+      APP_ORIGIN: http://app.poc.test
+    volumes:
+      - ./doubles:/app:ro
+
+  # Simulated untrusted client: attached only to the edge network.
+  runner:
+    image: node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+    profiles: [runner]
+    entrypoint: [node, /tests/runner.mjs]
+    environment:
+      TARGET_PRIVATE_IP: ${TARGET_PRIVATE_IP:-}
+    volumes:
+      - ./tests:/tests:ro
+      - state:/state
+      - effects:/effects:ro
+      - ${AUTH_POC_SECRETS:?}/cookie-secret:/run/secrets/cookie-secret:ro
+    networks: [edge]
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 10.231.64.0/24
+  private:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.231.65.0/24
+
+volumes:
+  redis-data:
+  effects:
+  state:

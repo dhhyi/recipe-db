@@ -1,0 +1,329 @@
+ Network recipe-db-auth-poc_edge Creating 
+ Network recipe-db-auth-poc_private Creating 
+ Network recipe-db-auth-poc_edge Creating 
+ Network recipe-db-auth-poc_private Creating 
+ Volume recipe-db-auth-poc_redis-data Creating 
+ Volume recipe-db-auth-poc_effects Creating 
+ Volume recipe-db-auth-poc_redis-data Creating 
+ Volume recipe-db-auth-poc_effects Creating 
+ Volume recipe-db-auth-poc_redis-data Created 
+ Volume recipe-db-auth-poc_redis-data Created 
+ Volume recipe-db-auth-poc_effects Created 
+ Volume recipe-db-auth-poc_effects Created 
+ Network recipe-db-auth-poc_private Created 
+ Network recipe-db-auth-poc_private Created 
+ Container recipe-db-auth-poc-target-1 Creating 
+ Container recipe-db-auth-poc-redis-1 Creating 
+ Container recipe-db-auth-poc-browse-1 Creating 
+ Container recipe-db-auth-poc-mock-oidc-1 Creating 
+ Network recipe-db-auth-poc_edge Created 
+ Network recipe-db-auth-poc_edge Created 
+ Container recipe-db-auth-poc-traefik-1 Creating 
+ Container recipe-db-auth-poc-target-1 Created 
+ Container recipe-db-auth-poc-mock-oidc-1 Created 
+ Container recipe-db-auth-poc-browse-1 Created 
+ Container recipe-db-auth-poc-redis-1 Created 
+ Container recipe-db-auth-poc-traefik-1 Created 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Creating 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Created 
+ Container recipe-db-auth-poc-redis-1 Starting 
+ Container recipe-db-auth-poc-mock-oidc-1 Starting 
+ Container recipe-db-auth-poc-target-1 Starting 
+ Container recipe-db-auth-poc-browse-1 Starting 
+ Container recipe-db-auth-poc-traefik-1 Starting 
+ Container recipe-db-auth-poc-redis-1 Started 
+ Container recipe-db-auth-poc-mock-oidc-1 Started 
+ Container recipe-db-auth-poc-target-1 Started 
+ Container recipe-db-auth-poc-browse-1 Started 
+ Container recipe-db-auth-poc-traefik-1 Started 
+ Container recipe-db-auth-poc-mock-oidc-1 Waiting 
+ Container recipe-db-auth-poc-redis-1 Waiting 
+ Container recipe-db-auth-poc-traefik-1 Waiting 
+ Container recipe-db-auth-poc-redis-1 Healthy 
+ Container recipe-db-auth-poc-mock-oidc-1 Healthy 
+ Container recipe-db-auth-poc-traefik-1 Healthy 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Starting 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Started 
+ Container recipe-db-auth-poc-mock-oidc-1 Waiting 
+ Container recipe-db-auth-poc-target-1 Waiting 
+ Container recipe-db-auth-poc-browse-1 Waiting 
+ Container recipe-db-auth-poc-traefik-1 Waiting 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Waiting 
+ Container recipe-db-auth-poc-redis-1 Waiting 
+ Container recipe-db-auth-poc-traefik-1 Healthy 
+ Container recipe-db-auth-poc-browse-1 Healthy 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Healthy 
+ Container recipe-db-auth-poc-redis-1 Healthy 
+ Container recipe-db-auth-poc-mock-oidc-1 Healthy 
+ Container recipe-db-auth-poc-target-1 Healthy 
+== phase wait
+ Volume recipe-db-auth-poc_state Creating 
+ Volume recipe-db-auth-poc_state Creating 
+ Volume recipe-db-auth-poc_state Created 
+ Volume recipe-db-auth-poc_state Created 
+ Container recipe-db-auth-poc-runner-run-a680380a01ce Creating 
+ Container recipe-db-auth-poc-runner-run-a680380a01ce Created 
+== phase main
+ Container recipe-db-auth-poc-runner-run-4c96c5795b1e Creating 
+ Container recipe-db-auth-poc-runner-run-4c96c5795b1e Created 
+PASS 1.1 [split] Anonymous read on mixed route {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","receivedIdentityHeaders":[]}
+PASS 1.2 [split] Anonymous protected action (rate) {"status":401,"identity":"-","code":"authentication-required","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 1.2 [split] Anonymous protected action (deleteRecipe) {"status":401,"identity":"-","code":"authentication-required","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 2.1 [split] Valid owner session identity {"status":200,"identity":"sub-owner owner@example.test verified=true role=owner","setCookie":[],"cacheControl":"no-store"}
+PASS 2.1 [split] Valid member session identity {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+PASS 2.1 [split] Valid outsider session identity {"status":200,"identity":"sub-outsider outsider@example.test verified=true role=none","setCookie":[],"cacheControl":"no-store"}
+PASS 2.2 [split] Member performs member action (rate) {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","sideEffects":1}
+PASS 2.3 [split] Member attempts owner-only action {"status":403,"identity":"-","code":"forbidden","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 2.4 [split] Owner performs owner-only action {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","sideEffects":1}
+PASS 2.5 [split] Authenticated non-allowlisted account attempts member action {"status":403,"identity":"-","code":"forbidden","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 1.1 [baseline] Anonymous read on mixed route {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","receivedIdentityHeaders":[]}
+PASS 1.2 [baseline] Anonymous protected action (rate) {"status":401,"identity":"-","code":"authentication-required","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 1.2 [baseline] Anonymous protected action (deleteRecipe) {"status":401,"identity":"-","code":"authentication-required","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 2.1 [baseline] Valid owner session identity {"status":200,"identity":"sub-owner owner@example.test verified=true role=owner","setCookie":[],"cacheControl":"no-store"}
+PASS 2.1 [baseline] Valid member session identity {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+PASS 2.1 [baseline] Valid outsider session identity {"status":200,"identity":"sub-outsider outsider@example.test verified=true role=none","setCookie":[],"cacheControl":"no-store"}
+PASS 2.2 [baseline] Member performs member action (rate) {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","sideEffects":1}
+PASS 2.3 [baseline] Member attempts owner-only action {"status":403,"identity":"-","code":"forbidden","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 2.4 [baseline] Owner performs owner-only action {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","sideEffects":1}
+PASS 2.5 [baseline] Authenticated non-allowlisted account attempts member action {"status":403,"identity":"-","code":"forbidden","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 2.6 [proxy] Sign-in with email_verified=false (allowlisted address) {"status":500,"setCookie":[]}
+PASS 2.7 [split] ID token without email_verified claim (allowlisted address) {"status":200,"identity":"sub-missing-verified member@example.test verified=false role=none","setCookie":[],"cacheControl":"no-store","loginStatus":302,"admittedBySession":true,"actionStatus":403,"sideEffects":0}
+PASS 2.7 [baseline] ID token without email_verified claim (allowlisted address) {"status":200,"identity":"sub-missing-verified member@example.test verified=false role=none","setCookie":[],"cacheControl":"no-store","loginStatus":302,"admittedBySession":true,"actionStatus":403,"sideEffects":0}
+PASS 2.8 [proxy] Session cookie attributes after sign-in {"status":302,"location":"http://app.poc.test/browse/page","setCookie":["_oauth2_proxy_XMtRw-A6_csrf=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax","_oauth2_proxy=<redacted>; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"]}
+PASS 3.1 [split] Anonymous request with forged identity/role headers {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","trustedIdentityHeadersReceived":[],"ignoredHeadersReceived":["x-role","x-user-role"]}
+PASS 3.2 [split] Anonymous owner action with forged headers {"status":401,"identity":"-","code":"authentication-required","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 3.3 [split] Member session with forged owner headers {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store","trustedIdentityHeadersReceived":["x-auth-request-email","x-auth-request-email-verified","x-auth-request-issuer","x-auth-request-user"],"actionStatus":403,"sideEffects":0}
+PASS 3.4 [split] Internal hostname (graphql.internal) requested from edge with forged headers {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store"}
+PASS 3.1 [baseline] Anonymous request with forged identity/role headers {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","trustedIdentityHeadersReceived":[],"ignoredHeadersReceived":["x-role","x-user-role"]}
+PASS 3.2 [baseline] Anonymous owner action with forged headers {"status":401,"identity":"-","code":"authentication-required","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 3.3 [baseline] Member session with forged owner headers {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store","trustedIdentityHeadersReceived":["x-auth-request-email","x-auth-request-email-verified","x-auth-request-issuer","x-auth-request-user"],"actionStatus":403,"sideEffects":0}
+PASS 3.4 [baseline] Internal hostname (graphql.internal) requested from edge with forged headers {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store"}
+PASS 3.5 [network] Direct access to private services from client network {"target:8080":"timeout","oauth2-proxy:4180":"timeout","redis:6379":"timeout","mock-oidc:8080":"timeout","browse:8080":"timeout","target-ip:8080":"timeout"}
+PASS 3.6 [split] Duplicate Cookie headers hiding a malformed session cookie in the second header {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]}
+PASS 4.1 [ssr] Anonymous SSR page {"status":200,"identity":"none","setCookie":[],"cacheControl":"public, max-age=60","browseCache":"miss"}
+PASS 4.2 [ssr] Member SSR page forwards only the session cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"private, no-store","forwardedCookieNames":["_oauth2_proxy"],"receivedIdentityHeaders":["x-auth-request-email","x-auth-request-email-verified","x-auth-request-issuer","x-auth-request-user"],"browseCache":"bypass"}
+PASS 4.3 [ssr] Anonymous SSR page after authenticated page {"status":200,"identity":"none","setCookie":[],"cacheControl":"public, max-age=60","browseCache":"hit"}
+PASS 4.4 [ssr] SSR page with tampered session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"private, no-store","nextStatus":200,"cookieClearedInBrowser":true}
+PASS 5.0 [split] Control: re-signed copy of a valid cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+PASS 5.1 [split] Presented malformed session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"actionStatus":401,"sideEffects":0,"afterClearing":200,"cookieCleared":true}
+PASS 5.2 [split] Presented tampered session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"actionStatus":401,"sideEffects":0,"afterClearing":200,"cookieCleared":true}
+PASS 5.3 [split] Presented unknown ticket (validly signed) session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"actionStatus":401,"sideEffects":0,"afterClearing":200,"cookieCleared":true}
+PASS 5.4 [split] Presented invalid bearer credential {"status":401,"identity":"-","setCookie":[],"actionStatus":401,"sideEffects":0}
+PASS 5.0 [baseline] Control: re-signed copy of a valid cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+GAP  5.1 [baseline] Presented malformed session cookie {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store","actionStatus":401,"sideEffects":0,"afterClearing":200,"cookieCleared":true}
+GAP  5.2 [baseline] Presented tampered session cookie {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store","actionStatus":401,"sideEffects":0,"afterClearing":200,"cookieCleared":true}
+GAP  5.3 [baseline] Presented unknown ticket (validly signed) session cookie {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store","actionStatus":401,"sideEffects":0,"afterClearing":200,"cookieCleared":true}
+GAP  5.4 [baseline] Presented invalid bearer credential {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","actionStatus":401,"sideEffects":0}
+PASS 5.5 [split] Expired-timestamp cookie (validly signed, older than cookie_expire) {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]}
+PASS 9.1 [ssr] Cross-site SSR form POST with member cookie {"status":403,"identity":"-","setCookie":[],"cacheControl":"private, no-store","sideEffects":0}
+PASS 9.2 [ssr] SSR form POST without Origin {"status":403,"identity":"-","setCookie":[],"cacheControl":"private, no-store","sideEffects":0}
+PASS 9.3 [ssr] Same-origin SSR form POST (positive control) {"status":200,"identity":"none","setCookie":[],"cacheControl":"private, no-store","sideEffects":1}
+PASS 9.4 [ssr] Anonymous same-origin SSR form POST {"status":401,"identity":"-","setCookie":[],"cacheControl":"private, no-store","sideEffects":0}
+PASS 9.5 [split] Cross-site multipart upload (simple request, no preflight) {"status":403,"identity":"-","code":"csrf-rejected","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 9.6 [split] Multipart upload without CSRF request header (old browser: no Origin/Fetch Metadata) {"status":403,"identity":"-","code":"csrf-rejected","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+PASS 9.7 [split] Same-origin multipart upload with X-Recipe-Db-Csrf header (positive control) {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store","sideEffects":1}
+PASS 9.8 [split] Cross-site urlencoded POST to GraphQL {"status":403,"identity":"-","code":"csrf-rejected","setCookie":[],"cacheControl":"no-store","sideEffects":0}
+== phase lifecycle
+ Container recipe-db-auth-poc-runner-run-4c1ebb2aad0b Creating 
+ Container recipe-db-auth-poc-runner-run-4c1ebb2aad0b Created 
+PASS 7.2 [proxy] Logout {"status":302,"identity":"-","location":"http://app.poc.test/browse/page","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-cache, no-store, must-revalidate, max-age=0"}
+PASS 7.3 [split] Replay pre-logout cookie (deleted ticket) {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"actionStatus":401,"sideEffects":0}
+GAP  7.3 [baseline] Replay pre-logout cookie (deleted ticket) {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store","actionStatus":401,"sideEffects":0}
+PASS 7.6 [split] Provider rejects refresh token (invalid_grant) {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax","_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]}
+PASS 7.4 [split] Refresh returns a changed verified email {"before":"sub-email-change member@example.test verified=true role=member","after":"sub-email-change changed@example.test verified=true role=none","emailUpdatedOnRefresh":true}
+PASS 4.5 [ssr] Session refresh triggered during SSR {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<redacted>; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"],"cacheControl":"private, no-store","relayedSessionCookies":1,"followUp":200}
+GAP  7.5 [split] Refresh returns email_verified=false (ID token TTL 30s, refresh after 20s) {"requests":["25s:whoami=200/true/member,rate=200","27s:whoami=200/true/member,rate=200","35s:whoami=401/-/-,rate=401","45s:whoami=200/-/-,rate=401"],"sideEffects":2}
+PASS 5.6 [split] Natural expiry: cookie presented after 70s idle (cookie_expire 60s) {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"actionStatus":401,"sideEffects":0}
+GAP  5.6 [baseline] Natural expiry: cookie presented after 70s idle (cookie_expire 60s) {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store","actionStatus":401,"sideEffects":0}
+PASS 7.1 [split] Active session across refresh beyond cookie_expire (60s) from original sign-in {"requests":["0s:200:member","25s:200:member","50s:200:member","75s:200:member"],"refreshSetCookies":3}
+== phase infra-prepare
+ Container recipe-db-auth-poc-runner-run-78ae23356325 Creating 
+ Container recipe-db-auth-poc-runner-run-78ae23356325 Created 
+ Container recipe-db-auth-poc-redis-1 Stopping 
+ Container recipe-db-auth-poc-redis-1 Stopped 
+== phase redis-down
+ Container recipe-db-auth-poc-runner-run-9ed79e69ff04 Creating 
+ Container recipe-db-auth-poc-runner-run-9ed79e69ff04 Created 
+PASS 6.R1 [split] redis stopped: request without credentials {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store"}
+PASS 6.R2 [split] redis stopped: request with valid session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]}
+PASS 6.R3 [split] redis stopped: protected action with valid session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"sideEffects":0}
+PASS 6.R1 [baseline] redis stopped: request without credentials {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store"}
+GAP  6.R2 [baseline] redis stopped: request with valid session cookie {"status":200,"identity":"none","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store"}
+PASS 6.R3 [baseline] redis stopped: protected action with valid session cookie {"status":401,"identity":"-","code":"authentication-required","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"no-store","sideEffects":0}
+PASS 6.R4 [ssr] redis stopped: SSR page with valid session cookie {"status":401,"identity":"-","setCookie":["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"],"cacheControl":"private, no-store"}
+ Container recipe-db-auth-poc-redis-1 Starting 
+ Container recipe-db-auth-poc-redis-1 Started 
+== phase redis-recovered
+ Container recipe-db-auth-poc-runner-run-c6c79b9a3fd9 Creating 
+ Container recipe-db-auth-poc-runner-run-c6c79b9a3fd9 Created 
+PASS 6.R5 [split] redis recovered: same session cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+PASS 6.R5 [baseline] redis recovered: same session cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+ Container recipe-db-auth-poc-oauth2-proxy-1 Stopping 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Stopped 
+== phase auth-down
+ Container recipe-db-auth-poc-runner-run-e307d4b8a06a Creating 
+ Container recipe-db-auth-poc-runner-run-e307d4b8a06a Created 
+PASS 6.A1 [split] oauth2-proxy stopped: request without credentials {"status":200,"identity":"none","setCookie":[],"cacheControl":"no-store"}
+PASS 6.A2 [split] oauth2-proxy stopped: request with valid session cookie {"status":500,"identity":"-","setCookie":[]}
+PASS 6.A3 [split] oauth2-proxy stopped: protected action with valid session cookie {"status":500,"identity":"-","setCookie":[],"sideEffects":0}
+PASS 6.A1 [baseline] oauth2-proxy stopped: request without credentials {"status":500,"identity":"-","setCookie":[]}
+PASS 6.A2 [baseline] oauth2-proxy stopped: request with valid session cookie {"status":500,"identity":"-","setCookie":[]}
+PASS 6.A3 [baseline] oauth2-proxy stopped: protected action with valid session cookie {"status":500,"identity":"-","setCookie":[],"sideEffects":0}
+PASS 6.A4 [ssr] oauth2-proxy stopped: SSR page with valid session cookie {"status":503,"identity":"-","setCookie":[],"cacheControl":"private, no-store"}
+ Container recipe-db-auth-poc-mock-oidc-1 Waiting 
+ Container recipe-db-auth-poc-redis-1 Waiting 
+ Container recipe-db-auth-poc-traefik-1 Waiting 
+ Container recipe-db-auth-poc-redis-1 Healthy 
+ Container recipe-db-auth-poc-mock-oidc-1 Healthy 
+ Container recipe-db-auth-poc-traefik-1 Healthy 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Starting 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Started 
+== phase auth-recovered
+ Container recipe-db-auth-poc-runner-run-a3fc44a7ba29 Creating 
+ Container recipe-db-auth-poc-runner-run-a3fc44a7ba29 Created 
+PASS 6.A5 [split] oauth2-proxy recovered: same session cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":["_oauth2_proxy=<redacted>; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"],"cacheControl":"no-store"}
+PASS 6.A5 [baseline] oauth2-proxy recovered: same session cookie {"status":200,"identity":"sub-member member@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store"}
+== phase roles-before
+ Container recipe-db-auth-poc-runner-run-ef31943bd36e Creating 
+ Container recipe-db-auth-poc-runner-run-ef31943bd36e Created 
+PASS 8.0 [split] Roles before map change {"owner":"sub-owner owner@example.test verified=true role=owner","member":"sub-member member@example.test verified=true role=member"}
+ Container recipe-db-auth-poc-target-1 Restarting 
+ Container recipe-db-auth-poc-target-1 Started 
+ Container recipe-db-auth-poc-target-1 Running 
+ Container recipe-db-auth-poc-target-1 Waiting 
+ Container recipe-db-auth-poc-target-1 Healthy 
+== phase roles-after
+ Container recipe-db-auth-poc-runner-run-4dfd607b2174 Creating 
+ Container recipe-db-auth-poc-runner-run-4dfd607b2174 Created 
+PASS 8.1 [split] Demoted owner keeps session; next request uses new map {"status":200,"identity":"sub-owner owner@example.test verified=true role=member","setCookie":[],"cacheControl":"no-store","deleteStatus":403,"deleteEffects":0,"rateStatus":200,"rateEffects":1}
+PASS 8.2 [split] Removed member keeps session; next request has no member rights {"status":200,"identity":"sub-member member@example.test verified=true role=none","setCookie":[],"cacheControl":"no-store","actionStatus":403,"sideEffects":0}
+== phase report
+ Container recipe-db-auth-poc-runner-run-5f09b0f34c07 Creating 
+ Container recipe-db-auth-poc-runner-run-5f09b0f34c07 Created 
+| Case | Mode | Scenario | Expected | Result | Observed (sanitized) |
+| --- | --- | --- | --- | --- | --- |
+| 1.1 | split | Anonymous read on mixed route | 200, no redirect, no identity headers | PASS | status: 200; identity: none; cacheControl: no-store |
+| 1.2 | split | Anonymous protected action (rate) | 401 authentication-required, no side effect | PASS | status: 401; identity: -; code: authentication-required; cacheControl: no-store; sideEffects: 0 |
+| 1.2 | split | Anonymous protected action (deleteRecipe) | 401 authentication-required, no side effect | PASS | status: 401; identity: -; code: authentication-required; cacheControl: no-store; sideEffects: 0 |
+| 2.1 | split | Valid owner session identity | 200, issuer+subject+verified email, role=owner | PASS | status: 200; identity: sub-owner owner@example.test verified=true role=owner; cacheControl: no-store |
+| 2.1 | split | Valid member session identity | 200, issuer+subject+verified email, role=member | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 2.1 | split | Valid outsider session identity | 200, issuer+subject+verified email, role=none | PASS | status: 200; identity: sub-outsider outsider@example.test verified=true role=none; cacheControl: no-store |
+| 2.2 | split | Member performs member action (rate) | 200, one side effect | PASS | status: 200; identity: none; cacheControl: no-store; sideEffects: 1 |
+| 2.3 | split | Member attempts owner-only action | 403 forbidden, no side effect | PASS | status: 403; identity: -; code: forbidden; cacheControl: no-store; sideEffects: 0 |
+| 2.4 | split | Owner performs owner-only action | 200, one side effect | PASS | status: 200; identity: none; cacheControl: no-store; sideEffects: 1 |
+| 2.5 | split | Authenticated non-allowlisted account attempts member action | 403 forbidden, no side effect | PASS | status: 403; identity: -; code: forbidden; cacheControl: no-store; sideEffects: 0 |
+| 1.1 | baseline | Anonymous read on mixed route | 200, no redirect, no identity headers | PASS | status: 200; identity: none; cacheControl: no-store |
+| 1.2 | baseline | Anonymous protected action (rate) | 401 authentication-required, no side effect | PASS | status: 401; identity: -; code: authentication-required; cacheControl: no-store; sideEffects: 0 |
+| 1.2 | baseline | Anonymous protected action (deleteRecipe) | 401 authentication-required, no side effect | PASS | status: 401; identity: -; code: authentication-required; cacheControl: no-store; sideEffects: 0 |
+| 2.1 | baseline | Valid owner session identity | 200, issuer+subject+verified email, role=owner | PASS | status: 200; identity: sub-owner owner@example.test verified=true role=owner; cacheControl: no-store |
+| 2.1 | baseline | Valid member session identity | 200, issuer+subject+verified email, role=member | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 2.1 | baseline | Valid outsider session identity | 200, issuer+subject+verified email, role=none | PASS | status: 200; identity: sub-outsider outsider@example.test verified=true role=none; cacheControl: no-store |
+| 2.2 | baseline | Member performs member action (rate) | 200, one side effect | PASS | status: 200; identity: none; cacheControl: no-store; sideEffects: 1 |
+| 2.3 | baseline | Member attempts owner-only action | 403 forbidden, no side effect | PASS | status: 403; identity: -; code: forbidden; cacheControl: no-store; sideEffects: 0 |
+| 2.4 | baseline | Owner performs owner-only action | 200, one side effect | PASS | status: 200; identity: none; cacheControl: no-store; sideEffects: 1 |
+| 2.5 | baseline | Authenticated non-allowlisted account attempts member action | 403 forbidden, no side effect | PASS | status: 403; identity: -; code: forbidden; cacheControl: no-store; sideEffects: 0 |
+| 2.6 | proxy | Sign-in with email_verified=false (allowlisted address) | sign-in rejected, no session cookie | PASS | status: 500 |
+| 2.7 | split | ID token without email_verified claim (allowlisted address) | no member rights | PASS | status: 200; identity: sub-missing-verified member@example.test verified=false role=none; cacheControl: no-store; loginStatus: 302; admittedBySession: true; actionStatus: 403; sideEffects: 0 |
+| 2.7 | baseline | ID token without email_verified claim (allowlisted address) | no member rights | PASS | status: 200; identity: sub-missing-verified member@example.test verified=false role=none; cacheControl: no-store; loginStatus: 302; admittedBySession: true; actionStatus: 403; sideEffects: 0 |
+| 2.8 | proxy | Session cookie attributes after sign-in | HttpOnly, SameSite=Lax, Path=/, no Domain | PASS | status: 302; location: http://app.poc.test/browse/page; setCookie: ["_oauth2_proxy_XMtRw-A6_csrf=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax","_oauth2_proxy=<redacted>; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"] |
+| 3.1 | split | Anonymous request with forged identity/role headers | anonymous, no trusted identity header reaches target | PASS | status: 200; identity: none; cacheControl: no-store; ignoredHeadersReceived: ["x-role","x-user-role"] |
+| 3.2 | split | Anonymous owner action with forged headers | 401, no side effect | PASS | status: 401; identity: -; code: authentication-required; cacheControl: no-store; sideEffects: 0 |
+| 3.3 | split | Member session with forged owner headers | member identity only; owner action 403, no side effect | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store; trustedIdentityHeadersReceived: ["x-auth-request-email","x-auth-request-email-verified","x-auth-request-issuer","x-auth-request-user"]; actionStatus: 403; sideEffects: 0 |
+| 3.4 | split | Internal hostname (graphql.internal) requested from edge with forged headers | same auth boundary: anonymous | PASS | status: 200; identity: none; cacheControl: no-store |
+| 3.1 | baseline | Anonymous request with forged identity/role headers | anonymous, no trusted identity header reaches target | PASS | status: 200; identity: none; cacheControl: no-store; ignoredHeadersReceived: ["x-role","x-user-role"] |
+| 3.2 | baseline | Anonymous owner action with forged headers | 401, no side effect | PASS | status: 401; identity: -; code: authentication-required; cacheControl: no-store; sideEffects: 0 |
+| 3.3 | baseline | Member session with forged owner headers | member identity only; owner action 403, no side effect | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store; trustedIdentityHeadersReceived: ["x-auth-request-email","x-auth-request-email-verified","x-auth-request-issuer","x-auth-request-user"]; actionStatus: 403; sideEffects: 0 |
+| 3.4 | baseline | Internal hostname (graphql.internal) requested from edge with forged headers | same auth boundary: anonymous | PASS | status: 200; identity: none; cacheControl: no-store |
+| 3.5 | network | Direct access to private services from client network | no connection by name or IP | PASS | target:8080: timeout; oauth2-proxy:4180: timeout; redis:6379: timeout; mock-oidc:8080: timeout; browse:8080: timeout; target-ip:8080: timeout |
+| 3.6 | split | Duplicate Cookie headers hiding a malformed session cookie in the second header | non-success (credential presented) | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"] |
+| 4.1 | ssr | Anonymous SSR page | 200 anonymous, shareable cache headers | PASS | status: 200; identity: none; cacheControl: public, max-age=60; browseCache: miss |
+| 4.2 | ssr | Member SSR page forwards only the session cookie | 200 member identity, private no-store, only _oauth2_proxy forwarded, no forged headers | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: private, no-store; forwardedCookieNames: ["_oauth2_proxy"]; receivedIdentityHeaders: ["x-auth-request-email","x-auth-request-email-verified","x-auth-request-issuer","x-auth-request-user"]; browseCache: bypass |
+| 4.3 | ssr | Anonymous SSR page after authenticated page | anonymous content, no identity leak from shared cache | PASS | status: 200; identity: none; cacheControl: public, max-age=60; browseCache: hit |
+| 4.4 | ssr | SSR page with tampered session cookie | 401 sign-in page, clearing cookie relayed; next credential-free page anonymous | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: private, no-store; nextStatus: 200; cookieClearedInBrowser: true |
+| 5.0 | split | Control: re-signed copy of a valid cookie | 200 member (validates the signing helper used for 5.3) | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 5.1 | split | Presented malformed session cookie | explicit non-success; protected action without side effect; cleared cookie then allows anonymous read | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; actionStatus: 401; sideEffects: 0; afterClearing: 200; cookieCleared: true |
+| 5.2 | split | Presented tampered session cookie | explicit non-success; protected action without side effect; cleared cookie then allows anonymous read | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; actionStatus: 401; sideEffects: 0; afterClearing: 200; cookieCleared: true |
+| 5.3 | split | Presented unknown ticket (validly signed) session cookie | explicit non-success; protected action without side effect; cleared cookie then allows anonymous read | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; actionStatus: 401; sideEffects: 0; afterClearing: 200; cookieCleared: true |
+| 5.4 | split | Presented invalid bearer credential | explicit non-success | PASS | status: 401; identity: -; actionStatus: 401; sideEffects: 0 |
+| 5.0 | baseline | Control: re-signed copy of a valid cookie | 200 member (validates the signing helper used for 5.3) | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 5.1 | baseline | Presented malformed session cookie | explicit non-success; protected action without side effect; cleared cookie then allows anonymous read | FAIL (preserved reproducer) | status: 200; identity: none; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store; actionStatus: 401; sideEffects: 0; afterClearing: 200; cookieCleared: true |
+| 5.2 | baseline | Presented tampered session cookie | explicit non-success; protected action without side effect; cleared cookie then allows anonymous read | FAIL (preserved reproducer) | status: 200; identity: none; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store; actionStatus: 401; sideEffects: 0; afterClearing: 200; cookieCleared: true |
+| 5.3 | baseline | Presented unknown ticket (validly signed) session cookie | explicit non-success; protected action without side effect; cleared cookie then allows anonymous read | FAIL (preserved reproducer) | status: 200; identity: none; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store; actionStatus: 401; sideEffects: 0; afterClearing: 200; cookieCleared: true |
+| 5.4 | baseline | Presented invalid bearer credential | explicit non-success | FAIL (preserved reproducer) | status: 200; identity: none; cacheControl: no-store; actionStatus: 401; sideEffects: 0 |
+| 5.5 | split | Expired-timestamp cookie (validly signed, older than cookie_expire) | explicit non-success | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"] |
+| 9.1 | ssr | Cross-site SSR form POST with member cookie | 403 before side effects | PASS | status: 403; identity: -; cacheControl: private, no-store; sideEffects: 0 |
+| 9.2 | ssr | SSR form POST without Origin | 403 before side effects | PASS | status: 403; identity: -; cacheControl: private, no-store; sideEffects: 0 |
+| 9.3 | ssr | Same-origin SSR form POST (positive control) | 200, one side effect | PASS | status: 200; identity: none; cacheControl: private, no-store; sideEffects: 1 |
+| 9.4 | ssr | Anonymous same-origin SSR form POST | 401 sign-in page, no side effect, no replay | PASS | status: 401; identity: -; cacheControl: private, no-store; sideEffects: 0 |
+| 9.5 | split | Cross-site multipart upload (simple request, no preflight) | 403 csrf-rejected, no side effect | PASS | status: 403; identity: -; code: csrf-rejected; cacheControl: no-store; sideEffects: 0 |
+| 9.6 | split | Multipart upload without CSRF request header (old browser: no Origin/Fetch Metadata) | 403 csrf-rejected, no side effect | PASS | status: 403; identity: -; code: csrf-rejected; cacheControl: no-store; sideEffects: 0 |
+| 9.7 | split | Same-origin multipart upload with X-Recipe-Db-Csrf header (positive control) | 200, one side effect | PASS | status: 200; identity: none; cacheControl: no-store; sideEffects: 1 |
+| 9.8 | split | Cross-site urlencoded POST to GraphQL | 403 csrf-rejected, no side effect | PASS | status: 403; identity: -; code: csrf-rejected; cacheControl: no-store; sideEffects: 0 |
+| 7.2 | proxy | Logout | redirect, session cookie cleared | PASS | status: 302; identity: -; location: http://app.poc.test/browse/page; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-cache, no-store, must-revalidate, max-age=0 |
+| 7.3 | split | Replay pre-logout cookie (deleted ticket) | explicit non-success; no side effect | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; actionStatus: 401; sideEffects: 0 |
+| 7.3 | baseline | Replay pre-logout cookie (deleted ticket) | explicit non-success; no side effect | FAIL (preserved reproducer) | status: 200; identity: none; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store; actionStatus: 401; sideEffects: 0 |
+| 7.6 | split | Provider rejects refresh token (invalid_grant) | explicit non-success, session cleared | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax","_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"] |
+| 7.4 | split | Refresh returns a changed verified email | stable subject; observe whether email is the sign-in snapshot | PASS | before: sub-email-change member@example.test verified=true role=member; after: sub-email-change changed@example.test verified=true role=none; emailUpdatedOnRefresh: true |
+| 4.5 | ssr | Session refresh triggered during SSR | refresh Set-Cookie relayed by browse to the browser; session keeps working | PASS | status: 200; identity: none; setCookie: ["_oauth2_proxy=<redacted>; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"]; cacheControl: private, no-store; relayedSessionCookies: 1; followUp: 200 |
+| 7.5 | split | Refresh returns email_verified=false (ID token TTL 30s, refresh after 20s) | no member rights on any request after the refresh | FAIL (preserved reproducer) | requests: ["25s:whoami=200/true/member,rate=200","27s:whoami=200/true/member,rate=200","35s:whoami=401/-/-,rate=401","45s:whoami=200/-/-,rate=401"]; sideEffects: 2 |
+| 5.6 | split | Natural expiry: cookie presented after 70s idle (cookie_expire 60s) | explicit non-success; no side effect | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; actionStatus: 401; sideEffects: 0 |
+| 5.6 | baseline | Natural expiry: cookie presented after 70s idle (cookie_expire 60s) | explicit non-success; no side effect | FAIL (preserved reproducer) | status: 200; identity: none; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store; actionStatus: 401; sideEffects: 0 |
+| 7.1 | split | Active session across refresh beyond cookie_expire (60s) from original sign-in | renewed sliding session; refresh Set-Cookie reaches client | PASS | requests: ["0s:200:member","25s:200:member","50s:200:member","75s:200:member"]; refreshSetCookies: 3 |
+| 6.R1 | split | redis stopped: request without credentials | public read may succeed anonymously (no credential presented) | PASS | status: 200; identity: none; cacheControl: no-store |
+| 6.R2 | split | redis stopped: request with valid session cookie | explicit non-success, not anonymous success | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"] |
+| 6.R3 | split | redis stopped: protected action with valid session cookie | non-success, no side effect | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; sideEffects: 0 |
+| 6.R1 | baseline | redis stopped: request without credentials | public read may succeed anonymously (no credential presented) | PASS | status: 200; identity: none; cacheControl: no-store |
+| 6.R2 | baseline | redis stopped: request with valid session cookie | explicit non-success, not anonymous success | FAIL (preserved reproducer) | status: 200; identity: none; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store |
+| 6.R3 | baseline | redis stopped: protected action with valid session cookie | non-success, no side effect | PASS | status: 401; identity: -; code: authentication-required; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: no-store; sideEffects: 0 |
+| 6.R4 | ssr | redis stopped: SSR page with valid session cookie | explicit non-success page, not anonymous HTML | PASS | status: 401; identity: -; setCookie: ["_oauth2_proxy=<cleared>; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"]; cacheControl: private, no-store |
+| 6.R5 | split | redis recovered: same session cookie | member identity restored, no escalation | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 6.R5 | baseline | redis recovered: same session cookie | member identity restored, no escalation | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 6.A1 | split | oauth2-proxy stopped: request without credentials | public read may succeed anonymously (no credential presented) | PASS | status: 200; identity: none; cacheControl: no-store |
+| 6.A2 | split | oauth2-proxy stopped: request with valid session cookie | explicit non-success, not anonymous success | PASS | status: 500; identity: - |
+| 6.A3 | split | oauth2-proxy stopped: protected action with valid session cookie | non-success, no side effect | PASS | status: 500; identity: -; sideEffects: 0 |
+| 6.A1 | baseline | oauth2-proxy stopped: request without credentials | public read may succeed anonymously (no credential presented) | PASS | status: 500; identity: - |
+| 6.A2 | baseline | oauth2-proxy stopped: request with valid session cookie | explicit non-success, not anonymous success | PASS | status: 500; identity: - |
+| 6.A3 | baseline | oauth2-proxy stopped: protected action with valid session cookie | non-success, no side effect | PASS | status: 500; identity: -; sideEffects: 0 |
+| 6.A4 | ssr | oauth2-proxy stopped: SSR page with valid session cookie | explicit non-success page, not anonymous HTML | PASS | status: 503; identity: -; cacheControl: private, no-store |
+| 6.A5 | split | oauth2-proxy recovered: same session cookie | member identity restored, no escalation | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; setCookie: ["_oauth2_proxy=<redacted>; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"]; cacheControl: no-store |
+| 6.A5 | baseline | oauth2-proxy recovered: same session cookie | member identity restored, no escalation | PASS | status: 200; identity: sub-member member@example.test verified=true role=member; cacheControl: no-store |
+| 8.0 | split | Roles before map change | owner=owner, member=member | PASS | owner: sub-owner owner@example.test verified=true role=owner; member: sub-member member@example.test verified=true role=member |
+| 8.1 | split | Demoted owner keeps session; next request uses new map | role=member; owner action 403 without side effect; member action allowed | PASS | status: 200; identity: sub-owner owner@example.test verified=true role=member; cacheControl: no-store; deleteStatus: 403; deleteEffects: 0; rateStatus: 200; rateEffects: 1 |
+| 8.2 | split | Removed member keeps session; next request has no member rights | role=none; member action 403 without side effect | PASS | status: 200; identity: sub-member member@example.test verified=true role=none; cacheControl: no-store; actionStatus: 403; sideEffects: 0 |
+
+88 checks: 80 passed, 8 failed, 0 unexpected.
+ Container recipe-db-auth-poc-oauth2-proxy-1 Stopping 
+ Container recipe-db-auth-poc-target-1 Stopping 
+ Container recipe-db-auth-poc-browse-1 Stopping 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Stopped 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Removing 
+ Container recipe-db-auth-poc-oauth2-proxy-1 Removed 
+ Container recipe-db-auth-poc-mock-oidc-1 Stopping 
+ Container recipe-db-auth-poc-redis-1 Stopping 
+ Container recipe-db-auth-poc-traefik-1 Stopping 
+ Container recipe-db-auth-poc-redis-1 Stopped 
+ Container recipe-db-auth-poc-redis-1 Removing 
+ Container recipe-db-auth-poc-redis-1 Removed 
+ Container recipe-db-auth-poc-traefik-1 Stopped 
+ Container recipe-db-auth-poc-traefik-1 Removing 
+ Container recipe-db-auth-poc-traefik-1 Removed 
+ Container recipe-db-auth-poc-browse-1 Stopped 
+ Container recipe-db-auth-poc-browse-1 Removing 
+ Container recipe-db-auth-poc-browse-1 Removed 
+ Container recipe-db-auth-poc-target-1 Stopped 
+ Container recipe-db-auth-poc-target-1 Removing 
+ Container recipe-db-auth-poc-target-1 Removed 
+ Container recipe-db-auth-poc-mock-oidc-1 Stopped 
+ Container recipe-db-auth-poc-mock-oidc-1 Removing 
+ Container recipe-db-auth-poc-mock-oidc-1 Removed 
+ Volume recipe-db-auth-poc_effects Removing 
+ Network recipe-db-auth-poc_edge Removing 
+ Volume recipe-db-auth-poc_redis-data Removing 
+ Volume recipe-db-auth-poc_state Removing 
+ Network recipe-db-auth-poc_private Removing 
+ Volume recipe-db-auth-poc_effects Removed 
+ Volume recipe-db-auth-poc_redis-data Removed 
+ Volume recipe-db-auth-poc_state Removed 
+ Network recipe-db-auth-poc_edge Removed 
+ Network recipe-db-auth-poc_private Removed 
+exit=0

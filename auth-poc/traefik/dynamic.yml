@@ -1,0 +1,83 @@
+# Traefik file-provider configuration for the isolated OAuth2 Proxy PoC.
+http:
+  routers:
+    oauth2:
+      rule: "Host(`app.poc.test`) && PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)"
+      entryPoints: [web]
+      service: oauth2-proxy
+    idp:
+      rule: "Host(`idp.poc.test`)"
+      entryPoints: [web]
+      service: mock-oidc
+    browse:
+      rule: "Host(`app.poc.test`) && PathPrefix(`/browse`)"
+      entryPoints: [web]
+      middlewares: [strip-identity]
+      service: browse
+    # Baseline: one router, ForwardAuth always consulted, anonymous access
+    # granted by OAuth2 Proxy skip_auth_routes.
+    graphql-baseline:
+      rule: "(Host(`app.poc.test`) || Host(`graphql.internal`)) && Path(`/baseline/graphql`)"
+      entryPoints: [web]
+      middlewares: [strip-identity, oauth2-auth, baseline-path]
+      service: target
+    # Split variant: requests without any credential never reach ForwardAuth;
+    # requests presenting the session cookie or an Authorization header must
+    # authenticate strictly (no skip_auth_routes match for /graphql).
+    graphql-anonymous:
+      rule: "(Host(`app.poc.test`) || Host(`graphql.internal`)) && Path(`/graphql`)"
+      priority: 100
+      entryPoints: [web]
+      middlewares: [strip-identity]
+      service: target
+    graphql-credentialed:
+      rule: '(Host(`app.poc.test`) || Host(`graphql.internal`)) && Path(`/graphql`) && (HeaderRegexp(`Cookie`, `(^|;\s*)_oauth2_proxy(_[0-9]+)?=`) || HeaderRegexp(`Authorization`, `.`))'
+      priority: 200
+      entryPoints: [web]
+      middlewares: [strip-identity, oauth2-auth]
+      service: target
+
+  middlewares:
+    strip-identity:
+      headers:
+        customRequestHeaders:
+          X-Auth-Request-User: ""
+          X-Auth-Request-Email: ""
+          X-Auth-Request-Issuer: ""
+          X-Auth-Request-Email-Verified: ""
+          X-Auth-Request-Groups: ""
+          X-Auth-Request-Preferred-Username: ""
+          X-Auth-Request-Access-Token: ""
+          X-Forwarded-User: ""
+          X-Forwarded-Email: ""
+          X-Forwarded-Groups: ""
+          Gap-Auth: ""
+          Remote-User: ""
+    oauth2-auth:
+      forwardAuth:
+        address: http://oauth2-proxy:4180/oauth2/auth
+        trustForwardHeader: false
+        authRequestHeaders: [Cookie, Authorization]
+        authResponseHeaders:
+          - X-Auth-Request-User
+          - X-Auth-Request-Email
+          - X-Auth-Request-Issuer
+          - X-Auth-Request-Email-Verified
+        addAuthCookiesToResponse: [_oauth2_proxy]
+    baseline-path:
+      replacePath:
+        path: /graphql
+
+  services:
+    oauth2-proxy:
+      loadBalancer:
+        servers: [{ url: http://oauth2-proxy:4180 }]
+    mock-oidc:
+      loadBalancer:
+        servers: [{ url: http://mock-oidc:8080 }]
+    browse:
+      loadBalancer:
+        servers: [{ url: http://browse:8080 }]
+    target:
+      loadBalancer:
+        servers: [{ url: http://target:8080 }]
