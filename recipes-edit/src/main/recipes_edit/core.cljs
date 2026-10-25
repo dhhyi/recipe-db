@@ -3,6 +3,7 @@
             [re-graph.core :as re-graph]
             [reagent.dom.client :as reagent-dom]
             [recipes-edit.events :as events]
+            [recipes-edit.navigation :as navigation]
             [recipes-edit.views :as views]))
 
 (defonce root
@@ -18,4 +19,5 @@
 (defn init []
   (rf/dispatch-sync [::re-graph/init {:ws nil :http {:url "/graphql"}}])
   (rf/dispatch-sync [::events/initialize (route (.-pathname js/location))])
+  (navigation/start!)
   (reagent-dom/render root [views/app]))

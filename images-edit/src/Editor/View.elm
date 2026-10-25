@@ -49,10 +49,11 @@ view model =
 
             Nothing ->
                 savedView model
-        , div [ class "editor-actions" ]
+        , div [ class "editor-actions grid! gap-2 my-3" ]
             [ label [ for "upload-image" ] [ text "JPEG- oder PNG-Bild auswählen (maximal 10 MiB)" ]
             , input
                 [ id "upload-image"
+                , class "max-w-full"
                 , type_ "file"
                 , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
                 , disabled (not canSelect)
@@ -60,7 +61,7 @@ view model =
                 ]
                 []
             , if model.session /= Nothing || model.phase == Loading then
-                div [ class "editor-buttons" ]
+                div [ class "editor-buttons flex flex-wrap gap-2" ]
                     [ button [ type_ "button", disabled (not (dirty model && (model.phase == Editing || model.phase == SaveFailed) && (model.session |> Maybe.map .previewReady |> Maybe.withDefault False))), attribute "aria-busy" (boolString busy), onClick Save ]
                         [ text
                             (if busy then
