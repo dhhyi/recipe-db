@@ -112,8 +112,8 @@
         dirty? "Ungespeicherte Änderungen."
         (= :success (:kind feedback)) (:message feedback)
         :else "Keine ungespeicherten Änderungen.")]
-     [:div.editor-actions {:class "grid! gap-[12px] my-[16px]"}
-      [:div.editor-buttons.flex.flex-wrap {:class "gap-[12px]"}
+     [:div.editor-actions {:class "grid! gap-2 my-3"}
+      [:div.editor-buttons.flex.flex-wrap.gap-2
        [:button.w-auto!.max-w-full
         {:type "submit" :disabled (or saving? (not dirty?)) :aria-busy saving?}
         (cond saving? "Speichert …" save-failed? "Erneut speichern" :else "Speichern")]
