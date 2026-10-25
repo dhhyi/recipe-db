@@ -68,7 +68,9 @@
 #@     graphql = services["graphql"]
 #@     graphql.setdefault("environment", {}).update({
 #@       "NATS_URL": "nats://nats:4222",
+#@       "AUTH_TRUSTED_ISSUER": "https://accounts.google.com",
 #@     })
+#@     graphql["secrets"] = ["auth-accounts.json"]
 #@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@   end
 #@   if "browse" in services:
@@ -100,12 +102,18 @@ volumes:
   data:
     name: recipe-db-data
 #@ end
-#@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
+#@ if len([p for p in deploy_projects if p.name == "search"]) > 0 or len([p for p in deploy_projects if p.name == "graphql"]) > 0:
 secrets:
+  #@ if len([p for p in deploy_projects if p.name == "graphql"]) > 0:
+  auth-accounts.json:
+    file: ./.secrets/auth-accounts.json
+  #@ end
+  #@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
   typesense-api-key:
     #@ if options.production:
     file: ${TYPESENSE_API_KEY_FILE:?Set TYPESENSE_API_KEY_FILE to a private Typesense API key file}
     #@ else:
     file: ${TYPESENSE_API_KEY_FILE:-./.secrets/typesense-api-key}
     #@ end
+  #@ end
 #@ end

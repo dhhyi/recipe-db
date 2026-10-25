@@ -269,6 +269,9 @@ EOF
     [ "$status" -eq 0 ]
     assert_compose '
       .services.graphql.environment.NATS_URL == "nats://nats:4222"
+      and .services.graphql.environment.AUTH_TRUSTED_ISSUER == "https://accounts.google.com"
+      and .services.graphql.secrets == ["auth-accounts.json"]
+      and .secrets["auth-accounts.json"].file == "./.secrets/auth-accounts.json"
       and (.services.graphql.environment | has("NATS_USER") | not)
       and (.services.graphql.environment | has("NATS_PASSWORD") | not)
       and .services["nats-init"].environment.NATS_URL == "nats://nats:4222"

@@ -324,6 +324,28 @@ EOF
   [ "$status" -eq 0 ]
   [ -f generate-docker-compose.done ]
   [ -s .secrets/typesense-api-key ]
+  [ -s .secrets/auth-accounts.json ]
+}
+
+@test "development auth accounts are private and preserved across setup runs" {
+  run mise run --raw create-auth-accounts
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %a .secrets/auth-accounts.json)" = 600 ]
+  jq -e '.anonymous.role == "anonymous" and .tokens == [] and .googleAccounts == {}' .secrets/auth-accounts.json
+
+  printf '%s\n' custom > .secrets/auth-accounts.json
+  run mise run --raw create-auth-accounts
+  [ "$status" -eq 0 ]
+  [ "$(cat .secrets/auth-accounts.json)" = custom ]
+}
+
+@test "empty development auth accounts file fails explicitly without replacement" {
+  mkdir .secrets
+  touch .secrets/auth-accounts.json
+  run mise run --raw create-auth-accounts
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"auth accounts file is empty"* ]]
+  [ ! -s .secrets/auth-accounts.json ]
 }
 
 @test "development search key is private, random and preserved across setup runs" {

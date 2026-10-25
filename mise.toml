@@ -77,7 +77,7 @@ file = ".scripts/generate-bazel-build.sh"
 
 [tasks.sync]
 description = "Synchronize shared files, devcontainers, GraphQL schemas and Bazel rules"
-depends = ["create-intranet", "create-search-key"]
+depends = ["create-intranet", "create-search-key", "create-auth-accounts"]
 run = [
   { task = "sync-files" },
   { task = "sync-devcontainers" },
@@ -106,13 +106,22 @@ run = "docker network inspect intranet >/dev/null 2>&1 || docker network create 
 description = "Create the ignored development Typesense key without replacing an existing key"
 file = ".scripts/create-search-key.sh"
 
+[tasks.create-auth-accounts]
+description = "Create the ignored development auth accounts file without replacing an existing file"
+file = ".scripts/create-auth-accounts.sh"
+
 [tasks.seed-demodata]
 description = "Generate demo data against the development stack"
 run = "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
 
 [tasks.dev-up]
 description = "Start the development stack detached and wait for readiness; accepts extra Compose up arguments"
-depends = ["create-intranet", "create-search-key", "generate-docker-compose"]
+depends = [
+  "create-intranet",
+  "create-search-key",
+  "create-auth-accounts",
+  "generate-docker-compose"
+]
 run = "docker compose up -d --wait"
 raw_args = true
 
