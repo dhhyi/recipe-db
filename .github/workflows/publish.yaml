@@ -1,9 +1,12 @@
 name: Publish
 concurrency:
   group: publish-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request' &&
+        (github.event.action != 'edited' || github.event.changes.title != null) }}
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches:
       - main
@@ -17,6 +20,11 @@ env:
 
 jobs:
   quality-checks:
+    # Ignore non-title edits; removing [WIP] starts validation without another commit.
+    if: >-
+      (github.event_name != 'pull_request' ||
+       !contains(github.event.pull_request.title, '[WIP]')) &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -99,6 +107,10 @@ jobs:
         run: mise run test-message-bus
 
   arm64-validation:
+    if: >-
+      (github.event_name != 'pull_request' ||
+       !contains(github.event.pull_request.title, '[WIP]')) &&
+      (github.event.action != 'edited' || github.event.changes.title != null)
     permissions:
       contents: read
       packages: write
