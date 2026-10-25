@@ -1,0 +1,40 @@
+# OAuth2 Proxy v7.15.5 alpha configuration: provider, identity claims and
+# the exact headers returned to Traefik ForwardAuth.
+server:
+  bindAddress: 0.0.0.0:4180
+upstreamConfig:
+  upstreams:
+    - id: forward-auth-only
+      path: /
+      static: true
+      staticCode: 404
+injectResponseHeaders:
+  - name: X-Auth-Request-User
+    values:
+      - claimSource:
+          claim: user
+  - name: X-Auth-Request-Email
+    values:
+      - claimSource:
+          claim: email
+  - name: X-Auth-Request-Issuer
+    values:
+      - claimSource:
+          claim: iss
+  - name: X-Auth-Request-Email-Verified
+    values:
+      - claimSource:
+          claim: email_verified
+providers:
+  - id: poc-oidc
+    provider: oidc
+    clientID: recipe-db-auth-poc
+    clientSecretFile: /run/secrets/oidc-client-secret
+    scope: openid email
+    code_challenge_method: S256
+    additionalClaims: [iss, email_verified]
+    oidcConfig:
+      issuerURL: http://idp.poc.test
+      emailClaim: email
+      audienceClaims: [aud]
+      insecureAllowUnverifiedEmail: false
