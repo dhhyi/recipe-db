@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
+use std::marker::PhantomData;
 use std::path::Path;
 
 use async_graphql::{Error, ErrorExtensions};
 use axum::http::{HeaderMap, HeaderValue};
-use serde::de::{MapAccess, Visitor};
+use serde::de::{value::MapAccessDeserializer, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use subtle::ConstantTimeEq;
@@ -232,9 +233,43 @@ struct AnonymousConfig {
 struct RawConfig {
     #[serde(rename = "$schema", default)]
     schema: String,
-    anonymous: RawAnonymous,
-    tokens: Vec<RawToken>,
+    anonymous: MapOnly<RawAnonymous>,
+    tokens: Vec<MapOnly<RawToken>>,
     google_accounts: RawGoogleAccounts,
+}
+
+struct MapOnly<T>(T);
+
+impl<'de, T> Deserialize<'de> for MapOnly<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct MapOnlyVisitor<T>(PhantomData<T>);
+
+        impl<'de, T> Visitor<'de> for MapOnlyVisitor<T>
+        where
+            T: Deserialize<'de>,
+        {
+            type Value = MapOnly<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object")
+            }
+
+            fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                T::deserialize(MapAccessDeserializer::new(map)).map(MapOnly)
+            }
+        }
+
+        deserializer.deserialize_map(MapOnlyVisitor(PhantomData))
+    }
 }
 
 #[derive(Deserialize)]
@@ -328,14 +363,14 @@ impl AuthPolicy {
         })?;
         let _ = raw.schema;
         let anonymous = AnonymousConfig {
-            role: parse_role(&raw.anonymous.role)?,
-            display_name: raw.anonymous.display_name,
+            role: parse_role(&raw.anonymous.0.role)?,
+            display_name: raw.anonymous.0.display_name,
         };
 
         let mut token_ids = HashSet::new();
         let mut token_secrets = HashSet::new();
         let mut tokens = Vec::with_capacity(raw.tokens.len());
-        for token in raw.tokens {
+        for token in raw.tokens.into_iter().map(|token| token.0) {
             if token.id.is_empty() || token.secret.is_empty() {
                 return Err("token IDs and secrets must be nonempty".to_owned());
             }
@@ -711,6 +746,9 @@ mod tests {
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"member","extra":true}],"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"member","displayName":null}],"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","id":"y","secret":"s","role":"member"}],"googleAccounts":{}}"#,
+            r#"{"anonymous":["anonymous","Guest"],"tokens":[],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[["x","s","member","Name"]],"googleAccounts":{}}"#,
+            r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":[["owner@example.com","owner"]]}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"","secret":"s","role":"member"}],"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"","role":"member"}],"googleAccounts":{}}"#,
             r#"{"anonymous":{"role":"anonymous"},"tokens":[{"id":"x","secret":"s","role":"bad"}],"googleAccounts":{}}"#,
