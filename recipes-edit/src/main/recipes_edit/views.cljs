@@ -19,27 +19,11 @@
 
 (defn- auto-sizing-textarea []
   (let [textarea (atom nil)
-        frame (atom nil)
-        cancel! (fn []
-                  (when @frame
-                    (js/cancelAnimationFrame @frame)
-                    (reset! frame nil)))
-        resize! (fn [_]
-                  (resize-textarea! @textarea)
-                  (cancel!)
-                  ;; Controlled input reconciliation can finish after commit.
-                  (reset! frame
-                          (js/requestAnimationFrame
-                           (fn []
-                             (reset! frame nil)
-                             (when (some-> @textarea .-isConnected)
-                               (resize-textarea! @textarea))))))]
+        resize! (fn [_] (resize-textarea! @textarea))]
     (r/create-class
      {:component-did-mount resize!
+      ;; The controlled child applies its value before this parent lifecycle.
       :component-did-update resize!
-      :component-will-unmount (fn [_]
-                                (cancel!)
-                                (reset! textarea nil))
       :reagent-render
       (fn [props]
         [:textarea (assoc props :ref #(reset! textarea %))])})))

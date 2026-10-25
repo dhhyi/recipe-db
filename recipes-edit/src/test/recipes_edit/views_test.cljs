@@ -11,27 +11,6 @@
       (finally
         (set! (.-window js/globalThis) window)))))
 
-(defn- with-animation-frames [f]
-  (let [request (.-requestAnimationFrame js/globalThis)
-        cancel (.-cancelAnimationFrame js/globalThis)
-        frames (atom {})
-        next-id (atom 0)]
-    (set! (.-requestAnimationFrame js/globalThis)
-          (fn [callback]
-            (let [id (swap! next-id inc)]
-              (swap! frames assoc id callback)
-              id)))
-    (set! (.-cancelAnimationFrame js/globalThis)
-          (fn [id] (swap! frames dissoc id)))
-    (try
-      (f frames (fn []
-                  (let [callbacks (vals @frames)]
-                    (reset! frames {})
-                    (doseq [callback callbacks] (callback)))))
-      (finally
-        (set! (.-requestAnimationFrame js/globalThis) request)
-        (set! (.-cancelAnimationFrame js/globalThis) cancel)))))
-
 (deftest textarea-height-accounts-for-box-sizing
   (doseq [[box-sizing expected] [["border-box" "103px"]
                                  ["content-box" "80px"]]]
@@ -59,41 +38,24 @@
          :borderTopWidth "1px"
          :borderBottomWidth "1px"}
     (fn []
-      (with-animation-frames
-        (fn [frames flush!]
-          (let [lifecycle (with-redefs [r/create-class (fn
-                                                         ([spec] spec)
-                                                         ([spec _] spec))]
-                            (#'views/auto-sizing-textarea))
-                textarea #js {:style #js {} :scrollHeight 100 :isConnected true}
-                [_ props] ((:reagent-render lifecycle) {:value "Persisted method"})
-                ref (:ref props)]
-            (ref textarea)
-            ((:component-did-mount lifecycle) nil)
-            (is (= "102px" (.. textarea -style -height)))
-            (testing "a programmatic update does not need another ref or change event"
-              (set! (.-scrollHeight textarea) 600)
-              ((:component-did-update lifecycle) nil)
-              (is (= "602px" (.. textarea -style -height))))
-            (testing "shorter restored values shrink the textarea"
-              (set! (.-scrollHeight textarea) 100)
-              ((:component-did-update lifecycle) nil)
-              (is (= "102px" (.. textarea -style -height))))
-            (testing "deferred controlled value writes are measured in the next frame"
-              (is (= 1 (count @frames)) "coalesce pending measurements")
-              (set! (.-scrollHeight textarea) 600)
-              (flush!)
-              (is (= "602px" (.. textarea -style -height)))
-              (is (empty? @frames)))
-            (testing "detached elements are not measured"
-              ((:component-did-update lifecycle) nil)
-              (set! (.-isConnected textarea) false)
-              (set! (.-scrollHeight textarea) 800)
-              (flush!)
-              (is (= "602px" (.. textarea -style -height))))
-            (testing "unmount cancels scheduled measurements"
-              ((:component-did-update lifecycle) nil)
-              ((:component-will-unmount lifecycle) nil)
-              (is (empty? @frames))
-              (ref nil)
-              (flush!))))))))
+      (let [lifecycle (with-redefs [r/create-class (fn
+                                                     ([spec] spec)
+                                                     ([spec _] spec))]
+                        (#'views/auto-sizing-textarea))
+            textarea #js {:style #js {} :scrollHeight 100}
+            [_ props] ((:reagent-render lifecycle) {:value "Persisted method"})
+            ref (:ref props)]
+        (ref textarea)
+        ((:component-did-mount lifecycle) nil)
+        (is (= "102px" (.. textarea -style -height)))
+        (testing "a programmatic update does not need another ref or change event"
+          (set! (.-scrollHeight textarea) 600)
+          ((:component-did-update lifecycle) nil)
+          (is (= "602px" (.. textarea -style -height))))
+        (testing "shorter restored values shrink the textarea"
+          (set! (.-scrollHeight textarea) 100)
+          ((:component-did-update lifecycle) nil)
+          (is (= "102px" (.. textarea -style -height))))
+        (testing "unmounted refs are safe"
+          (ref nil)
+          ((:component-did-update lifecycle) nil))))))
