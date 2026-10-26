@@ -530,6 +530,42 @@ EOF
   [ ! -s .secrets/auth-accounts.json ]
 }
 
+@test "E2E auth fixture creates isolated ephemeral principals without disclosing tokens" {
+  run mise run --raw create-auth-test-fixture
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Generated ephemeral GraphQL E2E auth fixture."* ]]
+  [ "$(stat -c %a .secrets/auth-accounts.json)" = 600 ]
+  [ "$(stat -c %a e2e-test/.secrets/auth-tokens.json)" = 600 ]
+  jq -e '
+    .anonymous.role == "anonymous"
+    and (.tokens | length == 3)
+    and ([.tokens[].id] == ["e2e-owner","e2e-member-one","e2e-member-two"])
+    and ([.tokens[].role] == ["owner","member","member"])
+    and .googleAccounts == {}
+  ' .secrets/auth-accounts.json
+  jq -e '
+    [.owner, .memberOne, .memberTwo] as $tokens
+    | all($tokens[]; type == "string" and test("^[0-9a-f]{64}$"))
+    and ($tokens | unique | length == 3)
+  ' e2e-test/.secrets/auth-tokens.json
+
+  run mise run --raw create-auth-test-fixture
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"E2E auth token file already exists"* ]]
+}
+
+@test "E2E auth fixture refuses to replace a customized local policy" {
+  mkdir -p .secrets
+  printf '%s\n' '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}' > .secrets/auth-accounts.json
+
+  run mise run --raw create-auth-test-fixture
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing to replace non-default auth accounts configuration"* ]]
+  [ ! -e e2e-test/.secrets/auth-tokens.json ]
+  jq -e '.anonymous.role == "owner"' .secrets/auth-accounts.json
+}
+
 @test "development search key is private, random and preserved across setup runs" {
   run mise run --raw create-search-key
   [ "$status" -eq 0 ]

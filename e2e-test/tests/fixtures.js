@@ -1,5 +1,6 @@
 import { test as base, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { createAuthIdentity } from "./auth-contexts.js";
 
 export { expect };
 
@@ -202,6 +203,58 @@ async function uploadImage(request, recipe, filename) {
 }
 
 export const test = base.extend({
+  authContexts: async ({ browser }, use) => {
+    let tokens;
+    try {
+      tokens = JSON.parse(
+        await readFile(
+          new URL("../.secrets/auth-tokens.json", import.meta.url),
+          "utf8",
+        ),
+      );
+    } catch {
+      throw new Error(
+        "E2E auth tokens are missing or invalid; run mise run create-auth-test-fixture.",
+      );
+    }
+    if (
+      !["owner", "memberOne", "memberTwo"].every(
+        (identity) =>
+          typeof tokens[identity] === "string" && tokens[identity].length > 0,
+      )
+    ) {
+      throw new Error(
+        "E2E auth tokens are missing or invalid; run mise run create-auth-test-fixture.",
+      );
+    }
+
+    const contexts = [];
+    const baseURL = process.env.BASE_URL || "http://traefik";
+    const identitiesByAuthorization = new Map(
+      Object.entries(tokens).map(([identity, token]) => [
+        "Bearer " + token,
+        identity,
+      ]),
+    );
+    const createIdentity = (identity, origin = baseURL) =>
+      createAuthIdentity(browser, identity, tokens[identity], origin).then(
+        (context) => {
+          contexts.push(context);
+          return context;
+        },
+      );
+    await use({
+      anonymous: (origin = baseURL) => createIdentity("anonymous", origin),
+      memberOne: (origin = baseURL) => createIdentity("memberOne", origin),
+      memberTwo: (origin = baseURL) => createIdentity("memberTwo", origin),
+      owner: (origin = baseURL) => createIdentity("owner", origin),
+      identifyAuthorization: (authorization) =>
+        authorization == null
+          ? null
+          : (identitiesByAuthorization.get(authorization) ?? "unknown"),
+    });
+    await Promise.all(contexts.map((context) => context.close()));
+  },
   resetApplicationData: [
     async ({ request }, use) => {
       await resetApplicationData(request);

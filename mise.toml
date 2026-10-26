@@ -131,6 +131,10 @@ file = ".scripts/create-search-key.sh"
 description = "Create the ignored development auth accounts file without replacing an existing file"
 file = ".scripts/create-auth-accounts.sh"
 
+[tasks.create-auth-test-fixture]
+description = "Generate ephemeral isolated GraphQL token principals for E2E auth tests"
+file = ".scripts/create-auth-test-fixture.sh"
+
 [tasks.create-oauth-secrets]
 description = "Create private development OAuth placeholders, cookie and ingress secrets without replacing existing files"
 file = ".scripts/create-oauth-secrets.sh"

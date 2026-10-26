@@ -31,3 +31,4 @@ oauth2-proxy-alpha.yml
 # data
 /data
 /.secrets
+/e2e-test/.secrets

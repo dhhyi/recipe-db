@@ -59,6 +59,31 @@ OAuth2 Proxy and Redis have no published ports. A separate private oauth2-ingres
 
 For a private SSR caller, forward only the configured `_oauth2_proxy` cookie (including its numbered chunks) to `http://traefik/graphql`; do not forward client identity headers or an Authorization header. Traefik reauthenticates the cookie and GraphQL receives the same four trusted claims. Relay every upstream `Set-Cookie` header to the browser so refreshed and cleared chunks are retained. The shared public shell must remain independent of credentials and cacheable. Cookie forwarding does not make SSR actions or GraphQL multipart uploads CSRF-safe: mutation CSRF protection is a separate requirement. Never replay a mutation automatically after authentication.
 
+## Local credential-free and token identities
+
+The local GraphQL configuration is authoritative in development and production. To choose the credential-free role, edit `.secrets/auth-accounts.json` and set `anonymous.role` to `anonymous`, `member`, or `owner`, then restart GraphQL with `docker compose restart graphql`. The file is read only at startup; changing it does not hot-reload policy. All credential-free requests share the stable `credential-free:v1` identity, so separate-user tests need distinct configured token IDs.
+
+For isolated E2E auth tests, `mise run create-auth-test-fixture` creates deterministic IDs (`e2e-owner`, `e2e-member-one`, `e2e-member-two`) with fresh random secrets in the same `.secrets/auth-accounts.json` mounted at `/run/secrets/auth-accounts.json`. It writes the client-only token inputs to `e2e-test/.secrets/auth-tokens.json`; both files are private and ignored by Git. The command replaces only the standard empty local configuration and refuses to overwrite a customized policy or an existing token-input file. Restart GraphQL after generation:
+
+```sh
+mise run create-auth-test-fixture
+docker compose restart graphql
+mise run --raw in-devcontainer e2e-test pnpm exec playwright test tests/auth-contexts.functional.spec.js --project=desktop
+```
+
+Start the development Compose stack first (`mise run dev-up`). The focused test exercises anonymous, both member, and owner request headers, isolated browser/API cookies, and same-origin-only credential forwarding across external requests and redirects. It uses no Google credentials or Google network access. The generated fixture keeps `anonymous.role` at `anonymous`; the ordinary E2E runner continues to use credential-free access.
+
+To restore the standard local fixture after a successful generation, remove only the generated files, recreate the default policy, and restart GraphQL:
+
+```sh
+rm -f .secrets/auth-accounts.json e2e-test/.secrets/auth-tokens.json
+rmdir e2e-test/.secrets 2> /dev/null || true
+mise run --raw create-auth-accounts
+docker compose restart graphql
+```
+
+Do not remove the whole `.secrets` directory or tear down Compose as part of this cleanup; unrelated local secrets and existing services are not owned by the E2E fixture. A token-capable API client or browser header tool can also send a `Bearer` header containing a chosen fixture token to the application origin for simultaneous identities. Keep headers scoped to that origin. Removing a static token header selects credential-free access; it is not OAuth session logout or server-side token revocation. No sign-in/out feature or browser identity picker is provided by this workflow.
+
 ## Session lifecycle and verification status
 
 Run `mise run test-auth-ingress` to exercise the generated production routing with real Traefik and an isolated mock HTTP backend (Docker and the `traefik:v3.7` / `python:3.13-slim` images are required). It verifies token overwrite, identity sanitization, cookie/bearer precedence, invalid-cookie rejection, and blocked configuration API endpoints without Google credentials. This is an ingress transport test, not an OIDC login test. GraphQL's token validation and health-route exemption are covered by its Rust tests.
