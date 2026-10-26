@@ -410,12 +410,12 @@ EOF
 
 @test "auth ingress network and trusted address can be overridden" {
   setup_graphql
-  run env AUTH_INGRESS_SUBNET=192.168.240.0/24 GRAPHQL_TRUSTED_INGRESS_IP=192.168.240.9 sh .scripts/generate-docker-compose.sh production
+  run env AUTH_INGRESS_SUBNET=192.168.240.0/24 GRAPHQL_TRUSTED_INGRESS_IP=192.168.240.254 sh .scripts/generate-docker-compose.sh production
 
   [ "$status" -eq 0 ]
   assert_compose '
-    .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "192.168.240.9"
-    and .services.traefik.networks["auth-ingress"].ipv4_address == "192.168.240.9"
+    .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "192.168.240.254"
+    and .services.traefik.networks["auth-ingress"].ipv4_address == "192.168.240.254"
     and .networks["auth-ingress"].ipam.config[0].subnet == "192.168.240.0/24"
   '
 }

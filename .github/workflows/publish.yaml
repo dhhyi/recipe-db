@@ -202,7 +202,7 @@ jobs:
           )
           for subnet in candidates:
               if not any(subnet.overlaps(network) for network in occupied):
-                  print(f"{subnet}\t{subnet.network_address + 2}")
+                  print(f"{subnet}\t{subnet.network_address + 254}")
                   break
           else:
               raise SystemExit("Could not find an unused private subnet for the auth ingress network")
