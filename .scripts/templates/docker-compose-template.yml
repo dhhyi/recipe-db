@@ -73,13 +73,13 @@
 #@       "AUTH_TRUSTED_ISSUER": "https://accounts.google.com",
 #@     })
 #@     if options.production:
-#@       graphql["environment"]["GRAPHQL_TRUSTED_INGRESS_IP"] = "10.231.65.2"
+#@       graphql["environment"]["GRAPHQL_TRUSTED_INGRESS_IP"] = data.values.graphqlTrustedIngressIp
 #@     end
 #@     graphql["secrets"] = ["auth-accounts.json"]
 #@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@     services["traefik"]["networks"] = {
 #@       "intranet": {},
-#@       "auth-ingress": {"ipv4_address": "10.231.65.2"},
+#@       "auth-ingress": {"ipv4_address": data.values.graphqlTrustedIngressIp},
 #@     }
 #@     services["nats"]["networks"].append("auth-ingress")
 #@     services["nats-init"]["networks"].append("auth-ingress")
@@ -196,7 +196,7 @@ networks:
     internal: true
     ipam:
       config:
-        - subnet: 10.231.65.0/24
+        - subnet: #@ data.values.authIngressSubnet
   oauth2-sessions:
     name: recipe-db-oauth2-sessions
     internal: true

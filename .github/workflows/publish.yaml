@@ -167,6 +167,50 @@ jobs:
           openssl rand -base64 32 > .secrets/oauth2-cookie-secret
           chmod 600 .secrets/auth-accounts.json
           chmod 600 .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret
+          ingress_config=$(python3 - <<'PY'
+          import ipaddress
+          import json
+          import subprocess
+
+          occupied = []
+          routes = subprocess.check_output(["ip", "-4", "route", "show", "table", "all"], text=True)
+          for route in routes.splitlines():
+              fields = route.split()
+              network = fields[1] if fields[0] in {"local", "broadcast", "unicast", "unreachable", "prohibit", "blackhole", "throw"} else fields[0]
+              if network != "default":
+                  try:
+                      occupied.append(ipaddress.ip_network(network, strict=False))
+                  except ValueError:
+                      pass
+          addresses = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr", "show"], text=True))
+          for interface in addresses:
+              for address in interface.get("addr_info", []):
+                  if address.get("family") == "inet":
+                      occupied.append(ipaddress.ip_network(f'{address["local"]}/{address["prefixlen"]}', strict=False))
+
+          network_ids = subprocess.check_output(["docker", "network", "ls", "-q"], text=True).split()
+          if network_ids:
+              networks = json.loads(subprocess.check_output(["docker", "network", "inspect", *network_ids], text=True))
+              for network in networks:
+                  for config in network.get("IPAM", {}).get("Config") or []:
+                      if config.get("Subnet"):
+                          occupied.append(ipaddress.ip_network(config["Subnet"], strict=False))
+
+          candidates = (
+              [ipaddress.ip_network(f"10.{second}.{third}.0/24") for second in range(240, 256) for third in range(256)]
+              + [ipaddress.ip_network(f"192.168.{third}.0/24") for third in range(200, 256)]
+          )
+          for subnet in candidates:
+              if not any(subnet.overlaps(network) for network in occupied):
+                  print(f"{subnet}\t{subnet.network_address + 2}")
+                  break
+          else:
+              raise SystemExit("Could not find an unused private subnet for the auth ingress network")
+          PY
+          )
+          IFS=$'\t' read -r AUTH_INGRESS_SUBNET GRAPHQL_TRUSTED_INGRESS_IP <<< "$ingress_config"
+          printf 'AUTH_INGRESS_SUBNET=%s\nGRAPHQL_TRUSTED_INGRESS_IP=%s\n' "$AUTH_INGRESS_SUBNET" "$GRAPHQL_TRUSTED_INGRESS_IP" >> "$GITHUB_ENV"
+          export AUTH_INGRESS_SUBNET GRAPHQL_TRUSTED_INGRESS_IP
           mise run --raw generate-docker-compose
           mise run create-intranet
           echo "::endgroup::"

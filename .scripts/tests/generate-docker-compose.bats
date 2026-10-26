@@ -408,6 +408,18 @@ EOF
   [ "$output" = "http://traefik/graphql" ]
 }
 
+@test "auth ingress network and trusted address can be overridden" {
+  setup_graphql
+  run env AUTH_INGRESS_SUBNET=192.168.240.0/24 GRAPHQL_TRUSTED_INGRESS_IP=192.168.240.9 sh .scripts/generate-docker-compose.sh production
+
+  [ "$status" -eq 0 ]
+  assert_compose '
+    .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "192.168.240.9"
+    and .services.traefik.networks["auth-ingress"].ipv4_address == "192.168.240.9"
+    and .networks["auth-ingress"].ipam.config[0].subnet == "192.168.240.0/24"
+  '
+}
+
 @test "browse waits for provisioning and retains its bus URL in development and production" {
   setup_browse
   for mode in "" production; do
