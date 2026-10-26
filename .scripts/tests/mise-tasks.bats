@@ -4,6 +4,7 @@ load test_helper
 
 setup() {
   unset DEVCONTAINER_KEEP_RUNNING
+  unset GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE
   setup_fixture sync-vscode-settings.sh
   cp "$BATS_TEST_DIRNAME"/../*.sh .scripts/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
@@ -12,6 +13,17 @@ setup() {
   export MISE_TASK_RUN_AUTO_INSTALL=false
   mkdir -p example .git/hooks
   printf '%s\n' 'name: example' > example/.project.yaml
+  setup_mock_bin
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MOCK_LOG"
+case "$*" in
+  "network inspect intranet") exit "${NETWORK_INSPECT_STATUS:-0}" ;;
+  "network create intranet") exit "${NETWORK_CREATE_STATUS:-0}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x bin/docker
 }
 
 mock_task_body() {
@@ -116,12 +128,55 @@ EOF
 }
 
 @test "Compose prepare still preserves existing configuration through mise" {
+  setup_mock_bin
+  printf '%s\n' '#!/bin/sh' 'test "$*" = "network inspect intranet"' > bin/docker
+  chmod +x bin/docker
   printf '%s\n' existing-compose > docker-compose.yml
 
   run mise run --raw generate-docker-compose prepare
 
   [ "$status" -eq 0 ]
   [ "$(cat docker-compose.yml)" = existing-compose ]
+  for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
+    [ -s ".secrets/$file" ]
+  done
+}
+
+@test "mise provisions all development prerequisites before rendering" {
+  mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
+set -eu
+for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
+  test -s ".secrets/$file"
+done
+grep -Fx 'network create intranet' "$MOCK_LOG"
+touch generated
+EOF
+  run env NETWORK_INSPECT_STATUS=1 mise run generate-docker-compose
+  [ "$status" -eq 0 ]
+  [ -f generated ]
+}
+
+@test "failed mise prerequisite prevents rendering" {
+  mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
+touch generated
+EOF
+  run env NETWORK_INSPECT_STATUS=1 NETWORK_CREATE_STATUS=23 mise run generate-docker-compose
+  [ "$status" -ne 0 ]
+  [ ! -e generated ]
+}
+
+@test "production task forwards mode and arguments without development dependencies" {
+  mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
+printf '<%s>\n' "$@" > arguments
+exit "${RENDER_STATUS:-0}"
+EOF
+  run env RENDER_STATUS=23 mise run --raw generate-docker-compose-prod backend prepare
+  [ "$status" -eq 23 ]
+  [ "$(cat arguments)" = $'<production>\n<backend>\n<prepare>' ]
+  [ ! -e .secrets ]
+  [ ! -s "$MOCK_LOG" ]
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("mise run generate-docker-compose-prod"))] | length' "$workflow")" -eq 2 ]
 }
 
 @test "dev-down removes orphans and forwards arguments and exit status" {
@@ -142,6 +197,129 @@ EOF
 
   [ "$status" -eq 23 ]
   [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--remove-orphans>\n<--timeout>\n<120>\n<two words>' ]
+}
+
+@test "dev-up generates configuration before Compose and preserves arguments and exit status" {
+  setup_mock_bin
+  mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
+touch generated
+EOF
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MOCK_LOG"
+case "$*" in
+  "network inspect intranet") exit 0 ;;
+  "compose up -d --wait"*)
+    test -f generated || exit 1
+    printf '<%s>\n' "$@" > up-arguments
+    exit "${UP_STATUS:-0}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x bin/docker
+
+  run env UP_STATUS=23 mise run --raw dev-up --wait-timeout 120 "two words"
+  [ "$status" -eq 23 ]
+  [ "$(cat up-arguments)" = $'<compose>\n<up>\n<-d>\n<--wait>\n<--wait-timeout>\n<120>\n<two words>' ]
+}
+
+@test "development auth secrets are private and stable and repair empty Docker directories" {
+  mkdir -p .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret .secrets/graphql-ingress-secret
+  run mise run --raw create-oauth-secrets
+  [ "$status" -eq 0 ]
+  for file in google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
+    [ -f ".secrets/$file" ]
+    [ "$(stat -c %a ".secrets/$file")" = 600 ]
+  done
+  [ "$(wc -c < .secrets/oauth2-cookie-secret)" -eq 43 ]
+  grep -Eq '^[A-Za-z0-9_-]{43}$' .secrets/oauth2-cookie-secret
+  [ "$({
+    tr '_-' '/+' < .secrets/oauth2-cookie-secret
+    printf '='
+  } | base64 -d | wc -c)" -eq 32 ]
+  cookie=$(cat .secrets/oauth2-cookie-secret)
+  ingress=$(cat .secrets/graphql-ingress-secret)
+  grep -Eq '^[A-Za-z0-9_-]{43}$' .secrets/graphql-ingress-secret
+  [ "$(wc -c < .secrets/graphql-ingress-secret)" -eq 43 ]
+  [ "$ingress" != "$cookie" ]
+  printf '%s' custom > .secrets/google-oauth-client-secret
+  run mise run --raw create-oauth-secrets
+  [ "$status" -eq 0 ]
+  [ "$(cat .secrets/google-oauth-client-secret)" = custom ]
+  [ "$(cat .secrets/oauth2-cookie-secret)" = "$cookie" ]
+  [ "$(cat .secrets/graphql-ingress-secret)" = "$ingress" ]
+}
+
+@test "development OAuth secret provisioning refuses empty files and nonempty directories" {
+  mkdir -p .secrets
+  touch .secrets/google-oauth-client-secret
+  run mise run --raw create-oauth-secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"readable, nonempty file"* ]]
+  rm .secrets/google-oauth-client-secret
+  mkdir .secrets/google-oauth-client-secret
+  touch .secrets/google-oauth-client-secret/keep
+  run mise run --raw create-oauth-secrets
+  [ "$status" -ne 0 ]
+  [ -f .secrets/google-oauth-client-secret/keep ]
+}
+
+@test "CI reuses mise development secrets and scopes explicit paths to production builds" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  while IFS= read -r task; do
+    run mise run --raw "$task"
+    [ "$status" -eq 0 ]
+  done < <(yq -p toml -r '.tasks.sync.depends[] | select(test("^create-"))' mise.toml)
+
+  for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
+    [ -s ".secrets/$file" ]
+    [ "$(stat -c %a ".secrets/$file")" = 600 ]
+  done
+  for variable in TYPESENSE_API_KEY_FILE GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE; do
+    [ "$(yq "[.env, .jobs[].env] | map(select(has(\"$variable\"))) | length" "$workflow")" -eq 0 ]
+  done
+  for job in arm64-validation publish; do
+    environment=$(yq -o json ".jobs.$job.steps[] | select(.run | contains(\"mise run generate-docker-compose-prod\")) | .env" "$workflow")
+    [ "$(printf '%s' "$environment" | jq -r '.TYPESENSE_API_KEY_FILE')" = ./.secrets/typesense-api-key ]
+    [ "$(printf '%s' "$environment" | jq -r '.GOOGLE_OAUTH_CLIENT_SECRET_FILE')" = ./.secrets/google-oauth-client-secret ]
+    [ "$(printf '%s' "$environment" | jq -r '.OAUTH2_COOKIE_SECRET_FILE')" = ./.secrets/oauth2-cookie-secret ]
+    [ "$(printf '%s' "$environment" | jq -r '.GRAPHQL_INGRESS_SECRET_FILE')" = ./.secrets/graphql-ingress-secret ]
+  done
+  run grep -E 'openssl|chmod|mkdir -p \.secrets|>.*\.secrets/' "$workflow"
+  [ "$status" -eq 1 ]
+}
+
+@test "development OAuth secret overrides must exist and are never replaced" {
+  printf '%s' client > custom-client
+  printf '%s' cookie > custom-cookie
+  printf '%s' ingress > custom-ingress
+  run env GOOGLE_OAUTH_CLIENT_SECRET_FILE=custom-client OAUTH2_COOKIE_SECRET_FILE=custom-cookie GRAPHQL_INGRESS_SECRET_FILE=custom-ingress \
+    mise run --raw create-oauth-secrets
+  [ "$status" -eq 0 ]
+  [ "$(cat custom-client)" = client ]
+  [ "$(cat custom-cookie)" = cookie ]
+  [ "$(cat custom-ingress)" = ingress ]
+  [ ! -e .secrets/google-oauth-client-secret ]
+  [ ! -e .secrets/oauth2-cookie-secret ]
+  [ ! -e .secrets/graphql-ingress-secret ]
+  run env GOOGLE_OAUTH_CLIENT_SECRET_FILE=missing mise run --raw create-oauth-secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Configured auth secret"* ]]
+  [ ! -e missing ]
+  mkdir custom-directory
+  run env OAUTH2_COOKIE_SECRET_FILE=custom-directory mise run --raw create-oauth-secrets
+  [ "$status" -ne 0 ]
+  [ -d custom-directory ]
+  run env GRAPHQL_INGRESS_SECRET_FILE=missing mise run --raw create-oauth-secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Configured auth secret"* ]]
+  [ ! -e missing ]
+  mkdir -p .secrets
+  touch .secrets/graphql-ingress-secret
+  run mise run --raw create-oauth-secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Development auth secret"* ]]
 }
 
 @test "devcontainer sync usage supports selected projects and defaults to all" {
@@ -207,6 +385,10 @@ EOF
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.quality-checks.env.DEVCONTAINER_KEEP_RUNNING' "$workflow")" = true ]
   [ "$(yq '[.. | select(tag == "!!map" and has("DEVCONTAINER_KEEP_RUNNING"))] | length' "$workflow")" -eq 1 ]
+  for job in arm64-validation publish; do
+    [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_URL" "$workflow")" = "https://recipes.example/oauth2/callback" ]
+    [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_HOST" "$workflow")" = recipes.example ]
+  done
   builds=0
   while IFS= read -r script; do
     [[ "$script" == *'--action_env=DEVCONTAINER_KEEP_RUNNING'* ]]

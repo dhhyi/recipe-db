@@ -17,7 +17,7 @@ devcontainer:
   ports:
     - 3000
   environment:
-    GRAPHQL_URL: http://graphql:4000/graphql
+    GRAPHQL_URL: http://traefik/graphql
     TYPESENSE_URL: http://typesense:8108
     TYPESENSE_API_KEY_FILE: /run/secrets/typesense-api-key
     NATS_URL: nats://nats:4222

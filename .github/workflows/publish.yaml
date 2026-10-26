@@ -16,7 +16,6 @@ permissions:
 env:
   BUILDKIT_PROGRESS: quiet
   COMPOSE_PROGRESS: quiet
-  TYPESENSE_API_KEY_FILE: /tmp/recipe-db-typesense-ci-api-key
 
 jobs:
   quality-checks:
@@ -34,11 +33,6 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2
@@ -118,14 +112,11 @@ jobs:
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       REGISTRY_CACHE_SUFFIX: "-arm64"
+      GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
+      GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
     steps:
       - name: checkout
         uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise
         uses: jdx/mise-action@v2
@@ -161,15 +152,15 @@ jobs:
           docker buildx create --use
           docker buildx inspect --bootstrap
           mise run --raw sync-files
-          mkdir -p .secrets
-          printf '%s\n' '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}' > .secrets/auth-accounts.json
-          chmod 600 .secrets/auth-accounts.json
           mise run --raw generate-docker-compose
           mise run create-intranet
           echo "::endgroup::"
 
       - name: build development and standalone test images
         run: docker compose --profile development --profile test build
+
+      - name: verify production ingress trust
+        run: mise run test-auth-ingress
 
       - name: start development stack and run standalone integration tests
         env:
@@ -205,13 +196,17 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
-      - name: generate production Compose configuration
+      - name: validate production configuration and build ARM64 images
         env:
           CI: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
-        run: mise run generate-docker-compose prod
-
-      - name: validate production configuration and build ARM64 images
+          TYPESENSE_API_KEY_FILE: ./.secrets/typesense-api-key
+          GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
+          OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
+          GRAPHQL_INGRESS_SECRET_FILE: ./.secrets/graphql-ingress-secret
         run: |
+          echo "::group::generate production Compose configuration"
+          mise run generate-docker-compose-prod
+          echo "::endgroup::"
           echo "::group::validate production Compose configuration and build images"
           docker compose config --quiet
           docker compose build
@@ -250,14 +245,11 @@ jobs:
     env:
       DOCKER_BUILDKIT: 1
       COMPOSE_PARALLEL_LIMIT: 1
+      GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
+      GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
     steps:
       - name: checkout
         uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2
@@ -279,9 +271,14 @@ jobs:
         run: mise install
 
       - name: build and push production images
+        env:
+          TYPESENSE_API_KEY_FILE: ./.secrets/typesense-api-key
+          GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
+          OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
+          GRAPHQL_INGRESS_SECRET_FILE: ./.secrets/graphql-ingress-secret
         run: |
           echo "::group::generate production docker-compose.yml"
-          mise run generate-docker-compose prod
+          mise run generate-docker-compose-prod
           echo "::endgroup::"
           echo "::group::docker-compose.yml"
           cat docker-compose.yml
