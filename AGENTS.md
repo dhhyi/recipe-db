@@ -122,4 +122,3 @@ If you pick one for a new project, make sure to remove it from this list.
 - https://citrusframework.org/citrus/reference/3.4.0/html/index.html#http-rest
 - https://gettaurus.org/
 - https://github.com/svanoort/pyresttest
-- https://rest-assured.io/
