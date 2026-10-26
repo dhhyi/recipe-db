@@ -9,6 +9,7 @@ output_compose="$project_root/docker-compose.yml"
 output_traefik="$project_root/traefik.yml"
 production=false
 backend_only=false
+prepare=false
 
 yq() {
   mise exec -- yq "$@"
@@ -22,18 +23,18 @@ for argument in "$@"; do
   case "$argument" in
     prod | production) production=true ;;
     backend) backend_only=true ;;
-    prepare)
-      if [ -f "$output_compose" ]; then
-        echo "docker-compose.yml already exists, skipping generation"
-        exit 0
-      fi
-      ;;
+    prepare) prepare=true ;;
     *)
       echo "unknown argument: $argument" >&2
       exit 1
       ;;
   esac
 done
+
+if [ "$prepare" = true ] && [ -f "$output_compose" ]; then
+  echo "docker-compose.yml already exists, skipping generation"
+  exit 0
+fi
 
 if [ "$production" = true ]; then
   echo "Setting up for production..."
@@ -58,7 +59,8 @@ jq -n \
   --arg authIngressSubnet "${AUTH_INGRESS_SUBNET:-10.231.65.0/24}" \
   --arg graphqlTrustedIngressIp "${GRAPHQL_TRUSTED_INGRESS_IP:-10.231.65.2}" \
   --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-replace-with-google-oauth-client-id}" \
-  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, authIngressSubnet: $authIngressSubnet, graphqlTrustedIngressIp: $graphqlTrustedIngressIp, googleOAuthClientId: $googleOAuthClientId, projects: []}' \
+  --arg developmentUser "$(id -u):$(id -g)" \
+  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, authIngressSubnet: $authIngressSubnet, graphqlTrustedIngressIp: $graphqlTrustedIngressIp, googleOAuthClientId: $googleOAuthClientId, developmentUser: $developmentUser, projects: []}' \
   > "$data_values"
 repository=$(yq -r '.repository // ""' "$project_root/package.json")
 

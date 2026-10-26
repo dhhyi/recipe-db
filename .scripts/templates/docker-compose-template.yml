@@ -25,6 +25,34 @@
 #@   registryCacheSuffix=data.values.registryCacheSuffix
 #@ )
 #@
+#@ def ipv4_number(address):
+#@   result = 0
+#@   for octet in address.split("."):
+#@     result = result * 256 + int(octet)
+#@   end
+#@   return result
+#@ end
+#@
+#@ def ingress_dynamic_range():
+#@   address, prefix = data.values.authIngressSubnet.split("/")
+#@   prefix = int(prefix)
+#@   if prefix < 1 or prefix > 30:
+#@     fail("AUTH_INGRESS_SUBNET must be an IPv4 subnet with prefix 1 through 30")
+#@   end
+#@   half = 1
+#@   for unused in range(31 - prefix):
+#@     half *= 2
+#@   end
+#@   network = ipv4_number(address)
+#@   trusted = ipv4_number(data.values.graphqlTrustedIngressIp)
+#@   if trusted <= network or trusted >= network + half * 2 - 1:
+#@     fail("GRAPHQL_TRUSTED_INGRESS_IP must be a host address inside AUTH_INGRESS_SUBNET")
+#@   end
+#@   pool = network + half if trusted < network + half else network
+#@   octets = [(pool // divisor) % 256 for divisor in [16777216, 65536, 256, 1]]
+#@   return ".".join([str(octet) for octet in octets]) + "/" + str(prefix + 1)
+#@ end
+#@
 #@ deploy_projects = projects.backend + projects.api
 #@ if not data.values.backendOnly:
 #@   deploy_projects += projects.frontend
@@ -132,6 +160,9 @@
 #@         "retries": 12,
 #@       },
 #@     }
+#@     if not options.production:
+#@       services["oauth2-proxy"]["user"] = data.values.developmentUser
+#@     end
 #@   end
 #@   if "browse" in services:
 #@     services.update(browse_maintenance_service(options.production))
@@ -200,6 +231,7 @@ networks:
     ipam:
       config:
         - subnet: #@ data.values.authIngressSubnet
+          ip_range: #@ ingress_dynamic_range()
   oauth2-sessions:
     name: recipe-db-oauth2-sessions
     internal: true

@@ -77,7 +77,12 @@ file = ".scripts/generate-bazel-build.sh"
 
 [tasks.sync]
 description = "Synchronize shared files, devcontainers, GraphQL schemas and Bazel rules"
-depends = ["create-intranet", "create-search-key", "create-auth-accounts"]
+depends = [
+  "create-intranet",
+  "create-search-key",
+  "create-auth-accounts",
+  "create-oauth-secrets"
+]
 run = [
   { task = "sync-files" },
   { task = "sync-devcontainers" },
@@ -86,8 +91,19 @@ run = [
 ]
 
 [tasks.generate-docker-compose]
-description = "Generate Compose configuration; defaults to development"
+description = "Prepare development defaults with mise dependencies and generate Compose configuration"
+depends = [
+  "create-intranet",
+  "create-search-key",
+  "create-auth-accounts",
+  "create-oauth-secrets"
+]
 file = ".scripts/generate-docker-compose.sh"
+
+[tasks.generate-docker-compose-prod]
+description = "Generate production Compose configuration for CI until production moves to k3d"
+run = "sh .scripts/generate-docker-compose.sh production"
+raw_args = true
 
 [tasks.merge-graphql-schemas]
 description = "Export the GraphQL application schema into consuming projects"
@@ -110,18 +126,17 @@ file = ".scripts/create-search-key.sh"
 description = "Create the ignored development auth accounts file without replacing an existing file"
 file = ".scripts/create-auth-accounts.sh"
 
+[tasks.create-oauth-secrets]
+description = "Create private development OAuth placeholders and a cookie secret without replacing existing files"
+file = ".scripts/create-oauth-secrets.sh"
+
 [tasks.seed-demodata]
 description = "Generate demo data against the development stack"
 run = "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
 
 [tasks.dev-up]
 description = "Start the development stack detached and wait for readiness; accepts extra Compose up arguments"
-depends = [
-  "create-intranet",
-  "create-search-key",
-  "create-auth-accounts",
-  "generate-docker-compose"
-]
+depends = ["generate-docker-compose"]
 run = "docker compose up -d --wait"
 raw_args = true
 

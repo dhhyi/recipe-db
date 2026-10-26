@@ -6,7 +6,19 @@ setup() {
   setup_fixture generate-docker-compose.sh
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   use_mise_tools
-  unset CI REGISTRY_CACHE_SUFFIX
+  unset CI REGISTRY_CACHE_SUFFIX AUTH_INGRESS_SUBNET GRAPHQL_TRUSTED_INGRESS_IP \
+    GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE
+  setup_mock_bin
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MOCK_LOG"
+case "$*" in
+  "network inspect intranet") exit "${NETWORK_INSPECT_STATUS:-0}" ;;
+  "network create intranet") exit "${NETWORK_CREATE_STATUS:-0}" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x bin/docker
   printf '%s\n' '{"repository":"github:example/fixture"}' > package.json
   mkdir fixtures
   cat > fixtures/.project.yaml << 'EOF'
@@ -195,9 +207,18 @@ EOF
   run sh .scripts/generate-docker-compose.sh prepare
 
   [ "$status" -eq 0 ]
-  [ "$output" = "docker-compose.yml already exists, skipping generation" ]
+  [[ "$output" == *"docker-compose.yml already exists, skipping generation"* ]]
   [ "$(cat docker-compose.yml)" = existing-compose ]
   [ "$(cat traefik.yml)" = existing-traefik ]
+}
+
+@test "renderer does not provision files or networks in development or production" {
+  for mode in "" production; do
+    run sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    [ ! -e .secrets ]
+    [ ! -s "$MOCK_LOG" ]
+  done
 }
 
 @test "unknown arguments fail before creating configuration files" {
@@ -322,6 +343,7 @@ EOF
   # shellcheck disable=SC2016
   assert_compose '
     .services["oauth2-proxy"].image == "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
+    and (.services["oauth2-proxy"] | has("user") | not)
     and .services["oauth2-proxy"].networks == ["auth-ingress", "oauth2-sessions", "oauth2-egress"]
     and .services["oauth2-proxy"].secrets == ["google-oauth-client-secret", "oauth2-cookie-secret"]
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "true"
@@ -337,6 +359,7 @@ EOF
     and .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "10.231.65.2"
     and .services.traefik.networks["auth-ingress"].ipv4_address == "10.231.65.2"
     and .networks["auth-ingress"].internal == true
+    and .networks["auth-ingress"].ipam.config == [{"subnet":"10.231.65.0/24", "ip_range":"10.231.65.128/25"}]
     and .networks["oauth2-sessions"].internal == true
     and (.networks["oauth2-egress"] | has("internal") | not)
     and .secrets["google-oauth-client-secret"].file == "${GOOGLE_OAUTH_CLIENT_SECRET_FILE:?Set GOOGLE_OAUTH_CLIENT_SECRET_FILE to the mounted OAuth client-secret file}"
@@ -355,6 +378,7 @@ EOF
     and .providers[0].oidcConfig.emailClaim == "email"
     and .providers[0].oidcConfig.insecureAllowUnverifiedEmail == false
     and .providers[0].oidcConfig.insecureSkipNonce == false
+    and (.providers[0].oidcConfig | has("skipDiscovery") | not)
     and (.providers[0].oidcConfig | has("userIDClaim") | not)
   ' <<< "$output"
 
@@ -388,6 +412,15 @@ EOF
 
   run env GOOGLE_OAUTH_CLIENT_ID=test-client sh .scripts/generate-docker-compose.sh
   [ "$status" -eq 0 ]
+  [ "$(yq '.services.oauth2-proxy.user' docker-compose.yml)" = "$(id -u):$(id -g)" ]
+  run yq -o=json '.' oauth2-proxy-alpha.yml
+  [ "$status" -eq 0 ]
+  jq -e '
+    .providers[0].oidcConfig.skipDiscovery == true
+    and .providers[0].oidcConfig.jwksURL == "https://www.googleapis.com/oauth2/v3/certs"
+    and .providers[0].loginURL == "https://accounts.google.com/o/oauth2/v2/auth"
+    and .providers[0].redeemURL == "https://oauth2.googleapis.com/token"
+  ' <<< "$output"
   # The jq expression checks literal Compose interpolation syntax.
   # shellcheck disable=SC2016
   assert_compose '
@@ -406,6 +439,23 @@ EOF
     and .services.graphql.networks == ["auth-ingress"]
     and (.services.graphql.labels | index("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000") != null)
   '
+}
+
+@test "ingress dynamic allocation excludes either half containing the trusted address" {
+  setup_graphql
+  for mode in "" production; do
+    run env AUTH_INGRESS_SUBNET=192.168.240.0/24 GRAPHQL_TRUSTED_INGRESS_IP=192.168.240.254 \
+      sh .scripts/generate-docker-compose.sh $mode
+    [ "$status" -eq 0 ]
+    assert_compose '
+      .networks["auth-ingress"].ipam.config == [{"subnet":"192.168.240.0/24", "ip_range":"192.168.240.0/25"}]
+      and .services.traefik.networks["auth-ingress"].ipv4_address == "192.168.240.254"
+    '
+  done
+  run env AUTH_INGRESS_SUBNET=10.240.0.0/16 GRAPHQL_TRUSTED_INGRESS_IP=10.240.0.2 \
+    sh .scripts/generate-docker-compose.sh
+  [ "$status" -eq 0 ]
+  assert_compose '.networks["auth-ingress"].ipam.config[0].ip_range == "10.240.128.0/17"'
 }
 
 @test "search uses GraphQL through Traefik's application entrypoint" {

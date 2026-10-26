@@ -259,7 +259,7 @@ jobs:
       - name: generate production Compose configuration
         env:
           CI: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
-        run: mise run generate-docker-compose prod
+        run: mise run generate-docker-compose-prod
 
       - name: validate production configuration and build ARM64 images
         run: |
@@ -338,7 +338,7 @@ jobs:
       - name: build and push production images
         run: |
           echo "::group::generate production docker-compose.yml"
-          mise run generate-docker-compose prod
+          mise run generate-docker-compose-prod
           echo "::endgroup::"
           echo "::group::docker-compose.yml"
           cat docker-compose.yml

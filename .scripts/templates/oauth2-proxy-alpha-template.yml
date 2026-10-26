@@ -34,8 +34,16 @@ providers:
     additionalClaims: [iss, email_verified]
     oidcConfig:
       issuerURL: https://accounts.google.com
+      #@ if not data.values.production:
+      skipDiscovery: true
+      jwksURL: https://www.googleapis.com/oauth2/v3/certs
+      #@ end
       emailClaim: email
       audienceClaims: [aud]
       insecureAllowUnverifiedEmail: false
       insecureSkipIssuerVerification: false
       insecureSkipNonce: false
+    #@ if not data.values.production:
+    loginURL: https://accounts.google.com/o/oauth2/v2/auth
+    redeemURL: https://oauth2.googleapis.com/token
+    #@ end

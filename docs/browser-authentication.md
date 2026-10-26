@@ -2,12 +2,25 @@
 
 ## Deployment setup
 
+For local development, run:
+
+```sh
+mise run generate-docker-compose
+docker compose up -d --wait
+```
+
+The development generation task declares mise dependencies that create the external development network and missing private account/search/OAuth files, preserving existing files. The renderer itself only generates configuration. The `prepare` mode also runs these dependencies when it skips rendering existing configuration. `mise run dev-up` is a convenience shortcut for generation followed by Compose startup; it does not tear down the stack. OAuth2 Proxy runs with the generating user's UID/GID in development so it can read the owner-only secret files. The generated OAuth client secret is only a placeholder and the cookie secret is random; anonymous and configured bearer-token access do not require Google credentials. Development uses Google's explicit OIDC endpoints without startup discovery, so Google is contacted only when sign-in is used. Real Google sign-in still requires a registered client ID and client secret. Production retains OIDC discovery and explicit external secret-file requirements. Use the separate `generate-docker-compose-prod` task for production rendering without development dependencies; this temporary CI task will be removed when production moves to ARM64 k3d.
+
+Docker may have created empty directories at missing secret-file paths during an earlier startup. Development provisioning removes only those empty default directories before creating files; nonempty directories, empty files, and invalid explicit secret-file overrides fail rather than being overwritten.
+
+The generated auth-ingress network allocates dynamic addresses from the half of `AUTH_INGRESS_SUBNET` that does not contain `GRAPHQL_TRUSTED_INGRESS_IP` (defaults: `10.231.65.128/25` and `10.231.65.2`). This keeps NATS and other services from claiming Traefik's fixed address. To reset development containers and Compose-managed networks, run `docker compose down --remove-orphans`, then generate and start again. Data volumes are retained unless explicitly removed.
+
 The generated Compose stack uses OAuth2 Proxy v7.15.5 with its OIDC provider, Traefik ForwardAuth, and Redis-backed sessions. OAuth2 Proxy is configured for the Google issuer `https://accounts.google.com`, the `openid email` scopes, and PKCE S256. Callback state and nonce validation are enabled; unverified email is not accepted by the proxy. The proxy does not maintain an account allowlist: GraphQL's mounted `/run/secrets/auth-accounts.json` remains the sole source of application roles.
 
 Register a Google Web OAuth client with the exact redirect URI `https://<public-host>/oauth2/callback`. Supply its client ID while generating the production configuration; the generated `oauth2-proxy-alpha.yml` contains the public client ID, not a credential:
 
 ```sh
-GOOGLE_OAUTH_CLIENT_ID='<client-id>' mise run generate-docker-compose production
+GOOGLE_OAUTH_CLIENT_ID='<client-id>' mise run generate-docker-compose-prod
 ```
 
 Provide `GOOGLE_OAUTH_REDIRECT_URL` as that exact HTTPS callback URL and `GOOGLE_OAUTH_REDIRECT_HOST` as its exact host (without scheme or path) when starting Compose. The host is the only post-login return domain; do not use wildcards. Mount the OAuth client secret and OAuth2 Proxy cookie secret from private files by setting `GOOGLE_OAUTH_CLIENT_SECRET_FILE` and `OAUTH2_COOKIE_SECRET_FILE` to their paths. Compose mounts these files as secrets; their contents must never be placed in source, image build arguments, environment variables, or generated configuration. Keep the files outside the repository with owner-only permissions. The development defaults are `.secrets/google-oauth-client-secret` and `.secrets/oauth2-cookie-secret`; development can use HTTP and disables Secure cookies by default. Production always sets Secure cookies and requires the HTTPS callback URL and explicit secret-file paths. Do not activate production auth until HTTPS is terminated by the deployment ingress.
