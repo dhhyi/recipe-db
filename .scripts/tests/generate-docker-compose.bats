@@ -401,6 +401,13 @@ EOF
   '
 }
 
+@test "search uses GraphQL through Traefik's application entrypoint" {
+  run yq eval-all -r 'select(documentIndex == 0).devcontainer.environment.GRAPHQL_URL' "$BATS_TEST_DIRNAME/../../search/.project.yaml"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = "http://traefik/graphql" ]
+}
+
 @test "browse waits for provisioning and retains its bus URL in development and production" {
   setup_browse
   for mode in "" production; do
