@@ -6,9 +6,14 @@ Do not add new content to README.md files unless the user explicitly asks for it
 
 ## GitHub issue planning
 
-Use GitHub issues to plan work in this repository. Apply the `spec` label to issues that are ready to hand to an agent for implementation, and the `idea` label to issues that need further refinement before implementation.
+Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
 
-Use `spec` only for implementation-ready issues with settled scope, decisions, and acceptance criteria. Research, exploration, and requirements-definition tasks remain `idea`, even when their research deliverables are clearly defined.
+- Create issues when the user asks to capture, plan, refine, or defer work for later implementation.
+- Do not create an issue merely because the user requests an immediate fix, investigation, or code change. Handle that work directly in the session.
+- When working on an existing issue, keep it and any relevant umbrella issue current. Do not create another issue for the same work.
+- If you discover follow-up work outside the current scope, mention it; do not create an issue unless the user asks.
+
+Apply the `spec` label to implementation-ready issues with settled scope, decisions, and acceptance criteria. Apply `idea` to work needing research, exploration, or further refinement. Research, exploration, and requirements-definition tasks remain `idea`, even when their research deliverables are clearly defined.
 
 When asked to mark an issue as blocked by another issue, use GitHub's native issue dependency ("blocked by") feature rather than a label.
 

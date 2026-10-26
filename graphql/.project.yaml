@@ -57,7 +57,7 @@ traefik:
               timeout: 1s
               path: /health
       routers:
-        graphql-anonymous:
+        graphql:
           rule: PathPrefix(`/graphql`)
           entrypoints: web
           priority: 100

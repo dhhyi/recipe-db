@@ -115,7 +115,7 @@ traefik:
             healthCheck:
               path: /health
       routers:
-        graphql-anonymous:
+        graphql:
           rule: "PathPrefix(`/graphql`)"
           entrypoints: web
           priority: 100
@@ -146,6 +146,21 @@ traefik:
 ---
 category: api
 EOF
+}
+
+@test "GraphQL catch-all keeps the readiness name and authentication priorities" {
+  run yq -o=json 'select(documentIndex == 0) | .traefik.labels.http.routers' \
+    "$BATS_TEST_DIRNAME/../../graphql/.project.yaml"
+  [ "$status" -eq 0 ]
+  jq -e '
+    .graphql.rule == "PathPrefix(`/graphql`)"
+    and .graphql.priority == 100
+    and .graphql.service == "recipe-db-graphql"
+    and (.graphql | has("middlewares") | not)
+    and .["graphql-cookie"].priority == 200
+    and .["graphql-cookie"].middlewares == "oauth2-forward-auth"
+    and .["graphql-bearer"].priority == 300
+  ' <<< "$output"
 }
 
 @test "development includes jobs and test runners and removes stale Traefik config" {
@@ -385,7 +400,7 @@ EOF
   run yq -o=json '.' traefik.yml
   [ "$status" -eq 0 ]
   jq -e '
-    .http.routers["graphql-anonymous"].priority == 100
+    .http.routers.graphql.priority == 100
     and .http.routers["graphql-cookie"].priority == 200
     and .http.routers["graphql-cookie"].middlewares == ["oauth2-forward-auth"]
     and .http.routers["graphql-bearer"].priority == 300
@@ -429,7 +444,7 @@ EOF
     and (.services.traefik.command | index("--entrypoints.rest-internal.http.middlewares=identity-strip@docker") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)") != null)
-    and (.services.graphql.labels | index("traefik.http.routers.graphql-anonymous.service=graphql") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql.service=graphql") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.service=graphql") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.service=graphql") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.middlewares=oauth2-forward-auth") != null)
