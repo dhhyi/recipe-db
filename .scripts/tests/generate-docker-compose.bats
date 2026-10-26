@@ -142,6 +142,7 @@ EOF
   [ ! -e traefik.yml ]
   assert_compose '
     (.services | keys) == ["backend", "fixtures", "frontend", "job", "nats", "nats-init", "test", "traefik"]
+    and .services.traefik.image == "traefik:v3.7"
     and .services.traefik.ports == ["8080:80", "3000:3000"]
     and .services.job.profiles == ["development"]
     and .services.test.profiles == ["test"]
@@ -161,6 +162,7 @@ EOF
   [ "$status" -eq 0 ]
   assert_compose '
     (.services | keys) == ["backend", "frontend", "nats", "nats-init", "traefik"]
+    and .services.traefik.image == "traefik:v3.7"
     and .services.traefik.ports == ["8080:80"]
     and .services.backend.environment.PRODUCTION == "true"
     and .services.backend.environment.DATA_LOCATION == "/app/data/backend"
