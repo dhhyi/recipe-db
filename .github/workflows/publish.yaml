@@ -164,13 +164,13 @@ jobs:
           echo "::group::prepare ARM64 build context"
           docker buildx create --use
           docker buildx inspect --bootstrap
-          mise run --raw sync-files
           mkdir -p .secrets
           printf '%s\n' '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}' > .secrets/auth-accounts.json
           openssl rand -hex 32 > .secrets/google-oauth-client-secret
           openssl rand -base64 32 > .secrets/oauth2-cookie-secret
           chmod 600 .secrets/auth-accounts.json
           chmod 600 .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret
+          mise run --raw sync-files
           ingress_config=$(python3 - <<'PY'
           import ipaddress
           import json
