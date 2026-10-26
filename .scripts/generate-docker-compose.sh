@@ -5,6 +5,7 @@
 set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd)
+. "$project_root/.scripts/lib/project-metadata.sh"
 output_compose="$project_root/docker-compose.yml"
 output_traefik="$project_root/traefik.yml"
 production=false
@@ -60,19 +61,7 @@ jq -n \
   --arg developmentUser "$(id -u):$(id -g)" \
   '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, googleOAuthClientId: $googleOAuthClientId, developmentUser: $developmentUser, projects: []}' \
   > "$data_values"
-repository=$(yq -r '.repository // ""' "$project_root/package.json")
-
-for project_file in "$project_root"/*/.project.yaml; do
-  project_directory=$(dirname "$project_file")
-  project=$(basename "$project_directory")
-  echo "Processing project: $project"
-  PROJECT="$project" REPOSITORY="$repository" \
-    yq -o=json -I=0 eval-all \
-    'select(documentIndex == 0) * select(documentIndex == 1)
-       | .name = env(PROJECT)
-       | .repository = env(REPOSITORY)' \
-    "$project_file" >> "$fragments"
-done
+project_metadata_to_jsonl "$project_root" "$fragments"
 
 jq --slurpfile projects "$fragments" \
   '.projects = $projects' "$data_values" > "$temporary_directory/next.yml"
