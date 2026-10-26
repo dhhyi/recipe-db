@@ -118,6 +118,8 @@ jobs:
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       REGISTRY_CACHE_SUFFIX: "-arm64"
+      GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
+      GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -297,6 +299,8 @@ jobs:
     env:
       DOCKER_BUILDKIT: 1
       COMPOSE_PARALLEL_LIMIT: 1
+      GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
+      GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
     steps:
       - name: checkout
         uses: actions/checkout@v7
