@@ -1,11 +1,15 @@
 use async_graphql::http::GraphiQLSource;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
-use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::body::Body;
+use axum::extract::{ConnectInfo, State};
+use axum::http::{HeaderMap, Request, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::Html;
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
+use std::net::{IpAddr, SocketAddr};
 
 pub mod auth;
 mod events;
@@ -26,6 +30,25 @@ mod traefik;
 struct GraphQLState {
     schema: schema::ApiSchema,
     auth_policy: auth::AuthPolicy,
+}
+
+fn is_trusted_ingress(peer: Option<SocketAddr>, trusted_ingress: IpAddr) -> bool {
+    peer.is_some_and(|peer| peer.ip() == trusted_ingress)
+}
+
+async fn trusted_graphql_ingress(
+    State(trusted_ingress): State<IpAddr>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(peer)| *peer);
+    if !is_trusted_ingress(peer, trusted_ingress) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(request).await)
 }
 
 async fn graphql(
@@ -89,18 +112,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let production = std::env::var("PRODUCTION").as_deref() == Ok("true");
+    let trusted_ingress_ip = if production {
+        Some(std::env::var("GRAPHQL_TRUSTED_INGRESS_IP")?.parse::<IpAddr>()?)
+    } else {
+        None
+    };
     let graphql_route = if production {
         post(graphql).get(graphql)
     } else {
         get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) }).post(graphql)
     };
-    let graphql_app = Router::new()
-        .route("/graphql", graphql_route)
-        .with_state(graphql_state);
+    let graphql_app = Router::new().route("/graphql", graphql_route);
+    let graphql_app = if let Some(trusted_ingress) = trusted_ingress_ip {
+        graphql_app
+            .route_layer(middleware::from_fn_with_state(
+                trusted_ingress,
+                trusted_graphql_ingress,
+            ))
+            .with_state(graphql_state)
+    } else {
+        graphql_app.with_state(graphql_state)
+    };
     let app = app.merge(graphql_app);
 
     println!("async-graphql started");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod ingress_tests {
+    use super::is_trusted_ingress;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn only_the_configured_traefik_address_is_trusted() {
+        let trusted = IpAddr::V4(Ipv4Addr::new(10, 231, 65, 2));
+        assert!(is_trusted_ingress(
+            Some(SocketAddr::from((Ipv4Addr::new(10, 231, 65, 2), 40000))),
+            trusted
+        ));
+        assert!(!is_trusted_ingress(
+            Some(SocketAddr::from((Ipv4Addr::new(10, 231, 65, 3), 40000))),
+            trusted
+        ));
+        assert!(!is_trusted_ingress(None, trusted));
+    }
 }

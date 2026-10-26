@@ -26,6 +26,7 @@ recipe-db.graphqls
 .dockerignore
 *.log*
 traefik.yml
+oauth2-proxy-alpha.yml
 
 # data
 /data

@@ -57,14 +57,34 @@ traefik:
               timeout: 1s
               path: /health
       routers:
-        graphql:
+        graphql-anonymous:
           rule: PathPrefix(`/graphql`)
           entrypoints: web
-      #     middlewares: graphql-stripprefix
-      # middlewares:
-      #   graphql-stripprefix:
-      #     stripprefix:
-      #       prefixes: /graphql
+          priority: 100
+        graphql-cookie:
+          rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)"
+          entrypoints: web
+          priority: 200
+          middlewares: oauth2-forward-auth
+        graphql-bearer:
+          rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)"
+          entrypoints: web
+          priority: 300
+      middlewares:
+        oauth2-forward-auth:
+          forwardAuth:
+            address: http://oauth2-proxy:4180/oauth2/auth
+            trustForwardHeader: false
+            authRequestHeaders:
+              - Cookie
+              - Authorization
+            authResponseHeaders:
+              - X-Auth-Request-User
+              - X-Auth-Request-Issuer
+              - X-Auth-Request-Email
+              - X-Auth-Request-Email-Verified
+            addAuthCookiesToResponse:
+              - _oauth2_proxy
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api

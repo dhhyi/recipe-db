@@ -1,0 +1,41 @@
+#@ load("@ytt:data", "data")
+server:
+  bindAddress: 0.0.0.0:4180
+upstreamConfig:
+  upstreams:
+    - id: forward-auth-only
+      path: /
+      static: true
+      staticCode: 404
+injectResponseHeaders:
+  - name: X-Auth-Request-User
+    values:
+      - claimSource:
+          claim: user
+  - name: X-Auth-Request-Email
+    values:
+      - claimSource:
+          claim: email
+  - name: X-Auth-Request-Issuer
+    values:
+      - claimSource:
+          claim: iss
+  - name: X-Auth-Request-Email-Verified
+    values:
+      - claimSource:
+          claim: email_verified
+providers:
+  - id: google-oidc
+    provider: oidc
+    clientID: #@ data.values.googleOAuthClientId
+    clientSecretFile: /run/secrets/google-oauth-client-secret
+    scope: openid email
+    code_challenge_method: S256
+    additionalClaims: [iss, email_verified]
+    oidcConfig:
+      issuerURL: https://accounts.google.com
+      emailClaim: email
+      audienceClaims: [aud]
+      insecureAllowUnverifiedEmail: false
+      insecureSkipIssuerVerification: false
+      insecureSkipNonce: false

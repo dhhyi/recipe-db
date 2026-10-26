@@ -89,6 +89,50 @@ category: frontend
 EOF
 }
 
+setup_graphql() {
+  mkdir graphql
+  cat > graphql/.project.yaml << 'EOF'
+devcontainer:
+  ports: [4000]
+traefik:
+  labels:
+    http:
+      services:
+        graphql:
+          loadBalancer:
+            healthCheck:
+              path: /health
+      routers:
+        graphql-anonymous:
+          rule: "PathPrefix(`/graphql`)"
+          entrypoints: web
+          priority: 100
+        graphql-cookie:
+          rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)"
+          entrypoints: web
+          priority: 200
+          middlewares: oauth2-forward-auth
+        graphql-bearer:
+          rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)"
+          entrypoints: web
+          priority: 300
+      middlewares:
+        oauth2-forward-auth:
+          forwardAuth:
+            address: http://oauth2-proxy:4180/oauth2/auth
+            trustForwardHeader: false
+            authRequestHeaders: [Cookie, Authorization]
+            authResponseHeaders:
+              - X-Auth-Request-User
+              - X-Auth-Request-Issuer
+              - X-Auth-Request-Email
+              - X-Auth-Request-Email-Verified
+            addAuthCookiesToResponse: [_oauth2_proxy]
+---
+category: api
+EOF
+}
+
 @test "development includes jobs and test runners and removes stale Traefik config" {
   printf '%s\n' stale > traefik.yml
 
@@ -245,25 +289,7 @@ EOF
 }
 
 @test "bus clients need only a URL and GraphQL waits for provisioning" {
-  mkdir graphql
-  cat > graphql/.project.yaml << 'EOF'
-devcontainer:
-  ports: [4000]
-traefik:
-  labels:
-    http:
-      services:
-        graphql:
-          loadBalancer:
-            healthCheck:
-              path: /health
-      routers:
-        graphql:
-          rule: "PathPrefix(`/graphql`)"
-          entrypoints: web
----
-category: api
-EOF
+  setup_graphql
   for mode in "" production backend; do
     run sh .scripts/generate-docker-compose.sh $mode
     [ "$status" -eq 0 ]
@@ -280,6 +306,97 @@ EOF
       and .services.graphql.depends_on["nats-init"].condition == "service_completed_successfully"
     '
   done
+}
+
+@test "OAuth2 Proxy routing, secrets, Redis, and identity isolation are generated" {
+  setup_graphql
+  run env GOOGLE_OAUTH_CLIENT_ID=test-client sh .scripts/generate-docker-compose.sh production
+
+  [ "$status" -eq 0 ]
+  # The jq expression checks literal Compose interpolation syntax.
+  # shellcheck disable=SC2016
+  assert_compose '
+    .services["oauth2-proxy"].image == "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
+    and .services["oauth2-proxy"].networks == ["auth-ingress", "oauth2-sessions", "oauth2-egress"]
+    and .services["oauth2-proxy"].secrets == ["google-oauth-client-secret", "oauth2-cookie-secret"]
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "true"
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_EXPIRE == "168h"
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_REFRESH == "50m"
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_REDIRECT_URL == "${GOOGLE_OAUTH_REDIRECT_URL:?Set GOOGLE_OAUTH_REDIRECT_URL to the exact callback URL}"
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_WHITELIST_DOMAINS == "${GOOGLE_OAUTH_REDIRECT_HOST:?Set GOOGLE_OAUTH_REDIRECT_HOST to the exact public host}"
+    and .services.redis.image == "redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0"
+    and .services.redis.networks == ["oauth2-sessions"]
+    and (.services.redis | has("ports") | not)
+    and .services.redis.volumes == ["oauth2-sessions-data:/data"]
+    and .services.graphql.networks == ["auth-ingress"]
+    and .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "10.231.65.2"
+    and .services.traefik.networks["auth-ingress"].ipv4_address == "10.231.65.2"
+    and .networks["auth-ingress"].internal == true
+    and .networks["oauth2-sessions"].internal == true
+    and (.networks["oauth2-egress"] | has("internal") | not)
+    and .secrets["google-oauth-client-secret"].file == "${GOOGLE_OAUTH_CLIENT_SECRET_FILE:?Set GOOGLE_OAUTH_CLIENT_SECRET_FILE to the mounted OAuth client-secret file}"
+    and .secrets["oauth2-cookie-secret"].file == "${OAUTH2_COOKIE_SECRET_FILE:?Set OAUTH2_COOKIE_SECRET_FILE to the mounted OAuth cookie-secret file}"
+  '
+
+  run yq -o=json '.' oauth2-proxy-alpha.yml
+  [ "$status" -eq 0 ]
+  jq -e '
+    .providers[0].provider == "oidc"
+    and .providers[0].clientID == "test-client"
+    and .providers[0].scope == "openid email"
+    and .providers[0].code_challenge_method == "S256"
+    and .providers[0].additionalClaims == ["iss", "email_verified"]
+    and .providers[0].oidcConfig.issuerURL == "https://accounts.google.com"
+    and .providers[0].oidcConfig.emailClaim == "email"
+    and .providers[0].oidcConfig.insecureAllowUnverifiedEmail == false
+    and .providers[0].oidcConfig.insecureSkipNonce == false
+    and (.providers[0].oidcConfig | has("userIDClaim") | not)
+  ' <<< "$output"
+
+  run yq -o=json '.' traefik.yml
+  [ "$status" -eq 0 ]
+  jq -e '
+    .http.routers["graphql-anonymous"].priority == 100
+    and .http.routers["graphql-cookie"].priority == 200
+    and .http.routers["graphql-cookie"].middlewares == ["oauth2-forward-auth"]
+    and .http.routers["graphql-bearer"].priority == 300
+    and (.http.routers["graphql-bearer"] | has("middlewares") | not)
+    and .http.routers["oauth2-public"].rule == "PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)"
+    and (.http.routers["oauth2-public"].rule | contains("/oauth2/auth") | not)
+    and .http.middlewares["oauth2-forward-auth"].forwardAuth.trustForwardHeader == false
+    and .http.middlewares["oauth2-forward-auth"].forwardAuth.authRequestHeaders == ["Cookie", "Authorization"]
+    and .http.middlewares["oauth2-forward-auth"].forwardAuth.authResponseHeaders == ["X-Auth-Request-User", "X-Auth-Request-Issuer", "X-Auth-Request-Email", "X-Auth-Request-Email-Verified"]
+    and .http.middlewares["oauth2-forward-auth"].forwardAuth.addAuthCookiesToResponse == ["_oauth2_proxy"]
+    and .http.middlewares["identity-strip"].headers.customRequestHeaders["X-Auth-Request-User"] == ""
+    and .http.services["oauth2-proxy"].loadBalancer.servers == [{"url": "http://oauth2-proxy:4180"}]
+  ' <<< "$output"
+  cookie_regex=$(jq -r '.http.routers["graphql-cookie"].rule | capture("HeaderRegexp\\(`Cookie`, `(?<pattern>[^`]*)`\\)") | .pattern' <<< "$output")
+  run node -e '
+    const matcher = new RegExp(process.argv[1]);
+    const credentialCookies = ["_oauth2_proxy=stale", "_oauth2_proxy_0=chunk", "other=1; _oauth2_proxy_1=chunk", "_oauth2_proxy_bad=malformed", "_oauth2_proxy"];
+    const unrelatedCookies = ["other=1", "_oauth2_proxyX=unrelated", "__oauth2_proxy=unrelated"];
+    if (credentialCookies.some((cookie) => !matcher.test(cookie)) || unrelatedCookies.some((cookie) => matcher.test(cookie))) {
+      process.exit(1);
+    }
+  ' "$cookie_regex"
+  [ "$status" -eq 0 ]
+
+  run env GOOGLE_OAUTH_CLIENT_ID=test-client sh .scripts/generate-docker-compose.sh
+  [ "$status" -eq 0 ]
+  # The jq expression checks literal Compose interpolation syntax.
+  # shellcheck disable=SC2016
+  assert_compose '
+    (.services.traefik.command | index("--entrypoints.web.http.aliasHeadersStrategy=delete") != null)
+    and (.services.traefik.command | index("--entrypoints.web.http.middlewares=identity-strip@docker") != null)
+    and (.services.traefik.command | index("--entrypoints.rest-internal.http.middlewares=identity-strip@docker") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.middlewares=oauth2-forward-auth") != null)
+    and (.services["oauth2-proxy"].labels | index("traefik.http.routers.oauth2-public.rule=PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)") != null)
+    and (.services["oauth2-proxy"].labels | index("traefik.docker.network=recipe-db-auth-ingress") != null)
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "${OAUTH2_COOKIE_SECURE:-false}"
+    and .services.graphql.networks == ["auth-ingress"]
+  '
 }
 
 @test "browse waits for provisioning and retains its bus URL in development and production" {

@@ -55,7 +55,8 @@ jq -n \
   --argjson backendOnly "$backend_only" \
   --argjson ci "$ci" \
   --arg registryCacheSuffix "${REGISTRY_CACHE_SUFFIX:-}" \
-  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, projects: []}' \
+  --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-replace-with-google-oauth-client-id}" \
+  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, googleOAuthClientId: $googleOAuthClientId, projects: []}' \
   > "$data_values"
 repository=$(yq -r '.repository // ""' "$project_root/package.json")
 
@@ -95,6 +96,11 @@ render() {
 }
 
 render docker-compose "$output_compose"
+if jq -e '.projects | any(.name == "graphql")' "$data_values" > /dev/null; then
+  render oauth2-proxy-alpha "$project_root/oauth2-proxy-alpha.yml"
+else
+  rm -f "$project_root/oauth2-proxy-alpha.yml"
+fi
 if [ "$production" = true ]; then
   render traefik "$output_traefik"
 else
