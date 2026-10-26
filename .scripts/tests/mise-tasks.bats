@@ -232,7 +232,12 @@ EOF
     [ -f ".secrets/$file" ]
     [ "$(stat -c %a ".secrets/$file")" = 600 ]
   done
-  [ "$(base64 -d .secrets/oauth2-cookie-secret | wc -c)" -eq 32 ]
+  [ "$(wc -c < .secrets/oauth2-cookie-secret)" -eq 43 ]
+  grep -Eq '^[A-Za-z0-9_-]{43}$' .secrets/oauth2-cookie-secret
+  [ "$({
+    tr '_-' '/+' < .secrets/oauth2-cookie-secret
+    printf '='
+  } | base64 -d | wc -c)" -eq 32 ]
   cookie=$(cat .secrets/oauth2-cookie-secret)
   printf '%s' custom > .secrets/google-oauth-client-secret
   run mise run --raw create-oauth-secrets
@@ -253,6 +258,42 @@ EOF
   run mise run --raw create-oauth-secrets
   [ "$status" -ne 0 ]
   [ -f .secrets/google-oauth-client-secret/keep ]
+}
+
+@test "CI creates URL-safe cookie secrets before mise setup can run" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+  cat > bin/mise << 'EOF'
+#!/bin/sh
+test -s .secrets/google-oauth-client-secret &&
+  test -s .secrets/oauth2-cookie-secret
+EOF
+  chmod +x bin/docker bin/mise
+  for job in arm64-validation publish; do
+    if [ "$job" = arm64-validation ]; then
+      script=$(yq -r '.jobs.arm64-validation.steps[] | select(.name == "prepare ARM64 build context without devcontainers") | .run' "$workflow" \
+        | sed -n '/^echo "::group::prepare ARM64 build context"/,/^ingress_config=/{ /^ingress_config=/!p; }')
+    else
+      script=$(yq -r '.jobs.publish.steps[] | select(.name == "create private search key for Compose validation") | .run' "$workflow")
+    fi
+    [ -n "$script" ]
+    export TYPESENSE_API_KEY_FILE="$FIXTURE_ROOT/search-key"
+    export GOOGLE_OAUTH_CLIENT_SECRET_FILE="$FIXTURE_ROOT/.secrets/google-oauth-client-secret"
+    export OAUTH2_COOKIE_SECRET_FILE="$FIXTURE_ROOT/.secrets/oauth2-cookie-secret"
+    mkdir -p .secrets
+    rm -f "$GOOGLE_OAUTH_CLIENT_SECRET_FILE" "$OAUTH2_COOKIE_SECRET_FILE"
+    run bash -euo pipefail -c "$script"
+    [ "$status" -eq 0 ]
+    [ "$(wc -c < "$OAUTH2_COOKIE_SECRET_FILE")" -eq 43 ]
+    grep -Eq '^[A-Za-z0-9_-]{43}$' "$OAUTH2_COOKIE_SECRET_FILE"
+    [ "$({
+      tr '_-' '/+' < "$OAUTH2_COOKIE_SECRET_FILE"
+      printf '='
+    } | base64 -d | wc -c)" -eq 32 ]
+  done
 }
 
 @test "development OAuth secret overrides must exist and are never replaced" {

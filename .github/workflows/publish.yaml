@@ -167,7 +167,7 @@ jobs:
           mkdir -p .secrets
           printf '%s\n' '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}' > .secrets/auth-accounts.json
           openssl rand -hex 32 > .secrets/google-oauth-client-secret
-          openssl rand -base64 32 > .secrets/oauth2-cookie-secret
+          openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n=' > .secrets/oauth2-cookie-secret
           chmod 600 .secrets/auth-accounts.json
           chmod 600 .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret
           mise run --raw sync-files
@@ -314,7 +314,7 @@ jobs:
           umask 077
           openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
           openssl rand -hex 32 > "$GOOGLE_OAUTH_CLIENT_SECRET_FILE"
-          openssl rand -base64 32 > "$OAUTH2_COOKIE_SECRET_FILE"
+          openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n=' > "$OAUTH2_COOKIE_SECRET_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2

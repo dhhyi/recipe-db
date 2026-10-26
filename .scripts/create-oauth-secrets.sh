@@ -28,7 +28,7 @@ create_secret() {
   (
     set -C
     if [ "$secret_kind" = cookie ]; then
-      secret=$(dd if=/dev/urandom bs=32 count=1 status=none | base64)
+      secret=$(dd if=/dev/urandom bs=32 count=1 status=none | base64 | tr '+/' '-_' | tr -d '\n=')
       printf '%s' "$secret" > "$secret_file"
     else
       printf '%s' 'development-placeholder-not-a-google-secret' > "$secret_file"
