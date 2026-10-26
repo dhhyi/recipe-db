@@ -46,6 +46,11 @@ run = "bats --print-output-on-failure .scripts/tests"
 description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"
 run = "sh .scripts/test-message-bus.sh"
 
+[tasks.test-auth-ingress]
+description = "Verify production ingress token routing and configuration isolation with real Traefik"
+env = { TEST_AUTH_INGRESS = "true" }
+run = "bats --print-output-on-failure .scripts/tests/traefik-ingress.bats"
+
 [tasks.sync-tailwind]
 description = "Generate shared Tailwind sources and Docker build inputs"
 file = ".scripts/sync-tailwind.sh"
@@ -127,7 +132,7 @@ description = "Create the ignored development auth accounts file without replaci
 file = ".scripts/create-auth-accounts.sh"
 
 [tasks.create-oauth-secrets]
-description = "Create private development OAuth placeholders and a cookie secret without replacing existing files"
+description = "Create private development OAuth placeholders, cookie and ingress secrets without replacing existing files"
 file = ".scripts/create-oauth-secrets.sh"
 
 [tasks.seed-demodata]

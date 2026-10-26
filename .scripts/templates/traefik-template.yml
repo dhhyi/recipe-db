@@ -10,6 +10,9 @@
 #@   middlewares = {}
 #@   services = {}
 #@   auth_enabled = len([project for project in deploy_projects() if project.name == "graphql"]) > 0
+#@   if auth_enabled:
+#@     routers["traefik"]["rule"] = "Method(`GET`) && (Path(`/api/http/routers`) || Path(`/api/http/services`))"
+#@   end
 #@   graphql_service = ""
 #@   for project in deploy_projects():
 #@     project_data = struct.encode(project)
@@ -47,6 +50,9 @@
 #@       if "middlewares" in router:
 #@         router_config["middlewares"] = router["middlewares"].split(",")
 #@       end
+#@       if project.name == "graphql":
+#@         router_config.setdefault("middlewares", []).append("graphql-ingress")
+#@       end
 #@       if "priority" in router:
 #@         router_config["priority"] = router["priority"]
 #@       end
@@ -75,6 +81,7 @@
 #@     middlewares["identity-strip"] = {
 #@       "headers": {
 #@         "customRequestHeaders": {
+#@           "X-Internal-Ingress-Token": "",
 #@           "X-Auth-Request-User": "",
 #@           "X-Auth-Request-Issuer": "",
 #@           "X-Auth-Request-Email": "",

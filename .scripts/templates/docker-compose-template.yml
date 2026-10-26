@@ -25,34 +25,6 @@
 #@   registryCacheSuffix=data.values.registryCacheSuffix
 #@ )
 #@
-#@ def ipv4_number(address):
-#@   result = 0
-#@   for octet in address.split("."):
-#@     result = result * 256 + int(octet)
-#@   end
-#@   return result
-#@ end
-#@
-#@ def ingress_dynamic_range():
-#@   address, prefix = data.values.authIngressSubnet.split("/")
-#@   prefix = int(prefix)
-#@   if prefix < 1 or prefix > 30:
-#@     fail("AUTH_INGRESS_SUBNET must be an IPv4 subnet with prefix 1 through 30")
-#@   end
-#@   half = 1
-#@   for unused in range(31 - prefix):
-#@     half *= 2
-#@   end
-#@   network = ipv4_number(address)
-#@   trusted = ipv4_number(data.values.graphqlTrustedIngressIp)
-#@   if trusted <= network or trusted >= network + half * 2 - 1:
-#@     fail("GRAPHQL_TRUSTED_INGRESS_IP must be a host address inside AUTH_INGRESS_SUBNET")
-#@   end
-#@   pool = network + half if trusted < network + half else network
-#@   octets = [(pool // divisor) % 256 for divisor in [16777216, 65536, 256, 1]]
-#@   return ".".join([str(octet) for octet in octets]) + "/" + str(prefix + 1)
-#@ end
-#@
 #@ deploy_projects = projects.backend + projects.api
 #@ if not data.values.backendOnly:
 #@   deploy_projects += projects.frontend
@@ -103,14 +75,15 @@
 #@       "NATS_URL": "nats://nats:4222",
 #@       "AUTH_TRUSTED_ISSUER": "https://accounts.google.com",
 #@     })
-#@     if options.production:
-#@       graphql["environment"]["GRAPHQL_TRUSTED_INGRESS_IP"] = data.values.graphqlTrustedIngressIp
-#@     end
 #@     graphql["secrets"] = ["auth-accounts.json"]
+#@     if options.production:
+#@       graphql["secrets"].append("graphql-ingress-secret")
+#@     end
 #@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@     services["traefik"]["networks"] = {
 #@       "intranet": {},
-#@       "auth-ingress": {"ipv4_address": data.values.graphqlTrustedIngressIp},
+#@       "auth-ingress": {},
+#@       "oauth2-ingress": {},
 #@     }
 #@     services["nats"]["networks"].append("auth-ingress")
 #@     services["nats-init"]["networks"].append("auth-ingress")
@@ -118,7 +91,7 @@
 #@       "image": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
 #@       "container_name": "oauth2-proxy",
 #@       "command": ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg", "--alpha-config=/etc/oauth2-proxy/alpha.yaml"],
-#@       "networks": ["auth-ingress", "oauth2-sessions", "oauth2-egress"],
+#@       "networks": ["oauth2-ingress", "oauth2-sessions", "oauth2-egress"],
 #@       "restart": "unless-stopped",
 #@       "volumes": [
 #@         "./oauth2-proxy/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro",
@@ -138,7 +111,7 @@
 #@       "depends_on": {"redis": {"condition": "service_healthy"}},
 #@       "labels": [
 #@         "traefik.enable=true",
-#@         "traefik.docker.network=recipe-db-auth-ingress",
+#@         "traefik.docker.network=recipe-db-oauth2-ingress",
 #@         "traefik.http.routers.oauth2-public.rule=PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)",
 #@         "traefik.http.routers.oauth2-public.entrypoints=web",
 #@         "traefik.http.routers.oauth2-public.priority=400",
@@ -198,6 +171,10 @@ secrets:
   #@ if len([p for p in deploy_projects if p.name == "graphql"]) > 0:
   auth-accounts.json:
     file: ./.secrets/auth-accounts.json
+  #@ if options.production:
+  graphql-ingress-secret:
+    file: ${GRAPHQL_INGRESS_SECRET_FILE:?Set GRAPHQL_INGRESS_SECRET_FILE to a private ingress secret file}
+  #@ end
   google-oauth-client-secret:
     #@ if options.production:
     file: ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:?Set GOOGLE_OAUTH_CLIENT_SECRET_FILE to the mounted OAuth client-secret file}
@@ -228,10 +205,9 @@ networks:
   auth-ingress:
     name: recipe-db-auth-ingress
     internal: true
-    ipam:
-      config:
-        - subnet: #@ data.values.authIngressSubnet
-          ip_range: #@ ingress_dynamic_range()
+  oauth2-ingress:
+    name: recipe-db-oauth2-ingress
+    internal: true
   oauth2-sessions:
     name: recipe-db-oauth2-sessions
     internal: true

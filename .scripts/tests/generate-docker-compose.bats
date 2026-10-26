@@ -6,8 +6,8 @@ setup() {
   setup_fixture generate-docker-compose.sh
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   use_mise_tools
-  unset CI REGISTRY_CACHE_SUFFIX AUTH_INGRESS_SUBNET GRAPHQL_TRUSTED_INGRESS_IP \
-    GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE
+  unset CI REGISTRY_CACHE_SUFFIX \
+    GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE
   setup_mock_bin
   cat > bin/docker << 'EOF'
 #!/bin/sh
@@ -337,7 +337,7 @@ EOF
     assert_compose '
       .services.graphql.environment.NATS_URL == "nats://nats:4222"
       and .services.graphql.environment.AUTH_TRUSTED_ISSUER == "https://accounts.google.com"
-      and .services.graphql.secrets == ["auth-accounts.json"]
+      and (.services.graphql.secrets | index("auth-accounts.json") != null)
       and .secrets["auth-accounts.json"].file == "./.secrets/auth-accounts.json"
       and (.services.graphql.environment | has("NATS_USER") | not)
       and (.services.graphql.environment | has("NATS_PASSWORD") | not)
@@ -359,7 +359,9 @@ EOF
   assert_compose '
     .services["oauth2-proxy"].image == "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
     and (.services["oauth2-proxy"] | has("user") | not)
-    and .services["oauth2-proxy"].networks == ["auth-ingress", "oauth2-sessions", "oauth2-egress"]
+    and .services["oauth2-proxy"].networks == ["oauth2-ingress", "oauth2-sessions", "oauth2-egress"]
+    and .services.traefik.networks["oauth2-ingress"] == {}
+    and .networks["oauth2-ingress"].internal == true
     and .services["oauth2-proxy"].secrets == ["google-oauth-client-secret", "oauth2-cookie-secret"]
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "true"
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_EXPIRE == "168h"
@@ -371,10 +373,16 @@ EOF
     and (.services.redis | has("ports") | not)
     and .services.redis.volumes == ["oauth2-sessions-data:/data"]
     and .services.graphql.networks == ["auth-ingress"]
-    and .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "10.231.65.2"
-    and .services.traefik.networks["auth-ingress"].ipv4_address == "10.231.65.2"
+    and .services.graphql.secrets == ["auth-accounts.json", "graphql-ingress-secret"]
+    and .services.traefik.secrets == ["graphql-ingress-secret"]
+    and .services.traefik.entrypoint == ["/bin/sh", "/ingress-entrypoint.sh"]
+    and (.services.traefik.command | index("--providers.file.directory=/run/traefik") != null)
+    and (.services.traefik.volumes | index("./.scripts/traefik-ingress-entrypoint.sh:/ingress-entrypoint.sh:ro") != null)
+    and .services.traefik.tmpfs == ["/run/traefik:mode=0700"]
+    and .secrets["graphql-ingress-secret"].file == "${GRAPHQL_INGRESS_SECRET_FILE:?Set GRAPHQL_INGRESS_SECRET_FILE to a private ingress secret file}"
+    and .services.traefik.networks["auth-ingress"] == {}
     and .networks["auth-ingress"].internal == true
-    and .networks["auth-ingress"].ipam.config == [{"subnet":"10.231.65.0/24", "ip_range":"10.231.65.128/25"}]
+    and (.networks["auth-ingress"] | has("ipam") | not)
     and .networks["oauth2-sessions"].internal == true
     and (.networks["oauth2-egress"] | has("internal") | not)
     and .secrets["google-oauth-client-secret"].file == "${GOOGLE_OAUTH_CLIENT_SECRET_FILE:?Set GOOGLE_OAUTH_CLIENT_SECRET_FILE to the mounted OAuth client-secret file}"
@@ -401,10 +409,12 @@ EOF
   [ "$status" -eq 0 ]
   jq -e '
     .http.routers.graphql.priority == 100
+    and .http.routers.graphql.middlewares == ["graphql-ingress"]
     and .http.routers["graphql-cookie"].priority == 200
-    and .http.routers["graphql-cookie"].middlewares == ["oauth2-forward-auth"]
+    and .http.routers["graphql-cookie"].middlewares == ["oauth2-forward-auth", "graphql-ingress"]
     and .http.routers["graphql-bearer"].priority == 300
-    and (.http.routers["graphql-bearer"] | has("middlewares") | not)
+    and .http.routers["graphql-bearer"].middlewares == ["graphql-ingress"]
+    and .http.routers.traefik.rule == "Method(`GET`) && (Path(`/api/http/routers`) || Path(`/api/http/services`))"
     and .http.routers["oauth2-public"].rule == "PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)"
     and (.http.routers["oauth2-public"].rule | contains("/oauth2/auth") | not)
     and .http.middlewares["oauth2-forward-auth"].forwardAuth.trustForwardHeader == false
@@ -412,6 +422,8 @@ EOF
     and .http.middlewares["oauth2-forward-auth"].forwardAuth.authResponseHeaders == ["X-Auth-Request-User", "X-Auth-Request-Issuer", "X-Auth-Request-Email", "X-Auth-Request-Email-Verified"]
     and .http.middlewares["oauth2-forward-auth"].forwardAuth.addAuthCookiesToResponse == ["_oauth2_proxy"]
     and .http.middlewares["identity-strip"].headers.customRequestHeaders["X-Auth-Request-User"] == ""
+    and .http.middlewares["identity-strip"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ""
+    and (.http.middlewares | has("graphql-ingress") | not)
     and .http.services["oauth2-proxy"].loadBalancer.servers == [{"url": "http://oauth2-proxy:4180"}]
   ' <<< "$output"
   cookie_regex=$(jq -r '.http.routers["graphql-cookie"].rule | capture("HeaderRegexp\\(`Cookie`, `(?<pattern>[^`]*)`\\)") | .pattern' <<< "$output")
@@ -442,6 +454,10 @@ EOF
     (.services.traefik.command | index("--entrypoints.web.http.aliasHeadersStrategy=delete") != null)
     and (.services.traefik.command | index("--entrypoints.web.http.middlewares=identity-strip@docker") != null)
     and (.services.traefik.command | index("--entrypoints.rest-internal.http.middlewares=identity-strip@docker") != null)
+    and (.services.traefik | has("secrets") | not)
+    and (.services.traefik.labels | index("traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Internal-Ingress-Token=") != null)
+    and .services.graphql.secrets == ["auth-accounts.json"]
+    and (.secrets | has("graphql-ingress-secret") | not)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql.service=graphql") != null)
@@ -449,28 +465,24 @@ EOF
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.service=graphql") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.middlewares=oauth2-forward-auth") != null)
     and (.services["oauth2-proxy"].labels | index("traefik.http.routers.oauth2-public.rule=PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)") != null)
-    and (.services["oauth2-proxy"].labels | index("traefik.docker.network=recipe-db-auth-ingress") != null)
+    and (.services["oauth2-proxy"].labels | index("traefik.docker.network=recipe-db-oauth2-ingress") != null)
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "${OAUTH2_COOKIE_SECURE:-false}"
     and .services.graphql.networks == ["auth-ingress"]
     and (.services.graphql.labels | index("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000") != null)
   '
 }
 
-@test "ingress dynamic allocation excludes either half containing the trusted address" {
+@test "ingress uses Docker-managed addresses in development and production" {
   setup_graphql
   for mode in "" production; do
-    run env AUTH_INGRESS_SUBNET=192.168.240.0/24 GRAPHQL_TRUSTED_INGRESS_IP=192.168.240.254 \
-      sh .scripts/generate-docker-compose.sh $mode
+    run sh .scripts/generate-docker-compose.sh $mode
     [ "$status" -eq 0 ]
     assert_compose '
-      .networks["auth-ingress"].ipam.config == [{"subnet":"192.168.240.0/24", "ip_range":"192.168.240.0/25"}]
-      and .services.traefik.networks["auth-ingress"].ipv4_address == "192.168.240.254"
+      .networks["auth-ingress"] == {"name":"recipe-db-auth-ingress", "internal":true}
+      and .services.traefik.networks["auth-ingress"] == {}
+      and (.services.graphql.environment | has("GRAPHQL_TRUSTED_INGRESS_IP") | not)
     '
   done
-  run env AUTH_INGRESS_SUBNET=10.240.0.0/16 GRAPHQL_TRUSTED_INGRESS_IP=10.240.0.2 \
-    sh .scripts/generate-docker-compose.sh
-  [ "$status" -eq 0 ]
-  assert_compose '.networks["auth-ingress"].ipam.config[0].ip_range == "10.240.128.0/17"'
 }
 
 @test "search uses GraphQL through Traefik's application entrypoint" {
@@ -480,16 +492,16 @@ EOF
   [ "$output" = "http://traefik/graphql" ]
 }
 
-@test "auth ingress network and trusted address can be overridden" {
+@test "production generation never reads or embeds the ingress secret" {
   setup_graphql
-  run env AUTH_INGRESS_SUBNET=192.168.240.0/24 GRAPHQL_TRUSTED_INGRESS_IP=192.168.240.254 sh .scripts/generate-docker-compose.sh production
-
+  run env GRAPHQL_INGRESS_SECRET_FILE=nonexistent sh .scripts/generate-docker-compose.sh production
   [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
   assert_compose '
-    .services.graphql.environment.GRAPHQL_TRUSTED_INGRESS_IP == "192.168.240.254"
-    and .services.traefik.networks["auth-ingress"].ipv4_address == "192.168.240.254"
-    and .networks["auth-ingress"].ipam.config[0].subnet == "192.168.240.0/24"
+    .secrets["graphql-ingress-secret"].file == "${GRAPHQL_INGRESS_SECRET_FILE:?Set GRAPHQL_INGRESS_SECRET_FILE to a private ingress secret file}"
+    and ([.services | to_entries[] | select(.value.secrets // [] | index("graphql-ingress-secret")) | .key] | sort) == ["graphql", "traefik"]
   '
+  [ ! -e nonexistent ]
 }
 
 @test "browse waits for provisioning and retains its bus URL in development and production" {

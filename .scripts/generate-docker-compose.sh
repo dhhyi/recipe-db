@@ -56,11 +56,9 @@ jq -n \
   --argjson backendOnly "$backend_only" \
   --argjson ci "$ci" \
   --arg registryCacheSuffix "${REGISTRY_CACHE_SUFFIX:-}" \
-  --arg authIngressSubnet "${AUTH_INGRESS_SUBNET:-10.231.65.0/24}" \
-  --arg graphqlTrustedIngressIp "${GRAPHQL_TRUSTED_INGRESS_IP:-10.231.65.2}" \
   --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-replace-with-google-oauth-client-id}" \
   --arg developmentUser "$(id -u):$(id -g)" \
-  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, authIngressSubnet: $authIngressSubnet, graphqlTrustedIngressIp: $graphqlTrustedIngressIp, googleOAuthClientId: $googleOAuthClientId, developmentUser: $developmentUser, projects: []}' \
+  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, googleOAuthClientId: $googleOAuthClientId, developmentUser: $developmentUser, projects: []}' \
   > "$data_values"
 repository=$(yq -r '.repository // ""' "$project_root/package.json")
 

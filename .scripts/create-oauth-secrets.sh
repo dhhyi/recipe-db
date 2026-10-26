@@ -9,7 +9,7 @@ create_secret() {
   local secret_file=$1 secret_kind=$2 external=$3
   if [ "$external" = true ]; then
     if [ ! -f "$secret_file" ] || [ ! -s "$secret_file" ] || [ ! -r "$secret_file" ]; then
-      echo "Configured OAuth secret must be a readable, nonempty file: $secret_file" >&2
+      echo "Configured auth secret must be a readable, nonempty file: $secret_file" >&2
       exit 1
     fi
     return
@@ -20,14 +20,14 @@ create_secret() {
   fi
   if [ -e "$secret_file" ]; then
     if [ ! -f "$secret_file" ] || [ ! -s "$secret_file" ] || [ ! -r "$secret_file" ]; then
-      echo "Development OAuth secret must be a readable, nonempty file: $secret_file" >&2
+      echo "Development auth secret must be a readable, nonempty file: $secret_file" >&2
       exit 1
     fi
     return
   fi
   (
     set -C
-    if [ "$secret_kind" = cookie ]; then
+    if [ "$secret_kind" != client ]; then
       secret=$(dd if=/dev/urandom bs=32 count=1 status=none | base64 | tr '+/' '-_' | tr -d '\n=')
       printf '%s' "$secret" > "$secret_file"
     else
@@ -40,3 +40,5 @@ create_secret "${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-$project_root/.secrets/google-
   client "${GOOGLE_OAUTH_CLIENT_SECRET_FILE:+true}"
 create_secret "${OAUTH2_COOKIE_SECRET_FILE:-$project_root/.secrets/oauth2-cookie-secret}" \
   cookie "${OAUTH2_COOKIE_SECRET_FILE:+true}"
+create_secret "${GRAPHQL_INGRESS_SECRET_FILE:-$project_root/.secrets/graphql-ingress-secret}" \
+  ingress "${GRAPHQL_INGRESS_SECRET_FILE:+true}"
