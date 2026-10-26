@@ -163,7 +163,10 @@ jobs:
           mise run --raw sync-files
           mkdir -p .secrets
           printf '%s\n' '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}' > .secrets/auth-accounts.json
+          openssl rand -hex 32 > .secrets/google-oauth-client-secret
+          openssl rand -base64 32 > .secrets/oauth2-cookie-secret
           chmod 600 .secrets/auth-accounts.json
+          chmod 600 .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret
           mise run --raw generate-docker-compose
           mise run create-intranet
           echo "::endgroup::"
