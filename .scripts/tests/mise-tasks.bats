@@ -260,40 +260,28 @@ EOF
   [ -f .secrets/google-oauth-client-secret/keep ]
 }
 
-@test "CI creates URL-safe cookie secrets before mise setup can run" {
+@test "CI reuses mise development secrets and scopes explicit paths to production builds" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  cat > bin/docker << 'EOF'
-#!/bin/sh
-exit 0
-EOF
-  cat > bin/mise << 'EOF'
-#!/bin/sh
-test -s .secrets/google-oauth-client-secret &&
-  test -s .secrets/oauth2-cookie-secret
-EOF
-  chmod +x bin/docker bin/mise
-  for job in arm64-validation publish; do
-    if [ "$job" = arm64-validation ]; then
-      script=$(yq -r '.jobs.arm64-validation.steps[] | select(.name == "prepare ARM64 build context without devcontainers") | .run' "$workflow" \
-        | sed -n '/^echo "::group::prepare ARM64 build context"/,/^ingress_config=/{ /^ingress_config=/!p; }')
-    else
-      script=$(yq -r '.jobs.publish.steps[] | select(.name == "create private search key for Compose validation") | .run' "$workflow")
-    fi
-    [ -n "$script" ]
-    export TYPESENSE_API_KEY_FILE="$FIXTURE_ROOT/search-key"
-    export GOOGLE_OAUTH_CLIENT_SECRET_FILE="$FIXTURE_ROOT/.secrets/google-oauth-client-secret"
-    export OAUTH2_COOKIE_SECRET_FILE="$FIXTURE_ROOT/.secrets/oauth2-cookie-secret"
-    mkdir -p .secrets
-    rm -f "$GOOGLE_OAUTH_CLIENT_SECRET_FILE" "$OAUTH2_COOKIE_SECRET_FILE"
-    run bash -euo pipefail -c "$script"
+  while IFS= read -r task; do
+    run mise run --raw "$task"
     [ "$status" -eq 0 ]
-    [ "$(wc -c < "$OAUTH2_COOKIE_SECRET_FILE")" -eq 43 ]
-    grep -Eq '^[A-Za-z0-9_-]{43}$' "$OAUTH2_COOKIE_SECRET_FILE"
-    [ "$({
-      tr '_-' '/+' < "$OAUTH2_COOKIE_SECRET_FILE"
-      printf '='
-    } | base64 -d | wc -c)" -eq 32 ]
+  done < <(yq -p toml -r '.tasks.sync.depends[] | select(test("^create-"))' mise.toml)
+
+  for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret; do
+    [ -s ".secrets/$file" ]
+    [ "$(stat -c %a ".secrets/$file")" = 600 ]
   done
+  for variable in TYPESENSE_API_KEY_FILE GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE; do
+    [ "$(yq "[.env, .jobs[].env] | map(select(has(\"$variable\"))) | length" "$workflow")" -eq 0 ]
+  done
+  for job in arm64-validation publish; do
+    environment=$(yq -o json ".jobs.$job.steps[] | select(.run | contains(\"mise run generate-docker-compose-prod\")) | .env" "$workflow")
+    [ "$(printf '%s' "$environment" | jq -r '.TYPESENSE_API_KEY_FILE')" = ./.secrets/typesense-api-key ]
+    [ "$(printf '%s' "$environment" | jq -r '.GOOGLE_OAUTH_CLIENT_SECRET_FILE')" = ./.secrets/google-oauth-client-secret ]
+    [ "$(printf '%s' "$environment" | jq -r '.OAUTH2_COOKIE_SECRET_FILE')" = ./.secrets/oauth2-cookie-secret ]
+  done
+  run grep -E 'openssl|chmod|mkdir -p \.secrets|>.*\.secrets/' "$workflow"
+  [ "$status" -eq 1 ]
 }
 
 @test "development OAuth secret overrides must exist and are never replaced" {
@@ -382,8 +370,6 @@ EOF
   for job in arm64-validation publish; do
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_URL" "$workflow")" = "https://recipes.example/oauth2/callback" ]
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_HOST" "$workflow")" = recipes.example ]
-    [ -n "$(yq ".jobs.$job.env.GOOGLE_OAUTH_CLIENT_SECRET_FILE" "$workflow")" ]
-    [ -n "$(yq ".jobs.$job.env.OAUTH2_COOKIE_SECRET_FILE" "$workflow")" ]
   done
   builds=0
   while IFS= read -r script; do

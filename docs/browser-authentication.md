@@ -25,6 +25,8 @@ GOOGLE_OAUTH_CLIENT_ID='<client-id>' mise run generate-docker-compose-prod
 
 Provide `GOOGLE_OAUTH_REDIRECT_URL` as that exact HTTPS callback URL and `GOOGLE_OAUTH_REDIRECT_HOST` as its exact host (without scheme or path) when starting Compose. The host is the only post-login return domain; do not use wildcards. Mount the OAuth client secret and OAuth2 Proxy cookie secret from private files by setting `GOOGLE_OAUTH_CLIENT_SECRET_FILE` and `OAUTH2_COOKIE_SECRET_FILE` to their paths. Compose mounts these files as secrets; their contents must never be placed in source, image build arguments, environment variables, or generated configuration. Keep the files outside the repository with owner-only permissions. The development defaults are `.secrets/google-oauth-client-secret` and `.secrets/oauth2-cookie-secret`; development can use HTTP and disables Secure cookies by default. Production always sets Secure cookies and requires the HTTPS callback URL and explicit secret-file paths. Do not activate production auth until HTTPS is terminated by the deployment ingress.
 
+CI uses the same mise-generated development files rather than generating separate secrets. Only production image-validation/build steps explicitly select those files to satisfy production Compose's required secret paths; they are not deployment credentials.
+
 The client-secret file must contain only the provider secret with no trailing newline. The cookie secret must use URL-safe base64 without a trailing newline; ordinary base64 containing `+` or `/` is not accepted by OAuth2 Proxy. Generate the cookie secret without displaying it, for example:
 
 ```sh

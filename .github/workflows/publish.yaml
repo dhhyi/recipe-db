@@ -16,7 +16,6 @@ permissions:
 env:
   BUILDKIT_PROGRESS: quiet
   COMPOSE_PROGRESS: quiet
-  TYPESENSE_API_KEY_FILE: /tmp/recipe-db-typesense-ci-api-key
 
 jobs:
   quality-checks:
@@ -34,11 +33,6 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2
@@ -120,16 +114,9 @@ jobs:
       REGISTRY_CACHE_SUFFIX: "-arm64"
       GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
       GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
-      GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
-      OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
     steps:
       - name: checkout
         uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
 
       - name: setup mise
         uses: jdx/mise-action@v2
@@ -164,12 +151,6 @@ jobs:
           echo "::group::prepare ARM64 build context"
           docker buildx create --use
           docker buildx inspect --bootstrap
-          mkdir -p .secrets
-          printf '%s\n' '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}' > .secrets/auth-accounts.json
-          openssl rand -hex 32 > .secrets/google-oauth-client-secret
-          openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n=' > .secrets/oauth2-cookie-secret
-          chmod 600 .secrets/auth-accounts.json
-          chmod 600 .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret
           mise run --raw sync-files
           ingress_config=$(python3 - <<'PY'
           import ipaddress
@@ -256,13 +237,16 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
-      - name: generate production Compose configuration
+      - name: validate production configuration and build ARM64 images
         env:
           CI: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
-        run: mise run generate-docker-compose-prod
-
-      - name: validate production configuration and build ARM64 images
+          TYPESENSE_API_KEY_FILE: ./.secrets/typesense-api-key
+          GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
+          OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
         run: |
+          echo "::group::generate production Compose configuration"
+          mise run generate-docker-compose-prod
+          echo "::endgroup::"
           echo "::group::validate production Compose configuration and build images"
           docker compose config --quiet
           docker compose build
@@ -303,18 +287,9 @@ jobs:
       COMPOSE_PARALLEL_LIMIT: 1
       GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
       GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
-      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /tmp/recipe-db-google-oauth-client-secret
-      OAUTH2_COOKIE_SECRET_FILE: /tmp/recipe-db-oauth2-cookie-secret
     steps:
       - name: checkout
         uses: actions/checkout@v7
-
-      - name: create private search key for Compose validation
-        run: |
-          umask 077
-          openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
-          openssl rand -hex 32 > "$GOOGLE_OAUTH_CLIENT_SECRET_FILE"
-          openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n=' > "$OAUTH2_COOKIE_SECRET_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2
@@ -336,6 +311,10 @@ jobs:
         run: mise install
 
       - name: build and push production images
+        env:
+          TYPESENSE_API_KEY_FILE: ./.secrets/typesense-api-key
+          GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
+          OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
         run: |
           echo "::group::generate production docker-compose.yml"
           mise run generate-docker-compose-prod
