@@ -35,7 +35,8 @@
 #@ end
 #@
 #@ def service_map():
-#@   services = {"traefik": traefik_service(options.production)}
+#@   auth_enabled = len([project for project in projects.api if project.name == "graphql"]) > 0
+#@   services = {"traefik": traefik_service(options.production, auth_enabled)}
 #@   if not options.production:
 #@     if len(projects.fixtures) != 1:
 #@       fail("Expected exactly one static fixtures project")
@@ -66,12 +67,75 @@
 #@   end
 #@   if "graphql" in services:
 #@     graphql = services["graphql"]
+#@     if not options.production:
+#@       graphql.setdefault("labels", []).append("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000")
+#@     end
+#@     graphql["networks"] = ["auth-ingress"]
 #@     graphql.setdefault("environment", {}).update({
 #@       "NATS_URL": "nats://nats:4222",
 #@       "AUTH_TRUSTED_ISSUER": "https://accounts.google.com",
 #@     })
 #@     graphql["secrets"] = ["auth-accounts.json"]
+#@     if options.production:
+#@       graphql["secrets"].append("graphql-ingress-secret")
+#@     end
 #@     graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
+#@     services["traefik"]["networks"] = {
+#@       "intranet": {},
+#@       "auth-ingress": {},
+#@       "oauth2-ingress": {},
+#@     }
+#@     services["nats"]["networks"].append("auth-ingress")
+#@     services["nats-init"]["networks"].append("auth-ingress")
+#@     services["oauth2-proxy"] = {
+#@       "image": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
+#@       "container_name": "oauth2-proxy",
+#@       "command": ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg", "--alpha-config=/etc/oauth2-proxy/alpha.yaml"],
+#@       "networks": ["oauth2-ingress", "oauth2-sessions", "oauth2-egress"],
+#@       "restart": "unless-stopped",
+#@       "volumes": [
+#@         "./oauth2-proxy/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro",
+#@         "./oauth2-proxy-alpha.yml:/etc/oauth2-proxy/alpha.yaml:ro",
+#@       ],
+#@       "secrets": ["google-oauth-client-secret", "oauth2-cookie-secret"],
+#@       "environment": {
+#@         "VERBOSE": "${VERBOSE:-false}",
+#@         "OAUTH2_PROXY_REDIRECT_URL": "${GOOGLE_OAUTH_REDIRECT_URL:?Set GOOGLE_OAUTH_REDIRECT_URL to the exact callback URL}" if options.production else "${GOOGLE_OAUTH_REDIRECT_URL:-http://localhost:8080/oauth2/callback}",
+#@         "OAUTH2_PROXY_WHITELIST_DOMAINS": "${GOOGLE_OAUTH_REDIRECT_HOST:?Set GOOGLE_OAUTH_REDIRECT_HOST to the exact public host}" if options.production else "${GOOGLE_OAUTH_REDIRECT_HOST:-localhost}",
+#@         "OAUTH2_PROXY_COOKIE_SECURE": "true" if options.production else "${OAUTH2_COOKIE_SECURE:-false}",
+#@         "OAUTH2_PROXY_COOKIE_EXPIRE": "168h",
+#@         "OAUTH2_PROXY_COOKIE_REFRESH": "50m",
+#@         "OAUTH2_PROXY_COOKIE_HTTPONLY": "true",
+#@         "OAUTH2_PROXY_COOKIE_SAMESITE": "lax",
+#@       },
+#@       "depends_on": {"redis": {"condition": "service_healthy"}},
+#@       "labels": [
+#@         "traefik.enable=true",
+#@         "traefik.docker.network=recipe-db-oauth2-ingress",
+#@         "traefik.http.routers.oauth2-public.rule=PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)",
+#@         "traefik.http.routers.oauth2-public.entrypoints=web",
+#@         "traefik.http.routers.oauth2-public.priority=400",
+#@         "traefik.http.routers.oauth2-public.service=oauth2-public",
+#@         "traefik.http.services.oauth2-public.loadbalancer.server.port=4180",
+#@       ],
+#@     }
+#@     services["redis"] = {
+#@       "image": "redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0",
+#@       "container_name": "oauth2-redis",
+#@       "command": ["redis-server", "--appendonly", "yes", "--appendfsync", "always"],
+#@       "networks": ["oauth2-sessions"],
+#@       "restart": "unless-stopped",
+#@       "volumes": ["oauth2-sessions-data:/data"],
+#@       "healthcheck": {
+#@         "test": ["CMD", "redis-cli", "ping"],
+#@         "interval": "5s",
+#@         "timeout": "2s",
+#@         "retries": 12,
+#@       },
+#@     }
+#@     if not options.production:
+#@       services["oauth2-proxy"]["user"] = data.values.developmentUser
+#@     end
 #@   end
 #@   if "browse" in services:
 #@     services.update(browse_maintenance_service(options.production))
@@ -85,16 +149,16 @@
 #@
 services:
   _: #@ template.replace(service_map())
-networks:
-  intranet:
-    name: intranet
-    external: true
 volumes:
   #@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
   typesense-data:
     name: recipe-db-typesense-data
   search-data:
     name: recipe-db-search-data
+  #@ end
+  #@ if len([p for p in deploy_projects if p.name == "graphql"]) > 0:
+  oauth2-sessions-data:
+    name: recipe-db-oauth2-sessions-data
   #@ end
   nats-data:
     name: recipe-db-nats-data
@@ -107,6 +171,22 @@ secrets:
   #@ if len([p for p in deploy_projects if p.name == "graphql"]) > 0:
   auth-accounts.json:
     file: ./.secrets/auth-accounts.json
+  #@ if options.production:
+  graphql-ingress-secret:
+    file: ${GRAPHQL_INGRESS_SECRET_FILE:?Set GRAPHQL_INGRESS_SECRET_FILE to a private ingress secret file}
+  #@ end
+  google-oauth-client-secret:
+    #@ if options.production:
+    file: ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:?Set GOOGLE_OAUTH_CLIENT_SECRET_FILE to the mounted OAuth client-secret file}
+    #@ else:
+    file: ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-./.secrets/google-oauth-client-secret}
+    #@ end
+  oauth2-cookie-secret:
+    #@ if options.production:
+    file: ${OAUTH2_COOKIE_SECRET_FILE:?Set OAUTH2_COOKIE_SECRET_FILE to the mounted OAuth cookie-secret file}
+    #@ else:
+    file: ${OAUTH2_COOKIE_SECRET_FILE:-./.secrets/oauth2-cookie-secret}
+    #@ end
   #@ end
   #@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
   typesense-api-key:
@@ -116,4 +196,21 @@ secrets:
     file: ${TYPESENSE_API_KEY_FILE:-./.secrets/typesense-api-key}
     #@ end
   #@ end
+  #@ end
+networks:
+  intranet:
+    name: intranet
+    external: true
+  #@ if len([p for p in deploy_projects if p.name == "graphql"]) > 0:
+  auth-ingress:
+    name: recipe-db-auth-ingress
+    internal: true
+  oauth2-ingress:
+    name: recipe-db-oauth2-ingress
+    internal: true
+  oauth2-sessions:
+    name: recipe-db-oauth2-sessions
+    internal: true
+  oauth2-egress:
+    name: recipe-db-oauth2-egress
 #@ end

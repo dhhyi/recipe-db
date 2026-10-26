@@ -2,7 +2,9 @@ import json
 import os
 import time
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
+import anyio
 import httpx
 import pytest
 from mcp import ClientSession
@@ -10,6 +12,8 @@ from mcp.client.streamable_http import streamablehttp_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
+MCP_REQUEST_TIMEOUT = timedelta(seconds=30)
+MCP_SESSION_TIMEOUT_SECONDS = 60
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -33,10 +37,46 @@ def fixture_server_ready():
 
 @asynccontextmanager
 async def mcp_session():
-    async with streamablehttp_client(MCP_URL) as (read_stream, write_stream, _):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            yield session
+    with anyio.fail_after(MCP_SESSION_TIMEOUT_SECONDS):
+        async with streamablehttp_client(
+            MCP_URL, timeout=10, sse_read_timeout=30
+        ) as (read_stream, write_stream, _):
+            async with ClientSession(
+                read_stream, write_stream, read_timeout_seconds=MCP_REQUEST_TIMEOUT
+            ) as session:
+                await session.initialize()
+                yield session
+
+
+@pytest.mark.parametrize("stall", ["response", "cleanup"])
+async def test_mcp_session_deadline_bounds_response_and_cleanup(monkeypatch, stall):
+    @asynccontextmanager
+    async def transport(*args, **kwargs):
+        incoming, read_stream = anyio.create_memory_object_stream(1)
+        write_stream, outgoing = anyio.create_memory_object_stream(1)
+        async with incoming, read_stream, write_stream, outgoing:
+            yield read_stream, write_stream, lambda: None
+            if stall == "cleanup":
+                await anyio.sleep_forever()
+
+    @asynccontextmanager
+    async def initialized_session(*args, **kwargs):
+        class Session:
+            async def initialize(self):
+                pass
+
+        yield Session()
+
+    monkeypatch.setitem(globals(), "streamablehttp_client", transport)
+    monkeypatch.setitem(globals(), "MCP_SESSION_TIMEOUT_SECONDS", 0.05)
+    if stall == "cleanup":
+        monkeypatch.setitem(globals(), "ClientSession", initialized_session)
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        async with mcp_session():
+            pass
+    assert time.monotonic() - started < 2
 
 
 async def create_recipe(session, name):

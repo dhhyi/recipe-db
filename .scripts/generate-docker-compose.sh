@@ -9,6 +9,7 @@ output_compose="$project_root/docker-compose.yml"
 output_traefik="$project_root/traefik.yml"
 production=false
 backend_only=false
+prepare=false
 
 yq() {
   mise exec -- yq "$@"
@@ -22,18 +23,18 @@ for argument in "$@"; do
   case "$argument" in
     prod | production) production=true ;;
     backend) backend_only=true ;;
-    prepare)
-      if [ -f "$output_compose" ]; then
-        echo "docker-compose.yml already exists, skipping generation"
-        exit 0
-      fi
-      ;;
+    prepare) prepare=true ;;
     *)
       echo "unknown argument: $argument" >&2
       exit 1
       ;;
   esac
 done
+
+if [ "$prepare" = true ] && [ -f "$output_compose" ]; then
+  echo "docker-compose.yml already exists, skipping generation"
+  exit 0
+fi
 
 if [ "$production" = true ]; then
   echo "Setting up for production..."
@@ -55,7 +56,9 @@ jq -n \
   --argjson backendOnly "$backend_only" \
   --argjson ci "$ci" \
   --arg registryCacheSuffix "${REGISTRY_CACHE_SUFFIX:-}" \
-  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, projects: []}' \
+  --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-replace-with-google-oauth-client-id}" \
+  --arg developmentUser "$(id -u):$(id -g)" \
+  '{production: $production, backendOnly: $backendOnly, ci: $ci, registryCacheSuffix: $registryCacheSuffix, googleOAuthClientId: $googleOAuthClientId, developmentUser: $developmentUser, projects: []}' \
   > "$data_values"
 repository=$(yq -r '.repository // ""' "$project_root/package.json")
 
@@ -95,6 +98,11 @@ render() {
 }
 
 render docker-compose "$output_compose"
+if jq -e '.projects | any(.name == "graphql")' "$data_values" > /dev/null; then
+  render oauth2-proxy-alpha "$project_root/oauth2-proxy-alpha.yml"
+else
+  rm -f "$project_root/oauth2-proxy-alpha.yml"
+fi
 if [ "$production" = true ]; then
   render traefik "$output_traefik"
 else
