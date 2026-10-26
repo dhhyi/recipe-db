@@ -61,15 +61,18 @@ traefik:
           rule: PathPrefix(`/graphql`)
           entrypoints: web
           priority: 100
+          service: recipe-db-graphql
         graphql-cookie:
           rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)"
           entrypoints: web
           priority: 200
+          service: recipe-db-graphql
           middlewares: oauth2-forward-auth
         graphql-bearer:
           rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)"
           entrypoints: web
           priority: 300
+          service: recipe-db-graphql
       middlewares:
         oauth2-forward-auth:
           forwardAuth:

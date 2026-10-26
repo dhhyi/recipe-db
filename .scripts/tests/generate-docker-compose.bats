@@ -107,15 +107,18 @@ traefik:
           rule: "PathPrefix(`/graphql`)"
           entrypoints: web
           priority: 100
+          service: graphql
         graphql-cookie:
           rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)"
           entrypoints: web
           priority: 200
+          service: graphql
           middlewares: oauth2-forward-auth
         graphql-bearer:
           rule: "PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)"
           entrypoints: web
           priority: 300
+          service: graphql
       middlewares:
         oauth2-forward-auth:
           forwardAuth:
@@ -393,6 +396,9 @@ EOF
     and (.services.traefik.command | index("--entrypoints.rest-internal.http.middlewares=identity-strip@docker") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.rule=PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\\s*)_oauth2_proxy(_[^=;\\s]*)?(=|;|\\s|$)`)") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql-anonymous.service=graphql") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.service=graphql") != null)
+    and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.service=graphql") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.middlewares=oauth2-forward-auth") != null)
     and (.services["oauth2-proxy"].labels | index("traefik.http.routers.oauth2-public.rule=PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)") != null)
     and (.services["oauth2-proxy"].labels | index("traefik.docker.network=recipe-db-auth-ingress") != null)
