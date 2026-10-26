@@ -210,6 +210,8 @@ EOF
   for job in arm64-validation publish; do
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_URL" "$workflow")" = "https://recipes.example/oauth2/callback" ]
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_HOST" "$workflow")" = recipes.example ]
+    [ -n "$(yq ".jobs.$job.env.GOOGLE_OAUTH_CLIENT_SECRET_FILE" "$workflow")" ]
+    [ -n "$(yq ".jobs.$job.env.OAUTH2_COOKIE_SECRET_FILE" "$workflow")" ]
   done
   builds=0
   while IFS= read -r script; do

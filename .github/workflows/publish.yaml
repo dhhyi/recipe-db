@@ -120,6 +120,8 @@ jobs:
       REGISTRY_CACHE_SUFFIX: "-arm64"
       GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
       GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
+      OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -301,6 +303,8 @@ jobs:
       COMPOSE_PARALLEL_LIMIT: 1
       GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
       GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
+      GOOGLE_OAUTH_CLIENT_SECRET_FILE: /tmp/recipe-db-google-oauth-client-secret
+      OAUTH2_COOKIE_SECRET_FILE: /tmp/recipe-db-oauth2-cookie-secret
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -309,6 +313,8 @@ jobs:
         run: |
           umask 077
           openssl rand -hex 32 > "$TYPESENSE_API_KEY_FILE"
+          openssl rand -hex 32 > "$GOOGLE_OAUTH_CLIENT_SECRET_FILE"
+          openssl rand -base64 32 > "$OAUTH2_COOKIE_SECRET_FILE"
 
       - name: setup mise tools
         uses: jdx/mise-action@v2
