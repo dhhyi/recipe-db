@@ -67,6 +67,9 @@
 #@   end
 #@   if "graphql" in services:
 #@     graphql = services["graphql"]
+#@     if not options.production:
+#@       graphql.setdefault("labels", []).append("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000")
+#@     end
 #@     graphql["networks"] = ["auth-ingress"]
 #@     graphql.setdefault("environment", {}).update({
 #@       "NATS_URL": "nats://nats:4222",

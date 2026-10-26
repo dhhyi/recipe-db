@@ -398,6 +398,7 @@ EOF
     and (.services["oauth2-proxy"].labels | index("traefik.docker.network=recipe-db-auth-ingress") != null)
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "${OAUTH2_COOKIE_SECURE:-false}"
     and .services.graphql.networks == ["auth-ingress"]
+    and (.services.graphql.labels | index("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000") != null)
   '
 }
 
