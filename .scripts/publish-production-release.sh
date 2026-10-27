@@ -31,12 +31,15 @@ if [ "$existing" != absent ]; then
 fi
 
 release_tag="ghcr.io/dhhyi/recipe-db-releases:sha-$revision"
-oras push \
-  --artifact-type application/vnd.dhhyi.recipe-db.release.v1+json \
-  --annotation org.opencontainers.image.source=https://github.com/dhhyi/recipe-db \
-  --annotation "org.opencontainers.image.revision=$revision" \
-  "$release_tag" \
-  "$release_file:application/json"
+(
+  cd "$(dirname "$release_file")"
+  oras push \
+    --artifact-type application/vnd.dhhyi.recipe-db.release.v1+json \
+    --annotation org.opencontainers.image.source=https://github.com/dhhyi/recipe-db \
+    --annotation "org.opencontainers.image.revision=$revision" \
+    "$release_tag" \
+    "$(basename "$release_file"):application/json"
+)
 
 published=$(sh "$project_root/.scripts/check-production-release.sh" "$revision")
 case "$published" in
