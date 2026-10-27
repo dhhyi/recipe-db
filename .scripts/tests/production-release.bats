@@ -241,6 +241,42 @@ EOF
   [[ "$stderr" == *"could not check existing release inventory"* ]]
 }
 
+@test "release lookup treats the ORAS missing reference response as absent" {
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+printf 'Error response from registry: failed to find "%s": %s: not found\n' "$4" "$4" >&2
+exit 1
+EOF
+  chmod +x bin/oras
+
+  run sh .scripts/check-production-release.sh "$REVISION"
+
+  [ "$status" -eq 0 ]
+  [ "$output" = absent ]
+}
+
+@test "release lookup does not treat transport or local not found errors as absence" {
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+printf '%s\n' "$ORAS_ERROR" >&2
+exit 1
+EOF
+  chmod +x bin/oras
+
+  for error in \
+    'Error response from registry: failed to find "ghcr.io/dhhyi/recipe-db-releases:sha-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": dial tcp: lookup ghcr.io: no such host' \
+    'Error: credential helper: executable file not found' \
+    'Error response from registry: failed to find "another-reference": another-reference: not found'; do
+    export ORAS_ERROR="$error"
+
+    run --separate-stderr sh .scripts/check-production-release.sh "$REVISION"
+
+    [ "$status" -eq 1 ]
+    [[ "$stderr" == *"$error"* ]]
+    [[ "$stderr" == *"could not check existing release inventory"* ]]
+  done
+}
+
 @test "rerunning a completed release reuses its inventory without pushing" {
   write_valid_release
   mock_public_image_verification
