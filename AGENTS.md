@@ -4,6 +4,10 @@
 
 Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.
 
+## GraphQL access boundary
+
+All normal client data operations go through GraphQL via trusted ingress. Do not introduce direct client-to-backend access. Backend maintenance APIs must remain private and be available only in backup mode. Public static/image delivery is an intentional exception. See issues #49 and #52 for the access contract and #70 for the planned backup-mode maintenance contract.
+
 ## GitHub issue planning
 
 Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
@@ -63,6 +67,8 @@ To tear down an already running container without running anything meaningful, u
 mise run --raw in-devcontainer --rm recipes true
 ```
 
+When instructed to create a Git worktree, run `mise install` from the new worktree root immediately after creating it, before running other project commands. If setup does not generate `.prettierignore`, run `mise run sync-ignore-files` before invoking Prettier or the pre-commit hook.
+
 ## Working on Bazel scripts
 
 When working on Bazel scripts, run their checks, linting, and regression tests directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules. For example:
@@ -74,9 +80,11 @@ mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scr
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 
-## Changing scripts or Bats tests
+## Committing during autonomous implementation
 
-Whenever changing scripts or `.bats` files, run `mise run test-scripts` and `mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck` from the repository root.
+When implementing autonomously, commit each self-contained chunk of work as soon as it is done instead of one large commit at the end. Sessions can time out and lose uncommitted work. Rely on the pre-commit hook for ShellCheck, script regression tests, and project checks instead of running full suites repeatedly before committing; run only the targeted tests needed while iterating.
+
+The pre-commit hook may apply formatting fixes and then abort the commit with `Files were probably changed by precommit script`. In that case, review the changes, stage the affected files again with `git add`, and repeat the commit.
 
 ## Modifying .project.yaml files
 

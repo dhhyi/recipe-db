@@ -277,6 +277,49 @@ EOF
   done
 }
 
+@test "release lookup verifies an existing artifact with anonymous ORAS credentials" {
+  write_valid_release
+  mock_public_image_verification
+  export MOCK_RELEASE="$FIXTURE_ROOT/release.json"
+  export MOCK_ARTIFACT="$FIXTURE_ROOT/artifact.json"
+  jq -n --arg revision "$REVISION" '{
+    artifactType: "application/vnd.dhhyi.recipe-db.release.v1+json",
+    annotations: {
+      "org.opencontainers.image.source": "https://github.com/dhhyi/recipe-db",
+      "org.opencontainers.image.revision": $revision
+    },
+    layers: [{mediaType: "application/json"}]
+  }' > "$MOCK_ARTIFACT"
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+set -eu
+case "$*" in
+  "manifest fetch --descriptor "*)
+    printf '%s\n' '{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}'
+    ;;
+  "manifest fetch "*)
+    [ "$(cat "$DOCKER_CONFIG/config.json")" = '{}' ]
+    [ -d "$HOME" ]
+    cat "$MOCK_ARTIFACT"
+    ;;
+  "pull "*)
+    [ "$(cat "$DOCKER_CONFIG/config.json")" = '{}' ]
+    [ -d "$HOME" ]
+    cp "$MOCK_RELEASE" "$4/release.json"
+    ;;
+  *) exit 99 ;;
+esac
+EOF
+  chmod +x bin/oras
+
+  run --separate-stderr sh .scripts/check-production-release.sh "$REVISION" verified.json
+
+  [ "$status" -eq 0 ]
+  [ "$output" = found:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ]
+  [[ "$stderr" == *"Verified anonymous release artifact"* ]]
+  cmp release.json verified.json
+}
+
 @test "rerunning a completed release reuses its inventory without pushing" {
   write_valid_release
   mock_public_image_verification
@@ -358,6 +401,41 @@ EOF
   [[ "$output" != *"Published release inventory:"* ]]
   run grep -F "push --artifact-type application/vnd.dhhyi.recipe-db.release.v1+json" "$MOCK_LOG"
   [ "$status" -eq 0 ]
+}
+
+@test "artifact publication uploads an absolute inventory path as a relative filename" {
+  write_valid_release
+  mock_public_image_verification
+  export UPLOAD_DIRECTORY="$BATS_TEST_TMPDIR/payload"
+  mkdir "$UPLOAD_DIRECTORY"
+  cp release.json "$UPLOAD_DIRECTORY/release.json"
+  cat > .scripts/check-production-release.sh << 'EOF'
+#!/bin/sh
+if [ -f "$UPLOAD_DIRECTORY/uploaded" ]; then
+  echo found:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+else
+  echo absent
+fi
+EOF
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+set -eu
+[ "$PWD" = "$UPLOAD_DIRECTORY" ]
+for argument do
+  case "$argument" in
+    /* | --disable-path-validation) exit 99 ;;
+    release.json:application/json) test -f release.json; touch uploaded ;;
+  esac
+done
+test -f uploaded
+EOF
+  chmod +x bin/oras
+
+  run sh .scripts/publish-production-release.sh "$UPLOAD_DIRECTORY/release.json" "$REVISION"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Published release inventory:"* ]]
+  [ -f "$UPLOAD_DIRECTORY/uploaded" ]
 }
 
 @test "production image smoke check starts the image and cleans up its container" {
