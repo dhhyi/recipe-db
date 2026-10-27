@@ -154,6 +154,8 @@ EOF
   add_test_project e2e-test
   jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
   mv next.json "$COMPOSE_CONFIG"
+  mkdir -p e2e-test/.secrets
+  printf '%s\n' '{"owner":"0000000000000000000000000000000000000000000000000000000000000000","memberOne":"1111111111111111111111111111111111111111111111111111111111111111","memberTwo":"2222222222222222222222222222222222222222222222222222222222222222"}' > e2e-test/.secrets/auth-tokens.json
 
   run bash .scripts/run-integration-tests.sh --development e2e-test
 
@@ -163,7 +165,19 @@ EOF
   grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/images-edit/' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm e2e-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS e2e-test' "$MOCK_LOG"
+}
+
+@test "browser tests require generated auth client inputs" {
+  add_test_project e2e-test
+  jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development e2e-test
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"E2E auth tokens are missing; run mise run create-auth-test-fixture."* ]]
+  run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
 }
 
 @test "excludes untracked, nested, non-test and incorrectly configured folders" {

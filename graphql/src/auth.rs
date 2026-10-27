@@ -736,6 +736,35 @@ mod tests {
     }
 
     #[test]
+    fn fresh_startup_load_honors_privileged_credential_free_roles_without_fallback() {
+        for role in ["member", "owner"] {
+            let path = std::env::temp_dir().join(format!("auth-config-{}", uuid::Uuid::new_v4()));
+            let json = format!(
+                r#"{{"anonymous":{{"role":"{role}"}},"tokens":[{{"id":"owner","secret":"known-token","role":"owner"}}],"googleAccounts":{{}}}}"#
+            );
+            fs::write(&path, json).unwrap();
+            let policy = AuthPolicy::load_from(&path, ISSUER).unwrap();
+            let _ = fs::remove_file(&path);
+
+            assert_eq!(
+                policy
+                    .request_context(&HeaderMap::new())
+                    .unwrap()
+                    .principal()
+                    .role(),
+                Role::parse(role).unwrap()
+            );
+            assert_eq!(
+                policy
+                    .request_context(&bearer("invalid-token"))
+                    .unwrap_err()
+                    .code,
+                "invalid-credentials"
+            );
+        }
+    }
+
+    #[test]
     fn strict_configuration_rejects_invalid_shapes_keys_and_values() {
         let invalid = [
             "{",

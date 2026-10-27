@@ -140,6 +140,7 @@ EOF
   for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
     [ -s ".secrets/$file" ]
   done
+  [ -s e2e-test/.secrets/auth-tokens.json ]
 }
 
 @test "mise provisions all development prerequisites before rendering" {
@@ -148,6 +149,8 @@ set -eu
 for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
   test -s ".secrets/$file"
 done
+test -s e2e-test/.secrets/auth-tokens.json
+test "$(jq -r '.tokens | length' .secrets/auth-accounts.json)" -eq 3
 grep -Fx 'network create intranet' "$MOCK_LOG"
 touch generated
 EOF
@@ -507,6 +510,7 @@ EOF
   [ -f generate-docker-compose.done ]
   [ -s .secrets/typesense-api-key ]
   [ -s .secrets/auth-accounts.json ]
+  [ -s e2e-test/.secrets/auth-tokens.json ]
 }
 
 @test "development auth accounts are private and preserved across setup runs" {
@@ -528,6 +532,48 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"auth accounts file is empty"* ]]
   [ ! -s .secrets/auth-accounts.json ]
+}
+
+@test "E2E auth fixture creates isolated ephemeral principals without disclosing tokens" {
+  run mise run --raw create-auth-test-fixture
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Prepared GraphQL E2E auth fixture."* ]]
+  [ "$(stat -c %a .secrets/auth-accounts.json)" = 600 ]
+  [ "$(stat -c %a e2e-test/.secrets/auth-tokens.json)" = 600 ]
+  tokens=$(cat e2e-test/.secrets/auth-tokens.json)
+  jq -e '
+    .anonymous.role == "anonymous"
+    and (.tokens | length == 3)
+    and ([.tokens[].id] == ["e2e-owner","e2e-member-one","e2e-member-two"])
+    and ([.tokens[].role] == ["owner","member","member"])
+    and .googleAccounts == {}
+  ' .secrets/auth-accounts.json
+  jq -e '
+    [.owner, .memberOne, .memberTwo] as $tokens
+    | all($tokens[]; type == "string" and test("^[0-9a-f]{64}$"))
+    and ($tokens | unique | length == 3)
+  ' e2e-test/.secrets/auth-tokens.json
+
+  run mise run --raw create-auth-test-fixture
+  [ "$status" -eq 0 ]
+  [ "$(cat e2e-test/.secrets/auth-tokens.json)" = "$tokens" ]
+}
+
+@test "E2E auth fixture preserves customized roles and unrelated token principals" {
+  mkdir -p .secrets
+  printf '%s\n' '{"anonymous":{"role":"owner"},"tokens":[{"id":"local-member","secret":"local-secret","role":"member"}],"googleAccounts":{}}' > .secrets/auth-accounts.json
+
+  run mise run --raw create-auth-test-fixture
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .anonymous.role == "owner"
+    and ([.tokens[].id] | index("local-member") != null)
+    and ([.tokens[].id] | index("e2e-owner") != null)
+  ' .secrets/auth-accounts.json
+  run mise run --raw create-auth-test-fixture
+  [ "$status" -eq 0 ]
+  jq -e '.anonymous.role == "owner"' .secrets/auth-accounts.json
 }
 
 @test "development search key is private, random and preserved across setup runs" {

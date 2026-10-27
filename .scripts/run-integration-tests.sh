@@ -221,9 +221,23 @@ for project in "${projects[@]}"; do
   fi
   echo "Running $project; report log: $project/target/integration-tests/run.log"
   set +e
-  docker compose --profile test run --rm "$project" 2>&1 \
-    | tee "$project/target/integration-tests/run.log"
-  status=${PIPESTATUS[0]}
+  if [[ $project == e2e-test ]]; then
+    tokens_file=e2e-test/.secrets/auth-tokens.json
+    if [[ ! -s $tokens_file ]]; then
+      echo "E2E auth tokens are missing; run mise run create-auth-test-fixture." >&2
+      exit 1
+    fi
+    E2E_AUTH_TOKENS=$(cat "$tokens_file")
+    export E2E_AUTH_TOKENS
+    docker compose --profile test run --rm -e E2E_AUTH_TOKENS "$project" 2>&1 \
+      | tee "$project/target/integration-tests/run.log"
+    status=${PIPESTATUS[0]}
+    unset E2E_AUTH_TOKENS
+  else
+    docker compose --profile test run --rm "$project" 2>&1 \
+      | tee "$project/target/integration-tests/run.log"
+    status=${PIPESTATUS[0]}
+  fi
   set -e
   if [[ $group_open == true ]]; then
     echo "::endgroup::" >&2
