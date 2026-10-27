@@ -35,13 +35,15 @@ accessPage model title message signIn =
     Html.main_ [ class "image-editor" ]
         [ h1 [] [ text title ]
         , p [ attribute "role" "alert", class "feedback error" ] [ text message ]
-        , if signIn then
-            a [ href "/oauth2/start?rd=%2F" ] [ text "Mit Google anmelden" ]
+        , div [ class "grid gap-2" ]
+            [ if signIn then
+                a [ href "/oauth2/start?rd=%2F" ] [ text "Mit Google anmelden" ]
 
-          else
-            text ""
-        , a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ]
-        , a [ href "/" ] [ text "Zurück zur Übersicht" ]
+              else
+                text ""
+            , a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ]
+            , a [ href "/" ] [ text "Zurück zur Übersicht" ]
+            ]
         ]
 
 
@@ -133,8 +135,10 @@ errorMessage model error =
         "authentication-required" ->
             div [ attribute "role" "alert", class "feedback error" ]
                 [ p [] [ text "Anmeldung erforderlich oder abgelaufen." ]
-                , a [ href "/oauth2/start?rd=%2F" ] [ text "Anmelden" ]
-                , a [ href "/oauth2/sign_out?rd=%2F" ] [ text "Abmelden und zurück zur Übersicht" ]
+                , div [ class "grid gap-2" ]
+                    [ a [ href "/oauth2/start?rd=%2F" ] [ text "Anmelden" ]
+                    , a [ href "/oauth2/sign_out?rd=%2F" ] [ text "Abmelden und zurück zur Übersicht" ]
+                    ]
                 ]
 
         "forbidden" ->

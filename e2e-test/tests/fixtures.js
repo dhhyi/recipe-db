@@ -203,7 +203,22 @@ async function uploadImage(request, recipe, filename) {
 }
 
 export const test = base.extend({
-  authContexts: async ({ browser }, use) => {
+  authContexts: async (
+    {
+      browser,
+      contextOptions,
+      viewport,
+      userAgent,
+      deviceScaleFactor,
+      isMobile,
+      hasTouch,
+      locale,
+      timezoneId,
+      colorScheme,
+      reducedMotion,
+    },
+    use,
+  ) => {
     let tokens;
     try {
       const source =
@@ -238,12 +253,22 @@ export const test = base.extend({
       ]),
     );
     const createIdentity = (identity, origin = baseURL) =>
-      createAuthIdentity(browser, identity, tokens[identity], origin).then(
-        (context) => {
-          contexts.push(context);
-          return context;
-        },
-      );
+      createAuthIdentity(browser, identity, tokens[identity], origin, {
+        ...contextOptions,
+        baseURL: origin,
+        viewport,
+        userAgent,
+        deviceScaleFactor,
+        isMobile,
+        hasTouch,
+        locale,
+        timezoneId,
+        colorScheme,
+        reducedMotion,
+      }).then((context) => {
+        contexts.push(context);
+        return context;
+      });
     await use({
       anonymous: (origin = baseURL) => createIdentity("anonymous", origin),
       memberOne: (origin = baseURL) => createIdentity("memberOne", origin),

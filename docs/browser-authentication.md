@@ -77,6 +77,8 @@ mise run --raw in-devcontainer e2e-test pnpm exec playwright test tests/auth-con
 
 Start the development Compose stack first (`mise run dev-up`). The focused test exercises anonymous, both member, and owner request headers, isolated browser/API cookies, and same-origin-only credential forwarding across external requests and redirects. It uses no Google credentials or Google network access. The generated fixture initially keeps `anonymous.role` at `anonymous`; application E2E setup and default editor flows use the isolated owner token, while public-browser and permission tests use explicit anonymous or member contexts.
 
+The visual suite uses explicit anonymous, member, and owner contexts for the overview, recipe detail, full-page error, existing/new recipe editors, and image editor. Non-owners capture the editors' authentication-required or forbidden views; the open crop-editor state is owner-only. Each role inherits the configured mobile, landscape, dark-tablet, and desktop browser settings. Detail fixtures include distinct owner/member votes to cover the personal overlay against the public average. Run `mise run --raw in-devcontainer e2e-test pnpm test pages.visual.spec.js` to compare screenshots, or append `--update-snapshots` to regenerate baselines. These tests reset application data and require `anonymous.role` to be `anonymous` in the active account policy, so use the development test stack.
+
 To restore the standard local fixture after a successful generation, remove only the generated files, recreate the default policy, and restart GraphQL:
 
 ```sh

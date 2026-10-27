@@ -2,9 +2,15 @@ import { request as apiRequest } from "@playwright/test";
 
 const API_METHODS = ["delete", "fetch", "get", "head", "patch", "post", "put"];
 
-export async function createAuthIdentity(browser, identity, token, appOrigin) {
+export async function createAuthIdentity(
+  browser,
+  identity,
+  token,
+  appOrigin,
+  contextOptions = {},
+) {
   const origin = new URL(appOrigin).origin;
-  const browserContext = await browser.newContext();
+  const browserContext = await browser.newContext(contextOptions);
   await browserContext.route("**/*", async (route) => {
     const requestUrl = new URL(route.request().url());
     if (
