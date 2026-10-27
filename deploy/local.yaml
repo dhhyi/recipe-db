@@ -12,6 +12,8 @@ volumes:
   images: 2Gi
   ratings: 256Mi
   inspirations: 256Mi
+  image-inline: 256Mi
+  link-extract: 256Mi
   nats: 1Gi
   typesense: 1Gi
   search: 256Mi

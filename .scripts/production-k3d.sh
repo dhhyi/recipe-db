@@ -146,7 +146,7 @@ annotate_credentials() {
   checksum=$(
     cd "$work"
     sha256sum auth-accounts.json graphql-ingress-secret typesense-api-key \
-      google-oauth-client-secret oauth2-cookie-secret | sha256sum
+      google-oauth-client-secret oauth2-cookie-secret template-values.json | sha256sum
   )
   checksum=${checksum%% *}
   route_checksum=$(sha256sum "$work/routes.yml")

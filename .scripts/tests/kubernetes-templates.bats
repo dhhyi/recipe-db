@@ -50,12 +50,19 @@ render() {
   render values.json
   jq -e --slurpfile config config.json '
     [.items[] | select(.kind == "PersistentVolumeClaim")] as $claims |
+    .items as $items |
     ($claims | map(.metadata.name) | sort) == ($config[0].volumes | keys | sort)
     and all($claims[]; .spec.storageClassName == "local-path" and .spec.accessModes == ["ReadWriteOnce"])
     and all(.items[] | select(.kind == "Deployment");
       .metadata.name as $name |
       [.spec.template.spec.volumes[] | select(has("persistentVolumeClaim")) | .persistentVolumeClaim.claimName]
       == (if $config[0].volumes | has($name) then [$name] else [] end))
+    and all(["image-inline","link-extract"][];
+      . as $name |
+      ($config[0].volumes | has($name))
+      and any($claims[]; .metadata.name == $name)
+      and any($items[]; .kind == "Deployment" and .metadata.name == $name
+        and any(.spec.template.spec.volumes[]; .persistentVolumeClaim.claimName == $name)))
   ' manifests.json
 }
 

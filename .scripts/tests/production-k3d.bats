@@ -23,7 +23,7 @@ setup() {
     namespace:"recipe-db",origin:"http://127.0.0.1:8080",httpPort:8080,apiPort:6445,
     timeoutSeconds:600,storageClass:"local-path",
     volumes:{recipes:"1Gi",images:"1Gi",ratings:"1Gi",inspirations:"1Gi",
-      nats:"1Gi",typesense:"1Gi",search:"1Gi",redis:"1Gi"},
+      "image-inline":"256Mi","link-extract":"256Mi",nats:"1Gi",typesense:"1Gi",search:"1Gi",redis:"1Gi"},
     resources:{requests:{cpu:"25m",memory:"32Mi"},limits:{memory:"512Mi"}},
     infrastructure:{traefik:"traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",nats:"nats:2.11.0",typesense:"typesense/typesense:30.0",
       maintenance:"nginx:1.28",oauth2Proxy:"quay.io/oauth2-proxy/oauth2-proxy:v7.9.0",redis:"redis:8.0"},
@@ -436,7 +436,7 @@ set_value() {
   grep -q 'delete lease recipe-db-deploy' "$MOCK_LOG"
 }
 
-@test "credential checksums are stable across identical deploys and change for rotated staged secrets" {
+@test "application checksums are stable across identical deploys and change for rotated staged secrets" {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
@@ -450,6 +450,27 @@ set_value() {
   [ "$(sed -n '1p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
   grep -Eq '^[0-9a-f]{64}$' "$MOCK_LOG.checksums"
   run ! grep -q 'rollout restart' "$MOCK_LOG"
+}
+
+@test "application checksums change when rendered configuration files change" {
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  printf 'updated NATS configuration\n' > message-bus/nats.conf
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  printf 'updated OAuth configuration\n' > oauth2-proxy/oauth2-proxy.cfg
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  printf 'updated maintenance configuration\n' > browse-maintenance/nginx.conf
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$MOCK_LOG.checksums")" -eq 5 ]
+  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" = "$(sed -n '2p' "$MOCK_LOG.checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
+  [ "$(sed -n '3p' "$MOCK_LOG.checksums")" != "$(sed -n '4p' "$MOCK_LOG.checksums")" ]
+  [ "$(sed -n '4p' "$MOCK_LOG.checksums")" != "$(sed -n '5p' "$MOCK_LOG.checksums")" ]
 }
 
 @test "existing deployment lease fails closed without deleting another owners lock" {
