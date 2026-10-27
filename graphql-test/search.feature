@@ -4,6 +4,7 @@ Feature: search recipes
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * configure retry = { count: 30, interval: 1000 }
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post

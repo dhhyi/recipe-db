@@ -9,6 +9,7 @@ setup() {
     inspirations-test link-extract-test image-inline-test mcp-test; do
     add_test_project "$project"
   done
+  create_auth_tokens
   setup_mock_bin
   install_mock integration-docker.sh docker
   install_mock integration-curl.sh curl
@@ -22,6 +23,11 @@ setup() {
         "inspirations-test", "link-extract-test", "image-inline-test", "mcp-test"][] as $project
         (. ; .services[$project] = {profiles: ["test"]})
   ' > "$COMPOSE_CONFIG"
+}
+
+create_auth_tokens() {
+  mkdir -p e2e-test/.secrets
+  printf '%s\n' '{"owner":"0000000000000000000000000000000000000000000000000000000000000000","memberOne":"1111111111111111111111111111111111111111111111111111111111111111","memberTwo":"2222222222222222222222222222222222222222222222222222222222222222"}' > e2e-test/.secrets/auth-tokens.json
 }
 
 add_test_project() {
@@ -147,7 +153,7 @@ EOF
   grep -Fx 'curl http://127.0.0.1:8080/graphql' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/search/reindex' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/mcp-test-fixture/test.jpg' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm search-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS search-test' "$MOCK_LOG"
 }
 
 @test "browser tests wait for the full frontend stack before running" {
@@ -168,15 +174,29 @@ EOF
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS e2e-test' "$MOCK_LOG"
 }
 
+@test "GraphQL tests receive configured auth principals" {
+  add_test_project graphql-test
+  jq '.services["graphql-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+  mkdir -p e2e-test/.secrets
+  printf '%s\n' '{"owner":"0000000000000000000000000000000000000000000000000000000000000000","memberOne":"1111111111111111111111111111111111111111111111111111111111111111","memberTwo":"2222222222222222222222222222222222222222222222222222222222222222"}' > e2e-test/.secrets/auth-tokens.json
+
+  run bash .scripts/run-integration-tests.sh --development graphql-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS graphql-test' "$MOCK_LOG"
+}
+
 @test "browser tests require generated auth client inputs" {
   add_test_project e2e-test
   jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
   mv next.json "$COMPOSE_CONFIG"
+  rm e2e-test/.secrets/auth-tokens.json
 
   run bash .scripts/run-integration-tests.sh --development e2e-test
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"E2E auth tokens are missing; run mise run create-auth-test-fixture."* ]]
+  [[ "$output" == *"Auth test tokens are missing; run mise run create-auth-test-fixture."* ]]
   run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
 }
 

@@ -221,10 +221,10 @@ for project in "${projects[@]}"; do
   fi
   echo "Running $project; report log: $project/target/integration-tests/run.log"
   set +e
-  if [[ $project == e2e-test ]]; then
+  if [[ $project == e2e-test || $project == graphql-test || $project == search-test ]]; then
     tokens_file=e2e-test/.secrets/auth-tokens.json
     if [[ ! -s $tokens_file ]]; then
-      echo "E2E auth tokens are missing; run mise run create-auth-test-fixture." >&2
+      echo "Auth test tokens are missing; run mise run create-auth-test-fixture." >&2
       exit 1
     fi
     E2E_AUTH_TOKENS=$(cat "$tokens_file")

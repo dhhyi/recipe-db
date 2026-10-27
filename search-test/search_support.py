@@ -12,16 +12,25 @@ GRAPHQL = os.environ["GRAPHQL_API"]
 REST = os.environ["REST_API"].rstrip("/")
 FIXTURE = os.environ["FIXTURE_API"].rstrip("/")
 NATS_HOST = os.environ.get("NATS_HOST", "nats")
+OWNER_AUTHORIZATION = None
 
 
-def request(url, method="GET", body=None, content_type="application/json"):
+def owner_authorization():
+    global OWNER_AUTHORIZATION
+    if OWNER_AUTHORIZATION is None:
+        OWNER_AUTHORIZATION = "Bearer " + json.loads(os.environ["E2E_AUTH_TOKENS"])["owner"]
+    return OWNER_AUTHORIZATION
+
+
+def request(url, method="GET", body=None, content_type="application/json", headers=None):
     data = json.dumps(body).encode() if body is not None else None
-    return raw_request(url, method, data, content_type)
+    return raw_request(url, method, data, content_type, headers)
 
 
-def raw_request(url, method, data, content_type):
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": content_type})
+def raw_request(url, method, data, content_type, headers=None):
+    req = urllib.request.Request(
+        url, data=data, method=method,
+        headers={"Content-Type": content_type, **(headers or {})})
     try:
         response = urllib.request.urlopen(req, timeout=10)
     except urllib.error.HTTPError as error:
@@ -32,7 +41,9 @@ def raw_request(url, method, data, content_type):
 
 
 def gql(query, variables=None):
-    status, raw, _ = request(GRAPHQL, "POST", {"query": query, "variables": variables or {}})
+    status, raw, _ = request(
+        GRAPHQL, "POST", {"query": query, "variables": variables or {}},
+        headers={"Authorization": owner_authorization()})
     result = json.loads(raw)
     if status != 200 or result.get("errors"):
         raise AssertionError(f"GraphQL request failed: HTTP {status}, {result!r}")
@@ -164,7 +175,8 @@ class SearchSession:
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="0"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\n'.encode()
                      + image + f"\r\n--{boundary}--\r\n".encode())
         status, raw, _ = raw_request(GRAPHQL, "POST", b"".join(parts),
-                                    f"multipart/form-data; boundary={boundary}")
+                                    f"multipart/form-data; boundary={boundary}",
+                                    headers={"Authorization": owner_authorization()})
         assert status == 200, (status, raw)
         result = json.loads(raw)
         assert not result.get("errors"), result

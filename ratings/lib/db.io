@@ -62,7 +62,7 @@ DB clear := method(
 )
 
 DB getAverageRating := method(id,
-    safeId := id asString replaceSeq("'", "''")
+    safeId := id asString asMutable replaceSeq("'", "''")
     result := exec("SELECT AVG(value), COUNT(value) FROM Ratings WHERE key='" .. safeId .. "';") at(0)
     checkNoError
     count := result at("COUNT(value)") asNumber
@@ -78,16 +78,16 @@ DB getAllAverageRatings := method(
 )
 
 DB getUserRating := method(id, userId,
-    safeId := id asString replaceSeq("'", "''")
-    safeUserId := userId asString replaceSeq("'", "''")
+    safeId := id asString asMutable replaceSeq("'", "''")
+    safeUserId := userId asString asMutable replaceSeq("'", "''")
     result := exec("SELECT value FROM Ratings WHERE key='" .. safeId .. "' AND userId='" .. safeUserId .. "';")
     checkNoError
     return if (result size == 0, nil, result at(0) at("value") asNumber)
 )
 
 DB addRating := method(id, rating, userId,
-    safeId := id asString replaceSeq("'", "''")
-    safeUserId := userId asString replaceSeq("'", "''")
+    safeId := id asString asMutable replaceSeq("'", "''")
+    safeUserId := userId asString asMutable replaceSeq("'", "''")
     exec("INSERT OR REPLACE INTO Ratings (key, userId, value)
           VALUES ('" .. safeId .. "', '" .. safeUserId .. "', " .. rating .. ");")
     checkNoError

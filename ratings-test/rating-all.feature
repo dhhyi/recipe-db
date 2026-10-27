@@ -42,3 +42,23 @@ Feature: All Ratings Endpoint
     * match response contains {id: "1", rating: 3.5, count: 2}
     * match response contains {id: "2", rating: 5, count: 1}
     * match response contains {id: "3", rating: 3, count: 1}
+
+  Scenario: userId query selects the own vote and returns null when absent
+    * url backend
+    * path 'ratings/1'
+    * form field rating = 4
+    * form field userId = 'token:v1:user1'
+    * method put
+    * status 200
+
+    * path 'ratings/1'
+    * param userId = 'token:v1:user1'
+    * method get
+    * status 200
+    * match response == {rating: 4}
+
+    * path 'ratings/1'
+    * param userId = 'token:v1:missing'
+    * method get
+    * status 200
+    * match response == {rating: null}

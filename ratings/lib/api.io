@@ -18,7 +18,9 @@ RESTAPI get := method(request,
             id := path at(1)
             userId := request at("query") at("userId")
             if (userId != nil,
-                return request sendData(Map clone atPut("rating", db getUserRating(id, userId)) asJson)
+                rating := db getUserRating(id, userId)
+                if (rating == nil, return request sendData("{\"rating\":null}"))
+                return request sendData(Map clone atPut("rating", rating) asJson)
             )
             rating := db getAverageRating(id)
             return request sendData(rating asJson)

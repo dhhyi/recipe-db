@@ -4,6 +4,7 @@ Feature: integration
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post
     * status 200
@@ -36,10 +37,12 @@ Feature: integration
     * def recipeId = response.data.createRecipe.id
     * match recipeId == '#present'
 
+    * configure headers = { Authorization: '#(memberOneAuthorization)' }
     * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(recipeId)', rating: 5 } }
     * method post
     * status 200
 
+    * configure headers = { Authorization: '#(memberTwoAuthorization)' }
     * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(recipeId)', rating: 4 } }
     * method post
     * status 200
