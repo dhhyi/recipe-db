@@ -31,4 +31,5 @@ oauth2-proxy-alpha.yml
 # data
 /data
 /.secrets
+/.production-k3d.*/
 /e2e-test/.secrets

@@ -78,11 +78,15 @@ mise run test-scripts
 mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 ```
 
+For a single topic group, use `mise run test-scripts <group>` or `mise exec -- bazelisk build --action_env=PATH --jobs=1 //:test_scripts_<group>`. Groups and their explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `tasks`, `devcontainer`, and `tooling`. Assign every new Bats suite to exactly one group and keep its inputs complete; generation rejects unassigned suites and patterns matching no files.
+
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 
-## Changing scripts or Bats tests
+## Committing during autonomous implementation
 
-Whenever changing scripts or `.bats` files, run `mise run test-scripts` and `mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck` from the repository root.
+When implementing autonomously, commit each self-contained chunk of work as soon as it is done instead of one large commit at the end. Sessions can time out and lose uncommitted work. Rely on the pre-commit hook for ShellCheck, script regression tests, and project checks instead of running full suites repeatedly before committing; run only the targeted tests needed while iterating.
+
+The pre-commit hook may apply formatting fixes and then abort the commit with `Files were probably changed by precommit script`. In that case, review the changes, stage the affected files again with `git add`, and repeat the commit.
 
 ## Modifying .project.yaml files
 
