@@ -95,6 +95,13 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		switch request.OperationName {
 		case "BrowseServices":
 			data = map[string]any{"searchOnline": false, "recipeEditOnline": false, "ratingsOnline": false}
+		case "BrowseControls":
+			data = map[string]any{
+				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
+				"recipeEditOnline": editOnline.Load(),
+			}
+		case "BrowseIdentity":
+			data = map[string]any{"myCapabilities": map[string]any{"role": "owner"}}
 		case "Overview":
 			data = map[string]any{
 				"recipes": []any{map[string]any{
@@ -131,7 +138,17 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			}
 			data = map[string]any{"recipe": recipe}
 		case "RecipeControls":
-			data = map[string]any{"recipeEditOnline": editOnline.Load(), "imagesOnline": false, "imageEditOnline": false}
+			data = map[string]any{
+				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
+				"recipeEditOnline": editOnline.Load(), "imagesOnline": false, "imageEditOnline": false,
+			}
+		case "RatingCapabilities":
+			data = map[string]any{"myCapabilities": map[string]any{"role": "member", "canRate": true}}
+		case "RecipeRating":
+			data = map[string]any{
+				"myCapabilities": map[string]any{"role": "member", "canRate": true},
+				"recipe":         map[string]any{"id": "42", "rating": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 5}},
+			}
 		case "RecipeInspirations":
 			var recipe any
 			if !deleted.Load() {
@@ -143,7 +160,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			}
 			data = map[string]any{"recipe": recipe, "inspirationsOnline": inspirationsOnline.Load()}
 		case "RateRecipe":
-			data = map[string]any{"rate": map[string]any{"recipeId": "42", "average": 5, "count": 3}}
+			data = map[string]any{"rate": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 5}}
 			version.Add(1)
 		default:
 			t.Errorf("unexpected operation: %s", request.OperationName)
@@ -155,13 +172,16 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	defer upstream.Close()
 	client := graphql.NewClient(upstream.URL, upstream.Client())
 	c := testCache(t, func(ctx context.Context, id string) ([]byte, error) { return renderRecipe(ctx, client, id) })
-	handler := newHandler(client, c)
+	handler := newHandlerWithEndpoint(client, c, upstream.URL)
 	request := func(method, path, etag string) *httptest.ResponseRecorder {
 		t.Helper()
 		form := url.Values{"rating": {"5"}}.Encode()
 		r := httptest.NewRequest(method, path, strings.NewReader(form))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.Header.Set("If-None-Match", etag)
+		if method == "POST" {
+			r.Header.Set("Origin", "http://example.com")
+		}
 		if strings.Contains(path, "variant=2") {
 			r.Header.Set("HX-Request", "true")
 		}
@@ -193,7 +213,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatal("shared page does not separate live content or contains user data")
 	}
 	etag := first.Header().Get("ETag")
-	if etag == "" || first.Header().Get("Cache-Control") != "private, no-cache" {
+	if etag == "" || first.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatal("missing browser revalidation headers")
 	}
 	if second := request("GET", "/recipe/42?variant=2", "W/"+etag); second.Code != 304 || second.Body.Len() != 0 {

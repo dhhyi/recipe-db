@@ -14,21 +14,21 @@ Feature: ratings
     * match response.data == { rating: { recipeId: '1', average: 0, count: 0 } }
 
   Scenario: should execute rate
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2, login: 'test' } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2 } }
     * method post
     * status 200
     * match response.data == { rate: { average: 2, count: 1 } }
 
   Scenario: should have rating after multiple rates
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2, login: 'test1' } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2 } }
     * method post
     * status 200
 
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 3, login: 'test2' } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 3 } }
     * method post
     * status 200
 
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 5, login: 'test3' } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 5 } }
     * method post
     * status 200
 

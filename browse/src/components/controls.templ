@@ -1,0 +1,70 @@
+package components
+
+import gql "frontend/src/generated"
+import "fmt"
+
+templ BrowseControls(resp *gql.BrowseControlsResponse) {
+	<div id="browse-controls">
+		if resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline {
+			<a href="/edit/new" data-add-recipe class="contents" aria-label="Neues Rezept hinzufügen">
+				<article class="flex items-center justify-center" style="font-size: 3rem; text-decoration: none;">+</article>
+			</a>
+		}
+	</div>
+}
+
+templ BrowseIdentity(resp *gql.BrowseIdentityResponse) {
+	<nav id="browse-identity" aria-label="Anmeldung">
+		if resp.MyCapabilities.Role == "anonymous" {
+			<a href="/oauth2/start?rd=%2F">Anmelden</a>
+			<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
+		} else {
+			<span>{ resp.MyCapabilities.Role }</span>
+			<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
+		}
+	</nav>
+}
+
+templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
+	<div id={ "recipe-rating-" + id }>
+		if resp.MyCapabilities.CanRate && resp.Recipe != nil && resp.Recipe.Rating != nil {
+			@Rating(&resp.Recipe.Rating.Rating, true, nil, resp.Recipe.Rating.MyRating)
+			if resp.Recipe.Rating.MyRating != nil {
+				<p>Deine Bewertung: { fmt.Sprint(*resp.Recipe.Rating.MyRating) }</p>
+			}
+		} else if resp.MyCapabilities.Role == "anonymous" {
+			<p>Zum Bewerten bitte <a href="/oauth2/start?rd=%2F">anmelden</a>.</p>
+		}
+	</div>
+}
+
+templ RecipeRatingUnavailable() {
+	<div id="recipe-rating" role="status">
+		<p>Bewertung derzeit nicht verfügbar. <a href="/">Zurück zur Rezeptübersicht</a></p>
+	</div>
+}
+
+templ RatingSignInRequired() {
+	<div id="recipe-rating" role="status">
+		<p>Zum Bewerten bitte <a href="/oauth2/start?rd=%2F">anmelden</a>.</p>
+	</div>
+}
+
+templ BrowseIdentityUnavailable() {
+	<nav id="browse-identity" aria-label="Anmeldung" role="status">
+		<span>Anmeldung derzeit nicht verfügbar.</span>
+		<a href="/oauth2/start?rd=%2F">Anmelden</a>
+		<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
+	</nav>
+}
+
+templ RatingDeniedPage(status int) {
+	if status == 401 {
+		<p role="alert">Zum Bewerten ist eine Anmeldung erforderlich oder die Anmeldung ist abgelaufen.</p>
+		<a href="/oauth2/start?rd=%2F">Anmelden</a>
+		<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
+	} else {
+		<p role="alert">Dein Konto darf keine Bewertungen abgeben.</p>
+	}
+	<a href="/">Zurück zur Übersicht</a>
+}

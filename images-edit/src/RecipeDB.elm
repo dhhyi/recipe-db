@@ -1,7 +1,8 @@
-module RecipeDB exposing (RecipeData, RecipeModel, UploadModel, UploadedImage, decodeUpload, makeRecipeRequest, makeUploadRequest)
+module RecipeDB exposing (Capabilities, CapabilitiesModel, RecipeData, RecipeModel, UploadModel, UploadedImage, decodeUpload, makeCapabilitiesRequest, makeRecipeRequest, makeUploadRequest)
 
 import Api.Object exposing (Recipe)
 import Api.Object.ImageMetadata as ImageMetadata
+import Api.Object.MyCapabilities as MyCapabilities
 import Api.Object.Recipe as Recipe
 import Api.Query as Query
 import Api.Scalar exposing (Id(..))
@@ -24,6 +25,34 @@ type alias RecipeData =
 
 type alias RecipeModel =
     RemoteData (Graphql.Http.Error (Maybe RecipeData)) (Maybe RecipeData)
+
+
+type alias Capabilities =
+    { role : String
+    , canManageImages : Bool
+    }
+
+
+type alias CapabilitiesModel =
+    RemoteData (Graphql.Http.Error Capabilities) Capabilities
+
+
+makeCapabilitiesRequest : (CapabilitiesModel -> msg) -> Cmd msg
+makeCapabilitiesRequest targetMsg =
+    let
+        selection : SelectionSet Capabilities Api.Object.MyCapabilities
+        selection =
+            SelectionSet.map2 Capabilities
+                MyCapabilities.role
+                MyCapabilities.canManageImages
+
+        query : SelectionSet Capabilities RootQuery
+        query =
+            Query.myCapabilities selection
+    in
+    query
+        |> Graphql.Http.queryRequest "/graphql"
+        |> Graphql.Http.send (RemoteData.fromResult >> targetMsg)
 
 
 makeRecipeRequest : String -> (RecipeModel -> msg) -> Cmd msg
@@ -133,6 +162,12 @@ transportError error =
         Http.BadStatus 413 ->
             "Die Datei ist für den Server zu groß. Bitte ein kleineres Bild auswählen."
 
+        Http.BadStatus 401 ->
+            "authentication-required"
+
+        Http.BadStatus 403 ->
+            "forbidden"
+
         _ ->
             "Speichern fehlgeschlagen. Bitte später erneut versuchen."
 
@@ -181,6 +216,24 @@ decodeMetadata value =
 graphQLError : Decode.Value -> String
 graphQLError value =
     case Decode.decodeValue (Decode.at [ "extensions", "code" ] string) value of
+        Ok "authentication-required" ->
+            "authentication-required"
+
+        Ok "invalid-credentials" ->
+            "authentication-required"
+
+        Ok "invalid-auth-context" ->
+            "authentication-required"
+
+        Ok "mixed-auth-context" ->
+            "authentication-required"
+
+        Ok "forbidden" ->
+            "forbidden"
+
+        Ok "csrf-forbidden" ->
+            "forbidden"
+
         Ok "crop-out-of-bounds" ->
             "Der Zuschnitt liegt außerhalb des Bildes. Bitte den Zuschnitt anpassen und erneut speichern."
 

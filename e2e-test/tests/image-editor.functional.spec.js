@@ -1,4 +1,4 @@
-import { test, expect, graphql } from "./fixtures.js";
+import { test as base, expect, graphql } from "./fixtures.js";
 import {
   crop,
   drag,
@@ -16,6 +16,17 @@ import {
   sourceImage,
   uploadedCrop,
 } from "./image-editor.helpers.js";
+
+const test = base.extend({
+  context: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.browserContext);
+  },
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    await use(page);
+    await page.close();
+  },
+});
 
 test.beforeEach(async ({ page }) => {
   await observeUploads(page);

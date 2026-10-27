@@ -36,6 +36,9 @@ step msg model =
         GotRecipe recipe ->
             ( { model | recipe = recipe }, Cmd.none )
 
+        GotCapabilities capabilities ->
+            ( { model | capabilities = capabilities }, Cmd.none )
+
         GotFile file ->
             if model.phase == Viewing || model.phase == SavedOpen then
                 case Source.file (File.mime file) (File.size file) of

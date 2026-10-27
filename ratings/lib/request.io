@@ -12,6 +12,16 @@ Request setQuery := method(query,
     self atPut("query", CGI parseString(query))
 )
 
+Request setTarget := method(target,
+    separator := target findSeq("?")
+    if (separator,
+        setPath(target slice(0, separator))
+        setQuery(target slice(separator + 1)),
+        setPath(target)
+        setQuery("")
+    )
+)
+
 Request setPayload := method(payload,
     self atPut("payload", CGI parseString(payload))
 )

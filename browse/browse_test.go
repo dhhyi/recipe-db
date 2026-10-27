@@ -387,12 +387,8 @@ func TestBrowseHTTP(t *testing.T) {
 				if more && !strings.Contains(body, `href="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort=rating"`) {
 					t.Fatalf("missing ordinary GET pagination: %s", body)
 				}
-				wantAdd := 0
-				if !fullPageError && tc.editor && !tc.statusError {
-					wantAdd = 1
-				}
-				if strings.Count(body, "data-add-recipe") != wantAdd {
-					t.Fatal("add affordance missing, duplicated, or not service gated")
+				if strings.Contains(body, "data-add-recipe") {
+					t.Fatal("privileged add affordance must remain in the dynamic controls fragment")
 				}
 				if tc.kind == "search" && tc.hits == 0 && !strings.Contains(body, "Keine Rezepte gefunden.") {
 					t.Fatal("empty successful search not distinguished")

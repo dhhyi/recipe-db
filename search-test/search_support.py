@@ -102,7 +102,7 @@ class SearchSession:
         recipe_id = result["createRecipe"]["id"]
         self.ids.append(recipe_id)
         if rating is not None:
-            gql("mutation($id: ID!, $rating: Int!) { rate(id: $id, rating: $rating, login: \"search-test\") { count } }",
+            gql("mutation($id: ID!, $rating: Int!) { rate(id: $id, rating: $rating) { count } }",
                 {"id": recipe_id, "rating": rating})
         return recipe_id
 

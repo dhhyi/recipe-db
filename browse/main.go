@@ -22,6 +22,8 @@ import (
 	gql "frontend/src/generated"
 )
 
+const graphqlEndpoint = "http://traefik/graphql"
+
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
 	if err != nil {
@@ -75,7 +77,53 @@ func writeErrorPage(w http.ResponseWriter, r *http.Request, status int, title, m
 	}
 }
 
+func writeRatingDeniedPage(w http.ResponseWriter, r *http.Request, status int) {
+	ctx := templ.WithChildren(r.Context(), components.RatingDeniedPage(status))
+	var body bytes.Buffer
+	if err := components.Layout("Bewertung nicht möglich | RezeptDB").Render(ctx, &body); err != nil {
+		http.Error(w, "Bewertung nicht möglich", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Del("ETag")
+	if r.Header.Get("HX-Request") == "true" || r.Header.Get("HX-Boosted") == "true" ||
+		r.Header.Get("HX-History-Restore-Request") == "true" {
+		w.Header().Set("X-Browse-Full-Page-Error", "true")
+		w.Header().Set("HX-Retarget", "main")
+		w.Header().Set("HX-Reswap", "innerHTML")
+		w.Header().Set("HX-Reselect", "main > *")
+	}
+	w.WriteHeader(status)
+	if r.Method != http.MethodHead {
+		if _, err := w.Write(body.Bytes()); err != nil {
+			log.Printf("failed to serve rating denial: %v", err)
+		}
+	}
+}
+
+func ratingAuthorizationStatus(err error, upstreamStatus int) int {
+	if upstreamStatus == http.StatusUnauthorized || upstreamStatus == http.StatusForbidden {
+		return upstreamStatus
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "authentication required"),
+		strings.Contains(message, "invalid credentials"):
+		return http.StatusUnauthorized
+	case strings.Contains(message, "forbidden"),
+		strings.Contains(message, "cross-origin mutation rejected"):
+		return http.StatusForbidden
+	default:
+		return 0
+	}
+}
+
 func newHandler(client graphql.Client, cache *pageCache) http.Handler {
+	return newHandlerWithEndpoint(client, cache, graphqlEndpoint)
+}
+
+func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", browseHandler(client))
 
@@ -89,6 +137,10 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !sameOriginRequest(r) {
+			http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+			return
+		}
 		rating := r.FormValue("rating")
 		if rating == "" {
 			http.Error(w, "missing rating", http.StatusBadRequest)
@@ -100,11 +152,15 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 			return
 		}
 
-		login := "test"
-		resp, err := gql.RateRecipe(r.Context(), client, id, ratingInt, login)
+		client, upstreamStatus := requestScopedClient(endpoint, r, w)
+		resp, err := gql.RateRecipe(r.Context(), client, id, ratingInt)
 		if err != nil {
 			log.Printf("failed to rate recipe: %v", err)
-			http.Error(w, "failed to rate recipe", http.StatusInternalServerError)
+			if status := ratingAuthorizationStatus(err, *upstreamStatus); status != 0 {
+				writeRatingDeniedPage(w, r, status)
+			} else {
+				writeErrorPage(w, r, http.StatusBadGateway, "Bewertung nicht möglich | RezeptDB", "Die Bewertung konnte derzeit nicht gespeichert werden.")
+			}
 			return
 		}
 		if err := cache.invalidate(id); err != nil {
@@ -112,17 +168,41 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 			http.Error(w, "rating saved but cache invalidation failed", http.StatusInternalServerError)
 			return
 		}
-		templ.Handler(components.Rating(&resp.Rate, true, nil)).ServeHTTP(w, r)
+		templ.Handler(components.Rating(&resp.Rate.Rating, true, nil, resp.Rate.MyRating)).ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("/recipe/{id}/controls", func(w http.ResponseWriter, r *http.Request) {
+		client, _ := requestScopedClient(endpoint, r, w)
 		resp, err := gql.RecipeControls(r.Context(), client)
 		if err != nil {
 			log.Printf("failed to fetch recipe controls: %v", err)
-			http.Error(w, "failed to fetch recipe controls", http.StatusInternalServerError)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		templ.Handler(components.RecipeControls(r.PathValue("id"), resp)).ServeHTTP(w, r)
+	})
+
+	mux.HandleFunc("/recipe/{id}/rating", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		client, _ := requestScopedClient(endpoint, r, w)
+		capabilities, err := gql.RatingCapabilities(r.Context(), client)
+		if err != nil {
+			log.Printf("failed to fetch rating capabilities: %v", err)
+			templ.Handler(components.RecipeRatingUnavailable()).ServeHTTP(w, r)
+			return
+		}
+		if !capabilities.MyCapabilities.CanRate {
+			templ.Handler(components.RatingSignInRequired()).ServeHTTP(w, r)
+			return
+		}
+		client, _ = requestScopedClient(endpoint, r, w)
+		resp, err := gql.RecipeRating(r.Context(), client, id)
+		if err != nil {
+			log.Printf("failed to fetch own rating: %v", err)
+			templ.Handler(components.RecipeRatingUnavailable()).ServeHTTP(w, r)
+			return
+		}
+		templ.Handler(components.RecipeRatingControls(id, resp)).ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("/recipe/{id}/inspirations", func(w http.ResponseWriter, r *http.Request) {
@@ -140,13 +220,35 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 		templ.Handler(components.InspirationsLazy(resp)).ServeHTTP(w, r)
 	})
 
+	mux.HandleFunc("/controls", func(w http.ResponseWriter, r *http.Request) {
+		client, _ := requestScopedClient(endpoint, r, w)
+		resp, err := gql.BrowseControls(r.Context(), client)
+		if err != nil {
+			log.Printf("failed to fetch browse controls: %v", err)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		templ.Handler(components.BrowseControls(resp)).ServeHTTP(w, r)
+	})
+
+	mux.HandleFunc("/identity", func(w http.ResponseWriter, r *http.Request) {
+		client, _ := requestScopedClient(endpoint, r, w)
+		resp, err := gql.BrowseIdentity(r.Context(), client)
+		if err != nil {
+			log.Printf("failed to fetch browse identity: %v", err)
+			templ.Handler(components.BrowseIdentityUnavailable()).ServeHTTP(w, r)
+			return
+		}
+		templ.Handler(components.BrowseIdentity(resp)).ServeHTTP(w, r)
+	})
+
 	mux.HandleFunc("GET /recipe/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if id == "" {
 			http.Error(w, "missing id", http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Cache-Control", "private, no-cache")
+		w.Header().Set("Cache-Control", "private, no-store")
 		page, err := cache.get(r.Context(), id)
 		if err != nil {
 			log.Printf("failed to fetch recipe: %v", err)
@@ -201,7 +303,7 @@ func run() error {
 	if url == "" {
 		return errors.New("NATS_URL environment variable not set")
 	}
-	client := graphql.NewClient("http://traefik/graphql", &http.Client{Timeout: 10 * time.Second})
+	client := graphql.NewClient(graphqlEndpoint, &http.Client{Timeout: 10 * time.Second})
 	cache, err := newPageCache(cacheDir, cacheTTL, cacheMaxBytes, func(ctx context.Context, id string) ([]byte, error) {
 		return renderRecipe(ctx, client, id)
 	})
@@ -215,7 +317,7 @@ func run() error {
 		defer close(busDone)
 		cache.watchEvents(ctx, url)
 	}()
-	server := &http.Server{Addr: ":3000", Handler: newHandler(client, cache), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: ":3000", Handler: newHandlerWithEndpoint(client, cache, graphqlEndpoint), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

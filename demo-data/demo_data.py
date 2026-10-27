@@ -104,18 +104,15 @@ def file_exists(file):
         return False
 
 
-async def rate_recipe(recipe_id, rating, user):
-    print(f"Rating recipe {recipe_id} with {rating} by {user}")
-    result = await client.add_rating(recipe_id, rating, user)
+async def rate_recipe(recipe_id, rating):
+    print(f"Rating recipe {recipe_id} with {rating}")
+    result = await client.add_rating(recipe_id, rating)
     print(f"-> {result}")
 
 
 async def random_rate_recipe(recipe_id):
-    users = ["joe", "jane", "bob", "alice", "eve"]
-
-    random_users = random.sample(users, random.randint(0, 3))
-    for user in random_users:
-        await rate_recipe(recipe_id, random.randint(1, 5), user)
+    if random.randint(0, 3) > 0:
+        await rate_recipe(recipe_id, random.randint(1, 5))
 
 
 async def insert_recipe(number):
@@ -149,7 +146,7 @@ async def main():
 
         recipe_id = await insert_recipe(1)
         await maybe_add_image(1, recipe_id)
-        await rate_recipe(recipe_id, 4, "jane")
+        await rate_recipe(recipe_id, 4)
 
         recipe_id = await insert_recipe(2)
         await maybe_add_image(2, recipe_id)

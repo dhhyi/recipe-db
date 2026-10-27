@@ -91,6 +91,9 @@ pub struct ImagesMutation;
 #[Object]
 impl ImagesMutation {
     async fn delete_images_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ResetForTesting)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<ImagesApi>()?
             .delete_images_for_testing(ctx.data::<EventPublisher>()?)
             .await
@@ -103,6 +106,9 @@ impl ImagesMutation {
         file: Upload,
         crop: Option<ImageCropInput>,
     ) -> Result<ImageMetadata, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ManageImages)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         let mut upload = file.value(ctx)?;
         let mimetype = upload
             .content_type

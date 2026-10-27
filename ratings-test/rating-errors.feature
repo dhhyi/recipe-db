@@ -18,21 +18,21 @@ Feature: Basic test for setting errornous ratings
     * match response.code == "missing-field"
     * match response.field == "rating"
 
-  Scenario: adding rating without login should fail
+  Scenario: adding rating without user ID should fail
     * url backend
     * path 'ratings/1'
     * form field rating = 5
     * method put
-    # * status 400
-    * match response.detail == "Missing login"
+    * status 400
+    * match response.detail == "Missing userId"
     * match response.code == "missing-field"
-    * match response.field == "login"
+    * match response.field == "userId"
 
   Scenario Outline: adding "<rating>" as rating should fail
     * url backend
     * path 'ratings/1'
     * form field rating = <rating>
-    * form field login = 'test'
+    * form field userId = 'token:v1:test'
     * method put
     * status 400
     * match response.detail == "Invalid rating"

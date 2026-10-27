@@ -14,25 +14,25 @@ Feature: All Ratings Endpoint
 
     * path 'ratings/1'
     * form field rating = 4
-    * form field login = 'user1'
+    * form field userId = 'token:v1:user1'
     * method put
     * status 200
 
     * path 'ratings/1'
     * form field rating = 3
-    * form field login = 'user2'
+    * form field userId = 'token:v1:user2'
     * method put
     * status 200
 
     * path 'ratings/2'
     * form field rating = 5
-    * form field login = 'user1'
+    * form field userId = 'token:v1:user1'
     * method put
     * status 200
 
     * path 'ratings/3'
     * form field rating = 3
-    * form field login = 'user2'
+    * form field userId = 'token:v1:user2'
     * method put
     * status 200
 

@@ -21,6 +21,7 @@ templ Layout(title string) {
 		</head>
 		<body class="container">
 			<header-component></header-component>
+			<div hx-get="/identity" hx-trigger="load" hx-swap="outerHTML"></div>
 			<main>
 				{ children... }
 			</main>

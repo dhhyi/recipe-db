@@ -1,12 +1,24 @@
 import {
-  test,
+  test as base,
   expect,
+  graphql,
   waitForRecipeIndexed,
   waitForRecipePageHeading,
   waitForRecipePageText,
 } from "./fixtures.js";
 import { fileURLToPath } from "node:url";
 import { crop, drag, handle, saveButton } from "./image-editor.helpers.js";
+
+const test = base.extend({
+  context: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.browserContext);
+  },
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    await use(page);
+    await page.close();
+  },
+});
 
 test("browse seeded recipes, open a recipe and return home", async ({
   page,
@@ -117,6 +129,109 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
   } finally {
     await context.close();
   }
+});
+
+test("members rate the same recipe independently and replace their own vote", async ({
+  authContexts,
+  baseURL,
+  ownerIdentity,
+}) => {
+  const memberOne = await authContexts.memberOne();
+  const memberTwo = await authContexts.memberTwo();
+  const anonymous = await authContexts.anonymous();
+  const { createRecipe: recipe } = await graphql(
+    ownerIdentity.api,
+    "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }",
+    { value: { name: "E2E independent ratings" } },
+    "Create recipe for independent ratings",
+  );
+  const readRating = async (identity, includeVote = true) =>
+    graphql(
+      identity.api,
+      `query($id: ID!) { rating(id: $id) { average count${includeVote ? " myRating" : ""} } }`,
+      { id: recipe.id },
+      "Read recipe ratings",
+    );
+  const rateInBrowser = async (identity, rating, expectedCount) => {
+    const page = await identity.browserContext.newPage();
+    try {
+      const fragmentResponse = page.waitForResponse(
+        (response) =>
+          response.url().endsWith(`/recipe/${recipe.id}/rating`) &&
+          response.request().method() === "GET",
+      );
+      await page.goto(`${baseURL}/recipe/${recipe.id}`);
+      const response = await fragmentResponse;
+      expect(response.headers()["cache-control"]).toBe("no-store");
+      const widget = page.locator(
+        `#recipe-rating-${recipe.id} rating-component`,
+      );
+      await expect(widget).toBeVisible();
+      await expect(widget).toHaveAttribute(
+        "hx-post",
+        `/recipe/${recipe.id}/rate`,
+      );
+      await widget
+        .locator("svg")
+        .nth(rating - 1)
+        .click();
+      await expect(widget).toHaveAttribute("rating", String(rating));
+      await expect(widget).toContainText(`(${expectedCount})`);
+    } finally {
+      await page.close();
+    }
+  };
+
+  const shell = await anonymous.api.get(`/recipe/${recipe.id}`);
+  const shellHtml = await shell.text();
+  expect(shell.ok()).toBe(true);
+  expect(shellHtml).toContain("AggregateRating");
+  expect(shellHtml).not.toContain("Deine Bewertung");
+  expect(shellHtml).not.toContain("Rezept bearbeiten");
+
+  const memberOneBefore = await readRating(memberOne);
+  expect(memberOneBefore.rating).toEqual({
+    average: 0,
+    count: 0,
+    myRating: null,
+  });
+  const memberTwoBefore = await readRating(memberTwo);
+  expect(memberTwoBefore.rating.myRating).toBeNull();
+
+  await rateInBrowser(memberOne, 5, 1);
+  expect((await readRating(memberOne)).rating).toEqual({
+    average: 5,
+    count: 1,
+    myRating: 5,
+  });
+  expect((await readRating(memberTwo)).rating).toEqual({
+    average: 5,
+    count: 1,
+    myRating: null,
+  });
+
+  await rateInBrowser(memberOne, 3, 1);
+  expect((await readRating(memberOne)).rating).toEqual({
+    average: 3,
+    count: 1,
+    myRating: 3,
+  });
+
+  await rateInBrowser(memberTwo, 5, 2);
+  expect((await readRating(memberOne)).rating).toEqual({
+    average: 4,
+    count: 2,
+    myRating: 3,
+  });
+  expect((await readRating(memberTwo)).rating).toEqual({
+    average: 4,
+    count: 2,
+    myRating: 5,
+  });
+  expect((await readRating(anonymous, false)).rating).toEqual({
+    average: 4,
+    count: 2,
+  });
 });
 
 test("create a recipe in the editor and find it in the overview", async ({

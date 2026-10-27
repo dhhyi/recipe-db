@@ -256,6 +256,12 @@ export const test = base.extend({
     });
     await Promise.all(contexts.map((context) => context.close()));
   },
+  ownerIdentity: async ({ authContexts }, use) => {
+    await use(await authContexts.owner());
+  },
+  request: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.api);
+  },
   resetApplicationData: [
     async ({ request }, use) => {
       await resetApplicationData(request);

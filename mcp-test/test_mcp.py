@@ -184,7 +184,7 @@ async def test_add_rating_updates_the_recipe_rating():
     async with mcp_session() as session:
         recipe_id = await create_recipe(session, "Rating Test Recipe")
         result = await session.call_tool(
-            "add_rating", {"recipeId": recipe_id, "rating": 5, "login": "mcp-test"}
+            "add_rating", {"recipeId": recipe_id, "rating": 5}
         )
         payload = json.loads(result.content[0].text)
         assert payload["average"] > 0

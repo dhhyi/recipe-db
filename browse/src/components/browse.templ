@@ -8,7 +8,7 @@ import "strconv"
 type BrowseState struct {
 	Query, Sort, Kind, Message  string
 	Page, PerPage, Found        int
-	EditorOnline, RatingsOnline bool
+	RatingsOnline               bool
 	Recipes                     []gql.RecipeStub
 	NextURL                     string
 	SeenIDs                     []string
@@ -77,7 +77,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 			}
 			if ratingsOnline && item.Rating != nil {
 				{{ slot := "rating" }}
-				@Rating(item.Rating, false, &slot)
+				@Rating(item.Rating, false, &slot, nil)
 			}
 		</recipe-tile-component>
 	</a>
@@ -87,6 +87,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 // whose form value attributes may predate the last search.
 templ Browse(state BrowseState) {
 	<div id="browse-content" data-browse-search hx-history="false" hx-on::send-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on::response-error="htmx.trigger(this, 'browse-error', event.detail)" hx-on:browse-error="const target = event.detail.target, status = this.querySelector('#browse-metadata'); if (target.id === 'browse-results') { target.querySelector('[data-recipe-list]').replaceChildren(); status.dataset.kind = 'error'; status.textContent = 'Rezepte konnten nicht geladen werden.'; document.title = 'Rezepte konnten nicht geladen werden | RezeptDB'; } else if (target.id === 'browse-pagination') { status.textContent = 'Weitere Rezepte konnten nicht geladen werden.'; target.querySelector('[data-load-more]').textContent = 'Erneut versuchen'; }">
+		<div hx-get="/controls" hx-trigger="load" hx-swap="outerHTML"></div>
 		@browseHeading(state, nil)
 		<form id="browse-form" action="/" method="get" hx-get="/" hx-target="#browse-results" hx-swap="outerHTML show:none" hx-sync="this:replace" hx-trigger="input[!event.isComposing] delay:300ms, compositionend delay:300ms, change[!event.target.closest('form').dataset.composing] from:#browse-sort, submit[!event.target.dataset.composing]" hx-on:input="htmx.trigger(this, 'htmx:abort')" hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')" hx-on:compositionend="delete this.dataset.composing" hx-on::config-request="if (this.dataset.composing) event.preventDefault()" class="my-3 grid! grid-cols-1 md:grid-cols-2 md:gap-3">
 			<fieldset role="search">
@@ -133,11 +134,6 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 				}
 				@browsePagination(state)
 			</div>
-			if state.EditorOnline {
-				<a href="/edit/new" data-add-recipe class="contents" aria-label="Neues Rezept hinzufügen">
-					<article class="flex items-center justify-center" style="font-size: 3rem; text-decoration: none;">+</article>
-				</a>
-			}
 		</div>
 	</section>
 }

@@ -4,7 +4,7 @@ use std::fs;
 use std::marker::PhantomData;
 use std::path::Path;
 
-use async_graphql::{Error, ErrorExtensions};
+use async_graphql::{Context, Error, ErrorExtensions, Object, SimpleObject};
 use axum::http::{HeaderMap, HeaderValue};
 use serde::de::{value::MapAccessDeserializer, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -33,6 +33,14 @@ impl Role {
             "member" => Some(Self::Member),
             "owner" => Some(Self::Owner),
             _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Anonymous => "anonymous",
+            Self::Member => "member",
+            Self::Owner => "owner",
         }
     }
 }
@@ -134,6 +142,7 @@ pub enum Capability {
     ManageRecipes,
     ManageImports,
     ManageImages,
+    ResetForTesting,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -152,7 +161,10 @@ impl RequestContext {
             Role::Owner => true,
             Role::Member => !matches!(
                 capability,
-                Capability::ManageRecipes | Capability::ManageImports | Capability::ManageImages
+                Capability::ManageRecipes
+                    | Capability::ManageImports
+                    | Capability::ManageImages
+                    | Capability::ResetForTesting
             ),
             Role::Anonymous => matches!(
                 capability,
@@ -169,6 +181,33 @@ impl RequestContext {
         } else {
             Err(AuthorizationError::forbidden())
         }
+    }
+}
+
+#[derive(SimpleObject)]
+#[graphql(rename_fields = "camelCase")]
+pub struct MyCapabilities {
+    role: String,
+    can_rate: bool,
+    can_manage_recipes: bool,
+    can_manage_imports: bool,
+    can_manage_images: bool,
+}
+
+#[derive(Default)]
+pub struct AuthQuery;
+
+#[Object]
+impl AuthQuery {
+    async fn my_capabilities(&self, ctx: &Context<'_>) -> Result<MyCapabilities, Error> {
+        let request = ctx.data::<RequestContext>()?;
+        Ok(MyCapabilities {
+            role: request.principal().role().as_str().to_owned(),
+            can_rate: request.require(Capability::WriteRatings).is_ok(),
+            can_manage_recipes: request.require(Capability::ManageRecipes).is_ok(),
+            can_manage_imports: request.require(Capability::ManageImports).is_ok(),
+            can_manage_images: request.require(Capability::ManageImages).is_ok(),
+        })
     }
 }
 
@@ -1053,6 +1092,7 @@ mod tests {
             Capability::ManageRecipes,
             Capability::ManageImports,
             Capability::ManageImages,
+            Capability::ResetForTesting,
         ];
         for (headers, role) in cases {
             let context = auth_policy.request_context(&headers).unwrap();
@@ -1065,6 +1105,7 @@ mod tests {
                         Capability::ManageRecipes
                             | Capability::ManageImports
                             | Capability::ManageImages
+                            | Capability::ResetForTesting
                     ),
                     Role::Anonymous => matches!(
                         capability,

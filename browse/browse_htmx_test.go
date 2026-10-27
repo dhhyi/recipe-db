@@ -150,7 +150,7 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 				return
 			}
 			if response.Code != 200 || len(pages) != 3 || pages[0] != 1 || pages[1] != 2 || pages[2] != 3 ||
-				strings.Count(body, "data-recipe-id=") != 4 || strings.Count(body, "data-add-recipe") != 1 ||
+				strings.Count(body, "data-recipe-id=") != 4 || strings.Contains(body, "data-add-recipe") ||
 				!strings.Contains(body, `data-page="3" data-per-page="24" data-found="49"`) ||
 				!strings.Contains(body, "<title>49 Rezepte für 'Apfel' | RezeptDB</title>") {
 				t.Fatalf("cumulative deduplicated depth not restored: pages=%v response=%d %s", pages, response.Code, body)

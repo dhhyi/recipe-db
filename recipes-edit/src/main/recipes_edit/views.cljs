@@ -126,13 +126,34 @@
 
 (defn app []
   (let [{:keys [route status feedback] :as state} @(rf/subscribe [::subs/state])]
-    (case (:page route)
-      :new [:<> [:h1 "Neues Rezept"] [recipe-form state]]
-      :edit [:<>
-             [:h1 "Rezept bearbeiten"]
-             (case status
-               :loading [:<> [:p {:role "status"} "Lädt…"] [return-action state]]
-               :not-found [:<> [:p "Rezept nicht gefunden."] [return-action state]]
-               :error [:<> [:p.feedback.error {:role "alert"} (:message feedback)] [return-action state]]
-               [recipe-form state])]
+    (case (:authorization state)
+      :loading [:<> [:h1 "Zugriff wird geprüft"] [:p {:role "status"} "Bitte warten …"] [return-action state]]
+      :authentication-required
+      [:<>
+       [:h1 "Anmeldung erforderlich"]
+       [:p.feedback.error {:role "alert"} "Zum Bearbeiten von Rezepten ist eine Anmeldung erforderlich."]
+       [:a {:href "/oauth2/start?rd=%2F"} "Mit Google anmelden"]
+       [return-action state]]
+      :forbidden
+      [:<>
+       [:h1 "Keine Berechtigung"]
+       [:p.feedback.error {:role "alert"} "Dein Konto darf Rezepte nicht bearbeiten."]
+       [return-action state]]
+      :error
+      [:<>
+       [:h1 "Zugriff nicht verfügbar"]
+       [:p.feedback.error {:role "alert"} (:authorization-message state)]
+       [:a {:href "/oauth2/start?rd=%2F"} "Anmelden"]
+       [return-action state]]
+      :allowed
+      (case (:page route)
+        :new [:<> [:h1 "Neues Rezept"] [recipe-form state]]
+        :edit [:<>
+               [:h1 "Rezept bearbeiten"]
+               (case status
+                 :loading [:<> [:p {:role "status"} "Lädt…"] [return-action state]]
+                 :not-found [:<> [:p "Rezept nicht gefunden."] [return-action state]]
+                 :error [:<> [:p.feedback.error {:role "alert"} (:message feedback)] [return-action state]]
+                 [recipe-form state])]
+        "Page not found.")
       "Page not found.")))

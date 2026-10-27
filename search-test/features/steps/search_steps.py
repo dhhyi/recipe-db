@@ -311,5 +311,5 @@ def preserved_metadata(context):
 
 @when('I change only the rating of "{recipe}"')
 def rate_only(context, recipe):
-    gql('mutation($id: ID!) { rate(id: $id, rating: 2, login: "search-test") { count } }',
+    gql('mutation($id: ID!) { rate(id: $id, rating: 2) { count } }',
         {"id": context.recipes[recipe]})

@@ -5,7 +5,7 @@ import (
 	"frontend/src/generated"
 )
 
-templ Rating(rating *gql.Rating, ratingPossible bool, slot *string) {
+templ Rating(rating *gql.Rating, ratingPossible bool, slot *string, myRating *int) {
 	{{
 		ratingValue := ""
 		if rating.Average != nil {
@@ -31,7 +31,9 @@ templ Rating(rating *gql.Rating, ratingPossible bool, slot *string) {
 			<meta itemprop="ratingCount" content={ ratingCount }/>
 		}
 		<rating-component
-			if rating.Average != nil {
+			if ratingPossible && myRating != nil {
+				rating={ *myRating }
+			} else if !ratingPossible && rating.Average != nil {
 				rating={ *rating.Average }
 			}
 			if rating.Count != nil {

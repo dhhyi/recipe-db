@@ -36,11 +36,11 @@ Feature: integration
     * def recipeId = response.data.createRecipe.id
     * match recipeId == '#present'
 
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(recipeId)', login: 'user1', rating: 5 } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(recipeId)', rating: 5 } }
     * method post
     * status 200
 
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(recipeId)', login: 'user2', rating: 4 } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(recipeId)', rating: 4 } }
     * method post
     * status 200
 

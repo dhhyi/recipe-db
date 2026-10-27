@@ -20,7 +20,12 @@ templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 }
 
 templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
-	@editFields(id, resp.RecipeEditOnline, resp.ImagesOnline, resp.ImageEditOnline)
+	@editFields(
+		id,
+		resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline,
+		resp.ImagesOnline,
+		resp.MyCapabilities.CanManageImages && resp.ImageEditOnline,
+	)
 }
 
 templ image(recipe *gql.RecipeDetail) {
@@ -85,16 +90,17 @@ templ method(recipe *gql.RecipeDetail) {
 
 templ Detail(resp *gql.RecipeByIdResponse) {
 	{{ recipe := resp.Recipe }}
-	<div itemscope itemtype="https://schema.org/Recipe" class="contents">
+	<div itemscope itemtype="https://schema.org/Recipe" class="contents" hx-history="false">
 		<div class="flex flex-col sm:flex-row pt-1">
 			<hgroup>
 				<h1 itemprop="name">{ recipe.Name }</h1>
 				if recipe.Rating != nil {
-					@Rating(recipe.Rating, true, nil)
+					@Rating(recipe.Rating, false, nil, nil)
 				}
 			</hgroup>
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
+		<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML"></div>
 		<section class="grid">
 			if recipe.Image != nil {
 				@image(recipe)

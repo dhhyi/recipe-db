@@ -32,12 +32,23 @@ DB openOrCreate := method(
 DB initialize := method(
     openOrCreate
 
+    tables := exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';")
+    if (tables size > 0,
+        hasUserId := false
+        exec("PRAGMA table_info(Ratings);") foreach(row,
+            if (row at("name") == "userId", hasUserId = true)
+        )
+        if (hasUserId == false,
+            writeln("Recreating ratings with stable user IDs")
+            exec("DROP TABLE Ratings;")
+        )
+    )
     if (exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';") size == 0,
         exec("CREATE TABLE Ratings (
                 key varchar(100) NOT NULL,
-                login varchar(100) NOT NULL,
+                userId varchar(500) NOT NULL,
                 value int NOT NULL,
-                CONSTRAINT pk PRIMARY KEY (key, login)
+                CONSTRAINT pk PRIMARY KEY (key, userId)
         );")
         checkNoError
     )
@@ -51,7 +62,8 @@ DB clear := method(
 )
 
 DB getAverageRating := method(id,
-    result := exec("SELECT AVG(value), COUNT(value) FROM Ratings WHERE key='" .. id .. "';") at(0)
+    safeId := id asString replaceSeq("'", "''")
+    result := exec("SELECT AVG(value), COUNT(value) FROM Ratings WHERE key='" .. safeId .. "';") at(0)
     checkNoError
     count := result at("COUNT(value)") asNumber
     rawRating := result at("AVG(value)")
@@ -65,9 +77,19 @@ DB getAllAverageRatings := method(
     return result map(row, formatSingle(row at("key"), row at("AVG(value)") asNumber, row at("COUNT(value)") asNumber))
 )
 
-DB addRating := method(id, rating, login,
-    exec("INSERT OR REPLACE INTO Ratings (key, login, value)
-          VALUES ('" .. id .. "', '" .. login .. "', " .. rating .. ");")
+DB getUserRating := method(id, userId,
+    safeId := id asString replaceSeq("'", "''")
+    safeUserId := userId asString replaceSeq("'", "''")
+    result := exec("SELECT value FROM Ratings WHERE key='" .. safeId .. "' AND userId='" .. safeUserId .. "';")
+    checkNoError
+    return if (result size == 0, nil, result at(0) at("value") asNumber)
+)
+
+DB addRating := method(id, rating, userId,
+    safeId := id asString replaceSeq("'", "''")
+    safeUserId := userId asString replaceSeq("'", "''")
+    exec("INSERT OR REPLACE INTO Ratings (key, userId, value)
+          VALUES ('" .. safeId .. "', '" .. safeUserId .. "', " .. rating .. ");")
     checkNoError
     return getAverageRating(id)
 )
