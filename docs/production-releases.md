@@ -55,7 +55,7 @@ export DOCKER_CONFIG="$(mktemp -d)"
 printf '{}\n' > "$DOCKER_CONFIG/config.json"
 ```
 
-The workflow also pulls each image platform and the artifact anonymously before treating publication as complete. It logs the verified image digests and exact release-artifact digest. Native AMD64 and ARM64 runners also start the production `design` image and check its `/health` endpoint.
+The workflow also pulls each image platform and the artifact anonymously before treating publication as complete. Platform verification pulls and inspects the individual manifest digests from each index, avoiding Docker image-store conflicts when pulling both platforms under one index reference. It logs the verified image digests and exact release-artifact digest. Native AMD64 and ARM64 runners also start the production `design` image and check its `/health` endpoint.
 
 ## GHCR access and permissions
 

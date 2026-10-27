@@ -20,13 +20,24 @@ verify_release_images_anonymously() (
       sh "$verify_project_root/.scripts/validate-production-image-index.sh" "$verify_manifest"
 
       for platform in linux/amd64 linux/arm64; do
+        if ! verify_platform_digest=$(jq -er --arg architecture "${platform#linux/}" '
+          [.manifests[]
+            | select(.platform.os == "linux" and .platform.architecture == $architecture)
+            | .digest]
+          | if length == 1 then .[0] else null end
+          | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
+        ' "$verify_manifest"); then
+          echo "$image must contain exactly one valid manifest digest for $platform" >&2
+          exit 1
+        fi
+        verify_platform_image="${image%@*}@$verify_platform_digest"
         if ! env HOME="$verify_directory/home" DOCKER_CONFIG="$verify_directory/docker" \
-          docker pull --platform "$platform" "$image" >&2; then
+          docker pull --platform "$platform" "$verify_platform_image" >&2; then
           echo "could not anonymously pull $platform image $image" >&2
           exit 1
         fi
         verify_image_revision=$(env HOME="$verify_directory/home" DOCKER_CONFIG="$verify_directory/docker" \
-          docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
+          docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$verify_platform_image")
         if [ "$verify_image_revision" != "$verify_revision" ]; then
           echo "$image $platform has revision '$verify_image_revision', expected '$verify_revision'" >&2
           exit 1

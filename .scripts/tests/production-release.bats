@@ -62,8 +62,8 @@ mock_public_image_verification() {
 {
   "schemaVersion": 2,
   "manifests": [
-    {"platform":{"os":"linux","architecture":"amd64"}},
-    {"platform":{"os":"linux","architecture":"arm64"}},
+    {"platform":{"os":"linux","architecture":"amd64"},"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    {"platform":{"os":"linux","architecture":"arm64"},"digest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
     {"platform":{"os":"unknown","architecture":"unknown"}}
   ]
 }
@@ -297,6 +297,44 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"Reusing release inventory:"* ]]
   run grep -q '^push ' "$MOCK_LOG"
+  [ "$status" -eq 1 ]
+}
+
+@test "anonymous verification pulls and inspects distinct platform manifests" {
+  write_valid_release
+  mock_public_image_verification
+  source .scripts/lib/release-validation.sh
+
+  run verify_release_images_anonymously release.json "$REVISION" "$PWD"
+
+  [ "$status" -eq 0 ]
+  for project in api backend frontend; do
+    for architecture in amd64 arm64; do
+      case "$architecture" in
+        amd64) digest=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ;;
+        arm64) digest=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
+      esac
+      image="ghcr.io/dhhyi/recipe-db-$project@sha256:$digest"
+      grep -Fx "pull --platform linux/$architecture $image" "$MOCK_LOG"
+      grep -Fx "image inspect --format {{ index .Config.Labels \"org.opencontainers.image.revision\" }} $image" "$MOCK_LOG"
+    done
+  done
+  run grep -F 'pull --platform linux/amd64 ghcr.io/dhhyi/recipe-db-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$MOCK_LOG"
+  [ "$status" -eq 1 ]
+}
+
+@test "anonymous verification rejects missing platform manifest digests" {
+  write_valid_release
+  mock_public_image_verification
+  jq 'del(.manifests[0].digest)' index.json > invalid-index.json
+  export MOCK_INDEX="$FIXTURE_ROOT/invalid-index.json"
+  source .scripts/lib/release-validation.sh
+
+  run --separate-stderr verify_release_images_anonymously release.json "$REVISION" "$PWD"
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"must contain exactly one valid manifest digest for linux/amd64"* ]]
+  run grep -q '^pull ' "$MOCK_LOG"
   [ "$status" -eq 1 ]
 }
 
