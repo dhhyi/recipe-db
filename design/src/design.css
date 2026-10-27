@@ -121,9 +121,12 @@ rating-component[hx-post] {
 
   svg:has(~ svg:hover),
   svg:hover {
-    fill: #ffec17;
     color: #ffec17;
     cursor: pointer;
+
+    .rating-outline {
+      fill: #ffec17;
+    }
   }
 }
 

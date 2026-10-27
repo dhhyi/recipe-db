@@ -168,7 +168,7 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			http.Error(w, "rating saved but cache invalidation failed", http.StatusInternalServerError)
 			return
 		}
-		templ.Handler(components.Rating(&resp.Rate.Rating, true, nil, resp.Rate.MyRating)).ServeHTTP(w, r)
+		templ.Handler(components.RecipeRatingWidget(id, &resp.Rate.Rating, true, resp.Rate.MyRating)).ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("/recipe/{id}/controls", func(w http.ResponseWriter, r *http.Request) {
@@ -185,14 +185,14 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 	mux.HandleFunc("/recipe/{id}/rating", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		client, _ := requestScopedClient(endpoint, r, w)
-		capabilities, err := gql.RatingCapabilities(r.Context(), client)
+		capabilities, err := gql.RatingCapabilities(r.Context(), client, id)
 		if err != nil {
 			log.Printf("failed to fetch rating capabilities: %v", err)
 			templ.Handler(components.RecipeRatingUnavailable()).ServeHTTP(w, r)
 			return
 		}
 		if !capabilities.MyCapabilities.CanRate {
-			templ.Handler(components.RatingSignInRequired()).ServeHTTP(w, r)
+			templ.Handler(components.RecipeRatingWidget(id, &capabilities.Rating, false, nil)).ServeHTTP(w, r)
 			return
 		}
 		client, _ = requestScopedClient(endpoint, r, w)

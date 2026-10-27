@@ -152,7 +152,12 @@ test("members rate the same recipe independently and replace their own vote", as
       { id: recipe.id },
       "Read recipe ratings",
     );
-  const rateInBrowser = async (identity, rating, expectedCount) => {
+  const rateInBrowser = async (
+    identity,
+    rating,
+    expectedCount,
+    expectedAverage,
+  ) => {
     const page = await identity.browserContext.newPage();
     try {
       const fragmentResponse = page.waitForResponse(
@@ -167,6 +172,7 @@ test("members rate the same recipe independently and replace their own vote", as
         `#recipe-rating-${recipe.id} rating-component`,
       );
       await expect(widget).toBeVisible();
+      await expect(page.locator("main rating-component")).toHaveCount(1);
       await expect(widget).toHaveAttribute(
         "hx-post",
         `/recipe/${recipe.id}/rate`,
@@ -175,7 +181,9 @@ test("members rate the same recipe independently and replace their own vote", as
         .locator("svg")
         .nth(rating - 1)
         .click();
-      await expect(widget).toHaveAttribute("rating", String(rating));
+      await expect(widget).toHaveAttribute("my-rating", String(rating));
+      await expect(widget).toHaveAttribute("rating", String(expectedAverage));
+      await expect(page.locator("main rating-component")).toHaveCount(1);
       await expect(widget).toContainText(`(${expectedCount})`);
     } finally {
       await page.close();
@@ -198,7 +206,7 @@ test("members rate the same recipe independently and replace their own vote", as
   const memberTwoBefore = await readRating(memberTwo);
   expect(memberTwoBefore.rating.myRating).toBeNull();
 
-  await rateInBrowser(memberOne, 5, 1);
+  await rateInBrowser(memberOne, 5, 1, 5);
   expect((await readRating(memberOne)).rating).toEqual({
     average: 5,
     count: 1,
@@ -210,14 +218,14 @@ test("members rate the same recipe independently and replace their own vote", as
     myRating: null,
   });
 
-  await rateInBrowser(memberOne, 3, 1);
+  await rateInBrowser(memberOne, 3, 1, 3);
   expect((await readRating(memberOne)).rating).toEqual({
     average: 3,
     count: 1,
     myRating: 3,
   });
 
-  await rateInBrowser(memberTwo, 5, 2);
+  await rateInBrowser(memberTwo, 5, 2, 4);
   expect((await readRating(memberOne)).rating).toEqual({
     average: 4,
     count: 2,

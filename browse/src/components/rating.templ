@@ -31,17 +31,18 @@ templ Rating(rating *gql.Rating, ratingPossible bool, slot *string, myRating *in
 			<meta itemprop="ratingCount" content={ ratingCount }/>
 		}
 		<rating-component
-			if ratingPossible && myRating != nil {
-				rating={ *myRating }
-			} else if !ratingPossible && rating.Average != nil {
+			if rating.Average != nil {
 				rating={ *rating.Average }
+			}
+			if myRating != nil {
+				my-rating={ *myRating }
 			}
 			if rating.Count != nil {
 				count={ *rating.Count }
 			}
 			if ratingPossible {
 				hx-post={ "/recipe/" + rating.RecipeId + "/rate" }
-				hx-target="this"
+				hx-target={ "#recipe-rating-" + rating.RecipeId }
 				hx-swap="outerHTML"
 				hx-trigger="rated"
 				hx-vals="js:{rating: event.detail}"

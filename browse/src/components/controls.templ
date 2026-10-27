@@ -1,7 +1,6 @@
 package components
 
 import gql "frontend/src/generated"
-import "fmt"
 
 templ BrowseControls(resp *gql.BrowseControlsResponse) {
 	<div id="browse-controls" class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none">
@@ -16,13 +15,17 @@ templ BrowseIdentity(resp *gql.BrowseIdentityResponse) {
 }
 
 templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
+	if resp.Recipe != nil && resp.Recipe.Rating != nil {
+		@RecipeRatingWidget(id, &resp.Recipe.Rating.Rating, resp.MyCapabilities.CanRate, resp.Recipe.Rating.MyRating)
+	} else {
+		@RecipeRatingUnavailable()
+	}
+}
+
+templ RecipeRatingWidget(id string, rating *gql.Rating, canRate bool, myRating *int) {
 	<div id={ "recipe-rating-" + id }>
-		if resp.MyCapabilities.CanRate && resp.Recipe != nil && resp.Recipe.Rating != nil {
-			@Rating(&resp.Recipe.Rating.Rating, true, nil, resp.Recipe.Rating.MyRating)
-			if resp.Recipe.Rating.MyRating != nil {
-				<p>Deine Bewertung: { fmt.Sprint(*resp.Recipe.Rating.MyRating) }</p>
-			}
-		} else if resp.MyCapabilities.Role == "anonymous" {
+		@Rating(rating, canRate, nil, myRating)
+		if !canRate {
 			<p>Zum Bewerten bitte <a href="/oauth2/start?rd=%2F">anmelden</a>.</p>
 		}
 	</div>
@@ -31,12 +34,6 @@ templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
 templ RecipeRatingUnavailable() {
 	<div id="recipe-rating" role="status">
 		<p>Bewertung derzeit nicht verfügbar. <a href="/">Zurück zur Rezeptübersicht</a></p>
-	</div>
-}
-
-templ RatingSignInRequired() {
-	<div id="recipe-rating" role="status">
-		<p>Zum Bewerten bitte <a href="/oauth2/start?rd=%2F">anmelden</a>.</p>
 	</div>
 }
 

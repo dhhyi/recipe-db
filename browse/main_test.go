@@ -86,6 +86,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	var inspirationsOnline, hasInspirations atomic.Bool
 	var identityRole atomic.Value
 	identityRole.Store("owner")
+	var canRate atomic.Bool
+	canRate.Store(true)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ OperationName string }
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -145,11 +147,14 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				"recipeEditOnline": editOnline.Load(), "imagesOnline": false, "imageEditOnline": false,
 			}
 		case "RatingCapabilities":
-			data = map[string]any{"myCapabilities": map[string]any{"role": "member", "canRate": true}}
+			data = map[string]any{
+				"myCapabilities": map[string]any{"role": "member", "canRate": canRate.Load()},
+				"rating":         map[string]any{"recipeId": "42", "average": 5, "count": 3},
+			}
 		case "RecipeRating":
 			data = map[string]any{
 				"myCapabilities": map[string]any{"role": "member", "canRate": true},
-				"recipe":         map[string]any{"id": "42", "rating": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 5}},
+				"recipe":         map[string]any{"id": "42", "rating": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 3}},
 			}
 		case "RecipeInspirations":
 			var recipe any
@@ -287,6 +292,22 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		})
 	}
 	deleted.Store(false)
+	ratingWidget := request("GET", "/recipe/42/rating", "")
+	if body := ratingWidget.Body.String(); ratingWidget.Code != http.StatusOK ||
+		strings.Count(body, "<rating-component") != 1 ||
+		!strings.Contains(body, `rating="5"`) || !strings.Contains(body, `my-rating="3"`) ||
+		strings.Contains(body, "Deine Bewertung") ||
+		!strings.Contains(body, `hx-target="#recipe-rating-42"`) {
+		t.Fatalf("personalized rating must combine public and own values in one widget: %s", body)
+	}
+	canRate.Store(false)
+	publicRating := request("GET", "/recipe/42/rating", "")
+	if body := publicRating.Body.String(); publicRating.Code != http.StatusOK ||
+		strings.Count(body, "<rating-component") != 1 || !strings.Contains(body, `rating="5"`) ||
+		strings.Contains(body, "my-rating") || strings.Contains(body, "hx-post") {
+		t.Fatalf("public rating must retain one non-editable aggregate widget: %s", body)
+	}
+	canRate.Store(true)
 	if health := request("GET", "/health", ""); health.Code != 200 || health.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("health check must stay uncached")
 	}

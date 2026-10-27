@@ -95,12 +95,13 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 			<hgroup>
 				<h1 itemprop="name">{ recipe.Name }</h1>
 				if recipe.Rating != nil {
-					@Rating(recipe.Rating, false, nil, nil)
+					<div id={ "recipe-rating-" + recipe.Id } hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML">
+						@Rating(recipe.Rating, false, nil, nil)
+					</div>
 				}
 			</hgroup>
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
-		<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML"></div>
 		<section class="grid">
 			if recipe.Image != nil {
 				@image(recipe)

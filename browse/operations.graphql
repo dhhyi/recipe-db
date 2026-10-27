@@ -43,10 +43,13 @@ query BrowseIdentity {
   }
 }
 
-query RatingCapabilities {
+query RatingCapabilities($id: ID!) {
   myCapabilities {
     role
     canRate
+  }
+  rating(id: $id) {
+    ...Rating
   }
 }
 
