@@ -294,14 +294,25 @@ EOF
   cat > bin/curl << 'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$MOCK_LOG"
-exit "${CURL_STATUS:-0}"
+count=0
+[ ! -f "$CURL_COUNT" ] || count=$(cat "$CURL_COUNT")
+count=$((count + 1))
+printf '%s\n' "$count" > "$CURL_COUNT"
+[ "$count" -gt "${CURL_FAILURES:-0}" ]
 EOF
-  chmod +x bin/docker bin/curl
+  cat > bin/sleep << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x bin/docker bin/curl bin/sleep
+  export CURL_COUNT="$FIXTURE_ROOT/curl-count"
+  export CURL_FAILURES=2
 
   run sh .scripts/smoke-production-image.sh ghcr.io/dhhyi/recipe-db-design@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
   [ "$status" -eq 0 ]
-  grep -F 'run --detach --rm --name production-image-smoke --publish 127.0.0.1:18080:80 ghcr.io/dhhyi/recipe-db-design@sha256:' "$MOCK_LOG"
+  [ "$(cat "$CURL_COUNT")" -eq 3 ]
+  grep -F 'run --detach --name production-image-smoke --publish 127.0.0.1:18080:80 ghcr.io/dhhyi/recipe-db-design@sha256:' "$MOCK_LOG"
   grep -F 'http://127.0.0.1:18080/health' "$MOCK_LOG"
   grep -F 'rm --force production-image-smoke' "$MOCK_LOG"
 }
@@ -310,6 +321,9 @@ EOF
   cat > bin/docker << 'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$MOCK_LOG"
+if [ "$1" = logs ]; then
+  echo 'nginx failed to start'
+fi
 EOF
   cat > bin/curl << 'EOF'
 #!/bin/sh
@@ -322,5 +336,6 @@ EOF
 
   [ "$status" -eq 1 ]
   [[ "$stderr" == *"failed its /health smoke check"* ]]
+  [[ "$stderr" == *"nginx failed to start"* ]]
   grep -F 'rm --force production-image-smoke' "$MOCK_LOG"
 }
