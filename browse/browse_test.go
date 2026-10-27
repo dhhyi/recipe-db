@@ -120,7 +120,7 @@ func TestBrowseValidation(t *testing.T) {
 					if !strings.Contains(body, `data-kind="error"`) || !strings.Contains(body, "data-browse-status") {
 						t.Fatal("invalid fragment lost its existing error state")
 					}
-				} else if strings.Count(body, "<header-component>") != 1 ||
+				} else if strings.Count(body, "<header-component ") != 1 ||
 					strings.Count(body, "<main>") != 1 ||
 					strings.Contains(body, `name="q"`) ||
 					!strings.Contains(body, "<title>Ungültige Suchparameter | RezeptDB</title>") ||
@@ -334,7 +334,7 @@ func TestBrowseHTTP(t *testing.T) {
 					t.Fatal("fragment/full page contract broken")
 				}
 				if !fragment {
-					if strings.Count(body, "<header-component>") != 1 || strings.Count(body, "<main>") != 1 ||
+					if strings.Count(body, "<header-component ") != 1 || strings.Count(body, "<main>") != 1 ||
 						recorder.Header().Get("HX-Replace-Url") != "" {
 						t.Fatalf("%s navigation must retain one shared layout without fragment headers: %s", mode, body)
 					}

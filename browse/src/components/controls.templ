@@ -12,15 +12,7 @@ templ BrowseControls(resp *gql.BrowseControlsResponse) {
 }
 
 templ BrowseIdentity(resp *gql.BrowseIdentityResponse) {
-	<nav id="browse-identity" aria-label="Anmeldung">
-		if resp.MyCapabilities.Role == "anonymous" {
-			<a href="/oauth2/start?rd=%2F">Anmelden</a>
-			<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
-		} else {
-			<span>{ resp.MyCapabilities.Role }</span>
-			<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
-		}
-	</nav>
+	<header-component auth-role={ resp.MyCapabilities.Role }></header-component>
 }
 
 templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
@@ -49,11 +41,7 @@ templ RatingSignInRequired() {
 }
 
 templ BrowseIdentityUnavailable() {
-	<nav id="browse-identity" aria-label="Anmeldung" role="status">
-		<span>Anmeldung derzeit nicht verfügbar.</span>
-		<a href="/oauth2/start?rd=%2F">Anmelden</a>
-		<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
-	</nav>
+	<header-component auth-unavailable></header-component>
 }
 
 templ RatingDeniedPage(status int) {

@@ -27,7 +27,7 @@ func assertStyledErrorPage(t *testing.T, response *httptest.ResponseRecorder, st
 		}
 		return
 	}
-	if strings.Count(body, "<header-component>") != 1 || strings.Count(body, "<main>") != 1 ||
+	if strings.Count(body, "<header-component ") != 1 || strings.Count(body, "<main>") != 1 ||
 		!strings.Contains(body, `<link rel="stylesheet" href="/design/styles.css">`) ||
 		!strings.Contains(body, `<script src="/design/htmx.min.js"></script>`) ||
 		!strings.Contains(body, "<title>"+title+"</title>") {
@@ -84,6 +84,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	var version atomic.Int32
 	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
+	var identityRole atomic.Value
+	identityRole.Store("owner")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ OperationName string }
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -101,7 +103,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				"recipeEditOnline": editOnline.Load(),
 			}
 		case "BrowseIdentity":
-			data = map[string]any{"myCapabilities": map[string]any{"role": "owner"}}
+			data = map[string]any{"myCapabilities": map[string]any{"role": identityRole.Load()}}
 		case "Overview":
 			data = map[string]any{
 				"recipes": []any{map[string]any{
@@ -197,6 +199,18 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	if results := strings.Index(overviewBody, `id="browse-results"`); results < 0 ||
 		strings.Index(overviewBody, `hx-get="/controls"`) < results {
 		t.Fatal("add-recipe control placeholder must follow the recipe results")
+	}
+	if !strings.Contains(overviewBody, `<header-component hx-get="/identity"`) ||
+		strings.Contains(overviewBody, "auth-role") || strings.Contains(overviewBody, `id="browse-identity"`) {
+		t.Fatal("public layout must load identity into the header separately")
+	}
+	for _, role := range []string{"anonymous", "member", "owner"} {
+		identityRole.Store(role)
+		widget := request("GET", "/identity", "")
+		if widget.Code != http.StatusOK || widget.Header().Get("Cache-Control") != "no-store" ||
+			strings.TrimSpace(widget.Body.String()) != `<header-component auth-role="`+role+`"></header-component>` {
+			t.Fatalf("identity must supply only the header auth state: %s", widget.Body.String())
+		}
 	}
 	first := request("GET", "/recipe/42?variant=1", "")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), "Original") {
