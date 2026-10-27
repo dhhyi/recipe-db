@@ -137,21 +137,85 @@ done
   printf ')\n'
 } >> "$output"
 
+manifest=.scripts/tests/groups.yaml
+group_specs=$(yq -o=json '.' "$manifest")
+if ! jq -e '
+  type == "object" and length > 0 and all(to_entries[];
+    (.key | test("^[a-z][a-z0-9_]*$")) and
+    (.value.tests | type == "array" and length > 0 and all(.[]; type == "string")) and
+    (.value.inputs | type == "array" and all(.[]; type == "string" and length > 0)))
+' <<< "$group_specs" > /dev/null; then
+  printf 'Invalid script test group manifest: %s\n' "$manifest" >&2
+  exit 1
+fi
+
+declare -A test_groups=()
+for group in $(jq -r 'keys[]' <<< "$group_specs"); do
+  while IFS= read -r test_file; do
+    if [[ "$test_file" != .scripts/tests/*.bats || ! -f "$test_file" ]]; then
+      printf 'Missing or invalid script test: %s\n' "$test_file" >&2
+      exit 1
+    fi
+    if [[ -n ${test_groups["$test_file"]+x} ]]; then
+      printf 'Script test assigned more than once: %s\n' "$test_file" >&2
+      exit 1
+    fi
+    test_groups["$test_file"]=$group
+  done < <(jq -r --arg group "$group" '.[$group].tests[]' <<< "$group_specs")
+done
+
+while IFS= read -r -d '' test_file; do
+  [[ -f "$test_file" ]] || continue
+  if [[ -z ${test_groups["$test_file"]+x} ]]; then
+    printf 'Script test is not assigned to a group: %s\n' "$test_file" >&2
+    exit 1
+  fi
+done < <(git ls-files --cached --others --exclude-standard -z -- '.scripts/tests/*.bats' | sort -zu)
+
+for group in $(jq -r 'keys[]' <<< "$group_specs"); do
+  declare -A group_files=()
+  group_files["$manifest"]=1
+  group_files[".scripts/tests/test_helper.bash"]=1
+  group_files[".scripts/test-scripts.sh"]=1
+  while IFS= read -r test_file; do
+    group_files["$test_file"]=1
+  done < <(jq -r --arg group "$group" '.[$group].tests[]' <<< "$group_specs")
+  while IFS= read -r pattern; do
+    matched=false
+    while IFS= read -r -d '' file; do
+      [[ -f "$file" ]] || continue
+      group_files["$file"]=1
+      matched=true
+    done < <(git ls-files --cached --others --exclude-standard -z -- "$pattern" | sort -zu)
+    if [[ "$matched" == false ]]; then
+      printf 'Script test group %s input pattern matches no files: %s\n' "$group" "$pattern" >&2
+      exit 1
+    fi
+  done < <(jq -r --arg group "$group" '.[$group].inputs[]' <<< "$group_specs")
+  {
+    printf '\ngenrule(\n'
+    printf '    name = "test_scripts_%s",\n' "$group"
+    printf '    srcs = [\n'
+    while IFS= read -r file; do
+      printf '        %s,\n' "$(quote "$file")"
+    done < <(printf '%s\n' "${!group_files[@]}" | sort)
+    printf '    ],\n'
+    printf '    tools = ["mise.toml", ".bazelversion"],\n'
+    printf '    outs = ["test-scripts-%s.ok"],\n' "$group"
+    printf '    cmd = "mise run --raw test-scripts %s && touch %s",\n' "$group" "\$@"
+    printf '    tags = ["no-sandbox", "no-remote"],\n'
+    printf ')\n'
+  } >> "$output"
+done
+
 {
-  printf '\ngenrule(\n'
+  printf '\nfilegroup(\n'
   printf '    name = "test_scripts",\n'
   printf '    srcs = [\n'
-  printf '        ".github/workflows/publish.yaml",\n'
-  printf '        "package.json",\n'
-  while IFS= read -r -d '' file; do
-    [[ -f "$file" ]] || continue
-    printf '        %s,\n' "$(quote "$file")"
-  done < <(git ls-files --cached --others --exclude-standard -z -- .scripts/ deploy/ '*/.project.yaml' | sort -zu)
+  while IFS= read -r group; do
+    printf '        ":test_scripts_%s",\n' "$group"
+  done < <(jq -r 'keys[]' <<< "$group_specs")
   printf '    ],\n'
-  printf '    tools = ["mise.toml", ".bazelversion"],\n'
-  printf '    outs = ["test-scripts.ok"],\n'
-  printf '    cmd = "mise run --raw test-scripts && touch %s",\n' "\$@"
-  printf '    tags = ["no-sandbox", "no-remote"],\n'
   printf ')\n'
 } >> "$output"
 

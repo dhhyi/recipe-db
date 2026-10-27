@@ -78,6 +78,8 @@ mise run test-scripts
 mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 ```
 
+For a single topic group, use `mise run test-scripts <group>` or `mise exec -- bazelisk build --action_env=PATH --jobs=1 //:test_scripts_<group>`. Groups and their explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `tasks`, `devcontainer`, and `tooling`. Assign every new Bats suite to exactly one group and keep its inputs complete; generation rejects unassigned suites and patterns matching no files.
+
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 
 ## Committing during autonomous implementation
