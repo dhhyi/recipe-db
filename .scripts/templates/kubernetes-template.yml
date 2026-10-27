@@ -1,0 +1,96 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:yaml", "yaml")
+#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "config_maps", "helm_values", "wait_for_nats")
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: #@ ns
+  labels:
+    app.kubernetes.io/part-of: recipe-db
+---
+#@ for config in config_maps():
+--- #@ config
+#@ end
+#@ for project in data.values.projects:
+--- #@ project_workload(project)
+--- #@ service(project.name, project.devcontainer.ports[0])
+#@ end
+#@ for workload in infrastructure():
+--- #@ workload
+--- #@ service(workload["metadata"]["name"], workload["spec"]["template"]["spec"]["containers"][0]["ports"][0]["containerPort"])
+#@ end
+---
+apiVersion: v1
+kind: Service
+metadata: #@ metadata("nats-monitor")
+spec:
+  selector:
+    app.kubernetes.io/name: nats
+  ports:
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+---
+#@ for name in cfg["volumes"]:
+--- #@ pvc(name)
+#@ end
+---
+apiVersion: batch/v1
+kind: Job
+metadata: #@ metadata("nats-init")
+spec:
+  activeDeadlineSeconds: #@ cfg["timeoutSeconds"]
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: recipe-db
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      initContainers:
+        -  #@ wait_for_nats()
+      containers:
+        - name: provision
+          image: #@ inventory["images"]["graphql"]
+          args: [provision-events]
+          env:
+            - name: NATS_URL
+              value: nats://nats:4222
+          resources: #@ cfg["resources"]
+---
+apiVersion: v1
+kind: Service
+metadata: #@ metadata("traefik")
+spec:
+  type: ExternalName
+  externalName: recipe-db-internal.kube-system.svc.cluster.local
+  ports:
+    - name: rest
+      port: 3000
+    - name: web
+      port: 80
+---
+apiVersion: v1
+kind: Service
+metadata: #@ metadata("recipe-db-internal", "kube-system")
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: traefik
+  ports:
+    - name: rest
+      port: 3000
+      targetPort: 3000
+    - name: web
+      port: 80
+      targetPort: 8000
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: #@ yaml.encode(helm_values())
+

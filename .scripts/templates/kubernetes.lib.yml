@@ -1,0 +1,130 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:struct", "struct")
+#@ load("@ytt:yaml", "yaml")
+
+#@ cfg = struct.decode(data.values.config)
+#@ inventory = struct.decode(data.values.release)
+#@ files = struct.decode(data.values.files)
+#@ ns = cfg["namespace"]
+
+#@ def metadata(name, namespace=ns):
+#@   return {"name": name, "namespace": namespace, "labels": {"app.kubernetes.io/part-of": "recipe-db", "app.kubernetes.io/name": name}}
+#@ end
+
+#@ def probe(port, path="/health"):
+#@   return {"httpGet": {"port": port, "path": path}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 6}
+#@ end
+
+#@ def secret_volume(keys):
+#@   return {"name": "secrets", "secret": {"secretName": "recipe-db-runtime", "items": [{"key": k, "path": k} for k in keys]}}
+#@ end
+
+#@ def deployment(name, image, port, environment={}, durable=False, command=None, args=None, secrets=[], mounts=[], volumes=[], readiness=None, liveness=None, init=[]):
+#@   env = [{"name": k, "value": str(v)} for k, v in environment.items()]
+#@   mounts = list(mounts)
+#@   volumes = list(volumes)
+#@   if durable:
+#@     mounts.append({"name": "data", "mountPath": "/data"})
+#@     volumes.append({"name": "data", "persistentVolumeClaim": {"claimName": name}})
+#@   end
+#@   if secrets:
+#@     mounts.append({"name": "secrets", "mountPath": "/run/secrets", "readOnly": True})
+#@     volumes.append(secret_volume(secrets))
+#@   end
+#@   container = {"name": name, "image": image, "env": env, "ports": [{"name": "http", "containerPort": port}], "resources": cfg["resources"], "volumeMounts": mounts, "readinessProbe": readiness or probe(port), "livenessProbe": liveness or probe(port)}
+#@   container["startupProbe"] = dict(container["livenessProbe"])
+#@   container["startupProbe"]["failureThreshold"] = 120
+#@   if command != None:
+#@     container["command"] = command
+#@   end
+#@   if args != None:
+#@     container["args"] = args
+#@   end
+#@   pod = {"automountServiceAccountToken": False, "containers": [container], "volumes": volumes}
+#@   if init:
+#@     pod["initContainers"] = init
+#@   end
+#@   return {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": metadata(name), "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": {"app.kubernetes.io/name": name}}, "template": {"metadata": {"labels": metadata(name)["labels"], "annotations": {"recipe-db/release": data.values.artifact, "recipe-db/config": yaml.encode(cfg)}}, "spec": pod}}}
+#@ end
+
+#@ def service(name, port):
+#@   return {"apiVersion": "v1", "kind": "Service", "metadata": metadata(name), "spec": {"type": "ClusterIP", "selector": {"app.kubernetes.io/name": name}, "ports": [{"name": "http", "port": port, "targetPort": port}]}}
+#@ end
+
+#@ def pvc(name):
+#@   if name not in cfg["volumes"]:
+#@     fail("Missing persistent volume request for " + name)
+#@   end
+#@   return {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": metadata(name), "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": cfg["storageClass"], "resources": {"requests": {"storage": cfg["volumes"][name]}}}}
+#@ end
+
+#@ def config_mount(name, path):
+#@   return {"name": name, "mountPath": path, "readOnly": True}
+#@ end
+
+#@ def config_volume(name):
+#@   return {"name": name, "configMap": {"name": name}}
+#@ end
+
+#@ def wait_for_nats():
+#@   return {"name": "wait-for-jetstream", "image": cfg["infrastructure"]["nats"], "command": ["sh", "-ec", "until wget -q -O /dev/null 'http://nats-monitor:8222/healthz?js-enabled-only=true'; do sleep 2; done"], "resources": cfg["resources"]}
+#@ end
+
+#@ def project_workload(project):
+#@   p = struct.decode(project)
+#@   name = p["name"]
+#@   port = p["devcontainer"]["ports"][0]
+#@   env = {k: v for k, v in p["devcontainer"].get("environment", {}).items() if "${" not in v and k != "MISE_IGNORED_CONFIG_PATHS"}
+#@   env["PRODUCTION"] = "true"
+#@   durable = name in cfg["volumes"]
+#@   secrets = []
+#@   init = []
+#@   if durable:
+#@     env["DATA_LOCATION"] = "/data"
+#@   end
+#@   if name == "graphql":
+#@     env.update({"REST_ENDPOINT": "http://traefik:3000", "AUTH_TRUSTED_ISSUER": cfg["runtime"]["trustedIssuer"], "NATS_URL": "nats://nats:4222"})
+#@     secrets = ["auth-accounts.json", "graphql-ingress-secret"]
+#@     init = [wait_for_nats()]
+#@   elif name == "search":
+#@     env.update({"GRAPHQL_URL": "http://traefik/graphql", "STATE_DIRECTORY": "/data", "TYPESENSE_API_KEY_FILE": "/run/secrets/typesense-api-key"})
+#@     secrets = ["typesense-api-key"]
+#@     init = [wait_for_nats()]
+#@   elif name in ["browse", "mcp"]:
+#@     env["GRAPHQL_URL"] = "http://traefik/graphql"
+#@     if name == "browse":
+#@       init = [wait_for_nats()]
+#@     end
+#@   end
+#@   result = deployment(name, inventory["images"][name], port, env, durable, secrets=secrets, init=init)
+#@   if name == "search":
+#@     result["spec"]["template"]["spec"]["containers"].append({"name": "index-readiness", "image": cfg["infrastructure"]["maintenance"], "command": ["sh", "-ec", "exec sleep infinity"], "resources": {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"memory": "32Mi"}}, "readinessProbe": {"exec": {"command": ["sh", "-ec", """wget -qO- http://127.0.0.1:3000/health | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'"""]}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 1}})
+#@   end
+#@   return result
+#@ end
+
+#@ def infrastructure():
+#@   images = cfg["infrastructure"]
+#@   nats = deployment("nats", images["nats"], 4222, {"VERBOSE": "false"}, True, args=["--config", "/etc/nats/nats.conf"], mounts=[config_mount("nats-config", "/etc/nats")], volumes=[config_volume("nats-config")], readiness=probe(8222, "/healthz?js-enabled-only=true"), liveness=probe(8222, "/healthz"))
+#@   typesense = deployment("typesense", images["typesense"], 8108, durable=True, command=["/bin/sh", "-ec"], args=['export TYPESENSE_API_KEY="$(cat /run/secrets/typesense-api-key)"; exec /opt/typesense-server --data-dir=/data'], secrets=["typesense-api-key"])
+#@   redis_probe = {"exec": {"command": ["redis-cli", "ping"]}, "periodSeconds": 5, "timeoutSeconds": 2, "failureThreshold": 6}
+#@   redis = deployment("redis", images["redis"], 6379, durable=True, command=["redis-server"], args=["--appendonly", "yes", "--appendfsync", "always"], readiness=redis_probe, liveness=redis_probe)
+#@   maintenance = deployment("browse-maintenance", images["maintenance"], 80, mounts=[config_mount("maintenance-config", "/etc/nginx/conf.d"), config_mount("maintenance-html", "/usr/share/nginx/html")], volumes=[config_volume("maintenance-config"), config_volume("maintenance-html")], readiness={"tcpSocket": {"port": 80}, "periodSeconds": 5}, liveness={"tcpSocket": {"port": 80}, "periodSeconds": 10})
+#@   oauth = deployment("oauth2-proxy", images["oauth2Proxy"], 4180, {"OAUTH2_PROXY_REDIRECT_URL": cfg["origin"] + "/oauth2/callback", "OAUTH2_PROXY_WHITELIST_DOMAINS": cfg["origin"].split("://")[1], "OAUTH2_PROXY_COOKIE_SECURE": "false" if cfg["target"] == "local" else "true", "OAUTH2_PROXY_COOKIE_EXPIRE": "168h", "OAUTH2_PROXY_COOKIE_REFRESH": "50m", "OAUTH2_PROXY_COOKIE_HTTPONLY": "true", "OAUTH2_PROXY_COOKIE_SAMESITE": "lax"}, args=["--config=/etc/oauth2-proxy/oauth2-proxy.cfg", "--alpha-config=/etc/oauth2-proxy/alpha.yaml"], secrets=["google-oauth-client-secret", "oauth2-cookie-secret"], mounts=[config_mount("oauth-config", "/etc/oauth2-proxy")], volumes=[config_volume("oauth-config")], readiness=probe(4180, "/ready"), liveness=probe(4180, "/ping"))
+#@   return [nats, typesense, redis, maintenance, oauth]
+#@ end
+
+#@ def oauth_alpha():
+#@   return {"server": {"bindAddress": "0.0.0.0:4180"}, "upstreamConfig": {"upstreams": [{"id": "forward-auth-only", "path": "/", "static": True, "staticCode": 404}]}, "injectResponseHeaders": [{"name": "X-Auth-Request-" + name, "values": [{"claimSource": {"claim": claim}}]} for name, claim in [["User", "user"], ["Email", "email"], ["Issuer", "iss"], ["Email-Verified", "email_verified"]]], "providers": [{"id": "google-oidc", "provider": "oidc", "clientID": cfg["runtime"]["googleOAuthClientId"], "clientSecretFile": "/run/secrets/google-oauth-client-secret", "scope": "openid email", "code_challenge_method": "S256", "additionalClaims": ["iss", "email_verified"], "oidcConfig": {"issuerURL": cfg["runtime"]["trustedIssuer"], "emailClaim": "email", "audienceClaims": ["aud"], "insecureAllowUnverifiedEmail": False, "insecureSkipIssuerVerification": False, "insecureSkipNonce": False}}]}
+#@ end
+
+#@ def config_maps():
+#@   entries = {"nats-config": {"nats.conf": files["nats"]}, "maintenance-config": {"default.conf": files["maintenanceNginx"]}, "maintenance-html": {"unavailable.html": files["maintenanceHtml"]}, "oauth-config": {"oauth2-proxy.cfg": files["oauthConfig"], "alpha.yaml": yaml.encode(oauth_alpha())}, "recipe-db-release": {"artifact": data.values.artifact, "revision": inventory["revision"]}}
+#@   return [{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(name), "data": value} for name, value in entries.items()]
+#@ end
+
+#@ def helm_values():
+#@   image = cfg["infrastructure"]["traefik"].split(":", 1)
+#@   return {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
+#@ end
+

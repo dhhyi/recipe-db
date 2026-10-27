@@ -142,11 +142,11 @@ done
   printf '    name = "test_scripts",\n'
   printf '    srcs = [\n'
   printf '        ".github/workflows/publish.yaml",\n'
-  printf '        "graphql/.project.yaml",\n'
+  printf '        "package.json",\n'
   while IFS= read -r -d '' file; do
     [[ -f "$file" ]] || continue
     printf '        %s,\n' "$(quote "$file")"
-  done < <(git ls-files --cached --others --exclude-standard -z -- .scripts/ | sort -zu)
+  done < <(git ls-files --cached --others --exclude-standard -z -- .scripts/ deploy/ '*/.project.yaml' | sort -zu)
   printf '    ],\n'
   printf '    tools = ["mise.toml", ".bazelversion"],\n'
   printf '    outs = ["test-scripts.ok"],\n'
