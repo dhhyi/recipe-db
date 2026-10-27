@@ -363,9 +363,9 @@ EOF
 @test "artifact publication uploads an absolute inventory path as a relative filename" {
   write_valid_release
   mock_public_image_verification
-  mkdir payload
-  cp release.json payload/release.json
-  export UPLOAD_DIRECTORY="$FIXTURE_ROOT/payload"
+  export UPLOAD_DIRECTORY="$BATS_TEST_TMPDIR/payload"
+  mkdir "$UPLOAD_DIRECTORY"
+  cp release.json "$UPLOAD_DIRECTORY/release.json"
   cat > .scripts/check-production-release.sh << 'EOF'
 #!/bin/sh
 if [ -f "$UPLOAD_DIRECTORY/uploaded" ]; then
