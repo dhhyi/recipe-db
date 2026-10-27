@@ -193,6 +193,11 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	if overview.Code != 200 || !strings.Contains(html.UnescapeString(overview.Body.String()), `src="`+thumbURL+`"`) {
 		t.Fatalf("overview did not preserve opaque backend thumbnail URL: %d %s", overview.Code, overview.Body.String())
 	}
+	overviewBody := overview.Body.String()
+	if results := strings.Index(overviewBody, `id="browse-results"`); results < 0 ||
+		strings.Index(overviewBody, `hx-get="/controls"`) < results {
+		t.Fatal("add-recipe control placeholder must follow the recipe results")
+	}
 	first := request("GET", "/recipe/42?variant=1", "")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), "Original") {
 		t.Fatalf("detail failed: %d %s", first.Code, first.Body.String())
@@ -227,10 +232,15 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	for _, online := range []bool{false, true, false} {
 		editOnline.Store(online)
-		widget := request("GET", "/recipe/42/controls", "")
-		if widget.Code != 200 || strings.Contains(widget.Body.String(), "Rezept bearbeiten") != online ||
+		widget := request("GET", "/controls", "")
+		body := widget.Body.String()
+		if widget.Code != 200 || strings.Contains(body, `data-add-recipe`) != online ||
+			strings.Contains(body, `role="button"`) != online ||
+			strings.Contains(body, `class="pointer-events-auto mr-2"`) != online ||
+			!strings.Contains(body, `class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none"`) ||
+			strings.Contains(body, "Rezept hinzufügen") != online ||
 			widget.Header().Get("Cache-Control") != "no-store" {
-			t.Fatal("edit controls not live")
+			t.Fatalf("add-recipe control placement or permission gating is incorrect: %s", body)
 		}
 	}
 	for _, tc := range []struct {
