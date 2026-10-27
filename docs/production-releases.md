@@ -63,6 +63,6 @@ The workflow requires `packages: write` to publish the application images and re
 
 ## Retry and recovery
 
-Rerun the workflow for the same commit after correcting a failed build or registry permission. If a valid complete inventory already exists for that revision, the workflow verifies and reuses its digest rather than replacing it. An invalid existing inventory fails closed for investigation. Incomplete staging image uploads do not create a release inventory.
+Rerun the workflow for the same commit after correcting a failed build or registry permission. If a valid complete inventory already exists for that revision, the workflow verifies and reuses its digest rather than replacing it. A missing inventory tag allows publication to proceed, including the first push that creates the release package; authentication and network failures still abort the lookup. An invalid existing inventory fails closed for investigation. Incomplete staging image uploads do not create a release inventory.
 
 Compatibility `latest` tags are updated only after the release inventory is complete and verified, and only while that revision is still the `main` head. GHCR updates each application's tag independently, not atomically; if a tag update fails partway through, rerun the workflow to finish it. Deployment inputs remain the artifact and image digests, not these tags. Digests do not prevent package deletion or guarantee indefinite registry retention.

@@ -29,7 +29,8 @@ descriptor="$anonymous_directory/descriptor.json"
 error_file="$anonymous_directory/error.log"
 
 if ! oras manifest fetch --descriptor "$release_tag" > "$descriptor" 2> "$error_file"; then
-  if grep -Eq 'status code 404|404 Not Found|MANIFEST_UNKNOWN' "$error_file"; then
+  if grep -Eq 'status code 404|404 Not Found|MANIFEST_UNKNOWN' "$error_file" \
+    || grep -Fxq "Error response from registry: failed to find \"$release_tag\": $release_tag: not found" "$error_file"; then
     echo "absent"
     exit 0
   fi
