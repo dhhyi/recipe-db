@@ -45,7 +45,7 @@ digest=$(jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))' "$descriptor")
 }
 artifact_reference="ghcr.io/dhhyi/recipe-db-releases@$digest"
 manifest="$anonymous_directory/artifact-manifest.json"
-if ! env HOME="$anonymous_directory/home" DOCKER_CONFIG="$anonymous_directory/docker" \
+if ! mise exec -- env HOME="$anonymous_directory/home" DOCKER_CONFIG="$anonymous_directory/docker" \
   oras manifest fetch "$artifact_reference" > "$manifest"; then
   echo "could not anonymously fetch release artifact $artifact_reference" >&2
   exit 1
@@ -62,7 +62,7 @@ fi
 
 pull_directory="$anonymous_directory/pulled"
 mkdir "$pull_directory"
-if ! env HOME="$anonymous_directory/home" DOCKER_CONFIG="$anonymous_directory/docker" \
+if ! mise exec -- env HOME="$anonymous_directory/home" DOCKER_CONFIG="$anonymous_directory/docker" \
   oras pull "$artifact_reference" --output "$pull_directory" >&2; then
   echo "could not anonymously pull release artifact $artifact_reference" >&2
   exit 1

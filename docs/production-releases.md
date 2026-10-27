@@ -47,12 +47,14 @@ jq -r '.images[]' release/release.json | while IFS= read -r image; do
 done
 ```
 
-To confirm anonymous access, run the ORAS and Docker commands with empty credentials:
+To confirm anonymous access, run the ORAS and Docker commands with empty credentials. Activate mise tools before replacing `HOME`, so the shims can still find the installed tools:
 
 ```sh
-export HOME="$(mktemp -d)"
-export DOCKER_CONFIG="$(mktemp -d)"
-printf '{}\n' > "$DOCKER_CONFIG/config.json"
+anonymous_home="$(mktemp -d)"
+anonymous_docker="$(mktemp -d)"
+printf '{}\n' > "$anonymous_docker/config.json"
+mise exec -- env HOME="$anonymous_home" DOCKER_CONFIG="$anonymous_docker" \
+  oras manifest fetch ghcr.io/dhhyi/recipe-db-releases@sha256:<artifact-digest>
 ```
 
 The workflow also pulls each image platform and the artifact anonymously before treating publication as complete. Platform verification pulls and inspects the individual manifest digests from each index, avoiding Docker image-store conflicts when pulling both platforms under one index reference. It logs the verified image digests and exact release-artifact digest. Native AMD64 and ARM64 runners also start the production `design` image and check its `/health` endpoint.
