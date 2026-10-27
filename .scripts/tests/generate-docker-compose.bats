@@ -4,6 +4,9 @@ load test_helper
 
 setup() {
   setup_fixture generate-docker-compose.sh
+  mkdir -p .scripts/lib
+  cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../generate-production-build-metadata.sh" .scripts/
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   use_mise_tools
   unset CI REGISTRY_CACHE_SUFFIX \
@@ -206,6 +209,44 @@ EOF
     .http.services.backend.loadBalancer.servers == [{"url":"http://backend:8000"}]
     and .http.routers.frontend.service == "frontend"
   ' <<< "$output"
+}
+
+@test "Compose and production image metadata share context, Dockerfile, and build arguments" {
+  awk '
+    /^devcontainer:$/ {
+      print
+      print "  build:"
+      print "    args:"
+      print "      VERSION: 7"
+      next
+    }
+    /^category: backend$/ {
+      print
+      print "dockerContext: ."
+      next
+    }
+    { print }
+  ' backend/.project.yaml > backend/.project.yaml.tmp
+  mv backend/.project.yaml.tmp backend/.project.yaml
+
+  run sh .scripts/generate-docker-compose.sh production
+
+  [ "$status" -eq 0 ]
+  assert_compose '
+    .services.backend.build.context == "."
+    and .services.backend.build.dockerfile == "backend/Dockerfile"
+    and .services.backend.build.args.VERSION == "7"
+  '
+
+  run sh .scripts/generate-production-build-metadata.sh \
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa linux/amd64 build.json false
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .target.backend.context == "."
+    and .target.backend.dockerfile == "backend/Dockerfile"
+    and .target.backend.args.VERSION == "7"
+  ' build.json
 }
 
 @test "backend mode excludes frontends but retains development jobs and tests" {

@@ -36,10 +36,10 @@
 #@ end
 
 #@ def service(project, options, projects):
-#@   context = project.dockerContext if "dockerContext" in project else project.name
-#@   dockerfile = "Dockerfile" if context == project.name else project.name + "/Dockerfile"
+#@   context = project.buildInputs.context
+#@   dockerfile = project.buildInputs.dockerfile
 #@   build = {"context": context}
-#@   cache_ref = "ghcr.io/dhhyi/recipe-db-" + project.name + "-cache" + options.registryCacheSuffix
+#@   cache_ref = project.buildInputs.cacheRepository + options.registryCacheSuffix
 #@   build["cache_from"] = ["type=registry,ref=" + cache_ref]
 #@   service = {
 #@     "build": build,
@@ -50,8 +50,8 @@
 #@   if dockerfile != "Dockerfile":
 #@     build["dockerfile"] = dockerfile
 #@   end
-#@   if "build" in project.devcontainer and "args" in project.devcontainer.build:
-#@     build["args"] = {key: str(project.devcontainer.build.args[key]) for key in project.devcontainer.build.args}
+#@   if len(project.buildInputs.args) > 0:
+#@     build["args"] = project.buildInputs.args
 #@   end
 #@   if "environment" in project.devcontainer:
 #@     environment = {}

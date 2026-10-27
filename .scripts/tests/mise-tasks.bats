@@ -7,6 +7,8 @@ setup() {
   unset GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE
   setup_fixture sync-vscode-settings.sh
   cp "$BATS_TEST_DIRNAME"/../*.sh .scripts/
+  mkdir -p .scripts/lib
+  cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
@@ -179,7 +181,8 @@ EOF
   [ ! -e .secrets ]
   [ ! -s "$MOCK_LOG" ]
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("mise run generate-docker-compose-prod"))] | length' "$workflow")" -eq 2 ]
+  [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-docker-compose-prod"))] | length' "$workflow")" -eq 0 ]
+  [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
 @test "dev-down removes orphans and forwards arguments and exit status" {
@@ -268,7 +271,7 @@ EOF
   [ -f .secrets/google-oauth-client-secret/keep ]
 }
 
-@test "CI reuses mise development secrets and scopes explicit paths to production builds" {
+@test "CI reuses mise development secrets without coupling production image builds to Compose" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   while IFS= read -r task; do
     run mise run --raw "$task"
@@ -283,12 +286,9 @@ EOF
     [ "$(yq "[.env, .jobs[].env] | map(select(has(\"$variable\"))) | length" "$workflow")" -eq 0 ]
   done
   for job in arm64-validation publish; do
-    environment=$(yq -o json ".jobs.$job.steps[] | select(.run | contains(\"mise run generate-docker-compose-prod\")) | .env" "$workflow")
-    [ "$(printf '%s' "$environment" | jq -r '.TYPESENSE_API_KEY_FILE')" = ./.secrets/typesense-api-key ]
-    [ "$(printf '%s' "$environment" | jq -r '.GOOGLE_OAUTH_CLIENT_SECRET_FILE')" = ./.secrets/google-oauth-client-secret ]
-    [ "$(printf '%s' "$environment" | jq -r '.OAUTH2_COOKIE_SECRET_FILE')" = ./.secrets/oauth2-cookie-secret ]
-    [ "$(printf '%s' "$environment" | jq -r '.GRAPHQL_INGRESS_SECRET_FILE')" = ./.secrets/graphql-ingress-secret ]
+    [ "$(yq "[.jobs.$job.steps[] | select(.run // \"\" | contains(\"generate-production-build-metadata.sh\"))] | length" "$workflow")" -eq 1 ]
   done
+  [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 1 ]
   run grep -E 'openssl|chmod|mkdir -p \.secrets|>.*\.secrets/' "$workflow"
   [ "$status" -eq 1 ]
 }

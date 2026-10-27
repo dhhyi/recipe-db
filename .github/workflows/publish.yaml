@@ -1,6 +1,6 @@
 name: Publish
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: >-
     ${{ github.event_name == 'pull_request' &&
         (github.event.action != 'edited' || github.event.changes.title != null) }}
@@ -100,6 +100,31 @@ jobs:
       - name: validate message bus integration and recovery
         run: mise run test-message-bus
 
+      - name: build and validate production AMD64 images for pull requests
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64|amd64) ;;
+            *) echo "Expected a native AMD64 runner, got $(uname -m)." >&2; exit 1 ;;
+          esac
+          metadata="$RUNNER_TEMP/production-build-amd64.json"
+          sh .scripts/generate-production-build-metadata.sh \
+            "$GITHUB_SHA" linux/amd64 "$metadata" false
+          docker buildx create --use
+          docker buildx inspect --bootstrap
+          docker buildx bake --file "$metadata" --load
+          mapfile -t images < <(jq -r '.target[] | .tags[0]' "$metadata")
+          for image in "${images[@]}"; do
+            platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")
+            if [[ $platform != linux/amd64 ]]; then
+              echo "$image was built for $platform, expected linux/amd64." >&2
+              exit 1
+            fi
+          done
+          smoke_image=$(jq -r '.target.design.tags[0]' "$metadata")
+          sh .scripts/smoke-production-image.sh "$smoke_image"
+
   arm64-validation:
     if: >-
       (github.event_name != 'pull_request' ||
@@ -109,6 +134,9 @@ jobs:
       contents: read
       packages: write
     runs-on: ubuntu-24.04-arm
+    outputs:
+      release_status: ${{ steps.check-existing-release.outputs.status }}
+      release_digest: ${{ steps.check-existing-release.outputs.digest }}
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       REGISTRY_CACHE_SUFFIX: "-arm64"
@@ -125,7 +153,7 @@ jobs:
           cache: true
 
       - name: install Compose generation tools
-        run: mise --no-hooks install jq yq ytt
+        run: mise --no-hooks install jq yq ytt oras
 
       - name: login to ghcr.io for ARM64 build cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -196,31 +224,53 @@ jobs:
         if: always()
         run: docker compose down --volumes --remove-orphans
 
-      - name: validate production configuration and build ARM64 images
-        env:
-          CI: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || '' }}
-          TYPESENSE_API_KEY_FILE: ./.secrets/typesense-api-key
-          GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
-          OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
-          GRAPHQL_INGRESS_SECRET_FILE: ./.secrets/graphql-ingress-secret
+      - name: check for an existing complete release
+        id: check-existing-release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          echo "::group::generate production Compose configuration"
-          mise run generate-docker-compose-prod
-          echo "::endgroup::"
-          echo "::group::validate production Compose configuration and build images"
-          docker compose config --quiet
-          docker compose build
-          echo "::endgroup::"
-          echo "::group::verify production image architectures"
-          mapfile -t images < <(docker compose config --images | sort -u)
+          set -euo pipefail
+          result=$(sh .scripts/check-production-release.sh "$GITHUB_SHA")
+          if [[ $result == found:* ]]; then
+            echo "status=found" >> "$GITHUB_OUTPUT"
+            echo "digest=${result#found:}" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=absent" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: build and validate production ARM64 images
+        if: >-
+          github.event_name != 'push' || github.ref != 'refs/heads/main' || steps.check-existing-release.outputs.status != 'found'
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/production-build-arm64.json"
+          is_main=false
+          if [[ $GITHUB_EVENT_NAME == push && $GITHUB_REF == refs/heads/main ]]; then
+            is_main=true
+          fi
+          write_cache=false
+          if [[ $is_main == true ]]; then
+            write_cache=true
+          fi
+          sh .scripts/generate-production-build-metadata.sh \
+            "$GITHUB_SHA" linux/arm64 "$metadata" "$write_cache"
+          if [[ $is_main == true ]]; then
+            docker buildx bake --file "$metadata" --push
+          else
+            docker buildx bake --file "$metadata" --load
+          fi
+          mapfile -t images < <(jq -r '.target[] | .tags[0]' "$metadata")
           for image in "${images[@]}"; do
+            if [[ $is_main == true ]]; then
+              docker pull --platform linux/arm64 "$image"
+            fi
             platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")
             if [[ $platform != linux/arm64 ]]; then
               echo "$image was built for $platform, expected linux/arm64." >&2
               exit 1
             fi
           done
-          echo "::endgroup::"
+          smoke_image=$(jq -r '.target.design.tags[0]' "$metadata")
+          sh .scripts/smoke-production-image.sh "$smoke_image"
 
       - name: upload integration reports on failure
         if: failure()
@@ -270,25 +320,53 @@ jobs:
       - name: install tools and synchronize
         run: mise install
 
-      - name: build and push production images
-        env:
-          TYPESENSE_API_KEY_FILE: ./.secrets/typesense-api-key
-          GOOGLE_OAUTH_CLIENT_SECRET_FILE: ./.secrets/google-oauth-client-secret
-          OAUTH2_COOKIE_SECRET_FILE: ./.secrets/oauth2-cookie-secret
-          GRAPHQL_INGRESS_SECRET_FILE: ./.secrets/graphql-ingress-secret
+      - name: build, publish, and verify production release
+        id: production-release
         run: |
-          echo "::group::generate production docker-compose.yml"
-          mise run generate-docker-compose-prod
-          echo "::endgroup::"
-          echo "::group::docker-compose.yml"
-          cat docker-compose.yml
-          echo "::endgroup::"
-          echo "::group::docker compose build"
-          docker compose build
-          echo "::endgroup::"
-          echo "::group::docker compose push"
-          docker compose push
-          echo "::endgroup::"
+          set -euo pipefail
+          inventory="$RUNNER_TEMP/release.json"
+          if [[ '${{ needs.arm64-validation.outputs.release_status }}' == found ]]; then
+            digest='${{ needs.arm64-validation.outputs.release_digest }}'
+            oras pull "ghcr.io/dhhyi/recipe-db-releases@$digest" --output "$RUNNER_TEMP/existing-release"
+            inventory="$RUNNER_TEMP/existing-release/release.json"
+            sh .scripts/validate-production-release.sh "$inventory" "$GITHUB_SHA"
+            echo "Reusing complete release inventory: ghcr.io/dhhyi/recipe-db-releases@$digest"
+          else
+            metadata="$RUNNER_TEMP/production-build-amd64.json"
+            sh .scripts/generate-production-build-metadata.sh \
+              "$GITHUB_SHA" linux/amd64 "$metadata" true
+            docker buildx bake --file "$metadata" --push
+            smoke_image=$(jq -r '.target.design.tags[0]' "$metadata")
+            docker pull --platform linux/amd64 "$smoke_image"
+            sh .scripts/smoke-production-image.sh "$smoke_image"
+
+            while IFS= read -r project; do
+              image="ghcr.io/dhhyi/recipe-db-$project"
+              docker buildx imagetools create \
+                --tag "$image:sha-$GITHUB_SHA" \
+                "$image:sha-$GITHUB_SHA-amd64" \
+                "$image:sha-$GITHUB_SHA-arm64"
+            done < <(jq -r '.target | keys[]' "$metadata")
+
+            sh .scripts/create-production-release-inventory.sh "$GITHUB_SHA" "$inventory"
+            sh .scripts/publish-production-release.sh "$inventory" "$GITHUB_SHA"
+          fi
+          echo "inventory=$inventory" >> "$GITHUB_OUTPUT"
+
+      - name: update compatibility latest tags
+        if: success()
+        run: |
+          set -euo pipefail
+          current_revision=$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')
+          if [[ $current_revision != "$GITHUB_SHA" ]]; then
+            echo "Skipping latest tags because $GITHUB_SHA is no longer the main-branch head."
+            exit 0
+          fi
+          inventory='${{ steps.production-release.outputs.inventory }}'
+          while IFS=$'\t' read -r project image; do
+            repository="ghcr.io/dhhyi/recipe-db-$project"
+            docker buildx imagetools create --tag "$repository:latest" "$image"
+          done < <(jq -r '.images | to_entries[] | [.key, .value] | @tsv' "$inventory")
 
       - name: build and push devcontainers
         run: |

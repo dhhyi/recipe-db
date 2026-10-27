@@ -68,6 +68,8 @@ teardown() {
 @test "real Traefik injects the token only after authentication and hides secret configuration" {
   [ "${TEST_AUTH_INGRESS:-false}" = true ] || skip "run mise run test-auth-ingress for Docker verification"
   cp "$BATS_TEST_DIRNAME/../generate-docker-compose.sh" .scripts/
+  mkdir -p .scripts/lib
+  cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   use_mise_tools
   mkdir graphql
