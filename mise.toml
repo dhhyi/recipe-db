@@ -6,12 +6,14 @@ COMPOSE_PARALLEL_LIMIT = "2"
 [tools]
 "aqua:bats-core/bats-core" = "1.13.0"
 "aqua:oras-project/oras" = "1.3.6"
+"aqua:k3d-io/k3d" = "5.8.3"
+"aqua:kubernetes/kubernetes/kubectl" = "1.35.5"
 jq = "latest"
 node = "26"
 "npm:@devcontainers/cli" = "latest"
 shellcheck = "latest"
 yq = "latest"
-ytt = "latest"
+ytt = "0.55.4"
 "aqua:bazelbuild/bazelisk" = "latest"
 
 [hooks]
@@ -44,6 +46,16 @@ run = "bats --print-output-on-failure .scripts/tests"
 [tasks.test-message-bus]
 description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"
 run = "sh .scripts/test-message-bus.sh"
+
+[tasks.production-k3d]
+description = "Create, render, deploy, inspect, or explicitly delete a production rehearsal"
+run = "bash .scripts/production-k3d.sh"
+raw_args = true
+
+[tasks.production-smoke]
+description = "Run protocol and persistence checks against a guarded local production rehearsal"
+run = "bash .scripts/smoke-production-k3d.sh"
+raw_args = true
 
 [tasks.test-auth-ingress]
 description = "Verify production ingress token routing and configuration isolation with real Traefik"
