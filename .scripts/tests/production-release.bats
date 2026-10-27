@@ -360,6 +360,41 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "artifact publication uploads an absolute inventory path as a relative filename" {
+  write_valid_release
+  mock_public_image_verification
+  mkdir payload
+  cp release.json payload/release.json
+  export UPLOAD_DIRECTORY="$FIXTURE_ROOT/payload"
+  cat > .scripts/check-production-release.sh << 'EOF'
+#!/bin/sh
+if [ -f "$UPLOAD_DIRECTORY/uploaded" ]; then
+  echo found:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+else
+  echo absent
+fi
+EOF
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+set -eu
+[ "$PWD" = "$UPLOAD_DIRECTORY" ]
+for argument do
+  case "$argument" in
+    /* | --disable-path-validation) exit 99 ;;
+    release.json:application/json) test -f release.json; touch uploaded ;;
+  esac
+done
+test -f uploaded
+EOF
+  chmod +x bin/oras
+
+  run sh .scripts/publish-production-release.sh "$UPLOAD_DIRECTORY/release.json" "$REVISION"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Published release inventory:"* ]]
+  [ -f "$UPLOAD_DIRECTORY/uploaded" ]
+}
+
 @test "production image smoke check starts the image and cleans up its container" {
   cat > bin/docker << 'EOF'
 #!/bin/sh
