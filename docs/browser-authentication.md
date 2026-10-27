@@ -63,7 +63,7 @@ For a private SSR caller, forward only the configured `_oauth2_proxy` cookie (in
 
 The local GraphQL configuration is authoritative in development and production. To choose the credential-free role, edit `.secrets/auth-accounts.json` and set `anonymous.role` to `anonymous`, `member`, or `owner`, then restart GraphQL with `docker compose restart graphql`. The file is read only at startup; changing it does not hot-reload policy. All credential-free requests share the stable `credential-free:v1` identity, so separate-user tests need distinct configured token IDs.
 
-For isolated E2E auth tests, `mise run create-auth-test-fixture` creates deterministic IDs (`e2e-owner`, `e2e-member-one`, `e2e-member-two`) with fresh random secrets in the same `.secrets/auth-accounts.json` mounted at `/run/secrets/auth-accounts.json`. It writes the client-only token inputs to `e2e-test/.secrets/auth-tokens.json`; both files are private and ignored by Git. The command replaces only the standard empty local configuration and refuses to overwrite a customized policy or an existing token-input file. Restart GraphQL after generation:
+For isolated E2E auth tests, `mise run create-auth-test-fixture` creates deterministic IDs (`e2e-owner`, `e2e-member-one`, `e2e-member-two`) with fresh random secrets in the same `.secrets/auth-accounts.json` mounted at `/run/secrets/auth-accounts.json`. It writes the client-only token inputs to `e2e-test/.secrets/auth-tokens.json`; both files are private and ignored by Git. This fixture is generated automatically by `mise run setup`, `mise run generate-docker-compose`, and the corresponding CI setup. Repeated setup preserves the generated token values, the selected `anonymous.role`, and unrelated configured principals. Compose integration tests pass the token inputs only to the E2E test process; GraphQL still reads its policy solely from `/run/secrets/auth-accounts.json`. Restart GraphQL after generation:
 
 ```sh
 mise run create-auth-test-fixture
@@ -71,7 +71,7 @@ docker compose restart graphql
 mise run --raw in-devcontainer e2e-test pnpm exec playwright test tests/auth-contexts.functional.spec.js --project=desktop
 ```
 
-Start the development Compose stack first (`mise run dev-up`). The focused test exercises anonymous, both member, and owner request headers, isolated browser/API cookies, and same-origin-only credential forwarding across external requests and redirects. It uses no Google credentials or Google network access. The generated fixture keeps `anonymous.role` at `anonymous`; the ordinary E2E runner continues to use credential-free access.
+Start the development Compose stack first (`mise run dev-up`). The focused test exercises anonymous, both member, and owner request headers, isolated browser/API cookies, and same-origin-only credential forwarding across external requests and redirects. It uses no Google credentials or Google network access. The generated fixture initially keeps `anonymous.role` at `anonymous`; the ordinary E2E runner continues to use credential-free access.
 
 To restore the standard local fixture after a successful generation, remove only the generated files, recreate the default policy, and restart GraphQL:
 

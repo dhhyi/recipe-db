@@ -85,7 +85,7 @@ description = "Synchronize shared files, devcontainers, GraphQL schemas and Baze
 depends = [
   "create-intranet",
   "create-search-key",
-  "create-auth-accounts",
+  "create-auth-test-fixture",
   "create-oauth-secrets"
 ]
 run = [
@@ -100,7 +100,7 @@ description = "Prepare development defaults with mise dependencies and generate 
 depends = [
   "create-intranet",
   "create-search-key",
-  "create-auth-accounts",
+  "create-auth-test-fixture",
   "create-oauth-secrets"
 ]
 file = ".scripts/generate-docker-compose.sh"
@@ -134,6 +134,7 @@ file = ".scripts/create-auth-accounts.sh"
 [tasks.create-auth-test-fixture]
 description = "Generate ephemeral isolated GraphQL token principals for E2E auth tests"
 file = ".scripts/create-auth-test-fixture.sh"
+depends = ["create-auth-accounts"]
 
 [tasks.create-oauth-secrets]
 description = "Create private development OAuth placeholders, cookie and ingress secrets without replacing existing files"

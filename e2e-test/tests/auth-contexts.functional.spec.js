@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { test, expect } from "./fixtures.js";
 
-test.use({ trace: "off" });
+test.use({ trace: "off", resetApplicationData: false });
 
 async function listen(handler) {
   const server = createServer(handler);

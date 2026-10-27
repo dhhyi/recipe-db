@@ -206,12 +206,13 @@ export const test = base.extend({
   authContexts: async ({ browser }, use) => {
     let tokens;
     try {
-      tokens = JSON.parse(
-        await readFile(
+      const source =
+        process.env.E2E_AUTH_TOKENS ??
+        (await readFile(
           new URL("../.secrets/auth-tokens.json", import.meta.url),
           "utf8",
-        ),
-      );
+        ));
+      tokens = JSON.parse(source);
     } catch {
       throw new Error(
         "E2E auth tokens are missing or invalid; run mise run create-auth-test-fixture.",
