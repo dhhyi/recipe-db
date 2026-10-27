@@ -2,7 +2,7 @@
 # Protocol-only rehearsal. All Kubernetes access goes through the guarded driver.
 # GraphQL and jq variables are deliberately literal, not shell interpolations.
 # shellcheck disable=SC2016
-set -euo pipefail
+set -Eeuo pipefail
 set +x
 umask 077
 
@@ -72,10 +72,20 @@ delete_own_recipe() {
     && jq -e '.data.deleteRecipe == true' "$work/body" > /dev/null
 }
 restore_browse() {
+  local deadline
   [[ $browse_scaled == true ]] || return 0
   kube scale "deployment/$browse_name" "--replicas=$browse_replicas" > /dev/null \
     && kube rollout status "deployment/$browse_name" "--timeout=${timeout}s" > /dev/null || return 1
   browse_scaled=false
+  deadline=$((SECONDS + timeout))
+  while ((SECONDS < deadline)); do
+    if request / --header 'Accept: text/html' && expect_status 200; then
+      return 0
+    fi
+    sleep 1
+  done
+  printf 'Browse replicas restored, but ingress did not become ready before the deadline.\n' >&2
+  return 1
 }
 finish() {
   local exit_code=$?
@@ -116,6 +126,7 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'printf "Production smoke: command failed at line %s (caller %s) during %s\n" "$LINENO" "${BASH_LINENO[0]:-0}" "$phase" >&2' ERR
 
 token=$(cat "$token_file")
 [[ $token =~ ^[A-Za-z0-9._~+/-]+=*$ ]] || die 'bearer token is not a single valid token'
@@ -158,7 +169,7 @@ done < "$work/initial-deployments.txt"
 mark
 
 phase=recipe-create-read-update
-name="Production-smoke-$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
+name="ProductionSmoke$(date -u +%Y%m%dT%H%M%SZ)$$${RANDOM}"
 graphql 'mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }' \
   "$(jq -nc --arg name "$name" '{value:{name:$name,method:"rehearsal initial"}}')"
 recipe_id=$(jq -er '.data.createRecipe.id | select(type == "string" and length > 0)' "$work/body")

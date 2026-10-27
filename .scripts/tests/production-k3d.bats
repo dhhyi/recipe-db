@@ -17,6 +17,7 @@ setup() {
   export MOCK_ABSENT=false MOCK_MEMORY=17179869184 MOCK_PUBLIC=false
   export MOCK_FOREIGN_NAMESPACE=false MOCK_FOREIGN_HELM=false MOCK_HELM_PENDING=false MOCK_HELM_DELAYED=false
   export MOCK_INCOMPLETE_INDEX=false
+  export MOCK_STALE_ROUTES=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
     namespace:"recipe-db",origin:"http://127.0.0.1:8080",httpPort:8080,apiPort:6445,
@@ -104,25 +105,43 @@ case "$*" in
       echo '{}'
       exit
     fi
+    checksum=$(cat "$MOCK_LOG.route-checksum")
+    if [[ $MOCK_STALE_ROUTES = true && ! -f ${MOCK_LOG%/*}/routes-observed ]]; then
+      touch "${MOCK_LOG%/*}/routes-observed"
+      checksum=old-routes
+    fi
     echo '{"spec":{"template":{"spec":{"containers":[{
       "name":"traefik","image":"docker.io/traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",
       "args":["--providers.file.filename=/etc/recipe-db/routes.yml"],
       "ports":[{"containerPort":3000}],"volumeMounts":[{"mountPath":"/etc/recipe-db"}]}],
-      "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' ;;
+      "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' |
+      jq --arg checksum "$checksum" \
+        '.spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum' ;;
   *"create -f "*lease.json*) [[ $MOCK_LOCK != true ]] ;;
   *"rollout status "*) [[ $MOCK_ROLLOUT != true ]] ;;
   *"create secret generic recipe-db-routes"*)
     for argument in "$@"; do
       case "$argument" in
         --from-file=routes.yml=*)
-          jq -e '.http.services.recipes.loadBalancer.servers[0].url == "http://recipes.recipe-db.svc.cluster.local:4000"
+          route_file=${argument#--from-file=routes.yml=}
+          jq -e --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
+            '.http.services.recipes.loadBalancer.servers[0].url == "http://recipes.recipe-db.svc.cluster.local:4000"
             and .http.middlewares["oauth2-forward-auth"].forwardAuth.address == "http://oauth2-proxy.recipe-db.svc.cluster.local/oauth2/auth"
             and .http.routers["graphql-internal"] == {
               rule:"PathPrefix(`/graphql`)",entrypoints:["rest-internal"],
               service:"recipe-db-graphql",middlewares:["graphql-ingress"]}
             and .http.routers.graphql.entrypoints == ["web"]
-            and .http.middlewares["graphql-ingress"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ("a"*43)' \
-            "${argument#--from-file=routes.yml=}" > /dev/null || exit 1 ;;
+            and .http.middlewares["graphql-ingress"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ($ingress | rtrimstr("\n"))' \
+            "$route_file" > /dev/null || exit 1 ;;
+      esac
+    done
+    echo '{"kind":"Secret","data":{}}' ;;
+  *"create secret generic recipe-db-runtime"*)
+    for argument in "$@"; do
+      case "$argument" in
+        --from-file=oauth2-cookie-secret=*)
+          jq -eRs 'test("^[A-Za-z0-9_-]+$")' \
+            "${argument#--from-file=oauth2-cookie-secret=}" > /dev/null || exit 1 ;;
       esac
     done
     echo '{"kind":"Secret","data":{}}' ;;
@@ -136,8 +155,16 @@ case "$*" in
         exit 1
       fi
     fi ;;
-  *"apply -f "*rendered.yml)
+  *"apply -f "*infrastructure.yml)
     last="${*: -1}"
+    if yq -e 'select(.metadata.namespace != "kube-system")' "$last" > /dev/null; then exit 1; fi
+    yq -r '.spec.valuesContent | from_yaml | .deployment.podAnnotations."recipe-db/routes-checksum"' \
+      "$last" > "$MOCK_LOG.route-checksum"
+    cat "$MOCK_LOG.route-checksum" >> "$MOCK_LOG.route-checksums"
+    [[ $* == *"--namespace kube-system apply"* ]] ;;
+  *"apply -f "*application.yml)
+    last="${*: -1}"
+    if yq -e 'select(.metadata.namespace == "kube-system")' "$last" > /dev/null; then exit 1; fi
     yq -r 'select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum"' \
       "$last" >> "$MOCK_LOG.checksums" ;;
   *"get deployments,pods,jobs,pvc"* | *"get events "*) echo safe-status ;;
@@ -165,6 +192,7 @@ if [[ $1 = manifest ]]; then
         [{platform:{os:"linux",architecture:"arm64"},digest:("sha256:"+("e"*64))}] end))}'
   fi
 else
+  [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]] || exit 1
   while [[ $1 != --output ]]; do shift; done
   jq -n '{schemaVersion:1,revision:("a"*40),images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
@@ -179,6 +207,7 @@ if jq -e 'has("config")' "$2" > /dev/null; then
   jq -e 'keys == ["artifact","config","files","projects","release"]
     and (.files | keys) == ["maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
   printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: release\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: recipes\nspec:\n  template:\n    metadata:\n      annotations: {}\n'
+  printf '%s\n' '---' 'apiVersion: helm.cattle.io/v1' 'kind: HelmChartConfig' 'metadata:' '  name: traefik' '  namespace: kube-system' 'spec:' '  valuesContent: "deployment: {}"'
 else
   cat << 'YAML'
 http:
@@ -346,7 +375,7 @@ set_value() {
   [ "$status" -eq 0 ]
   [[ $output == "apiVersion: v1"* ]]
   [[ $output != *private-* ]]
-  grep -q 'oras pull --no-progress ghcr.io/dhhyi/recipe-db-releases@sha256:' "$MOCK_LOG"
+  grep -q 'oras pull ghcr.io/dhhyi/recipe-db-releases@sha256:' "$MOCK_LOG"
   run ! grep -Eq '^(k3d|docker|kubectl)' "$MOCK_LOG"
 }
 
@@ -398,6 +427,8 @@ set_value() {
   grep -q -- '--namespace kube-system create secret generic recipe-db-routes' "$MOCK_LOG"
   grep -q 'wait --for=condition=complete job/nats-init --timeout=600s' "$MOCK_LOG"
   grep -q 'delete job nats-init --ignore-not-found --wait=true --timeout=600s' "$MOCK_LOG"
+  grep -q -- '--namespace kube-system apply -f .*infrastructure.yml' "$MOCK_LOG"
+  grep -q -- '--namespace recipe-db .*apply -f .*application.yml' "$MOCK_LOG"
   run ! grep -q 'rollout restart' "$MOCK_LOG"
   grep -q 'rollout status deployment/recipes --timeout=600s' "$MOCK_LOG"
   grep -q 'rollout status deployment/search --timeout=600s' "$MOCK_LOG"
@@ -428,6 +459,21 @@ set_value() {
   [[ $output == *"cannot be acquired"* ]]
   run ! grep -q 'delete lease' "$MOCK_LOG"
   run ! grep -q 'create secret' "$MOCK_LOG"
+}
+
+@test "ingress secret rotation updates Traefik pod checksum and waits past stale deployment" {
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' > graphql-ingress-secret
+  export MOCK_STALE_ROUTES=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(sed -n '1p' "$MOCK_LOG.route-checksums")" = "$(sed -n '2p' "$MOCK_LOG.route-checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.route-checksums")" != "$(sed -n '3p' "$MOCK_LOG.route-checksums")" ]
+  [ "$(grep -c 'get deployment traefik -o json' "$MOCK_LOG")" -eq 4 ]
+  grep -Eq '^[0-9a-f]{64}$' "$MOCK_LOG.route-checksum"
 }
 
 @test "deploy refuses foreign namespace before creating secrets or taking its lock" {
@@ -493,6 +539,32 @@ set_value() {
   [[ $output == *"details suppressed to protect secrets"* ]]
   [[ $output != *unsafe-private-secret-contents* ]]
   grep -q 'delete lease recipe-db-deploy' "$MOCK_LOG"
+}
+
+@test "deploy accepts an unpadded URL-safe 32-byte cookie key with a trailing newline" {
+  printf '__________________________________________8\n' > oauth2-cookie-secret
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output != *"__________________________________________8"* ]]
+  grep -q 'create secret generic recipe-db-runtime' "$MOCK_LOG"
+}
+
+@test "caller xtrace is disabled before any credentials are processed" {
+  run bash -x .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output != *private-typesense-value-for-tests* ]]
+  [[ $output != *private-oauth-client-value-for-tests* ]]
+  [[ $output != *MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=* ]]
+  run ! grep -Eq 'private-typesense-value-for-tests|private-oauth-client-value-for-tests' "$MOCK_LOG"
+}
+
+@test "deploy normalizes standard padded cookie base64 without modifying operator files" {
+  printf '//////////////////////////////////////////8=\n' > oauth2-cookie-secret
+  cp oauth2-cookie-secret original-cookie
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  cmp oauth2-cookie-secret original-cookie
+  [[ $output != *"//////////////////////////////////////////8="* ]]
 }
 
 @test "malformed auth accounts and incorrect ingress token length fail before mutation" {

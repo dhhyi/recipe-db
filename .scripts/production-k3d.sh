@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
 umask 077
 
@@ -108,7 +109,7 @@ pull_release() {
     and (.layers[0].size | type == "number" and . > 0 and . <= 1048576)
   ' "$work/manifest.json" > /dev/null || production_fail "unsafe or invalid release artifact shape"
   mkdir "$work/pulled"
-  oras pull --no-progress "$artifact" --output "$work/pulled" > /dev/null
+  oras pull "$artifact" --output "$work/pulled" > /dev/null
   [[ -f $work/pulled/release.json && ! -L $work/pulled/release.json ]] \
     || production_fail "release artifact did not contain a regular release.json"
   revision=$(jq -er .revision "$work/pulled/release.json")
@@ -148,8 +149,12 @@ annotate_credentials() {
       google-oauth-client-secret oauth2-cookie-secret | sha256sum
   )
   checksum=${checksum%% *}
-  SECRET_CHECKSUM="$checksum" yq \
-    '(select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum") = strenv(SECRET_CHECKSUM)' \
+  route_checksum=$(sha256sum "$work/routes.yml")
+  route_checksum=${route_checksum%% *}
+  SECRET_CHECKSUM="$checksum" ROUTES_CHECKSUM="$route_checksum" yq \
+    '(select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum") = strenv(SECRET_CHECKSUM) |
+      (select(.kind == "HelmChartConfig").spec.valuesContent) |=
+        (from_yaml | .deployment.podAnnotations."recipe-db/routes-checksum" = strenv(ROUTES_CHECKSUM) | to_yaml)' \
     "$work/rendered.yml" > "$work/deployment.yml"
   mv "$work/deployment.yml" "$work/rendered.yml"
 }
@@ -214,8 +219,9 @@ wait_traefik() {
   # A rollout status call alone can observe the old deployment before the Helm controller acts.
   while ((SECONDS < deadline)); do
     if kube --namespace kube-system get deployment traefik -o json > "$work/traefik.json" 2> /dev/null \
-      && jq -e --arg image "$expected" '
-        any(.spec.template.spec.containers[]?;
+      && jq -e --arg image "$expected" --arg checksum "$route_checksum" '
+        .spec.template.metadata.annotations["recipe-db/routes-checksum"] == $checksum
+        and any(.spec.template.spec.containers[]?;
           (.image | sub("^docker.io/"; "")) == ($image | sub("^docker.io/"; ""))
           and any(.args[]?; . == "--providers.file.filename=/etc/recipe-db/routes.yml")
           and any(.ports[]?; .containerPort == 3000)
@@ -300,8 +306,10 @@ case "$command" in
     pull_release "$1"
     production_secrets
     render
-    annotate_credentials
     routes
+    annotate_credentials
+    yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
+    yq 'select(.metadata.namespace != "kube-system")' "$work/rendered.yml" > "$work/application.yml"
     connect
     guard_helm_config
     ensure_namespace
@@ -332,7 +340,8 @@ case "$command" in
     if ! {
       # Job pod templates are immutable; provisioning is deliberately idempotent.
       kube delete job nats-init --ignore-not-found --wait=true --timeout="${timeout}s" > /dev/null \
-        && kube apply -f "$work/rendered.yml" > /dev/null \
+        && kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null \
+        && kube apply -f "$work/application.yml" > /dev/null \
         && kube rollout status deployment/nats --timeout="${timeout}s" \
         && kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" \
         && wait_traefik \

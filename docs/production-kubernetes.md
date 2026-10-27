@@ -10,7 +10,11 @@ The production manifest renderer consumes the same project metadata and immutabl
 - Use a published `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 hex digits>` artifact, not a mutable tag or an individual application image. The driver validates the artifact shape, source, revision and complete image inventory.
 - No development Compose generation or development authentication fixture is needed. Do not copy fixture credentials into production.
 
-The local identity is deliberately narrow: target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. A different configured `httpPort` is supported only with its matching loopback origin. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
+The local identity is deliberately narrow: target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. A different configured `httpPort` is supported only with its matching loopback origin; set `apiPort` independently when its default is occupied. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
+
+### Release-matched runtime mode
+
+The verified release below predates #81 and requires `PRODUCTION=true`, which these templates emit. It does not understand `MODE=production`. #81's independent mode migration must update the deployment environment and its regression tests together with the application images: migrated images require `MODE=production` and reject the legacy variable. Do not deploy a migrated release using these legacy templates or assume that changing only the variable makes an old image production-safe. Backup mode remains outside this deployment work.
 
 ## Operator configuration and secrets
 
@@ -32,6 +36,8 @@ Provide these private operator-managed files, all readable only by the operator:
 | `typesense-api-key` | Strong Typesense API key |
 | `google-oauth-client-secret` | Actual Google OAuth client secret |
 | `oauth2-cookie-secret` | Base64-encoded random 16-, 24- or 32-byte cookie key |
+
+Cookie keys may use standard or URL-safe base64, with or without padding and with an optional trailing newline. The driver validates the decoded length and stages a newline-free URL-safe representation for OAuth2 Proxy without modifying the operator's file.
 
 Set each corresponding value to its absolute path, and set `runtime.googleOAuthClientId` to the real, public Google client ID ending in `.apps.googleusercontent.com`. Keep the trusted issuer `https://accounts.google.com`. Configure the provider's authorized redirect URI for this origin's `/oauth2/callback`. Google browser login is not tested by the HTTP smoke. Do not disable auth or replace real provider settings with an anonymous-write policy to make a rehearsal pass.
 
@@ -98,6 +104,8 @@ The application objects live in `recipe-db`. The intentional infrastructure exce
 
 `infrastructure.traefik` explicitly overrides the bundled controller's image via `HelmChartConfig` to `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. The k3s-bundled Traefik 3.6.13 lacks the required `aliasHeadersStrategy` support; the override preserves the existing authentication header-alias sanitization. This upgrades the same bundled controller, not an additional ingress deployment.
 
+The driver applies the two namespaces separately. Application secret checksums trigger workload replacement when credentials change. A separate route checksum in the bundled controller's pod annotations triggers a Traefik rollout when its file-provider configuration or ingress token changes; deployment waits for that exact checksum, not a previously ready controller. Identical inputs keep both checksums stable.
+
 Deployment uses the `recipe-db-deploy` Kubernetes Lease as coordination groundwork for backup/restore work in #43. An existing Lease blocks deployment rather than being silently stolen. This is **not** a complete backup locking protocol, transactional deployment, snapshot mechanism or proof that a backup is safe. Investigate an abandoned Lease and its owner before any manual recovery; do not automatically delete it to make deployment proceed.
 
 ## What the protocol smoke verifies
@@ -157,21 +165,23 @@ mise run production-k3d delete "$PWD/.secrets/local-values.yaml" \
 
 There is no automatic teardown at the end of the smoke. Do not use the destructive command as a troubleshooting shortcut, and never treat k3d PVCs as a backup.
 
-## Verification evidence and current release blocker
+## Verification evidence
 
-As of 2026-10-27, the attempted release for source revision `195db086f9142dc1ad4da44df47741781a7287f8` did **not** produce a consumable release artifact. The [Publish workflow run 40494661344](https://github.com/dhhyi/recipe-db/actions/runs/40494661344), job [122162385526](https://github.com/dhhyi/recipe-db/actions/runs/40494661344/job/122162385526), failed at 11:29:19 UTC during ORAS publication with:
+The earlier release-publication blocker is resolved. [Publish run 40515853280](https://github.com/dhhyi/recipe-db/actions/runs/40515853280) published and anonymously verified:
 
-```text
-absolute file paths are insecure ... /home/runner/work/_temp/release.json
-```
+- Artifact: `ghcr.io/dhhyi/recipe-db-releases@sha256:e05612b6e79bba7005854ab9827e2525be1ba7d9cb9174b019fa9c54097a17eb`
+- Source revision: `431f861ffb8912484f050b1bc744aba9667ea08f`
+- Runtime contract: legacy `PRODUCTION=true`, before #81's mode migration.
 
-Application images had been anonymously verified, but successful image publication is not successful release-artifact publication. No substitute, locally fabricated OCI inventory was used. Until a real immutable release artifact is published, the real-release deployment/restart/reapply smoke remains **blocked, not passed**; physical Pi acceptance is also **not passed**.
+On 2026-10-27, the full protocol smoke passed on an x86-64 Docker/k3d deployment with this real immutable release. All 11 phases completed, including private-path rejection, actual maintenance-page comparison, restored browse ingress, PVC-backed workload restarts, same-release reapplication, and retained recipe/image/search data. The test deleted only its own recipe and reported successful cleanup. The synthetic recipe name is a unique alphanumeric search token, avoiding Typesense's hyphenated-query interpretation. After restoring browse replicas, the smoke waits for ingress health as well as Kubernetes readiness.
 
-The rehearsal tool contract is ytt 0.55.4, ORAS 1.3.6, k3d 5.8.3, k3s v1.35.5-k3s1 and kubectl 1.35.5, with the bundled controller overridden to `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. These declared versions and mocked regression results are not end-to-end deployment evidence. Record the eventual real artifact digest, source revision, smoke result and device checks separately when the blocker is resolved.
+After confirmed deletion, a newly created cluster passed the same complete smoke from empty volumes (`success: true`, `cleanupSucceeded: true`, 11 checks). Rotating only the disposable ingress secret and redeploying the identical release replaced the bundled Traefik pod and preserved successful authenticated GraphQL reads. The disposable cluster was then explicitly deleted and the k3d cluster list verified empty. Recreating empty volumes is not a backup-restoration test.
 
-Separately, real local Docker/k3d lifecycle validation on 2026-10-27 successfully created the managed single-server cluster with pinned k3s, verified its private kubeconfig and live node provider ID, obtained status, and performed guarded deletion. The cluster was removed afterwards. The pinned k3d 5.8.3 CLI requires `--runtime-label` for the management label (not `--label`); the driver also handles its actual API `PortBindings` key and confines deletion's `KUBECONFIG` to the private verified file.
+The operator explicitly authorized generated disposable-local owner and infrastructure credentials, including a non-production OAuth client placeholder. No production credentials, test fixture accounts, fabricated release inventory, or real Google browser login were used. This is not evidence of Google login, HTTPS, backup/restore, or physical Pi operation; #43-#45 retain those responsibilities.
 
-This is **infrastructure lifecycle evidence only**. It does not establish successful application deployment, release-artifact consumption, smoke execution, data persistence across restart/reapply, or physical Pi acceptance. The missing published release artifact still blocks those application-level checks.
+The verified tools were k3d 5.8.3 with explicit server image `rancher/k3s:v1.35.5-k3s1`, kubectl 1.35.5, ORAS 1.3.6, ytt 0.55.4, Docker 29.8.2, jq 1.8.2, yq 4.54.1 and curl 8.18.0. The bundled controller used `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. The k3d CLI's displayed default k3s version is not the selected server version.
+
+Commands were the create/render/deploy/status/production-smoke commands above, using private values with `httpPort: 18080`, `apiPort: 16445` and `origin: http://127.0.0.1:18080` to avoid the running development stack. Full JSON results record the release, phase checks, cleanup status and exact client versions; secret values are excluded.
 
 ## Script regression checks
 

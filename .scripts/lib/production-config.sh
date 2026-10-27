@@ -67,7 +67,7 @@ production_config() {
 }
 
 production_secrets() {
-  local key path
+  local key path decoded cookie
   for key in auth-accounts.json graphql-ingress-secret typesense-api-key google-oauth-client-secret oauth2-cookie-secret; do
     path=$(jq -r --arg key "$key" '.secrets[$key]' "$work/config.json")
     [[ -f $path && -r $path && -s $path ]] || production_fail "missing or unreadable secret file: $key"
@@ -85,9 +85,16 @@ production_secrets() {
   done
   jq -eRs 'test("^[A-Za-z0-9+/_-]+={0,2}\\n?\\z")' "$work/oauth2-cookie-secret" > /dev/null \
     || production_fail "invalid oauth2 cookie secret"
-  local decoded
-  decoded=$(tr '_-' '/+' < "$work/oauth2-cookie-secret" | base64 -d 2> /dev/null | wc -c) \
+  cookie=$(< "$work/oauth2-cookie-secret")
+  cookie=${cookie//_/\/}
+  cookie=${cookie//-/+}
+  while ((${#cookie} % 4 != 0)); do
+    cookie+='='
+  done
+  decoded=$(printf '%s' "$cookie" | base64 -d 2> /dev/null | wc -c) \
     || production_fail "oauth2 cookie secret must be base64"
   [[ $decoded = 16 || $decoded = 24 || $decoded = 32 ]] \
     || production_fail "oauth2 cookie secret must encode 16, 24 or 32 bytes"
+  # OAuth2 Proxy decodes only URL-safe base64, with no trailing newline.
+  printf '%s' "$cookie" | tr '/+' '_-' | tr -d '=' > "$work/oauth2-cookie-secret"
 }

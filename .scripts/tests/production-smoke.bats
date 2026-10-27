@@ -4,7 +4,7 @@ load test_helper
 
 setup() {
   unset FAIL_VERIFY FAIL_DEPLOY FAIL_SEARCH FAIL_RELEASE FAIL_MAINTENANCE FAIL_HTMX \
-    FAIL_BACKEND_EXPOSURE FAIL_MCP_MAINTENANCE FAIL_WRONG_MAINTENANCE FAIL_DELETE FAIL_INIT
+    FAIL_BACKEND_EXPOSURE FAIL_MCP_MAINTENANCE FAIL_WRONG_MAINTENANCE FAIL_DELETE FAIL_INIT DELAY_BROWSE_RESTORE
   setup_fixture smoke-production-k3d.sh
   FIXTURE_ROOT=$(pwd -P)
   setup_mock_bin
@@ -52,7 +52,7 @@ case "$command" in
       'scale deployment/browse --replicas=0') touch "$SMOKE_ROOT/scaled" ;;
       'scale deployment/browse --replicas=2') rm -f "$SMOKE_ROOT/scaled"; touch "$SMOKE_ROOT/restored" ;;
       'version --client -o json') printf '{"clientVersion":{"gitVersion":"v1.35.5"}}\n' ;;
-      'wait --for=condition=complete job/nats-init --timeout=1s') [[ ${FAIL_INIT:-false} != true ]] ;;
+      'wait --for=condition=complete job/nats-init --timeout='*) [[ ${FAIL_INIT:-false} != true ]] ;;
       'rollout '*) : ;;
       *) exit 99 ;;
     esac
@@ -94,6 +94,7 @@ case "$path" in
       query=$(jq -r .query "$data")
       case "$query" in
         *createRecipe*)
+          jq -e '.variables.value.name | test("^ProductionSmoke[A-Za-z0-9]+$")' "$data" > /dev/null
           jq '.variables.value + {id:"own-smoke-id",image:null}' "$data" > "$SMOKE_ROOT/recipe.json"
           jq '{data:{createRecipe:.}}' "$SMOKE_ROOT/recipe.json" > "$output"
           ;;
@@ -183,6 +184,11 @@ case "$path" in
       else
         cat "$SMOKE_ROOT/browse-maintenance/unavailable.html" > "$output"
       fi
+    elif [[ $path == / && ${DELAY_BROWSE_RESTORE:-false} == true &&
+      -f $SMOKE_ROOT/restored && ! -f $SMOKE_ROOT/ingress-restored ]]; then
+      touch "$SMOKE_ROOT/ingress-restored"
+      status=503
+      cat "$SMOKE_ROOT/browse-maintenance/unavailable.html" > "$output"
     else
       printf '<html>smoke</html>' > "$output"
     fi
@@ -234,6 +240,15 @@ run_smoke() {
   [ "$status" -ne 0 ]
   [ "$(wc -l < "$MOCK_LOG")" -eq 1 ]
   [ ! -e recipe.json ]
+}
+
+@test "smoke waits for ingress health to catch up after browse replicas are restored" {
+  export DELAY_BROWSE_RESTORE=true
+  yq -i '.timeoutSeconds=5' values.yaml
+  run_smoke
+  [ "$status" -eq 0 ]
+  [ -f ingress-restored ]
+  jq -e '.success and .cleanupSucceeded' result.json
 }
 
 @test "maintenance failure restores exact browse replicas and deletes only its own recipe" {
