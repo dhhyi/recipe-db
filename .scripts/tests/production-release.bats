@@ -277,6 +277,49 @@ EOF
   done
 }
 
+@test "release lookup verifies an existing artifact with anonymous ORAS credentials" {
+  write_valid_release
+  mock_public_image_verification
+  export MOCK_RELEASE="$FIXTURE_ROOT/release.json"
+  export MOCK_ARTIFACT="$FIXTURE_ROOT/artifact.json"
+  jq -n --arg revision "$REVISION" '{
+    artifactType: "application/vnd.dhhyi.recipe-db.release.v1+json",
+    annotations: {
+      "org.opencontainers.image.source": "https://github.com/dhhyi/recipe-db",
+      "org.opencontainers.image.revision": $revision
+    },
+    layers: [{mediaType: "application/json"}]
+  }' > "$MOCK_ARTIFACT"
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+set -eu
+case "$*" in
+  "manifest fetch --descriptor "*)
+    printf '%s\n' '{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}'
+    ;;
+  "manifest fetch "*)
+    [ "$(cat "$DOCKER_CONFIG/config.json")" = '{}' ]
+    [ -d "$HOME" ]
+    cat "$MOCK_ARTIFACT"
+    ;;
+  "pull "*)
+    [ "$(cat "$DOCKER_CONFIG/config.json")" = '{}' ]
+    [ -d "$HOME" ]
+    cp "$MOCK_RELEASE" "$4/release.json"
+    ;;
+  *) exit 99 ;;
+esac
+EOF
+  chmod +x bin/oras
+
+  run --separate-stderr sh .scripts/check-production-release.sh "$REVISION" verified.json
+
+  [ "$status" -eq 0 ]
+  [ "$output" = found:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ]
+  [[ "$stderr" == *"Verified anonymous release artifact"* ]]
+  cmp release.json verified.json
+}
+
 @test "rerunning a completed release reuses its inventory without pushing" {
   write_valid_release
   mock_public_image_verification
