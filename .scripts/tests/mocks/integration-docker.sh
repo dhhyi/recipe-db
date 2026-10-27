@@ -11,8 +11,9 @@ case "$1" in
   up) exit "${UP_STATUS:-0}" ;;
   stop) exit "${STOP_STATUS:-0}" ;;
   run)
-    printf '%s\n' "test stdout: $3"
-    printf '%s\n' "test stderr: $3" >&2
+    project=${!#}
+    printf '%s\n' "test stdout: $project"
+    printf '%s\n' "test stderr: $project" >&2
     exit "${RUN_STATUS:-0}"
     ;;
   *)
