@@ -401,6 +401,90 @@ EOF
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "validate message bus integration and recovery") | .run' "$workflow")" = "mise run test-message-bus" ]
 }
 
+@test "CI Compose startup and integration failures preserve failure without dumping logs" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  script=$(yq '.jobs.arm64-validation.steps[] | select(.id == "integration-tests") | .run' "$workflow")
+  [ -n "$script" ]
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+printf '%s\n' "docker $*" >> "$MOCK_LOG"
+case "$*" in
+  "compose up -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
+  "compose ps") exit 0 ;;
+  *) exit 99 ;;
+esac
+EOF
+  cat > bin/mise << 'EOF'
+#!/bin/sh
+printf '%s\n' "mise $*" >> "$MOCK_LOG"
+exit "${TEST_STATUS:-0}"
+EOF
+  chmod +x bin/docker bin/mise
+
+  for scenario in startup test success; do
+    : > "$MOCK_LOG"
+    case "$scenario" in
+      startup)
+        up_status=23
+        test_status=0
+        expected_status=23
+        ;;
+      test)
+        up_status=0
+        test_status=24
+        expected_status=24
+        ;;
+      success)
+        up_status=0
+        test_status=0
+        expected_status=0
+        ;;
+    esac
+    run env UP_STATUS="$up_status" TEST_STATUS="$test_status" bash -eo pipefail -c "$script"
+    [ "$status" -eq "$expected_status" ]
+    run -1 grep -F 'compose logs' "$MOCK_LOG"
+    if [[ $scenario == startup ]]; then
+      run -1 grep -F 'mise run integration-tests' "$MOCK_LOG"
+    else
+      grep -Fx 'mise run integration-tests -- --development' "$MOCK_LOG"
+    fi
+  done
+}
+
+@test "CI Compose failure logs are captured in a downloadable artifact before cleanup" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  steps=$(yq -o=json '.jobs.arm64-validation.steps' "$workflow")
+  condition="failure() && steps.integration-tests.outcome == 'failure'"
+  [ "$(jq -r '.[] | select(.name == "capture ARM64 Compose logs") | .if' <<< "$steps")" = "$condition" ]
+  [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .if' <<< "$steps")" = "$condition" ]
+  jq -e '
+    (map(.name) | index("capture ARM64 Compose logs")) <
+    (map(.name) | index("upload ARM64 Compose logs")) and
+    (map(.name) | index("upload ARM64 Compose logs")) <
+    (map(.name) | index("clean up development and test stack"))
+  ' <<< "$steps"
+  [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .uses' <<< "$steps")" = actions/upload-artifact@v4 ]
+  [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .with.name' <<< "$steps")" = arm64-compose-logs ]
+  [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .with.path' <<< "$steps")" = "\${{ runner.temp }}/compose.log" ]
+  [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .with["if-no-files-found"]' <<< "$steps")" = error ]
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+[ "$*" = "compose --profile test logs --no-color" ] || exit 99
+printf '%s\n' 'service log output'
+printf '%s\n' 'Compose diagnostic' >&2
+exit "${LOG_STATUS:-0}"
+EOF
+  chmod +x bin/docker
+  export RUNNER_TEMP="$BATS_TEST_TMPDIR"
+  script=$(jq -r '.[] | select(.name == "capture ARM64 Compose logs") | .run' <<< "$steps")
+  for log_status in 0 25; do
+    run env LOG_STATUS="$log_status" bash -eo pipefail -c "$script"
+    [ "$status" -eq "$log_status" ]
+    [ -z "$output" ]
+    [ "$(cat "$RUNNER_TEMP/compose.log")" = $'service log output\nCompose diagnostic' ]
+  done
+}
+
 @test "VS Code settings skip unchanged inputs and regenerate after changes or missing output" {
   run mise run --raw sync-vscode-settings
   [ "$status" -eq 0 ]
