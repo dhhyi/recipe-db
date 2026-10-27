@@ -1,0 +1,184 @@
+# Production Kubernetes deployment and local rehearsal
+
+The production manifest renderer consumes the same project metadata and immutable multi-platform release inventory as production image publishing. It does not build images. A local, single-server k3d deployment is the first acceptance target; the Pi values file is a deployment contract, **not evidence of a validated Pi installation**. No real-cluster rehearsal or physical-device validation is implied by the presence of the scripts or their mocked regression tests.
+
+## Prerequisites and boundaries
+
+- Run commands from the repository root, with an absolute values-file path. Examples below use `/home/runner/work/recipe-db/recipe-db`; substitute your actual absolute checkout path.
+- Local rehearsal requires an x86-64 host, a running Docker daemon with **more than 8 GiB** assigned, available loopback ports 8080 and 6445, and access to GHCR. Leave enough disk space for images and the requested PVCs.
+- The tool contract is k3d **5.8.3**, k3s **v1.35.5-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
+- Use a published `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 hex digits>` artifact, not a mutable tag or an individual application image. The driver validates the artifact shape, source, revision and complete image inventory.
+- No development Compose generation or development authentication fixture is needed. Do not copy fixture credentials into production.
+
+The local identity is deliberately narrow: target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. A different configured `httpPort` is supported only with its matching loopback origin. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
+
+## Operator configuration and secrets
+
+`deploy/local.yaml` and `deploy/pi.yaml` contain non-secret configuration and absolute **secret-file references**, not usable credentials. Copy the desired values under the gitignored repository-root `/.secrets` directory and edit the copy. That directory must not be committed, uploaded as an artifact, or included in diagnostics.
+
+```sh
+cd /home/runner/work/recipe-db/recipe-db
+umask 077
+mkdir -p .secrets
+cp deploy/local.yaml .secrets/local-values.yaml
+```
+
+Provide these private operator-managed files, all readable only by the operator:
+
+| Values key under `secrets` | Contents |
+| --- | --- |
+| `auth-accounts.json` | Valid configuration conforming to `graphql/auth-accounts.schema.json` |
+| `graphql-ingress-secret` | 43 URL-safe base64 characters shared by ingress and GraphQL |
+| `typesense-api-key` | Strong Typesense API key |
+| `google-oauth-client-secret` | Actual Google OAuth client secret |
+| `oauth2-cookie-secret` | Base64-encoded random 16-, 24- or 32-byte cookie key |
+
+Set each corresponding value to its absolute path, and set `runtime.googleOAuthClientId` to the real, public Google client ID ending in `.apps.googleusercontent.com`. Keep the trusted issuer `https://accounts.google.com`. Configure the provider's authorized redirect URI for this origin's `/oauth2/callback`. Google browser login is not tested by the HTTP smoke. Do not disable auth or replace real provider settings with an anonymous-write policy to make a rehearsal pass.
+
+For example, after securely provisioning the files:
+
+```sh
+cd /home/runner/work/recipe-db/recipe-db
+ROOT="$PWD"
+export ROOT
+mise exec -- yq -i '
+  .secrets."auth-accounts.json" = (strenv(ROOT) + "/.secrets/auth-accounts.json") |
+  .secrets."graphql-ingress-secret" = (strenv(ROOT) + "/.secrets/graphql-ingress-secret") |
+  .secrets."typesense-api-key" = (strenv(ROOT) + "/.secrets/typesense-api-key") |
+  .secrets."google-oauth-client-secret" = (strenv(ROOT) + "/.secrets/google-oauth-client-secret") |
+  .secrets."oauth2-cookie-secret" = (strenv(ROOT) + "/.secrets/oauth2-cookie-secret")
+' "$ROOT/.secrets/local-values.yaml"
+```
+
+The smoke requires a separate private bearer-token file. Add that token as a uniquely identified principal in the operator's auth-accounts configuration. Under the **existing** policy the editor-capable role is named `owner`; `member` cannot manage recipes or images, and `editor` is not a valid role. Preserve the intended anonymous/member policy and existing accounts. The smoke does not create accounts or mint credentials automatically. It checks that the supplied token matches an explicit `owner` entry in the configured accounts file before making requests. The current GraphQL schema has no viewer/current-principal field; successful create/update/image/delete operations additionally verify the deployed policy actually authorizes the token. A local file match alone is not treated as proof of deployed authorization.
+
+To add a dedicated smoke principal to an already valid accounts file, generate a new strong token without overwriting an existing token, then use file-based input rather than putting the token on the command line:
+
+```sh
+cd /home/runner/work/recipe-db/recipe-db
+umask 077
+(
+  set -C
+  openssl rand -hex 32 > "$PWD/.secrets/production-smoke-token"
+) \
+  && mise exec -- jq --rawfile token "$PWD/.secrets/production-smoke-token" '
+  if any(.tokens[]; .id == "production-smoke") then
+    error("production-smoke principal already exists; explicitly rotate it")
+  else
+    .tokens += [{id:"production-smoke", secret:($token | rtrimstr("\n")), role:"owner"}]
+  end
+' "$PWD/.secrets/auth-accounts.json" > "$PWD/.secrets/auth-accounts.next.json" \
+  && mv "$PWD/.secrets/auth-accounts.next.json" "$PWD/.secrets/auth-accounts.json"
+```
+
+The account ID is stable and explicit; the token is not the ID. Revoke or rotate the dedicated credential after rehearsal, then redeploy to apply the updated accounts file. Do not print secret files, `kubectl get secrets`, raw manifests containing credentials, or unrestricted application/proxy logs into CI output. The smoke stores Authorization in a private curl config, never in curl arguments.
+
+## Create, render, deploy and inspect
+
+Replace the digest placeholder with the actual **artifact** digest. Keep that same reference for the initial deployment, smoke reapply and evidence.
+
+```sh
+cd /home/runner/work/recipe-db/recipe-db
+VALUES="$PWD/.secrets/local-values.yaml"
+RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+
+mise run production-k3d create "$VALUES"
+mise run production-k3d verify "$VALUES"
+mise run production-k3d render "$VALUES" "$RELEASE" > "$PWD/.secrets/rendered.yaml"
+mise run production-k3d deploy "$VALUES" "$RELEASE"
+mise run production-k3d status "$VALUES"
+mise run production-k3d kubectl "$VALUES" get configmap recipe-db-release -o json
+mise run production-smoke "$VALUES" "$RELEASE" \
+  "$PWD/.secrets/production-smoke-token" "$PWD/.secrets/production-smoke-result.json"
+```
+
+`create` reuses only a cluster that passes the managed-identity checks; it refuses an unrelated cluster using the reserved name. `deploy` applies namespaced configuration and operator secrets, initializes JetStream, and waits for readiness. `recipe-db-release` records the release artifact and source revision. Reapplying the identical artifact is intentional and should preserve PVC-backed data. `status` and smoke failure diagnostics report resource summaries, not credentials. All smoke Kubernetes operations use the driver's guarded `kubectl` interface with explicit context and namespace; no ambient kubeconfig is trusted.
+
+The application objects live in `recipe-db`. The intentional infrastructure exception is the bundled Traefik `HelmChartConfig`, its route Secret, and its internal metadata Service in `kube-system`. There is **one** bundled Traefik with a file provider, not a second ingress controller or a parallel hand-maintained application route list. Routes, priorities, strip-prefix middleware, OAuth forward-auth, identity-header stripping and internal GraphQL ingress-token injection retain their project-metadata definitions. The internal metadata port is cluster-only; router/service discovery does not expose raw route configuration, middleware configuration, dashboards or credentials publicly.
+
+`infrastructure.traefik` explicitly overrides the bundled controller's image via `HelmChartConfig` to `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. The k3s-bundled Traefik 3.6.13 lacks the required `aliasHeadersStrategy` support; the override preserves the existing authentication header-alias sanitization. This upgrades the same bundled controller, not an additional ingress deployment.
+
+Deployment uses the `recipe-db-deploy` Kubernetes Lease as coordination groundwork for backup/restore work in #43. An existing Lease blocks deployment rather than being silently stolen. This is **not** a complete backup locking protocol, transactional deployment, snapshot mechanism or proof that a backup is safe. Investigate an abandoned Lease and its owner before any manual recovery; do not automatically delete it to make deployment proceed.
+
+## What the protocol smoke verifies
+
+The four positional arguments are an absolute values path, immutable artifact reference, absolute bearer-token-file path and absolute result-JSON path. The driver must verify the managed local cluster **before any HTTP request or mutation**. The smoke deliberately refuses Pi values and non-loopback origins.
+
+The script uses HTTP protocols, not a browser automation suite:
+
+1. Confirms the deployed ConfigMap artifact and revision, recording available exact client tool versions in JSON. Before its first HTTP request or recipe mutation, explicitly waits for the NATS rollout, `nats-init` Job completion, and every application's Deployment rollout. Search's index-readiness sidecar requires `/health` to report `ready: true`, not merely a listening process.
+2. Creates one uniquely named recipe, reads it, updates it and reads the change. No test-only bulk-reset endpoints are used.
+3. Uploads the existing JPEG fixture using GraphQL multipart Upload, reads image metadata through GraphQL, and verifies the returned public PNG and thumbnail content hashes against their URLs.
+4. Waits within the configured deadline for the recipe in search, GraphQL browse data, and the actual server-rendered browse search response.
+5. Checks browse, both editor HTML entry points, design CSS and component JavaScript, including their same-origin hashed-asset redirects, plus the nonempty JavaScript runtime at `/design/htmx.min.js`.
+6. Initializes MCP Streamable HTTP, sends its initialized notification and calls the allowed read-only `get_recipe` tool; no MCP write capability is assumed.
+7. Asserts HTTP 404 for representative private REST, NATS, Typesense, monitoring and Kubernetes paths: `/recipes`, `/ratings`, `/inspirations`, `/search/reindex`, `/varz`, `/jsz`, `/collections`, `/metrics`, `/healthz` and `/api/v1/namespaces`. Also denies Traefik metadata/configuration endpoints, dashboard and `/oauth2/auth`. These use non-HTML requests, not maintenance-page fallbacks.
+8. Saves browse's exact replica count, scales only browse to zero, and waits for browse HTML's maintenance 503, comparing its body with the actual bundled maintenance page rather than accepting an unrelated HTML error. GraphQL, an initialized MCP read, images, both editors and design assets must still work. It restores the original replicas on success **or failure**.
+9. Discovers persistent Deployments from live PVC volume references, restarts each with bounded rollout waits, and reapplies the identical release. This covers the configured recipes, images, ratings, inspirations, NATS, Typesense, search and Redis persistence without a second application-name list. The own recipe, image bytes, search and browse must survive.
+10. Deletes only the smoke-created recipe and verifies its absence.
+
+An EXIT handler attempts deletion of that specific recipe after a failure and reports whether cleanup succeeded; it never deletes other records or the cluster. Interrupted or unreachable services can make cleanup impossible: inspect the record ID in the result and remove only that record once service is restored. The cluster remains available for diagnosis after both success and failure. Normal API deletion/eventual downstream cleanup semantics apply; this is not a whole-database reset or a storage leak/compaction test.
+
+The JSON result contains `success`, `phase`, completed checks, artifact, revision, timestamps, own recipe ID, image URL/hash, cleanup status and available tool versions. Preserve it as rehearsal evidence only after checking it is suitable for publication. A failed exit is a failed rehearsal, even if some checks passed. This tests pod replacement and manifest reapplication, not cluster recreation, power-loss recovery, host reboot, physical USB reliability, TLS/browser OAuth, backup restoration or multi-node high availability.
+
+## Storage, Pi adaptation and destructive deletion
+
+Both values files use independent `ReadWriteOnce` PVCs and the default k3s `local-path` storage class. On a Pi the default provisioner directory is `/var/lib/rancher/k3s/storage`. The target Pi uses the **same 128 GB USB device** for its OS and this directory; this plan does not require or imply a separate SSD, host bind mount, or custom `/mnt/ssd` mount.
+
+The checked-in initial values request the following storage:
+
+| PVC          | Initial request |
+| ------------ | --------------- |
+| recipes      | 1 GiB           |
+| images       | 2 GiB           |
+| ratings      | 256 MiB         |
+| inspirations | 256 MiB         |
+| NATS         | 1 GiB           |
+| Typesense    | 1 GiB           |
+| search       | 256 MiB         |
+| Redis        | 256 MiB         |
+
+| Container budget | CPU request | Memory request | Memory limit |
+| --- | --- | --- | --- |
+| Application/infrastructure default | 25m | 32 MiB | 512 MiB |
+| Additional search index-readiness sidecar | 5m | 8 MiB | 32 MiB |
+
+These are initial declarative settings, **not measured Pi sizing guarantees**, reserved physical capacity, or evidence that every workload fits the target device. Account separately for k3s, Traefik, OS, image storage and filesystem overhead; tune and measure against the actual 128 GB USB device.
+
+For a Pi deployment, copy `deploy/pi.yaml` to a private absolute values path, provide a real HTTPS origin, explicit Pi kubeconfig context, OAuth configuration, operator secrets and appropriately budgeted volume/resource sizes. Install the specified k3s version and establish the real device's networking/TLS separately. Render, deploy and status use the explicit Pi context; `create`, `verify`, guarded local `kubectl`, smoke and `delete` refuse to manage a Pi cluster. Rendered declarations alone do not validate ARM64 execution, memory/disk budgets or the physical USB device. Perform and record those acceptance checks before describing the Pi as production-ready.
+
+Local k3d has **no host-directory persistence contract**. PVCs survive pod replacement and identical-release reapply, but deleting the cluster destroys its data. Export anything needed for investigation before deleting it. Deletion requires the exact cluster-specific confirmation:
+
+```sh
+cd /home/runner/work/recipe-db/recipe-db
+mise run production-k3d delete "$PWD/.secrets/local-values.yaml" \
+  DELETE-recipe-db-rehearsal-AND-ALL-DATA
+```
+
+There is no automatic teardown at the end of the smoke. Do not use the destructive command as a troubleshooting shortcut, and never treat k3d PVCs as a backup.
+
+## Verification evidence and current release blocker
+
+As of 2026-10-27, the attempted release for source revision `195db086f9142dc1ad4da44df47741781a7287f8` did **not** produce a consumable release artifact. The [Publish workflow run 40494661344](https://github.com/dhhyi/recipe-db/actions/runs/40494661344), job [122162385526](https://github.com/dhhyi/recipe-db/actions/runs/40494661344/job/122162385526), failed at 11:29:19 UTC during ORAS publication with:
+
+```text
+absolute file paths are insecure ... /home/runner/work/_temp/release.json
+```
+
+Application images had been anonymously verified, but successful image publication is not successful release-artifact publication. No substitute, locally fabricated OCI inventory was used. Until a real immutable release artifact is published, the real-release deployment/restart/reapply smoke remains **blocked, not passed**; physical Pi acceptance is also **not passed**.
+
+The rehearsal tool contract is ytt 0.55.4, ORAS 1.3.6, k3d 5.8.3, k3s v1.35.5-k3s1 and kubectl 1.35.5, with the bundled controller overridden to `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. These declared versions and mocked regression results are not end-to-end deployment evidence. Record the eventual real artifact digest, source revision, smoke result and device checks separately when the blocker is resolved.
+
+Separately, real local Docker/k3d lifecycle validation on 2026-10-27 successfully created the managed single-server cluster with pinned k3s, verified its private kubeconfig and live node provider ID, obtained status, and performed guarded deletion. The cluster was removed afterwards. The pinned k3d 5.8.3 CLI requires `--runtime-label` for the management label (not `--label`); the driver also handles its actual API `PortBindings` key and confines deletion's `KUBECONFIG` to the private verified file.
+
+This is **infrastructure lifecycle evidence only**. It does not establish successful application deployment, release-artifact consumption, smoke execution, data persistence across restart/reapply, or physical Pi acceptance. The missing published release artifact still blocks those application-level checks.
+
+## Script regression checks
+
+Mocks exercise guard ordering, HTTP protocol sequencing, private credential handling, PVC-derived restart selection, same-artifact reapply, bounded eventual search and failure cleanup. These checks do not substitute for the real rehearsal. Run repository script checks on the host (the script-tooling exception), not in an application devcontainer:
+
+```sh
+cd /home/runner/work/recipe-db/recipe-db
+mise run test-scripts
+mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck
+```

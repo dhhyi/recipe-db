@@ -1,0 +1,40 @@
+target: pi
+cluster: recipe-db-pi
+context: recipe-db-pi
+namespace: recipe-db
+origin: https://recipes.example.invalid
+httpPort: 8080
+apiPort: 6445
+timeoutSeconds: 900
+storageClass: local-path
+volumes:
+  recipes: 1Gi
+  images: 2Gi
+  ratings: 256Mi
+  inspirations: 256Mi
+  nats: 1Gi
+  typesense: 1Gi
+  search: 256Mi
+  redis: 256Mi
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    memory: 512Mi
+infrastructure:
+  traefik: traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65
+  nats: nats:2.11.10-alpine@sha256:cfb8778d98230be90832bee7fec91ae04a230c11ed52646b6a65755f3e89f085
+  typesense: typesense/typesense:29.0@sha256:316b7e71c21f7e5e5caa8daa150e1b3f2be8c876081ee1f77bc2d92cd7f137d0
+  maintenance: nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+  oauth2Proxy: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
+  redis: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+runtime:
+  googleOAuthClientId: replace-with-real-google-oauth-client-id
+  trustedIssuer: https://accounts.google.com
+secrets:
+  auth-accounts.json: /absolute/private/path/auth-accounts.json
+  graphql-ingress-secret: /absolute/private/path/graphql-ingress-secret
+  typesense-api-key: /absolute/private/path/typesense-api-key
+  google-oauth-client-secret: /absolute/private/path/google-oauth-client-secret
+  oauth2-cookie-secret: /absolute/private/path/oauth2-cookie-secret

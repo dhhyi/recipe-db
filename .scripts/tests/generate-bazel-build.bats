@@ -5,7 +5,7 @@ load test_helper
 setup() {
   setup_fixture generate-bazel-build.sh
   git init -q
-  mkdir -p example .scripts/tests .scripts/templates
+  mkdir -p example deploy .scripts/tests .scripts/templates
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
@@ -13,7 +13,7 @@ format: echo formatted
 check: echo checked
 EOF
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/helper.bash
-  touch .scripts/templates/example.yml .bazelversion mise.toml
+  touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml
 }
 
 @test "script tests declare scripts, tests, helpers, templates and tool configuration as inputs" {
@@ -22,7 +22,8 @@ EOF
   [ "$status" -eq 0 ]
   sed -n '/name = "test_scripts"/,/^)/p' BUILD.bazel > test-rule
   for file in .scripts/generate-bazel-build.sh .scripts/tests/example.bats \
-    .scripts/tests/helper.bash .scripts/templates/example.yml .github/workflows/publish.yaml; do
+    .scripts/tests/helper.bash .scripts/templates/example.yml .github/workflows/publish.yaml \
+    example/.project.yaml deploy/local.yaml deploy/pi.yaml package.json; do
     grep -Fx "        \"$file\"," test-rule
   done
   grep -Fx '    tools = ["mise.toml", ".bazelversion"],' test-rule
