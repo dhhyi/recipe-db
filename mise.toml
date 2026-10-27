@@ -41,7 +41,8 @@ file = ".scripts/check-forbidden-files.sh"
 
 [tasks.test-scripts]
 description = "Run repository script regression tests with Bats"
-run = "bats --print-output-on-failure .scripts/tests"
+run = "bash .scripts/test-scripts.sh"
+raw_args = true
 
 [tasks.test-message-bus]
 description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"
