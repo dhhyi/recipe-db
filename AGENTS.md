@@ -4,6 +4,10 @@
 
 Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.
 
+## GraphQL access boundary
+
+All normal client data operations go through GraphQL via trusted ingress. Do not introduce direct client-to-backend access. Backend maintenance APIs must remain private and be available only in backup mode. Public static/image delivery is an intentional exception. See issues #49 and #52 for the access contract and #70 for the planned backup-mode maintenance contract.
+
 ## GitHub issue planning
 
 Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
