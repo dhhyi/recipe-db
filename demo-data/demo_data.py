@@ -9,7 +9,15 @@ from graphql_client import Client
 from graphql_client.base_model import Upload
 from graphql_client.exceptions import GraphQLClientHttpError
 
-headers = {"apollo-require-preflight": "true"}
+authorization = os.getenv("DEMO_DATA_AUTH_TOKEN")
+if not authorization:
+    sys.exit("DEMO_DATA_AUTH_TOKEN is required to seed demo data.")
+
+headers = {
+    "apollo-require-preflight": "true",
+    "origin": "http://traefik",
+    "authorization": f"Bearer {authorization}",
+}
 # large recipe photos can take a while to decode/resize server-side
 http_client = httpx.AsyncClient(headers=headers, timeout=30.0)
 client = Client("http://traefik/graphql", http_client=http_client)
