@@ -447,20 +447,41 @@ EOF
 }
 
 @test "precommit installation skips unchanged inputs and restores a deleted hook" {
-  run mise run --raw install-precommit
-  [ "$status" -eq 0 ]
-  [ -x .git/hooks/pre-commit ]
-  before=$(stat -c %y .git/hooks/pre-commit)
+  git init -q
+  hook=$(git rev-parse --git-path hooks/pre-commit)
 
   run mise run --raw install-precommit
   [ "$status" -eq 0 ]
-  [ "$(stat -c %y .git/hooks/pre-commit)" = "$before" ]
+  [ -x "$hook" ]
+  before=$(stat -c %y "$hook")
 
-  rm .git/hooks/pre-commit
   run mise run --raw install-precommit
   [ "$status" -eq 0 ]
-  [ -x .git/hooks/pre-commit ]
-  grep -Fx 'exec bash .scripts/precommit.sh "$@"' .git/hooks/pre-commit
+  [ "$(stat -c %y "$hook")" = "$before" ]
+
+  rm "$hook"
+  run mise run --raw install-precommit
+  [ "$status" -eq 0 ]
+  [ -x "$hook" ]
+  grep -Fx 'exec bash .scripts/precommit.sh "$@"' "$hook"
+}
+
+@test "precommit installation in a worktree uses the shared hook path" {
+  git init -q
+  git config user.name "Test User"
+  git config user.email "test@example.com"
+  git add .
+  git commit -qm "fixture"
+  git worktree add -q -b linked "$FIXTURE_ROOT/linked"
+
+  run bash -c 'cd "$1" && MISE_TRUSTED_CONFIG_PATHS="$1" mise run --raw install-precommit' _ "$FIXTURE_ROOT/linked"
+
+  [ "$status" -eq 0 ]
+  worktree_hook=$(git -C "$FIXTURE_ROOT/linked" rev-parse --git-path hooks/pre-commit)
+  main_hook=$(git -C "$FIXTURE_ROOT" rev-parse --git-path hooks/pre-commit)
+  [ "$(realpath "$worktree_hook")" = "$(realpath "$main_hook")" ]
+  [ -x "$worktree_hook" ]
+  grep -Fx 'exec bash .scripts/precommit.sh "$@"' "$worktree_hook"
 }
 
 mock_sync_steps() {
@@ -489,6 +510,7 @@ EOF
 }
 
 @test "setup waits for installation and preserves ordered sync stages" {
+  git init -q
   mock_sync_steps
   setup_mock_bin
   cat > bin/pnpm << 'EOF'

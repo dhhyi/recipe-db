@@ -23,9 +23,7 @@ run = "pnpm install --frozen-lockfile"
 
 [tasks.install-precommit]
 description = "Install the repository precommit hook"
-run = "printf '%s\\n' '#!/bin/sh' 'exec bash .scripts/precommit.sh \"$@\"' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
-sources = ["mise.toml"]
-outputs = [".git/hooks/pre-commit"]
+file = ".scripts/install-precommit.sh"
 
 [tasks.setup]
 description = "Install dependencies and hooks, then synchronize repository configuration"
