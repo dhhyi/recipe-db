@@ -92,7 +92,7 @@ for (const role of ["anonymous", "member", "owner"]) {
       await expect(rating).toHaveAttribute("count", "2");
       if (role === "anonymous") {
         await expect(rating).not.toHaveAttribute("hx-post");
-        await expect(page.getByText("Zum Bewerten bitte")).toBeVisible();
+        await expect(page.getByText("Zum Bewerten bitte")).toHaveCount(0);
       } else {
         await expect(rating).toHaveAttribute(
           "my-rating",

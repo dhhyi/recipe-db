@@ -25,9 +25,6 @@ templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
 templ RecipeRatingWidget(id string, rating *gql.Rating, canRate bool, myRating *int) {
 	<div id={ "recipe-rating-" + id }>
 		@Rating(rating, canRate, nil, myRating)
-		if !canRate {
-			<p>Zum Bewerten bitte <a href="/oauth2/start?rd=%2F">anmelden</a>.</p>
-		}
 	</div>
 }
 
