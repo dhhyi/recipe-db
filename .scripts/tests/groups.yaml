@@ -1,0 +1,79 @@
+compose:
+  tests:
+    - .scripts/tests/generate-docker-compose.bats
+    - .scripts/tests/traefik-ingress.bats
+  inputs:
+    - .scripts/generate-docker-compose.sh
+    - .scripts/generate-production-build-metadata.sh
+    - .scripts/lib/project-metadata.sh
+    - .scripts/templates/**
+    - .scripts/traefik-ingress-entrypoint.sh
+    - .scripts/tests/fixtures/**
+    - graphql/.project.yaml
+    - search/.project.yaml
+    - package.json
+release:
+  tests:
+    - .scripts/tests/production-release.bats
+  inputs:
+    - .scripts/lib/project-metadata.sh
+    - .scripts/lib/release-validation.sh
+    - .scripts/validate-production-release.sh
+    - .scripts/validate-production-image-index.sh
+    - .scripts/check-production-release.sh
+    - .scripts/publish-production-release.sh
+    - .scripts/smoke-production-image.sh
+    - .scripts/generate-production-build-metadata.sh
+    - package.json
+deploy:
+  tests:
+    - .scripts/tests/kubernetes-templates.bats
+    - .scripts/tests/production-k3d.bats
+    - .scripts/tests/production-smoke.bats
+  inputs:
+    - .scripts/production-k3d.sh
+    - .scripts/smoke-production-k3d.sh
+    - .scripts/generate-production-build-metadata.sh
+    - .scripts/lib/production-config.sh
+    - .scripts/lib/project-metadata.sh
+    - .scripts/templates/kubernetes*.yml
+    - .scripts/validate-production-image-index.sh
+    - deploy/**
+    - ":(glob)*/.project.yaml"
+    - browse-maintenance/unavailable.html
+    - package.json
+tasks:
+  tests:
+    - .scripts/tests/mise-tasks.bats
+    - .scripts/tests/precommit.bats
+  inputs:
+    - ":(glob).scripts/*.sh"
+    - .scripts/lib/project-metadata.sh
+    - .github/workflows/publish.yaml
+    - .scripts/tests/mocks/precommit-*
+    - .scripts/tests/mocks/devcontainer-*
+devcontainer:
+  tests:
+    - .scripts/tests/run-in-devcontainer.bats
+    - .scripts/tests/run-integration-tests.bats
+  inputs:
+    - .scripts/run-in-devcontainer.sh
+    - .scripts/run-integration-tests.sh
+    - .scripts/tests/mocks/devcontainer-*
+    - .scripts/tests/mocks/integration-*
+tooling:
+  tests:
+    - .scripts/tests/generate-bazel-build.bats
+    - .scripts/tests/sync-ignore-files.bats
+    - .scripts/tests/sync-tailwind.bats
+    - .scripts/tests/merge-graphql-schemas.bats
+    - .scripts/tests/check-forbidden-files.bats
+  inputs:
+    - .scripts/generate-bazel-build.sh
+    - .scripts/sync-ignore-files.sh
+    - .scripts/sync-tailwind.sh
+    - .scripts/merge-graphql-schemas.sh
+    - .scripts/check-forbidden-files.sh
+    - .scripts/tests/groups.yaml
+    - .scripts/templates/**
+    - .github/workflows/publish.yaml
