@@ -16,14 +16,6 @@
 #@   return result
 #@ end
 
-#@ def depends_on(projects):
-#@   result = {}
-#@   for project in projects:
-#@     result[project.name] = {"condition": "service_started"}
-#@   end
-#@   return result
-#@ end
-
 #@ def project_labels(project):
 #@   if "labels" not in project.traefik:
 #@     return []
@@ -65,27 +57,8 @@
 #@       service["environment"] = environment
 #@     end
 #@   end
-#@   if options.production:
-#@     service.setdefault("environment", {})["PRODUCTION"] = "true"
-#@     if options.ci:
-#@       build["cache_to"] = ["type=registry,mode=max,ref=" + cache_ref]
-#@     end
-#@     if project.repository.startswith("github:"):
-#@       build["labels"] = {"org.opencontainers.image.source": "https://github.com/" + project.repository[7:]}
-#@     end
-#@     if project.category == "backend":
-#@       service["volumes"] = ["data:/app/data"]
-#@       service["environment"]["DATA_LOCATION"] = "/app/data/" + project.name
-#@     elif project.category == "frontend":
-#@       service["depends_on"] = depends_on(projects.api)
-#@     elif project.category == "api":
-#@       service["depends_on"] = {"traefik": {"condition": "service_started"}}
-#@       service["depends_on"].update(depends_on(projects.backend))
-#@     end
-#@   else:
-#@     if "labels" in project.traefik:
-#@       service["labels"] = project_labels(project)
-#@     end
+#@   if "labels" in project.traefik:
+#@     service["labels"] = project_labels(project)
 #@   end
 #@   if project.category == "job":
 #@     service["profiles"] = ["development"]
