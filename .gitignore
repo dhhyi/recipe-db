@@ -29,6 +29,7 @@ traefik.yml
 oauth2-proxy-alpha.yml
 
 # data
+/.generated/
 /data
 /.secrets
 /.production-k3d.*/

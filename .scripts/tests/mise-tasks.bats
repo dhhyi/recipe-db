@@ -10,7 +10,7 @@ setup() {
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
-  export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
+  export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_TASK_RUN_AUTO_INSTALL=false
   mkdir -p example .git/hooks
@@ -67,7 +67,7 @@ EOF
 }
 
 @test "structured tasks provide help without executing their scripts" {
-  for task in integration-tests generate-docker-compose sync-devcontainers; do
+  for task in integration-tests sync-devcontainers; do
     script=$task
     [ "$task" != integration-tests ] || script=run-integration-tests
     printf '%s\n' 'touch executed' 'exit 19' | mock_task_body ".scripts/$script.sh"
@@ -82,11 +82,6 @@ EOF
       integration-tests)
         [[ $output == *"--development"* ]]
         [[ $output == *"[projects]"* ]]
-        ;;
-      generate-docker-compose)
-        [[ $output == *"[modes]"* ]]
-        [[ $output == *"production"* ]]
-        [[ $output == *"backend"* ]]
         ;;
       sync-devcontainers) [[ $output == *"[projects]"* ]] ;;
     esac
@@ -107,8 +102,9 @@ EOF
   [[ $output == *"This command runs destructive integration tests"* ]]
 }
 
-@test "Compose usage validates modes and preserves combinations and defaults" {
+@test "Compose renderer accepts only no arguments and production task is absent" {
   mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
+test "$#" -eq 0 || exit 2
 printf 'mode:<%s>\n' "$@"
 touch executed
 EOF
@@ -117,38 +113,21 @@ EOF
   [ "$status" -eq 0 ]
   [[ $output == *"mode:<>"* ]]
 
-  for production in prod production; do
-    run mise run --raw generate-docker-compose "$production" backend prepare
-    [ "$status" -eq 0 ]
-    [[ $output == *"mode:<$production>"$'\nmode:<backend>\nmode:<prepare>'* ]]
-  done
-
   rm executed
-  run mise run --raw generate-docker-compose invalid
+  run mise run --raw generate-docker-compose production
   [ "$status" -ne 0 ]
   [ ! -e executed ]
-}
 
-@test "Compose prepare still preserves existing configuration through mise" {
-  setup_mock_bin
-  printf '%s\n' '#!/bin/sh' 'test "$*" = "network inspect intranet"' > bin/docker
-  chmod +x bin/docker
-  printf '%s\n' existing-compose > docker-compose.yml
-
-  run mise run --raw generate-docker-compose prepare
-
+  run mise tasks --json
   [ "$status" -eq 0 ]
-  [ "$(cat docker-compose.yml)" = existing-compose ]
-  for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
-    [ -s ".secrets/$file" ]
-  done
-  [ -s e2e-test/.secrets/auth-tokens.json ]
+  [ "$(printf '%s' "$output" | jq '[.[] | select(.name == "generate-docker-compose-prod")] | length')" -eq 0 ]
 }
 
 @test "mise provisions all development prerequisites before rendering" {
   mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
 set -eu
-for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
+  test -s .generated/compose-inputs.json
+  for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
   test -s ".secrets/$file"
 done
 test -s e2e-test/.secrets/auth-tokens.json
@@ -170,16 +149,7 @@ EOF
   [ ! -e generated ]
 }
 
-@test "production task forwards mode and arguments without development dependencies" {
-  mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
-printf '<%s>\n' "$@" > arguments
-exit "${RENDER_STATUS:-0}"
-EOF
-  run env RENDER_STATUS=23 mise run --raw generate-docker-compose-prod backend prepare
-  [ "$status" -eq 23 ]
-  [ "$(cat arguments)" = $'<production>\n<backend>\n<prepare>' ]
-  [ ! -e .secrets ]
-  [ ! -s "$MOCK_LOG" ]
+@test "production publishing continues to use build metadata without Compose tasks" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-docker-compose-prod"))] | length' "$workflow")" -eq 0 ]
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
@@ -570,7 +540,7 @@ EOF
 
 mock_sync_steps() {
   for script in check-forbidden-files sync-tailwind sync-ignore-files sync-vscode-settings \
-    sync-devcontainers merge-graphql-schemas generate-bazel-build generate-docker-compose; do
+    sync-devcontainers export-graphql-schema merge-graphql-schemas generate-bazel-build generate-docker-compose; do
     mock_task_body ".scripts/$script.sh" << 'EOF'
 set -eu
 name=$(basename "$0" .sh)
@@ -581,11 +551,19 @@ case "$name" in
     test -f sync-ignore-files.done
     test -f sync-vscode-settings.done
     ;;
-  merge-graphql-schemas) test -f sync-devcontainers.done ;;
+  merge-graphql-schemas)
+    test -f sync-devcontainers.done
+    test -f generate-docker-compose.done
+    ;;
+  export-graphql-schema)
+    mkdir -p .generated/graphql
+    printf '%s\n' 'type Query { fixture: Boolean! }' > .generated/graphql/recipe-db.graphqls
+    ;;
   generate-bazel-build) test -f merge-graphql-schemas.done ;;
   generate-docker-compose)
-    test -f generate-bazel-build.done
-    test "$*" = prepare
+    test "$#" -eq 0
+    printf '%s\n' 'services: {}' > docker-compose.yml
+    printf '%s\n' 'providers: []' > oauth2-proxy-alpha.yml
     ;;
 esac
 touch "$name.done"

@@ -161,7 +161,7 @@ annotate_credentials() {
 
 routes() {
   jq -n --slurpfile projects "$work/projects.jsonl" \
-    '{projects:$projects,production:true,backendOnly:false}' > "$work/route-values.json"
+    '{projects:$projects}' > "$work/route-values.json"
   ytt -f "$root/.scripts/templates/traefik-template.yml" \
     -f "$root/.scripts/templates/browse-maintenance-template.lib.yml" \
     -f "$root/.scripts/templates/service-template.lib.yml" \

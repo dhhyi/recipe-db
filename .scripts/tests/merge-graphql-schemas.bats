@@ -4,73 +4,80 @@ load test_helper
 
 setup() {
   setup_fixture merge-graphql-schemas.sh
-  mkdir -p mcp .scripts/tests
+  use_mise_tools
+  mkdir -p .generated/graphql mcp nested-consumer
+  printf '%s\n' 'type Query { ready: Boolean! }' > .generated/graphql/recipe-db.graphqls
   cat > mcp/.project.yaml << 'EOF'
+category: utility
 ---
 graphqlSchema: "."
 EOF
-
-  setup_mock_bin
-  cat > "$FIXTURE_ROOT/bin/mise" << 'EOF'
-#!/bin/sh
-if [ "$1" = exec ] && [ "$2" = -- ] && [ "$3" = yq ]; then
-  printf '%s\n' .
-else
-  case "$*" in
-    "run --raw generate-docker-compose prepare")
-      printf '%s\n' "$*" >> "$MOCK_LOG"
-      ;;
-    *)
-      echo "Unexpected mise arguments: $*" >&2
-      exit 1
-      ;;
-  esac
-fi
+  cat > nested-consumer/.project.yaml << 'EOF'
+category: utility
+---
+graphqlSchema: "schema/api"
 EOF
-  cat > "$FIXTURE_ROOT/bin/docker" << 'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$DOCKER_LOG"
-case "$*" in
-  "compose build graphql") exit "${BUILD_STATUS:-0}" ;;
-  "run --rm --entrypoint /app/graphql ghcr.io/dhhyi/recipe-db-graphql:latest print-schema")
-    printf '%s\n' 'type Query { ready: Boolean! }'
-    exit "${SCHEMA_STATUS:-0}"
-    ;;
-  *)
-    echo "Unexpected docker arguments: $*" >&2
-    exit 1
-    ;;
-esac
-EOF
-  chmod +x "$FIXTURE_ROOT/bin/mise" "$FIXTURE_ROOT/bin/docker"
-  export DOCKER_LOG="$FIXTURE_ROOT/docker.log"
 }
 
-@test "generates GraphQL schema from the application image without devcontainers" {
+@test "distribution discovers every declared consumer and is idempotent" {
   run sh .scripts/merge-graphql-schemas.sh
 
   [ "$status" -eq 0 ]
-  [ "$(cat "$MOCK_LOG")" = "run --raw generate-docker-compose prepare" ]
-  [ "$(cat mcp/recipe-db.graphqls)" = "type Query { ready: Boolean! }" ]
-  [ "$(cat "$DOCKER_LOG")" = $'compose build graphql\nrun --rm --entrypoint /app/graphql ghcr.io/dhhyi/recipe-db-graphql:latest print-schema' ]
-  [[ $output != *in-devcontainer* ]]
+  [ "$(cat mcp/recipe-db.graphqls)" = 'type Query { ready: Boolean! }' ]
+  [ "$(cat nested-consumer/schema/api/recipe-db.graphqls)" = 'type Query { ready: Boolean! }' ]
+  mcp_mtime=$(stat -c %Y mcp/recipe-db.graphqls)
+  nested_mtime=$(stat -c %Y nested-consumer/schema/api/recipe-db.graphqls)
+
+  run sh .scripts/merge-graphql-schemas.sh
+
+  [ "$status" -eq 0 ]
+  [ "$(stat -c %Y mcp/recipe-db.graphqls)" = "$mcp_mtime" ]
+  [ "$(stat -c %Y nested-consumer/schema/api/recipe-db.graphqls)" = "$nested_mtime" ]
 }
 
-@test "application image build failures preserve existing schemas without fallback" {
-  printf '%s\n' existing-schema > mcp/recipe-db.graphqls
+@test "missing and modified consumer copies are repaired from the cached canonical SDL" {
+  run sh .scripts/merge-graphql-schemas.sh
+  [ "$status" -eq 0 ]
+  printf '%s\n' modified > mcp/recipe-db.graphqls
+  rm nested-consumer/schema/api/recipe-db.graphqls
 
-  run env BUILD_STATUS=19 sh .scripts/merge-graphql-schemas.sh
+  run sh .scripts/merge-graphql-schemas.sh
 
-  [ "$status" -eq 19 ]
-  [ "$(cat mcp/recipe-db.graphqls)" = existing-schema ]
-  [ "$(cat "$DOCKER_LOG")" = "compose build graphql" ]
+  [ "$status" -eq 0 ]
+  cmp .generated/graphql/recipe-db.graphqls mcp/recipe-db.graphqls
+  cmp .generated/graphql/recipe-db.graphqls nested-consumer/schema/api/recipe-db.graphqls
 }
 
-@test "schema printing failures preserve existing schemas without fallback" {
-  printf '%s\n' existing-schema > mcp/recipe-db.graphqls
+@test "new or relocated consumers are added without deleting undeclared old paths" {
+  run sh .scripts/merge-graphql-schemas.sh
+  [ "$status" -eq 0 ]
+  mkdir -p another
+  cat > another/.project.yaml << 'EOF'
+category: utility
+---
+graphqlSchema: "new/schema"
+EOF
+  cat > mcp/.project.yaml << 'EOF'
+category: utility
+---
+graphqlSchema: "relocated"
+EOF
 
-  run env SCHEMA_STATUS=23 sh .scripts/merge-graphql-schemas.sh
+  run sh .scripts/merge-graphql-schemas.sh
 
-  [ "$status" -eq 23 ]
-  [ "$(cat mcp/recipe-db.graphqls)" = existing-schema ]
+  [ "$status" -eq 0 ]
+  [ -s another/new/schema/recipe-db.graphqls ]
+  [ -s mcp/relocated/recipe-db.graphqls ]
+  [ -s mcp/recipe-db.graphqls ]
+}
+
+@test "missing canonical SDL fails explicitly without modifying consumers" {
+  printf '%s\n' existing > mcp/recipe-db.graphqls
+  rm .generated/graphql/recipe-db.graphqls
+
+  run --separate-stderr sh .scripts/merge-graphql-schemas.sh
+
+  [ "$status" -ne 0 ]
+  [[ "$stderr" == *"canonical GraphQL schema is missing or empty"* ]]
+  [ "$(cat mcp/recipe-db.graphqls)" = existing ]
 }
