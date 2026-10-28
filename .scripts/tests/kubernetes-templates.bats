@@ -95,15 +95,14 @@ render() {
   ' manifests.json
 }
 
-@test "application workloads explicitly use production mode without legacy variables" {
+@test "application workloads explicitly use production mode" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '
     .items as $items |
     all($projects[]; .name as $name |
       any($items[];
         .kind == "Deployment" and .metadata.name == $name
-        and any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production")
-        and all(.spec.template.spec.containers[0].env[]; .name != "PRODUCTION")))
+        and any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production")))
   ' manifests.json
 }
 

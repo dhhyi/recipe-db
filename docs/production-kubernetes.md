@@ -14,7 +14,7 @@ The local identity is deliberately narrow: target `local`, cluster `recipe-db-re
 
 ### Runtime mode
 
-Production workloads set `MODE=production`. Services accept `production` (the default when `MODE` is absent) or `testing`; empty and unsupported values fail startup. `PRODUCTION` is not read or supported. Backup mode remains outside this deployment work.
+Production workloads set `MODE=production`. Services accept `production` (the default when `MODE` is absent) or `testing`; empty and unsupported values fail startup. Backup mode remains outside this deployment work.
 
 ## Operator configuration and secrets
 

@@ -120,7 +120,7 @@ When the user explicitly asks to run the precommit script or hook (for example, 
 
 ## Runtime modes and REST API test resets
 
-The planned runtime contract in issue #81 defaults an absent `MODE` to `production`. Testing and any later modes require explicit selection; empty or unknown values fail startup. There is no public deployment yet, so the migration needs no legacy `PRODUCTION` compatibility mode, rejection checks, or migration diagnostics. Remove old runtime reads and managed configuration; leftover legacy variables do not affect mode selection.
+The planned runtime contract in issue #81 defaults an absent `MODE` to `production`. Testing and any later modes require explicit selection; empty or unknown values fail startup. Remove obsolete runtime reads and managed configuration.
 
 Every REST API that owns stored data must provide a private delete-all-data API for isolated testing as `DELETE` on its root collection resource (for example, `DELETE /recipes` or `DELETE /images`, not the server root `/` or a separate `/reset` endpoint), available only with explicit `MODE=testing`. Preserve supported trailing-slash variants; stateless APIs do not need a meaningless reset endpoint. Clear all service-owned test data, not configuration, credentials, other services' storage, or backups. Production (including unset `MODE`) and future modes must not expose or execute these resets; cover supported route variants and verify denied requests leave data unchanged. Do not expose resets through public ingress, GraphQL, or MCP. These are testing interfaces, not the backup-mode maintenance APIs in issue #70.
 

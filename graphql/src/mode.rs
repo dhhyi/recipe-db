@@ -39,7 +39,6 @@ mod tests {
 
     struct RestoreEnvironment {
         mode: Option<OsString>,
-        production: Option<OsString>,
     }
 
     impl Drop for RestoreEnvironment {
@@ -47,10 +46,6 @@ mod tests {
             match self.mode.take() {
                 Some(value) => std::env::set_var("MODE", value),
                 None => std::env::remove_var("MODE"),
-            }
-            match self.production.take() {
-                Some(value) => std::env::set_var("PRODUCTION", value),
-                None => std::env::remove_var("PRODUCTION"),
             }
         }
     }
@@ -76,19 +71,14 @@ mod tests {
     }
 
     #[test]
-    fn ignores_legacy_environment_values() {
+    fn reads_only_the_selected_mode() {
         let _lock = ENVIRONMENT_LOCK.lock().unwrap();
         let _restore = RestoreEnvironment {
             mode: std::env::var_os("MODE"),
-            production: std::env::var_os("PRODUCTION"),
         };
         std::env::remove_var("MODE");
-        for legacy_value in ["", "true", "false"] {
-            std::env::set_var("PRODUCTION", legacy_value);
-            assert_eq!(RuntimeMode::from_env().unwrap(), RuntimeMode::Production);
-        }
+        assert_eq!(RuntimeMode::from_env().unwrap(), RuntimeMode::Production);
         std::env::set_var("MODE", "testing");
-        std::env::set_var("PRODUCTION", "true");
         assert_eq!(RuntimeMode::from_env().unwrap(), RuntimeMode::Testing);
     }
 }

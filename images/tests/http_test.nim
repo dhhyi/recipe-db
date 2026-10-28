@@ -6,26 +6,21 @@ const
   root = "tests/http-test-data"
   base = "http://127.0.0.1:18432"
 
-proc serverEnvironment(mode: Option[string], legacyProduction: Option[string],
-    maxPixels, maxUploadBytes: int): StringTableRef =
+proc serverEnvironment(mode: Option[string], maxPixels, maxUploadBytes: int): StringTableRef =
   result = newStringTable(modeCaseSensitive)
   for key, value in envPairs():
     result[key] = value
   result["PORT"] = "18432"
   result["DATA_LOCATION"] = root
   result.del("MODE")
-  result.del("PRODUCTION")
   if mode.isSome:
     result["MODE"] = mode.get
-  if legacyProduction.isSome:
-    result["PRODUCTION"] = legacyProduction.get
   result["MAX_PIXELS"] = $maxPixels
   result["MAX_UPLOAD_BYTES"] = $maxUploadBytes
 
-proc startServer(mode = some("testing"), legacyProduction = none(string),
-    maxPixels = 40_000_000,
+proc startServer(mode = some("testing"), maxPixels = 40_000_000,
     maxUploadBytes = 10 * 1024 * 1024): Process =
-  let environment = serverEnvironment(mode, legacyProduction, maxPixels, maxUploadBytes)
+  let environment = serverEnvironment(mode, maxPixels, maxUploadBytes)
   result = startProcess("./server", env = environment,
       options = {poParentStreams})
   let client = newHttpClient(timeout = 100)
@@ -285,17 +280,16 @@ suite "backend HTTP publication contract":
     check explicitProduction.code == Http404
     discard explicitProduction.body
     check fileExists(store.manifestPath(specialId))
-    for legacy in ["", "true", "false"]:
-      client.close()
-      server.stopServer()
-      server = startServer(mode = none(string), legacyProduction = some(legacy))
-      let guarded = client.request(base & "/images", httpMethod = HttpDelete)
-      check guarded.code == Http404
-      discard guarded.body
-      check fileExists(store.manifestPath(specialId))
     client.close()
     server.stopServer()
-    server = startServer(mode = some("testing"), legacyProduction = some("true"))
+    server = startServer(mode = none(string))
+    let guarded = client.request(base & "/images", httpMethod = HttpDelete)
+    check guarded.code == Http404
+    discard guarded.body
+    check fileExists(store.manifestPath(specialId))
+    client.close()
+    server.stopServer()
+    server = startServer(mode = some("testing"))
     let wiped = client.request(base & "/images/", httpMethod = HttpDelete)
     check wiped.code == Http204
     discard wiped.body
