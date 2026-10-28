@@ -39,7 +39,7 @@ Request send := method(code, message, data, contentType,
     )
 
     ct := if (contentType == nil, "application/json", contentType)
-    return "HTTP/1.1 " .. code .. " " .. message .. "\r\nConnection: close\r\n" .. if (data == nil, "\r\n", "Content-type: " .. ct .. "\r\n\r\n" .. data)
+    return "HTTP/1.1 " .. code .. " " .. message .. "\r\nConnection: close\r\n" .. if (data == nil, "\r\n", "Content-type: " .. ct .. "\r\nContent-Length: " .. data size .. "\r\n\r\n" .. data)
 )
 
 Request sendData := method(data,
