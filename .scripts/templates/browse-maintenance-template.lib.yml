@@ -27,7 +27,7 @@
 
 #@ def browse_maintenance_service(production):
 #@   service = {
-#@     "image": "nginx:stable-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94",
+#@     "image": "nginx:stable-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951",
 #@     "networks": ["intranet"],
 #@     "restart": "unless-stopped",
 #@     "read_only": True,

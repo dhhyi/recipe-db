@@ -182,7 +182,8 @@ EOF
   run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
   [[ "$output" == *"Rendering"* ]]
-  mise -C "$FIXTURE_ROOT" exec -- yq -e '.services.nats.image == "nats:2.11.11-alpine"' docker-compose.yml
+  image=$(mise -C "$FIXTURE_ROOT" exec -- yq -r '.services.nats.image' docker-compose.yml)
+  [[ "$image" =~ ^nats:2\.11\.11-alpine@sha256:[[:xdigit:]]{64}$ ]]
 }
 
 @test "Mise repairs equal-size Compose and SDL output edits with the exact original mtime" {

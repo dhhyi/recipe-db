@@ -1,4 +1,4 @@
-FROM elixir:1.18.4-otp-27-slim@sha256:09b37446f1b24a280890c4b294eec6a53ba2501a2289959b483d849035e1053c AS builder
+FROM elixir:1.18.4-otp-27-slim@sha256:4d24a682c9063a6961e44a95ada95d4803d856a53a52b26568f0cc3ed62e9386 AS builder
 
 ENV LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
@@ -18,7 +18,7 @@ RUN mix deps.get --only prod && mix deps.compile
 COPY lib ./lib
 RUN mix compile && mix release
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runner
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runner
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libstdc++6 openssl \

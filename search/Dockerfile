@@ -1,6 +1,6 @@
 ARG TARGETARCH
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS downloader
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS downloader
 ARG BUILDARCH
 ARG TARGETARCH
 RUN test "$BUILDARCH" = "$TARGETARCH" \
@@ -33,7 +33,7 @@ RUN python3 generate_operations.py \
   && zig build test -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe \
   && zig build -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe
 
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libcurl4 libnats3.4 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /ws/zig-out/bin/search /app/search
