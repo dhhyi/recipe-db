@@ -36,16 +36,7 @@ Feature: search recipes
     * status 200
     * match response.data.rate.average == 4
 
-    * url 'http://traefik:3000/search/reindex'
-    * method post
-    * status 202
-    * def rebuildJobId = response.jobId
-    * configure retry = { count: 60, interval: 1000 }
-    * url 'http://traefik:3000/search/reindex/' + rebuildJobId
-    * retry until responseStatus != 202
-    * method get
-    * status 200
-    * match response.status == 'succeeded'
+    * call read('graphql/rebuild-search-index.feature')
     * url graphqlApi
 
   Scenario: German search returns ordered recipes with full GraphQL fields
@@ -77,12 +68,12 @@ Feature: search recipes
     * match response.data.searchRecipes.recipes[0].name == '#(searchToken) Kartoffelsuppe'
 
   Scenario: pagination and facets preserve search metadata
-    * request { query: '#(read("graphql/search-recipes-with-facets.graphql"))', variables: { options: { q: '#(searchToken)', query_by: 'name', sort_by: 'rating_average:desc', page: 2, per_page: 1, facet_by: 'ingredients' } } }
-    * retry until response.data != null && response.data.searchRecipes.found == 3 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == cakeId
+    * request { query: '#(read("graphql/search-recipes-with-facets.graphql"))', variables: { options: { q: '#(searchToken)', query_by: 'name', sort_by: 'name_sort:asc,recipe_id_sort:asc', page: 2, per_page: 1, facet_by: 'ingredients' } } }
+    * retry until response.data != null && response.data.searchRecipes.found == 3 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == saladId
     * method post
     * status 200
     * match response.errors == '#notpresent'
-    * match response.data.searchRecipes contains { found: 3, page: 2, perPage: 1, recipes: [{ id: '#(cakeId)', name: '#(searchToken) Apfelkuchen' }] }
+    * match response.data.searchRecipes contains { found: 3, page: 2, perPage: 1, recipes: [{ id: '#(saladId)', name: '#(searchToken) Kartoffelsalat' }] }
     * match response.data.searchRecipes.facets == '#[1]'
     * match response.data.searchRecipes.facets[0] contains { field_name: 'ingredients', counts: '#array' }
     * match response.data.searchRecipes.facets[0].counts contains { value: 'Kartoffeln', count: 2, highlighted: 'Kartoffeln' }
@@ -99,6 +90,8 @@ Feature: search recipes
     * status 200
     * match response.data.deleteRecipe == true
 
+    * call read('graphql/rebuild-search-index.feature')
+    * url graphqlApi
     * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: '#(searchToken) Kartoffelsuppe' } } }
     * retry until response.data != null && response.data.searchRecipes.found == 0 && response.data.searchRecipes.recipes.length == 0
     * method post
