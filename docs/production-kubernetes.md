@@ -14,7 +14,7 @@ The local identity is deliberately narrow: target `local`, cluster `recipe-db-re
 
 ### Release-matched runtime mode
 
-The verified release below predates #81 and requires `PRODUCTION=true`, which these templates emit. It does not understand `MODE=production`. #81's independent mode migration must update the deployment environment and its regression tests together with the application images: migrated images require `MODE=production` and reject the legacy variable. Do not deploy a migrated release using these legacy templates or assume that changing only the variable makes an old image production-safe. Backup mode remains outside this deployment work.
+The verified release below predates #81 and requires `PRODUCTION=true`, which these templates emit. It does not understand `MODE=production`. #81's planned independent mode migration must update the deployment environment and its regression tests together with the application images: migrated images default an absent `MODE` to `production`, and deployment templates should still emit `MODE=production` explicitly. Testing and later modes require explicit selection. There is no public deployment yet, so no legacy compatibility or rejection mechanism is needed; migrated images no longer interpret `PRODUCTION`. Keep images and configuration release-matched: changing only the variable does not make an old image production-safe. Backup mode remains outside this deployment work.
 
 ## Operator configuration and secrets
 
