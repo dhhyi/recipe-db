@@ -187,6 +187,13 @@ EOF
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS graphql-test' "$MOCK_LOG"
 }
 
+@test "MCP tests receive owner and both member auth principals" {
+  run bash .scripts/run-integration-tests.sh --development mcp-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS mcp-test' "$MOCK_LOG"
+}
+
 @test "browser tests require generated auth client inputs" {
   add_test_project e2e-test
   jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
