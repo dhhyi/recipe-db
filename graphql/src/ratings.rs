@@ -81,7 +81,7 @@ impl RatingsApi {
             .put_form(id, &[("rating", rating.as_str()), ("userId", user_id)])
             .await
             .map_err(RestError::into_error)?;
-        publisher.notify(Some(id), EventKind::RatingChanged).await;
+        publisher.notify(id, EventKind::RatingChanged).await;
         Ok(Rating {
             recipe_id: ID::from(id.to_string()),
             average: Some(result.rating),

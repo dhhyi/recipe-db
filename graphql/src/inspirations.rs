@@ -46,9 +46,7 @@ impl InspirationsApi {
                 .await
                 .map_err(RestError::into_error)?;
         }
-        publisher
-            .notify(Some(id), EventKind::InspirationsChanged)
-            .await;
+        publisher.notify(id, EventKind::InspirationsChanged).await;
         Ok(())
     }
 }

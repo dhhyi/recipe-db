@@ -149,14 +149,6 @@ pub fn worker(cfg: Config, state: *State) void {
             next_event_retry = std.time.timestamp() + 300;
             continue;
         };
-        var reset_job: u64 = 0;
-        if (envelope.recipeId == null) {
-            reset_job = state.request();
-            state.mutex.lock();
-            state.active = reset_job;
-            state.ready = false;
-            state.mutex.unlock();
-        }
         const outcome = process(&index, a, envelope, msg);
         const done = if (outcome) natsCheck(c.natsMsg_AckSync(msg, null, null)) else |err| failed: {
             std.log.err("event unfinished: {s}", .{@errorName(err)});
@@ -165,10 +157,6 @@ pub fn worker(cfg: Config, state: *State) void {
         state.mutex.lock();
         state.event_error = if (done) null else |err| @errorName(err);
         state.checkpoint = index.checkpoint;
-        if (reset_job != 0) {
-            state.complete(reset_job, if (outcome) null else |err| @errorName(err));
-            next_rebuild = deadline(std.time.timestamp(), if (outcome) true else |_| false);
-        }
         state.mutex.unlock();
         if (done) {
             index.message = null;
@@ -188,9 +176,7 @@ fn process(index: *Index, a: Allocator, e: Event, msg: ?*c.natsMsg) !void {
     try natsCheck(c.natsMsg_GetMetaData(&metadata, msg));
     defer c.jsMsgMetaData_Destroy(metadata);
     try index.progress();
-    if (e.recipeId) |id| {
-        _ = try index.reload(a, id);
-    } else try index.rebuild(a);
+    _ = try index.reload(a, e.recipeId);
     try index.saveCheckpoint(@max(index.checkpoint, metadata.?.Sequence.Stream));
 }
 

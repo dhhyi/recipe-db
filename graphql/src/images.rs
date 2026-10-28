@@ -66,9 +66,7 @@ impl ImagesApi {
             .post_bytes::<ImageMetadata>(recipe_id, mimetype, content, crop.as_ref())
             .await
             .map_err(RestError::into_error)?;
-        publisher
-            .notify(Some(recipe_id), EventKind::ImageChanged)
-            .await;
+        publisher.notify(recipe_id, EventKind::ImageChanged).await;
         Ok(metadata)
     }
 }

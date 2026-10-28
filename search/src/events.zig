@@ -7,7 +7,7 @@ pub const Event = struct {
     version: u64,
     eventId: []const u8,
     occurredAt: []const u8,
-    recipeId: ?[]const u8,
+    recipeId: []const u8,
     kind: []const u8,
 };
 pub fn event(a: Allocator, body: []const u8) !Event {
@@ -20,13 +20,8 @@ pub fn event(a: Allocator, body: []const u8) !Event {
         } else if (!std.ascii.isHex(ch)) return error.InvalidEvent;
     }
     const single = [_][]const u8{ "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed" };
-    const reset = [_][]const u8{ "recipes.reset", "ratings.reset", "images.reset", "inspirations.reset" };
     for (single) |kind| if (std.mem.eql(u8, kind, e.kind)) {
-        if (e.recipeId == null or e.recipeId.?.len == 0) return error.InvalidEvent;
-        return e;
-    };
-    for (reset) |kind| if (std.mem.eql(u8, kind, e.kind)) {
-        if (e.recipeId != null) return error.InvalidEvent;
+        if (e.recipeId.len == 0) return error.InvalidEvent;
         return e;
     };
     return error.InvalidEvent;
@@ -57,32 +52,26 @@ fn utcTimestamp(value: []const u8) bool {
     return day > 0 and day <= max_day;
 }
 
-test "event contract rejects unsupported envelopes and accepts additive fields" {
+test "event contract rejects invalid envelopes and unsupported kinds" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
     const valid = "{\"version\":1,\"eventId\":\"53cf7722-2b64-4e9f-a267-8b4d1f878302\",\"occurredAt\":\"2026-10-08T13:00:00Z\",\"recipeId\":\"42\",\"kind\":\"recipe.changed\",\"extra\":true}";
-    try std.testing.expectEqualStrings("42", (try event(a, valid)).recipeId.?);
-    try std.testing.expectError(error.InvalidEvent, event(a, "{\"version\":2,\"eventId\":\"53cf7722-2b64-4e9f-a267-8b4d1f878302\",\"occurredAt\":\"2026-10-08T13:00:00Z\",\"recipeId\":null,\"kind\":\"recipes.reset\"}"));
+    try std.testing.expectEqualStrings("42", (try event(a, valid)).recipeId);
+    try std.testing.expectError(error.InvalidEvent, event(a, "{\"version\":2,\"eventId\":\"53cf7722-2b64-4e9f-a267-8b4d1f878302\",\"occurredAt\":\"2026-10-08T13:00:00Z\",\"recipeId\":\"42\",\"kind\":\"recipe.changed\"}"));
+    try std.testing.expectError(error.InvalidEvent, event(a, "{\"version\":1,\"eventId\":\"53cf7722-2b64-4e9f-a267-8b4d1f878302\",\"occurredAt\":\"2026-10-08T13:00:00Z\",\"recipeId\":\"42\",\"kind\":\"unknown\"}"));
 }
-test "event kinds, reset relationships and UTC timestamps" {
+test "event kinds and UTC timestamps" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var e = Event{ .version = 1, .eventId = "53cf7722-2b64-4e9f-a267-8b4d1f878302", .occurredAt = "2026-10-08T13:00:00Z", .recipeId = null, .kind = "recipes.reset" };
-    for ([_][]const u8{ "recipes.reset", "ratings.reset", "images.reset", "inspirations.reset" }) |kind| {
-        e.kind = kind;
-        _ = try event(a, try encode(a, e));
-        e.recipeId = "42";
-        try std.testing.expectError(error.InvalidEvent, event(a, try encode(a, e)));
-        e.recipeId = null;
-    }
+    var e = Event{ .version = 1, .eventId = "53cf7722-2b64-4e9f-a267-8b4d1f878302", .occurredAt = "2026-10-08T13:00:00Z", .recipeId = "", .kind = "recipe.changed" };
     for ([_][]const u8{ "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed" }) |kind| {
         e.kind = kind;
         try std.testing.expectError(error.InvalidEvent, event(a, try encode(a, e)));
         e.recipeId = "42";
         _ = try event(a, try encode(a, e));
-        e.recipeId = null;
+        e.recipeId = "";
     }
     try std.testing.expect(utcTimestamp("2024-02-29T13:00:00.123Z"));
     try std.testing.expect(!utcTimestamp("2026-02-29T13:00:00Z"));

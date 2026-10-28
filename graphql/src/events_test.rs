@@ -41,12 +41,12 @@ async fn next_message(consumer: &consumer::PullConsumer) -> jetstream::Message {
         .unwrap()
 }
 
-async fn assert_events(consumer: &consumer::PullConsumer, expected: &[(Option<&str>, EventKind)]) {
+async fn assert_events(consumer: &consumer::PullConsumer, expected: &[(&str, EventKind)]) {
     for (id, kind) in expected {
         let message = next_message(consumer).await;
         let event: RecipeEvent = serde_json::from_slice(&message.payload).unwrap();
         assert_eq!(event.version, 1);
-        assert_eq!(event.recipe_id.as_deref(), *id);
+        assert_eq!(event.recipe_id, *id);
         assert_eq!(&event.kind, kind);
         message.double_ack().await.unwrap();
     }
@@ -358,16 +358,16 @@ async fn bus_contract() {
     execute(&schema, "{ recipes { id } }", true).await;
 
     let expected = [
-        (Some("42"), EventKind::RecipeChanged),
-        (Some("42"), EventKind::InspirationsChanged),
-        (Some("42"), EventKind::RecipeChanged),
-        (Some("partial-create"), EventKind::RecipeChanged),
-        (Some("42"), EventKind::InspirationsChanged),
-        (Some("42"), EventKind::InspirationsChanged),
-        (Some("42"), EventKind::RecipeChanged),
-        (Some("42"), EventKind::RatingChanged),
-        (Some("42"), EventKind::ImageChanged),
-        (Some("42"), EventKind::RecipeDeleted),
+        ("42", EventKind::RecipeChanged),
+        ("42", EventKind::InspirationsChanged),
+        ("42", EventKind::RecipeChanged),
+        ("partial-create", EventKind::RecipeChanged),
+        ("42", EventKind::InspirationsChanged),
+        ("42", EventKind::InspirationsChanged),
+        ("42", EventKind::RecipeChanged),
+        ("42", EventKind::RatingChanged),
+        ("42", EventKind::ImageChanged),
+        ("42", EventKind::RecipeDeleted),
     ];
     let search = settings.consumer(CONSUMERS[0]).await;
     assert_events(&search, &expected).await;
@@ -384,15 +384,15 @@ async fn bus_contract() {
         expected.len() as u64
     );
 
-    let event = RecipeEvent::new(Some("duplicate"), EventKind::RecipeChanged);
+    let event = RecipeEvent::new("duplicate", EventKind::RecipeChanged);
     publisher.publish(&event).await.unwrap();
     publisher.publish(&event).await.unwrap();
     assert_eq!(
         stream.info().await.unwrap().state.messages,
         expected.len() as u64 + 1
     );
-    assert_events(&search, &[(Some("duplicate"), EventKind::RecipeChanged)]).await;
-    assert_events(&browse, &[(Some("duplicate"), EventKind::RecipeChanged)]).await;
+    assert_events(&search, &[("duplicate", EventKind::RecipeChanged)]).await;
+    assert_events(&browse, &[("duplicate", EventKind::RecipeChanged)]).await;
 
     let mut wrong_config = stream_config();
     wrong_config.max_bytes /= 2;
@@ -440,11 +440,11 @@ async fn bus_contract() {
     context.update_stream(stream_config()).await.unwrap();
 
     publisher
-        .notify(Some("restart-marker"), EventKind::RecipeChanged)
+        .notify("restart-marker", EventKind::RecipeChanged)
         .await;
     let unacknowledged = next_message(&search).await;
     let event: RecipeEvent = serde_json::from_slice(&unacknowledged.payload).unwrap();
-    assert_eq!(event.recipe_id.as_deref(), Some("restart-marker"));
+    assert_eq!(event.recipe_id, "restart-marker");
     backend.abort();
 }
 
@@ -460,14 +460,10 @@ async fn bus_restart_recovery() {
         "Unacknowledged event must be redelivered"
     );
     let event: RecipeEvent = serde_json::from_slice(&message.payload).unwrap();
-    assert_eq!(event.recipe_id.as_deref(), Some("restart-marker"));
+    assert_eq!(event.recipe_id, "restart-marker");
     message.double_ack().await.unwrap();
     let mut browse = settings.consumer(CONSUMERS[1]).await;
-    assert_events(
-        &browse,
-        &[(Some("restart-marker"), EventKind::RecipeChanged)],
-    )
-    .await;
+    assert_events(&browse, &[("restart-marker", EventKind::RecipeChanged)]).await;
     assert_eq!(search.info().await.unwrap().num_ack_pending, 0);
     assert_eq!(browse.info().await.unwrap().num_ack_pending, 0);
 }

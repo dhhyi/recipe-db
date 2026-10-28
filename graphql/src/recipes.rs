@@ -39,7 +39,7 @@ impl RecipesApi {
             .await
             .map_err(RestError::into_error)?;
         publisher
-            .notify(Some(recipe.id.as_str()), EventKind::RecipeChanged)
+            .notify(recipe.id.as_str(), EventKind::RecipeChanged)
             .await;
         Ok(recipe)
     }
@@ -55,14 +55,14 @@ impl RecipesApi {
             .patch(id, &value.base())
             .await
             .map_err(RestError::into_error)?;
-        publisher.notify(Some(id), EventKind::RecipeChanged).await;
+        publisher.notify(id, EventKind::RecipeChanged).await;
         Ok(recipe)
     }
 
     pub async fn delete_recipe(&self, id: &str, publisher: &EventPublisher) -> Result<bool, Error> {
         match self.client.delete(id).await {
             Ok(()) => {
-                publisher.notify(Some(id), EventKind::RecipeDeleted).await;
+                publisher.notify(id, EventKind::RecipeDeleted).await;
                 Ok(true)
             }
             Err(err) if err.status == StatusCode::NOT_FOUND => Ok(false),
