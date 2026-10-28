@@ -227,21 +227,12 @@ for project in "${projects[@]}"; do
       echo "Auth test tokens are missing; run mise run create-auth-test-fixture." >&2
       exit 1
     fi
-    if [[ $project == mcp-test ]]; then
-      MCP_API_TOKEN=$(jq -er '.owner' "$tokens_file")
-      export MCP_API_TOKEN
-      docker compose --profile test run --rm -e MCP_API_TOKEN "$project" 2>&1 \
-        | tee "$project/target/integration-tests/run.log"
-      status=${PIPESTATUS[0]}
-      unset MCP_API_TOKEN
-    else
-      E2E_AUTH_TOKENS=$(cat "$tokens_file")
-      export E2E_AUTH_TOKENS
-      docker compose --profile test run --rm -e E2E_AUTH_TOKENS "$project" 2>&1 \
-        | tee "$project/target/integration-tests/run.log"
-      status=${PIPESTATUS[0]}
-      unset E2E_AUTH_TOKENS
-    fi
+    E2E_AUTH_TOKENS=$(cat "$tokens_file")
+    export E2E_AUTH_TOKENS
+    docker compose --profile test run --rm -e E2E_AUTH_TOKENS "$project" 2>&1 \
+      | tee "$project/target/integration-tests/run.log"
+    status=${PIPESTATUS[0]}
+    unset E2E_AUTH_TOKENS
   else
     docker compose --profile test run --rm "$project" 2>&1 \
       | tee "$project/target/integration-tests/run.log"

@@ -13,37 +13,60 @@ from mcp.client.streamable_http import streamablehttp_client
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
 MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
+AUTH_TOKENS = json.loads(os.environ.get("E2E_AUTH_TOKENS", "{}"))
 MCP_REQUEST_TIMEOUT = timedelta(seconds=30)
 MCP_SESSION_TIMEOUT_SECONDS = 60
 
 
 @pytest.fixture(scope="session", autouse=True)
 def fixture_server_ready():
-    url = f"{FIXTURE_API}/test.jpg"
-    deadline = time.monotonic() + 30
-    last_error = None
     with httpx.Client(timeout=1) as client:
-        while time.monotonic() < deadline:
-            try:
-                response = client.get(url)
-                if response.is_success:
-                    return
-                last_error = f"HTTP {response.status_code}"
-            except httpx.RequestError as error:
-                last_error = str(error)
-            time.sleep(0.2)
-
-    pytest.fail(f"Fixture {url} did not become ready within 30 seconds: {last_error}")
+        for method, url, kwargs in (
+            ("GET", f"{FIXTURE_API}/test.jpg", {}),
+            (
+                "POST",
+                MCP_URL,
+                {
+                    "headers": {"Accept": "application/json, text/event-stream"},
+                    "json": {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-03-26",
+                            "capabilities": {},
+                            "clientInfo": {"name": "readiness", "version": "1"},
+                        },
+                    },
+                },
+            ),
+        ):
+            deadline = time.monotonic() + 30
+            last_error = None
+            while time.monotonic() < deadline:
+                try:
+                    response = client.request(method, url, **kwargs)
+                    if response.is_success:
+                        break
+                    last_error = f"HTTP {response.status_code}"
+                except httpx.RequestError as error:
+                    last_error = str(error)
+                time.sleep(0.2)
+            else:
+                pytest.fail(f"{url} did not become ready within 30 seconds: {last_error}")
 
 
 @asynccontextmanager
-async def mcp_session(authenticated=True):
+async def mcp_session(authenticated=True, account="owner"):
     with anyio.fail_after(MCP_SESSION_TIMEOUT_SECONDS):
         headers = {}
         if authenticated:
-            if not MCP_API_TOKEN:
-                pytest.fail("MCP_API_TOKEN environment variable is required")
-            headers["Authorization"] = f"Bearer {MCP_API_TOKEN}"
+            token = AUTH_TOKENS.get(account)
+            if not token and account == "owner":
+                token = MCP_API_TOKEN
+            if not token:
+                pytest.fail("E2E_AUTH_TOKENS with owner/memberOne/memberTwo is required")
+            headers["Authorization"] = "Bearer " + token
         async with streamablehttp_client(
             MCP_URL, headers=headers, timeout=10, sse_read_timeout=30
         ) as (read_stream, write_stream, _):
@@ -117,7 +140,8 @@ async def test_add_recipe_without_an_api_token_is_rejected():
         result = await session.call_tool(
             "add_recipe", {"recipeJson": json.dumps({"name": "Unauthenticated Recipe"})}
         )
-        assert "cross-origin mutation rejected" in result.content[0].text.lower()
+        assert result.isError is True
+        assert "authentication-required" in result.content[0].text.lower()
 
 
 async def test_add_recipe_with_valid_json_creates_a_recipe():

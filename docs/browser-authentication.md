@@ -90,6 +90,45 @@ docker compose restart graphql
 
 Do not remove the whole `.secrets` directory or tear down Compose as part of this cleanup; unrelated local secrets and existing services are not owned by the E2E fixture. A token-capable API client or browser header tool can also send a `Bearer` header containing a chosen fixture token to the application origin for simultaneous identities. Keep headers scoped to that origin. Removing a static token header selects credential-free access; it is not OAuth session logout or server-side token revocation. No sign-in/out feature or browser identity picker is provided by this workflow.
 
+## MCP configured-token access
+
+MCP uses stateless Streamable HTTP at `/mcp`, not legacy SSE or a login session. Each request forwards only its own bearer `Authorization` header to GraphQL through Traefik, including schema/online-service queries, ratings and multipart image uploads. Browser cookies and caller-supplied identity headers are not forwarded. Cookie-only requests remain credential-free; bearer plus cookies uses only the bearer. Invalid presented credentials fail explicitly rather than selecting the credential-free role. The server-to-server GraphQL request sets its Origin to the fixed GraphQL destination, never the incoming browser Origin, so GraphQL's CSRF gate does not override intentionally privileged credential-free roles. GraphQL errors become MCP tool results with `isError: true` and the available stable code/message; mutations are not automatically retried. External image downloads, including redirects, use a separate credential-free client.
+
+The server has no MCP-specific token file or environment variable. GraphQL reads only its read-only mounted `/run/secrets/auth-accounts.json` at startup in Compose and Kubernetes. Its configuration contains `anonymous: {role, displayName?}`, `tokens: [{id, secret, role, displayName?}]`, and `googleAccounts: {email: role}`. Tokens represent stable namespaced token IDs, not Google accounts. Keep an ID when rotating its secret to preserve attribution. Restart GraphQL after changing secrets, removing tokens or changing roles. Configuration is authoritative, including an intentionally privileged `anonymous.role`; MCP does not impose a separate role policy. Members may rate, owners may manage recipes/images, and no tool accepts a rating author, login or role as authority.
+
+For the portable Copilot configuration, merge this entry into `$COPILOT_HOME/mcp-config.json` (default `~/.copilot/mcp-config.json`), outside the repository. The [VS Code configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) documents portable header environment references. Use HTTPS for a remote deployment:
+
+```json
+{
+  "mcpServers": {
+    "recipe-db-mcp": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "\u0042earer ${RECIPE_DB_MCP_TOKEN}"
+      },
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Provide `RECIPE_DB_MCP_TOKEN` to the process launching the client, not the server. For example, in a Bash terminal, read it without echo or shell-history exposure, then launch a fresh VS Code process from that terminal:
+
+```sh
+read -r -s -p 'Recipe DB MCP token: ' RECIPE_DB_MCP_TOKEN
+printf '\n'
+export RECIPE_DB_MCP_TOKEN
+code
+unset RECIPE_DB_MCP_TOKEN
+```
+
+Fully quit an already-running VS Code instance first so it does not reuse an older process environment. For a separately launched Copilot harness, supply the variable to that harness process too. Do not put the value in workspace settings, `.mcp.json`, shell startup files, command-line arguments, tool arguments, logs or chat. Environment variables are client-side credential delivery, not a server configuration alternative.
+
+The JSON escape `\u0042` is the letter `B`; the decoded header uses the standard bearer scheme. For VS Code-managed HTTP MCP configuration, replace `${RECIPE_DB_MCP_TOKEN}` with `${env:RECIPE_DB_MCP_TOKEN}` and use its user-level `servers` entry. The portable `mcpServers` configuration above is for the Copilot harness; these file formats and variable syntaxes are not interchangeable. The repository's credential-free `.mcp.json` is intentionally unchanged. To use public reads, omit the header entirely rather than sending an empty or unresolved token reference.
+
+Client verification must connect using the user-level configuration and run an anonymous `list_recipes`/`get_recipe_schema`, an owner `add_recipe`, and a denied anonymous or member write, checking `isError: true`. Also verify member ratings without an author argument. The Python MCP integration suite tests the HTTP behavior but does **not** establish Copilot harness or VS Code compatibility. No real Copilot harness/VS Code connection has been verified in this environment; that acceptance gate remains open. VS Code password-masked `${input:...}` configuration is unsupported/unverified here; no interactive OAuth or token issuance UI is provided.
+
 ## Session lifecycle and verification status
 
 Run `mise run test-auth-ingress` to render the production routing template directly and exercise it with real Traefik and an isolated mock HTTP backend (Docker and the `traefik:v3.7` / `python:3.13-slim` images are required). It verifies token overwrite, identity sanitization, cookie/bearer precedence, invalid-cookie rejection, and blocked configuration API endpoints without Google credentials. This is an ingress transport test, not an OIDC login test. GraphQL's token validation and health-route exemption are covered by its Rust tests.

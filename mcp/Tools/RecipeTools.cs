@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 using Json.Schema;
 using Mcp.GraphQL;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using StrawberryShake;
 
@@ -70,7 +71,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         var response = await client.CreateRecipe.ExecuteAsync(value);
         if (response.Errors.Count > 0)
         {
-            return $"Failed to create recipe: {string.Join("; ", response.Errors.Select(e => e.Message))}";
+            throw GraphQLError(response.Errors);
         }
 
         var created = response.Data?.CreateRecipe;
@@ -95,7 +96,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         var response = await client.ListRecipes.ExecuteAsync();
         if (response.Errors.Count > 0)
         {
-            return $"Failed to list recipes: {string.Join("; ", response.Errors.Select(e => e.Message))}";
+            throw GraphQLError(response.Errors);
         }
 
         var recipes = response.Data?.Recipes ?? [];
@@ -113,7 +114,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         var response = await client.GetRecipe.ExecuteAsync(recipeId);
         if (response.Errors.Count > 0)
         {
-            return $"Failed to get recipe: {string.Join("; ", response.Errors.Select(e => e.Message))}";
+            throw GraphQLError(response.Errors);
         }
 
         var recipe = response.Data?.Recipe;
@@ -164,7 +165,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
             var response = await client.UpdateRecipe.ExecuteAsync(recipeId, value);
             if (response.Errors.Count > 0)
             {
-                return $"Failed to change recipe: {string.Join("; ", response.Errors.Select(e => e.Message))}";
+                throw GraphQLError(response.Errors);
             }
 
             var updated = response.Data?.UpdateRecipe;
@@ -191,7 +192,19 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     private async Task<HashSet<string>> GetOnlineServicesAsync()
     {
         var response = await client.OnlineServices.ExecuteAsync();
+        if (response.Errors.Count > 0)
+        {
+            throw GraphQLError(response.Errors);
+        }
         return (response.Data?.OnlineServices ?? []).ToHashSet();
+    }
+
+    private static McpException GraphQLError(IReadOnlyList<IClientError> errors)
+    {
+        return new McpException(string.Join("; ", errors.Select(error =>
+            error.Extensions?.TryGetValue("code", out var code) == true
+                ? $"{code}: {error.Message}"
+                : error.Message)));
     }
 
     private static RecipeInput BuildRecipeInput(JsonObject recipe)
@@ -254,7 +267,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         var response = await client.SetImage.ExecuteAsync(recipeId, file);
         if (response.Errors.Count > 0)
         {
-            return $"Failed to upload image: {string.Join("; ", response.Errors.Select(e => e.Message))}";
+            throw GraphQLError(response.Errors);
         }
 
         return response.Data?.SetImage is not null ? "Image uploaded" : "Failed to upload image";
@@ -270,7 +283,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         var response = await client.Rate.ExecuteAsync(recipeId, rating);
         if (response.Errors.Count > 0)
         {
-            return $"Failed to add rating: {string.Join("; ", response.Errors.Select(e => e.Message))}";
+            throw GraphQLError(response.Errors);
         }
 
         var result = response.Data?.Rate;
