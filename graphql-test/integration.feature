@@ -3,6 +3,7 @@ Feature: integration
 
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
+    * call read('graphql/reset-testing-data.feature')
     * url graphqlApi
     * configure headers = { Authorization: '#(ownerAuthorization)' }
 
