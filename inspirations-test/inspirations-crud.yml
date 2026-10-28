@@ -41,6 +41,33 @@ testcases:
             Content-Type: application/json
           json: ["https://www.test.com", "https://example.com"]
 
+  - name: Clear seeded inspirations
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations"
+          method: DELETE
+        response:
+          statusCode: 204
+
+  - name: Verify seeded inspirations were cleared
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/1234"
+          method: GET
+        response:
+          statusCode: 404
+
+  - name: Repeat empty reset
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/"
+          method: DELETE
+        response:
+          statusCode: 204
+
   - name: Update inspiration
     steps:
       - type: tavern

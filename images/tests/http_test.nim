@@ -1,4 +1,4 @@
-import std/[httpclient, json, os, osproc, sequtils, strtabs, strutils, unittest, uri]
+import std/[httpclient, json, options, os, osproc, sequtils, strtabs, strutils, unittest, uri]
 import pixie
 import ../storage
 
@@ -6,16 +6,26 @@ const
   root = "tests/http-test-data"
   base = "http://127.0.0.1:18432"
 
-proc startServer(production = false, maxPixels = 40_000_000,
-    maxUploadBytes = 10 * 1024 * 1024): Process =
-  var environment = newStringTable(modeCaseSensitive)
+proc serverEnvironment(mode: Option[string], legacyProduction: Option[string],
+    maxPixels, maxUploadBytes: int): StringTableRef =
+  result = newStringTable(modeCaseSensitive)
   for key, value in envPairs():
-    environment[key] = value
-  environment["PORT"] = "18432"
-  environment["DATA_LOCATION"] = root
-  environment["PRODUCTION"] = $production
-  environment["MAX_PIXELS"] = $maxPixels
-  environment["MAX_UPLOAD_BYTES"] = $maxUploadBytes
+    result[key] = value
+  result["PORT"] = "18432"
+  result["DATA_LOCATION"] = root
+  result.del("MODE")
+  result.del("PRODUCTION")
+  if mode.isSome:
+    result["MODE"] = mode.get
+  if legacyProduction.isSome:
+    result["PRODUCTION"] = legacyProduction.get
+  result["MAX_PIXELS"] = $maxPixels
+  result["MAX_UPLOAD_BYTES"] = $maxUploadBytes
+
+proc startServer(mode = some("testing"), legacyProduction = none(string),
+    maxPixels = 40_000_000,
+    maxUploadBytes = 10 * 1024 * 1024): Process =
+  let environment = serverEnvironment(mode, legacyProduction, maxPixels, maxUploadBytes)
   result = startProcess("./server", env = environment,
       options = {poParentStreams})
   let client = newHttpClient(timeout = 100)
@@ -32,12 +42,24 @@ proc startServer(production = false, maxPixels = 40_000_000,
   result.close()
   raise newException(IOError, "Test server did not become ready")
 
+proc checkInvalidMode(mode: string) =
+  let environment = serverEnvironment(some(mode), none(string),
+      40_000_000, 10 * 1024 * 1024)
+  let server = startProcess("./server", env = environment,
+      options = {poParentStreams})
+  check server.waitForExit() != 0
+  server.close()
+
 proc stopServer(server: Process) =
   server.terminate()
   discard server.waitForExit()
   server.close()
 
 suite "backend HTTP publication contract":
+  test "validates mode values and rejects unsupported configuration":
+    for mode in ["", "backup", "Production", " production", "testing "]:
+      checkInvalidMode(mode)
+
   test "off-center crop pixels, strict errors and failed saves preserve the complete pair":
     if dirExists(root):
       removeDir(root)
@@ -256,15 +278,28 @@ suite "backend HTTP publication contract":
     discard deletedImage.body
     client.close()
     server.stopServer()
-    server = startServer(production = true)
-    let guarded = client.request(base & "/images", httpMethod = HttpDelete)
-    check guarded.code == Http404
-    discard guarded.body
-    check fileExists(store.manifestPath(specialId))
     client.close()
     server.stopServer()
-    server = startServer()
-    let wiped = client.request(base & "/images", httpMethod = HttpDelete)
+    server = startServer(mode = some("production"))
+    let explicitProduction = client.request(base & "/images", httpMethod = HttpDelete)
+    check explicitProduction.code == Http404
+    discard explicitProduction.body
+    check fileExists(store.manifestPath(specialId))
+    for legacy in ["", "true", "false"]:
+      client.close()
+      server.stopServer()
+      server = startServer(mode = none(string), legacyProduction = some(legacy))
+      let guarded = client.request(base & "/images", httpMethod = HttpDelete)
+      check guarded.code == Http404
+      discard guarded.body
+      check fileExists(store.manifestPath(specialId))
+    client.close()
+    server.stopServer()
+    server = startServer(mode = some("testing"), legacyProduction = some("true"))
+    let wiped = client.request(base & "/images/", httpMethod = HttpDelete)
     check wiped.code == Http204
     discard wiped.body
     check not fileExists(store.manifestPath(specialId))
+    let repeated = client.request(base & "/images", httpMethod = HttpDelete)
+    check repeated.code == Http204
+    discard repeated.body

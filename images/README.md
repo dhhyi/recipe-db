@@ -17,7 +17,7 @@ Integration testing (in [`images-test`](../images-test)) uses [Hurl](https://hur
 | `POST /images/:recipeId` | Raw image body, `Content-Type` must be `image/jpeg`, `image/jpg` or `image/png`. Optional query parameters `cropX`, `cropY`, `cropWidth`, `cropHeight` must occur once each, all together, as nonnegative decimal integers. Dimensions must be positive, in bounds in oriented source pixels, exact 4:3 and at least 300x225. Invalid crops return `400` with codes `invalid-crop` (and the offending/missing `field`), `invalid-crop-aspect-ratio`, `crop-out-of-bounds`, or `crop-too-small`; they never fall back to automatic cropping. Returns `201` with the published metadata as JSON, `400` for an unsupported or mismatching type, undecodable data or excessive pixel count, `413` for excessive encoded bytes, or `500` on storage failure. |
 | `GET /images/:recipeId/meta` | Current metadata with `Cache-Control: no-store`, or `404` for no manifest. Malformed manifests or missing/corrupt outputs produce a logged `500` Problem Details response. Fields remain `recipeId`, `width`, `height`, `size` (normal PNG bytes), `modified` (last successful publication), `url`, and `thumbUrl`. |
 | `DELETE /images/:recipeId` | Removes the manifest and all retained versions of exactly that recipe. Returns `204`, or `404`. |
-| `DELETE /images` | Removes all manifests and versions. Only available outside production. |
+| `DELETE /images` or `DELETE /images/` | Removes all manifests and versions. Only available with explicit `MODE=testing`. |
 | `GET /public/:file` | Only hash-named PNGs are public. Successful responses and conditional `304` responses use `Cache-Control: public, max-age=31536000, immutable` and a content-hash ETag; errors do not. |
 | `GET /health` | Returns `204`. |
 
@@ -29,7 +29,7 @@ Integration testing (in [`images-test`](../images-test)) uses [Hurl](https://hur
 | `DATA_LOCATION` | `public` | Persistent data root containing the public PNGs in `public` and private manifests in `manifests`. |
 | `MAX_UPLOAD_BYTES` | `10485760` | Rejected request bodies above this size. |
 | `MAX_PIXELS` | `40000000` | Rejected images above this pixel count. |
-| `PRODUCTION` | unset | Set to `true` to disable `DELETE /images`. |
+| `MODE` | `production` | Set to `testing` to enable `DELETE /images` for isolated tests. Empty or unsupported values fail startup. |
 | `VERBOSE` | unset | Set to `true` for info level logging. |
 
 ## Development

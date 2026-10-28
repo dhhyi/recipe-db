@@ -62,13 +62,16 @@ Request errorBadRequest := method(detail, code, field,
 )
 
 Request errorNotFound := method(
-    return self error("404", "Not Found")
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Not Found") atPut("status", 404) atPut("detail", "Route not found") atPut("code", "not-found")
+    return self send("404", "Not Found", problem asJson, "application/problem+json")
 )
 
 Request errorMethodNotAllowed := method(
-    return self error("405", "Method Not Allowed")
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Method Not Allowed") atPut("status", 405) atPut("detail", "Method not allowed") atPut("code", "method-not-allowed")
+    return self send("405", "Method Not Allowed", problem asJson, "application/problem+json")
 )
 
 Request errorInternalServerError := method(
-    return self error("500", "Internal Server Error")
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Internal Server Error") atPut("status", 500) atPut("detail", "The request could not be completed") atPut("code", "internal-server-error")
+    return self send("500", "Internal Server Error", problem asJson, "application/problem+json")
 )

@@ -29,12 +29,12 @@ NATS JetStream is shared infrastructure for the [search index](../search/OPERATI
 | `rating.changed` | Confirmed rating submission; only the affected recipe ID is included |
 | `image.changed` | Confirmed image upload/replacement |
 | `inspirations.changed` | Confirmed inspirations replacement or deletion |
-| `recipes.reset` | Successful `deleteRecipesForTesting` |
-| `ratings.reset` | Successful `deleteRatingsForTesting` |
-| `images.reset` | Successful `deleteImagesForTesting` |
-| `inspirations.reset` | Successful `deleteInspirationsForTesting` |
+| `recipes.reset` | Internal whole-projection reconciliation |
+| `ratings.reset` | Internal whole-projection reconciliation |
+| `images.reset` | Internal whole-projection reconciliation |
+| `inspirations.reset` | Internal whole-projection reconciliation |
 
-The bulk reset mutations already exist; their notifications have `recipeId: null` and require whole-projection recovery. Clearing already-absent inspirations performs no write and emits no notification. Reads, rejected writes, and direct REST mutations emit none. Repeated successful writes may emit multiple notifications even if the effective data is unchanged.
+The reset event kinds have `recipeId: null` and require whole-projection recovery. Per-service testing reset routes do not publish reset events and are not exposed through GraphQL or MCP. Clearing already-absent inspirations performs no write and emits no notification. Reads, rejected writes, and direct REST mutations emit none. Repeated successful writes may emit multiple notifications even if the effective data is unchanged.
 
 Events contain no recipe bodies, image bytes, login names, or individual rating values. Each confirmed write in a multi-backend mutation publishes independently: a later backend failure does not suppress notification of an earlier committed write. No event claims the multi-backend operation was atomic.
 
