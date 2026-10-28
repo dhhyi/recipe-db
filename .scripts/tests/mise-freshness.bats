@@ -166,6 +166,69 @@ EOF
   [ "$status" -eq 1 ]
 }
 
+@test "Mise detects equal-size Compose source edits with the exact original mtime" {
+  run mise -C "$FIXTURE_ROOT" run --raw --force generate-docker-compose
+  [ "$status" -eq 0 ]
+
+  source=.scripts/templates/nats-service-template.lib.yml
+  cp -p "$source" original-source
+  original_size=$(stat -c %s "$source")
+  original_mtime=$(stat -c %y "$source")
+  sed -i 's/2\.11\.10/2.11.11/' "$source"
+  [ "$(stat -c %s "$source")" -eq "$original_size" ]
+  touch -r original-source "$source"
+  [ "$(stat -c %y "$source")" = "$original_mtime" ]
+
+  run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rendering"* ]]
+  mise -C "$FIXTURE_ROOT" exec -- yq -e '.services.nats.image == "nats:2.11.11-alpine"' docker-compose.yml
+}
+
+@test "Mise repairs equal-size Compose and SDL output edits with the exact original mtime" {
+  run mise -C "$FIXTURE_ROOT" run --raw --force generate-docker-compose
+  [ "$status" -eq 0 ]
+
+  cp -p docker-compose.yml original-compose
+  original_size=$(stat -c %s docker-compose.yml)
+  original_mtime=$(stat -c %y docker-compose.yml)
+  sed -i 's/traefik:v3\.7/traefik:v3.8/' docker-compose.yml
+  [ "$(stat -c %s docker-compose.yml)" -eq "$original_size" ]
+  touch -r original-compose docker-compose.yml
+  [ "$(stat -c %y docker-compose.yml)" = "$original_mtime" ]
+  run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  [ "$status" -eq 0 ]
+  run grep -F 'traefik:v3.8' docker-compose.yml
+  [ "$status" -eq 1 ]
+
+  cp -p oauth2-proxy-alpha.yml original-oauth
+  original_size=$(stat -c %s oauth2-proxy-alpha.yml)
+  original_mtime=$(stat -c %y oauth2-proxy-alpha.yml)
+  sed -i 's/replace-with-google-oauth-client-id/replace-with-google-oauth-client-zz/' oauth2-proxy-alpha.yml
+  [ "$(stat -c %s oauth2-proxy-alpha.yml)" -eq "$original_size" ]
+  touch -r original-oauth oauth2-proxy-alpha.yml
+  [ "$(stat -c %y oauth2-proxy-alpha.yml)" = "$original_mtime" ]
+  run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rendering"* ]]
+  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == "replace-with-google-oauth-client-id"' oauth2-proxy-alpha.yml
+
+  run mise -C "$FIXTURE_ROOT" run --raw --force merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  cp -p .generated/graphql/recipe-db.graphqls original-schema
+  original_size=$(stat -c %s .generated/graphql/recipe-db.graphqls)
+  original_mtime=$(stat -c %y .generated/graphql/recipe-db.graphqls)
+  sed -i 's/fixture/feature/' .generated/graphql/recipe-db.graphqls
+  [ "$(stat -c %s .generated/graphql/recipe-db.graphqls)" -eq "$original_size" ]
+  touch -r original-schema .generated/graphql/recipe-db.graphqls
+  [ "$(stat -c %y .generated/graphql/recipe-db.graphqls)" = "$original_mtime" ]
+  : > "$DOCKER_LOG"
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DOCKER_LOG")" = $'build\nprint' ]
+  cmp .generated/graphql/recipe-db.graphqls mcp/recipe-db.graphqls
+}
+
 @test "schema export is cached separately from dynamic consumer distribution" {
   run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
   [ "$status" -eq 0 ]
@@ -206,6 +269,40 @@ EOF
   run mise -C "$FIXTURE_ROOT" run --raw --force merge-graphql-schemas
   [ "$status" -eq 0 ]
   [ "$(cat "$DOCKER_LOG")" = $'build\nprint' ]
+}
+
+@test "Mise detects equal-size GraphQL edits and SDL damage with the exact original mtime" {
+  run mise -C "$FIXTURE_ROOT" run --raw --force merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DOCKER_LOG")" = $'build\nprint' ]
+
+  source=graphql/src/main.rs
+  cp -p "$source" original-source
+  original_size=$(stat -c %s "$source")
+  original_mtime=$(stat -c %y "$source")
+  sed -i 's/main/test/' "$source"
+  [ "$(stat -c %s "$source")" -eq "$original_size" ]
+  touch -r original-source "$source"
+  [ "$(stat -c %y "$source")" = "$original_mtime" ]
+
+  : > "$DOCKER_LOG"
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DOCKER_LOG")" = $'build\nprint' ]
+
+  cp -p .generated/graphql/recipe-db.graphqls original-schema
+  original_size=$(stat -c %s .generated/graphql/recipe-db.graphqls)
+  original_mtime=$(stat -c %y .generated/graphql/recipe-db.graphqls)
+  sed -i 's/fixture/feature/' .generated/graphql/recipe-db.graphqls
+  [ "$(stat -c %s .generated/graphql/recipe-db.graphqls)" -eq "$original_size" ]
+  touch -r original-schema .generated/graphql/recipe-db.graphqls
+  [ "$(stat -c %y .generated/graphql/recipe-db.graphqls)" = "$original_mtime" ]
+
+  : > "$DOCKER_LOG"
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  [ "$(cat "$DOCKER_LOG")" = $'build\nprint' ]
+  cmp .generated/graphql/recipe-db.graphqls mcp/recipe-db.graphqls
 }
 
 @test "GraphQL source and platform changes rebuild, while failures preserve the last good SDL" {

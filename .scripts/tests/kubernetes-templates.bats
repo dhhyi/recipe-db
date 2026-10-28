@@ -95,6 +95,26 @@ render() {
   ' manifests.json
 }
 
+@test "Kubernetes OAuth alpha config requires PKCE, verified issuer, email, and nonce" {
+  render values.json
+  jq -er '
+    .items[] | select(.kind == "ConfigMap" and .metadata.name == "oauth-config") |
+    .data["alpha.yaml"]
+  ' manifests.json > oauth-alpha.yaml
+  mise exec -- yq -p yaml -o=json '.' oauth-alpha.yaml > oauth-alpha.json
+  jq -e '
+    .providers | any(.[]; .id == "google-oidc"
+      and .provider == "oidc"
+      and .scope == "openid email"
+      and .code_challenge_method == "S256"
+      and .additionalClaims == ["iss", "email_verified"]
+      and .oidcConfig.issuerURL == "https://accounts.google.com"
+      and .oidcConfig.insecureAllowUnverifiedEmail == false
+      and .oidcConfig.insecureSkipIssuerVerification == false
+      and .oidcConfig.insecureSkipNonce == false)
+  ' oauth-alpha.json
+}
+
 @test "bundled Traefik keeps REST and administrative ports off its load balancer" {
   render values.json
   jq -er '.items[] | select(.kind == "HelmChartConfig") | .spec.valuesContent' manifests.json > helm.yaml

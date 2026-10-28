@@ -129,16 +129,25 @@ sources = [
   ".scripts/templates/browse-maintenance-template.lib.yml",
   ".generated/compose-inputs.json",
 ]
-outputs = ["docker-compose.yml", "oauth2-proxy-alpha.yml"]
+outputs = [
+  "docker-compose.yml",
+  "oauth2-proxy-alpha.yml",
+  ".generated/compose-source-fingerprint"
+]
 file = ".scripts/generate-docker-compose.sh"
 
 [tasks.refresh-render-inputs]
-description = "Refresh effective Compose and GraphQL build inputs"
-file = ".scripts/refresh-render-inputs.sh"
+description = "Refresh effective Compose inputs and source fingerprint"
+run = "bash .scripts/refresh-render-inputs.sh"
+
+[tasks.refresh-graphql-inputs]
+description = "Refresh effective GraphQL build inputs after Compose generation"
+depends = ["generate-docker-compose"]
+run = "bash .scripts/refresh-render-inputs.sh graphql"
 
 [tasks.export-graphql-schema]
 description = "Build the GraphQL application image and cache its canonical SDL"
-depends = ["generate-docker-compose", "refresh-render-inputs"]
+depends = ["refresh-graphql-inputs"]
 file = ".scripts/export-graphql-schema.sh"
 sources = [
   "mise.toml",
@@ -153,7 +162,10 @@ sources = [
   "graphql/src/**",
   ".generated/graphql-inputs.json",
 ]
-outputs = [".generated/graphql/recipe-db.graphqls"]
+outputs = [
+  ".generated/graphql/recipe-db.graphqls",
+  ".generated/graphql-source-fingerprint"
+]
 
 [tasks.merge-graphql-schemas]
 description = "Distribute the cached GraphQL SDL to metadata-declared consumers"

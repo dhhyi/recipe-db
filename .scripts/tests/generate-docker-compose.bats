@@ -82,7 +82,10 @@ traefik:
           rule: "PathPrefix(`/`)"
           entrypoints: web
           priority: 2
-          middlewares: browse-unavailable
+          middlewares: frontend-compress,browse-unavailable
+      middlewares:
+        frontend-compress:
+          compress: true
 ---
 category: frontend
 EOF
@@ -317,8 +320,33 @@ assert_compose() {
     --data-values-file route-values.json -o json
 
   [ "$status" -eq 0 ]
+  # jq variables in the expression must remain literal for jq.
+  # shellcheck disable=SC2016
   jq -e '
-    .http.routers.graphql.priority == 100
+    .http.routers["browse-maintenance"].rule as $maintenance_rule |
+    .http.routers.browse.rule == "PathPrefix(`/`)"
+    and .http.routers.browse.service == "recipe-db-browse"
+    and .http.routers.browse.middlewares == ["frontend-compress", "browse-unavailable"]
+    and .http.routers.browse.priority > .http.routers["browse-maintenance"].priority
+    and .http.middlewares["frontend-compress"].compress == true
+    and .http.routers["browse-maintenance"].entrypoints == ["web"]
+    and .http.routers["browse-maintenance"].priority == 1
+    and .http.routers["browse-maintenance"].service == "browse-maintenance"
+    and ($maintenance_rule | contains("PathPrefix(`/`)"))
+    and ($maintenance_rule | contains("Method(`GET`) || Method(`HEAD`)"))
+    and ($maintenance_rule | contains("HeaderRegexp(`Accept`, `(?i)text/html`)"))
+    and all(["/graphql", "/mcp", "/public", "/images", "/edit", "/design"][];
+      . as $excluded_path | $maintenance_rule | contains("!PathPrefix(`" + $excluded_path + "`)"))
+    and .http.middlewares["browse-unavailable"].errors.status == ["502-504"]
+    and .http.middlewares["browse-unavailable"].errors.statusRewrites == {"502-504": 503}
+    and .http.middlewares["browse-unavailable"].errors.service == "browse-maintenance"
+    and .http.middlewares["browse-unavailable"].errors.query == "/unavailable.html"
+    and .http.services["browse-maintenance"].loadBalancer.servers == [{"url": "http://browse-maintenance:80"}]
+    and .http.services["recipe-db-browse"].loadBalancer.healthCheck == {"interval": "10s", "timeout": "1s", "path": "/health"}
+    and .http.routers.backend.entrypoints == ["rest-internal"]
+    and .http.routers.backend.service == "backend"
+    and (.http.routers.backend | has("middlewares") | not)
+    and .http.routers.graphql.priority == 100
     and .http.routers.graphql.middlewares == ["graphql-ingress"]
     and .http.routers["graphql-cookie"].priority == 200
     and .http.routers["graphql-cookie"].middlewares == ["oauth2-forward-auth", "graphql-ingress"]
@@ -328,6 +356,7 @@ assert_compose() {
     and .http.middlewares["oauth2-forward-auth"].forwardAuth.trustForwardHeader == false
     and .http.middlewares["identity-strip"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ""
     and (.http.middlewares | has("graphql-ingress") | not)
+    and (tostring | contains("@docker") | not)
   ' <<< "$output"
 }
 

@@ -20,7 +20,7 @@ jq() {
   mise exec -- jq "$@"
 }
 
-sh "$project_root/.scripts/refresh-render-inputs.sh"
+bash "$project_root/.scripts/refresh-render-inputs.sh"
 work_directory="$generated_directory/compose-render.$$"
 mkdir "$work_directory"
 trap 'rm -rf "$work_directory"' EXIT HUP INT TERM
