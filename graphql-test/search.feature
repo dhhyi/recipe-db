@@ -5,7 +5,7 @@ Feature: search recipes
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * call read('graphql/reset-testing-data.feature')
     * url graphqlApi
-    * def searchToken = 'issue81' + java.lang.System.currentTimeMillis()
+    * def searchToken = java.util.UUID.randomUUID().toString()
     * configure headers = { Authorization: '#(ownerAuthorization)' }
     * configure retry = { count: 30, interval: 1000 }
 
