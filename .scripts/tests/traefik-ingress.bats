@@ -67,15 +67,22 @@ teardown() {
 
 @test "real Traefik injects the token only after authentication and hides secret configuration" {
   [ "${TEST_AUTH_INGRESS:-false}" = true ] || skip "run mise run test-auth-ingress for Docker verification"
-  cp "$BATS_TEST_DIRNAME/../generate-docker-compose.sh" .scripts/
-  mkdir -p .scripts/lib
+  mkdir -p .scripts/lib .scripts/templates graphql
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
-  cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
-  use_mise_tools
-  mkdir graphql
+  cp "$BATS_TEST_DIRNAME/../templates/traefik-template.yml" .scripts/templates/
+  cp "$BATS_TEST_DIRNAME/../templates/service-template.lib.yml" .scripts/templates/
+  cp "$BATS_TEST_DIRNAME/../templates/browse-maintenance-template.lib.yml" .scripts/templates/
   cp "$BATS_TEST_DIRNAME/../../graphql/.project.yaml" graphql/
+  use_mise_tools
+  . .scripts/lib/project-metadata.sh
   printf '%s\n' '{"repository":"github:example/fixture"}' > package.json
-  run sh .scripts/generate-docker-compose.sh production
+  project_metadata_to_jsonl "$PWD" projects.jsonl
+  jq -n --slurpfile projects projects.jsonl '{projects:$projects}' > route-values.json
+  run sh -c 'mise exec -- ytt \
+    -f .scripts/templates/traefik-template.yml \
+    -f .scripts/templates/service-template.lib.yml \
+    -f .scripts/templates/browse-maintenance-template.lib.yml \
+    --data-values-file route-values.json > traefik.yml'
   [ "$status" -eq 0 ]
   yq -i '
     .http.services.recipe-db-graphql.loadBalancer.servers[0].url = "http://mock:8000" |

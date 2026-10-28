@@ -30,10 +30,7 @@ file = ".scripts/install-precommit.sh"
 [tasks.setup]
 description = "Install dependencies and hooks, then synchronize repository configuration"
 depends = ["install-deps", "install-precommit"]
-run = [
-  { task = "sync" },
-  { task = "generate-docker-compose", args = ["prepare"] },
-]
+run = [{ task = "sync" }]
 
 [tasks.check-forbidden-files]
 description = "Check tracked files for forbidden ignore-file locations"
@@ -98,7 +95,7 @@ depends = [
   "create-intranet",
   "create-search-key",
   "create-auth-test-fixture",
-  "create-oauth-secrets"
+  "create-oauth-secrets",
 ]
 run = [
   { task = "sync-files" },
@@ -108,22 +105,71 @@ run = [
 ]
 
 [tasks.generate-docker-compose]
-description = "Prepare development defaults with mise dependencies and generate Compose configuration"
+description = "Generate the development Compose configuration"
 depends = [
   "create-intranet",
   "create-search-key",
   "create-auth-test-fixture",
-  "create-oauth-secrets"
+  "create-oauth-secrets",
+  "refresh-render-inputs",
+]
+sources = [
+  "mise.toml",
+  ".scripts/generate-docker-compose.sh",
+  ".scripts/lib/project-metadata.sh",
+  ".scripts/refresh-render-inputs.sh",
+  "package.json",
+  "*/.project.yaml",
+  ".scripts/templates/docker-compose-template.yml",
+  ".scripts/templates/oauth2-proxy-alpha-template.yml",
+  ".scripts/templates/service-template.lib.yml",
+  ".scripts/templates/fixtures-service-template.lib.yml",
+  ".scripts/templates/traefik-service-template.lib.yml",
+  ".scripts/templates/nats-service-template.lib.yml",
+  ".scripts/templates/browse-maintenance-template.lib.yml",
+  ".generated/compose-inputs.json",
+]
+outputs = [
+  "docker-compose.yml",
+  "oauth2-proxy-alpha.yml",
+  ".generated/compose-source-fingerprint"
 ]
 file = ".scripts/generate-docker-compose.sh"
 
-[tasks.generate-docker-compose-prod]
-description = "Generate production Compose configuration for CI until production moves to k3d"
-run = "sh .scripts/generate-docker-compose.sh production"
-raw_args = true
+[tasks.refresh-render-inputs]
+description = "Refresh effective Compose inputs and source fingerprint"
+run = "bash .scripts/refresh-render-inputs.sh"
+
+[tasks.refresh-graphql-inputs]
+description = "Refresh effective GraphQL build inputs after Compose generation"
+depends = ["generate-docker-compose"]
+run = "bash .scripts/refresh-render-inputs.sh graphql"
+
+[tasks.export-graphql-schema]
+description = "Build the GraphQL application image and cache its canonical SDL"
+depends = ["refresh-graphql-inputs"]
+file = ".scripts/export-graphql-schema.sh"
+sources = [
+  "mise.toml",
+  ".scripts/export-graphql-schema.sh",
+  ".scripts/refresh-render-inputs.sh",
+  "docker-compose.yml",
+  "graphql/.project.yaml",
+  "graphql/Dockerfile",
+  "graphql/.dockerignore",
+  "graphql/Cargo.toml",
+  "graphql/Cargo.lock",
+  "graphql/src/**",
+  ".generated/graphql-inputs.json",
+]
+outputs = [
+  ".generated/graphql/recipe-db.graphqls",
+  ".generated/graphql-source-fingerprint"
+]
 
 [tasks.merge-graphql-schemas]
-description = "Export the GraphQL application schema into consuming projects"
+description = "Distribute the cached GraphQL SDL to metadata-declared consumers"
+depends = ["export-graphql-schema"]
 file = ".scripts/merge-graphql-schemas.sh"
 
 [tasks.in-devcontainer]

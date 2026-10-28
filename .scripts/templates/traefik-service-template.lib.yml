@@ -1,53 +1,12 @@
-#@ def traefik_service(production, auth_enabled):
+#@ def traefik_service():
 #@   service = {
 #@     "image": "traefik:v3.7",
 #@     "container_name": "traefik",
-#@     "command": ["--entrypoints.web.address=:80", "--entrypoints.rest-internal.address=:3000", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete", "--api=true", "--global.sendAnonymousUsage"],
-#@     "ports": ["8080:80"],
-#@     "volumes": [],
+#@     "command": ["--entrypoints.web.address=:80", "--entrypoints.rest-internal.address=:3000", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete", "--entrypoints.web.http.middlewares=identity-strip@docker", "--entrypoints.rest-internal.http.middlewares=identity-strip@docker", "--api=true", "--api.dashboard=true", "--log.level=INFO", "--providers.docker=true", "--providers.docker.exposedbydefault=false", "--global.sendAnonymousUsage"],
+#@     "ports": ["8080:80", "3000:3000"],
+#@     "volumes": ["/var/run/docker.sock:/var/run/docker.sock:ro"],
 #@     "networks": ["intranet"],
+#@     "labels": ["traefik.enable=true", "traefik.http.routers.traefik.entrypoints=rest-internal", "traefik.http.routers.traefik.service=api@internal", "traefik.http.routers.traefik.rule=PathPrefix(`/api`) || PathPrefix(`/dashboard`)", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Internal-Ingress-Token=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-User=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Issuer=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Email=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Email-Verified=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Groups=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Preferred-Username=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Access-Token=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Forwarded-User=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Forwarded-Email=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Forwarded-Groups=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.Gap-Auth=", "traefik.http.middlewares.identity-strip.headers.customrequestheaders.Remote-User=", "traefik.http.routers.traefik.middlewares=identity-strip"],
 #@   }
-#@   if auth_enabled:
-#@     provider = "file" if production else "docker"
-#@     service["command"].extend([
-#@       "--entrypoints.web.http.middlewares=identity-strip@" + provider,
-#@       "--entrypoints.rest-internal.http.middlewares=identity-strip@" + provider,
-#@     ])
-#@   end
-#@   if production:
-#@     if auth_enabled:
-#@       service["entrypoint"] = ["/bin/sh", "/ingress-entrypoint.sh"]
-#@       service["command"].append("--providers.file.directory=/run/traefik")
-#@       service["volumes"].append("./.scripts/traefik-ingress-entrypoint.sh:/ingress-entrypoint.sh:ro")
-#@       service["secrets"] = ["graphql-ingress-secret"]
-#@       service["tmpfs"] = ["/run/traefik:mode=0700"]
-#@     else:
-#@       service["command"].append("--providers.file.filename=/traefik_config.yml")
-#@     end
-#@     service["volumes"].append("./traefik.yml:/traefik_config.yml:ro")
-#@   else:
-#@     service["command"].extend(["--api.dashboard=true", "--log.level=INFO", "--providers.docker=true", "--providers.docker.exposedbydefault=false"])
-#@     service["volumes"].append("/var/run/docker.sock:/var/run/docker.sock:ro")
-#@     service["ports"].append("3000:3000")
-#@     service["labels"] = ["traefik.enable=true", "traefik.http.routers.traefik.entrypoints=rest-internal", "traefik.http.routers.traefik.service=api@internal", "traefik.http.routers.traefik.rule=PathPrefix(`/api`) || PathPrefix(`/dashboard`)"]
-#@     if auth_enabled:
-#@       service["labels"].extend([
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Internal-Ingress-Token=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-User=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Issuer=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Email=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Email-Verified=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Groups=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Preferred-Username=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Auth-Request-Access-Token=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Forwarded-User=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Forwarded-Email=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Forwarded-Groups=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.Gap-Auth=",
-#@         "traefik.http.middlewares.identity-strip.headers.customrequestheaders.Remote-User=",
-#@         "traefik.http.routers.traefik.middlewares=identity-strip",
-#@       ])
-#@     end
-#@   end
 #@   return service
 #@ end

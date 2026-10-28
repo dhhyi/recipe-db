@@ -2,18 +2,13 @@
 #@ load("@ytt:struct", "struct")
 #@ load("browse-maintenance-template.lib.yml", "browse_maintenance_http")
 #@ def deploy_projects():
-#@   categories = ["backend", "api"] if data.values.backendOnly else ["backend", "api", "frontend"]
-#@   return [project for project in data.values.projects if project.category in categories]
+#@   return [project for project in data.values.projects if project.category in ["backend", "api", "frontend"]]
 #@ end
 #@ def traefik_config():
 #@   routers = {"traefik": {"rule": "PathPrefix(`/api`)", "entrypoints": ["rest-internal"], "service": "api@internal"}}
 #@   middlewares = {}
 #@   services = {}
-#@   auth_enabled = len([project for project in deploy_projects() if project.name == "graphql"]) > 0
-#@   if auth_enabled:
-#@     routers["traefik"]["rule"] = "Method(`GET`) && (Path(`/api/http/routers`) || Path(`/api/http/services`))"
-#@   end
-#@   graphql_service = ""
+#@   routers["traefik"]["rule"] = "Method(`GET`) && (Path(`/api/http/routers`) || Path(`/api/http/services`))"
 #@   for project in deploy_projects():
 #@     project_data = struct.encode(project)
 #@     http = struct.encode(project.traefik.labels.http)
@@ -24,9 +19,6 @@
 #@       fail("Expected exactly one Traefik service for " + project.name)
 #@     end
 #@     service_name = service_names[0]
-#@     if project.name == "graphql":
-#@       graphql_service = service_name
-#@     end
 #@     service_config = {}
 #@     for key in service_configs[service_name]:
 #@       service_config[key] = service_configs[service_name][key]
@@ -77,8 +69,7 @@
 #@     middlewares.update(maintenance["middlewares"])
 #@     services.update(maintenance["services"])
 #@   end
-#@   if auth_enabled:
-#@     middlewares["identity-strip"] = {
+#@   middlewares["identity-strip"] = {
 #@       "headers": {
 #@         "customRequestHeaders": {
 #@           "X-Internal-Ingress-Token": "",
@@ -97,15 +88,14 @@
 #@         },
 #@       },
 #@     }
-#@     routers["oauth2-public"] = {
+#@   routers["oauth2-public"] = {
 #@       "rule": "PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)",
 #@       "entrypoints": ["web"],
 #@       "priority": 400,
 #@       "middlewares": ["identity-strip"],
 #@       "service": "oauth2-proxy",
 #@     }
-#@     services["oauth2-proxy"] = {"loadBalancer": {"servers": [{"url": "http://oauth2-proxy:4180"}]}}
-#@   end
+#@   services["oauth2-proxy"] = {"loadBalancer": {"servers": [{"url": "http://oauth2-proxy:4180"}]}}
 #@   return {"http": {"routers": routers, "middlewares": middlewares, "services": services}}
 #@ end
 http: #@ traefik_config()["http"]

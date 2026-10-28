@@ -4,6 +4,7 @@ compose:
     - .scripts/tests/traefik-ingress.bats
   inputs:
     - .scripts/generate-docker-compose.sh
+    - .scripts/refresh-render-inputs.sh
     - .scripts/generate-production-build-metadata.sh
     - .scripts/lib/project-metadata.sh
     - .scripts/templates/**
@@ -45,6 +46,7 @@ deploy:
 tasks:
   tests:
     - .scripts/tests/mise-tasks.bats
+    - .scripts/tests/mise-freshness.bats
     - .scripts/tests/precommit.bats
     - .scripts/tests/seed-demodata.bats
   inputs:
@@ -53,6 +55,10 @@ tasks:
     - .github/workflows/publish.yaml
     - .scripts/tests/mocks/precommit-*
     - .scripts/tests/mocks/devcontainer-*
+    - .scripts/templates/**
+    - mise.toml
+    - package.json
+    - ":(glob)*/.project.yaml"
 devcontainer:
   tests:
     - .scripts/tests/run-in-devcontainer.bats
@@ -74,6 +80,8 @@ tooling:
     - .scripts/sync-ignore-files.sh
     - .scripts/sync-tailwind.sh
     - .scripts/merge-graphql-schemas.sh
+    - .scripts/export-graphql-schema.sh
+    - .scripts/refresh-render-inputs.sh
     - .scripts/check-forbidden-files.sh
     - .scripts/tests/groups.yaml
     - .scripts/templates/**
