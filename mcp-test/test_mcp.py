@@ -12,6 +12,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
+MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
 MCP_REQUEST_TIMEOUT = timedelta(seconds=30)
 MCP_SESSION_TIMEOUT_SECONDS = 60
 
@@ -36,10 +37,15 @@ def fixture_server_ready():
 
 
 @asynccontextmanager
-async def mcp_session():
+async def mcp_session(authenticated=True):
     with anyio.fail_after(MCP_SESSION_TIMEOUT_SECONDS):
+        headers = {}
+        if authenticated:
+            if not MCP_API_TOKEN:
+                pytest.fail("MCP_API_TOKEN environment variable is required")
+            headers["Authorization"] = f"Bearer {MCP_API_TOKEN}"
         async with streamablehttp_client(
-            MCP_URL, timeout=10, sse_read_timeout=30
+            MCP_URL, headers=headers, timeout=10, sse_read_timeout=30
         ) as (read_stream, write_stream, _):
             async with ClientSession(
                 read_stream, write_stream, read_timeout_seconds=MCP_REQUEST_TIMEOUT
@@ -74,7 +80,7 @@ async def test_mcp_session_deadline_bounds_response_and_cleanup(monkeypatch, sta
 
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        async with mcp_session():
+        async with mcp_session(authenticated=False):
             pass
     assert time.monotonic() - started < 2
 
@@ -104,6 +110,14 @@ async def test_get_recipe_schema_describes_name_as_required_for_add_recipe():
         schema = json.loads(result.content[0].text)
         assert schema["addRecipe"]["required"] == ["name"]
         assert "required" not in schema["changeRecipe"]
+
+
+async def test_add_recipe_without_an_api_token_is_rejected():
+    async with mcp_session(authenticated=False) as session:
+        result = await session.call_tool(
+            "add_recipe", {"recipeJson": json.dumps({"name": "Unauthenticated Recipe"})}
+        )
+        assert "cross-origin mutation rejected" in result.content[0].text.lower()
 
 
 async def test_add_recipe_with_valid_json_creates_a_recipe():
