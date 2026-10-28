@@ -134,7 +134,7 @@ impl RecipesMutation {
             &value.inspirations,
             async_graphql::MaybeUndefined::Undefined
         ) {
-            if let Err(error) = request.require(crate::auth::Capability::ManageImports) {
+            if let Err(error) = request.require(crate::auth::Capability::ManageInspirations) {
                 return Some(Err(error.into_graphql_error()));
             }
         }
@@ -169,7 +169,7 @@ impl RecipesMutation {
             &value.inspirations,
             async_graphql::MaybeUndefined::Undefined
         ) {
-            if let Err(error) = request.require(crate::auth::Capability::ManageImports) {
+            if let Err(error) = request.require(crate::auth::Capability::ManageInspirations) {
                 return Some(Err(error.into_graphql_error()));
             }
         }

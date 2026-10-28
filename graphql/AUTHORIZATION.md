@@ -32,7 +32,7 @@ GraphQL validates one bearer `Authorization` header against configured token sec
 
 Requests without a bearer credential or trusted Google identity headers use the shared `credential-free:v1` principal and the configured `anonymous` role/name. All such callers share this identity, so attribution cannot distinguish individual credential-free users. The trusted Google headers are `X-Auth-Request-User`, `X-Auth-Request-Issuer`, `X-Auth-Request-Email`, and optional `X-Auth-Request-Email-Verified`. Production ingress strips identity aliases before routing, and GraphQL rejects `/graphql` requests without exactly one matching `X-Internal-Ingress-Token`. The independent deployment secret is loaded from `/run/secrets/graphql-ingress-secret`, compared in constant time, and the header is removed before application handling. Traefik injects it only after sanitization/authentication; it is not a user credential or role. Development networking is not a production security boundary and does not enforce this token. See [browser authentication](../docs/browser-authentication.md) for provisioning, rotation, ingress and SSR contracts.
 
-The `anonymous` role permits public reads and aggregate ratings. `member` additionally permits own-vote access and rating writes; `owner` adds recipe, import, image, and test-reset management. The same capability checks apply to principals from every identity source, including intentionally privileged credential-free principals.
+The `anonymous` role permits public reads and aggregate ratings. `member` additionally permits own-vote access and rating writes; `owner` adds management of recipes, inspirations, images, and test resets. The same capability checks apply to principals from every identity source, including intentionally privileged credential-free principals.
 
 ## Application operation mapping
 
@@ -43,13 +43,13 @@ The `anonymous` role permits public reads and aggregate ratings. `member` additi
 | `Rating.myRating` | `ReadIndividualRatings` | Deny | Own vote only | Own vote only |
 | `rate` | `WriteRatings` | Deny | Allow | Allow |
 | `createRecipe`, `updateRecipe`, `deleteRecipe` | `ManageRecipes` | Deny | Deny | Allow |
-| Inspiration changes in create/update | `ManageImports` | Deny | Deny | Allow |
+| Inspiration changes in create/update | `ManageInspirations` | Deny | Deny | Allow |
 | `setImage` | `ManageImages` | Deny | Deny | Allow |
 | `myCapabilities`, `onlineServices`, `isServiceOnline`, `allServicesOnline` | Effective current principal / public availability | Allow | Allow | Allow |
 
 These are field resolver checks, so GraphQL aliases and nested/composed calls use the same authorization path. `myRating` is nullable and only reads the current principal's vote; no argument accepts another user ID. A missing vote is `null`, while insufficient capability is a structured `authentication-required` or `forbidden` error. Public aggregate fields remain independently nullable only when their existing backend availability contract says so.
 
-Mutations check capabilities before any REST write, event publication, or upload processing. Recipe updates that also change inspirations check both recipe and import capabilities before either backend is touched. Service reset APIs are private REST routes enabled only by explicit `MODE=testing`; they are not exposed through GraphQL or MCP.
+Mutations check capabilities before any REST write, event publication, or upload processing. Recipe updates that also change inspirations check both recipe-management and inspiration-management capabilities before either backend is touched. Service reset APIs are private REST routes enabled only by explicit `MODE=testing`; they are not exposed through GraphQL or MCP.
 
 `MODE` accepts `production` (the default when unset) or `testing`; empty and unsupported values fail startup. Production mode requires trusted ingress and disables GraphiQL and schema introspection.
 
