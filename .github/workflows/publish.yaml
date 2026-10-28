@@ -67,10 +67,10 @@ jobs:
           pnpm exec prettier --log-level warn --write .
           echo "::group::generate format targets"
           mise run --raw generate-bazel-build
-          targets=$(mise exec -- bazelisk query 'attr(name, "_format$", //:all)')
+          targets=$(mise run --raw bazel query 'attr(name, "_format$", //:all)')
           mapfile -t format_targets <<< "$targets"
           echo "::endgroup::"
-          mise exec -- bazelisk build \
+          mise run --raw bazel build \
             --action_env=PATH \
             --action_env=CI \
             --action_env=GITHUB_ACTIONS \
@@ -90,7 +90,7 @@ jobs:
       - name: Bazel precommit checks and unit tests
         run: |
           mise run --raw generate-bazel-build
-          mise exec -- bazelisk build \
+          mise run --raw bazel build \
             --action_env=PATH \
             --action_env=CI \
             --action_env=GITHUB_ACTIONS \

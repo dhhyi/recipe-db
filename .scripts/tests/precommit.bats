@@ -29,7 +29,7 @@ setup() {
   cat > expected-calls << 'EOF'
 pnpm exec prettier --log-level warn --write .
 mise run --raw generate-bazel-build
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 EOF
   cmp expected-calls "$MOCK_LOG"
 }
@@ -44,11 +44,11 @@ EOF
   run bash .scripts/precommit.sh
 
   [ "$status" -eq 0 ]
-  grep 'bazelisk build' "$MOCK_LOG" > bazel-calls
+  grep 'bazel build' "$MOCK_LOG" > bazel-calls
   cat > expected-calls << 'EOF'
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:example_format //:other_format
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:example_check //:other_check
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel build --action_env=PATH --jobs=1 //:example_format //:other_format
+mise run --raw bazel build --action_env=PATH --jobs=1 //:example_check //:other_check
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 EOF
   cmp expected-calls bazel-calls
 }

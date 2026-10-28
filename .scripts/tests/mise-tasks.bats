@@ -12,6 +12,7 @@ setup() {
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
+  export MISE_CONFIG_DIR="$BATS_TEST_TMPDIR/mise-config"
   export MISE_TASK_RUN_AUTO_INSTALL=false
   mkdir -p example .git/hooks
   printf '%s\n' 'name: example' > example/.project.yaml
@@ -408,7 +409,7 @@ EOF
   while IFS= read -r script; do
     [[ "$script" == *'--action_env=DEVCONTAINER_KEEP_RUNNING'* ]]
     builds=$((builds + 1))
-  done < <(yq -o=json -I=0 '.jobs.quality-checks.steps[].run | select(contains("bazelisk build"))' "$workflow")
+  done < <(yq -o=json -I=0 '.jobs.quality-checks.steps[].run | select(contains("bazel build"))' "$workflow")
   [ "$builds" -eq 2 ]
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "validate message bus integration and recovery") | .run' "$workflow")" = "mise run test-message-bus" ]
 }
