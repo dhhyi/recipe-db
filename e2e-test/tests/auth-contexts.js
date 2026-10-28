@@ -83,6 +83,7 @@ export async function createAuthIdentity(
 
   return {
     identity,
+    authorizationHeader: token ? "Bearer " + token : undefined,
     api,
     browserContext,
     async close() {

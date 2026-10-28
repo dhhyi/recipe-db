@@ -1,4 +1,4 @@
-import { expect } from "./fixtures.js";
+import { expect, uploadImage } from "./fixtures.js";
 import { deflateSync } from "node:zlib";
 
 function crc32(bytes) {
@@ -144,6 +144,29 @@ export async function observeUploads(page) {
       }
       return send.call(this, body);
     };
+  });
+}
+
+export async function fulfillImageUpload(route, page, request, recipe) {
+  if (!isImageUpload(route.request())) {
+    await route.fallback();
+    return;
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.imageEditorUploads.at(-1)?.bytes ?? null),
+    )
+    .not.toBeNull();
+  const upload = await page.evaluate(() => window.imageEditorUploads.at(-1));
+  const metadata = await uploadImage(request, recipe, upload.name, {
+    buffer: Buffer.from(upload.bytes),
+    mimeType: upload.type,
+    crop: upload.operations.variables.crop,
+  });
+  await route.fulfill({
+    status: 200,
+    contentType: "application/graphql-response+json",
+    body: JSON.stringify({ data: { setImage: metadata } }),
   });
 }
 

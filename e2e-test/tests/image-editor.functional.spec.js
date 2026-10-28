@@ -4,6 +4,7 @@ import {
   drag,
   expectCropPixels,
   expectValidCrop,
+  fulfillImageUpload,
   handle,
   isImageUpload,
   observeUploads,
@@ -28,8 +29,11 @@ const test = base.extend({
   },
 });
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request, demoRecipe }) => {
   await observeUploads(page);
+  await page.route("**/graphql", (route) =>
+    fulfillImageUpload(route, page, request, demoRecipe),
+  );
 });
 
 test("selecting a local source does not upload, and Cancel keeps the saved image", async ({
@@ -279,7 +283,7 @@ test("HTTP-200 GraphQL failure preserves the crop and saved pair and allows retr
         }),
       });
     } else {
-      await route.continue();
+      await route.fallback();
     }
   });
   await saveButton(page).click();
