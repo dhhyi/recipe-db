@@ -87,6 +87,7 @@ export async function createAuthIdentity(
     api,
     browserContext,
     async close() {
+      await browserContext.unrouteAll({ behavior: "ignoreErrors" });
       await Promise.all([apiContext.dispose(), browserContext.close()]);
     },
   };
