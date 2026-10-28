@@ -100,7 +100,12 @@ app cacheEnabled db manager = do
 
 main :: IO ()
 main = do
-  cacheEnabled <- (== Just "true") <$> lookupEnv "PRODUCTION"
+  mode <- lookupEnv "MODE"
+  let configuredMode = fromMaybe "production" mode
+  cacheEnabled <- case configuredMode of
+    "production" -> return True
+    "testing" -> return False
+    _ -> ioError $ userError "Invalid MODE; expected production or testing"
   configuredLocation <- lookupEnv "DATA_LOCATION"
   let db = fromMaybe "db" configuredLocation
   if cacheEnabled then createDirectoryIfMissing True db else return ()

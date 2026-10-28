@@ -50,18 +50,6 @@ impl RatingsApi {
         }
     }
 
-    pub async fn delete_ratings_for_testing(
-        &self,
-        publisher: &EventPublisher,
-    ) -> Result<bool, Error> {
-        self.client
-            .delete("")
-            .await
-            .map_err(RestError::into_error)?;
-        publisher.notify(None, EventKind::RatingsReset).await;
-        Ok(true)
-    }
-
     pub async fn get_rating(&self, id: &str) -> Result<Rating, Error> {
         let rating: RestRating = self.client.get(id).await.map_err(RestError::into_error)?;
         Ok(Rating {
@@ -93,7 +81,7 @@ impl RatingsApi {
             .put_form(id, &[("rating", rating.as_str()), ("userId", user_id)])
             .await
             .map_err(RestError::into_error)?;
-        publisher.notify(Some(id), EventKind::RatingChanged).await;
+        publisher.notify(id, EventKind::RatingChanged).await;
         Ok(Rating {
             recipe_id: ID::from(id.to_string()),
             average: Some(result.rating),
@@ -120,15 +108,6 @@ pub struct RatingsMutation;
 
 #[Object]
 impl RatingsMutation {
-    async fn delete_ratings_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ResetForTesting)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<RatingsApi>()?
-            .delete_ratings_for_testing(ctx.data::<EventPublisher>()?)
-            .await
-    }
-
     async fn rate(&self, ctx: &Context<'_>, id: ID, rating: i32) -> Result<Rating, Error> {
         let request = ctx.data::<crate::auth::RequestContext>()?;
         request

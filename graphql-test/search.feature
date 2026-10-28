@@ -3,15 +3,13 @@ Feature: search recipes
 
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
+    * call read('graphql/reset-testing-data.feature')
     * url graphqlApi
+    * def searchToken = java.util.UUID.randomUUID().toString().replace("-", "")
     * configure headers = { Authorization: '#(ownerAuthorization)' }
     * configure retry = { count: 30, interval: 1000 }
-    * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
-    * method post
-    * status 200
-    * match response.data.deleteRecipesForTesting == true
 
-    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'Kartoffelsuppe', method: 'Kartoffeln mit Zwiebeln kochen.', ingredients: [{ name: 'Kartoffeln', amount: 500, unit: 'g' }] } } }
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: '#(searchToken + " Kartoffelsuppe")', method: 'Kartoffeln mit Zwiebeln kochen.', ingredients: [{ name: 'Kartoffeln', amount: 500, unit: 'g' }] } } }
     * method post
     * status 200
     * def soupId = response.data.createRecipe.id
@@ -20,7 +18,7 @@ Feature: search recipes
     * status 200
     * match response.data.rate.average == 5
 
-    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'Kartoffelsalat', ingredients: [{ name: 'Kartoffeln' }] } } }
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: '#(searchToken + " Kartoffelsalat")', ingredients: [{ name: 'Kartoffeln' }] } } }
     * method post
     * status 200
     * def saladId = response.data.createRecipe.id
@@ -29,7 +27,7 @@ Feature: search recipes
     * status 200
     * match response.data.rate.average == 3
 
-    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'Apfelkuchen', ingredients: [{ name: 'Apfel' }] } } }
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: '#(searchToken + " Apfelkuchen")', ingredients: [{ name: 'Apfel' }] } } }
     * method post
     * status 200
     * def cakeId = response.data.createRecipe.id
@@ -38,8 +36,11 @@ Feature: search recipes
     * status 200
     * match response.data.rate.average == 4
 
+    * call read('graphql/rebuild-search-index.feature')
+    * url graphqlApi
+
   Scenario: German search returns ordered recipes with full GraphQL fields
-    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: 'Kartoffel', query_by: 'name', sort_by: '_text_match:desc,rating_average:desc' } } }
+    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: '#(searchToken + " Kartoffel")', query_by: 'name', sort_by: '_text_match:desc,rating_average:desc' } } }
     * retry until response.data != null && response.data.searchRecipes.found == 2 && response.data.searchRecipes.recipes.length == 2 && response.data.searchRecipes.recipes[0].id == soupId && response.data.searchRecipes.recipes[1].id == saladId
     * method post
     * status 200
@@ -48,7 +49,7 @@ Feature: search recipes
       """
       {
         id: '#(soupId)',
-        name: 'Kartoffelsuppe',
+        name: '#(searchToken + " Kartoffelsuppe")',
         method: 'Kartoffeln mit Zwiebeln kochen.',
         ingredients: [{ name: 'Kartoffeln', amount: '500', unit: 'g', optional: null }],
         rating: { average: 5, count: 1 },
@@ -56,30 +57,30 @@ Feature: search recipes
         inspirations: []
       }
       """
-    * match response.data.searchRecipes.recipes[1].name == 'Kartoffelsalat'
+    * match response.data.searchRecipes.recipes[1].name == '#(searchToken + " Kartoffelsalat")'
 
   Scenario: a misspelled query finds the intended recipe
-    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: 'Kartofelsuppe' } } }
+    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: '#(searchToken + " Kartofelsuppe")' } } }
     * retry until response.data != null && response.data.searchRecipes.found == 1 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == soupId
     * method post
     * status 200
     * match response.errors == '#notpresent'
-    * match response.data.searchRecipes.recipes[0].name == 'Kartoffelsuppe'
+    * match response.data.searchRecipes.recipes[0].name == '#(searchToken + " Kartoffelsuppe")'
 
   Scenario: pagination and facets preserve search metadata
-    * request { query: '#(read("graphql/search-recipes-with-facets.graphql"))', variables: { options: { q: '*', sort_by: 'rating_average:desc', page: 2, per_page: 1, facet_by: 'ingredients' } } }
-    * retry until response.data != null && response.data.searchRecipes.found == 3 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == cakeId
+    * request { query: '#(read("graphql/search-recipes-with-facets.graphql"))', variables: { options: { q: '#(searchToken)', query_by: 'name', sort_by: 'name_sort:asc,recipe_id_sort:asc', page: 2, per_page: 1, facet_by: 'ingredients' } } }
+    * retry until response.data != null && response.data.searchRecipes.found == 3 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == saladId
     * method post
     * status 200
     * match response.errors == '#notpresent'
-    * match response.data.searchRecipes contains { found: 3, page: 2, perPage: 1, recipes: [{ id: '#(cakeId)', name: 'Apfelkuchen' }] }
+    * match response.data.searchRecipes contains { found: 3, page: 2, perPage: 1, recipes: [{ id: '#(saladId)', name: '#(searchToken + " Kartoffelsalat")' }] }
     * match response.data.searchRecipes.facets == '#[1]'
     * match response.data.searchRecipes.facets[0] contains { field_name: 'ingredients', counts: '#array' }
     * match response.data.searchRecipes.facets[0].counts contains { value: 'Kartoffeln', count: 2, highlighted: 'Kartoffeln' }
     * match response.data.searchRecipes.facets[0].counts contains { value: 'Apfel', count: 1, highlighted: 'Apfel' }
 
   Scenario: a deleted recipe disappears from search
-    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: 'Kartoffelsuppe' } } }
+    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: '#(searchToken + " Kartoffelsuppe")', drop_tokens_threshold: 0 } } }
     * retry until response.data != null && response.data.searchRecipes.found == 1 && response.data.searchRecipes.recipes.length == 1 && response.data.searchRecipes.recipes[0].id == soupId
     * method post
     * status 200
@@ -89,7 +90,9 @@ Feature: search recipes
     * status 200
     * match response.data.deleteRecipe == true
 
-    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: 'Kartoffelsuppe' } } }
+    * call read('graphql/rebuild-search-index.feature')
+    * url graphqlApi
+    * request { query: '#(read("graphql/search-recipes.graphql"))', variables: { options: { q: '#(searchToken + " Kartoffelsuppe")', drop_tokens_threshold: 0 } } }
     * retry until response.data != null && response.data.searchRecipes.found == 0 && response.data.searchRecipes.recipes.length == 0
     * method post
     * status 200

@@ -20,6 +20,7 @@ devcontainer:
   ports:
     - 4000
   environment:
+    MODE: testing
     REST_ENDPOINT: http://traefik:3000
     TRAEFIK_ENTRYPOINTS: web,rest-internal
     NATS_URL: nats://nats:4222

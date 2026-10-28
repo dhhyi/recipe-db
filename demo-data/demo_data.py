@@ -21,6 +21,7 @@ headers = {
 # large recipe photos can take a while to decode/resize server-side
 http_client = httpx.AsyncClient(headers=headers, timeout=30.0)
 client = Client("http://traefik/graphql", http_client=http_client)
+rest_api = os.getenv("REST_API", "http://traefik:3000")
 
 
 async def wait_all_online():
@@ -45,17 +46,15 @@ async def wait_all_online():
 async def delete_everything():
     print("Deleting everything")
 
-    result = await client.delete_recipes()
-    print(f"-> {result}")
+    result = await client.recipes()
+    for recipe in result.recipes:
+        deleted = await client.delete_recipe(recipe.id)
+        print(f"-> Deleted recipe {recipe.id}: {deleted.delete_recipe}")
 
-    result = await client.delete_ratings()
-    print(f"-> {result}")
-
-    result = await client.delete_inspirations()
-    print(f"-> {result}")
-
-    result = await client.delete_images()
-    print(f"-> {result}")
+    for service in ["ratings", "images", "inspirations"]:
+        response = await http_client.delete(f"{rest_api}/{service}")
+        response.raise_for_status()
+        print(f"-> Reset {service}")
 
 
 async def has_existing_recipes():

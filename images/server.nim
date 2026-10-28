@@ -13,7 +13,12 @@ const
   jpegSignature = "\xFF\xD8"
 
 let
-  productionMode = getEnv("PRODUCTION") == "true"
+  modeValue = getEnv("MODE", "production")
+  runtimeMode = case modeValue
+    of "production": "production"
+    of "testing": "testing"
+    else: raise newException(ValueError,
+      "Invalid MODE='" & modeValue & "'; expected 'production' or 'testing'")
   verbose = getEnv("VERBOSE") == "true"
   documentRoot = getEnv("DATA_LOCATION", "public")
   dataFolder = documentRoot / imagesSubfolder
@@ -135,7 +140,7 @@ router imagesRouter:
           "Cannot read image metadata", "metadata-error")
 
   delete "/images/?":
-    if productionMode:
+    if runtimeMode != "testing":
       respProblem(Http404, "Not Found", "Not found", "not-found")
     info "DELETE all images"
     try:
@@ -164,8 +169,8 @@ proc main() =
   ))
   store.initialize()
   info "Data location '", dataFolder, "'"
-  if productionMode:
-    info "Running in PRODUCTION mode"
+  if runtimeMode == "production":
+    info "Running in production mode"
 
   let settings = newSettings(
     port = Port(port),

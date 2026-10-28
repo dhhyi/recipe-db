@@ -39,7 +39,7 @@ defmodule Recipes.Router do
   end
 
   delete "/recipes" do
-    if System.get_env("PRODUCTION") != "true" do
+    if Application.fetch_env!(:recipes, :mode) == :testing do
       case Repository.clear() do
         :ok -> send_resp(conn, 204, "")
         {:error, error} -> database_error(conn, error)
@@ -190,7 +190,9 @@ defmodule Recipes.Router do
   end
 
   defp collection_methods do
-    if System.get_env("PRODUCTION") != "true", do: "GET, POST, DELETE", else: "GET, POST"
+    if Application.fetch_env!(:recipes, :mode) == :testing,
+      do: "GET, POST, DELETE",
+      else: "GET, POST"
   end
 
   defp code_string(code), do: code |> Atom.to_string() |> String.replace("_", "-")

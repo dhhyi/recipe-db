@@ -53,10 +53,16 @@ RESTAPI put := method(request,
 )
 
 RESTAPI delete := method(request,
-    if (System getEnvironmentVariable("PRODUCTION") != "true",
-    if (request at("path") size == 1,
-    if (request at("path") at(0) == "ratings",
-        db clear
+    path := request at("path")
+    collection := path size == 1 or (path size == 2 and path at(1) == "")
+    if (runtimeMode == "testing",
+    if (collection,
+    if (path at(0) == "ratings",
+        error := db clear
+        if (error,
+            writeln("Rating reset failed: ", error)
+            return request errorInternalServerError
+        )
         return request sendNoContent
     )))
 

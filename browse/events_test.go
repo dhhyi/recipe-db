@@ -35,9 +35,6 @@ func TestEventContract(t *testing.T) {
 	for _, kind := range []string{"recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed"} {
 		events = append(events, eventData(t, kind, &id))
 	}
-	for _, kind := range []string{"recipes.reset", "ratings.reset", "images.reset", "inspirations.reset"} {
-		events = append(events, eventData(t, kind, nil))
-	}
 	c := testCache(t, func(context.Context, string) ([]byte, error) { return []byte("page"), nil })
 	for _, event := range events {
 		getPage(t, c, "42")
@@ -46,24 +43,17 @@ func TestEventContract(t *testing.T) {
 		if err := json.Unmarshal(event, &envelope); err != nil {
 			t.Fatal(err)
 		}
-		if envelope.RecipeID != nil {
-			getPage(t, c, *envelope.RecipeID)
-		}
+		getPage(t, c, *envelope.RecipeID)
 		for range 2 {
 			if err := c.applyEvent(event); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if envelope.RecipeID == nil && len(c.entries) != 0 {
-			t.Fatal("reset did not invalidate every page")
+		if _, ok := c.entries[*envelope.RecipeID]; ok {
+			t.Fatal("recipe event did not invalidate its page")
 		}
-		if envelope.RecipeID != nil {
-			if _, ok := c.entries[*envelope.RecipeID]; ok {
-				t.Fatal("recipe event did not invalidate its page")
-			}
-			if _, ok := c.entries["other"]; !ok {
-				t.Fatal("recipe event invalidated unrelated page")
-			}
+		if _, ok := c.entries["other"]; !ok {
+			t.Fatal("recipe event invalidated unrelated page")
 		}
 	}
 	for _, malformed := range []string{
@@ -76,7 +66,6 @@ func TestEventContract(t *testing.T) {
 	for _, invalid := range [][]byte{
 		eventData(t, "unknown", &id),
 		eventData(t, "recipe.changed", nil),
-		eventData(t, "recipes.reset", &id),
 	} {
 		if err := c.applyEvent(invalid); err == nil {
 			t.Fatalf("accepted invalid event: %s", invalid)

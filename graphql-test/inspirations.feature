@@ -2,14 +2,9 @@ Feature: inspirations
 
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
+    * call read('graphql/reset-testing-data.feature')
     * url graphqlApi
     * configure headers = { Authorization: '#(ownerAuthorization)' }
-    * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
-    * method post
-    * status 200
-    * request { query: '#(read("graphql/delete-inspirations-for-testing.graphql"))' }
-    * method post
-    * status 200
 
   Scenario: should have no recipe
     * request { query: '#(read("graphql/all-recipes.graphql"))' }

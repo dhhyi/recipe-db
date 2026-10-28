@@ -25,6 +25,8 @@ devcontainer:
     - 5000
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    MODE: testing
+    RECIPES_RUNTIME_MODE: testing
     LANG: C.UTF-8
     LC_ALL: C.UTF-8
 vscode:
@@ -63,9 +65,9 @@ check: |
   elixir --version
   mix compile --warnings-as-errors
   mix credo --strict
-  mix test
+  mix test --no-start
   MIX_ENV=prod mix release --overwrite
-test: mix test
+test: mix test --no-start
 prettier:
   ignore:
     - mix.exs

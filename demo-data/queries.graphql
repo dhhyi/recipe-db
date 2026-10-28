@@ -8,8 +8,8 @@ query Recipes {
   }
 }
 
-mutation DeleteRecipes {
-  deleteRecipesForTesting
+mutation DeleteRecipe($id: ID!) {
+  deleteRecipe(id: $id)
 }
 
 mutation AddRecipe($value: RecipeInput!) {
@@ -19,23 +19,11 @@ mutation AddRecipe($value: RecipeInput!) {
   }
 }
 
-mutation DeleteRatings {
-  deleteRatingsForTesting
-}
-
 mutation AddRating($id: ID!, $rating: Int!) {
   rate(id: $id, rating: $rating) {
     average
     count
   }
-}
-
-mutation DeleteInspirations {
-  deleteInspirationsForTesting
-}
-
-mutation DeleteImages {
-  deleteImagesForTesting
 }
 
 mutation AddImage($id: ID!, $file: Upload!) {

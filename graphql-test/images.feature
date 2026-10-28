@@ -3,14 +3,9 @@ Feature: images
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * def webApi = java.lang.System.getenv('WEB_API') || graphqlApi
+    * call read('graphql/reset-testing-data.feature')
     * url graphqlApi
     * configure headers = { Authorization: '#(ownerAuthorization)' }
-    * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
-    * method post
-    * status 200
-    * request { query: '#(read("graphql/delete-images-for-testing.graphql"))' }
-    * method post
-    * status 200
 
   Scenario: recipe should have no image before one is uploaded
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test' } } }

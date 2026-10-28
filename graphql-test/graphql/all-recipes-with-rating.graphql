@@ -1,5 +1,5 @@
-query {
-  recipes {
+query RecipeWithRating($id: ID!) {
+  recipe(id: $id) {
     name
     rating {
       average

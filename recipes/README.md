@@ -7,13 +7,14 @@ Recipes are stored as schemaless JSON documents and identified by UUID v4 IDs. T
 - `GET /health`
 - `GET /recipes`
 - `POST /recipes`
+- `DELETE /recipes` or `DELETE /recipes/` (only with explicit `MODE=testing`)
 - `GET /recipes/:id`
 - `PATCH /recipes/:id`
 - `DELETE /recipes/:id`
 
 Create requests use `application/json`. Updates implement JSON Merge Patch (RFC 7396) and require `application/merge-patch+json`. Errors use Problem Details (RFC 9457).
 
-The database defaults to `db/recipes.sqlite3`. Set `DATA_LOCATION` to change its directory. When `TESTING=true`, `DELETE /recipes` clears all recipes for integration tests.
+The database defaults to `db/recipes.sqlite3`. Set `DATA_LOCATION` to change its directory.
 
 Run unit tests with:
 

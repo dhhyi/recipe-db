@@ -2,6 +2,12 @@ local app = require "milua"
 local json = require "dkjson"
 local logger = require("milua_log")
 
+local mode = os.getenv("MODE") or "production"
+if mode ~= "production" and mode ~= "testing" then
+    io.stderr:write("Invalid MODE; expected production or testing\n")
+    os.exit(1)
+end
+
 local data = {}
 
 local function database_location()
@@ -32,12 +38,22 @@ local function load_data()
 end
 
 -- function that saves data to a file
-local function save_data()
-    local file = io.open(db_location, "w")
-    if file then
-        file:write(json.encode(data))
-        file:close()
+local function save_data(updated_data)
+    local temporary_location = db_location .. ".tmp"
+    local file, open_error = io.open(temporary_location, "w")
+    if not file then return false, open_error end
+    local written, write_error = file:write(json.encode(updated_data))
+    local closed, close_error = file:close()
+    if not written or not closed then
+        os.remove(temporary_location)
+        return false, write_error or close_error
     end
+    local renamed, rename_error = os.rename(temporary_location, db_location)
+    if not renamed then
+        os.remove(temporary_location)
+        return false, rename_error
+    end
+    return true
 end
 
 local function check_input(array)
@@ -51,10 +67,10 @@ local function check_input(array)
 end
 
 -- RFC 9457 Problem Details body, mirroring the recipes service's error shape.
-local function problem_details(status, detail, code)
+local function problem_details(status, title, detail, code)
     local body = json.encode({
         type = "about:blank",
-        title = "Bad Request",
+        title = title,
         status = status,
         detail = detail,
         code = code
@@ -65,14 +81,23 @@ local function problem_details(status, detail, code)
     }
 end
 
-if os.getenv("PRODUCTION") ~= "true" then
-    app.add_handler("DELETE", "/inspirations/", function()
-        data = {}
-        save_data()
-
-        return nil, {[":status"] = "204"}
-    end)
+local function delete_all()
+    if mode ~= "testing" then
+        return problem_details(404, "Not Found", "Route not found", "not-found")
+    end
+    local saved, save_error = save_data({})
+    if not saved then
+        io.stderr:write("Cannot clear inspirations file: ",
+                        tostring(save_error), "\n")
+        return problem_details(500, "Internal Server Error",
+                               "Cannot delete inspirations", "storage-error")
+    end
+    data = {}
+    return nil, {[":status"] = "204"}
 end
+
+app.add_handler("DELETE", "/inspirations", delete_all)
+app.add_handler("DELETE", "/inspirations/", delete_all)
 
 app.add_handler("GET", "/health",
                 function() return nil, {[":status"] = "204"} end)
@@ -81,7 +106,10 @@ app.add_handler("GET", "/inspirations/...", function(captures)
     local recipe_id = captures[1]
     local inspirations = data[recipe_id]
 
-    if inspirations == nil then return nil, {[":status"] = "404"} end
+    if inspirations == nil then
+        return problem_details(404, "Not Found", "Inspiration not found",
+                               "inspiration-not-found")
+    end
 
     return json.encode(inspirations), {["content-type"] = "application/json"}
 end)
@@ -92,13 +120,23 @@ app.add_handler("PUT", "/inspirations/...", function(captures, _q, _h, body)
     local decoded = json.decode(body)
 
     if not check_input(decoded) then
-        return problem_details(400, "Input must be a JSON array of strings.",
+        return problem_details(400, "Bad Request",
+                               "Input must be a JSON array of strings.",
                                "invalid-input")
     end
 
-    data[recipe_id] = {}
-    for _, v in pairs(decoded) do table.insert(data[recipe_id], v) end
-    save_data()
+    local updated_data = {}
+    for key, values in pairs(data) do updated_data[key] = values end
+    updated_data[recipe_id] = {}
+    for _, v in pairs(decoded) do table.insert(updated_data[recipe_id], v) end
+    local saved, save_error = save_data(updated_data)
+    if not saved then
+        io.stderr:write("Cannot save inspirations file: ", tostring(save_error),
+                        "\n")
+        return problem_details(500, "Internal Server Error",
+                               "Cannot save inspirations", "storage-error")
+    end
+    data = updated_data
 
     return nil, {[":status"] = "201"}
 end)
@@ -107,10 +145,23 @@ app.add_handler("DELETE", "/inspirations/...", function(captures)
     local recipe_id = captures[1]
     local inspirations = data[recipe_id]
 
-    if inspirations == nil then return nil, {[":status"] = "404"} end
+    if inspirations == nil then
+        return problem_details(404, "Not Found", "Inspiration not found",
+                               "inspiration-not-found")
+    end
 
-    data[recipe_id] = nil
-    save_data()
+    local updated_data = {}
+    for key, values in pairs(data) do
+        if key ~= recipe_id then updated_data[key] = values end
+    end
+    local saved, save_error = save_data(updated_data)
+    if not saved then
+        io.stderr:write("Cannot delete inspiration: ", tostring(save_error),
+                        "\n")
+        return problem_details(500, "Internal Server Error",
+                               "Cannot delete inspiration", "storage-error")
+    end
+    data = updated_data
 
     return nil, {[":status"] = "204"}
 end)

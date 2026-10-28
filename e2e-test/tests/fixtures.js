@@ -23,30 +23,21 @@ export async function graphql(
   return result.data;
 }
 
-async function reset(request, mutation) {
-  const response = await request.post("/graphql", {
-    data: { query: `mutation { ${mutation} }` },
-  });
+async function resetRestService(request, service) {
+  const response = await request.delete(`${process.env.REST_API}/${service}`);
   const body = await response.text();
-  expect(response.ok(), `Reset ${mutation} failed: ${body}`).toBeTruthy();
-  const result = JSON.parse(body);
-  expect(
-    result.errors,
-    `Reset ${mutation} returned GraphQL errors`,
-  ).toBeUndefined();
-  expect(result.data?.[mutation], `Reset ${mutation} did not succeed`).toBe(
-    true,
-  );
+  expect(response.status(), `Reset ${service} failed: ${body}`).toBe(204);
 }
 
 async function resetApplicationData(request) {
-  for (const mutation of [
-    "deleteRecipesForTesting",
-    "deleteRatingsForTesting",
-    "deleteImagesForTesting",
-    "deleteInspirationsForTesting",
-  ]) {
-    await reset(request, mutation);
+  const { recipes } = await graphql(request, "query { recipes { id } }");
+  for (const { id } of recipes) {
+    await graphql(request, "mutation($id: ID!) { deleteRecipe(id: $id) }", {
+      id,
+    });
+  }
+  for (const service of ["ratings", "images", "inspirations"]) {
+    await resetRestService(request, service);
   }
   await expect
     .poll(
@@ -60,6 +51,21 @@ async function resetApplicationData(request) {
       },
     )
     .toEqual([]);
+  await expect
+    .poll(
+      async () => {
+        const { searchRecipes } = await graphql(
+          request,
+          'query { searchRecipes(options: { q: "*" }) { found } }',
+        );
+        return searchRecipes.found;
+      },
+      {
+        message: "Deleted recipes are removed from search",
+        timeout: 30_000,
+      },
+    )
+    .toBe(0);
 }
 
 export async function waitForRecipeIndexed(request, id) {
