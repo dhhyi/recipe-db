@@ -73,7 +73,7 @@ When instructed to create a Git worktree, run `mise install` from the new worktr
 
 When running checks, linting, or regression tests for Bazel scripts, run them directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules, not a requirement to duplicate the pre-commit hook's checks.
 
-For a single topic group, use `mise run test-scripts <group>` or `mise exec -- bazelisk build --action_env=PATH --jobs=1 //:test_scripts_<group>`. Groups and their explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `tasks`, `devcontainer`, and `tooling`. Assign every new Bats suite to exactly one group and keep its inputs complete; generation rejects unassigned suites and patterns matching no files.
+For a single topic group, use `mise run test-scripts <group>` or `mise run --raw bazel build --action_env=PATH --jobs=1 //:test_scripts_<group>`. Use the `bazel` Mise task for direct Bazel commands, as the hook and CI do: it constructs PATH from Mise-managed tool directories, the Mise executable's directory and fixed system directories (`/usr/local/bin:/usr/bin:/bin`), excluding caller-specific Git/VS Code paths. Keep `--action_env=PATH` on builds so tool-path changes still invalidate actions. Groups and their explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `tasks`, `devcontainer`, and `tooling`. Assign every new Bats suite to exactly one group and keep its inputs complete; generation rejects unassigned suites and patterns matching no files.
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 

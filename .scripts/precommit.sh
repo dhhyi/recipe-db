@@ -74,20 +74,20 @@ done
 mise run --raw generate-bazel-build
 
 if ((${#format_targets[@]} > 0)); then
-  mise exec -- bazelisk build --action_env=PATH --jobs=1 "${format_targets[@]}"
+  mise run --raw bazel build --action_env=PATH --jobs=1 "${format_targets[@]}"
   for archive in "${format_archives[@]}"; do
     tar -xf "$archive"
   done
 fi
 
 if ((${#check_targets[@]} > 0)); then
-  mise exec -- bazelisk build --action_env=PATH --jobs=1 "${check_targets[@]}"
+  mise run --raw bazel build --action_env=PATH --jobs=1 "${check_targets[@]}"
   for archive in "${check_archives[@]}"; do
     tar -xf "$archive"
   done
 fi
 
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
 
 for file in "${staged_files[@]}"; do
   if ! git diff --quiet -- "$file"; then

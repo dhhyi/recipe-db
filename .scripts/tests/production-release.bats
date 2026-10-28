@@ -14,6 +14,8 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../smoke-production-image.sh" .scripts/
   use_mise_tools
   setup_mock_bin
+  printf '%s\n' '[env]' '_.path = ["bin"]' > mise.local.toml
+  export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   printf '%s\n' '{"repository":"github:dhhyi/recipe-db"}' > package.json
 
   for project in backend api frontend test job static; do

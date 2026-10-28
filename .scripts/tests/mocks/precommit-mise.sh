@@ -16,7 +16,7 @@ case "$*" in
       exit 99
     fi
     ;;
-  'exec -- bazelisk build --action_env=PATH --jobs=1 '*)
+  'run --raw bazel build --action_env=PATH --jobs=1 '*)
     for project in example other; do
       if [[ "$*" == *"//:${project}_format"* ]]; then
         mkdir -p bazel-bin

@@ -45,6 +45,7 @@ deploy:
     - package.json
 tasks:
   tests:
+    - .scripts/tests/bazel.bats
     - .scripts/tests/mise-tasks.bats
     - .scripts/tests/mise-freshness.bats
     - .scripts/tests/precommit.bats

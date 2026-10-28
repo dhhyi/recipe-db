@@ -41,6 +41,11 @@ description = "Run repository script regression tests with Bats"
 run = "bash .scripts/test-scripts.sh"
 raw_args = true
 
+[tasks.bazel]
+description = "Run Bazel with a stable Mise and system tool PATH"
+run = "bash .scripts/bazel.sh"
+raw_args = true
+
 [tasks.test-message-bus]
 description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"
 run = "sh .scripts/test-message-bus.sh"
