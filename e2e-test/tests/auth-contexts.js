@@ -63,6 +63,7 @@ export async function createAuthIdentity(
     baseURL: origin,
     maxRedirects: 0,
   });
+  let closed = false;
   const api = Object.fromEntries(
     API_METHODS.map((method) => [
       method,
@@ -87,6 +88,8 @@ export async function createAuthIdentity(
     api,
     browserContext,
     async close() {
+      if (closed) return;
+      closed = true;
       await browserContext.unrouteAll({ behavior: "ignoreErrors" });
       await Promise.all([apiContext.dispose(), browserContext.close()]);
     },
