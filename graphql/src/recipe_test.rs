@@ -38,7 +38,7 @@ async fn exposes_backend_name_sort_key_without_changing_name_or_timestamps() {
 
 #[tokio::test]
 async fn rejects_name_sort_key_in_recipe_input() {
-    let schema = crate::schema::build_schema(None);
+    let schema = crate::schema::build_schema(crate::mode::RuntimeMode::Testing, None);
     let response = schema
         .execute(
             r#"mutation { createRecipe(value: {name: "Test", nameSortKey: "override"}) { id } }"#,

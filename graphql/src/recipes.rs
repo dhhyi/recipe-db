@@ -16,18 +16,6 @@ impl RecipesApi {
         }
     }
 
-    pub async fn delete_recipes_for_testing(
-        &self,
-        publisher: &EventPublisher,
-    ) -> Result<bool, Error> {
-        self.client
-            .delete("")
-            .await
-            .map_err(RestError::into_error)?;
-        publisher.notify(None, EventKind::RecipesReset).await;
-        Ok(true)
-    }
-
     pub async fn get_recipes(&self) -> Result<Vec<Recipe>, Error> {
         self.client.get("").await.map_err(RestError::into_error)
     }
@@ -128,15 +116,6 @@ async fn apply_inspirations(
 
 #[Object]
 impl RecipesMutation {
-    async fn delete_recipes_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ResetForTesting)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<RecipesApi>()?
-            .delete_recipes_for_testing(ctx.data::<EventPublisher>()?)
-            .await
-    }
-
     // `Option<Result<T>>` (not `Result<Option<T>>`) is what makes async-graphql resolve this
     // nullable field to `null` on error without nulling out the whole response's `data`.
     async fn create_recipe(

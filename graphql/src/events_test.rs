@@ -203,7 +203,7 @@ async fn denied_mutations_have_no_backend_side_effects() {
         format!("http://{}", listener.local_addr().unwrap()),
     );
     let backend = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let schema = crate::schema::build_schema(None);
+    let schema = crate::schema::build_schema(crate::mode::RuntimeMode::Testing, None);
 
     for (role, query, expected_status) in [
         (
@@ -222,10 +222,6 @@ async fn denied_mutations_have_no_backend_side_effects() {
             r#"mutation { rate(id: "42", rating: 5) { count } }"#,
             401,
         ),
-        ("member", "mutation { deleteRecipesForTesting }", 403),
-        ("member", "mutation { deleteRatingsForTesting }", 403),
-        ("member", "mutation { deleteImagesForTesting }", 403),
-        ("member", "mutation { deleteInspirationsForTesting }", 403),
     ] {
         let response = schema
             .execute(Request::new(query).data(crate::test_context(role)))
@@ -291,7 +287,8 @@ async fn bus_contract() {
     publisher.connect().await.unwrap();
     assert!(publisher.status().connected);
     let backend = mock_backend().await;
-    let schema = crate::schema::build_schema(Some(publisher.clone()));
+    let schema =
+        crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher.clone()));
     let started = tokio::time::Instant::now();
     execute(
         &schema,
@@ -359,7 +356,6 @@ async fn bus_contract() {
     execute(&schema, r#"mutation { deleteRecipe(id: "42") }"#, true).await;
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
     execute(&schema, "{ recipes { id } }", true).await;
-    execute(&schema, "mutation { deleteRecipesForTesting deleteRatingsForTesting deleteImagesForTesting deleteInspirationsForTesting }", true).await;
 
     let expected = [
         (Some("42"), EventKind::RecipeChanged),
@@ -372,10 +368,6 @@ async fn bus_contract() {
         (Some("42"), EventKind::RatingChanged),
         (Some("42"), EventKind::ImageChanged),
         (Some("42"), EventKind::RecipeDeleted),
-        (None, EventKind::RecipesReset),
-        (None, EventKind::RatingsReset),
-        (None, EventKind::ImagesReset),
-        (None, EventKind::InspirationsReset),
     ];
     let search = settings.consumer(CONSUMERS[0]).await;
     assert_events(&search, &expected).await;
@@ -486,7 +478,8 @@ async fn bus_outage_preserves_mutation_results() {
     let publisher = EventPublisher::new(test_settings());
     assert!(publisher.connect().await.is_err());
     let backend = mock_backend().await;
-    let schema = crate::schema::build_schema(Some(publisher.clone()));
+    let schema =
+        crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher.clone()));
     let started = tokio::time::Instant::now();
     execute(
         &schema,

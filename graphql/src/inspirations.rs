@@ -1,4 +1,4 @@
-use async_graphql::{Context, Error, Object};
+use async_graphql::Error;
 use reqwest::StatusCode;
 
 use crate::events::{EventKind, EventPublisher};
@@ -13,18 +13,6 @@ impl InspirationsApi {
         Self {
             client: RestClient::new("inspirations"),
         }
-    }
-
-    pub async fn delete_inspirations_for_testing(
-        &self,
-        publisher: &EventPublisher,
-    ) -> Result<bool, Error> {
-        self.client
-            .delete("/")
-            .await
-            .map_err(RestError::into_error)?;
-        publisher.notify(None, EventKind::InspirationsReset).await;
-        Ok(true)
     }
 
     pub async fn get_inspirations(&self, id: &str) -> Result<Vec<String>, Error> {
@@ -62,20 +50,5 @@ impl InspirationsApi {
             .notify(Some(id), EventKind::InspirationsChanged)
             .await;
         Ok(())
-    }
-}
-
-#[derive(Default)]
-pub struct InspirationsMutation;
-
-#[Object]
-impl InspirationsMutation {
-    async fn delete_inspirations_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ResetForTesting)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<InspirationsApi>()?
-            .delete_inspirations_for_testing(ctx.data::<EventPublisher>()?)
-            .await
     }
 }

@@ -142,7 +142,6 @@ pub enum Capability {
     ManageRecipes,
     ManageImports,
     ManageImages,
-    ResetForTesting,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,10 +160,7 @@ impl RequestContext {
             Role::Owner => true,
             Role::Member => !matches!(
                 capability,
-                Capability::ManageRecipes
-                    | Capability::ManageImports
-                    | Capability::ManageImages
-                    | Capability::ResetForTesting
+                Capability::ManageRecipes | Capability::ManageImports | Capability::ManageImages
             ),
             Role::Anonymous => matches!(
                 capability,
@@ -1092,7 +1088,6 @@ mod tests {
             Capability::ManageRecipes,
             Capability::ManageImports,
             Capability::ManageImages,
-            Capability::ResetForTesting,
         ];
         for (headers, role) in cases {
             let context = auth_policy.request_context(&headers).unwrap();
@@ -1105,7 +1100,6 @@ mod tests {
                         Capability::ManageRecipes
                             | Capability::ManageImports
                             | Capability::ManageImages
-                            | Capability::ResetForTesting
                     ),
                     Role::Anonymous => matches!(
                         capability,

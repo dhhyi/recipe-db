@@ -5,28 +5,20 @@ Feature: integration
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
     * configure headers = { Authorization: '#(ownerAuthorization)' }
-    * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
-    * method post
-    * status 200
-    * match response.data.deleteRecipesForTesting == true
-    * request { query: '#(read("graphql/delete-ratings-for-testing.graphql"))' }
-    * method post
-    * status 200
 
   Scenario: should be possible to have a recipe without rating
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'Rice Pudding' } } }
     * method post
     * status 200
+    * def recipeId = response.data.createRecipe.id
 
-    * request { query: '#(read("graphql/all-recipes-with-rating.graphql"))' }
+    * request { query: '#(read("graphql/all-recipes-with-rating.graphql"))', variables: { id: '#(recipeId)' } }
     * method post
     * status 200
     * match response.data ==
       """
       {
-        recipes: [
-          { name: 'Rice Pudding', rating: { average: 0, count: 0 } }
-        ]
+        recipe: { name: 'Rice Pudding', rating: { average: 0, count: 0 } }
       }
       """
 
@@ -47,14 +39,12 @@ Feature: integration
     * method post
     * status 200
 
-    * request { query: '#(read("graphql/all-recipes-with-rating.graphql"))' }
+    * request { query: '#(read("graphql/all-recipes-with-rating.graphql"))', variables: { id: '#(recipeId)' } }
     * method post
     * status 200
     * match response.data ==
       """
       {
-        recipes: [
-          { name: 'Beetroot Soup', rating: { average: 4.5, count: 2 } }
-        ]
+        recipe: { name: 'Beetroot Soup', rating: { average: 4.5, count: 2 } }
       }
       """

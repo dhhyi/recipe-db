@@ -43,14 +43,15 @@ The `anonymous` role permits public reads and aggregate ratings. `member` additi
 | `Rating.myRating` | `ReadIndividualRatings` | Deny | Own vote only | Own vote only |
 | `rate` | `WriteRatings` | Deny | Allow | Allow |
 | `createRecipe`, `updateRecipe`, `deleteRecipe` | `ManageRecipes` | Deny | Deny | Allow |
-| Inspiration changes in create/update and reset | `ManageImports` / `ResetForTesting` | Deny | Deny | Allow |
+| Inspiration changes in create/update | `ManageImports` | Deny | Deny | Allow |
 | `setImage` | `ManageImages` | Deny | Deny | Allow |
-| All `delete*ForTesting` mutations | `ResetForTesting` | Deny | Deny | Allow, still subject to each backend's development/test restriction |
 | `myCapabilities`, `onlineServices`, `isServiceOnline`, `allServicesOnline` | Effective current principal / public availability | Allow | Allow | Allow |
 
 These are field resolver checks, so GraphQL aliases and nested/composed calls use the same authorization path. `myRating` is nullable and only reads the current principal's vote; no argument accepts another user ID. A missing vote is `null`, while insufficient capability is a structured `authentication-required` or `forbidden` error. Public aggregate fields remain independently nullable only when their existing backend availability contract says so.
 
-Mutations check capabilities before any REST write, event publication, or upload processing. Recipe updates that also change inspirations check both recipe and import capabilities before either backend is touched. Testing resets require `ResetForTesting`; their REST backends continue to reject reset requests when `PRODUCTION=true`.
+Mutations check capabilities before any REST write, event publication, or upload processing. Recipe updates that also change inspirations check both recipe and import capabilities before either backend is touched. Service reset APIs are private REST routes enabled only by explicit `MODE=testing`; they are not exposed through GraphQL or MCP.
+
+`MODE` accepts `production` (the default when unset) or `testing`; empty and unsupported values fail startup. Production mode requires trusted ingress and disables GraphiQL and schema introspection.
 
 Rating attribution is the namespaced stable principal ID from the request context, never a caller-provided login, display name, email, or token secret. The ratings backend stores only that ID and enforces `(recipeId, userId)` uniqueness. Existing disposable development ratings created with the former login key are discarded when the old table schema is encountered; there is no production ratings migration or account-guessing step.
 
