@@ -71,6 +71,9 @@ pub struct InspirationsMutation;
 #[Object]
 impl InspirationsMutation {
     async fn delete_inspirations_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ResetForTesting)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<InspirationsApi>()?
             .delete_inspirations_for_testing(ctx.data::<EventPublisher>()?)
             .await

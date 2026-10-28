@@ -1,8 +1,9 @@
 use async_graphql::http::GraphiQLSource;
+use async_graphql::ErrorExtensions;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, Request, StatusCode};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Html;
 use axum::response::Response;
@@ -25,6 +26,24 @@ mod rest_client;
 mod schema;
 mod search;
 mod traefik;
+
+#[cfg(test)]
+pub static REST_ENDPOINT_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[cfg(test)]
+fn test_context(role: &str) -> auth::RequestContext {
+    let policy = auth::AuthPolicy::from_json(
+        &serde_json::json!({
+            "anonymous": {"role": role},
+            "tokens": [],
+            "googleAccounts": {}
+        })
+        .to_string(),
+        "https://accounts.google.com",
+    )
+    .unwrap();
+    policy.request_context(&HeaderMap::new()).unwrap()
+}
 
 #[derive(Clone)]
 struct GraphQLState {
@@ -77,6 +96,7 @@ async fn trusted_graphql_ingress(
 async fn graphql(
     State(state): State<GraphQLState>,
     headers: HeaderMap,
+    method: Method,
     request: GraphQLRequest,
 ) -> GraphQLResponse {
     let context = match state.auth_policy.request_context(&headers) {
@@ -93,11 +113,118 @@ async fn graphql(
             return async_graphql::Response::from_errors(vec![error]).into();
         }
     };
-    state
-        .schema
-        .execute(request.into_inner().data(context))
-        .await
-        .into()
+    let request = request.into_inner();
+    if let Some(error) = mutation_request_error(&headers, method, &request) {
+        return async_graphql::Response::from_errors(vec![error]).into();
+    }
+    state.schema.execute(request.data(context)).await.into()
+}
+
+fn mutation_request_error(
+    headers: &HeaderMap,
+    method: Method,
+    request: &async_graphql::Request,
+) -> Option<async_graphql::ServerError> {
+    let document = async_graphql::parser::parse_query(&request.query).ok()?;
+    let has_mutation = document.operations.iter().any(|(_, operation)| {
+        operation.node.ty == async_graphql::parser::types::OperationType::Mutation
+    });
+    if !has_mutation {
+        return None;
+    }
+    if method == Method::GET {
+        return Some(csrf_error(405, "mutation-over-get"));
+    }
+    let origin = match single_header(headers, "origin") {
+        Ok(Some(value)) => match value.to_str() {
+            Ok(origin) => Some(origin),
+            Err(_) => return Some(csrf_error(403, "csrf-forbidden")),
+        },
+        Ok(None) => None,
+        Err(()) => return Some(csrf_error(403, "csrf-forbidden")),
+    };
+    let has_bearer = headers.contains_key("authorization");
+    if origin.is_some_and(|origin| !same_origin(headers, origin))
+        || (origin.is_none() && !has_bearer)
+    {
+        return Some(csrf_error(403, "csrf-forbidden"));
+    }
+    None
+}
+
+fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
+    let Ok(origin) = origin.parse::<axum::http::Uri>() else {
+        return false;
+    };
+    let Some(origin_authority) = origin.authority() else {
+        return false;
+    };
+    if origin.path() != "" && origin.path() != "/" || origin.query().is_some() {
+        return false;
+    }
+    let Some(scheme) = origin.scheme_str() else {
+        return false;
+    };
+    let forwarded_scheme = match single_header(headers, "x-forwarded-proto") {
+        Ok(Some(value)) => match value.to_str() {
+            Ok(scheme) => scheme,
+            Err(_) => return false,
+        },
+        Ok(None) => "http",
+        Err(()) => return false,
+    };
+    if !matches!(forwarded_scheme, "http" | "https")
+        || !scheme.eq_ignore_ascii_case(forwarded_scheme)
+    {
+        return false;
+    }
+    let Ok(Some(host)) = single_header(headers, "host") else {
+        return false;
+    };
+    let Some(request_authority) = host
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<axum::http::uri::Authority>().ok())
+    else {
+        return false;
+    };
+    origin_authority
+        .host()
+        .eq_ignore_ascii_case(request_authority.host())
+        && origin_authority
+            .port_u16()
+            .unwrap_or(if scheme == "https" { 443 } else { 80 })
+            == request_authority
+                .port_u16()
+                .unwrap_or(if forwarded_scheme == "https" { 443 } else { 80 })
+}
+
+fn single_header<'a>(
+    headers: &'a HeaderMap,
+    name: &'static str,
+) -> Result<Option<&'a axum::http::HeaderValue>, ()> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        Err(())
+    } else {
+        Ok(value)
+    }
+}
+
+fn csrf_error(status: u16, code: &'static str) -> async_graphql::ServerError {
+    let error =
+        async_graphql::Error::new("Cross-origin mutation rejected").extend_with(|_, extensions| {
+            extensions.set("status", status);
+            extensions.set("code", code);
+        });
+    async_graphql::ServerError {
+        message: error.message,
+        source: error.source,
+        locations: Vec::new(),
+        path: Vec::new(),
+        extensions: error.extensions,
+    }
 }
 
 #[tokio::main]
@@ -168,8 +295,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 #[cfg(test)]
 mod ingress_tests {
-    use super::{trusted_graphql_ingress, IngressSecret, INGRESS_HEADER};
-    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use super::{mutation_request_error, trusted_graphql_ingress, IngressSecret, INGRESS_HEADER};
+    use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
 
     const TOKEN: &str = "abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE";
@@ -201,6 +328,46 @@ mod ingress_tests {
         assert!(secret.accepts(&headers));
         headers.append(INGRESS_HEADER, HeaderValue::from_static(TOKEN));
         assert!(!secret.accepts(&headers));
+    }
+
+    #[test]
+    fn browser_mutations_require_same_origin_and_get_mutations_are_rejected() {
+        let request = async_graphql::Request::new("mutation { __typename }");
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("recipes.example"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let error = mutation_request_error(&headers, Method::POST, &request).unwrap();
+        assert_eq!(
+            error.extensions.as_ref().unwrap().get("code"),
+            Some(&async_graphql::value!("csrf-forbidden"))
+        );
+
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://recipes.example"),
+        );
+        assert!(mutation_request_error(&headers, Method::POST, &request).is_none());
+
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://attacker.example"),
+        );
+        assert!(mutation_request_error(&headers, Method::POST, &request).is_some());
+
+        headers.remove("origin");
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("dummy-auth-value"),
+        );
+        assert!(mutation_request_error(&headers, Method::POST, &request).is_none());
+        assert_eq!(
+            mutation_request_error(&headers, Method::GET, &request)
+                .unwrap()
+                .extensions
+                .unwrap()
+                .get("code"),
+            Some(&async_graphql::value!("mutation-over-get"))
+        );
     }
 
     #[tokio::test]

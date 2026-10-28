@@ -20,14 +20,37 @@ query Overview {
   recipes {
     ...RecipeStub
   }
-  recipeEditOnline: isServiceOnline(name: "recipes-edit")
   ratingsOnline: isServiceOnline(name: "ratings")
 }
 
 query BrowseServices {
   searchOnline: isServiceOnline(name: "search")
-  recipeEditOnline: isServiceOnline(name: "recipes-edit")
   ratingsOnline: isServiceOnline(name: "ratings")
+}
+
+query BrowseControls {
+  myCapabilities {
+    role
+    canManageRecipes
+    canManageImages
+  }
+  recipeEditOnline: isServiceOnline(name: "recipes-edit")
+}
+
+query BrowseIdentity {
+  myCapabilities {
+    role
+  }
+}
+
+query RatingCapabilities($id: ID!) {
+  myCapabilities {
+    role
+    canRate
+  }
+  rating(id: $id) {
+    ...Rating
+  }
 }
 
 query BrowseSearch($options: JSON!) {
@@ -68,9 +91,28 @@ query RecipeById($id: ID!) {
 }
 
 query RecipeControls {
+  myCapabilities {
+    role
+    canManageRecipes
+    canManageImages
+  }
   recipeEditOnline: isServiceOnline(name: "recipes-edit")
   imagesOnline: isServiceOnline(name: "images")
   imageEditOnline: isServiceOnline(name: "images-edit")
+}
+
+query RecipeRating($id: ID!) {
+  myCapabilities {
+    role
+    canRate
+  }
+  recipe(id: $id) {
+    id
+    rating {
+      ...Rating
+      myRating
+    }
+  }
 }
 
 fragment InspirationsLink on Link {
@@ -93,8 +135,9 @@ query RecipeInspirations($id: ID!) {
   inspirationsOnline: isServiceOnline(name: "inspirations")
 }
 
-mutation RateRecipe($id: ID!, $rating: Int!, $login: String!) {
-  rate(id: $id, rating: $rating, login: $login) {
+mutation RateRecipe($id: ID!, $rating: Int!) {
+  rate(id: $id, rating: $rating) {
     ...Rating
+    myRating
   }
 }

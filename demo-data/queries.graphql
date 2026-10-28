@@ -23,8 +23,8 @@ mutation DeleteRatings {
   deleteRatingsForTesting
 }
 
-mutation AddRating($id: ID!, $rating: Int!, $login: String!) {
-  rate(id: $id, rating: $rating, login: $login) {
+mutation AddRating($id: ID!, $rating: Int!) {
+  rate(id: $id, rating: $rating) {
     average
     count
   }

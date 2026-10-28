@@ -20,7 +20,7 @@ templ Layout(title string) {
 			</script>
 		</head>
 		<body class="container">
-			<header-component></header-component>
+			<header-component hx-get="/identity" hx-trigger="load" hx-swap="outerHTML"></header-component>
 			<main>
 				{ children... }
 			</main>

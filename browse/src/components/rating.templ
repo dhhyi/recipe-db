@@ -5,7 +5,7 @@ import (
 	"frontend/src/generated"
 )
 
-templ Rating(rating *gql.Rating, ratingPossible bool, slot *string) {
+templ Rating(rating *gql.Rating, ratingPossible bool, slot *string, myRating *int) {
 	{{
 		ratingValue := ""
 		if rating.Average != nil {
@@ -34,12 +34,15 @@ templ Rating(rating *gql.Rating, ratingPossible bool, slot *string) {
 			if rating.Average != nil {
 				rating={ *rating.Average }
 			}
+			if myRating != nil {
+				my-rating={ *myRating }
+			}
 			if rating.Count != nil {
 				count={ *rating.Count }
 			}
 			if ratingPossible {
 				hx-post={ "/recipe/" + rating.RecipeId + "/rate" }
-				hx-target="this"
+				hx-target={ "#recipe-rating-" + rating.RecipeId }
 				hx-swap="outerHTML"
 				hx-trigger="rated"
 				hx-vals="js:{rating: event.detail}"

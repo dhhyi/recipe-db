@@ -55,6 +55,9 @@ impl SearchQuery {
         ctx: &Context<'_>,
         options: Json<Value>,
     ) -> Result<RecipeSearchResult, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         let result = ctx.data::<SearchApi>()?.search(&options.0).await?;
         let recipes_api = ctx.data::<RecipesApi>()?;
         let recipes = try_join_all(

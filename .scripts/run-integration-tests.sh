@@ -221,18 +221,27 @@ for project in "${projects[@]}"; do
   fi
   echo "Running $project; report log: $project/target/integration-tests/run.log"
   set +e
-  if [[ $project == e2e-test ]]; then
+  if [[ $project == e2e-test || $project == graphql-test || $project == search-test || $project == mcp-test ]]; then
     tokens_file=e2e-test/.secrets/auth-tokens.json
     if [[ ! -s $tokens_file ]]; then
-      echo "E2E auth tokens are missing; run mise run create-auth-test-fixture." >&2
+      echo "Auth test tokens are missing; run mise run create-auth-test-fixture." >&2
       exit 1
     fi
-    E2E_AUTH_TOKENS=$(cat "$tokens_file")
-    export E2E_AUTH_TOKENS
-    docker compose --profile test run --rm -e E2E_AUTH_TOKENS "$project" 2>&1 \
-      | tee "$project/target/integration-tests/run.log"
-    status=${PIPESTATUS[0]}
-    unset E2E_AUTH_TOKENS
+    if [[ $project == mcp-test ]]; then
+      MCP_API_TOKEN=$(jq -er '.owner' "$tokens_file")
+      export MCP_API_TOKEN
+      docker compose --profile test run --rm -e MCP_API_TOKEN "$project" 2>&1 \
+        | tee "$project/target/integration-tests/run.log"
+      status=${PIPESTATUS[0]}
+      unset MCP_API_TOKEN
+    else
+      E2E_AUTH_TOKENS=$(cat "$tokens_file")
+      export E2E_AUTH_TOKENS
+      docker compose --profile test run --rm -e E2E_AUTH_TOKENS "$project" 2>&1 \
+        | tee "$project/target/integration-tests/run.log"
+      status=${PIPESTATUS[0]}
+      unset E2E_AUTH_TOKENS
+    fi
   else
     docker compose --profile test run --rm "$project" 2>&1 \
       | tee "$project/target/integration-tests/run.log"

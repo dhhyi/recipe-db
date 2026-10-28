@@ -3,6 +3,7 @@ Feature: ratings
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * request { query: '#(read("graphql/delete-ratings-for-testing.graphql"))' }
     * method post
     * status 200
@@ -14,21 +15,25 @@ Feature: ratings
     * match response.data == { rating: { recipeId: '1', average: 0, count: 0 } }
 
   Scenario: should execute rate
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2, login: 'test' } }
+    * configure headers = { Authorization: '#(memberOneAuthorization)' }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2 } }
     * method post
     * status 200
     * match response.data == { rate: { average: 2, count: 1 } }
 
   Scenario: should have rating after multiple rates
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2, login: 'test1' } }
+    * configure headers = { Authorization: '#(memberOneAuthorization)' }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 2 } }
     * method post
     * status 200
 
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 3, login: 'test2' } }
+    * configure headers = { Authorization: '#(memberTwoAuthorization)' }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 3 } }
     * method post
     * status 200
 
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 5, login: 'test3' } }
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '1', rating: 5 } }
     * method post
     * status 200
 

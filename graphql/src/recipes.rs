@@ -89,10 +89,16 @@ pub struct RecipesQuery;
 #[Object]
 impl RecipesQuery {
     async fn recipe(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Recipe>, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<RecipesApi>()?.get_recipe(id.as_str()).await
     }
 
     async fn recipes(&self, ctx: &Context<'_>) -> Result<Vec<Recipe>, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<RecipesApi>()?.get_recipes().await
     }
 }
@@ -123,6 +129,9 @@ async fn apply_inspirations(
 #[Object]
 impl RecipesMutation {
     async fn delete_recipes_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ResetForTesting)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<RecipesApi>()?
             .delete_recipes_for_testing(ctx.data::<EventPublisher>()?)
             .await
@@ -135,6 +144,21 @@ impl RecipesMutation {
         ctx: &Context<'_>,
         value: RecipeInput,
     ) -> Option<Result<Recipe, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ManageRecipes) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        if !matches!(
+            &value.inspirations,
+            async_graphql::MaybeUndefined::Undefined
+        ) {
+            if let Err(error) = request.require(crate::auth::Capability::ManageImports) {
+                return Some(Err(error.into_graphql_error()));
+            }
+        }
         Some(
             async {
                 let publisher = ctx.data::<EventPublisher>()?;
@@ -155,6 +179,21 @@ impl RecipesMutation {
         id: ID,
         value: RecipeInput,
     ) -> Option<Result<Recipe, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ManageRecipes) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        if !matches!(
+            &value.inspirations,
+            async_graphql::MaybeUndefined::Undefined
+        ) {
+            if let Err(error) = request.require(crate::auth::Capability::ManageImports) {
+                return Some(Err(error.into_graphql_error()));
+            }
+        }
         Some(
             async {
                 apply_inspirations(ctx, id.as_str(), &value.inspirations).await?;
@@ -167,6 +206,9 @@ impl RecipesMutation {
     }
 
     async fn delete_recipe(&self, ctx: &Context<'_>, id: ID) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ManageRecipes)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<RecipesApi>()?
             .delete_recipe(id.as_str(), ctx.data::<EventPublisher>()?)
             .await

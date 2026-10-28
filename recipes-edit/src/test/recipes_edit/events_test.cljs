@@ -23,23 +23,48 @@
     (is (= (:re-graph state) (:re-graph db)))
     (is (= :idle (:status db)))
     (is (= (:form db) (:baseline db)))
-    (is (= [::re-graph/query
-            {:id :service-online
-             :query events/service-online-query
-             :callback [::events/service-online-loaded]}]
-           (:dispatch effects)))))
+    (is (= [[::re-graph/query
+             {:id :my-capabilities
+              :query events/capabilities-query
+              :callback [::events/capabilities-loaded]}]
+            [::re-graph/query
+             {:id :service-online
+              :query events/service-online-query
+              :callback [::events/service-online-loaded]}]]
+           (:dispatch-n effects)))))
 
 (deftest initialize-event-for-edit-queries-recipe
   (let [effects (event-effects {} [::events/initialize {:page :edit :id "123"}])
         db (:db effects)]
     (is (= :loading (:status db)))
     (is (= {:page :edit :id "123"} (:route db)))
-    (is (= [::re-graph/query
-            {:id :recipe
-             :query events/recipe-query
-             :variables {:id "123"}
-             :callback [::events/recipe-loaded]}]
-           (:dispatch effects)))))
+    (is (= [[::re-graph/query
+             {:id :my-capabilities
+              :query events/capabilities-query
+              :callback [::events/capabilities-loaded]}]
+            [::re-graph/query
+             {:id :recipe
+              :query events/recipe-query
+              :variables {:id "123"}
+              :callback [::events/recipe-loaded]}]]
+           (:dispatch-n effects)))))
+
+(deftest capabilities-control-editor-access
+  (doseq [[role can-manage expected]
+          [["anonymous" false :authentication-required]
+           ["member" false :forbidden]
+           ["owner" true :allowed]]]
+    (let [db (event-db (events/initial-db {:page :new})
+                       [::events/capabilities-loaded
+                        {:response {:data {:myCapabilities {:role role
+                                                            :canManageRecipes can-manage}}
+                                    :errors []}}])]
+      (is (= expected (:authorization db)) role)))
+  (let [db (event-db (events/initial-db {:page :new})
+                     [::events/capabilities-loaded
+                      {:response {:errors [{:message "Authentication required"
+                                            :extensions {:code "authentication-required"}}]}}])]
+    (is (= :authentication-required (:authorization db)))))
 
 (deftest normalizes-graphql-response-keys
   (is (= {:data {:createRecipe nil}
@@ -108,6 +133,7 @@
     (doseq [status [:saving :loading :not-found :error]]
       (let [db {:status status
                 :route {:page :new}
+                :authorization :allowed
                 :form {:name "Soup" :method "Boil" :ingredients [] :inspirations []}
                 :baseline {:name "" :method "" :ingredients [] :inspirations []}}]
         (is (= {} (event-effects db [::events/save])))))
@@ -119,6 +145,7 @@
   (testing "dirty create builds create mutation and enters saving"
     (let [db {:status :idle
               :route {:page :new}
+              :authorization :allowed
               :inspirations-online true
               :form {:name "Soup"
                      :method "Boil"
@@ -135,6 +162,7 @@
   (testing "dirty update includes id and update mutation"
     (let [db {:status :idle
               :route {:page :edit :id "123"}
+              :authorization :allowed
               :inspirations-online false
               :form {:name "Soup"
                      :method "Boil"
@@ -249,6 +277,7 @@
         initial-form (make-form "Original")
         first-save-form (make-form "First save")
         start-db {:status :saving
+                  :authorization :allowed
                   :route {:page :edit :id "123"}
                   :form first-save-form
                   :baseline initial-form}

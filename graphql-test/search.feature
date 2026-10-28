@@ -4,6 +4,7 @@ Feature: search recipes
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * configure retry = { count: 30, interval: 1000 }
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post
@@ -14,7 +15,7 @@ Feature: search recipes
     * method post
     * status 200
     * def soupId = response.data.createRecipe.id
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(soupId)', login: 'search-test', rating: 5 } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(soupId)', rating: 5 } }
     * method post
     * status 200
     * match response.data.rate.average == 5
@@ -23,7 +24,7 @@ Feature: search recipes
     * method post
     * status 200
     * def saladId = response.data.createRecipe.id
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(saladId)', login: 'search-test', rating: 3 } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(saladId)', rating: 3 } }
     * method post
     * status 200
     * match response.data.rate.average == 3
@@ -32,7 +33,7 @@ Feature: search recipes
     * method post
     * status 200
     * def cakeId = response.data.createRecipe.id
-    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(cakeId)', login: 'search-test', rating: 4 } }
+    * request { query: '#(read("graphql/rate.graphql"))', variables: { id: '#(cakeId)', rating: 4 } }
     * method post
     * status 200
     * match response.data.rate.average == 4

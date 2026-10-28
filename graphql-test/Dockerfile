@@ -10,6 +10,7 @@ RUN chmod a+r /opt/karate.jar
 
 WORKDIR /app
 COPY *.feature ./
+COPY karate-config.js ./
 COPY graphql ./graphql
 COPY fixtures ./fixtures
 COPY karate ./karate

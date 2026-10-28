@@ -86,10 +86,16 @@ pub struct TraefikQuery;
 #[Object]
 impl TraefikQuery {
     async fn online_services(&self, ctx: &Context<'_>) -> Result<Vec<String>, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<TraefikApi>()?.get_online_services().await
     }
 
     async fn is_service_online(&self, ctx: &Context<'_>, name: String) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         let online = ctx.data::<TraefikApi>()?.get_online_services().await?;
         Ok(online.contains(&name))
     }
@@ -99,6 +105,9 @@ impl TraefikQuery {
         ctx: &Context<'_>,
         names: Vec<String>,
     ) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         let online = ctx.data::<TraefikApi>()?.get_online_services().await?;
         Ok(names.iter().all(|name| online.contains(name)))
     }

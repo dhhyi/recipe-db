@@ -11,7 +11,13 @@ use crate::search::{SearchApi, SearchQuery};
 use crate::traefik::{TraefikApi, TraefikQuery};
 
 #[derive(MergedObject, Default)]
-pub struct QueryRoot(RecipesQuery, RatingsQuery, TraefikQuery, SearchQuery);
+pub struct QueryRoot(
+    crate::auth::AuthQuery,
+    RecipesQuery,
+    RatingsQuery,
+    TraefikQuery,
+    SearchQuery,
+);
 
 #[derive(MergedObject, Default)]
 pub struct MutationRoot(

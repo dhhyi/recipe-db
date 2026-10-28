@@ -264,11 +264,10 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     [Description("Adds a rating for an existing recipe.")]
     public async Task<string> AddRating(
         [Description("Recipe id")] string recipeId,
-        [Description("Rating value")] int rating,
-        [Description("Login/username of the rater")] string login
+        [Description("Rating value")] int rating
     )
     {
-        var response = await client.Rate.ExecuteAsync(recipeId, rating, login);
+        var response = await client.Rate.ExecuteAsync(recipeId, rating);
         if (response.Errors.Count > 0)
         {
             return $"Failed to add rating: {string.Join("; ", response.Errors.Select(e => e.Message))}";

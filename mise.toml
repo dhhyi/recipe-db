@@ -154,7 +154,7 @@ file = ".scripts/create-oauth-secrets.sh"
 
 [tasks.seed-demodata]
 description = "Generate demo data against the development stack"
-run = "docker compose --profile development run --build --rm -e FORCE_DELETE demo-data"
+file = ".scripts/seed-demodata.sh"
 
 [tasks.dev-up]
 description = "Start the development stack detached and wait for readiness; accepts extra Compose up arguments"

@@ -120,7 +120,7 @@ func TestBrowseValidation(t *testing.T) {
 					if !strings.Contains(body, `data-kind="error"`) || !strings.Contains(body, "data-browse-status") {
 						t.Fatal("invalid fragment lost its existing error state")
 					}
-				} else if strings.Count(body, "<header-component>") != 1 ||
+				} else if strings.Count(body, "<header-component ") != 1 ||
 					strings.Count(body, "<main>") != 1 ||
 					strings.Contains(body, `name="q"`) ||
 					!strings.Contains(body, "<title>Ungültige Suchparameter | RezeptDB</title>") ||
@@ -334,7 +334,7 @@ func TestBrowseHTTP(t *testing.T) {
 					t.Fatal("fragment/full page contract broken")
 				}
 				if !fragment {
-					if strings.Count(body, "<header-component>") != 1 || strings.Count(body, "<main>") != 1 ||
+					if strings.Count(body, "<header-component ") != 1 || strings.Count(body, "<main>") != 1 ||
 						recorder.Header().Get("HX-Replace-Url") != "" {
 						t.Fatalf("%s navigation must retain one shared layout without fragment headers: %s", mode, body)
 					}
@@ -387,12 +387,8 @@ func TestBrowseHTTP(t *testing.T) {
 				if more && !strings.Contains(body, `href="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort=rating"`) {
 					t.Fatalf("missing ordinary GET pagination: %s", body)
 				}
-				wantAdd := 0
-				if !fullPageError && tc.editor && !tc.statusError {
-					wantAdd = 1
-				}
-				if strings.Count(body, "data-add-recipe") != wantAdd {
-					t.Fatal("add affordance missing, duplicated, or not service gated")
+				if strings.Contains(body, "data-add-recipe") {
+					t.Fatal("privileged add affordance must remain in the dynamic controls fragment")
 				}
 				if tc.kind == "search" && tc.hits == 0 && !strings.Contains(body, "Keine Rezepte gefunden.") {
 					t.Fatal("empty successful search not distinguished")

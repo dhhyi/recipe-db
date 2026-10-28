@@ -27,7 +27,7 @@ Feature: Rating Progression
   Scenario: putting first rating should succeed
     * path 'ratings/1'
     * form field rating = 5
-    * form field login = 'user1'
+    * form field userId = 'token:v1:user1'
     * method put
     * status 200
     * match response == {id: "1", rating: 5, count: 1}
@@ -41,7 +41,7 @@ Feature: Rating Progression
   Scenario: putting second rating should succeed
     * path 'ratings/1'
     * form field rating = 4
-    * form field login = 'user2'
+    * form field userId = 'token:v1:user2'
     * method put
     * status 200
     * match response == {id: "1", rating: 4.5, count: 2}
@@ -55,7 +55,7 @@ Feature: Rating Progression
   Scenario: putting third rating should succeed
     * path 'ratings/1'
     * form field rating = 3
-    * form field login = 'user3'
+    * form field userId = 'token:v1:user3'
     * method put
     * status 200
     * match response == {id: "1", rating: 4, count: 3}
