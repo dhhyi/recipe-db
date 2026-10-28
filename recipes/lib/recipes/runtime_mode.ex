@@ -1,7 +1,7 @@
 defmodule Recipes.RuntimeMode do
   @moduledoc false
 
-  def from_env!, do: parse(System.get_env("MODE"))
+  def from_env!, do: parse(System.get_env("RECIPES_RUNTIME_MODE"))
 
   def parse(value) do
     case value do

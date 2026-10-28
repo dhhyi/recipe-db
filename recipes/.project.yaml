@@ -26,6 +26,7 @@ devcontainer:
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     MODE: testing
+    RECIPES_RUNTIME_MODE: testing
     LANG: C.UTF-8
     LC_ALL: C.UTF-8
 vscode:
