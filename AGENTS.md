@@ -6,7 +6,7 @@ Do not add new content to README.md files unless the user explicitly asks for it
 
 ## GraphQL access boundary
 
-All normal client data operations go through GraphQL via trusted ingress. Do not introduce direct client-to-backend access. Backend maintenance APIs must remain private and be available only in backup mode. Public static/image delivery is an intentional exception. See issues #49 and #52 for the access contract and #70 for the planned backup-mode maintenance contract.
+All normal client data operations go through GraphQL via trusted ingress. Do not introduce direct client-to-backend access. Backend maintenance APIs must remain private and be available only in backup mode. Testing-only data-reset APIs are a separate private interface, available only in testing mode, not backup mode. Public static/image delivery is an intentional exception. See issues #49 and #52 for the access contract and #70 for the planned backup-mode maintenance contract.
 
 ## GitHub issue planning
 
@@ -117,6 +117,16 @@ This will run the `test:` script defined in the second yaml document of the proj
 Execute precommit checks with `in-devcontainer` script. (see above) Make sure any existing devcontainer torn down before running precommit checks.
 
 When the user explicitly asks to run the precommit script or hook (for example, `sh .git/hooks/pre-commit`) without specifying a container, run that command directly on the host without using a container.
+
+## Runtime modes and REST API test resets
+
+The planned runtime contract in issue #81 defaults an absent `MODE` to `production`. Testing and any later modes require explicit selection; empty or unknown values fail startup. There is no public deployment yet, so the migration needs no legacy `PRODUCTION` compatibility mode, rejection checks, or migration diagnostics. Remove old runtime reads and managed configuration; leftover legacy variables do not affect mode selection.
+
+Every REST API that owns stored data must provide a private delete-all-data API for isolated testing as `DELETE` on its root collection resource (for example, `DELETE /recipes` or `DELETE /images`, not the server root `/` or a separate `/reset` endpoint), available only with explicit `MODE=testing`. Preserve supported trailing-slash variants; stateless APIs do not need a meaningless reset endpoint. Clear all service-owned test data, not configuration, credentials, other services' storage, or backups. Production (including unset `MODE`) and future modes must not expose or execute these resets; cover supported route variants and verify denied requests leave data unchanged. Do not expose resets through public ingress, GraphQL, or MCP. These are testing interfaces, not the backup-mode maintenance APIs in issue #70.
+
+## REST API health endpoints
+
+Every REST backend must provide a non-mutating `GET /health` endpoint in every supported runtime mode, including production, testing and future backup mode. Keep it reachable by internal health probes without exposing sensitive information or requiring public ingress access. Preserve existing response contracts; recipes, images, ratings and inspirations currently return `204 No Content` when healthy. Distinguish liveness from readiness: readiness must reflect whether the selected mode is ready, not whether ordinary application writes are enabled. A healthy backup-mode service may intentionally reject normal application operations.
 
 ## REST API error responses
 
