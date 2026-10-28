@@ -1,9 +1,10 @@
-import { test, expect, graphql } from "./fixtures.js";
+import { test as base, expect, graphql } from "./fixtures.js";
 import {
   crop,
   drag,
   expectCropPixels,
   expectValidCrop,
+  fulfillImageUpload,
   handle,
   isImageUpload,
   observeUploads,
@@ -17,8 +18,22 @@ import {
   uploadedCrop,
 } from "./image-editor.helpers.js";
 
-test.beforeEach(async ({ page }) => {
+const test = base.extend({
+  context: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.browserContext);
+  },
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    await use(page);
+    await page.close();
+  },
+});
+
+test.beforeEach(async ({ page, request, demoRecipe }) => {
   await observeUploads(page);
+  await page.route("**/graphql", (route) =>
+    fulfillImageUpload(route, page, request, demoRecipe),
+  );
 });
 
 test("selecting a local source does not upload, and Cancel keeps the saved image", async ({
@@ -268,7 +283,7 @@ test("HTTP-200 GraphQL failure preserves the crop and saved pair and allows retr
         }),
       });
     } else {
-      await route.continue();
+      await route.fallback();
     }
   });
   await saveButton(page).click();

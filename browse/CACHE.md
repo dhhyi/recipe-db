@@ -2,7 +2,9 @@
 
 Browse uses one disposable disk-backed cache per process at `/tmp/recipe-db-browse-html`. Startup clears only this dedicated directory before listening. Run only one browse replica; files are not used for recovery across restarts.
 
-Only `GET`/`HEAD /recipe/{id}` is cached. Query strings, HTMX headers, and browser conditional requests share the same recipe document, so invalidating a recipe removes all its variants. Existing Traefik routing, authentication, and compression are unchanged; authentication must remain ahead of browse. Cached HTML contains no login or individual-user rating data. Overview pages, mutation responses, HTMX widgets, and health checks use `Cache-Control: no-store`.
+Only `GET`/`HEAD /recipe/{id}` is cached. Query strings, HTMX headers, and browser conditional requests share the same recipe document, so invalidating a recipe removes all its variants. Existing Traefik routing, authentication, and compression are unchanged; authentication must remain ahead of browse. Cached HTML is a public shell: it contains recipe data, structured metadata, and aggregate ratings, but no current role, editor controls, own vote, login state, or identity. Cache fills use the public GraphQL client and never forward browser cookies or `Authorization`. Role-/principal-sensitive identity, editor controls, and editable ratings are fetched separately through request-scoped GraphQL calls.
+
+Browse forwards only the request's bearer `Authorization` header, or only `_oauth2_proxy` session-cookie chunks when no bearer header is present. It never forwards identity headers. Responses' `Set-Cookie` headers are relayed to the browser. The identity, controls, rating, mutation, overview, and health responses use `Cache-Control: no-store`; detail HTML is also `private, no-store` so browser/HTMX history cannot restore personalized fragments after an account change. HTMX history snapshots are disabled for the detail document.
 
 Concurrent misses for the same recipe share one fetch/render. Completed HTML is atomically renamed into place. Cached bodies are read from disk; only entry metadata and active render coordination are held in memory. Entries expire 60 seconds after the start of their successful fetch, without extending expiry on hits. Storage is limited to 32 MiB; the oldest fetched entries are evicted to make room, and oversized pages fail explicitly.
 
@@ -14,7 +16,7 @@ Browse attaches to the provisioned `RECIPE_EVENTS` / `browse-cache-v1` pull cons
 
 Invalidation marks active renders obsolete before removing files. Their completed HTML is discarded and waiting requests retry, preventing older renders from repopulating invalidated entries. During broker outages, valid entries remain available until TTL expiry, while misses and expired entries still require a successful fresh render. The consumer reconnects automatically and retries setup every second; healthy invalidation targets five seconds.
 
-Detail responses use `Cache-Control: private, no-cache` and a content-derived ETag. Conditional requests check the current server entry first, rather than returning 304 for expired or invalidated HTML. Browser image caching is separate.
+Detail responses use `Cache-Control: private, no-store` and retain a content-derived ETag for validators supplied by clients. Conditional requests check the current server entry first, rather than returning 304 for expired or invalidated HTML. Browser image caching is separate.
 
 Logs expose `cache hit`, `cache miss`, `cache eviction`, `cache invalidation`, `cache failure`, and consumer connection/retry events. Monitor these alongside JetStream pending, redelivered, and outstanding-acknowledgement counts. Invalid events require operator correction or quarantine as described in the [message-bus contract](../message-bus/CONTRACT.md).
 

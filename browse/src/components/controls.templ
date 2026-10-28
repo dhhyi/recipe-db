@@ -1,0 +1,53 @@
+package components
+
+import gql "frontend/src/generated"
+
+templ BrowseControls(resp *gql.BrowseControlsResponse) {
+	<div id="browse-controls" class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none">
+		if resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline {
+			<a href="/edit/new" data-add-recipe role="button" class="pointer-events-auto mr-2">Rezept hinzufügen</a>
+		}
+	</div>
+}
+
+templ BrowseIdentity(resp *gql.BrowseIdentityResponse) {
+	<header-component auth-role={ resp.MyCapabilities.Role }></header-component>
+}
+
+templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
+	if resp.Recipe != nil && resp.Recipe.Rating != nil {
+		@RecipeRatingWidget(id, &resp.Recipe.Rating.Rating, resp.MyCapabilities.CanRate, resp.Recipe.Rating.MyRating)
+	} else {
+		@RecipeRatingUnavailable()
+	}
+}
+
+templ RecipeRatingWidget(id string, rating *gql.Rating, canRate bool, myRating *int) {
+	<div id={ "recipe-rating-" + id }>
+		@Rating(rating, canRate, nil, myRating)
+	</div>
+}
+
+templ RecipeRatingUnavailable() {
+	<div id="recipe-rating" role="status">
+		<p>Bewertung derzeit nicht verfügbar. <a href="/">Zurück zur Rezeptübersicht</a></p>
+	</div>
+}
+
+templ BrowseIdentityUnavailable() {
+	<header-component auth-unavailable></header-component>
+}
+
+templ RatingDeniedPage(status int) {
+	if status == 401 {
+		<p role="alert">Zum Bewerten ist eine Anmeldung erforderlich oder die Anmeldung ist abgelaufen.</p>
+		<div class="grid gap-2">
+			<a href="/oauth2/start?rd=%2F">Anmelden</a>
+			<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
+			<a href="/">Zurück zur Übersicht</a>
+		</div>
+	} else {
+		<p role="alert">Dein Konto darf keine Bewertungen abgeben.</p>
+		<a href="/">Zurück zur Übersicht</a>
+	}
+}

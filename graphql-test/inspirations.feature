@@ -3,6 +3,7 @@ Feature: inspirations
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post
     * status 200
@@ -22,11 +23,13 @@ Feature: inspirations
     * def canonicalUrl = fixtureApi + '/canonical'
     * def faviconUrl = fixtureApi + '/favicon.ico'
     * configure retry = { count: 30, interval: 1000 }
+    * configure headers = {}
     * url pageUrl
     * retry until responseStatus == 200
     * method get
     * status 200
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'test', inspirations: ['#(pageUrl)'] } } }
     * method post
     * status 200

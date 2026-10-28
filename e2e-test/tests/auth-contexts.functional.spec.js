@@ -18,6 +18,8 @@ async function listen(handler) {
 
 test("auth contexts isolate identities and keep bearer tokens on the app origin", async ({
   authContexts,
+  viewport,
+  colorScheme,
 }) => {
   const externalRequests = [];
   const external = await listen((request, response) => {
@@ -94,6 +96,12 @@ test("auth contexts isolate identities and keep bearer tokens on the app origin"
     const ownerPage = await owner.browserContext.newPage();
     await ownerPage.goto(`${app.origin}/capture`);
     expect(appRequests.at(-1).identity).toBe("owner");
+    expect(ownerPage.viewportSize()).toEqual(viewport);
+    expect(
+      await ownerPage.evaluate(
+        () => matchMedia("(prefers-color-scheme: dark)").matches,
+      ),
+    ).toBe(colorScheme === "dark");
   } finally {
     await Promise.all([app.close(), external.close()]);
   }

@@ -3,8 +3,8 @@ module Editor.View exposing (view)
 import Crop exposing (Crop)
 import Editor.Types exposing (Model, Msg(..), Phase(..), Session, dirty)
 import File exposing (File)
-import Html exposing (Html, button, div, h1, img, input, label, p, span, text)
-import Html.Attributes exposing (accept, alt, attribute, class, disabled, for, id, src, style, type_)
+import Html exposing (Html, a, button, div, h1, img, input, label, p, span, text)
+import Html.Attributes exposing (accept, alt, attribute, class, disabled, for, href, id, src, style, type_)
 import Html.Events exposing (on, onClick)
 import Json.Decode as D
 import RemoteData
@@ -12,6 +12,43 @@ import RemoteData
 
 view : Model -> Html Msg
 view model =
+    case model.capabilities of
+        RemoteData.Success capabilities ->
+            if capabilities.canManageImages then
+                editorView model
+
+            else if capabilities.role == "anonymous" then
+                accessPage model "Anmeldung erforderlich" "Zum Verwalten von Bildern ist eine Anmeldung erforderlich." True
+
+            else
+                accessPage model "Keine Berechtigung" "Dein Konto darf Rezeptbilder nicht verwalten." False
+
+        RemoteData.Failure _ ->
+            accessPage model "Zugriff nicht verfügbar" "Die Anmeldung konnte nicht geprüft werden." True
+
+        _ ->
+            accessPage model "Zugriff wird geprüft" "Bitte warten …" False
+
+
+accessPage : Model -> String -> String -> Bool -> Html Msg
+accessPage model title message signIn =
+    Html.main_ [ class "image-editor" ]
+        [ h1 [] [ text title ]
+        , p [ attribute "role" "alert", class "feedback error" ] [ text message ]
+        , div [ class "grid gap-2" ]
+            [ if signIn then
+                a [ href "/oauth2/start?rd=%2F" ] [ text "Mit Google anmelden" ]
+
+              else
+                text ""
+            , a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ]
+            , a [ href "/" ] [ text "Zurück zur Übersicht" ]
+            ]
+        ]
+
+
+editorView : Model -> Html Msg
+editorView model =
     let
         title : String
         title =
@@ -38,7 +75,7 @@ view model =
         [ h1 [] [ text title ]
         , case model.error of
             Just error ->
-                p [ attribute "role" "alert", class "feedback error" ] [ text error ]
+                errorMessage model error
 
             Nothing ->
                 text ""
@@ -90,6 +127,28 @@ view model =
             , button [ type_ "button", class "secondary", disabled busy, attribute "aria-disabled" (boolString busy), onClick Back ] [ text "Zurück zum Rezept" ]
             ]
         ]
+
+
+errorMessage : Model -> String -> Html Msg
+errorMessage model error =
+    case error of
+        "authentication-required" ->
+            div [ attribute "role" "alert", class "feedback error" ]
+                [ p [] [ text "Anmeldung erforderlich oder abgelaufen." ]
+                , div [ class "grid gap-2" ]
+                    [ a [ href "/oauth2/start?rd=%2F" ] [ text "Anmelden" ]
+                    , a [ href "/oauth2/sign_out?rd=%2F" ] [ text "Abmelden und zurück zur Übersicht" ]
+                    ]
+                ]
+
+        "forbidden" ->
+            div [ attribute "role" "alert", class "feedback error" ]
+                [ p [] [ text "Keine Berechtigung zum Verwalten dieses Bildes." ]
+                , a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ]
+                ]
+
+        _ ->
+            p [ attribute "role" "alert", class "feedback error" ] [ text error ]
 
 
 boolString : Bool -> String

@@ -8,7 +8,7 @@ import "strconv"
 type BrowseState struct {
 	Query, Sort, Kind, Message  string
 	Page, PerPage, Found        int
-	EditorOnline, RatingsOnline bool
+	RatingsOnline               bool
 	Recipes                     []gql.RecipeStub
 	NextURL                     string
 	SeenIDs                     []string
@@ -77,7 +77,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 			}
 			if ratingsOnline && item.Rating != nil {
 				{{ slot := "rating" }}
-				@Rating(item.Rating, false, &slot)
+				@Rating(item.Rating, false, &slot, nil)
 			}
 		</recipe-tile-component>
 	</a>
@@ -106,6 +106,7 @@ templ Browse(state BrowseState) {
 			</select>
 		</form>
 		@BrowseResults(state, true)
+		<div hx-get="/controls" hx-trigger="load" hx-swap="outerHTML"></div>
 	</div>
 }
 
@@ -133,11 +134,6 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 				}
 				@browsePagination(state)
 			</div>
-			if state.EditorOnline {
-				<a href="/edit/new" data-add-recipe class="contents" aria-label="Neues Rezept hinzufügen">
-					<article class="flex items-center justify-center" style="font-size: 3rem; text-decoration: none;">+</article>
-				</a>
-			}
 		</div>
 	</section>
 }

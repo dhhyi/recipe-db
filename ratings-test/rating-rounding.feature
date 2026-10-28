@@ -14,28 +14,28 @@ Feature: Rounding Ratings
 
     * path 'ratings/1'
     * form field rating = 4
-    * form field login = 'user1'
+    * form field userId = 'token:v1:user1'
     * method put
     * status 200
     * match response.rating == 4
 
     * path 'ratings/1'
     * form field rating = 3
-    * form field login = 'user2'
+    * form field userId = 'token:v1:user2'
     * method put
     * status 200
     * match response.rating == 3.5
 
     * path 'ratings/1'
     * form field rating = 3
-    * form field login = 'user3'
+    * form field userId = 'token:v1:user3'
     * method put
     * status 200
     * match response.rating == 3.5
 
     * path 'ratings/1'
     * form field rating = 1
-    * form field login = 'user4'
+    * form field userId = 'token:v1:user4'
     * method put
     * status 200
     * match response.rating == 3

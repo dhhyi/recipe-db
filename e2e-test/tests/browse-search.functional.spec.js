@@ -1,5 +1,23 @@
-import { test, expect, graphql, waitForRecipeIndexed } from "./fixtures.js";
+import {
+  test as base,
+  expect,
+  graphql,
+  waitForRecipeIndexed,
+} from "./fixtures.js";
 import { allowDesignAssets } from "./browse-error.helpers.js";
+
+const test = base.extend({
+  context: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.browserContext);
+  },
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    await use(page);
+    await page.close();
+  },
+});
+
+const appOrigin = new URL(process.env.BASE_URL || "http://traefik").origin;
 
 function resultsFragment({
   page = 1,
@@ -40,18 +58,21 @@ function resultsFragment({
   return `<section id="browse-results">
     ${metadata}
     <div data-recipe-list>${cards}${pagination}</div>
-    <a href="/edit/new" data-add-recipe aria-label="Neues Rezept hinzufügen">+</a>
   </section>`;
 }
 
 // Keep the real server-rendered form and HTMX attributes in mocked boundary
 // responses. Only hit data is synthetic; request/swap/history behavior is real HTMX.
-async function fulfillBrowse(route, options = {}) {
-  const response = await route.fetch(
-    options.kind === "fallback"
-      ? { headers: { ...route.request().headers(), "hx-request": "false" } }
-      : {},
-  );
+async function fulfillBrowse(route, options = {}, authorizationHeader) {
+  const headers = { ...route.request().headers() };
+  if (
+    new URL(route.request().url()).origin === appOrigin &&
+    authorizationHeader
+  ) {
+    headers.authorization = authorizationHeader;
+  }
+  if (options.kind === "fallback") headers["hx-request"] = "false";
+  const response = await route.fetch({ headers });
   const url = new URL(route.request().url());
   const query = url.searchParams.get("q") || "";
   const sort = url.searchParams.get("sort") || "";
@@ -247,9 +268,7 @@ test("search retains explicit sorting, focus and composition state", async ({
   await page.reload();
   await expect(sort).toHaveValue("rating");
   await expect(search).toHaveValue("");
-  await expect(
-    page.getByRole("link", { name: "Neues Rezept hinzufügen" }),
-  ).toHaveCount(1);
+  await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
 });
 
 test("automatic sorting, titles and headings follow the current query", async ({
@@ -421,10 +440,6 @@ test("search controls fit the content area without horizontal overflow", async (
             getComputedStyle(grid).gridTemplateColumns.split(/\s+/).length,
         ),
     ).toBe(page.viewportSize().width >= 1280 ? 4 : 3);
-    await expect(page.locator("[data-add-recipe]")).toHaveCSS(
-      "display",
-      "contents",
-    );
   }
 });
 
@@ -465,6 +480,7 @@ test("ordinary GET search works without JavaScript", async ({
 
 test("sentinel and keyboard loading serialize requests, deduplicate and stop at the end", async ({
   page,
+  authContexts,
 }) => {
   await manualSentinel(page);
   const requested = [];
@@ -481,7 +497,11 @@ test("sentinel and keyboard loading serialize requests, deduplicate and stop at 
       { length: Math.min(pageNumber * 24, 73) },
       (_, index) => `batch-${index}`,
     ).filter((_, index) => index !== 24);
-    await fulfillBrowse(route, { page: pageNumber, found: 73, ids });
+    await fulfillBrowse(
+      route,
+      { page: pageNumber, found: 73, ids },
+      authContexts.authorizationHeader("owner"),
+    );
   });
   await page.goto("/");
   await page.getByRole("searchbox").fill("boundary");
@@ -526,6 +546,7 @@ test("sentinel and keyboard loading serialize requests, deduplicate and stop at 
 
 test("an empty hydrated page still advances using found metadata", async ({
   page,
+  authContexts,
 }) => {
   await manualSentinel(page);
   const requested = [];
@@ -534,11 +555,15 @@ test("an empty hydrated page still advances using found metadata", async ({
       new URL(route.request().url()).searchParams.get("page") || 1,
     );
     requested.push(pageNumber);
-    await fulfillBrowse(route, {
-      page: pageNumber,
-      found: 49,
-      ids: pageNumber === 3 ? ["page-1", "page-3"] : ["page-1"],
-    });
+    await fulfillBrowse(
+      route,
+      {
+        page: pageNumber,
+        found: 49,
+        ids: pageNumber === 3 ? ["page-1", "page-3"] : ["page-1"],
+      },
+      authContexts.authorizationHeader("owner"),
+    );
   });
   await page.goto("/");
   await page.getByRole("searchbox").fill("boundary");
@@ -555,7 +580,10 @@ test("an empty hydrated page still advances using found metadata", async ({
 });
 
 for (const kind of ["error", "fallback"]) {
-  test(`later-page ${kind} never appends unrelated cards`, async ({ page }) => {
+  test(`later-page ${kind} never appends unrelated cards`, async ({
+    page,
+    authContexts,
+  }) => {
     await manualSentinel(page);
     const requested = [];
     await page.route(/\/\?[^#]*\bq=/, async (route) => {
@@ -574,17 +602,21 @@ for (const kind of ["error", "fallback"]) {
         });
         return;
       }
-      await fulfillBrowse(route, {
-        page: pageNumber,
-        found: 48,
-        ids:
-          pageNumber === 1
-            ? ["filtered"]
-            : kind === "fallback"
-              ? ["unfiltered"]
-              : [],
-        kind: pageNumber === 1 ? "search" : kind,
-      });
+      await fulfillBrowse(
+        route,
+        {
+          page: pageNumber,
+          found: 48,
+          ids:
+            pageNumber === 1
+              ? ["filtered"]
+              : kind === "fallback"
+                ? ["unfiltered"]
+                : [],
+          kind: pageNumber === 1 ? "search" : kind,
+        },
+        authContexts.authorizationHeader("owner"),
+      );
     });
     await page.goto("/");
     await page.getByRole("searchbox").fill("boundary");
@@ -622,6 +654,7 @@ for (const kind of ["error", "fallback"]) {
 
 test("a superseded first-page response cannot replace a newer query", async ({
   page,
+  authContexts,
 }) => {
   await manualSentinel(page);
   let release;
@@ -642,7 +675,11 @@ test("a superseded first-page response cannot replace a newer query", async ({
       oldStarted();
       await pending;
     }
-    await fulfillBrowse(route, { query, ids: [query] }).catch(() => {});
+    await fulfillBrowse(
+      route,
+      { query, ids: [query] },
+      authContexts.authorizationHeader("owner"),
+    ).catch(() => {});
     if (query === "old") oldFinished();
   });
   await page.goto("/");
@@ -664,6 +701,7 @@ for (const cacheSize of [10, 0]) {
   test(`Back reconstructs loaded depth and controls with history cache size ${cacheSize}`, async ({
     page,
     demoRecipe,
+    authContexts,
   }) => {
     await manualSentinel(page);
     await page.route(/\/\?[^#]*\bq=/, async (route) => {
@@ -675,7 +713,11 @@ for (const cacheSize of [10, 0]) {
         (_, index) => `history-${index}`,
       );
       ids[0] = demoRecipe.id;
-      await fulfillBrowse(route, { page: number, found: 72, ids });
+      await fulfillBrowse(
+        route,
+        { page: number, found: 72, ids },
+        authContexts.authorizationHeader("owner"),
+      );
     });
     await page.goto("/");
     const search = page.getByRole("searchbox");
@@ -716,6 +758,7 @@ for (const cacheSize of [10, 0]) {
 for (const action of ["sort", "query"]) {
   test(`a ${action} change cancels an older append generation`, async ({
     page,
+    authContexts,
   }) => {
     await manualSentinel(page);
     let release;
@@ -742,9 +785,11 @@ for (const action of ["sort", "query"]) {
         url.searchParams.get("q") === "new"
           ? "new-state"
           : `old-${number}`;
-      await fulfillBrowse(route, { page: number, found: 48, ids: [id] }).catch(
-        () => {},
-      );
+      await fulfillBrowse(
+        route,
+        { page: number, found: 48, ids: [id] },
+        authContexts.authorizationHeader("owner"),
+      ).catch(() => {});
       if (number === 2) appendFinished();
     });
     await page.goto("/");
@@ -772,6 +817,7 @@ for (const action of ["sort", "query"]) {
 
 test("returning to the same query cannot revive its older response", async ({
   page,
+  authContexts,
 }) => {
   await manualSentinel(page);
   let release;
@@ -794,11 +840,15 @@ test("returning to the same query cannot revive its older response", async ({
       oldStarted();
       await pending;
     }
-    await fulfillBrowse(route, {
-      query,
-      found: stale ? 99 : 1,
-      ids: [stale ? "stale" : query],
-    }).catch(() => {});
+    await fulfillBrowse(
+      route,
+      {
+        query,
+        found: stale ? 99 : 1,
+        ids: [stale ? "stale" : query],
+      },
+      authContexts.authorizationHeader("owner"),
+    ).catch(() => {});
     if (stale) oldFinished();
   });
   await page.goto("/");
@@ -820,6 +870,7 @@ test("returning to the same query cannot revive its older response", async ({
 
 test("typing debounces by 300ms while Enter and sorting submit immediately", async ({
   page,
+  authContexts,
 }) => {
   await manualSentinel(page);
   await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
@@ -830,9 +881,11 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
       url.searchParams.get("q"),
       url.searchParams.get("sort") || null,
     ]);
-    await fulfillBrowse(route, { query: url.searchParams.get("q") }).catch(
-      () => {},
-    );
+    await fulfillBrowse(
+      route,
+      { query: url.searchParams.get("q") },
+      authContexts.authorizationHeader("owner"),
+    ).catch(() => {});
   });
   await page.goto("/");
   await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
@@ -861,15 +914,20 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
 
 test("rendered online failure removes previous-query cards without fallback", async ({
   page,
+  authContexts,
 }) => {
   await manualSentinel(page);
   await page.route(/\/\?[^#]*\bq=/, async (route) => {
     const query = new URL(route.request().url()).searchParams.get("q");
-    await fulfillBrowse(route, {
-      query,
-      kind: query === "failure" ? "error" : "search",
-      ids: query === "failure" ? [] : ["previous-query"],
-    });
+    await fulfillBrowse(
+      route,
+      {
+        query,
+        kind: query === "failure" ? "error" : "search",
+        ids: query === "failure" ? [] : ["previous-query"],
+      },
+      authContexts.authorizationHeader("owner"),
+    );
   });
   await page.goto("/");
   const input = page.getByRole("searchbox");
@@ -903,12 +961,18 @@ for (const failure of ["network", "502"]) {
 
   test(`first-page ${failure} failure clears stale cards and reports failure`, async ({
     page,
+    authContexts,
   }) => {
     await manualSentinel(page);
     await page.route(/\/\?[^#]*\bq=/, async (route) => {
       if (new URL(route.request().url()).searchParams.get("q") === "failure")
         await fail(route);
-      else await fulfillBrowse(route, { ids: ["previous-query"] });
+      else
+        await fulfillBrowse(
+          route,
+          { ids: ["previous-query"] },
+          authContexts.authorizationHeader("owner"),
+        );
     });
     await page.goto("/");
     const input = page.getByRole("searchbox");
@@ -934,6 +998,7 @@ for (const failure of ["network", "502"]) {
 
   test(`append ${failure} failure retains cards/title, stops auto-loading and permits retry`, async ({
     page,
+    authContexts,
   }) => {
     await manualSentinel(page);
     const requested = [];
@@ -947,11 +1012,15 @@ for (const failure of ["network", "502"]) {
         failed = true;
         await fail(route);
       } else
-        await fulfillBrowse(route, {
-          page: number,
-          found: 48,
-          ids: number === 1 ? ["filtered"] : ["filtered", "next"],
-        });
+        await fulfillBrowse(
+          route,
+          {
+            page: number,
+            found: 48,
+            ids: number === 1 ? ["filtered"] : ["filtered", "next"],
+          },
+          authContexts.authorizationHeader("owner"),
+        );
     });
     await page.goto("/");
     await page.getByRole("searchbox").fill("boundary");
@@ -1020,21 +1089,19 @@ test.describe("pagination with and without JavaScript", () => {
   });
 
   test("ordinary links preserve the query and advance to the next page", async ({
-    browser,
+    authContexts,
     baseURL,
     searchRecipes,
   }) => {
-    const context = await browser.newContext({
+    const identity = await authContexts.owner(baseURL, {
       javaScriptEnabled: false,
-      baseURL,
     });
     try {
-      const page = await context.newPage();
+      const page = await identity.browserContext.newPage();
       await page.goto(
         `/?q=${encodeURIComponent("E2E Suchrezept")}&sort=newest`,
       );
       await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
-      await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
       await page.getByRole("link", { name: "Mehr laden" }).click();
       await expect(page).toHaveURL(/page=2.*sort=newest/);
       await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
@@ -1045,9 +1112,8 @@ test.describe("pagination with and without JavaScript", () => {
       await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(
         0,
       );
-      await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
     } finally {
-      await context.close();
+      await identity.close();
     }
   });
 });
@@ -1056,17 +1122,22 @@ test("a failed history cache miss renders a truthful error page", async ({
   page,
   demoRecipe,
   request,
+  authContexts,
 }) => {
   await waitForRecipeIndexed(request, demoRecipe.id);
   await allowDesignAssets(page);
   await manualSentinel(page);
   let restoring = false;
   await page.route(/\/\?[^#]*\bq=/, async (route) => {
-    await fulfillBrowse(route, {
-      kind: restoring ? "error" : "search",
-      found: restoring ? 0 : 2,
-      ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
-    });
+    await fulfillBrowse(
+      route,
+      {
+        kind: restoring ? "error" : "search",
+        found: restoring ? 0 : 2,
+        ids: restoring ? [] : [demoRecipe.id, "stale-snapshot"],
+      },
+      authContexts.authorizationHeader("owner"),
+    );
   });
   await page.goto("/?q=boundary");
   await expect(page.locator("[data-recipe-id]")).toHaveCount(2);

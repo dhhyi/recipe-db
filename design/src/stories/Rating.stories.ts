@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/web-components-vite";
-import { html } from "lit";
-import { fn } from "storybook/test";
+import { html, nothing } from "lit";
+import { expect, fireEvent, fn, waitFor } from "storybook/test";
 
 import "../components/rating.ts";
 import "../design.css";
@@ -14,23 +14,64 @@ export default meta;
 type Story = StoryObj;
 
 export const Feedback: Story = {
+  play: async ({ canvasElement, args }) => {
+    await waitFor(() => {
+      expect(
+        canvasElement.querySelectorAll("rating-component svg"),
+      ).toHaveLength(5);
+    });
+    const stars = canvasElement.querySelector("rating-component > span")!;
+    const expectedOverlays = args.myRating === undefined ? 0 : 5;
+    await waitFor(() => {
+      expect(stars.querySelectorAll(".own-rating")).toHaveLength(
+        expectedOverlays,
+      );
+    });
+    fireEvent.mouseEnter(stars);
+    await waitFor(() => {
+      expect(stars.querySelectorAll(".own-rating")).toHaveLength(0);
+    });
+    fireEvent.mouseLeave(stars);
+    await waitFor(() => {
+      expect(stars.querySelectorAll(".own-rating")).toHaveLength(
+        expectedOverlays,
+      );
+    });
+    args.onRated.mockClear();
+    if (args.myRating !== undefined) {
+      fireEvent.click(stars.querySelectorAll("svg")[args.myRating - 1]);
+      expect(args.onRated).not.toHaveBeenCalled();
+    }
+    const changedRating = args.myRating === 1 ? 2 : 1;
+    fireEvent.click(stars.querySelectorAll("svg")[changedRating - 1]);
+    expect(args.onRated).toHaveBeenCalledTimes(1);
+    expect(args.onRated).toHaveBeenCalledWith(changedRating);
+  },
   args: {
     rating: 3.5,
     count: 10,
+    myRating: 4,
     onRated: fn(),
   },
   argTypes: {
     rating: { control: "number" },
     count: { control: "number" },
+    myRating: { control: "number" },
   },
-  render: ({ rating, count, onRated }) => html`
+  render: ({ rating, count, myRating, onRated }) => html`
     <rating-component
       hx-post="/rate"
       rating=${rating}
       count=${count}
+      my-rating=${myRating ?? nothing}
       @rated=${(event: CustomEvent<number>) => onRated(event.detail)}
     ></rating-component>
   `,
+};
+
+export const NoOwnVote: Story = {
+  ...Feedback,
+  args: { ...Feedback.args, myRating: undefined },
 };
 
 export const Static: Story = {

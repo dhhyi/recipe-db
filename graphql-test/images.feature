@@ -4,6 +4,7 @@ Feature: images
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * def webApi = java.lang.System.getenv('WEB_API') || graphqlApi
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post
     * status 200
@@ -58,6 +59,7 @@ Feature: images
     * status 200
     * match response.data.recipe.image == uploaded
 
+    * configure headers = {}
     * url java.net.URI.create(webApi).resolve(uploaded.url).toString()
     * method get
     * status 200

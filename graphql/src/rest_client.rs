@@ -208,14 +208,13 @@ impl RestClient {
     pub async fn put_form<T: DeserializeOwned>(
         &self,
         path: &str,
-        form_body: String,
+        fields: &[(&str, &str)],
     ) -> Result<T, RestError> {
         let url = self.url(path);
         let response = self
             .client
             .put(url)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(form_body)
+            .form(fields)
             .send()
             .await
             .map_err(|err| RestError {

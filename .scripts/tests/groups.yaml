@@ -46,6 +46,7 @@ tasks:
   tests:
     - .scripts/tests/mise-tasks.bats
     - .scripts/tests/precommit.bats
+    - .scripts/tests/seed-demodata.bats
   inputs:
     - ":(glob).scripts/*.sh"
     - .scripts/lib/project-metadata.sh

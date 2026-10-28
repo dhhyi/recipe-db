@@ -34,6 +34,7 @@ type alias Drag =
 type alias Model =
     { recipeId : String
     , recipe : RecipeDB.RecipeModel
+    , capabilities : RecipeDB.CapabilitiesModel
     , latestUrl : Maybe String
     , phase : Phase
     , session : Maybe Session
@@ -48,6 +49,7 @@ type alias Model =
 
 type Msg
     = GotRecipe RecipeDB.RecipeModel
+    | GotCapabilities RecipeDB.CapabilitiesModel
     | GotFile File
     | Bridge D.Value
     | PreviewReady Int
@@ -63,6 +65,7 @@ init : String -> Model
 init recipeId =
     { recipeId = recipeId
     , recipe = RemoteData.Loading
+    , capabilities = RemoteData.Loading
     , latestUrl = Nothing
     , phase = Viewing
     , session = Nothing

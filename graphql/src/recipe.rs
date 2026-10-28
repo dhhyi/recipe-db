@@ -139,6 +139,9 @@ impl Recipe {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<crate::ratings::Rating>> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadAggregateRatings)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         match ctx.data::<RatingsApi>()?.get_rating(self.id.as_str()).await {
             Ok(rating) => Ok(Some(rating)),
             Err(err) => {
@@ -152,6 +155,9 @@ impl Recipe {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<crate::images::ImageMetadata>> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         ctx.data::<ImagesApi>()?
             .get_image_metadata(self.id.as_str())
             .await
@@ -163,6 +169,9 @@ impl Recipe {
         &self,
         ctx: &Context<'_>,
     ) -> async_graphql::Result<Option<Vec<crate::link::Link>>> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ReadPublic)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
         match ctx
             .data::<InspirationsApi>()?
             .get_inspirations(self.id.as_str())

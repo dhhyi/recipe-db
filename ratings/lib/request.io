@@ -12,6 +12,16 @@ Request setQuery := method(query,
     self atPut("query", CGI parseString(query))
 )
 
+Request setTarget := method(target,
+    separator := target findSeq("?")
+    if (separator,
+        setPath(target slice(0, separator))
+        setQuery(target slice(separator + 1)),
+        setPath(target)
+        setQuery("")
+    )
+)
+
 Request setPayload := method(payload,
     self atPut("payload", CGI parseString(payload))
 )
@@ -29,7 +39,7 @@ Request send := method(code, message, data, contentType,
     )
 
     ct := if (contentType == nil, "application/json", contentType)
-    return "HTTP/1.1 " .. code .. " " .. message .. "\r\nConnection: close\r\n" .. if (data == nil, "\r\n", "Content-type: " .. ct .. "\r\n\r\n" .. data)
+    return "HTTP/1.1 " .. code .. " " .. message .. "\r\nConnection: close\r\n" .. if (data == nil, "\r\n", "Content-type: " .. ct .. "\r\nContent-Length: " .. data size .. "\r\n\r\n" .. data)
 )
 
 Request sendData := method(data,

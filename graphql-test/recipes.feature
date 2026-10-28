@@ -3,6 +3,7 @@ Feature: recipes
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
     * url graphqlApi
+    * configure headers = { Authorization: '#(ownerAuthorization)' }
     * request { query: '#(read("graphql/delete-recipes-for-testing.graphql"))' }
     * method post
     * status 200

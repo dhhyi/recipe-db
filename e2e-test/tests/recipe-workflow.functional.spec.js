@@ -1,4 +1,4 @@
-import { test, expect, waitForRecipeIndexed } from "./fixtures.js";
+import { test as base, expect, waitForRecipeIndexed } from "./fixtures.js";
 
 function deferred() {
   let resolve;
@@ -43,6 +43,17 @@ function requestIsOperation(request, expectedName, queryNeedle) {
     (queryNeedle && query.includes(queryNeedle))
   );
 }
+
+const test = base.extend({
+  context: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.browserContext);
+  },
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    await use(page);
+    await page.close();
+  },
+});
 
 const nameField = (page) =>
   page.getByRole("textbox", { name: "Name", exact: true });
@@ -255,7 +266,7 @@ test("HTTP 200 GraphQL error shows retry and clears after successful retry", asy
         return;
       }
     }
-    await route.continue();
+    await route.fallback();
   });
 
   await page.goto(`/edit/${demoRecipe.id}`);
@@ -300,7 +311,7 @@ test("field validation retry path marks name invalid and succeeds after correcti
         return;
       }
     }
-    await route.continue();
+    await route.fallback();
   });
 
   await page.goto(`/edit/${demoRecipe.id}`);
@@ -336,7 +347,7 @@ test("pending save freezes form controls, blocks duplicate submits and navigatio
         await release.promise;
       }
     }
-    await route.continue();
+    await route.fallback();
   });
 
   try {
@@ -527,7 +538,7 @@ test("beforeunload guard is active while save is pending", async ({
       started.resolve();
       await release.promise;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   try {
@@ -628,7 +639,7 @@ test("create transitions to /edit/:id and second save updates without duplicate 
       createCount += 1;
     if (requestIsOperation(route.request(), "UpdateRecipe", "updateRecipe"))
       updateCount += 1;
-    await route.continue();
+    await route.fallback();
   });
 
   await page.goto("/edit/new");
@@ -666,7 +677,7 @@ test("loading state renders no saveable form and supports safe back", async ({
     if (requestIsOperation(route.request(), "RecipeById", "recipe(")) {
       await release.promise;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   try {
@@ -698,7 +709,7 @@ test("not-found state renders no saveable form and supports safe back", async ({
       });
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   await page.goto(`/edit/${demoRecipe.id}`);
@@ -726,7 +737,7 @@ test("error state renders no saveable form and supports safe back", async ({
       });
       return;
     }
-    await route.continue();
+    await route.fallback();
   });
 
   await page.goto(`/edit/${demoRecipe.id}`);

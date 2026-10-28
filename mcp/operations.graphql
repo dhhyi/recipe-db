@@ -22,8 +22,8 @@ mutation SetImage($recipeId: ID!, $file: Upload!) {
   }
 }
 
-mutation Rate($id: ID!, $rating: Int!, $login: String!) {
-  rate(id: $id, rating: $rating, login: $login) {
+mutation Rate($id: ID!, $rating: Int!) {
+  rate(id: $id, rating: $rating) {
     average
     count
   }

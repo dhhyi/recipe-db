@@ -30,6 +30,7 @@ fn uploaded_metadata() -> serde_json::Value {
 
 #[tokio::test]
 async fn image_metadata_passthrough_and_upstream_errors() {
+    let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
     let app = Router::new()
         .route(
             "/recipes/{id}",
@@ -69,6 +70,20 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                     ),
                 }
             }),
+        )
+        .route(
+            "/ratings/{id}",
+            get(
+                |Path(_id): Path<String>,
+                 Query(query): Query<HashMap<String, String>>| async move {
+                    if let Some(user_id) = query.get("userId") {
+                        assert_eq!(user_id, "credential-free:v1");
+                        Json(json!({"rating": null}))
+                    } else {
+                        Json(json!({"rating": 4.0, "count": 2}))
+                    }
+                },
+            ),
         )
         .route("/images/{id}", post(|Path(id): Path<String>, Query(query): Query<HashMap<String, String>>, headers: HeaderMap, body: axum::body::Bytes| async move {
             assert_eq!(body.as_ref(), std::fs::read("testdata/image.svg").unwrap());
@@ -119,7 +134,10 @@ async fn image_metadata_passthrough_and_upstream_errors() {
         ("unrouted-image", true),
     ] {
         let result = schema
-            .execute(format!("{{ recipe(id: \"{id}\") {{ image {{ url }} }} }}"))
+            .execute(
+                Request::new(format!("{{ recipe(id: \"{id}\") {{ image {{ url }} }} }}"))
+                    .data(crate::test_context("owner")),
+            )
             .await;
         assert_eq!(!result.errors.is_empty(), expect_error, "{id}");
         if !expect_error && id == "absent" {
@@ -137,8 +155,45 @@ async fn image_metadata_passthrough_and_upstream_errors() {
             );
         }
     }
+    let response = schema
+        .execute(
+            Request::new("{ recipe(id: \"present\") { name rating { average count myRating } } }")
+                .data(crate::test_context("anonymous")),
+        )
+        .await;
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"recipe": {"name": "Test", "rating": {"average": 4.0, "count": 2, "myRating": null}}})
+    );
+    assert_eq!(
+        response.errors[0].path,
+        vec![
+            async_graphql::PathSegment::Field("recipe".into()),
+            async_graphql::PathSegment::Field("rating".into()),
+            async_graphql::PathSegment::Field("myRating".into())
+        ]
+    );
+    assert_eq!(
+        response.errors[0].extensions.as_ref().unwrap().get("code"),
+        Some(&async_graphql::value!("authentication-required"))
+    );
+
+    let response = schema
+        .execute(
+            Request::new(r#"{ rating(id: "present") { myRating } }"#)
+                .data(crate::test_context("member")),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{response:?}");
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"rating": {"myRating": null}})
+    );
     let result = schema
-        .execute("{ recipe(id: \"offline\") { id image { url } } }")
+        .execute(
+            Request::new("{ recipe(id: \"offline\") { id image { url } } }")
+                .data(crate::test_context("owner")),
+        )
         .await;
     let path = &result.errors[0].path;
     assert!(matches!(
@@ -154,7 +209,10 @@ async fn image_metadata_passthrough_and_upstream_errors() {
     );
     for (id, expect_error) in [("deleted", false), ("unrouted-recipe", true)] {
         let result = schema
-            .execute(format!("{{ recipe(id: \"{id}\") {{ id }} }}"))
+            .execute(
+                Request::new(format!("{{ recipe(id: \"{id}\") {{ id }} }}"))
+                    .data(crate::test_context("owner")),
+            )
             .await;
         assert_eq!(!result.errors.is_empty(), expect_error, "{id}");
         if !expect_error {
@@ -198,7 +256,9 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                 content: std::fs::File::open("testdata/image.svg").unwrap(),
             },
         );
-        let response = schema.execute(request).await;
+        let response = schema
+            .execute(request.data(crate::test_context("owner")))
+            .await;
         if ["present", "null-crop", "crop-present"].contains(&id) {
             successful_uploads += 1;
             assert!(response.errors.is_empty(), "{response:?}");
@@ -277,7 +337,9 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                 content: std::fs::File::open("testdata/image.svg").unwrap(),
             },
         );
-        let response = schema.execute(request).await;
+        let response = schema
+            .execute(request.data(crate::test_context("owner")))
+            .await;
         assert!(!response.errors.is_empty(), "{response:?}");
         let notifications = serde_json::to_value(publisher.status()).unwrap();
         assert_eq!(notifications["failed"], successful_uploads);

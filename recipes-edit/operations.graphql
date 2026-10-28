@@ -19,6 +19,13 @@ query ServiceOnline {
   inspirationsOnline: isServiceOnline(name: "inspirations")
 }
 
+query MyCapabilities {
+  myCapabilities {
+    role
+    canManageRecipes
+  }
+}
+
 mutation CreateRecipe($input: RecipeInput!) {
   createRecipe(value: $input) {
     id

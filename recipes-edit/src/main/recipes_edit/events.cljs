@@ -9,10 +9,12 @@
 (def create-mutation (operation "CreateRecipe"))
 (def update-mutation (operation "UpdateRecipe"))
 (def service-online-query (operation "ServiceOnline"))
+(def capabilities-query (operation "MyCapabilities"))
 
 (defn initial-db [route]
   {:route route
    :status (if (= :edit (:page route)) :loading :idle)
+   :authorization :loading
    :form (model/blank-form)
    :baseline (model/blank-form)
    :name-error? false
@@ -29,6 +31,17 @@
      (string? response) (js->clj (js/JSON.parse response))
      (map? response) response
      :else (js->clj response))))
+
+(defn- authorization-state [errors]
+  (let [extensions (:extensions (first errors))]
+    (case (:code extensions)
+      "authentication-required" :authentication-required
+      "invalid-credentials" :authentication-required
+      "forbidden" :forbidden
+      (case (:status extensions)
+        401 :authentication-required
+        403 :forbidden
+        nil))))
 
 (rf/reg-fx
  ::replace-url
@@ -47,17 +60,37 @@
  (fn [{:keys [db]} [_ route]]
    (let [page (:page route)]
      {:db (initialize-db db route)
-      :dispatch (case page
-                  :edit [::re-graph/query
-                         {:id :recipe
-                          :query recipe-query
-                          :variables {:id (:id route)}
-                          :callback [::recipe-loaded]}]
-                  :new [::re-graph/query
-                        {:id :service-online
-                         :query service-online-query
-                         :callback [::service-online-loaded]}]
-                  nil)})))
+      :dispatch-n (cond-> [[::re-graph/query
+                            {:id :my-capabilities
+                             :query capabilities-query
+                             :callback [::capabilities-loaded]}]]
+                    (= page :edit)
+                    (conj [::re-graph/query
+                           {:id :recipe
+                            :query recipe-query
+                            :variables {:id (:id route)}
+                            :callback [::recipe-loaded]}])
+                    (= page :new)
+                    (conj [::re-graph/query
+                           {:id :service-online
+                            :query service-online-query
+                            :callback [::service-online-loaded]}]))})))
+
+(rf/reg-event-db
+ ::capabilities-loaded
+ (fn [db [_ {:keys [response]}]]
+   (let [{:keys [data errors]} (normalize-response response)]
+     (if (seq errors)
+       (assoc db
+              :authorization (or (authorization-state errors) :error)
+              :authorization-message (model/error-message errors))
+       (let [capabilities (:myCapabilities data)]
+         (assoc db
+                :authorization (if (:canManageRecipes capabilities) :allowed
+                                   (if (= "anonymous" (:role capabilities))
+                                     :authentication-required
+                                     :forbidden))
+                :capabilities capabilities))))))
 
 (rf/reg-event-db
  ::recipe-loaded
@@ -145,7 +178,8 @@
  ::save
  (fn [{:keys [db]} _]
    (let [status (:status db)]
-     (if (or (= :saving status)
+     (if (or (not= :allowed (:authorization db))
+             (= :saving status)
              (= :loading status)
              (= :not-found status)
              (= :error status)
@@ -164,14 +198,18 @@
  (fn [{:keys [db]} [_ {:keys [response]}]]
    (let [{:keys [data errors]} (normalize-response response)]
      (cond
-       (some model/empty-name-error? errors)
-       {:db (assoc db :status :idle :name-error? true :save-failed? true :feedback nil)}
-
        (seq errors)
-       {:db (assoc db :status :idle
-                   :name-error? false
-                   :save-failed? true
-                   :feedback {:kind :error :message (model/error-message errors)})}
+       (if-let [authorization (authorization-state errors)]
+         {:db (assoc db
+                     :status :idle
+                     :authorization authorization
+                     :authorization-message (model/error-message errors))}
+         (if (some model/empty-name-error? errors)
+           {:db (assoc db :status :idle :name-error? true :save-failed? true :feedback nil)}
+           {:db (assoc db :status :idle
+                       :name-error? false
+                       :save-failed? true
+                       :feedback {:kind :error :message (model/error-message errors)})}))
 
        (= :new (get-in db [:route :page]))
        (if-let [id (get-in data [:createRecipe :id])]

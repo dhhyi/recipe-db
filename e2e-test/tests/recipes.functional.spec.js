@@ -1,12 +1,32 @@
 import {
-  test,
+  test as base,
   expect,
+  graphql,
+  uploadImage,
   waitForRecipeIndexed,
   waitForRecipePageHeading,
   waitForRecipePageText,
 } from "./fixtures.js";
 import { fileURLToPath } from "node:url";
-import { crop, drag, handle, saveButton } from "./image-editor.helpers.js";
+import {
+  crop,
+  drag,
+  fulfillImageUpload,
+  observeUploads,
+  handle,
+  saveButton,
+} from "./image-editor.helpers.js";
+
+const test = base.extend({
+  context: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.browserContext);
+  },
+  page: async ({ context }, use) => {
+    const page = await context.newPage();
+    await use(page);
+    await page.close();
+  },
+});
 
 test("browse seeded recipes, open a recipe and return home", async ({
   page,
@@ -119,12 +139,123 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
   }
 });
 
+test("members rate the same recipe independently and replace their own vote", async ({
+  authContexts,
+  baseURL,
+  ownerIdentity,
+}) => {
+  const memberOne = await authContexts.memberOne();
+  const memberTwo = await authContexts.memberTwo();
+  const anonymous = await authContexts.anonymous();
+  const { createRecipe: recipe } = await graphql(
+    ownerIdentity.api,
+    "mutation($value: RecipeInput!) { createRecipe(value: $value) { id name } }",
+    { value: { name: "E2E independent ratings" } },
+    "Create recipe for independent ratings",
+  );
+  const readRating = async (identity, includeVote = true) =>
+    graphql(
+      identity.api,
+      `query($id: ID!) { rating(id: $id) { average count${includeVote ? " myRating" : ""} } }`,
+      { id: recipe.id },
+      "Read recipe ratings",
+    );
+  const rateInBrowser = async (
+    identity,
+    rating,
+    expectedCount,
+    expectedAverage,
+  ) => {
+    const page = await identity.browserContext.newPage();
+    try {
+      const fragmentResponse = page.waitForResponse(
+        (response) =>
+          response.url().endsWith(`/recipe/${recipe.id}/rating`) &&
+          response.request().method() === "GET",
+      );
+      await page.goto(`${baseURL}/recipe/${recipe.id}`);
+      const response = await fragmentResponse;
+      expect(response.headers()["cache-control"]).toBe("no-store");
+      const widget = page.locator(
+        `#recipe-rating-${recipe.id} rating-component`,
+      );
+      await expect(widget).toBeVisible();
+      await expect(page.locator("main rating-component")).toHaveCount(1);
+      await expect(widget).toHaveAttribute(
+        "hx-post",
+        `/recipe/${recipe.id}/rate`,
+      );
+      await widget
+        .locator("svg")
+        .nth(rating - 1)
+        .click();
+      await expect(widget).toHaveAttribute("my-rating", String(rating));
+      await expect(widget).toHaveAttribute("rating", String(expectedAverage));
+      await expect(page.locator("main rating-component")).toHaveCount(1);
+      await expect(widget).toContainText(`(${expectedCount})`);
+    } finally {
+      await page.close();
+    }
+  };
+
+  const shell = await anonymous.api.get(`/recipe/${recipe.id}`);
+  const shellHtml = await shell.text();
+  expect(shell.ok()).toBe(true);
+  expect(shellHtml).toContain("AggregateRating");
+  expect(shellHtml).not.toContain("Deine Bewertung");
+  expect(shellHtml).not.toContain("Rezept bearbeiten");
+
+  const memberOneBefore = await readRating(memberOne);
+  expect(memberOneBefore.rating).toEqual({
+    average: 0,
+    count: 0,
+    myRating: null,
+  });
+  const memberTwoBefore = await readRating(memberTwo);
+  expect(memberTwoBefore.rating.myRating).toBeNull();
+
+  await rateInBrowser(memberOne, 5, 1, 5);
+  expect((await readRating(memberOne)).rating).toEqual({
+    average: 5,
+    count: 1,
+    myRating: 5,
+  });
+  expect((await readRating(memberTwo)).rating).toEqual({
+    average: 5,
+    count: 1,
+    myRating: null,
+  });
+
+  await rateInBrowser(memberOne, 3, 1, 3);
+  expect((await readRating(memberOne)).rating).toEqual({
+    average: 3,
+    count: 1,
+    myRating: 3,
+  });
+
+  await rateInBrowser(memberTwo, 5, 2, 4);
+  expect((await readRating(memberOne)).rating).toEqual({
+    average: 4,
+    count: 2,
+    myRating: 3,
+  });
+  expect((await readRating(memberTwo)).rating).toEqual({
+    average: 4,
+    count: 2,
+    myRating: 5,
+  });
+  expect((await readRating(anonymous, false)).rating).toEqual({
+    average: 4,
+    count: 2,
+  });
+});
+
 test("create a recipe in the editor and find it in the overview", async ({
   page,
   request,
 }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Neues Rezept hinzufügen" }).click();
+  await page.locator("[data-add-recipe]").click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Neues Rezept",
   );
@@ -274,10 +405,15 @@ async function waitForPublishedImage(page, recipeId, url, thumbUrl) {
 test.describe("first image", () => {
   test("explicitly saves A B A B sources and shows fresh detail and overview pixels", async ({
     page,
+    request,
     recipeWithoutImage,
   }) => {
     const demoRecipe = recipeWithoutImage;
-    test.setTimeout(120_000);
+    test.setTimeout(45_000);
+    await observeUploads(page);
+    await page.route("**/graphql", (route) =>
+      fulfillImageUpload(route, page, request, demoRecipe),
+    );
     await page.goto(`/images-edit/${demoRecipe.id}`);
     await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
@@ -378,9 +514,10 @@ test.describe("first image", () => {
 
 test("replace a recipe image in the image editor and view the uploaded image", async ({
   page,
+  request,
   demoRecipe,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(30_000);
   await page.goto("/");
   await page
     .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
@@ -394,6 +531,19 @@ test("replace a recipe image in the image editor and view the uploaded image", a
     `Bild für ${demoRecipe.name} bearbeiten`,
   );
   const image = page.locator("img.recipe-image");
+  let uploadFilename;
+  await page.route("**/graphql", async (route) => {
+    if (isImageUpload(route.request())) {
+      const metadata = await uploadImage(request, demoRecipe, uploadFilename);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({ data: { setImage: metadata } }),
+      });
+    } else {
+      await route.fallback();
+    }
+  });
   const displayedImage = () =>
     image.evaluate((element) => {
       if (!element.complete || element.naturalWidth === 0) return null;
@@ -421,6 +571,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
   };
   page.on("request", recordQuery);
   const upload = async (filename) => {
+    uploadFilename = filename;
     const uploaded = page.waitForResponse((response) =>
       isImageUpload(response.request()),
     );
@@ -493,16 +644,33 @@ test("replace a recipe image in the image editor and view the uploaded image", a
 
 test("a late initial recipe response cannot overwrite a successful upload", async ({
   page,
+  request,
   demoRecipe,
+  authContexts,
 }) => {
   const snapshotReady = Promise.withResolvers();
   const releaseInitial = Promise.withResolvers();
+  let pendingUpload;
   await page.route("**/graphql", async (route) => {
     if (isImageUpload(route.request())) {
-      await route.continue();
+      const metadata = await pendingUpload();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({ data: { setImage: metadata } }),
+      });
       return;
     }
-    const response = await route.fetch();
+    if (!route.request().postData()?.includes("recipe(id:")) {
+      await route.fallback();
+      return;
+    }
+    const response = await route.fetch({
+      headers: {
+        ...route.request().headers(),
+        authorization: authContexts.authorizationHeader("owner"),
+      },
+    });
     const body = await response.text();
     snapshotReady.resolve();
     await releaseInitial.promise;
@@ -512,13 +680,18 @@ test("a late initial recipe response cannot overwrite a successful upload", asyn
     await page.goto(`/images-edit/${demoRecipe.id}`);
     await snapshotReady.promise;
     const pattern = await imagePattern(page, "#2040d0");
+    const patternBuffer = Buffer.from(pattern.split(",")[1], "base64");
+    pendingUpload = () =>
+      uploadImage(request, demoRecipe, "before-initial-response.png", {
+        buffer: patternBuffer,
+      });
     const uploaded = page.waitForResponse((response) =>
       isImageUpload(response.request()),
     );
     await page.locator("#upload-image").setInputFiles({
       name: "before-initial-response.png",
       mimeType: "image/png",
-      buffer: Buffer.from(pattern.split(",")[1], "base64"),
+      buffer: patternBuffer,
     });
     await page.getByRole("button", { name: "Speichern", exact: true }).click();
     const result = await (await uploaded).json();
@@ -559,7 +732,7 @@ test("a failed image upload preserves the previous image and shows feedback", as
         }),
       });
     } else {
-      await route.continue();
+      await route.fallback();
     }
   });
   const pattern = await imagePattern(page, "#2040d0");
@@ -603,7 +776,7 @@ test("the image editor disables file selection while an upload is pending", asyn
         }),
       });
     } else {
-      await route.continue();
+      await route.fallback();
     }
   });
   try {

@@ -16,6 +16,12 @@ RESTAPI get := method(request,
         )
         if (path size == 2,
             id := path at(1)
+            userId := request at("query") at("userId")
+            if (userId != nil,
+                rating := db getUserRating(id, userId)
+                if (rating == nil, return request sendData("{\"rating\":null}"))
+                return request sendData(Map clone atPut("rating", rating) asJson)
+            )
             rating := db getAverageRating(id)
             return request sendData(rating asJson)
         )
@@ -30,13 +36,13 @@ RESTAPI put := method(request,
         if (id != nil,
         if (request at("payload") != nil,
             if (request at("payload") at("rating") == nil, return request errorBadRequest("Missing rating", "missing-field", "rating"))
-            if (request at("payload") at("login") == nil, return request errorBadRequest("Missing login", "missing-field", "login"))
+            if (request at("payload") at("userId") == nil, return request errorBadRequest("Missing userId", "missing-field", "userId"))
 
             rating := request at("payload") at("rating") asNumber
             if (list(1, 2, 3, 4, 5) contains(rating) == false, return request errorBadRequest("Invalid rating", "invalid-field", "rating"))
 
-            login := request at("payload") at("login")
-            data := db addRating(id, rating, login) asJson
+            userId := request at("payload") at("userId")
+            data := db addRating(id, rating, userId) asJson
             return request sendData(data)
             )
         )
@@ -73,7 +79,7 @@ RESTAPI parseRequest := method(aSocket,
 
     request := Request clone
     request setMethod (httpMethod)
-    request setPath (header at(1))
+    request setTarget (header at(1))
 
     contentLengthRegex := "Content-Length: (\\d+)" asRegex
     contentLength := requestData allMatchesOfRegex(contentLengthRegex)

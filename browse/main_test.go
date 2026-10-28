@@ -27,7 +27,7 @@ func assertStyledErrorPage(t *testing.T, response *httptest.ResponseRecorder, st
 		}
 		return
 	}
-	if strings.Count(body, "<header-component>") != 1 || strings.Count(body, "<main>") != 1 ||
+	if strings.Count(body, "<header-component ") != 1 || strings.Count(body, "<main>") != 1 ||
 		!strings.Contains(body, `<link rel="stylesheet" href="/design/styles.css">`) ||
 		!strings.Contains(body, `<script src="/design/htmx.min.js"></script>`) ||
 		!strings.Contains(body, "<title>"+title+"</title>") {
@@ -84,6 +84,10 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	var version atomic.Int32
 	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
+	var identityRole atomic.Value
+	identityRole.Store("owner")
+	var canRate atomic.Bool
+	canRate.Store(true)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ OperationName string }
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -95,6 +99,13 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		switch request.OperationName {
 		case "BrowseServices":
 			data = map[string]any{"searchOnline": false, "recipeEditOnline": false, "ratingsOnline": false}
+		case "BrowseControls":
+			data = map[string]any{
+				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
+				"recipeEditOnline": editOnline.Load(),
+			}
+		case "BrowseIdentity":
+			data = map[string]any{"myCapabilities": map[string]any{"role": identityRole.Load()}}
 		case "Overview":
 			data = map[string]any{
 				"recipes": []any{map[string]any{
@@ -131,7 +142,20 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			}
 			data = map[string]any{"recipe": recipe}
 		case "RecipeControls":
-			data = map[string]any{"recipeEditOnline": editOnline.Load(), "imagesOnline": false, "imageEditOnline": false}
+			data = map[string]any{
+				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
+				"recipeEditOnline": editOnline.Load(), "imagesOnline": false, "imageEditOnline": false,
+			}
+		case "RatingCapabilities":
+			data = map[string]any{
+				"myCapabilities": map[string]any{"role": "member", "canRate": canRate.Load()},
+				"rating":         map[string]any{"recipeId": "42", "average": 5, "count": 3},
+			}
+		case "RecipeRating":
+			data = map[string]any{
+				"myCapabilities": map[string]any{"role": "member", "canRate": true},
+				"recipe":         map[string]any{"id": "42", "rating": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 3}},
+			}
 		case "RecipeInspirations":
 			var recipe any
 			if !deleted.Load() {
@@ -143,7 +167,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			}
 			data = map[string]any{"recipe": recipe, "inspirationsOnline": inspirationsOnline.Load()}
 		case "RateRecipe":
-			data = map[string]any{"rate": map[string]any{"recipeId": "42", "average": 5, "count": 3}}
+			data = map[string]any{"rate": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 5}}
 			version.Add(1)
 		default:
 			t.Errorf("unexpected operation: %s", request.OperationName)
@@ -155,13 +179,16 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	defer upstream.Close()
 	client := graphql.NewClient(upstream.URL, upstream.Client())
 	c := testCache(t, func(ctx context.Context, id string) ([]byte, error) { return renderRecipe(ctx, client, id) })
-	handler := newHandler(client, c)
+	handler := newHandlerWithEndpoint(client, c, upstream.URL)
 	request := func(method, path, etag string) *httptest.ResponseRecorder {
 		t.Helper()
 		form := url.Values{"rating": {"5"}}.Encode()
 		r := httptest.NewRequest(method, path, strings.NewReader(form))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.Header.Set("If-None-Match", etag)
+		if method == "POST" {
+			r.Header.Set("Origin", "http://example.com")
+		}
 		if strings.Contains(path, "variant=2") {
 			r.Header.Set("HX-Request", "true")
 		}
@@ -172,6 +199,23 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	overview := request("GET", "/", "")
 	if overview.Code != 200 || !strings.Contains(html.UnescapeString(overview.Body.String()), `src="`+thumbURL+`"`) {
 		t.Fatalf("overview did not preserve opaque backend thumbnail URL: %d %s", overview.Code, overview.Body.String())
+	}
+	overviewBody := overview.Body.String()
+	if results := strings.Index(overviewBody, `id="browse-results"`); results < 0 ||
+		strings.Index(overviewBody, `hx-get="/controls"`) < results {
+		t.Fatal("add-recipe control placeholder must follow the recipe results")
+	}
+	if !strings.Contains(overviewBody, `<header-component hx-get="/identity"`) ||
+		strings.Contains(overviewBody, "auth-role") || strings.Contains(overviewBody, `id="browse-identity"`) {
+		t.Fatal("public layout must load identity into the header separately")
+	}
+	for _, role := range []string{"anonymous", "member", "owner"} {
+		identityRole.Store(role)
+		widget := request("GET", "/identity", "")
+		if widget.Code != http.StatusOK || widget.Header().Get("Cache-Control") != "no-store" ||
+			strings.TrimSpace(widget.Body.String()) != `<header-component auth-role="`+role+`"></header-component>` {
+			t.Fatalf("identity must supply only the header auth state: %s", widget.Body.String())
+		}
 	}
 	first := request("GET", "/recipe/42?variant=1", "")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), "Original") {
@@ -193,7 +237,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatal("shared page does not separate live content or contains user data")
 	}
 	etag := first.Header().Get("ETag")
-	if etag == "" || first.Header().Get("Cache-Control") != "private, no-cache" {
+	if etag == "" || first.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatal("missing browser revalidation headers")
 	}
 	if second := request("GET", "/recipe/42?variant=2", "W/"+etag); second.Code != 304 || second.Body.Len() != 0 {
@@ -207,10 +251,15 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	for _, online := range []bool{false, true, false} {
 		editOnline.Store(online)
-		widget := request("GET", "/recipe/42/controls", "")
-		if widget.Code != 200 || strings.Contains(widget.Body.String(), "Rezept bearbeiten") != online ||
+		widget := request("GET", "/controls", "")
+		body := widget.Body.String()
+		if widget.Code != 200 || strings.Contains(body, `data-add-recipe`) != online ||
+			strings.Contains(body, `role="button"`) != online ||
+			strings.Contains(body, `class="pointer-events-auto mr-2"`) != online ||
+			!strings.Contains(body, `class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none"`) ||
+			strings.Contains(body, "Rezept hinzufügen") != online ||
 			widget.Header().Get("Cache-Control") != "no-store" {
-			t.Fatal("edit controls not live")
+			t.Fatalf("add-recipe control placement or permission gating is incorrect: %s", body)
 		}
 	}
 	for _, tc := range []struct {
@@ -243,6 +292,22 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		})
 	}
 	deleted.Store(false)
+	ratingWidget := request("GET", "/recipe/42/rating", "")
+	if body := ratingWidget.Body.String(); ratingWidget.Code != http.StatusOK ||
+		strings.Count(body, "<rating-component") != 1 ||
+		!strings.Contains(body, `rating="5"`) || !strings.Contains(body, `my-rating="3"`) ||
+		strings.Contains(body, "Deine Bewertung") ||
+		!strings.Contains(body, `hx-target="#recipe-rating-42"`) {
+		t.Fatalf("personalized rating must combine public and own values in one widget: %s", body)
+	}
+	canRate.Store(false)
+	publicRating := request("GET", "/recipe/42/rating", "")
+	if body := publicRating.Body.String(); publicRating.Code != http.StatusOK ||
+		strings.Count(body, "<rating-component") != 1 || !strings.Contains(body, `rating="5"`) ||
+		strings.Contains(body, "my-rating") || strings.Contains(body, "hx-post") {
+		t.Fatalf("public rating must retain one non-editable aggregate widget: %s", body)
+	}
+	canRate.Store(true)
 	if health := request("GET", "/health", ""); health.Code != 200 || health.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("health check must stay uncached")
 	}

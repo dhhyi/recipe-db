@@ -14,7 +14,10 @@ main =
         { init =
             \flags ->
                 ( Editor.Types.init flags.recipeId
-                , RecipeDB.makeRecipeRequest flags.recipeId GotRecipe
+                , Cmd.batch
+                    [ RecipeDB.makeRecipeRequest flags.recipeId GotRecipe
+                    , RecipeDB.makeCapabilitiesRequest GotCapabilities
+                    ]
                 )
         , update = Editor.State.update
         , view = Editor.View.view

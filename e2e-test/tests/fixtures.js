@@ -161,23 +161,28 @@ async function createRecipe(request, name) {
   return recipe;
 }
 
-async function uploadImage(request, recipe, filename) {
-  const buffer = await readFile(
-    new URL(`./assets/${filename}`, import.meta.url),
-  );
+export async function uploadImage(
+  request,
+  recipe,
+  filename,
+  { buffer, mimeType = "image/png", crop = null } = {},
+) {
+  const image =
+    buffer ??
+    (await readFile(new URL(`./assets/${filename}`, import.meta.url)));
   const response = await request.post("/graphql", {
     headers: { "apollo-require-preflight": "true" },
     multipart: {
       operations: JSON.stringify({
         query:
-          "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url size width height } }",
-        variables: { id: recipe.id, file: null },
+          "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl size width height } }",
+        variables: { id: recipe.id, file: null, crop },
       }),
       map: JSON.stringify({ 0: ["variables.file"] }),
       0: {
         name: filename,
-        mimeType: "image/png",
-        buffer,
+        mimeType,
+        buffer: image,
       },
     },
   });
@@ -200,10 +205,26 @@ async function uploadImage(request, recipe, filename) {
     width: expect.any(Number),
     height: expect.any(Number),
   });
+  return result.data.setImage;
 }
 
 export const test = base.extend({
-  authContexts: async ({ browser }, use) => {
+  authContexts: async (
+    {
+      browser,
+      contextOptions,
+      viewport,
+      userAgent,
+      deviceScaleFactor,
+      isMobile,
+      hasTouch,
+      locale,
+      timezoneId,
+      colorScheme,
+      reducedMotion,
+    },
+    use,
+  ) => {
     let tokens;
     try {
       const source =
@@ -237,24 +258,51 @@ export const test = base.extend({
         identity,
       ]),
     );
-    const createIdentity = (identity, origin = baseURL) =>
-      createAuthIdentity(browser, identity, tokens[identity], origin).then(
-        (context) => {
-          contexts.push(context);
-          return context;
-        },
-      );
+    const createIdentity = (
+      identity,
+      origin = baseURL,
+      contextOverrides = {},
+    ) =>
+      createAuthIdentity(browser, identity, tokens[identity], origin, {
+        ...contextOptions,
+        viewport,
+        userAgent,
+        deviceScaleFactor,
+        isMobile,
+        hasTouch,
+        locale,
+        timezoneId,
+        colorScheme,
+        reducedMotion,
+        ...contextOverrides,
+        baseURL: origin,
+      }).then((context) => {
+        contexts.push(context);
+        return context;
+      });
     await use({
-      anonymous: (origin = baseURL) => createIdentity("anonymous", origin),
-      memberOne: (origin = baseURL) => createIdentity("memberOne", origin),
-      memberTwo: (origin = baseURL) => createIdentity("memberTwo", origin),
-      owner: (origin = baseURL) => createIdentity("owner", origin),
+      anonymous: (origin = baseURL, contextOverrides = {}) =>
+        createIdentity("anonymous", origin, contextOverrides),
+      memberOne: (origin = baseURL, contextOverrides = {}) =>
+        createIdentity("memberOne", origin, contextOverrides),
+      memberTwo: (origin = baseURL, contextOverrides = {}) =>
+        createIdentity("memberTwo", origin, contextOverrides),
+      owner: (origin = baseURL, contextOverrides = {}) =>
+        createIdentity("owner", origin, contextOverrides),
+      authorizationHeader: (identity) =>
+        tokens[identity] ? "Bearer " + tokens[identity] : undefined,
       identifyAuthorization: (authorization) =>
         authorization == null
           ? null
           : (identitiesByAuthorization.get(authorization) ?? "unknown"),
     });
     await Promise.all(contexts.map((context) => context.close()));
+  },
+  ownerIdentity: async ({ authContexts }, use) => {
+    await use(await authContexts.owner());
+  },
+  request: async ({ ownerIdentity }, use) => {
+    await use(ownerIdentity.api);
   },
   resetApplicationData: [
     async ({ request }, use) => {

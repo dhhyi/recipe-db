@@ -8,6 +8,8 @@ use axum::{
 };
 use futures::StreamExt;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 fn test_settings() -> ConnectionSettings {
     let url = std::env::var("NATS_TEST_URL")
@@ -179,8 +181,96 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
 }
 
 async fn execute(schema: &crate::schema::ApiSchema, query: &str, succeeds: bool) {
-    let response = schema.execute(query).await;
+    let response = schema
+        .execute(Request::new(query).data(crate::test_context("owner")))
+        .await;
     assert_eq!(response.errors.is_empty(), succeeds, "{response:?}");
+}
+
+#[tokio::test]
+async fn denied_mutations_have_no_backend_side_effects() {
+    let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend_calls = calls.clone();
+    let app = Router::new().fallback(move || {
+        backend_calls.fetch_add(1, Ordering::SeqCst);
+        async { StatusCode::NO_CONTENT }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let previous_endpoint = std::env::var_os("REST_ENDPOINT");
+    std::env::set_var(
+        "REST_ENDPOINT",
+        format!("http://{}", listener.local_addr().unwrap()),
+    );
+    let backend = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let schema = crate::schema::build_schema(None);
+
+    for (role, query, expected_status) in [
+        (
+            "member",
+            r#"mutation { createRecipe(value: {name: "Denied"}) { id } }"#,
+            403,
+        ),
+        (
+            "member",
+            r#"mutation { updateRecipe(id: "42", value: {inspirations: ["https://example.com"]}) { id } }"#,
+            403,
+        ),
+        ("member", r#"mutation { deleteRecipe(id: "42") }"#, 403),
+        (
+            "anonymous",
+            r#"mutation { rate(id: "42", rating: 5) { count } }"#,
+            401,
+        ),
+        ("member", "mutation { deleteRecipesForTesting }", 403),
+        ("member", "mutation { deleteRatingsForTesting }", 403),
+        ("member", "mutation { deleteImagesForTesting }", 403),
+        ("member", "mutation { deleteInspirationsForTesting }", 403),
+    ] {
+        let response = schema
+            .execute(Request::new(query).data(crate::test_context(role)))
+            .await;
+        assert_eq!(response.errors.len(), 1, "{response:?}");
+        let extensions = response.errors[0].extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("status"),
+            Some(&async_graphql::value!(expected_status))
+        );
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!(if expected_status == 401 {
+                "authentication-required"
+            } else {
+                "forbidden"
+            }))
+        );
+    }
+
+    let mut upload = Request::new(
+        "mutation($file: Upload!) { setImage(recipeId: \"42\", file: $file) { url } }",
+    )
+    .variables(Variables::from_json(json!({"file": null})))
+    .data(crate::test_context("member"));
+    upload.set_upload(
+        "variables.file",
+        UploadValue {
+            filename: "image.svg".into(),
+            content_type: Some("image/svg+xml".into()),
+            content: std::fs::File::open("testdata/image.svg").unwrap(),
+        },
+    );
+    let response = schema.execute(upload).await;
+    assert_eq!(
+        response.errors[0].extensions.as_ref().unwrap().get("code"),
+        Some(&async_graphql::value!("forbidden"))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    backend.abort();
+    if let Some(value) = previous_endpoint {
+        std::env::set_var("REST_ENDPOINT", value);
+    } else {
+        std::env::remove_var("REST_ENDPOINT");
+    }
 }
 
 #[tokio::test]
@@ -227,13 +317,13 @@ async fn bus_contract() {
     execute(&schema, r#"mutation { updateRecipe(id: "42", value: {name: "Updated", inspirations: null}) { id } }"#, true).await;
     execute(
         &schema,
-        r#"mutation { rate(id: "42", rating: 4, login: "private-user") { count } }"#,
+        r#"mutation { rate(id: "42", rating: 4) { count } }"#,
         true,
     )
     .await;
     execute(
         &schema,
-        r#"mutation { rate(id: "42", rating: -1, login: "private-user") { count } }"#,
+        r#"mutation { rate(id: "42", rating: -1) { count } }"#,
         false,
     )
     .await;
@@ -244,7 +334,7 @@ async fn bus_contract() {
         ).variables(Variables::from_json(json!({
             "id": id, "file": null,
             "crop": {"x": 17, "y": 29, "width": 101, "height": 83}
-        })));
+        }))).data(crate::test_context("owner"));
         request.set_upload(
             "variables.file",
             UploadValue {
