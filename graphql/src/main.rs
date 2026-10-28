@@ -19,6 +19,7 @@ mod images;
 mod inspirations;
 mod link;
 mod link_extract;
+mod mode;
 mod ratings;
 mod recipe;
 mod recipes;
@@ -231,13 +232,15 @@ fn csrf_error(status: u16, code: &'static str) -> async_graphql::ServerError {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match std::env::args().nth(1).as_deref() {
         Some("print-schema") => {
-            println!("{}", schema::build_schema(None).sdl());
+            let runtime_mode = mode::RuntimeMode::from_env()?;
+            println!("{}", schema::build_schema(runtime_mode, None).sdl());
             return Ok(());
         }
         Some("provision-events") => return events::provision().await,
         _ => {}
     }
 
+    let runtime_mode = mode::RuntimeMode::from_env()?;
     let rest_endpoint =
         std::env::var("REST_ENDPOINT").expect("REST_ENDPOINT environment variable not set");
     println!("Using REST: {rest_endpoint}");
@@ -247,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Err(error) = publisher.connect().await {
         eprintln!("message bus unavailable at startup; mutations remain available: {error}");
     }
-    let schema = schema::build_schema(Some(publisher.clone()));
+    let schema = schema::build_schema(runtime_mode, Some(publisher.clone()));
     let graphql_state = GraphQLState {
         schema,
         auth_policy,
@@ -261,15 +264,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    let production = std::env::var("PRODUCTION").as_deref() == Ok("true");
-    let ingress_secret = if production {
+    let ingress_secret = if runtime_mode == mode::RuntimeMode::Production {
         Some(IngressSecret::parse(std::fs::read_to_string(
             "/run/secrets/graphql-ingress-secret",
         )?)?)
     } else {
         None
     };
-    let graphql_route = if production {
+    let graphql_route = if runtime_mode == mode::RuntimeMode::Production {
         post(graphql).get(graphql)
     } else {
         get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) }).post(graphql)

@@ -55,10 +55,9 @@ DB initialize := method(
 )
 
 DB clear := method(
-    exec("DROP TABLE Ratings;")
-    checkNoError
-    close
-    initialize
+    exec("DELETE FROM Ratings;")
+    if (error, return error)
+    return nil
 )
 
 DB getAverageRating := method(id,

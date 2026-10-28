@@ -222,20 +222,3 @@ func (c *pageCache) invalidate(id string) error {
 	}
 	return err
 }
-
-func (c *pageCache) invalidateAll() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, flight := range c.flights {
-		flight.invalidated = true
-	}
-	var errs []error
-	for id := range c.entries {
-		if _, err := c.remove(id); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	err := errors.Join(errs...)
-	log.Printf("cache invalidation all=true error=%v", err)
-	return err
-}

@@ -22,6 +22,7 @@ devcontainer:
     - 8081
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    MODE: testing
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"

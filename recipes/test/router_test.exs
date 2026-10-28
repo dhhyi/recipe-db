@@ -9,17 +9,47 @@ defmodule Recipes.RouterTest do
   @options Router.init([])
 
   setup do
-    previous_production = System.get_env("PRODUCTION")
-    System.delete_env("PRODUCTION")
+    previous_mode = Application.fetch_env!(:recipes, :mode)
+    Application.put_env(:recipes, :mode, :testing)
     :ok = Repository.clear()
 
     on_exit(fn ->
-      if previous_production do
-        System.put_env("PRODUCTION", previous_production)
-      else
-        System.delete_env("PRODUCTION")
-      end
+      Application.put_env(:recipes, :mode, previous_mode)
     end)
+  end
+
+  test "bulk delete is testing-only and preserves data when denied" do
+    recipe = %{"name" => "Rice Pudding"}
+    assert {:ok, created} = Repository.create(recipe)
+
+    testing =
+      :delete
+      |> conn("/recipes/")
+      |> Router.call(@options)
+
+    assert testing.status == 204
+    assert {:ok, []} = Repository.all()
+
+    assert {:ok, created} = Repository.create(recipe)
+    Application.put_env(:recipes, :mode, :production)
+
+    production =
+      :delete
+      |> conn("/recipes")
+      |> Router.call(@options)
+
+    assert production.status == 404
+    assert %{"code" => "not-found"} = Jason.decode!(production.resp_body)
+    assert {:ok, ^created} = Repository.get(created["id"])
+
+    production_slash =
+      :delete
+      |> conn("/recipes/")
+      |> Router.call(@options)
+
+    assert production_slash.status == 404
+    assert %{"code" => "not-found"} = Jason.decode!(production_slash.resp_body)
+    assert {:ok, ^created} = Repository.get(created["id"])
   end
 
   test "creates and patches a recipe using the required media types" do

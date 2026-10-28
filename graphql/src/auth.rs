@@ -140,9 +140,8 @@ pub enum Capability {
     ReadIndividualRatings,
     WriteRatings,
     ManageRecipes,
-    ManageImports,
+    ManageInspirations,
     ManageImages,
-    ResetForTesting,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -162,9 +161,8 @@ impl RequestContext {
             Role::Member => !matches!(
                 capability,
                 Capability::ManageRecipes
-                    | Capability::ManageImports
+                    | Capability::ManageInspirations
                     | Capability::ManageImages
-                    | Capability::ResetForTesting
             ),
             Role::Anonymous => matches!(
                 capability,
@@ -190,7 +188,7 @@ pub struct MyCapabilities {
     role: String,
     can_rate: bool,
     can_manage_recipes: bool,
-    can_manage_imports: bool,
+    can_manage_inspirations: bool,
     can_manage_images: bool,
 }
 
@@ -205,7 +203,7 @@ impl AuthQuery {
             role: request.principal().role().as_str().to_owned(),
             can_rate: request.require(Capability::WriteRatings).is_ok(),
             can_manage_recipes: request.require(Capability::ManageRecipes).is_ok(),
-            can_manage_imports: request.require(Capability::ManageImports).is_ok(),
+            can_manage_inspirations: request.require(Capability::ManageInspirations).is_ok(),
             can_manage_images: request.require(Capability::ManageImages).is_ok(),
         })
     }
@@ -1090,9 +1088,8 @@ mod tests {
             Capability::ReadIndividualRatings,
             Capability::WriteRatings,
             Capability::ManageRecipes,
-            Capability::ManageImports,
+            Capability::ManageInspirations,
             Capability::ManageImages,
-            Capability::ResetForTesting,
         ];
         for (headers, role) in cases {
             let context = auth_policy.request_context(&headers).unwrap();
@@ -1103,9 +1100,8 @@ mod tests {
                     Role::Member => !matches!(
                         capability,
                         Capability::ManageRecipes
-                            | Capability::ManageImports
+                            | Capability::ManageInspirations
                             | Capability::ManageImages
-                            | Capability::ResetForTesting
                     ),
                     Role::Anonymous => matches!(
                         capability,

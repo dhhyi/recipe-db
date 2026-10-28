@@ -95,6 +95,17 @@ render() {
   ' manifests.json
 }
 
+@test "application workloads explicitly use production mode" {
+  render values.json
+  jq -e --slurpfile projects projects.jsonl '
+    .items as $items |
+    all($projects[]; .name as $name |
+      any($items[];
+        .kind == "Deployment" and .metadata.name == $name
+        and any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production")))
+  ' manifests.json
+}
+
 @test "Kubernetes OAuth alpha config requires PKCE, verified issuer, email, and nonce" {
   render values.json
   jq -er '

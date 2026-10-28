@@ -75,7 +75,7 @@
 #@   name = p["name"]
 #@   port = p["devcontainer"]["ports"][0]
 #@   env = {k: v for k, v in p["devcontainer"].get("environment", {}).items() if "${" not in v and k != "MISE_IGNORED_CONFIG_PATHS"}
-#@   env["PRODUCTION"] = "true"
+#@   env["MODE"] = "production"
 #@   durable = name in cfg["volumes"]
 #@   secrets = []
 #@   init = []
@@ -127,4 +127,3 @@
 #@   image = cfg["infrastructure"]["traefik"].split(":", 1)
 #@   return {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
 #@ end
-

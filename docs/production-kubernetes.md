@@ -12,9 +12,9 @@ The production manifest renderer consumes the same project metadata and immutabl
 
 The local identity is deliberately narrow: target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. A different configured `httpPort` is supported only with its matching loopback origin; set `apiPort` independently when its default is occupied. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
 
-### Release-matched runtime mode
+### Runtime mode
 
-The verified release below predates #81 and requires `PRODUCTION=true`, which these templates emit. It does not understand `MODE=production`. #81's planned independent mode migration must update the deployment environment and its regression tests together with the application images: migrated images default an absent `MODE` to `production`, and deployment templates should still emit `MODE=production` explicitly. Testing and later modes require explicit selection. There is no public deployment yet, so no legacy compatibility or rejection mechanism is needed; migrated images no longer interpret `PRODUCTION`. Keep images and configuration release-matched: changing only the variable does not make an old image production-safe. Backup mode remains outside this deployment work.
+Production workloads set `MODE=production`. Services accept `production` (the default when `MODE` is absent) or `testing`; empty and unsupported values fail startup. Backup mode remains outside this deployment work.
 
 ## Operator configuration and secrets
 
@@ -173,7 +173,7 @@ The earlier release-publication blocker is resolved. [Publish run 40515853280](h
 
 - Artifact: `ghcr.io/dhhyi/recipe-db-releases@sha256:e05612b6e79bba7005854ab9827e2525be1ba7d9cb9174b019fa9c54097a17eb`
 - Source revision: `431f861ffb8912484f050b1bc744aba9667ea08f`
-- Runtime contract: legacy `PRODUCTION=true`, before #81's mode migration.
+- This artifact predates the `MODE` runtime contract and is historical verification evidence only; it is not the release used by current templates.
 
 On 2026-10-27, the full protocol smoke passed on an x86-64 Docker/k3d deployment with this real immutable release. All 11 phases completed, including private-path rejection, actual maintenance-page comparison, restored browse ingress, PVC-backed workload restarts, same-release reapplication, and retained recipe/image/search data. The test deleted only its own recipe and reported successful cleanup. The synthetic recipe name is a unique alphanumeric search token, avoiding Typesense's hyphenated-query interpretation. After restoring browse replicas, the smoke waits for ingress health as well as Kubernetes readiness.
 

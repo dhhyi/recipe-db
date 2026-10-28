@@ -66,38 +66,28 @@ func TestCacheConcurrentMissesAndDiskHits(t *testing.T) {
 }
 
 func TestInvalidationDuringRender(t *testing.T) {
-	for _, all := range []bool{false, true} {
-		t.Run(map[bool]string{false: "recipe", true: "reset"}[all], func(t *testing.T) {
-			var calls atomic.Int32
-			started, release := make(chan struct{}), make(chan struct{})
-			c := testCache(t, func(context.Context, string) ([]byte, error) {
-				if calls.Add(1) == 1 {
-					close(started)
-					<-release
-					return []byte("old"), nil
-				}
-				return []byte("new"), nil
-			})
-			result := make(chan cachedPage, 1)
-			go func() { result <- getPage(t, c, "42") }()
-			<-started
-			var err error
-			if all {
-				err = c.invalidateAll()
-			} else {
-				err = c.invalidate("42")
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			close(release)
-			if page := <-result; string(page.html) != "new" {
-				t.Fatalf("served invalidated render: %s", page.html)
-			}
-			if page := getPage(t, c, "42"); string(page.html) != "new" || calls.Load() != 2 {
-				t.Fatal("invalidated render repopulated cache")
-			}
-		})
+	var calls atomic.Int32
+	started, release := make(chan struct{}), make(chan struct{})
+	c := testCache(t, func(context.Context, string) ([]byte, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return []byte("old"), nil
+		}
+		return []byte("new"), nil
+	})
+	result := make(chan cachedPage, 1)
+	go func() { result <- getPage(t, c, "42") }()
+	<-started
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if page := <-result; string(page.html) != "new" {
+		t.Fatalf("served invalidated render: %s", page.html)
+	}
+	if page := getPage(t, c, "42"); string(page.html) != "new" || calls.Load() != 2 {
+		t.Fatal("invalidated render repopulated cache")
 	}
 }
 

@@ -7,6 +7,9 @@ defmodule Recipes.Application do
 
   @impl true
   def start(_type, _args) do
+    mode = Recipes.RuntimeMode.from_env!()
+    Application.put_env(:recipes, :mode, mode)
+
     children = [
       {Recipes.Repository, []},
       {Bandit,

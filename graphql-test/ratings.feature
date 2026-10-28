@@ -2,11 +2,9 @@ Feature: ratings
 
   Background:
     * def graphqlApi = java.lang.System.getenv('GRAPHQL_API')
+    * call read('graphql/reset-testing-data.feature')
     * url graphqlApi
     * configure headers = { Authorization: '#(ownerAuthorization)' }
-    * request { query: '#(read("graphql/delete-ratings-for-testing.graphql"))' }
-    * method post
-    * status 200
 
   Scenario: should have no rating
     * request { query: '#(read("graphql/rating-by-id.graphql"))', variables: { id: '1' } }

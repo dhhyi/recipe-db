@@ -126,7 +126,8 @@ async fn image_metadata_passthrough_and_upstream_errors() {
     let previous_nats = std::env::var_os("NATS_URL");
     std::env::set_var("NATS_URL", "nats://127.0.0.1:1");
     let publisher = crate::events::EventPublisher::from_env().unwrap();
-    let schema = crate::schema::build_schema(Some(publisher.clone()));
+    let schema =
+        crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher.clone()));
     for (id, expect_error) in [
         ("present", false),
         ("absent", false),

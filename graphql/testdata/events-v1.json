@@ -33,33 +33,5 @@
     "occurredAt": "2026-10-08T13:00:04Z",
     "recipeId": "42",
     "kind": "inspirations.changed"
-  },
-  {
-    "version": 1,
-    "eventId": "53cf7722-2b64-4e9f-a267-8b4d1f878306",
-    "occurredAt": "2026-10-08T13:00:05Z",
-    "recipeId": null,
-    "kind": "recipes.reset"
-  },
-  {
-    "version": 1,
-    "eventId": "53cf7722-2b64-4e9f-a267-8b4d1f878307",
-    "occurredAt": "2026-10-08T13:00:06Z",
-    "recipeId": null,
-    "kind": "ratings.reset"
-  },
-  {
-    "version": 1,
-    "eventId": "53cf7722-2b64-4e9f-a267-8b4d1f878308",
-    "occurredAt": "2026-10-08T13:00:07Z",
-    "recipeId": null,
-    "kind": "images.reset"
-  },
-  {
-    "version": 1,
-    "eventId": "53cf7722-2b64-4e9f-a267-8b4d1f878309",
-    "occurredAt": "2026-10-08T13:00:08Z",
-    "recipeId": null,
-    "kind": "inspirations.reset"
   }
 ]

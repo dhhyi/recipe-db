@@ -47,11 +47,6 @@ func (c *pageCache) applyEvent(data []byte) error {
 			return errors.New("recipe event is missing recipeId")
 		}
 		return c.invalidate(*event.RecipeID)
-	case "recipes.reset", "ratings.reset", "images.reset", "inspirations.reset":
-		if event.RecipeID != nil {
-			return errors.New("reset event has a recipeId")
-		}
-		return c.invalidateAll()
 	default:
 		return fmt.Errorf("unsupported recipe event kind: %q", event.Kind)
 	}

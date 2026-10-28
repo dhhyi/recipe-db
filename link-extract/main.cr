@@ -173,7 +173,12 @@ def get_page_meta_data(url : URI) : PageMetaData
   )
 end
 
-cache = Cache.new(ENV["DATA_LOCATION"]?) if ENV["PRODUCTION"]? == "true"
+mode = ENV["MODE"]? || "production"
+unless mode == "production" || mode == "testing"
+  raise "Invalid MODE=#{mode.inspect}; expected 'production' or 'testing'"
+end
+
+cache = Cache.new(ENV["DATA_LOCATION"]?) if mode == "production"
 
 server = HTTP::Server.new do |context|
   request = context.request

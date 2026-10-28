@@ -104,7 +104,9 @@ test("boosted recipe errors replace the previous page", async ({
   expect((await responsePromise).status()).toBe(200);
   await expect(link).toBeVisible();
 
-  await graphql(request, "mutation { deleteRecipesForTesting }");
+  await graphql(request, "mutation($id: ID!) { deleteRecipe(id: $id) }", {
+    id: recipe.id,
+  });
   const missingError = {
     status: 404,
     title: "recipe not found | RezeptDB",

@@ -27,14 +27,6 @@ pub enum EventKind {
     ImageChanged,
     #[serde(rename = "inspirations.changed")]
     InspirationsChanged,
-    #[serde(rename = "recipes.reset")]
-    RecipesReset,
-    #[serde(rename = "ratings.reset")]
-    RatingsReset,
-    #[serde(rename = "images.reset")]
-    ImagesReset,
-    #[serde(rename = "inspirations.reset")]
-    InspirationsReset,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -43,19 +35,19 @@ pub struct RecipeEvent {
     pub version: u8,
     pub event_id: String,
     pub occurred_at: String,
-    pub recipe_id: Option<String>,
+    pub recipe_id: String,
     pub kind: EventKind,
 }
 
 impl RecipeEvent {
-    fn new(recipe_id: Option<&str>, kind: EventKind) -> Self {
+    fn new(recipe_id: &str, kind: EventKind) -> Self {
         Self {
             version: 1,
             event_id: Uuid::new_v4().to_string(),
             occurred_at: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .expect("UTC timestamp is representable as RFC 3339"),
-            recipe_id: recipe_id.map(str::to_owned),
+            recipe_id: recipe_id.to_owned(),
             kind,
         }
     }
@@ -151,7 +143,7 @@ impl EventPublisher {
         Ok(())
     }
 
-    pub async fn notify(&self, recipe_id: Option<&str>, kind: EventKind) {
+    pub async fn notify(&self, recipe_id: &str, kind: EventKind) {
         let event = RecipeEvent::new(recipe_id, kind);
         for attempt in 1..=3 {
             let result = tokio::time::timeout(REQUEST_TIMEOUT, self.publish(&event)).await;
@@ -283,7 +275,7 @@ mod tests {
 
     #[test]
     fn event_envelope_has_stable_names_and_no_user_data() {
-        let event = RecipeEvent::new(Some("123"), EventKind::RatingChanged);
+        let event = RecipeEvent::new("123", EventKind::RatingChanged);
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["version"], 1);
         assert_eq!(json["recipeId"], "123");
@@ -296,14 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn reset_notifications_have_no_recipe_id() {
-        let event = RecipeEvent::new(None, EventKind::RecipesReset);
-        let json = serde_json::to_value(event).unwrap();
-        assert!(json["recipeId"].is_null());
-        assert_eq!(json["kind"], "recipes.reset");
-    }
-
-    #[test]
     fn shared_fixtures_cover_every_event_kind() {
         let fixtures: Vec<RecipeEvent> =
             serde_json::from_str(include_str!("../testdata/events-v1.json")).unwrap();
@@ -313,10 +297,6 @@ mod tests {
             EventKind::RatingChanged,
             EventKind::ImageChanged,
             EventKind::InspirationsChanged,
-            EventKind::RecipesReset,
-            EventKind::RatingsReset,
-            EventKind::ImagesReset,
-            EventKind::InspirationsReset,
         ];
         assert_eq!(fixtures.len(), kinds.len());
         for (event, kind) in fixtures.iter().zip(kinds) {
@@ -324,14 +304,7 @@ mod tests {
             assert_eq!(event.kind, kind);
             assert!(Uuid::parse_str(&event.event_id).is_ok());
             assert!(serde_json::to_vec(event).unwrap().len() <= 4096);
-            let reset = matches!(
-                kind,
-                EventKind::RecipesReset
-                    | EventKind::RatingsReset
-                    | EventKind::ImagesReset
-                    | EventKind::InspirationsReset
-            );
-            assert_eq!(event.recipe_id.is_none(), reset);
+            assert!(!event.recipe_id.is_empty());
         }
     }
 

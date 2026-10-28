@@ -66,22 +66,8 @@ impl ImagesApi {
             .post_bytes::<ImageMetadata>(recipe_id, mimetype, content, crop.as_ref())
             .await
             .map_err(RestError::into_error)?;
-        publisher
-            .notify(Some(recipe_id), EventKind::ImageChanged)
-            .await;
+        publisher.notify(recipe_id, EventKind::ImageChanged).await;
         Ok(metadata)
-    }
-
-    pub async fn delete_images_for_testing(
-        &self,
-        publisher: &EventPublisher,
-    ) -> Result<bool, Error> {
-        self.client
-            .delete("")
-            .await
-            .map_err(RestError::into_error)?;
-        publisher.notify(None, EventKind::ImagesReset).await;
-        Ok(true)
     }
 }
 
@@ -90,15 +76,6 @@ pub struct ImagesMutation;
 
 #[Object]
 impl ImagesMutation {
-    async fn delete_images_for_testing(&self, ctx: &Context<'_>) -> Result<bool, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ResetForTesting)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<ImagesApi>()?
-            .delete_images_for_testing(ctx.data::<EventPublisher>()?)
-            .await
-    }
-
     async fn set_image(
         &self,
         ctx: &Context<'_>,
