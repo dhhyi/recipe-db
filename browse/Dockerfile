@@ -4,7 +4,7 @@ WORKDIR /ws
 
 COPY go.mod go.sum /ws/
 RUN go mod download
-RUN go install github.com/a-h/templ/cmd/templ@latest
+RUN go install github.com/a-h/templ/cmd/templ@v0.3.1020
 
 COPY *.go *.templ genqlient.yaml recipe-db.graphqls operations.graphql /ws/
 COPY src /ws/src
