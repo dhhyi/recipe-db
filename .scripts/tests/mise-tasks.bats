@@ -185,6 +185,48 @@ EOF
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
+@test "Publish validates title edits only when WIP is removed without cancelling on other edits" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  run env WORKFLOW="$(yq -o=json "$workflow")" node << 'EOF'
+const assert = require("node:assert/strict");
+const workflow = JSON.parse(process.env.WORKFLOW);
+const contains = (value, search) =>
+  String(value ?? "").toLowerCase().includes(search.toLowerCase());
+const evaluate = (expression, github) =>
+  new Function("github", "contains", `return (${expression.replace(/\$\{\{|\}\}/g, "")});`)(github, contains);
+const cases = [
+  // Event, action, previous title, current title, validate, cancel.
+  ["pull_request", "edited", "[WIP] Feature", "Feature", true, true],
+  ["pull_request", "edited", "[wip] Feature", "Feature", true, true],
+  ["pull_request", "edited", "Feature", "Renamed feature", false, false],
+  ["pull_request", "edited", "Feature", "[WIP] Feature", false, false],
+  ["pull_request", "edited", "[WIP] Feature", "[WIP] Renamed", false, false],
+  ["pull_request", "edited", "[WIP] Feature", "[WIP] Feature", false, false],
+  ["pull_request", "edited", "", "Feature", false, false],
+  ["pull_request", "edited", "", "[WIP] Feature", false, false],
+  ["pull_request", "opened", "", "Feature", true, true],
+  ["pull_request", "opened", "", "[WIP] Feature", false, true],
+  ["pull_request", "synchronize", "", "Feature", true, true],
+  ["pull_request", "synchronize", "", "[WIP] Feature", false, true],
+  ["pull_request", "reopened", "", "Feature", true, true],
+  ["pull_request", "reopened", "", "[WIP] Feature", false, true],
+  ["push", "", "", "", true, false],
+];
+for (const [event, action, from, title, validate, cancel] of cases) {
+  const github = {
+    event_name: event,
+    event: { action, changes: { title: { from } }, pull_request: { title } },
+  };
+  for (const job of ["quality-checks", "arm64-validation"]) {
+    assert.equal(evaluate(workflow.jobs[job].if, github), validate, `${job}: ${JSON.stringify(github)}`);
+  }
+  assert.equal(evaluate(workflow.concurrency["cancel-in-progress"], github), cancel, `cancel: ${JSON.stringify(github)}`);
+}
+EOF
+
+  [ "$status" -eq 0 ]
+}
+
 @test "dev-down removes orphans and forwards arguments and exit status" {
   setup_mock_bin
   cat > bin/docker << 'EOF'

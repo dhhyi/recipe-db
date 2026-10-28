@@ -3,7 +3,9 @@ concurrency:
   group: publish-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: >-
     ${{ github.event_name == 'pull_request' &&
-        (github.event.action != 'edited' || github.event.changes.title != null) }}
+        (github.event.action != 'edited' ||
+         (contains(github.event.changes.title.from, '[WIP]') &&
+          !contains(github.event.pull_request.title, '[WIP]'))) }}
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
@@ -19,11 +21,12 @@ env:
 
 jobs:
   quality-checks:
-    # Ignore non-title edits; removing [WIP] starts validation without another commit.
+    # Only removing [WIP] retriggers validation on edits, without another commit.
     if: >-
       (github.event_name != 'pull_request' ||
        !contains(github.event.pull_request.title, '[WIP]')) &&
-      (github.event.action != 'edited' || github.event.changes.title != null)
+      (github.event.action != 'edited' ||
+       contains(github.event.changes.title.from, '[WIP]'))
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -129,7 +132,8 @@ jobs:
     if: >-
       (github.event_name != 'pull_request' ||
        !contains(github.event.pull_request.title, '[WIP]')) &&
-      (github.event.action != 'edited' || github.event.changes.title != null)
+      (github.event.action != 'edited' ||
+       contains(github.event.changes.title.from, '[WIP]'))
     permissions:
       contents: read
       packages: write
