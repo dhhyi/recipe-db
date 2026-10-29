@@ -361,7 +361,6 @@ async fn bus_contract() {
     let expected = [
         ("42", EventKind::RecipeChanged),
         ("42", EventKind::InspirationsChanged),
-        ("42", EventKind::TagsChanged),
         ("42", EventKind::RecipeChanged),
         ("partial-create", EventKind::RecipeChanged),
         ("42", EventKind::InspirationsChanged),
@@ -370,6 +369,7 @@ async fn bus_contract() {
         ("42", EventKind::RatingChanged),
         ("42", EventKind::ImageChanged),
         ("42", EventKind::RecipeDeleted),
+        ("42", EventKind::TagsChanged),
     ];
     let search = settings.consumer(CONSUMERS[0]).await;
     assert_events(&search, &expected).await;
