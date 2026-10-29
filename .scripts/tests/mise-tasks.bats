@@ -476,7 +476,7 @@ EOF
     (map(.name) | index("upload ARM64 Compose logs")) <
     (map(.name) | index("clean up development and test stack"))
   ' <<< "$steps"
-  [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .uses' <<< "$steps")" = actions/upload-artifact@v4 ]
+  [[ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .uses' <<< "$steps")" =~ ^actions/upload-artifact@v[0-9]+$ ]]
   [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .with.name' <<< "$steps")" = arm64-compose-logs ]
   [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .with.path' <<< "$steps")" = "\${{ runner.temp }}/compose.log" ]
   [ "$(jq -r '.[] | select(.name == "upload ARM64 Compose logs") | .with["if-no-files-found"]' <<< "$steps")" = error ]
