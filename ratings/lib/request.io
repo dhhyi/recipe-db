@@ -23,7 +23,12 @@ Request setTarget := method(target,
 )
 
 Request setPayload := method(payload,
+    self atPut("rawPayload", payload)
     self atPut("payload", CGI parseString(payload))
+)
+
+Request setHeaders := method(headers,
+    self atPut("headers", headers)
 )
 
 Request prettyPath := method(
@@ -59,6 +64,21 @@ Request errorBadRequest := method(detail, code, field,
     problem := Map clone atPut("type", "about:blank") atPut("title", "Bad Request") atPut("status", 400) atPut("detail", detail) atPut("code", code)
     if (field != nil, problem atPut("field", field))
     return self send("400", "Bad Request", problem asJson, "application/problem+json")
+)
+
+Request errorUnsupportedContentType := method(
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Unsupported Media Type") atPut("status", 415) atPut("detail", "Expected application/json") atPut("code", "unsupported-content-type")
+    return self send("415", "Unsupported Media Type", problem asJson, "application/problem+json")
+)
+
+Request errorMaintenanceMode := method(
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Service Unavailable") atPut("status", 503) atPut("detail", "Application writes are unavailable during backup maintenance") atPut("code", "maintenance-mode")
+    return self send("503", "Service Unavailable", problem asJson, "application/problem+json")
+)
+
+Request errorStorage := method(
+    problem := Map clone atPut("type", "about:blank") atPut("title", "Internal Server Error") atPut("status", 500) atPut("detail", "Cannot access rating storage") atPut("code", "storage-error")
+    return self send("500", "Internal Server Error", problem asJson, "application/problem+json")
 )
 
 Request errorNotFound := method(

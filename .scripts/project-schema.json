@@ -10,6 +10,18 @@
       "type": "string",
       "enum": ["api", "frontend", "backend", "test", "job", "static"]
     },
+    "backupRole": {
+      "type": "string",
+      "enum": [
+        "authoritative-read-only",
+        "cleanup-participant",
+        "derived-stateless",
+        "excluded-external-cache"
+      ]
+    },
+    "backupCompact": {
+      "type": "boolean"
+    },
     "graphqlSchema": {
       "type": "string",
       "minLength": 1

@@ -15,12 +15,13 @@ type problem = {
 exception Problem of problem
 exception Database_error of string
 
-type mode = Production | Testing
+type mode = Production | Testing | Backup
 
 let mode_of_environment = function
   | None | Some "production" -> Production
   | Some "testing" -> Testing
-  | Some _ -> invalid_arg "Invalid MODE; expected production or testing"
+  | Some "backup" -> Backup
+  | Some _ -> invalid_arg "Invalid MODE; expected production, testing or backup"
 
 let category_slug = function
   | Cuisine -> "cuisine"
@@ -304,6 +305,24 @@ let assigned_tags db recipe_id =
       in
       collect [])
 
+let assigned_recipe_ids db =
+  with_statement db
+    "SELECT DISTINCT recipe_id FROM assignments ORDER BY recipe_id"
+    (fun statement ->
+      let rec collect accumulated =
+       if step db statement then
+         collect (column_text statement 0 :: accumulated)
+       else List.rev accumulated
+      in
+      collect [])
+
+let purge_recipe_assignments db recipe_id =
+  with_transaction db (fun () ->
+      with_statement db "DELETE FROM assignments WHERE recipe_id = ?"
+       (fun statement ->
+         bind_text db statement 1 recipe_id;
+         ignore (step db statement)))
+
 let unknown_tag tag_id =
   raise
     (Problem
@@ -545,7 +564,11 @@ let not_found () =
 
 let handle mode db request =
   let method_ = Dream.method_ request |> Dream.method_to_string in
-  let segments = path_segments request in
+  let rec trim_trailing_empty = function
+    | "" :: rest -> trim_trailing_empty rest
+    | reversed_segments -> List.rev reversed_segments
+  in
+  let segments = path_segments request |> List.rev |> trim_trailing_empty in
   let allowed methods =
     if List.mem method_ methods then None else Some (method_not_allowed methods)
   in
@@ -571,6 +594,18 @@ let handle mode db request =
     | Ok json -> respond (fun () -> operation json)
   in
   let empty () = Dream.empty `No_Content in
+  let backup_mutation =
+    mode = Backup
+    && List.mem method_ [ "POST"; "PUT"; "PATCH"; "DELETE" ]
+    && (match segments with "maintenance" :: _ -> false | _ -> true)
+  in
+  if backup_mutation then
+    Lwt.return
+      (problem_response
+         (problem 503 "Service Unavailable"
+            "Application writes are unavailable during backup maintenance."
+            "maintenance-mode"))
+  else
   match segments with
   | [ "health" ] -> (
       match allowed [ "GET" ] with
@@ -595,6 +630,44 @@ let handle mode db request =
                     (problem 503 "Database unavailable"
                        "The tags database is unavailable."
                        "database-unavailable"))))
+  | [ "maintenance"; "status" ] ->
+      if mode <> Backup then Lwt.return (not_found ())
+      else if method_ <> "GET" then Lwt.return (method_not_allowed [ "GET" ])
+      else
+        Lwt.return
+          (json_response
+             (`Assoc
+               [
+                 ("version", `Int 1);
+                 ("service", `String "tags");
+                 ("mode", `String "backup");
+               ]))
+  | [ "maintenance"; "recipe-ids" ] ->
+      if mode <> Backup then Lwt.return (not_found ())
+      else if method_ <> "GET" then Lwt.return (method_not_allowed [ "GET" ])
+      else
+        respond (fun () ->
+            `Assoc
+              [
+                ( "recipeIds",
+                  `List
+                    (List.map
+                       (fun id -> `String id)
+                       (assigned_recipe_ids db)) );
+              ]
+            |> json_response |> Lwt.return)
+  | [ "maintenance"; "recipes"; "purge" ] ->
+      if mode <> Backup then Lwt.return (not_found ())
+      else if method_ <> "POST" then Lwt.return (method_not_allowed [ "POST" ])
+      else
+        with_json request (fun json ->
+            let fields = object_fields json in
+            reject_unknown_fields fields [ "recipeId" ];
+            let recipe_id = string_field "recipeId" fields in
+            if recipe_id = "" then
+              invalid_request ~field:"recipeId" "The recipe ID must not be empty.";
+            purge_recipe_assignments db recipe_id;
+            empty ())
   | [ "tags" ] | [ "tags"; "" ] -> (
       match method_ with
       | "GET" ->

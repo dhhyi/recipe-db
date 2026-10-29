@@ -69,6 +69,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
+backupRole: cleanup-participant
 prettier:
   ignore:
     - "*.lua"

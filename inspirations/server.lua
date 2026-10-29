@@ -3,8 +3,8 @@ local json = require "dkjson"
 local logger = require("milua_log")
 
 local mode = os.getenv("MODE") or "production"
-if mode ~= "production" and mode ~= "testing" then
-    io.stderr:write("Invalid MODE; expected production or testing\n")
+if mode ~= "production" and mode ~= "testing" and mode ~= "backup" then
+    io.stderr:write("Invalid MODE; expected production, testing or backup\n")
     os.exit(1)
 end
 
@@ -32,8 +32,30 @@ print("Database location: " .. db_location)
 local function load_data()
     local file = io.open(db_location, "r")
     if file then
-        data = json.decode(file:read("*a")) or {}
+        local contents = file:read("*a")
         file:close()
+        local loaded, _, decode_error = json.decode(contents)
+        if type(loaded) ~= "table" then
+            io.stderr:write("Cannot read inspirations storage: ",
+                            tostring(decode_error or "expected a JSON object"),
+                            "\n")
+            os.exit(1)
+        end
+        for recipe_id, urls in pairs(loaded) do
+            if type(recipe_id) ~= "string" or type(urls) ~= "table" then
+                io.stderr:write(
+                    "Cannot read inspirations storage: invalid recipe record\n")
+                os.exit(1)
+            end
+            for _, url in pairs(urls) do
+                if type(url) ~= "string" then
+                    io.stderr:write(
+                        "Cannot read inspirations storage: invalid URL record\n")
+                    os.exit(1)
+                end
+            end
+        end
+        data = loaded
     end
 end
 
@@ -67,19 +89,92 @@ local function check_input(array)
 end
 
 -- RFC 9457 Problem Details body, mirroring the recipes service's error shape.
-local function problem_details(status, title, detail, code)
-    local body = json.encode({
+local function problem_details(status, title, detail, code, field)
+    local problem = {
         type = "about:blank",
         title = title,
         status = status,
         detail = detail,
         code = code
-    })
+    }
+    if field then problem.field = field end
+    local body = json.encode(problem)
     return body, {
         ["Content-Type"] = "application/problem+json",
         [":status"] = tostring(status)
     }
 end
+
+local function maintenance_status()
+    if mode ~= "backup" then
+        return problem_details(404, "Not Found", "Route not found", "not-found")
+    end
+    return
+        json.encode({version = 1, service = "inspirations", mode = "backup"}),
+        {["Content-Type"] = "application/json"}
+end
+
+local function maintenance_recipe_ids()
+    if mode ~= "backup" then
+        return problem_details(404, "Not Found", "Route not found", "not-found")
+    end
+    local ids = {}
+    for recipe_id in pairs(data) do table.insert(ids, recipe_id) end
+    table.sort(ids)
+    return json.encode({recipeIds = ids}),
+           {["Content-Type"] = "application/json"}
+end
+
+local function purge_recipe(_captures, _query, headers, body)
+    if mode ~= "backup" then
+        return problem_details(404, "Not Found", "Route not found", "not-found")
+    end
+    local content_type = headers and
+                             (headers["content-type"] or headers["Content-Type"])
+    if type(content_type) ~= "string" or
+        content_type:lower():match("^%s*([^;]+)") ~= "application/json" then
+        return problem_details(415, "Unsupported Media Type",
+                               "Expected application/json",
+                               "unsupported-content-type")
+    end
+    local document = json.decode(body or "")
+    if type(document) ~= "table" then
+        return problem_details(400, "Bad Request", "Invalid JSON",
+                               "invalid-input")
+    end
+    for field in pairs(document) do
+        if field ~= "recipeId" then
+            return problem_details(400, "Bad Request", "Unknown field",
+                                   "invalid-input", field)
+        end
+    end
+    if type(document.recipeId) ~= "string" or document.recipeId == "" then
+        return problem_details(400, "Bad Request",
+                               "Expected a non-empty recipeId", "invalid-input",
+                               "recipeId")
+    end
+
+    local updated_data = {}
+    for key, values in pairs(data) do
+        if key ~= document.recipeId then updated_data[key] = values end
+    end
+    local saved, save_error = save_data(updated_data)
+    if not saved then
+        io.stderr:write("Cannot purge inspirations: ", tostring(save_error),
+                        "\n")
+        return problem_details(500, "Internal Server Error",
+                               "Cannot delete inspirations", "storage-error")
+    end
+    data = updated_data
+    return nil, {[":status"] = "204"}
+end
+
+app.add_handler("GET", "/maintenance/status", maintenance_status)
+app.add_handler("GET", "/maintenance/status/", maintenance_status)
+app.add_handler("GET", "/maintenance/recipe-ids", maintenance_recipe_ids)
+app.add_handler("GET", "/maintenance/recipe-ids/", maintenance_recipe_ids)
+app.add_handler("POST", "/maintenance/recipes/purge", purge_recipe)
+app.add_handler("POST", "/maintenance/recipes/purge/", purge_recipe)
 
 local function delete_all()
     if mode ~= "testing" then
@@ -115,6 +210,11 @@ app.add_handler("GET", "/inspirations/...", function(captures)
 end)
 
 app.add_handler("PUT", "/inspirations/...", function(captures, _q, _h, body)
+    if mode == "backup" then
+        return problem_details(503, "Service Unavailable",
+                               "Application writes are unavailable during backup maintenance",
+                               "maintenance-mode")
+    end
     local recipe_id = captures[1]
 
     local decoded = json.decode(body)
@@ -142,6 +242,11 @@ app.add_handler("PUT", "/inspirations/...", function(captures, _q, _h, body)
 end)
 
 app.add_handler("DELETE", "/inspirations/...", function(captures)
+    if mode == "backup" then
+        return problem_details(503, "Service Unavailable",
+                               "Application writes are unavailable during backup maintenance",
+                               "maintenance-mode")
+    end
     local recipe_id = captures[1]
     local inspirations = data[recipe_id]
 

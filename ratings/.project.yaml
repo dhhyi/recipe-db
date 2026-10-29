@@ -72,9 +72,11 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
+backupRole: cleanup-participant
 prettier:
   ignore:
     - "*.io"
 check: |
   io --version
   timeout 10 io tests/coroutines.io
+  io tests/maintenance.io

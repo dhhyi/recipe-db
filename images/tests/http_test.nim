@@ -6,6 +6,9 @@ const
   root = "tests/http-test-data"
   base = "http://127.0.0.1:18432"
 
+proc filename(metadata: JsonNode, key: string): string =
+  decodeUrl(metadata[key].getStr[8 .. ^1], decodePlus = false)
+
 proc serverEnvironment(mode: Option[string], maxPixels, maxUploadBytes: int): StringTableRef =
   result = newStringTable(modeCaseSensitive)
   for key, value in envPairs():
@@ -38,7 +41,7 @@ proc startServer(mode = some("testing"), maxPixels = 40_000_000,
   raise newException(IOError, "Test server did not become ready")
 
 proc checkInvalidMode(mode: string) =
-  let environment = serverEnvironment(some(mode), none(string),
+  let environment = serverEnvironment(some(mode),
       40_000_000, 10 * 1024 * 1024)
   let server = startProcess("./server", env = environment,
       options = {poParentStreams})
@@ -52,7 +55,7 @@ proc stopServer(server: Process) =
 
 suite "backend HTTP publication contract":
   test "validates mode values and rejects unsupported configuration":
-    for mode in ["", "backup", "Production", " production", "testing "]:
+    for mode in ["", "Production", " production", "testing "]:
       checkInvalidMode(mode)
 
   test "off-center crop pixels, strict errors and failed saves preserve the complete pair":
@@ -273,8 +276,6 @@ suite "backend HTTP publication contract":
     discard deletedImage.body
     client.close()
     server.stopServer()
-    client.close()
-    server.stopServer()
     server = startServer(mode = some("production"))
     let explicitProduction = client.request(base & "/images", httpMethod = HttpDelete)
     check explicitProduction.code == Http404
@@ -297,3 +298,90 @@ suite "backend HTTP publication contract":
     let repeated = client.request(base & "/images", httpMethod = HttpDelete)
     check repeated.code == Http204
     discard repeated.body
+
+  test "backup maintenance APIs enumerate, compact, purge, and block writes":
+    if dirExists(root):
+      removeDir(root)
+    var server = startServer(mode = some("backup"))
+    let client = newHttpClient(timeout = 5000)
+    defer:
+      client.close()
+      server.stopServer()
+      if dirExists(root):
+        removeDir(root)
+
+    let store = ImageStorage(root: root)
+    let a = newImage(648, 486)
+    let aThumb = newImage(300, 225)
+    a.fill(parseHtmlColor("#ff0000"))
+    aThumb.fill(parseHtmlColor("#ff0000"))
+    let b = newImage(648, 486)
+    let bThumb = newImage(300, 225)
+    b.fill(parseHtmlColor("#0000ff"))
+    bThumb.fill(parseHtmlColor("#0000ff"))
+    let first = store.publish("recipe-a", a.encodeImage(PngFormat),
+        aThumb.encodeImage(PngFormat))
+    let superseded = store.publish("recipe-a", b.encodeImage(PngFormat),
+        bThumb.encodeImage(PngFormat))
+    let current = store.publish("recipe-a", a.encodeImage(PngFormat),
+        aThumb.encodeImage(PngFormat))
+    discard store.publish("recipe-c", b.encodeImage(PngFormat),
+        bThumb.encodeImage(PngFormat))
+    writeFile(store.manifestPath("recipe-c"), "{")
+
+    let status = client.get(base & "/maintenance/status")
+    check status.code == Http200
+    check parseJson(status.body) == %*{
+      "version": 1, "service": "images", "mode": "backup"}
+    let listed = client.get(base & "/maintenance/recipe-ids/")
+    check listed.code == Http200
+    check parseJson(listed.body)["recipeIds"] == %*["recipe-a", "recipe-c"]
+
+    let jsonHeaders = newHttpHeaders({"Content-Type": "application/json"})
+    let compact = client.request(base & "/maintenance/images/compact",
+        httpMethod = HttpPost, body = """{"recipeId":"recipe-a"}""",
+        headers = jsonHeaders)
+    check compact.code == Http204
+    check store.metadata("recipe-a") == current
+    check fileExists(store.publicFolder / first.filename("url"))
+    check not fileExists(store.publicFolder / superseded.filename("url"))
+    check not fileExists(store.publicFolder / superseded.filename("thumbUrl"))
+
+    let purge = client.request(base & "/maintenance/recipes/purge/",
+        httpMethod = HttpPost, body = """{"recipeId":"recipe-c"}""",
+        headers = jsonHeaders)
+    check purge.code == Http204
+    let repeated = client.request(base & "/maintenance/recipes/purge",
+        httpMethod = HttpPost, body = """{"recipeId":"recipe-c"}""",
+        headers = jsonHeaders)
+    check repeated.code == Http204
+    check parseJson(client.getContent(base & "/maintenance/recipe-ids"))["recipeIds"] ==
+        %*["recipe-a"]
+
+    let blockedUpload = client.request(base & "/images/recipe-a",
+        httpMethod = HttpPost, body = "not an image",
+        headers = newHttpHeaders({"Content-Type": "image/png"}))
+    check blockedUpload.code == Http503
+    check parseJson(blockedUpload.body)["code"].getStr == "maintenance-mode"
+    let blockedDelete = client.request(base & "/images/recipe-a",
+        httpMethod = HttpDelete)
+    check blockedDelete.code == Http503
+    check parseJson(blockedDelete.body)["code"].getStr == "maintenance-mode"
+    let blockedReset = client.request(base & "/images", httpMethod = HttpDelete)
+    check blockedReset.code == Http404
+    check fileExists(store.manifestPath("recipe-a"))
+
+    writeFile(store.manifestPath("recipe-a"), "{")
+    let invalidState = client.request(base & "/maintenance/images/compact",
+        httpMethod = HttpPost, body = """{"recipeId":"recipe-a"}""",
+        headers = jsonHeaders)
+    check invalidState.code == Http409
+    check parseJson(invalidState.body)["code"].getStr == "image-state-invalid"
+    check parseImageName(extractFilename(store.publicFolder / first.filename("url"))).valid
+
+    client.close()
+    server.stopServer()
+    server = startServer(mode = some("testing"))
+    let unavailable = client.get(base & "/maintenance/status")
+    check unavailable.code == Http404
+    check parseJson(unavailable.body)["code"].getStr == "not-found"

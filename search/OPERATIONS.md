@@ -34,6 +34,10 @@ The devcontainer installs Python and `graphql-core` and generates constants on i
 
 `POST /search` accepts a flat object of Typesense options. Defaults are `query_by=name,method,ingredients` and `num_typos=2`. Only recipe IDs are returned; field selection and highlighting options cannot override this.
 
+### Backup mode
+
+Search accepts the shared `MODE=production|testing|backup` contract, defaulting an absent `MODE` to production and rejecting empty or unknown values. In backup mode it does not start the NATS/rebuild worker, so it cannot autonomously write derived index state. Application search and rebuild requests return 503 Problem Details with code `maintenance-mode`; `GET /health` remains available and reports `ready: true` for the backup-mode service. Search is derived data, not backup authority; the #43 lifecycle is responsible for refreshing it before restoring client access.
+
 ```sh
 curl --fail-with-body http://localhost:3000/search \
   -H 'Content-Type: application/json' \

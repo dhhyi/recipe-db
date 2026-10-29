@@ -13,6 +13,7 @@ use axum::Router;
 use subtle::ConstantTimeEq;
 
 pub mod auth;
+mod backup_cleanup;
 mod events;
 mod image_inline;
 mod images;
@@ -92,6 +93,23 @@ async fn trusted_graphql_ingress(
     }
     request.headers_mut().remove(INGRESS_HEADER);
     Ok(next.run(request).await)
+}
+
+async fn backup_mode_barrier(
+    State(mode): State<mode::RuntimeMode>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if mode == mode::RuntimeMode::Backup {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .header("content-type", "application/problem+json")
+            .body(Body::from(
+                r#"{"type":"about:blank","title":"Service Unavailable","status":503,"detail":"Application requests are unavailable during backup maintenance","code":"maintenance-mode"}"#,
+            ))
+            .expect("valid maintenance response");
+    }
+    next.run(request).await
 }
 
 async fn graphql(
@@ -236,6 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("{}", schema::build_schema(runtime_mode, None).sdl());
             return Ok(());
         }
+        Some("backup-cleanup") => return backup_cleanup::run().await,
         Some("provision-events") => return events::provision().await,
         _ => {}
     }
@@ -264,19 +283,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    let ingress_secret = if runtime_mode == mode::RuntimeMode::Production {
+    let ingress_secret = if runtime_mode != mode::RuntimeMode::Testing {
         Some(IngressSecret::parse(std::fs::read_to_string(
             "/run/secrets/graphql-ingress-secret",
         )?)?)
     } else {
         None
     };
-    let graphql_route = if runtime_mode == mode::RuntimeMode::Production {
+    let graphql_route = if runtime_mode != mode::RuntimeMode::Testing {
         post(graphql).get(graphql)
     } else {
         get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) }).post(graphql)
     };
-    let graphql_app = Router::new().route("/graphql", graphql_route);
+    let graphql_app =
+        Router::new()
+            .route("/graphql", graphql_route)
+            .route_layer(middleware::from_fn_with_state(
+                runtime_mode,
+                backup_mode_barrier,
+            ));
     let graphql_app = if let Some(secret) = ingress_secret {
         graphql_app
             .route_layer(middleware::from_fn_with_state(
@@ -297,7 +322,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 #[cfg(test)]
 mod ingress_tests {
-    use super::{mutation_request_error, trusted_graphql_ingress, IngressSecret, INGRESS_HEADER};
+    use super::{
+        backup_mode_barrier, mutation_request_error, trusted_graphql_ingress, IngressSecret,
+        INGRESS_HEADER,
+    };
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
 
@@ -415,6 +443,64 @@ mod ingress_tests {
         assert_eq!(response.status(), StatusCode::OK);
         assert!(!response.headers().contains_key(INGRESS_HEADER));
         assert_eq!(response.text().await.unwrap(), "accepted");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn backup_barrier_rejects_all_graphql_http_requests_without_running_handlers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static HANDLER_CALLS: AtomicUsize = AtomicUsize::new(0);
+        async fn handler() -> &'static str {
+            HANDLER_CALLS.fetch_add(1, Ordering::SeqCst);
+            "executed"
+        }
+
+        HANDLER_CALLS.store(0, Ordering::SeqCst);
+        let app = Router::new()
+            .route("/graphql", get(handler).post(handler))
+            .route_layer(middleware::from_fn_with_state(
+                crate::mode::RuntimeMode::Backup,
+                backup_mode_barrier,
+            ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+
+        for (method, body, content_type) in [
+            ("GET", "", "application/json"),
+            ("POST", r#"{"query":"{ __typename }"}"#, "application/json"),
+            (
+                "POST",
+                "multipart boundary and upload",
+                "multipart/form-data",
+            ),
+            (
+                "POST",
+                r#"[{"query":"{ __typename }"}]"#,
+                "application/json",
+            ),
+        ] {
+            let response = client
+                .request(method.parse().unwrap(), format!("http://{address}/graphql"))
+                .header("content-type", content_type)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response.headers().get("content-type").unwrap(),
+                "application/problem+json"
+            );
+            assert_eq!(
+                response.json::<serde_json::Value>().await.unwrap()["code"],
+                "maintenance-mode"
+            );
+        }
+
+        assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
         server.abort();
     }
 }
