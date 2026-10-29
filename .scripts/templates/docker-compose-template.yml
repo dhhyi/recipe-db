@@ -69,6 +69,18 @@
 #@           "tmpfs": ["/data"],
 #@         }
 #@       end
+#@       if "recipes" in services:
+#@         services["tags-recipes-test-api"] = {
+#@           "build": {"context": "recipes", "cache_from": ["type=registry,ref=ghcr.io/dhhyi/recipe-db-recipes-cache" + options.registryCacheSuffix]},
+#@           "image": "ghcr.io/dhhyi/recipe-db-recipes:latest",
+#@           "container_name": "tags-recipes-test-api",
+#@           "networks": ["intranet"],
+#@           "profiles": ["test"],
+#@           "restart": "no",
+#@           "environment": {"DATA_LOCATION": "/data", "MODE": "testing"},
+#@           "tmpfs": ["/data"],
+#@         }
+#@       end
 #@     end
 #@   end
 #@   graphql = services["graphql"]

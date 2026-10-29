@@ -18,14 +18,17 @@ class TagsSpec extends Specification {
 	static String api
 	static String productionApi
 	static String fixtureApi
+	static String recipesApi
 
 	def setupSpec() {
 		api = requiredEnvironment('TAGS_API')
 		productionApi = requiredEnvironment('TAGS_PRODUCTION_API')
 		fixtureApi = requiredEnvironment('FIXTURE_API')
+		recipesApi = requiredEnvironment('TAGS_RECIPES_API')
 		RestAssured.enableLoggingOfRequestAndResponseIfValidationFails()
 		waitForHealth(api)
 		waitForHealth(productionApi)
+		waitForHealth(recipesApi)
 		waitForStatus("${fixtureApi}/tags.json", 200)
 	}
 
@@ -46,16 +49,20 @@ class TagsSpec extends Specification {
 
 	private static void waitForStatus(String endpoint, int expectedStatus) {
 		long deadline = System.nanoTime() + 30_000_000_000L
+		String lastResult = 'no response'
 		while (System.nanoTime() < deadline) {
 			try {
-				if (given().get(endpoint).statusCode() == expectedStatus) {
+				int status = given().get(endpoint).statusCode()
+				lastResult = "HTTP ${status}"
+				if (status == expectedStatus) {
 					return
 				}
-			} catch (Exception ignored) {
+			} catch (java.net.ConnectException error) {
+				lastResult = error.message
 			}
 			Thread.sleep(250)
 		}
-		throw new AssertionError("Tags service did not become ready at ${endpoint}")
+		throw new AssertionError("Tags service did not become ready at ${endpoint}: ${lastResult}")
 	}
 
 	private static String segment(String value) {
@@ -161,6 +168,9 @@ class TagsSpec extends Specification {
 
 		where:
 		name << [
+			'',
+			' \u00a0 ',
+			'a' * 101,
 			'!!!',
 			'\u0301',
 			'ø',
@@ -168,6 +178,41 @@ class TagsSpec extends Specification {
 			'caféø',
 			'a\nb'
 		]
+	}
+
+	def 'display names normalize Unicode whitespace and NFC while inventory sorts by display'() {
+		expect:
+		create('course', '\u00a0Cafe\u0301\u00a0').then()
+				.statusCode(201).body('name', equalTo('Café')).body('id', equalTo('course-cafe'))
+		create('course', 'A-y').statusCode() == 201
+		create('course', 'A!z').statusCode() == 201
+		create('cuisine', 'Thai').statusCode() == 201
+		given().get("${api}/tags").jsonPath().getList('name') == ['Thai', 'A!z', 'A-y', 'Café']
+	}
+
+	@Unroll
+	def 'invalid bulk payload #payload preserves confirmed assignments'() {
+		given:
+		def tag = create('course', 'Kept').jsonPath().getMap('')
+		String path = "${api}/tags/recipes/invalid-bulk"
+		given().put("${path}/assignments/${tag.id}").then().statusCode(204)
+
+		expect:
+		given().contentType('application/json').body(payload).patch(path).then()
+				.statusCode(422).contentType('application/problem+json').body('code', equalTo(code))
+		given().get(path).jsonPath().getList('id') == [tag.id]
+		given().contentType('application/json').body('{}').patch(path).then()
+				.statusCode(200).body('id', contains(tag.id))
+
+		where:
+		payload                                  | code
+		'[]'                                     | 'invalid-request'
+		'{"addTagIds":null}'                      | 'invalid-tag-ids'
+		'{"addTagIds":"course-kept"}'              | 'invalid-tag-ids'
+		'{"addTagIds":[1]}'                       | 'invalid-tag-ids'
+		'{"removeTagIds":[""]}'                   | 'invalid-tag-ids'
+		'{"removeTagIds":["course-missing"]}'     | 'unknown-tag'
+		'{"addTagIds":[],"addTagIds":["bad"]}'     | 'invalid-request'
 	}
 
 	def 'malformed JSON media type and object shapes produce Problem Details'() {
@@ -277,6 +322,36 @@ class TagsSpec extends Specification {
 		given().delete("${api}/tags/${tag.id}").statusCode() == 204
 	}
 
+	def 'ordinary recipe create and edit leave independent tag assignments unchanged'() {
+		given:
+		def recipe = given().contentType('application/json')
+				.body([name: 'Tagged recipe', servings: 2]).post("${recipesApi}/recipes")
+				.then().statusCode(201).extract().jsonPath().getMap('')
+		def tag = create('course', 'Main').jsonPath().getMap('')
+		String assignments = "${api}/tags/recipes/${recipe.id}"
+		given().put("${assignments}/assignments/${tag.id}").then().statusCode(204)
+
+		when:
+		given().contentType('application/merge-patch+json')
+				.body([name: 'Edited recipe', servings: 4])
+				.patch("${recipesApi}/recipes/${recipe.id}").then().statusCode(200)
+		def untagged = given().contentType('application/json')
+				.body([name: 'Untagged recipe', servings: 1]).post("${recipesApi}/recipes")
+				.then().statusCode(201).extract().jsonPath().getMap('')
+
+		then:
+		given().get(assignments).jsonPath().getList('id') == [tag.id]
+		given().get("${api}/tags/recipes/${untagged.id}").jsonPath().getList('').isEmpty()
+
+		cleanup:
+		if (recipe?.id) {
+			given().delete("${recipesApi}/recipes/${recipe.id}").then().statusCode(204)
+		}
+		if (untagged?.id) {
+			given().delete("${recipesApi}/recipes/${untagged.id}").then().statusCode(204)
+		}
+	}
+
 	def 'test reset clears inventory and assignments and production reset preserves data'() {
 		given:
 		def tag = create('course', 'Reset me').jsonPath().getMap('')
@@ -298,6 +373,13 @@ class TagsSpec extends Specification {
 		given().get("${productionApi}/tags").jsonPath().getList('id') == [productionTag.id]
 		given().get("${productionApi}/tags/recipes/production-recipe")
 				.jsonPath().getList('id') == [productionTag.id]
+
+		cleanup:
+		if (productionTag?.id) {
+			given().delete("${productionApi}/tags/recipes/production-recipe/assignments/${productionTag.id}")
+					.then().statusCode(204)
+			given().delete("${productionApi}/tags/${productionTag.id}").then().statusCode(204)
+		}
 	}
 
 	def 'simultaneous normalized creates yield exactly one winner'() {
@@ -320,6 +402,9 @@ class TagsSpec extends Specification {
 		statuses.count { it == 201 } == 1
 		statuses.count { it == 409 } == 11
 		given().get("${api}/tags").jsonPath().getList('').size() == 1
+
+		cleanup:
+		pool.shutdownNow()
 	}
 
 	def 'assignment and delete races never create dangling assignments'() {
@@ -350,5 +435,8 @@ class TagsSpec extends Specification {
 		} else {
 			given().get("${api}/tags/recipes/race-recipe").jsonPath().getList('').isEmpty()
 		}
+
+		cleanup:
+		pool.shutdownNow()
 	}
 }

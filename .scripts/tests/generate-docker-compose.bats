@@ -164,7 +164,27 @@ EOF
 }
 
 setup_tags() {
-  mkdir tags tags-test
+  mkdir tags tags-test recipes
+  cat > recipes/.project.yaml << 'EOF'
+devcontainer:
+  ports: [5000]
+  environment:
+    MODE: testing
+traefik:
+  labels:
+    http:
+      services:
+        recipe-db-recipes:
+          loadBalancer:
+            healthCheck:
+              path: /health
+      routers:
+        recipes:
+          rule: "PathPrefix(`/recipes`)"
+          entrypoints: rest-internal
+---
+category: backend
+EOF
   cat > tags/.project.yaml << 'EOF'
 devcontainer:
   ports: [8900]
@@ -221,7 +241,7 @@ assert_compose() {
     and .services.test.command == ["/bin/sh", "-c", "echo tested"]
     and .services.test.volumes == ["./test/target:/app/target"]
     and all(.services | to_entries[] | select(.value | has("build"));
-      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" else . end) as $project
+      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" else . end) as $project
       | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $project + "-cache"]
       and (.value.build | has("cache_to") | not))
     and .volumes["nats-data"].name == "recipe-db-nats-data"
@@ -238,6 +258,9 @@ assert_compose() {
     and .services["tags-production-test-api"].environment.MODE == "production"
     and (.services["tags-production-test-api"].environment | has("PRODUCTION") | not)
     and .services["tags-production-test-api"].tmpfs == ["/data"]
+    and .services["tags-recipes-test-api"].environment.MODE == "testing"
+    and .services["tags-recipes-test-api"].tmpfs == ["/data"]
+    and (.services["tags-recipes-test-api"] | has("labels") | not)
     and (.volumes | has("data") | not)
   '
   [ -s oauth2-proxy-alpha.yml ]
@@ -270,7 +293,7 @@ assert_compose() {
   # shellcheck disable=SC2016
   assert_compose '
     all(.services | to_entries[] | select(.value | has("build"));
-      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" else . end) as $project
+      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" else . end) as $project
       | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $project + "-cache-arm64"]
       and (.value.build | has("cache_to") | not))
   '

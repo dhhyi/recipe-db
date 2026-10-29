@@ -18,11 +18,12 @@ devcontainer:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     TAGS_API: http://tags-test-api:8900
     TAGS_PRODUCTION_API: http://tags-production-test-api:8900
+    TAGS_RECIPES_API: http://tags-recipes-test-api:5000
     FIXTURE_API: http://fixtures:80/tags-test-fixture
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
-    peacock.remoteColor: "#755d93"
+    peacock.remoteColor: "#ae5dc9"
   extensions:
     - johnpapa.vscode-peacock
     - vscjava.vscode-java-pack
