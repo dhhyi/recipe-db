@@ -33,4 +33,4 @@ ENV HOME=/app \
 
 EXPOSE 5000
 
-CMD ["/app/bin/recipes", "start"]
+CMD ["/bin/sh", "-c", "APP_MODE=\"${MODE-production}\" exec /app/bin/recipes start"]
