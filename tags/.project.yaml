@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-tags
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-tags
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - build-essential
+      - libev-dev
+      - libgmp-dev
+      - libssl-dev
+      - libsqlite3-dev
+      - m4
+      - pkg-config
+    user:
+      - RUN mise use -g opam@2.3.0
+  initialize: |
+    opam init --disable-sandboxing --bare --yes
+    opam switch list --short | grep -Fxq 5.3.0 || opam switch create 5.3.0 --jobs=2 --yes
+    opam install --switch=5.3.0 --deps-only --yes ./tags.opam
+  ports:
+    - 8900
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    MODE: testing
+    PRODUCTION: "false"
+    DATA_LOCATION: /data
+vscode:
+  settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
+    peacock.remoteColor: "#c994db"
+  extensions:
+    - johnpapa.vscode-peacock
+    - ocamllabs.ocaml-platform
+extras:
+  - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.opam: recipe-db-tags-opam-cache
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-tags:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        tags:
+          rule: PathPrefix(`/tags`)
+          entrypoints: rest-internal
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: backend
+format: opam exec --switch=5.3.0 -- dune fmt
+check: |
+  opam exec --switch=5.3.0 -- dune build --profile release
+  opam exec --switch=5.3.0 -- dune runtest
+test: opam exec --switch=5.3.0 -- dune runtest
+prettier:
+  ignore:
+    - "*.ml"
+    - "*.mli"
+    - "*.opam"
+    - dune
+    - dune-project

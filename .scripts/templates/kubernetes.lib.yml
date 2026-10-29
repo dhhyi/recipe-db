@@ -82,6 +82,9 @@
 #@   if durable:
 #@     env["DATA_LOCATION"] = "/data"
 #@   end
+#@ if name == "tags":
+#@   env["PRODUCTION"] = "true"
+#@ end
 #@   if name == "graphql":
 #@     env.update({"REST_ENDPOINT": "http://traefik:3000", "AUTH_TRUSTED_ISSUER": cfg["runtime"]["trustedIssuer"], "NATS_URL": "nats://nats:4222"})
 #@     secrets = ["auth-accounts.json", "graphql-ingress-secret"]

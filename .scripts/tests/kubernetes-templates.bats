@@ -106,6 +106,17 @@ render() {
   ' manifests.json
 }
 
+@test "tags workload has durable storage and production reset protection" {
+  render values.json
+  jq -e '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "tags") |
+    any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production")
+    and any(.spec.template.spec.containers[0].env[]; .name == "PRODUCTION" and .value == "true")
+    and any(.spec.template.spec.containers[0].env[]; .name == "DATA_LOCATION" and .value == "/data")
+    and any(.spec.template.spec.volumes[]; .persistentVolumeClaim.claimName == "tags")
+  ' manifests.json
+}
+
 @test "Kubernetes OAuth alpha config requires PKCE, verified issuer, email, and nonce" {
   render values.json
   jq -er '

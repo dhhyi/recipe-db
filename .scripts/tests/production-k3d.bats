@@ -23,7 +23,7 @@ setup() {
     namespace:"recipe-db",origin:"http://127.0.0.1:8080",httpPort:8080,apiPort:6445,
     timeoutSeconds:600,storageClass:"local-path",
     volumes:{recipes:"1Gi",images:"1Gi",ratings:"1Gi",inspirations:"1Gi",
-      "image-inline":"256Mi","link-extract":"256Mi",nats:"1Gi",typesense:"1Gi",search:"1Gi",redis:"1Gi"},
+      "image-inline":"256Mi","link-extract":"256Mi",nats:"1Gi",typesense:"1Gi",search:"1Gi",redis:"1Gi",tags:"256Mi"},
     resources:{requests:{cpu:"25m",memory:"32Mi"},limits:{memory:"512Mi"}},
     infrastructure:{traefik:"traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",nats:"nats:2.11.0",typesense:"typesense/typesense:30.0",
       maintenance:"nginx:1.28",oauth2Proxy:"quay.io/oauth2-proxy/oauth2-proxy:v7.9.0",redis:"redis:8.0"},

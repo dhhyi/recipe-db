@@ -1,0 +1,23 @@
+opam-version: "2.0"
+name: "tags"
+version: "0.1.0"
+synopsis: "Private categorized recipe tags service"
+homepage: "https://github.com/dhhyi/recipe-db"
+bug-reports: "https://github.com/dhhyi/recipe-db/issues"
+maintainer: "recipe-db"
+authors: "recipe-db"
+license: "MIT"
+depends: [
+  "ocaml" {= "5.3.0"}
+  "dune" {= "3.23.1"}
+  "dream" {= "1.0.0"}
+  "lwt" {= "6.1.2"}
+  "sqlite3" {= "5.2.0"}
+  "yojson" {= "2.2.2"}
+  "uunf" {= "15.0.0"}
+  "uucp" {= "15.0.0"}
+  "ocamlformat" {= "0.27.0"}
+]
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]
