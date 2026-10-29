@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${RECIPE_DB_SKIP_PRECOMMIT:-}" == "1" ]]; then
+  printf '%s\n' 'Skipping pre-commit checks: cloud-agent checkpoint mode.' >&2
+  exit 0
+fi
+
 project_root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$project_root"
 

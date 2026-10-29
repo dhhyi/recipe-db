@@ -79,11 +79,25 @@ Project generator, format, and check commands invoked by Bazel must still run in
 
 ## Committing during autonomous implementation
 
-When implementing autonomously, commit each self-contained chunk of work as soon as it is done instead of one large commit at the end. Sessions can time out and lose uncommitted work.
+Unless the user asks to leave changes uncommitted, commit each self-contained implementation step before moving to the next instead of waiting until the whole task is done. Sessions can time out and lose uncommitted work.
 
 The pre-commit hook runs ShellCheck, all script regression test groups, and applicable project formatting/checks. Do not manually duplicate these standard checks before committing. During development, run only targeted tests needed to reproduce a bug or verify an intermediate change, preferably through the corresponding Bazel target so pre-commit can reuse its cache. Run broader checks manually only when explicitly requested, diagnosing a hook failure, or when no commit will be made.
 
 The pre-commit hook may apply formatting fixes and then abort the commit with `Files were probably changed by precommit script`. In that case, review the changes, stage the affected files again with `git add`, and repeat the commit.
+
+### Cloud-agent checkpoints
+
+For GitHub Actions-backed Copilot cloud agents, configure the repository's Agents variable `RECIPE_DB_SKIP_PRECOMMIT=1`. GitHub exposes it to the agent's commands; the pre-commit script logs the bypass and returns without running checks. Unset, empty, and other values preserve normal checks. Do not set this variable yourself to bypass checks in other environments.
+
+When `RECIPE_DB_SKIP_PRECOMMIT=1` is already configured, and the user has not asked to leave changes uncommitted:
+
+- Commit and publish the first meaningful implementation change before starting expensive validation. Use ordinary commits; `--no-verify` is unnecessary.
+- Commit and publish each coherent implementation step before moving to another step. Use the environment's supported publishing mechanism; local commits alone are not a durable checkpoint.
+- Preserve useful partial work even when tests fail. Identify known failures or pending validation in checkpoint messages; do not describe checkpoints as verified.
+- Run targeted tests during development; leave exhaustive checks to CI rather than manually running the skipped hook.
+- Before ending the session, commit and publish remaining useful changes and report unfinished work and validation.
+
+CI checks remain required before merging. The Publish workflow skips validation while the PR title contains `[WIP]`; remove that marker when requesting CI feedback.
 
 ## Modifying .project.yaml files
 
