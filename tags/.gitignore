@@ -1,0 +1,5 @@
+_build/
+.opam/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

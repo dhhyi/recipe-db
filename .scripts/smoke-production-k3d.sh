@@ -307,7 +307,7 @@ mark
 
 phase=ingress-negative
 for path in /api/rawdata /api/http/routers /api/http/services /api/http/middlewares /dashboard/ /oauth2/auth \
-  /recipes /ratings /inspirations /search/reindex /varz /jsz /collections /metrics /healthz /api/v1/namespaces; do
+  /recipes /ratings /inspirations /tags /search/reindex /varz /jsz /collections /metrics /healthz /api/v1/namespaces; do
   request "$path" --header 'Accept: application/json'
   expect_status 404
 done

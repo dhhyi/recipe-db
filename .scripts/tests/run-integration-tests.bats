@@ -156,6 +156,27 @@ EOF
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS search-test' "$MOCK_LOG"
 }
 
+@test "tags integration tests use isolated disposable instances and categorized fixtures" {
+  add_test_project tags-test
+  jq '.services["tags-test"] = {profiles: ["test"]}
+    | .services["tags-test-api"] = {profiles: ["test"]}
+    | .services["tags-production-test-api"] = {profiles: ["test"]}
+    | .services["tags-recipes-test-api"] = {profiles: ["test"]}' \
+    "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development tags-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test build fixtures tags-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test build tags-test-api tags-production-test-api tags-recipes-test-api' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test up -d --force-recreate tags-test-api tags-production-test-api tags-recipes-test-api' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm tags-test' "$MOCK_LOG"
+  mapfile -t commands < "$MOCK_LOG"
+  [ "${commands[-2]}" = "docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api" ]
+  [ "${commands[-1]}" = "docker compose --profile test stop fixtures" ]
+}
+
 @test "browser tests wait for the full frontend stack before running" {
   add_test_project e2e-test
   jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json

@@ -151,7 +151,7 @@ case "$path" in
         ;;
     esac
     ;;
-  /api/* | /dashboard/ | /oauth2/auth | /recipes | /ratings | /inspirations | /search/reindex | /varz | /jsz | /collections | /metrics | /healthz)
+  /api/* | /dashboard/ | /oauth2/auth | /recipes | /ratings | /inspirations | /tags | /search/reindex | /varz | /jsz | /collections | /metrics | /healthz)
     status=404
     [[ ${FAIL_BACKEND_EXPOSURE:-false} != true || $path != /recipes ]] || status=200
     printf 'not found' > "$output"
@@ -215,7 +215,7 @@ run_smoke() {
   [ "$status" -eq 1 ]
   grep -qF "driver deploy $ARTIFACT" "$MOCK_LOG"
   grep -qF /design/htmx.min.js "$MOCK_LOG"
-  for path in /recipes /ratings /inspirations /search/reindex /varz /jsz /collections /metrics /healthz /api/v1/namespaces; do
+  for path in /recipes /ratings /inspirations /tags /search/reindex /varz /jsz /collections /metrics /healthz /api/v1/namespaces; do
     grep -qF "$SMOKE_ORIGIN$path" "$MOCK_LOG"
   done
   [ "$(grep -c "$SMOKE_ORIGIN/mcp" "$MOCK_LOG")" -eq 6 ]

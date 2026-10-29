@@ -67,9 +67,16 @@ fi
 echo "WARNING: integration tests may modify application data. e2e-test deletes all recipes, ratings, images, and inspirations before each attempt, preserving the final attempt's data; volumes are not reset."
 
 fixture_started=false
+tags_test_instances_started=false
 group_open=false
 cleanup() {
   local status=$?
+  if [[ $tags_test_instances_started == true ]]; then
+    if ! docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api; then
+      echo "Failed to stop the disposable tags integration-test services." >&2
+      ((status == 0)) && status=1
+    fi
+  fi
   if [[ $fixture_started == true ]]; then
     if ! docker compose --profile test stop fixtures; then
       echo "Failed to stop the fixture service started by this test run." >&2
@@ -91,6 +98,12 @@ for project in "${projects[@]}"; do
 done
 
 docker compose --profile test build fixtures "${projects[@]}"
+for project in "${projects[@]}"; do
+  if [[ $project == tags-test ]]; then
+    docker compose --profile test build tags-test-api tags-production-test-api tags-recipes-test-api
+    break
+  fi
+done
 
 if ! docker compose --profile test ps --services --status running | grep -Fxq fixtures; then
   fixture_started=true
@@ -210,10 +223,16 @@ for project in "${projects[@]}"; do
       wait_for_http "search API" http://127.0.0.1:3000/search/reindex 200
       wait_for_fixture "$project" mcp-test-fixture/test.jpg
       ;;
+    tags-test) ;;
+
   esac
 done
 
 for project in "${projects[@]}"; do
+  if [[ $project == tags-test ]]; then
+    tags_test_instances_started=true
+    docker compose --profile test up -d --force-recreate tags-test-api tags-production-test-api tags-recipes-test-api
+  fi
   mkdir -p "$project/target/integration-tests"
   if [[ ${GITHUB_ACTIONS:-} == true ]]; then
     echo "::group::integration tests: $project" >&2

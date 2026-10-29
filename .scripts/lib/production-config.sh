@@ -38,7 +38,7 @@ production_config() {
       and .storageClass == "local-path"
     else .context != "k3d-recipe-db-rehearsal" end)
     and (.volumes | objectkeys(["recipes","images","ratings","inspirations","image-inline","link-extract",
-      "nats","typesense","search","redis"])
+      "nats","typesense","search","redis","tags"])
       and all(.[]; quantity))
     and (.resources | objectkeys(["requests","limits"])
       and (.requests | objectkeys(["cpu","memory"])

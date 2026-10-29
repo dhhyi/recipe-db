@@ -18,6 +18,7 @@ volumes:
   typesense: 1Gi
   search: 256Mi
   redis: 256Mi
+  tags: 256Mi
 resources:
   requests:
     cpu: 25m
