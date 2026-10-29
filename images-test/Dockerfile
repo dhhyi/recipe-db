@@ -1,7 +1,7 @@
 ARG TARGETARCH
 ARG HURL_VERSION
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS downloader
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS downloader
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl tar \
   && rm -rf /var/lib/apt/lists/*
@@ -20,7 +20,7 @@ RUN curl -fsSL "https://github.com/Orange-OpenSource/hurl/releases/download/${HU
 
 FROM download-${TARGETARCH} AS download
 
-FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libcurl4 libxml2 libssl3 \
   && rm -rf /var/lib/apt/lists/*

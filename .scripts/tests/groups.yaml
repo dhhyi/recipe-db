@@ -50,9 +50,15 @@ tasks:
     - .scripts/tests/mise-freshness.bats
     - .scripts/tests/precommit.bats
     - .scripts/tests/seed-demodata.bats
+    - .scripts/tests/update-docker-image-digests.bats
   inputs:
     - ":(glob).scripts/*.sh"
     - .scripts/lib/project-metadata.sh
+    - .scripts/docker-base-images.awk
+    - .scripts/external-image-references.awk
+    - .scripts/update-image-references.awk
+    - deploy/local.yaml
+    - deploy/pi.yaml
     - .github/workflows/publish.yaml
     - .scripts/tests/mocks/precommit-*
     - .scripts/tests/mocks/devcontainer-*

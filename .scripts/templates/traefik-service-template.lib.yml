@@ -1,6 +1,6 @@
 #@ def traefik_service():
 #@   service = {
-#@     "image": "traefik:v3.7",
+#@     "image": "traefik:v3@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",
 #@     "container_name": "traefik",
 #@     "command": ["--entrypoints.web.address=:80", "--entrypoints.rest-internal.address=:3000", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete", "--entrypoints.web.http.middlewares=identity-strip@docker", "--entrypoints.rest-internal.http.middlewares=identity-strip@docker", "--api=true", "--api.dashboard=true", "--log.level=INFO", "--providers.docker=true", "--providers.docker.exposedbydefault=false", "--global.sendAnonymousUsage"],
 #@     "ports": ["8080:80", "3000:3000"],

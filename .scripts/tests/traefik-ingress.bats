@@ -99,7 +99,7 @@ teardown() {
     --mount "type=bind,src=$FIXTURE_ROOT/traefik.yml,dst=/traefik_config.yml,readonly" \
     --mount "type=bind,src=$FIXTURE_ROOT/secrets/token,dst=/run/secrets/graphql-ingress-secret,readonly" \
     --mount "type=bind,src=$BATS_TEST_DIRNAME/../traefik-ingress-entrypoint.sh,dst=/ingress-entrypoint.sh,readonly" \
-    --tmpfs /run/traefik:mode=0700 --entrypoint /bin/sh traefik:v3.7 \
+    --tmpfs /run/traefik:mode=0700 --entrypoint /bin/sh traefik:v3 \
     /ingress-entrypoint.sh --api=true --providers.file.directory=/run/traefik \
     --entrypoints.web.address=:80 --entrypoints.rest-internal.address=:3000 \
     --entrypoints.web.http.aliasHeadersStrategy=delete \

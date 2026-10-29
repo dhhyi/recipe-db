@@ -1,10 +1,10 @@
-FROM golang:bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS builder
+FROM golang:bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS builder
 
 WORKDIR /ws
 
 COPY go.mod go.sum /ws/
 RUN go mod download
-RUN go install github.com/a-h/templ/cmd/templ@latest
+RUN go install github.com/a-h/templ/cmd/templ@v0.3.1020
 
 COPY *.go *.templ genqlient.yaml recipe-db.graphqls operations.graphql /ws/
 COPY src /ws/src

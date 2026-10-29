@@ -47,7 +47,7 @@ production_config() {
       and (.limits | objectkeys(["memory"]) and (.memory | quantity)))
     and (.infrastructure | objectkeys(["traefik","nats","typesense","maintenance","oauth2Proxy","redis"])
       and all(.[]; image)
-      and (.traefik | test("^traefik:v3[.]7[.][0-9]+@sha256:[0-9a-f]{64}$")))
+      and (.traefik | test("^traefik:v3([.]([7-9]|[1-9][0-9])([.][0-9]+)?)?@sha256:[0-9a-f]{64}$")))
     and (.runtime | objectkeys(["googleOAuthClientId","trustedIssuer"])
       and (.googleOAuthClientId | nonempty and
         (if $action == "render" or $action == "deploy" then

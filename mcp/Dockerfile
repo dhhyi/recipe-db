@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:9.0-bookworm-slim@sha256:01fabc4758d1d74e39eda700c8463dae6241a61481f973683692ddcb59a5eeb7 AS builder
+FROM mcr.microsoft.com/dotnet/sdk:9.0-bookworm-slim@sha256:7e3a4bd66701a451823db2028154ae16ff191bc452596ba618ef4d0c58f9cd01 AS builder
 
 WORKDIR /ws
 
@@ -9,7 +9,7 @@ COPY .graphqlrc.json operations.graphql recipe-db.graphqls *.cs /ws/
 COPY Tools /ws/Tools
 RUN dotnet publish -c Release -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0-bookworm-slim@sha256:2680706c9656fafe34876446d694fd25077fd0b5da478f38d56073ac6c21d37e
+FROM mcr.microsoft.com/dotnet/aspnet:9.0-bookworm-slim@sha256:8bbd3f6fcc157792d96f0932107d9d435df814a2c058ce2891a267fe341dea1a
 
 WORKDIR /app
 COPY --from=builder /app /app

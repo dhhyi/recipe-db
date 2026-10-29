@@ -9,7 +9,7 @@ devcontainer:
   build:
     args:
       JAVA_VERSION: "21"
-      MAVEN_VERSION: "3.9.16"
+      MAVEN_VERSION: "3"
     user:
       - RUN mise use -g java@$JAVA_VERSION maven@$MAVEN_VERSION
   environment:
