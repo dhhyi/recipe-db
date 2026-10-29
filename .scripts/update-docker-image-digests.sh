@@ -71,10 +71,24 @@ for deployment in "$project_root/deploy/local.yaml" "$project_root/deploy/pi.yam
 done
 
 sort -u "$temporary_directory/inventory" > "$temporary_directory/sorted-inventory"
-cat "$temporary_directory/sorted-inventory"
 if [ "$list_only" = true ]; then
+  awk -F "$tab" '{
+    image = $2
+    sub(/@sha256:[[:xdigit:]]+$/, "", image)
+    print image "\t" $1
+  }' "$temporary_directory/sorted-inventory" \
+    | sort -u \
+    | awk -F "$tab" '
+      $1 != previous_image {
+        if (NR > 1) print ""
+        print $1
+        previous_image = $1
+      }
+      { print "  " $2 }
+    '
   exit 0
 fi
+cat "$temporary_directory/sorted-inventory"
 
 awk -F "$tab" '{
   image = $2

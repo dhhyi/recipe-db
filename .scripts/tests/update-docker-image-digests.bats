@@ -78,9 +78,10 @@ EOF
 @test "--list inventories Dockerfiles and deployment sources without resolving images" {
   run "$FIXTURE_ROOT/.scripts/update-docker-image-digests.sh" --list
   [ "$status" -eq 0 ]
-  [[ "$output" == *$'demo/Dockerfile\talpine:3.20'* ]]
-  [[ "$output" == *$'.scripts/templates/external.lib.yml\tnats:2.11.10-alpine'* ]]
-  [[ "$output" == *$'deploy/local.yaml\ttraefik:v3.7.16@sha256:'* ]]
+  [[ "$output" == *$'alpine:3.20\n  demo/Dockerfile'* ]]
+  [[ "$output" == *$'nats:2.11.10-alpine\n  .scripts/templates/external.lib.yml\n  deploy/local.yaml\n  deploy/pi.yaml'* ]]
+  [[ "$output" == *$'traefik:v3.7.16\n  deploy/local.yaml\n  deploy/pi.yaml'* ]]
+  [[ "$output" != *"@sha256:"* ]]
   [[ "$output" != *"ghcr.io/dhhyi/recipe-db-graphql:latest"* ]]
   [[ "$output" != *"docker-compose.yml"* ]]
   [ ! -s "$MOCK_LOG" ]
