@@ -2,6 +2,7 @@ FROM node:lts-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5
 
 FROM clojure:temurin-21-tools-deps-bookworm-slim@sha256:e412035074cfebebe388bddc40c0c0c83817bf04a765f9a407491b678d2cbb47 AS builder
 COPY --from=node /usr/local /usr/local
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 && rm -rf /var/lib/apt/lists/*
 RUN npm install --global pnpm@12.6.0
 
 WORKDIR /app
