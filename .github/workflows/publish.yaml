@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: setup mise tools
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
           cache: true
@@ -55,7 +55,7 @@ jobs:
           docker compose version
 
       - name: restore Bazel disk cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/bazel-disk
           key: bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -151,7 +151,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: setup mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
           cache: true
@@ -211,7 +211,7 @@ jobs:
 
       - name: upload ARM64 Compose logs
         if: failure() && steps.integration-tests.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arm64-compose-logs
           path: ${{ runner.temp }}/compose.log
@@ -219,7 +219,7 @@ jobs:
 
       - name: upload ARM64 end-to-end screenshots, ARIA snapshots and reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arm64-e2e-reports
           path: e2e-test/target/
@@ -291,7 +291,7 @@ jobs:
 
       - name: upload integration reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arm64-integration-reports
           path: |
@@ -319,7 +319,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: setup mise tools
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
         with:
           install: false
           cache: true
