@@ -30,8 +30,7 @@ WORKDIR /app
 COPY --from=builder /app/tags ./tags
 
 ENV DATA_LOCATION=/data \
-  MODE=production \
-  PRODUCTION=true
+  MODE=production
 
 EXPOSE 8900
 

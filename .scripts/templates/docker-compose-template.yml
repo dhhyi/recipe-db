@@ -65,7 +65,7 @@
 #@           "networks": ["intranet"],
 #@           "profiles": ["test"],
 #@           "restart": "no",
-#@           "environment": {"DATA_LOCATION": "/data", "MODE": "production" if production else "testing", "PRODUCTION": "true" if production else "false"},
+#@           "environment": {"DATA_LOCATION": "/data", "MODE": "production" if production else "testing"},
 #@           "tmpfs": ["/data"],
 #@         }
 #@       end

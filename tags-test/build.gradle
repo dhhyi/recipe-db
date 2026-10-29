@@ -7,6 +7,8 @@ repositories {
 	mavenCentral()
 }
 
+layout.buildDirectory = file('target/build')
+
 dependencies {
 	testImplementation 'org.spockframework:spock-core:2.4-groovy-4.0'
 	testImplementation 'io.rest-assured:rest-assured:5.5.6'

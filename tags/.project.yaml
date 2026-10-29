@@ -26,7 +26,6 @@ devcontainer:
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     MODE: testing
-    PRODUCTION: "false"
     DATA_LOCATION: /data
 vscode:
   settings:

@@ -15,6 +15,13 @@ type problem = {
 exception Problem of problem
 exception Database_error of string
 
+type mode = Production | Testing
+
+let mode_of_environment = function
+  | None | Some "production" -> Production
+  | Some "testing" -> Testing
+  | Some _ -> invalid_arg "Invalid MODE; expected production or testing"
+
 let category_slug = function
   | Cuisine -> "cuisine"
   | Dietary_style -> "dietary-style"
@@ -182,8 +189,7 @@ let step db statement =
 let column_text statement index =
   match Sqlite3.column statement index with
   | Sqlite3.Data.TEXT value -> value
-  | Sqlite3.Data.NULL -> ""
-  | _ -> ""
+  | _ -> database_failure "Expected a text column in the tags database"
 
 let tag_of_statement statement =
   let id = column_text statement 0 in
@@ -234,7 +240,9 @@ let with_transaction db action =
     exec db "COMMIT";
     result
   with error ->
-    (try exec db "ROLLBACK" with _ -> ());
+    (try exec db "ROLLBACK"
+     with rollback_error ->
+       prerr_endline ("tags rollback error: " ^ Printexc.to_string rollback_error));
     raise error
 
 let raise_collision name =
@@ -390,8 +398,8 @@ let delete_tag db tag_id =
             if step db statement then
               match Sqlite3.column statement 0 with
               | Sqlite3.Data.INT count -> count
-              | _ -> 0L
-            else 0L)
+              | _ -> database_failure "Expected an assignment count"
+            else database_failure "Missing assignment count")
       in
       if count > 0L then
         raise
@@ -454,12 +462,16 @@ let decode_segment segment =
     else if index + 2 >= String.length segment then
       invalid_request "The URL contains an invalid encoded path segment."
     else
-      try
+      let is_hex = function
+        | '0' .. '9' | 'a' .. 'f' | 'A' .. 'F' -> true
+        | _ -> false
+      in
+      if not (is_hex segment.[index + 1] && is_hex segment.[index + 2]) then
+        invalid_request "The URL contains an invalid encoded path segment."
+      else
         let byte = int_of_string ("0x" ^ String.sub segment (index + 1) 2) in
         Buffer.add_char buffer (Char.chr byte);
         loop (index + 3)
-      with Failure _ ->
-        invalid_request "The URL contains an invalid encoded path segment."
   in
   loop 0
 
@@ -476,7 +488,15 @@ let path_segments request =
 
 let object_fields json =
   match json with
-  | `Assoc fields -> fields
+  | `Assoc fields ->
+      let rec validate seen = function
+        | [] -> fields
+        | (name, _) :: rest ->
+            if List.mem name seen then
+              invalid_request ~field:name "The field must not be repeated.";
+            validate (name :: seen) rest
+      in
+      validate [] fields
   | _ -> invalid_request "The request body must be a JSON object."
 
 let string_field field fields =
@@ -505,19 +525,12 @@ let request_json request =
       if media_type <> "application/json" then
         Lwt.return (Error unsupported_media_type)
       else
-        Lwt.catch
-          (fun () ->
             Dream.body request >|= fun body ->
             try Ok (Yojson.Basic.from_string body)
             with Yojson.Json_error _ ->
               Error
                 (problem 400 "Invalid JSON" "The request body is not valid JSON."
-                   "invalid-json"))
-          (fun _ ->
-            Lwt.return
-              (Error
-                 (problem 400 "Invalid JSON" "The request body is not valid JSON."
-                    "invalid-json")))
+                   "invalid-json")
 
 let method_not_allowed allowed =
   problem_response
@@ -530,7 +543,7 @@ let not_found () =
   problem_response
     (problem 404 "Not Found" "The requested route was not found." "not-found")
 
-let handle db request =
+let handle mode db request =
   let method_ = Dream.method_ request |> Dream.method_to_string in
   let segments = path_segments request in
   let allowed methods =
@@ -609,8 +622,7 @@ let handle db request =
                json_response ~status:201 (tag_json tag) |> Lwt.return)
       | "DELETE" ->
           if
-            Sys.getenv_opt "MODE" <> Some "testing"
-            || Sys.getenv_opt "PRODUCTION" = Some "true"
+            mode <> Testing
           then
              Lwt.return (not_found ())
           else respond (fun () -> reset_database db; empty ())
@@ -653,9 +665,21 @@ let handle db request =
               empty ()))
   | _ -> Lwt.return (not_found ())
 
-let router db =
-  Dream.router
+let router ~mode db =
+  let handler = Dream.router
     [
-      Dream.any "/" (handle db);
-      Dream.any "/**" (handle db);
+      Dream.any "/" (handle mode db);
+      Dream.any "/**" (handle mode db);
     ]
+  in
+  fun request ->
+    Lwt.catch
+      (fun () -> handler request)
+      (function
+        | Problem problem -> Lwt.return (problem_response problem)
+        | error ->
+            prerr_endline ("tags server error: " ^ Printexc.to_string error);
+            Lwt.return
+              (problem_response
+                 (problem 500 "Internal Server Error"
+                    "An unexpected server error occurred." "internal-error")))

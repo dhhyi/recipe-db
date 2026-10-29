@@ -170,7 +170,6 @@ devcontainer:
   ports: [8900]
   environment:
     MODE: testing
-    PRODUCTION: "false"
     DATA_LOCATION: /data
 traefik:
   labels:
@@ -229,15 +228,15 @@ assert_compose() {
     and .volumes["oauth2-sessions-data"].name == "recipe-db-oauth2-sessions-data"
     and .volumes["tags-data"].name == "recipe-db-tags-data"
     and .services.tags.environment.MODE == "testing"
-    and .services.tags.environment.PRODUCTION == "false"
+    and (.services.tags.environment | has("PRODUCTION") | not)
     and .services.tags.volumes == ["tags-data:/data"]
     and any(.services.tags.labels[]; . == "traefik.http.routers.tags.entrypoints=rest-internal")
     and .services["tags-test-api"].profiles == ["test"]
     and .services["tags-test-api"].environment.MODE == "testing"
-    and .services["tags-test-api"].environment.PRODUCTION == "false"
+    and (.services["tags-test-api"].environment | has("PRODUCTION") | not)
     and .services["tags-test-api"].tmpfs == ["/data"]
     and .services["tags-production-test-api"].environment.MODE == "production"
-    and .services["tags-production-test-api"].environment.PRODUCTION == "true"
+    and (.services["tags-production-test-api"].environment | has("PRODUCTION") | not)
     and .services["tags-production-test-api"].tmpfs == ["/data"]
     and (.volumes | has("data") | not)
   '

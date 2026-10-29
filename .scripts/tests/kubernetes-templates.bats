@@ -111,7 +111,7 @@ render() {
   jq -e '
     .items[] | select(.kind == "Deployment" and .metadata.name == "tags") |
     any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production")
-    and any(.spec.template.spec.containers[0].env[]; .name == "PRODUCTION" and .value == "true")
+    and all(.spec.template.spec.containers[0].env[]; .name != "PRODUCTION")
     and any(.spec.template.spec.containers[0].env[]; .name == "DATA_LOCATION" and .value == "/data")
     and any(.spec.template.spec.volumes[]; .persistentVolumeClaim.claimName == "tags")
   ' manifests.json

@@ -122,16 +122,17 @@ class TagsSpec extends Specification {
 		def stored = given().get("${api}/tags").jsonPath().getList('')
 		stored.size() == 1
 		stored[0].name == existing
-		stored[0].id == 'dietary-style-glutenfree'
+		stored[0].id == "dietary-style-${key}"
 		stored[0].id.substring('dietary-style-'.length()) ==~ /^[a-z0-9]+$/
 
 		where:
-		existing       | duplicate
-		'Gluten-free'  | 'gluten free'
-		'Gluten_Free'  | 'glutenfree'
-		'Straße'       | 'Strasse'
-		'Crème brûlée' | 'Creme Brulee'
-		'Café'         | 'Cafe\u0301'
+		existing       | duplicate      | key
+		'Gluten-free'  | 'Gluten-free'  | 'glutenfree'
+		'Gluten-free'  | 'gluten free'  | 'glutenfree'
+		'Gluten_Free'  | 'glutenfree'   | 'glutenfree'
+		'Straße'       | 'Strasse'      | 'strasse'
+		'Crème brûlée' | 'Creme Brulee' | 'cremebrulee'
+		'Café'         | 'Cafe\u0301'   | 'cafe'
 	}
 
 	def 'same identity key in different categories creates independent tags'() {

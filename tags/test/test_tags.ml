@@ -179,6 +179,88 @@ let test_reset_is_complete_and_transactional () =
         (Tags.assigned_tags database "orphan" = [])
         "reset clears even orphaned assignments")
 
+let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =
+  Dream.test (Tags.router ~mode db)
+    (Dream.request ~method_ ~target
+       ~headers:[ ("Content-Type", "application/json") ] body)
+
+let assert_status status response =
+  check (Dream.status response = Dream.int_to_status status)
+    (Printf.sprintf "Expected HTTP %d, received %d" status
+       (Dream.status response |> Dream.status_to_int))
+
+let assert_problem status code response =
+  assert_status status response;
+  check (Dream.header response "Content-Type" = Some "application/problem+json")
+    "Problem Details content type";
+  let json = Lwt_main.run (Dream.body response) |> Yojson.Basic.from_string in
+  let open Yojson.Basic.Util in
+  check (json |> member "type" |> to_string = "about:blank") "problem type";
+  check (json |> member "status" |> to_int = status) "problem status";
+  check (json |> member "code" |> to_string = code) "problem code"
+
+let test_runtime_modes_and_http_reset () =
+  check (Tags.mode_of_environment None = Tags.Production) "unset mode is production";
+  check (Tags.mode_of_environment (Some "production") = Tags.Production)
+    "explicit production mode";
+  check (Tags.mode_of_environment (Some "testing") = Tags.Testing) "testing mode";
+  List.iter
+    (fun mode ->
+      match Tags.mode_of_environment (Some mode) with
+      | _ -> fail "Invalid mode was accepted"
+      | exception Invalid_argument _ -> ())
+    [ ""; "unknown"; "backup"; "Testing" ];
+  with_database (fun db ->
+      let tag = Tags.create_tag db Tags.Course "Protected" in
+      Tags.assign_one db "recipe" tag.id;
+      List.iter
+        (fun mode ->
+          assert_status 204 (request ~mode db "/health");
+          List.iter
+            (fun target ->
+              assert_problem 404 "not-found" (request ~mode ~method_:`DELETE db target);
+              check (List.length (Tags.select_tags db ()) = 1) "denied reset retains tags";
+              check (List.length (Tags.assigned_tags db "recipe") = 1)
+                "denied reset retains assignments")
+            [ "/tags"; "/tags/" ])
+        [ Tags.mode_of_environment None; Tags.Production ];
+      List.iter
+        (fun target ->
+          assert_status 204 (request ~method_:`DELETE db target);
+          check (Tags.select_tags db () = []) "HTTP reset clears inventory";
+          check (Tags.assigned_tags db "recipe" = []) "HTTP reset clears assignments")
+        [ "/tags/"; "/tags"; "/tags/" ])
+
+let test_http_errors_and_rollback () =
+  with_database (fun db ->
+      List.iter
+        (fun path -> assert_problem 422 "invalid-request" (request db path))
+        [ "/tags/recipes/%"; "/tags/recipes/%GG"; "/tags/recipes/%+1" ];
+      assert_problem 422 "invalid-request"
+        (request ~method_:`POST ~body:{|{"category":"course","name":"A","name":"B"}|} db "/tags");
+      assert_problem 400 "invalid-json"
+        (request ~method_:`POST ~body:"{" db "/tags");
+      let tag = Tags.create_tag db Tags.Course "Retained" in
+      Tags.assign_one db "recipe" tag.id;
+      Tags.exec db
+        "CREATE TRIGGER reject_reset BEFORE DELETE ON tags \
+         BEGIN SELECT RAISE(ABORT, 'forced failure'); END";
+      assert_problem 500 "database-error" (request ~method_:`DELETE db "/tags");
+      check (List.length (Tags.select_tags db ()) = 1) "failed HTTP reset retains tags";
+      check (List.length (Tags.assigned_tags db "recipe") = 1)
+        "failed HTTP reset retains assignments";
+      Tags.exec db "DROP TRIGGER reject_reset";
+      let second = Tags.create_tag db Tags.Course "Second" in
+      Tags.exec db
+        "CREATE TRIGGER reject_assignment BEFORE INSERT ON assignments \
+         BEGIN SELECT RAISE(ABORT, 'forced failure'); END";
+      assert_problem 500 "database-error"
+        (request ~method_:`PATCH
+           ~body:(Printf.sprintf {|{"addTagIds":["%s"],"removeTagIds":["%s"]}|} second.id tag.id)
+           db "/tags/recipes/recipe");
+      check (List.map (fun (t : Tags.tag) -> t.id) (Tags.assigned_tags db "recipe") = [ tag.id ])
+        "failed HTTP bulk change retains assignments")
+
 let () =
   test_identity_and_validation ();
   test_creation_and_collisions ();
@@ -186,4 +268,6 @@ let () =
   test_assignments_and_atomic_rollback ();
   test_bulk_validation_and_conflicts ();
   test_restart_persistence ();
-  test_reset_is_complete_and_transactional ()
+  test_reset_is_complete_and_transactional ();
+  test_runtime_modes_and_http_reset ();
+  test_http_errors_and_rollback ()
