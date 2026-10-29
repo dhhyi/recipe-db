@@ -21,7 +21,8 @@ impl RecipesApi {
     }
 
     pub async fn get_recipe(&self, id: &str) -> Result<Option<Recipe>, Error> {
-        match self.client.get(id).await {
+        let path = RestClient::encode_path_segment(id);
+        match self.client.get(&path).await {
             Ok(recipe) => Ok(Some(recipe)),
             Err(err) if err.confirms_absence("recipe-not-found") => Ok(None),
             Err(err) => Err(err.into_error()),

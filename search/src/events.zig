@@ -19,7 +19,7 @@ pub fn event(a: Allocator, body: []const u8) !Event {
             if (ch != '-') return error.InvalidEvent;
         } else if (!std.ascii.isHex(ch)) return error.InvalidEvent;
     }
-    const single = [_][]const u8{ "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed" };
+    const single = [_][]const u8{ "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed", "tags.changed" };
     for (single) |kind| if (std.mem.eql(u8, kind, e.kind)) {
         if (e.recipeId.len == 0) return error.InvalidEvent;
         return e;
@@ -66,7 +66,7 @@ test "event kinds and UTC timestamps" {
     defer arena.deinit();
     const a = arena.allocator();
     var e = Event{ .version = 1, .eventId = "53cf7722-2b64-4e9f-a267-8b4d1f878302", .occurredAt = "2026-10-08T13:00:00Z", .recipeId = "", .kind = "recipe.changed" };
-    for ([_][]const u8{ "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed" }) |kind| {
+    for ([_][]const u8{ "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed", "tags.changed" }) |kind| {
         e.kind = kind;
         try std.testing.expectError(error.InvalidEvent, event(a, try encode(a, e)));
         e.recipeId = "42";

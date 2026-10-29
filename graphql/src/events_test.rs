@@ -356,10 +356,12 @@ async fn bus_contract() {
     execute(&schema, r#"mutation { deleteRecipe(id: "42") }"#, true).await;
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
     execute(&schema, "{ recipes { id } }", true).await;
+    publisher.notify("42", EventKind::TagsChanged).await;
 
     let expected = [
         ("42", EventKind::RecipeChanged),
         ("42", EventKind::InspirationsChanged),
+        ("42", EventKind::TagsChanged),
         ("42", EventKind::RecipeChanged),
         ("partial-create", EventKind::RecipeChanged),
         ("42", EventKind::InspirationsChanged),
