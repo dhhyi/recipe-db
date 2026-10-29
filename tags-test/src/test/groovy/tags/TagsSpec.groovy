@@ -11,9 +11,6 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 
-import static io.restassured.RestAssured.given
-import static org.hamcrest.Matchers.*
-
 class TagsSpec extends Specification {
 	static String api
 	static String productionApi
@@ -25,7 +22,6 @@ class TagsSpec extends Specification {
 		productionApi = requiredEnvironment('TAGS_PRODUCTION_API')
 		fixtureApi = requiredEnvironment('FIXTURE_API')
 		recipesApi = requiredEnvironment('TAGS_RECIPES_API')
-		RestAssured.enableLoggingOfRequestAndResponseIfValidationFails()
 		waitForHealth(api)
 		waitForHealth(productionApi)
 		waitForHealth(recipesApi)
@@ -33,8 +29,16 @@ class TagsSpec extends Specification {
 	}
 
 	def setup() {
-		given().delete("${api}/tags").then().statusCode(204)
-		given().delete("${api}/tags/").then().statusCode(204)
+		assert http('DELETE', "${api}/tags").statusCode() == 204
+		assert http('DELETE', "${api}/tags/").statusCode() == 204
+	}
+
+	private static Response http(String method, String url, Object body = null, String contentType = 'application/json') {
+		def request = RestAssured.with().contentType(contentType)
+		if (body != null) {
+			request.body(body)
+		}
+		request.request(method, url)
 	}
 
 	private static String requiredEnvironment(String name) {
@@ -52,7 +56,7 @@ class TagsSpec extends Specification {
 		String lastResult = 'no response'
 		while (System.nanoTime() < deadline) {
 			try {
-				int status = given().get(endpoint).statusCode()
+				int status = http('GET', endpoint).statusCode()
 				lastResult = "HTTP ${status}"
 				if (status == expectedStatus) {
 					return
@@ -70,63 +74,69 @@ class TagsSpec extends Specification {
 	}
 
 	private static Response create(String category, String name, String base = api) {
-		given()
-				.contentType('application/json')
-				.body([category: category, name: name])
-				.post("${base}/tags")
+		http('POST', "${base}/tags", [category: category, name: name])
 	}
 
 	private static Map seedProductionAssignment() {
 		Response tag = create('course', 'Production seed', productionApi)
 		assert tag.statusCode() == 201
 		Map data = tag.jsonPath().getMap('')
-		assert given()
-		.put("${productionApi}/tags/recipes/production-recipe/assignments/${data.id}")
-		.statusCode() == 204
+		assert http('PUT', "${productionApi}/tags/recipes/production-recipe/assignments/${data.id}").statusCode() == 204
 		data
 	}
 
 	def 'health and inventory responses use the documented shape and category order'() {
-		given().get("${api}/health").then().statusCode(204)
-
-		def fixture = given().get("${fixtureApi}/tags.json")
-				.then().statusCode(200).contentType('application/json')
-				.extract().jsonPath().getList('tags')
-
-		fixture.each { Map entry ->
+		given:
+		def fixtureResponse = http('GET', "${fixtureApi}/tags.json")
+		assert fixtureResponse.statusCode() == 200
+		assert fixtureResponse.contentType().startsWith('application/json')
+		fixtureResponse.jsonPath().getList('tags').each { Map entry ->
 			assert create(entry.category as String, entry.name as String).statusCode() == 201
 		}
 
-		given().get("${api}/tags").then()
-				.statusCode(200)
-				.contentType('application/json')
-				.body('category', [
-					'cuisine',
-					'dietary-style',
-					'course'
-				])
-				.body('id', everyItem(matchesPattern('^(cuisine|dietary-style|course)-[a-z0-9]+$')))
-				.body('name', hasItems('Thai', 'Gluten-free', 'Crème brûlée'))
-		given().get("${api}/tags?category=dietary-style").then()
-				.statusCode(200)
-				.body('category', everyItem(equalTo('dietary-style')))
-		given().get("${api}/tags?category=unknown").then()
-				.statusCode(422)
-				.contentType('application/problem+json')
-				.body('code', equalTo('invalid-category'))
-				.body('field', equalTo('category'))
+		when:
+		def health = http('GET', "${api}/health")
+		def inventory = http('GET', "${api}/tags")
+		def filtered = http('GET', "${api}/tags?category=dietary-style")
+		def invalidFilter = http('GET', "${api}/tags?category=unknown")
+
+		then:
+		health.statusCode() == 204
+		inventory.statusCode() == 200
+		inventory.contentType().startsWith('application/json')
+		inventory.jsonPath().getList('category') == [
+			'cuisine',
+			'dietary-style',
+			'course'
+		]
+		inventory.jsonPath().getList('id').every { it ==~ /^(cuisine|dietary-style|course)-[a-z0-9]+$/ }
+		inventory.jsonPath().getList('name').containsAll([
+			'Thai',
+			'Gluten-free',
+			'Crème brûlée'
+		])
+		filtered.statusCode() == 200
+		filtered.jsonPath().getList('category').every { it == 'dietary-style' }
+		invalidFilter.statusCode() == 422
+		invalidFilter.contentType().startsWith('application/problem+json')
+		invalidFilter.jsonPath().getString('code') == 'invalid-category'
+		invalidFilter.jsonPath().getString('field') == 'category'
 	}
 
 	@Unroll
 	def 'normalized duplicate #existing and #duplicate returns collision without changing spelling'() {
-		expect:
-		create('dietary-style', existing).statusCode() == 201
+		given:
+		assert create('dietary-style', existing).statusCode() == 201
+
+		when:
 		def rejected = create('dietary-style', duplicate)
+		def stored = http('GET', "${api}/tags").jsonPath().getList('')
+
+		then:
 		rejected.statusCode() == 409
 		rejected.contentType().startsWith('application/problem+json')
 		rejected.jsonPath().getString('code') == 'tag-collision'
 		rejected.jsonPath().getString('field') == 'name'
-		def stored = given().get("${api}/tags").jsonPath().getList('')
 		stored.size() == 1
 		stored[0].name == existing
 		stored[0].id == "dietary-style-${key}"
@@ -164,7 +174,7 @@ class TagsSpec extends Specification {
 		response.contentType().startsWith('application/problem+json')
 		response.jsonPath().getString('code') == 'invalid-tag-name'
 		response.jsonPath().getString('field') == 'name'
-		given().get("${api}/tags").jsonPath().getList('').isEmpty()
+		http('GET', "${api}/tags").jsonPath().getList('').isEmpty()
 
 		where:
 		name << [
@@ -181,13 +191,20 @@ class TagsSpec extends Specification {
 	}
 
 	def 'display names normalize Unicode whitespace and NFC while inventory sorts by display'() {
-		expect:
-		create('course', '\u00a0Cafe\u0301\u00a0').then()
-				.statusCode(201).body('name', equalTo('Café')).body('id', equalTo('course-cafe'))
-		create('course', 'A-y').statusCode() == 201
-		create('course', 'A!z').statusCode() == 201
-		create('cuisine', 'Thai').statusCode() == 201
-		given().get("${api}/tags").jsonPath().getList('name') == ['Thai', 'A!z', 'A-y', 'Café']
+		when:
+		def normalized = create('course', '\u00a0Cafe\u0301\u00a0')
+		def punctuated = create('course', 'A-y')
+		def symbol = create('course', 'A!z')
+		def cuisine = create('cuisine', 'Thai')
+
+		then:
+		normalized.statusCode() == 201
+		normalized.jsonPath().getString('name') == 'Café'
+		normalized.jsonPath().getString('id') == 'course-cafe'
+		punctuated.statusCode() == 201
+		symbol.statusCode() == 201
+		cuisine.statusCode() == 201
+		http('GET', "${api}/tags").jsonPath().getList('name') == ['Thai', 'A!z', 'A-y', 'Café']
 	}
 
 	@Unroll
@@ -195,14 +212,23 @@ class TagsSpec extends Specification {
 		given:
 		def tag = create('course', 'Kept').jsonPath().getMap('')
 		String path = "${api}/tags/recipes/invalid-bulk"
-		given().put("${path}/assignments/${tag.id}").then().statusCode(204)
+		assert http('PUT', "${path}/assignments/${tag.id}").statusCode() == 204
 
-		expect:
-		given().contentType('application/json').body(payload).patch(path).then()
-				.statusCode(422).contentType('application/problem+json').body('code', equalTo(code))
-		given().get(path).jsonPath().getList('id') == [tag.id]
-		given().contentType('application/json').body('{}').patch(path).then()
-				.statusCode(200).body('id', contains(tag.id))
+		when:
+		def rejected = http('PATCH', path, payload)
+
+		then:
+		rejected.statusCode() == 422
+		rejected.contentType().startsWith('application/problem+json')
+		rejected.jsonPath().getString('code') == code
+		http('GET', path).jsonPath().getList('id') == [tag.id]
+
+		when:
+		def unchanged = http('PATCH', path, '{}')
+
+		then:
+		unchanged.statusCode() == 200
+		unchanged.jsonPath().getList('id') == [tag.id]
 
 		where:
 		payload                                  | code
@@ -215,33 +241,42 @@ class TagsSpec extends Specification {
 		'{"addTagIds":[],"addTagIds":["bad"]}'     | 'invalid-request'
 	}
 
-	def 'malformed JSON media type and object shapes produce Problem Details'() {
-		expect:
-		given().contentType('application/json').body('{').post("${api}/tags").then()
-				.statusCode(400).contentType('application/problem+json').body('code', equalTo('invalid-json'))
-		given().contentType('text/plain').body('{}').post("${api}/tags").then()
-				.statusCode(415).body('code', equalTo('unsupported-media-type'))
-		given().contentType('application/json').body([category: 'course']).post("${api}/tags").then()
-		.statusCode(422).body('code', equalTo('invalid-request')).body('field', equalTo('name'))
-		given().contentType('application/json').body([category: 'course', name: 'Pie', extra: true]).post("${api}/tags").then()
-		.statusCode(422).body('field', equalTo('extra'))
-		given().contentType('application/json').body([category: 'course', name: 'Pie']).post("${api}/tags").statusCode() == 201
-		given().contentType('application/json').body([addTagIds: null]).patch("${api}/tags/recipes/r").then()
-		.statusCode(422).body('code', equalTo('invalid-tag-ids')).body('field', equalTo('addTagIds'))
-		given().contentType('application/json').body([addTagIds: ['']]).patch("${api}/tags/recipes/r").then()
-		.statusCode(422).body('code', equalTo('invalid-tag-ids')).body('field', equalTo('addTagIds'))
-		given().contentType('text/plain').body('{}').patch("${api}/tags/recipes/r").then()
-				.statusCode(415).body('code', equalTo('unsupported-media-type'))
-		given().contentType('application/json').body([unexpected: true]).patch("${api}/tags/recipes/r").then()
-		.statusCode(422).body('code', equalTo('invalid-request'))
-		given().post("${api}/unknown").then().statusCode(404)
-				.contentType('application/problem+json').body('code', equalTo('not-found'))
-		def methodNotAllowed = given().patch("${api}/tags")
-		methodNotAllowed.then()
-				.statusCode(405)
-				.contentType('application/problem+json')
-				.header('Allow', containsString('GET'))
-				.body('code', equalTo('method-not-allowed'))
+	@Unroll
+	def '#method #path rejects malformed input with #code'() {
+		when:
+		def response = http(method, "${api}${path}", body, mediaType)
+
+		then:
+		response.statusCode() == status
+		response.contentType().startsWith('application/problem+json')
+		response.jsonPath().getString('code') == code
+		response.jsonPath().getString('field') == field
+
+		where:
+		method  | path              | body                                              | mediaType          | status | code                     | field
+		'POST'  | '/tags'           | '{'                                               | 'application/json' | 400    | 'invalid-json'           | null
+		'POST'  | '/tags'           | '{}'                                              | 'text/plain'       | 415    | 'unsupported-media-type' | null
+		'POST'  | '/tags'           | [category: 'course']                              | 'application/json' | 422    | 'invalid-request'        | 'name'
+		'POST'  | '/tags'           | [category: 'course', name: 'Pie', extra: true]      | 'application/json' | 422    | 'invalid-request'        | 'extra'
+		'PATCH' | '/tags/recipes/r' | [addTagIds: null]                                 | 'application/json' | 422    | 'invalid-tag-ids'        | 'addTagIds'
+		'PATCH' | '/tags/recipes/r' | [addTagIds: ['']]                                 | 'application/json' | 422    | 'invalid-tag-ids'        | 'addTagIds'
+		'PATCH' | '/tags/recipes/r' | '{}'                                              | 'text/plain'       | 415    | 'unsupported-media-type' | null
+		'PATCH' | '/tags/recipes/r' | [unexpected: true]                                | 'application/json' | 422    | 'invalid-request'        | 'unexpected'
+	}
+
+	def 'unknown routes and unsupported methods produce Problem Details'() {
+		when:
+		def unknown = http('POST', "${api}/unknown")
+		def methodNotAllowed = http('PATCH', "${api}/tags")
+
+		then:
+		unknown.statusCode() == 404
+		unknown.contentType().startsWith('application/problem+json')
+		unknown.jsonPath().getString('code') == 'not-found'
+		methodNotAllowed.statusCode() == 405
+		methodNotAllowed.contentType().startsWith('application/problem+json')
+		methodNotAllowed.header('Allow').contains('GET')
+		methodNotAllowed.jsonPath().getString('code') == 'method-not-allowed'
 	}
 
 	def 'assignments support safely encoded opaque recipe IDs and idempotent changes'() {
@@ -252,15 +287,29 @@ class TagsSpec extends Specification {
 		String assignment = "${path}/assignments/${tag.id}"
 
 		expect:
-		given().put(assignment).statusCode() == 204
-		given().put(assignment).statusCode() == 204
-		given().get(path).then().statusCode(200).body('id', contains(tag.id))
-		given().delete("${path}/assignments/course-missing").statusCode() == 204
-		given().delete(assignment).statusCode() == 204
-		given().delete(assignment).statusCode() == 204
-		given().get(path).then().statusCode(200).body('', empty())
-		given().put("${path}/assignments/course-missing").then()
-				.statusCode(404).body('code', equalTo('tag-not-found')).body('field', equalTo('tagId'))
+		http('PUT', assignment).statusCode() == 204
+		http('PUT', assignment).statusCode() == 204
+
+		when:
+		def assigned = http('GET', path)
+
+		then:
+		assigned.statusCode() == 200
+		assigned.jsonPath().getList('id') == [tag.id]
+		http('DELETE', "${path}/assignments/course-missing").statusCode() == 204
+		http('DELETE', assignment).statusCode() == 204
+		http('DELETE', assignment).statusCode() == 204
+
+		when:
+		def empty = http('GET', path)
+		def missing = http('PUT', "${path}/assignments/course-missing")
+
+		then:
+		empty.statusCode() == 200
+		empty.jsonPath().getList('').isEmpty()
+		missing.statusCode() == 404
+		missing.jsonPath().getString('code') == 'tag-not-found'
+		missing.jsonPath().getString('field') == 'tagId'
 	}
 
 	def 'bulk deltas are deduplicated atomic and return the full assignment set'() {
@@ -270,38 +319,30 @@ class TagsSpec extends Specification {
 		def path = "${api}/tags/recipes/recipe"
 
 		when:
-		def added = given().contentType('application/json')
-				.body([addTagIds: [one.id, one.id, two.id]])
-				.patch(path)
+		def added = http('PATCH', path, [addTagIds: [one.id, one.id, two.id]])
 
 		then:
 		added.statusCode() == 200
 		added.jsonPath().getList('id').toSet() == [one.id, two.id] as Set
 
 		when:
-		def failed = given().contentType('application/json')
-				.body([addTagIds: ['course-unknown'], removeTagIds: [one.id]])
-				.patch(path)
+		def failed = http('PATCH', path, [addTagIds: ['course-unknown'], removeTagIds: [one.id]])
 
 		then:
 		failed.statusCode() == 422
 		failed.jsonPath().getString('code') == 'unknown-tag'
 		failed.jsonPath().getString('field') == 'addTagIds'
-		given().get(path).jsonPath().getList('id').toSet() == [one.id, two.id] as Set
+		http('GET', path).jsonPath().getList('id').toSet() == [one.id, two.id] as Set
 
 		when:
-		def conflict = given().contentType('application/json')
-				.body([addTagIds: [one.id], removeTagIds: [one.id]])
-				.patch(path)
+		def conflict = http('PATCH', path, [addTagIds: [one.id], removeTagIds: [one.id]])
 
 		then:
 		conflict.statusCode() == 422
 		conflict.jsonPath().getString('code') == 'conflicting-tag-change'
 
 		when:
-		def removed = given().contentType('application/json')
-				.body([removeTagIds: [one.id, one.id, two.id]])
-				.patch(path)
+		def removed = http('PATCH', path, [removeTagIds: [one.id, one.id, two.id]])
 
 		then:
 		removed.statusCode() == 200
@@ -311,74 +352,81 @@ class TagsSpec extends Specification {
 	def 'delete rejects assigned inventory tags and succeeds when unused'() {
 		given:
 		def tag = create('cuisine', 'Thai').jsonPath().getMap('')
-		given().put("${api}/tags/recipes/r/assignments/${tag.id}").statusCode() == 204
+		assert http('PUT', "${api}/tags/recipes/r/assignments/${tag.id}").statusCode() == 204
 
-		expect:
-		given().delete("${api}/tags/${tag.id}").then()
-				.statusCode(409).body('code', equalTo('tag-in-use')).body('field', equalTo('tagId'))
-		given().delete("${api}/tags/missing").then()
-				.statusCode(404).body('code', equalTo('tag-not-found'))
-		given().delete("${api}/tags/recipes/r/assignments/${tag.id}").statusCode() == 204
-		given().delete("${api}/tags/${tag.id}").statusCode() == 204
+		when:
+		def inUse = http('DELETE', "${api}/tags/${tag.id}")
+		def missing = http('DELETE', "${api}/tags/missing")
+
+		then:
+		inUse.statusCode() == 409
+		inUse.jsonPath().getString('code') == 'tag-in-use'
+		inUse.jsonPath().getString('field') == 'tagId'
+		missing.statusCode() == 404
+		missing.jsonPath().getString('code') == 'tag-not-found'
+		http('DELETE', "${api}/tags/recipes/r/assignments/${tag.id}").statusCode() == 204
+		http('DELETE', "${api}/tags/${tag.id}").statusCode() == 204
 	}
 
 	def 'ordinary recipe create and edit leave independent tag assignments unchanged'() {
 		given:
-		def recipe = given().contentType('application/json')
-				.body([name: 'Tagged recipe', servings: 2]).post("${recipesApi}/recipes")
-				.then().statusCode(201).extract().jsonPath().getMap('')
+		def created = http('POST', "${recipesApi}/recipes", [name: 'Tagged recipe', servings: 2])
+		assert created.statusCode() == 201
+		def recipe = created.jsonPath().getMap('')
 		def tag = create('course', 'Main').jsonPath().getMap('')
 		String assignments = "${api}/tags/recipes/${recipe.id}"
-		given().put("${assignments}/assignments/${tag.id}").then().statusCode(204)
+		assert http('PUT', "${assignments}/assignments/${tag.id}").statusCode() == 204
 
 		when:
-		given().contentType('application/merge-patch+json')
-				.body([name: 'Edited recipe', servings: 4])
-				.patch("${recipesApi}/recipes/${recipe.id}").then().statusCode(200)
-		def untagged = given().contentType('application/json')
-				.body([name: 'Untagged recipe', servings: 1]).post("${recipesApi}/recipes")
-				.then().statusCode(201).extract().jsonPath().getMap('')
+		def edited = http('PATCH', "${recipesApi}/recipes/${recipe.id}",
+				[name: 'Edited recipe', servings: 4], 'application/merge-patch+json')
+		def untagged = http('POST', "${recipesApi}/recipes", [name: 'Untagged recipe', servings: 1])
+		def untaggedId = untagged.jsonPath().getString('id')
 
 		then:
-		given().get(assignments).jsonPath().getList('id') == [tag.id]
-		given().get("${api}/tags/recipes/${untagged.id}").jsonPath().getList('').isEmpty()
+		edited.statusCode() == 200
+		untagged.statusCode() == 201
+		http('GET', assignments).jsonPath().getList('id') == [tag.id]
+		http('GET', "${api}/tags/recipes/${untaggedId}").jsonPath().getList('').isEmpty()
 
 		cleanup:
 		if (recipe?.id) {
-			given().delete("${recipesApi}/recipes/${recipe.id}").then().statusCode(204)
+			assert http('DELETE', "${recipesApi}/recipes/${recipe.id}").statusCode() == 204
 		}
-		if (untagged?.id) {
-			given().delete("${recipesApi}/recipes/${untagged.id}").then().statusCode(204)
+		if (untaggedId) {
+			assert http('DELETE', "${recipesApi}/recipes/${untaggedId}").statusCode() == 204
 		}
 	}
 
 	def 'test reset clears inventory and assignments and production reset preserves data'() {
 		given:
 		def tag = create('course', 'Reset me').jsonPath().getMap('')
-		given().put("${api}/tags/recipes/r/assignments/${tag.id}").statusCode() == 204
+		assert http('PUT', "${api}/tags/recipes/r/assignments/${tag.id}").statusCode() == 204
 		Map productionTag = seedProductionAssignment()
 
 		expect:
-		given().delete("${api}/tags/").statusCode() == 204
-		given().get("${api}/tags").jsonPath().getList('').isEmpty()
-		given().get("${api}/tags/recipes/r").jsonPath().getList('').isEmpty()
-		given().delete("${api}/tags").statusCode() == 204
+		http('DELETE', "${api}/tags/").statusCode() == 204
+		http('GET', "${api}/tags").jsonPath().getList('').isEmpty()
+		http('GET', "${api}/tags/recipes/r").jsonPath().getList('').isEmpty()
+		http('DELETE', "${api}/tags").statusCode() == 204
 
-		def denied = given().delete("${productionApi}/tags/")
+		when:
+		def deniedTrailing = http('DELETE', "${productionApi}/tags/")
+		def denied = http('DELETE', "${productionApi}/tags")
+
+		then:
+		deniedTrailing.statusCode() == 404
+		deniedTrailing.contentType().startsWith('application/problem+json')
+		deniedTrailing.jsonPath().getString('code') == 'not-found'
 		denied.statusCode() == 404
-		denied.contentType().startsWith('application/problem+json')
 		denied.jsonPath().getString('code') == 'not-found'
-		given().delete("${productionApi}/tags").then()
-				.statusCode(404).body('code', equalTo('not-found'))
-		given().get("${productionApi}/tags").jsonPath().getList('id') == [productionTag.id]
-		given().get("${productionApi}/tags/recipes/production-recipe")
-				.jsonPath().getList('id') == [productionTag.id]
+		http('GET', "${productionApi}/tags").jsonPath().getList('id') == [productionTag.id]
+		http('GET', "${productionApi}/tags/recipes/production-recipe").jsonPath().getList('id') == [productionTag.id]
 
 		cleanup:
 		if (productionTag?.id) {
-			given().delete("${productionApi}/tags/recipes/production-recipe/assignments/${productionTag.id}")
-					.then().statusCode(204)
-			given().delete("${productionApi}/tags/${productionTag.id}").then().statusCode(204)
+			assert http('DELETE', "${productionApi}/tags/recipes/production-recipe/assignments/${productionTag.id}").statusCode() == 204
+			assert http('DELETE', "${productionApi}/tags/${productionTag.id}").statusCode() == 204
 		}
 	}
 
@@ -401,7 +449,7 @@ class TagsSpec extends Specification {
 		then:
 		statuses.count { it == 201 } == 1
 		statuses.count { it == 409 } == 11
-		given().get("${api}/tags").jsonPath().getList('').size() == 1
+		http('GET', "${api}/tags").jsonPath().getList('').size() == 1
 
 		cleanup:
 		pool.shutdownNow()
@@ -416,11 +464,11 @@ class TagsSpec extends Specification {
 		when:
 		def assignment = pool.submit({
 			start.await()
-			given().put("${api}/tags/recipes/race-recipe/assignments/${tag.id}").statusCode()
+			http('PUT', "${api}/tags/recipes/race-recipe/assignments/${tag.id}").statusCode()
 		} as Callable<Integer>)
 		def deletion = pool.submit({
 			start.await()
-			given().delete("${api}/tags/${tag.id}").statusCode()
+			http('DELETE', "${api}/tags/${tag.id}").statusCode()
 		} as Callable<Integer>)
 		start.countDown()
 		int assignmentStatus = assignment.get()
@@ -431,9 +479,9 @@ class TagsSpec extends Specification {
 		(assignmentStatus == 204 && deletionStatus == 409) ||
 				(assignmentStatus == 404 && deletionStatus == 204)
 		if (deletionStatus == 409) {
-			given().get("${api}/tags/recipes/race-recipe").jsonPath().getList('id') == [tag.id]
+			assert http('GET', "${api}/tags/recipes/race-recipe").jsonPath().getList('id') == [tag.id]
 		} else {
-			given().get("${api}/tags/recipes/race-recipe").jsonPath().getList('').isEmpty()
+			assert http('GET', "${api}/tags/recipes/race-recipe").jsonPath().getList('').isEmpty()
 		}
 
 		cleanup:
