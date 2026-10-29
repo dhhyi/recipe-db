@@ -227,9 +227,9 @@ description = "Run destructive integration tests against the development stack"
 file = ".scripts/run-integration-tests.sh"
 
 [tasks.update-docker-image-digests]
-description = "Refresh pinned production Docker base-image digests from their registries"
+description = "Refresh external Docker image digests from their registries"
 file = ".scripts/update-docker-image-digests.sh"
-confirm = { message = "Update pinned base-image digests in production Dockerfiles?", default = "no" }
+raw_args = true
 
 [settings]
 idiomatic_version_file_enable_tools = ["npm", "pnpm"]

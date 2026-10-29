@@ -25,7 +25,7 @@ setup() {
     volumes:{recipes:"1Gi",images:"1Gi",ratings:"1Gi",inspirations:"1Gi",
       "image-inline":"256Mi","link-extract":"256Mi",nats:"1Gi",typesense:"1Gi",search:"1Gi",redis:"1Gi"},
     resources:{requests:{cpu:"25m",memory:"32Mi"},limits:{memory:"512Mi"}},
-    infrastructure:{traefik:"traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",nats:"nats:2.11.0",typesense:"typesense/typesense:30.0",
+    infrastructure:{traefik:"traefik:v3@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",nats:"nats:2.11.0",typesense:"typesense/typesense:30.0",
       maintenance:"nginx:1.28",oauth2Proxy:"quay.io/oauth2-proxy/oauth2-proxy:v7.9.0",redis:"redis:8.0"},
     runtime:{googleOAuthClientId:"explicit.apps.googleusercontent.com",trustedIssuer:"https://accounts.google.com"},
     secrets:{"auth-accounts.json":($root+"/auth-accounts.json"),
@@ -111,7 +111,7 @@ case "$*" in
       checksum=old-routes
     fi
     echo '{"spec":{"template":{"spec":{"containers":[{
-      "name":"traefik","image":"docker.io/traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",
+      "name":"traefik","image":"docker.io/traefik:v3@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65",
       "args":["--providers.file.filename=/etc/recipe-db/routes.yml"],
       "ports":[{"containerPort":3000}],"volumeMounts":[{"mountPath":"/etc/recipe-db"}]}],
       "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' |
