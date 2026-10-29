@@ -10,24 +10,27 @@ All normal client data operations go through GraphQL via trusted ingress. Do not
 
 ## GitHub issue planning
 
-Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) for the canonical issue refinement process. Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
 
 - Create issues when the user asks to capture, plan, refine, or defer work for later implementation.
 - Do not create an issue merely because the user requests an immediate fix, investigation, or code change. Handle that work directly in the session.
 - When working on an existing issue, keep it and any relevant umbrella issue current. Do not create another issue for the same work.
 - If you discover follow-up work outside the current scope, mention it; do not create an issue unless the user asks.
 
-Apply the `spec` label to implementation-ready issues with settled scope, decisions, and acceptance criteria. Apply `idea` to work needing research, exploration, or further refinement. Research, exploration, and requirements-definition tasks remain `idea`, even when their research deliverables are clearly defined.
-
-When asked to mark an issue as blocked by another issue, use GitHub's native issue dependency ("blocked by") feature rather than a label.
+- Give each issue exactly one workflow label: `idea`, `umbrella`, `spec`, or `decision`; other metadata labels may coexist. Replace the workflow label during refinement, preserving the issue and discussion.
+- Capture problems and feature wishes as `idea`, with context and optional implementation hints, not a full specification. Research, exploration, and unresolved requirements remain `idea`.
+- Refine standalone ideas into `spec` or `umbrella`, never `decision`. A `spec` must settle material requirements and define scope, behavior, constraints, dependencies, and verifiable acceptance criteria for autonomous implementation; minor implementation choices remain open to agent judgment and review.
+- Create `decision` records only under an umbrella. Record context, chosen approach, alternatives, and consequences; link accepted decisions as the umbrella's base contract and require child specs to conform. Close accepted decisions; explicitly supersede material contract changes and review affected specs.
+- Model dependencies with GitHub's native "blocked by" feature, including cross-umbrella and standalone dependencies, not labels or diagrams alone. Implement specs only after blockers are resolved; clarify material ambiguities before proceeding.
+- Close specs after verifying acceptance criteria, not merely after refinement.
 
 ### Keeping umbrella issues current
 
-Umbrella issues use the `umbrella` label and track larger outcomes through native sub-issues. Whenever a child issue changes, update its umbrella's main description in the same task to reflect current decisions, progress, open questions, and next steps rather than relying only on comments. Keep refinement distinct from implementation, link durable decision records, and close the umbrella only when its overall completion criteria are met.
+Umbrella issues track larger outcomes through native sub-issues, initially labeled `idea`, which may become specs, decisions, or umbrellas. Define scope and completion criteria. Whenever a child, dependency, or decision changes, update the umbrella's main description and diagram in the same task to reflect its base contract, progress, open questions, and next steps rather than relying only on comments. Keep refinement distinct from implementation and close the umbrella only when its overall completion criteria are met.
 
 Only issues labeled `umbrella` may have sub-issues. Attach sub-issues directly to the appropriate umbrella; do not nest them under ordinary issues. If a non-umbrella issue already has sub-issues, move those children to its umbrella.
 
-Every umbrella issue must include a Mermaid `flowchart TD` showing implementation order and dependencies among its direct sub-issues. Use prerequisite-to-dependent arrows, matching native GitHub "blocked by" dependencies; clearly mark any cross-umbrella or non-blocking coordination separately rather than implying it is a native blocker. Update the diagram in the same task whenever sub-issues, their dependencies, or implementation order change. Prefer a flowchart over a Gantt chart because these plans express dependencies, not dates.
+Every umbrella issue must include a Mermaid `flowchart TD` showing implementation order and dependencies among its direct sub-issues. Every node representing an issue must link to its GitHub URL using a Mermaid `click` directive. Use prerequisite-to-dependent arrows matching native GitHub "blocked by" dependencies. Document external dependencies separately, outside this diagram; contract references are not automatically blockers. Prefer a flowchart over a Gantt chart because these plans express dependencies, not dates.
 
 ## Running commands for a project
 
