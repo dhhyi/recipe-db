@@ -174,7 +174,7 @@ EOF
   cp -p "$source" original-source
   original_size=$(stat -c %s "$source")
   original_mtime=$(stat -c %y "$source")
-  sed -i 's/2\.11\.10/2.11.11/' "$source"
+  sed -i 's/nats:2-alpine/nats:3-alpine/' "$source"
   [ "$(stat -c %s "$source")" -eq "$original_size" ]
   touch -r original-source "$source"
   [ "$(stat -c %y "$source")" = "$original_mtime" ]
@@ -183,7 +183,7 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"Rendering"* ]]
   image=$(mise -C "$FIXTURE_ROOT" exec -- yq -r '.services.nats.image' docker-compose.yml)
-  [[ "$image" =~ ^nats:2\.11\.11-alpine@sha256:[[:xdigit:]]{64}$ ]]
+  [[ "$image" =~ ^nats:3-alpine@sha256:[[:xdigit:]]{64}$ ]]
 }
 
 @test "Mise repairs equal-size Compose and SDL output edits with the exact original mtime" {
@@ -193,13 +193,13 @@ EOF
   cp -p docker-compose.yml original-compose
   original_size=$(stat -c %s docker-compose.yml)
   original_mtime=$(stat -c %y docker-compose.yml)
-  sed -i 's/traefik:v3\.7/traefik:v3.8/' docker-compose.yml
+  sed -i 's/traefik:v3@/traefik:v4@/' docker-compose.yml
   [ "$(stat -c %s docker-compose.yml)" -eq "$original_size" ]
   touch -r original-compose docker-compose.yml
   [ "$(stat -c %y docker-compose.yml)" = "$original_mtime" ]
   run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
-  run grep -F 'traefik:v3.8' docker-compose.yml
+  run grep -F 'traefik:v4@' docker-compose.yml
   [ "$status" -eq 1 ]
 
   cp -p oauth2-proxy-alpha.yml original-oauth

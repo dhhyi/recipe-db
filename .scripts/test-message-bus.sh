@@ -34,7 +34,7 @@ docker create --name "$name" --network intranet --network-alias "$name" \
   --env "VERBOSE=${VERBOSE:-false}" \
   --mount "type=bind,src=$project_root/message-bus/nats.conf,dst=/etc/nats/nats.conf,readonly" \
   --mount "type=volume,src=$name,dst=/data" \
-  nats:2.11.10-alpine --config /etc/nats/nats.conf
+  nats:2-alpine --config /etc/nats/nats.conf
 container_started=true
 docker start "$name" > /dev/null
 

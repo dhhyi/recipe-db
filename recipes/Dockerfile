@@ -1,4 +1,4 @@
-FROM elixir:1.18.4-otp-27-slim@sha256:4d24a682c9063a6961e44a95ada95d4803d856a53a52b26568f0cc3ed62e9386 AS builder
+FROM elixir:1.18-otp-27-slim@sha256:4d24a682c9063a6961e44a95ada95d4803d856a53a52b26568f0cc3ed62e9386 AS builder
 
 ENV LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \

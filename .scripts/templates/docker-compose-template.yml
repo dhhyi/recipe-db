@@ -104,7 +104,7 @@
 #@     "user": data.values.developmentUser,
 #@   }
 #@   services["redis"] = {
-#@     "image": "redis:8.10.2-alpine@sha256:9f8d2d789b9a1d1e3f283f979aa9cbf393373806472e1ccd460e2f9c869b833b",
+#@     "image": "redis:8-alpine@sha256:9f8d2d789b9a1d1e3f283f979aa9cbf393373806472e1ccd460e2f9c869b833b",
 #@     "container_name": "oauth2-redis",
 #@     "command": ["redis-server", "--appendonly", "yes", "--appendfsync", "always"],
 #@     "networks": ["oauth2-sessions"],
