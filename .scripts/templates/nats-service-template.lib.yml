@@ -1,7 +1,7 @@
 #@ def nats_services():
 #@   return {
 #@     "nats": {
-#@       "image": "nats:2.11.10-alpine",
+#@       "image": "nats:2-alpine@sha256:823e7f1d6d8ffe3b30dbd73d4a06bbb939acf94929f7fdf224404da7a05bafb5",
 #@       "command": ["--config", "/etc/nats/nats.conf"],
 #@       "networks": ["intranet"],
 #@       "restart": "unless-stopped",
