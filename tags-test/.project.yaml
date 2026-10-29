@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-tags-test
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-tags-test
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    args:
+      JAVA_VERSION: "21"
+      GRADLE_VERSION: "8.14.3"
+      HOST_UID: "${HOST_UID:-1000}"
+      HOST_GID: "${HOST_GID:-1000}"
+    user:
+      - RUN mise use -g java@$JAVA_VERSION gradle@$GRADLE_VERSION
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+    TAGS_API: http://tags-test-api:8900
+    TAGS_PRODUCTION_API: http://tags-production-test-api:8900
+    TAGS_RECIPES_API: http://tags-recipes-test-api:5000
+    FIXTURE_API: http://fixtures:80/tags-test-fixture
+vscode:
+  settings:
+    window.title: "${dirty}${rootName}${separator}${profileName}${separator}"
+    peacock.remoteColor: "#ae5dc9"
+  extensions:
+    - johnpapa.vscode-peacock
+    - vscjava.vscode-java-pack
+extras:
+  - traefik
+traefik:
+  network: intranet
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: test
+test: GRADLE_USER_HOME=target/gradle-cache gradle --no-daemon --project-cache-dir target/gradle-project-cache test
+format: gradle --no-daemon spotlessApply
+check: |
+  java --version
+  gradle --version
+prettier:
+  ignore:
+    - "*.gradle"
+    - "*.groovy"

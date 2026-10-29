@@ -21,7 +21,7 @@ traefik:
               path: /
       routers:
         recipe-db-fixtures:
-          rule: PathPrefix(`/graphql-test-fixture`) || PathPrefix(`/link-extract-test-fixture`) || PathPrefix(`/image-inline-test-fixture`) || PathPrefix(`/mcp-test-fixture`)
+          rule: PathPrefix(`/graphql-test-fixture`) || PathPrefix(`/link-extract-test-fixture`) || PathPrefix(`/image-inline-test-fixture`) || PathPrefix(`/mcp-test-fixture`) || PathPrefix(`/tags-test-fixture`)
           entrypoints: rest-internal
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json

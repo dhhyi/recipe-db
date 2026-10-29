@@ -54,6 +54,35 @@
 #@       "typesense": {"condition": "service_started"},
 #@     })
 #@   end
+#@   if "tags" in services:
+#@     services["tags"]["volumes"] = ["tags-data:/data"]
+#@     if "tags-test" in services:
+#@       for name, production in [("tags-test-api", False), ("tags-production-test-api", True)]:
+#@         services[name] = {
+#@           "build": {"context": "tags", "cache_from": ["type=registry,ref=ghcr.io/dhhyi/recipe-db-tags-cache" + options.registryCacheSuffix]},
+#@           "image": "ghcr.io/dhhyi/recipe-db-tags:latest",
+#@           "container_name": name,
+#@           "networks": ["intranet"],
+#@           "profiles": ["test"],
+#@           "restart": "no",
+#@           "environment": {"DATA_LOCATION": "/data", "MODE": "production" if production else "testing"},
+#@           "tmpfs": ["/data"],
+#@         }
+#@       end
+#@       if "recipes" in services:
+#@         services["tags-recipes-test-api"] = {
+#@           "build": {"context": "recipes", "cache_from": ["type=registry,ref=ghcr.io/dhhyi/recipe-db-recipes-cache" + options.registryCacheSuffix]},
+#@           "image": "ghcr.io/dhhyi/recipe-db-recipes:latest",
+#@           "container_name": "tags-recipes-test-api",
+#@           "networks": ["intranet"],
+#@           "profiles": ["test"],
+#@           "restart": "no",
+#@           "environment": {"DATA_LOCATION": "/data", "MODE": "testing"},
+#@           "tmpfs": ["/data"],
+#@         }
+#@       end
+#@     end
+#@   end
 #@   graphql = services["graphql"]
 #@   graphql.setdefault("labels", []).append("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000")
 #@   graphql["networks"] = ["auth-ingress"]
@@ -135,6 +164,10 @@ volumes:
     name: recipe-db-typesense-data
   search-data:
     name: recipe-db-search-data
+  #@ end
+  #@ if len([p for p in deploy_projects if p.name == "tags"]) > 0:
+  tags-data:
+    name: recipe-db-tags-data
   #@ end
   oauth2-sessions-data:
     name: recipe-db-oauth2-sessions-data

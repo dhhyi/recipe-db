@@ -1,0 +1,3 @@
+(library
+ (name tags)
+ (libraries dream lwt.unix sqlite3 yojson uunf.string uucp unix))
