@@ -100,6 +100,37 @@ query RecipeById($id: ID!) {
   }
 }
 
+query RecipeTags($id: ID!) {
+  myCapabilities {
+    role
+    canManageRecipes
+  }
+  recipe(id: $id) {
+    id
+    tags {
+      id
+      category
+      name
+    }
+  }
+}
+
+query TagInventory {
+  tags {
+    id
+    category
+    name
+  }
+}
+
+mutation AddRecipeTag($recipeId: ID!, $tagId: ID!) {
+  addRecipeTag(recipeId: $recipeId, tagId: $tagId)
+}
+
+mutation RemoveRecipeTag($recipeId: ID!, $tagId: ID!) {
+  removeRecipeTag(recipeId: $recipeId, tagId: $tagId)
+}
+
 query RecipeControls {
   myCapabilities {
     role
