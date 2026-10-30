@@ -13,6 +13,7 @@ package-lock.json
 
 # generated
 .devcontainer
+.BUILD.bazel.*
 /BUILD.bazel
 /bazel-*
 **/.vscode/settings.json
