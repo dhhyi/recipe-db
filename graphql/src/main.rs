@@ -26,6 +26,7 @@ mod recipes;
 mod rest_client;
 mod schema;
 mod search;
+mod tags;
 mod traefik;
 
 #[cfg(test)]

@@ -33,5 +33,12 @@
     "occurredAt": "2026-10-08T13:00:04Z",
     "recipeId": "42",
     "kind": "inspirations.changed"
+  },
+  {
+    "version": 1,
+    "eventId": "53cf7722-2b64-4e9f-a267-8b4d1f878306",
+    "occurredAt": "2026-10-08T13:00:05Z",
+    "recipeId": "42",
+    "kind": "tags.changed"
   }
 ]

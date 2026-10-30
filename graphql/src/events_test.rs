@@ -356,6 +356,7 @@ async fn bus_contract() {
     execute(&schema, r#"mutation { deleteRecipe(id: "42") }"#, true).await;
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
     execute(&schema, "{ recipes { id } }", true).await;
+    publisher.notify("42", EventKind::TagsChanged).await;
 
     let expected = [
         ("42", EventKind::RecipeChanged),
@@ -368,6 +369,7 @@ async fn bus_contract() {
         ("42", EventKind::RatingChanged),
         ("42", EventKind::ImageChanged),
         ("42", EventKind::RecipeDeleted),
+        ("42", EventKind::TagsChanged),
     ];
     let search = settings.consumer(CONSUMERS[0]).await;
     assert_events(&search, &expected).await;

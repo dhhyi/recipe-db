@@ -65,5 +65,46 @@ query GetRecipe($id: ID!) {
     inspirations {
       url
     }
+    tags {
+      id
+      category
+      name
+    }
+  }
+}
+
+query ListTags($category: TagCategory) {
+  tags(category: $category) {
+    id
+    category
+    name
+  }
+}
+
+mutation CreateTag($category: TagCategory!, $name: String!) {
+  createTag(category: $category, name: $name) {
+    id
+    category
+    name
+  }
+}
+
+mutation DeleteTag($id: ID!) {
+  deleteTag(id: $id)
+}
+
+mutation ChangeRecipeTags(
+  $recipeId: ID!
+  $addTagIds: [ID!]
+  $removeTagIds: [ID!]
+) {
+  changeRecipeTags(
+    recipeId: $recipeId
+    addTagIds: $addTagIds
+    removeTagIds: $removeTagIds
+  ) {
+    id
+    category
+    name
   }
 }

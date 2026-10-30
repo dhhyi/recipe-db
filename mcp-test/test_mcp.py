@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
@@ -124,7 +125,100 @@ async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
             "list_recipes",
             "get_recipe",
             "change_recipe",
+            "list_tags",
+            "create_tag",
+            "delete_tag",
+            "change_recipe_tags",
         }
+
+
+async def test_tag_tools_describe_categories_and_optional_bulk_lists():
+    async with mcp_session() as session:
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+        category_schema = tools["list_tags"].inputSchema["properties"]["category"]
+        assert {value for value in category_schema["enum"] if value is not None} == {
+            "CUISINE",
+            "DIETARY_STYLE",
+            "COURSE",
+        }
+        change_schema = tools["change_recipe_tags"].inputSchema
+        assert "addTagIds" not in change_schema.get("required", [])
+        assert "removeTagIds" not in change_schema.get("required", [])
+        assert "collision" in tools["create_tag"].description.lower()
+        assert "null" in tools["change_recipe_tags"].description.lower()
+
+
+async def test_tag_inventory_create_collision_and_delete():
+    async with mcp_session() as session:
+        name = f"Tag {uuid.uuid4()}"
+        created = await session.call_tool(
+            "create_tag", {"category": "CUISINE", "name": name}
+        )
+        tag = json.loads(created.content[0].text)
+        assert tag["category"] == "CUISINE"
+        assert tag["name"] == name
+
+        listed = await session.call_tool("list_tags", {"category": "CUISINE"})
+        assert tag in json.loads(listed.content[0].text)
+
+        collision = await session.call_tool(
+            "create_tag", {"category": "CUISINE", "name": name}
+        )
+        assert collision.isError is True
+        assert "tag-collision" in collision.content[0].text
+
+        deleted = await session.call_tool("delete_tag", {"tagId": tag["id"]})
+        assert json.loads(deleted.content[0].text) == {"deleted": True}
+
+
+async def test_non_owner_cannot_create_tags():
+    name = f"Denied Tag {uuid.uuid4()}"
+    async with mcp_session(account="memberOne") as session:
+        denied = await session.call_tool(
+            "create_tag", {"category": "CUISINE", "name": name}
+        )
+        assert denied.isError is True
+        assert "forbidden" in denied.content[0].text
+
+    async with mcp_session() as session:
+        listed = await session.call_tool("list_tags", {"category": "CUISINE"})
+        assert all(tag["name"] != name for tag in json.loads(listed.content[0].text))
+
+
+async def test_change_recipe_tags_bulk_and_get_recipe_includes_tags():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Tagged Recipe")
+        tags = []
+        for category, name in [
+            ("CUISINE", f"Bulk A {uuid.uuid4()}"),
+            ("COURSE", f"Bulk B {uuid.uuid4()}"),
+        ]:
+            result = await session.call_tool(
+                "create_tag", {"category": category, "name": name}
+            )
+            tags.append(json.loads(result.content[0].text))
+
+        changed = await session.call_tool(
+            "change_recipe_tags",
+            {
+                "recipeId": recipe_id,
+                "addTagIds": [tag["id"] for tag in tags],
+            },
+        )
+        assert {tag["id"] for tag in json.loads(changed.content[0].text)} == {
+            tag["id"] for tag in tags
+        }
+
+        recipe = json.loads(
+            (await session.call_tool("get_recipe", {"recipeId": recipe_id})).content[0].text
+        )
+        assert {tag["id"] for tag in recipe["tags"]} == {tag["id"] for tag in tags}
+
+        removed = await session.call_tool(
+            "change_recipe_tags",
+            {"recipeId": recipe_id, "removeTagIds": [tags[0]["id"]]},
+        )
+        assert [tag["id"] for tag in json.loads(removed.content[0].text)] == [tags[1]["id"]]
 
 
 async def test_get_recipe_schema_describes_name_as_required_for_add_recipe():
