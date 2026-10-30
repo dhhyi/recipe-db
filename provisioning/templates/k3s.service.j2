@@ -1,0 +1,24 @@
+[Unit]
+Description=Recipe DB single-server k3s
+Wants=network-online.target
+Requires=recipe-db-firewall.service
+After=network-online.target recipe-db-firewall.service
+
+[Service]
+Type=notify
+User=root
+ExecStartPre=/usr/local/sbin/recipe-db-storage-guard {{ expected_root_uuid }} {{ data_root }}
+ExecStart=/usr/local/bin/k3s server
+KillMode=control-group
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=0
+TasksMax=infinity
+TimeoutStartSec=300
+TimeoutStopSec=180
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

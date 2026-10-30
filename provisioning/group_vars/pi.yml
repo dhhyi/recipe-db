@@ -1,0 +1,10 @@
+data_root: /srv/recipe-db
+k3s_version: v1.35.5+k3s1
+k3s_sha256: aced90bea6a4e025abef4cf6db7d8cc316a7d20a2b963f809852a37f2b9dbc03
+# Changing a pinned version/checksum requires explicit operator approval.
+allow_k3s_upgrade: false
+journal_max_use: 128M
+journal_keep_free: 1G
+journal_max_file: 16M
+container_log_max_size: 10Mi
+container_log_max_files: 3

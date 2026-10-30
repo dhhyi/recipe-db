@@ -41,7 +41,7 @@
   "properties": {
     "category": {
       "type": "string",
-      "enum": ["api", "frontend", "backend", "test", "job", "static"]
+      "enum": ["api", "frontend", "backend", "test", "job", "static", "tooling"]
     },
     "backupRole": {
       "description": "Backup-cleanup role for API/backend projects; required for these categories.",

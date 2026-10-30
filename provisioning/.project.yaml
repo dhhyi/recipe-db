@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-provisioning
+  publish:
+    image: ghcr.io/dhhyi/recipe-db-devcontainer-provisioning
+    labels:
+      org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
+  build:
+    packages:
+      - openssh-client
+    user:
+      - RUN mise use -g python@3.13.9
+      - RUN pip install ansible-core==2.20.1
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+vscode:
+  settings:
+    peacock.remoteColor: "#dbb894"
+  extensions:
+    - johnpapa.vscode-peacock
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: tooling
+check: |
+  python -m unittest discover -s tests -v
+  ansible-playbook --syntax-check -i inventory.example.yml site.yml
+  ansible-playbook --syntax-check -i inventory.example.yml access.yml
+test: python -m unittest discover -s tests -v

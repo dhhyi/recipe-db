@@ -1,0 +1,431 @@
+- name: Provision one private Raspberry Pi k3s server
+  hosts: pi
+  gather_facts: true
+  become: false
+  any_errors_fatal: true
+  tasks:
+    - name: Validate explicit operator inputs and supported host
+      ansible.builtin.assert:
+        that:
+          - groups['pi'] | length == 1
+          - ansible_facts.distribution == 'Debian'
+          - ansible_facts.distribution_major_version == '13'
+          - ansible_facts.distribution_release == 'trixie'
+          - ansible_facts.architecture == 'aarch64'
+          - ansible_user is defined and ansible_user != 'root'
+          - expected_root_uuid is defined
+          - expected_root_uuid is match('^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')
+          - data_root is match('^/srv/[a-zA-Z0-9_-]+$')
+          - k3s_version is match('^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$')
+          - k3s_sha256 is match('^[0-9a-f]{64}$')
+          - admin_networks is defined and admin_networks | length > 0
+          - application_networks is defined and application_networks | length > 0
+          - journal_max_use is match('^[1-9][0-9]*[KMG]$')
+          - journal_keep_free is match('^[1-9][0-9]*[KMG]$')
+          - journal_max_file is match('^[1-9][0-9]*[KMG]$')
+          - container_log_max_size is match('^[1-9][0-9]*Mi$')
+          - container_log_max_files | int >= 1
+          - container_log_max_files | int <= 10
+          - not ansible_check_mode
+        fail_msg: Unsupported target or incomplete inputs. Check mode cannot prove this provisioning sequence; use preflight instead.
+
+    - name: Verify Pi 5 hardware identity
+      ansible.builtin.command: cat /proc/device-tree/model
+      register: pi_model
+      changed_when: false
+
+    - name: Require Raspberry Pi 5
+      ansible.builtin.assert:
+        that: "'Raspberry Pi 5' in pi_model.stdout"
+
+    - name: Verify Raspberry Pi OS image marker
+      ansible.builtin.command: cat /etc/rpi-issue
+      register: pi_os
+      changed_when: false
+
+    - name: Require Raspberry Pi OS
+      ansible.builtin.assert:
+        that: "'Raspberry Pi' in pi_os.stdout"
+
+    - name: Verify root identity before making changes
+      ansible.builtin.script:
+        cmd: "files/storage-guard.py {{ expected_root_uuid }} {{ data_root }} --preflight"
+        executable: /usr/bin/python3
+      changed_when: false
+
+    - name: Verify private network inputs and current SSH source
+      ansible.builtin.script:
+        cmd: "files/network-preflight.py {{ admin_networks | to_json | quote }} {{ application_networks | to_json | quote }}"
+        executable: /usr/bin/python3
+      changed_when: false
+
+    - name: Verify existing public-key-only authentication independently
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -o
+          - BatchMode=yes
+          - -o
+          - PreferredAuthentications=publickey
+          - -o
+          - PasswordAuthentication=no
+          - -o
+          - KbdInteractiveAuthentication=no
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=.private/known_hosts
+          - -i
+          - "{{ ansible_ssh_private_key_file }}"
+          - "{{ ansible_user }}@{{ ansible_host }}"
+          - "true"
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Verify administrator privilege escalation
+      ansible.builtin.command: /usr/bin/id -u
+      become: true
+      register: sudo_identity
+      changed_when: false
+
+    - name: Require root privileges for provisioning
+      ansible.builtin.assert:
+        that: sudo_identity.stdout == '0'
+
+    - name: Inspect existing host services and k3s state
+      ansible.builtin.script:
+        cmd: "files/host-preflight.py {{ data_root }} {{ k3s_version }} {{ allow_k3s_upgrade | bool | ternary('yes', 'no') }}"
+        executable: /usr/bin/python3
+      become: true
+      changed_when: false
+
+    - name: Report successful preflight
+      ansible.builtin.debug:
+        msg: "Preflight passed. Target={{ inventory_hostname }}, OS={{ ansible_facts.distribution_version }}, USB root={{ expected_root_uuid }}, k3s={{ k3s_version }}"
+
+    - name: Stop after read-only preflight when requested
+      ansible.builtin.meta: end_host
+      when: preflight_only | default(false) | bool
+
+    - name: Configure the host
+      become: true
+      block:
+        - name: Install host prerequisites and security update tooling
+          ansible.builtin.apt:
+            name:
+              - ca-certificates
+              - curl
+              - nftables
+              - unattended-upgrades
+              - update-notifier-common
+              - containernetworking-plugins
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+
+        - name: Configure required Pi memory cgroups
+          ansible.builtin.replace:
+            path: /boot/firmware/cmdline.txt
+            regexp: '^(?!.*\bcgroup_memory=1\b)(.*)$'
+            replace: '\1 cgroup_memory=1'
+
+        - name: Enable the memory cgroup controller at boot
+          ansible.builtin.replace:
+            path: /boot/firmware/cmdline.txt
+            regexp: '^(?!.*\bcgroup_enable=memory\b)(.*)$'
+            replace: '\1 cgroup_enable=memory'
+
+        - name: Check the active memory controller
+          ansible.builtin.command: grep -w memory /sys/fs/cgroup/cgroup.controllers
+          register: memory_controller
+          failed_when: memory_controller.rc not in [0, 1]
+          changed_when: false
+
+        - name: Require an operator reboot before continuing without memory cgroups
+          ansible.builtin.fail:
+            msg: "Memory cgroup is not active. Boot settings are prepared. Run sudo reboot at an approved time, reconnect, then rerun the same playbook. No reboot was performed."
+          when: memory_controller.rc != 0
+
+        - name: Create runtime directories without altering existing contents
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          loop:
+            - "{{ data_root }}"
+            - "{{ data_root }}/k3s"
+            - "{{ data_root }}/storage"
+            - "{{ data_root }}/kubelet"
+
+        - name: Install the storage startup guard
+          ansible.builtin.copy:
+            src: files/storage-guard.py
+            dest: /usr/local/sbin/recipe-db-storage-guard
+            owner: root
+            group: root
+            mode: "0755"
+          notify: Restart k3s
+
+        - name: Create managed configuration directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+          loop:
+            - /etc/rancher/k3s
+            - /etc/ssh/sshd_config.d
+            - /etc/systemd/journald.conf.d
+            - /etc/modules-load.d
+            - /etc/sysctl.d
+
+        - name: Configure kernel modules
+          ansible.builtin.copy:
+            dest: /etc/modules-load.d/recipe-db.conf
+            content: |
+              overlay
+              br_netfilter
+            mode: "0644"
+
+        - name: Load required modules
+          ansible.builtin.command: "modprobe {{ item }}"
+          changed_when: false
+          loop:
+            - overlay
+            - br_netfilter
+
+        - name: Configure IPv4 forwarding and bridged traffic
+          ansible.builtin.copy:
+            dest: /etc/sysctl.d/90-recipe-db.conf
+            content: |
+              net.ipv4.ip_forward=1
+              net.bridge.bridge-nf-call-iptables=1
+              net.bridge.bridge-nf-call-ip6tables=1
+            mode: "0644"
+          register: sysctl_config
+
+        - name: Apply managed kernel settings
+          ansible.builtin.command: sysctl -p /etc/sysctl.d/90-recipe-db.conf
+          changed_when: sysctl_config.changed
+
+        - name: Install private host firewall configuration
+          ansible.builtin.template:
+            src: firewall.nft.j2
+            dest: /etc/recipe-db-firewall.nft
+            mode: "0600"
+          notify: Reload private firewall
+
+        - name: Install firewall service without replacing other nftables tables
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/recipe-db-firewall.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=Recipe DB private host ingress firewall
+              Before=k3s.service
+              After=network-pre.target nftables.service
+              [Service]
+              Type=oneshot
+              RemainAfterExit=yes
+              ExecStart=/usr/sbin/nft -f /etc/recipe-db-firewall.nft
+              ExecReload=/usr/sbin/nft -f /etc/recipe-db-firewall.nft
+              [Install]
+              WantedBy=multi-user.target
+          notify: Reload private firewall
+
+        - name: Validate firewall syntax before activation
+          ansible.builtin.command: nft --check -f /etc/recipe-db-firewall.nft
+          changed_when: false
+
+        - name: Enable private firewall
+          ansible.builtin.systemd_service:
+            name: recipe-db-firewall
+            daemon_reload: true
+            enabled: true
+            state: started
+
+        - name: Configure SSH access protections
+          ansible.builtin.copy:
+            dest: /etc/ssh/sshd_config.d/00-recipe-db.conf
+            mode: "0644"
+            content: |
+              PermitRootLogin no
+              PubkeyAuthentication yes
+              PasswordAuthentication no
+              KbdInteractiveAuthentication no
+          notify: Reload SSH
+
+        - name: Validate SSH syntax
+          ansible.builtin.command: /usr/sbin/sshd -t
+          changed_when: false
+
+        - name: Validate effective SSH policy for the operator
+          ansible.builtin.command:
+            argv:
+              - /usr/sbin/sshd
+              - -T
+              - -C
+              - "user={{ ansible_user }},host={{ ansible_host }},addr={{ ansible_facts.env.SSH_CONNECTION.split()[0] }}"
+          register: ssh_policy
+          changed_when: false
+
+        - name: Refuse conflicting SSH policy
+          ansible.builtin.assert:
+            that:
+              - "'permitrootlogin no' in ssh_policy.stdout_lines"
+              - "'pubkeyauthentication yes' in ssh_policy.stdout_lines"
+              - "'passwordauthentication no' in ssh_policy.stdout_lines"
+              - "'kbdinteractiveauthentication no' in ssh_policy.stdout_lines"
+
+        - name: Bound system journal storage
+          ansible.builtin.copy:
+            dest: /etc/systemd/journald.conf.d/recipe-db.conf
+            mode: "0644"
+            content: |
+              [Journal]
+              SystemMaxUse={{ journal_max_use }}
+              RuntimeMaxUse={{ journal_max_use }}
+              SystemKeepFree={{ journal_keep_free }}
+              SystemMaxFileSize={{ journal_max_file }}
+              MaxRetentionSec=7day
+          notify: Restart journald
+
+        - name: Configure automatic security updates without reboot
+          ansible.builtin.copy:
+            dest: /etc/apt/apt.conf.d/99recipe-db-security
+            mode: "0644"
+            content: |
+              APT::Periodic::Enable "1";
+              APT::Periodic::Update-Package-Lists "1";
+              APT::Periodic::Unattended-Upgrade "1";
+              #clear Unattended-Upgrade::Allowed-Origins;
+              #clear Unattended-Upgrade::Origins-Pattern;
+              Unattended-Upgrade::Origins-Pattern {
+                "origin=Debian,codename=trixie-security";
+              };
+              Unattended-Upgrade::Automatic-Reboot "false";
+              Unattended-Upgrade::Remove-Unused-Dependencies "false";
+
+        - name: Enable apt update timers
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            enabled: true
+            state: started
+          loop:
+            - apt-daily.timer
+            - apt-daily-upgrade.timer
+
+        - name: Download checksum-pinned ARM64 k3s binary
+          ansible.builtin.get_url:
+            url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/k3s-arm64"
+            dest: /usr/local/bin/k3s
+            checksum: "sha256:{{ k3s_sha256 }}"
+            owner: root
+            group: root
+            mode: "0755"
+          notify: Restart k3s
+
+        - name: Configure private single-server k3s
+          ansible.builtin.template:
+            src: k3s-config.yaml.j2
+            dest: /etc/rancher/k3s/config.yaml
+            mode: "0600"
+          notify: Restart k3s
+
+        - name: Install guarded k3s service
+          ansible.builtin.template:
+            src: k3s.service.j2
+            dest: /etc/systemd/system/k3s.service
+            mode: "0644"
+          notify: Restart k3s
+
+        - name: Apply service changes
+          ansible.builtin.meta: flush_handlers
+
+        - name: Reconnect to verify the hardened SSH/firewall path
+          ansible.builtin.meta: reset_connection
+
+        - name: Verify the new SSH connection
+          ansible.builtin.wait_for_connection:
+            timeout: 60
+
+        - name: Enable k3s across reboots
+          ansible.builtin.systemd_service:
+            name: k3s
+            enabled: true
+            state: started
+            daemon_reload: true
+
+        - name: Wait for Kubernetes readiness
+          ansible.builtin.command: /usr/local/bin/k3s kubectl get --raw=/readyz
+          register: api_ready
+          retries: 60
+          delay: 5
+          until: api_ready.rc == 0
+          changed_when: false
+
+        - name: Verify the single node is Ready
+          ansible.builtin.command: /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
+          changed_when: false
+
+        - name: Verify bundled Traefik is available
+          ansible.builtin.command: /usr/local/bin/k3s kubectl -n kube-system rollout status deployment/traefik --timeout=300s
+          register: traefik_ready
+          retries: 12
+          delay: 10
+          until: traefik_ready.rc == 0
+          changed_when: false
+
+        - name: Verify local-path provisioner is available
+          ansible.builtin.command: /usr/local/bin/k3s kubectl -n kube-system rollout status deployment/local-path-provisioner --timeout=300s
+          changed_when: false
+
+        - name: Verify final storage identity
+          ansible.builtin.command: "/usr/local/sbin/recipe-db-storage-guard {{ expected_root_uuid }} {{ data_root }}"
+          changed_when: false
+
+        - name: Check pending reboot indicator
+          ansible.builtin.stat:
+            path: /var/run/reboot-required
+          register: reboot_required
+
+        - name: Report ready-cluster interface
+          ansible.builtin.debug:
+            msg:
+              - "k3s={{ k3s_version }}, root={{ expected_root_uuid }}"
+              - "State={{ data_root }}/k3s; local-path={{ data_root }}/storage"
+              - "Administration=https://127.0.0.1:6443 via SSH tunnel; LAN API blocked by firewall; kubeconfig=/etc/rancher/k3s/k3s.yaml (root only)"
+              - "Reboot indicator={{ reboot_required.stat.exists }}. No automatic reboot performed; no application deployed."
+
+  handlers:
+    - name: Reload private firewall
+      become: true
+      ansible.builtin.systemd_service:
+        name: recipe-db-firewall
+        daemon_reload: true
+        enabled: true
+        state: restarted
+
+    - name: Reload SSH
+      become: true
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: reloaded
+
+    - name: Restart journald
+      become: true
+      ansible.builtin.systemd_service:
+        name: systemd-journald
+        state: restarted
+
+    - name: Restart k3s
+      become: true
+      ansible.builtin.systemd_service:
+        name: k3s
+        daemon_reload: true
+        state: restarted

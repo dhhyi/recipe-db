@@ -168,6 +168,6 @@ On 2026-10-30 the operator reported:
 - Successful shutdown, cooling-case assembly, boot and Ethernet SSH reconnection.
 - Before case assembly: 40.6 C; after assembly/reboot: 28.5 C. Both checks reported `throttled=0x0`.
 
-The exact stick product model was not independently established. Hostname-based SSH from WSL remains to be verified; successful Windows name resolution alone does not establish that.
+The exact stick product model was not independently established. Hostname-based SSH from WSL was subsequently confirmed by the operator on 2026-10-30.
 
-No k3s or application workloads have been installed. Automatic security updates, SSH hardening verification, bounded logs, storage startup protection and private Kubernetes administration remain #42. Backups and recovery remain #43. These bootstrap observations do not complete #42, #45 or the deployment umbrella #17.
+No k3s or application workloads have been installed. Continue with the [host provisioning guide](raspberry-pi-provisioning.md) for #42's automatic security updates, SSH hardening verification, bounded logs, storage startup protection and private Kubernetes administration. Backups and recovery remain #43. These bootstrap observations do not complete #42, #45 or the deployment umbrella #17.

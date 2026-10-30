@@ -4,7 +4,7 @@ The production manifest renderer consumes the same project metadata and immutabl
 
 ## Prerequisites and boundaries
 
-- For initial physical Pi setup, follow the [Windows/WSL USB bootstrap guide](raspberry-pi-bootstrap.md). It covers verified boot/SSH steps, not completed host provisioning or Pi application acceptance.
+- For initial physical Pi setup, follow the [Windows/WSL USB bootstrap guide](raspberry-pi-bootstrap.md), then the [private host provisioning guide](raspberry-pi-provisioning.md). Bootstrap evidence and provisioning tooling are not completed Pi application acceptance.
 - Run commands from the repository root, with an absolute values-file path. Examples below use `/home/runner/work/recipe-db/recipe-db`; substitute your actual absolute checkout path.
 - Local rehearsal requires an x86-64 host, a running Docker daemon with **more than 8 GiB** assigned, available loopback ports 8080 and 6445, and access to GHCR. Leave enough disk space for images and the requested PVCs.
 - The tool contract is k3d **5.8.3**, k3s **v1.35.5-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
