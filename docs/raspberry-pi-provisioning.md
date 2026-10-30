@@ -5,6 +5,7 @@ Imaging and working public-key SSH are prerequisites; start with the [bootstrap 
 ## Supported baseline and pinned tools
 
 - Raspberry Pi 5, Raspberry Pi OS Lite 64-bit, Debian 13/Trixie, ext4 root on the explicitly identified single USB device.
+- Use the supplied `kernel8.img` with **4096-byte pages**. The Pi 5 default `kernel_2712.img` uses 16 KiB pages, which the pinned Typesense 29.0 ARM64 image rejects (`jemalloc: Unsupported system page size`).
 - Baseline image: `2026-10-06-raspios-trixie-arm64-lite.img.xz`, [official download](https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz). Compressed SHA-256: `483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843`. Compare the downloaded file with `sha256sum` in WSL before selecting it as a custom image in Imager. Imager can also fetch this image and verify its extracted checksum. Never bypass the physical-device erase confirmation.
 - Controller: Python 3.13.9 and ansible-core 2.20.1 in the generated `provisioning` devcontainer. The `tooling` project category keeps this administrative environment out of application releases and Compose services.
 - k3s `v1.35.5+k3s1`, matching the local rehearsal's version. The ARM64 binary SHA-256 is pinned in `provisioning/group_vars/pi.yml`, from the [versioned release checksums](https://github.com/k3s-io/k3s/releases/download/v1.35.5%2Bk3s1/sha256sum-arm64.txt). No floating installation script is executed.
@@ -16,6 +17,7 @@ The initial physical Pi reported Debian 13.7; its exact flashed image date was n
 Review these before authorizing a live run:
 
 - Install host prerequisites, nftables and unattended-upgrades.
+- Verify `kernel8.img` exists, then select it in a managed final `[all]` boot-config block, retaining a backup. Stop for an approved manual reboot if `getconf PAGESIZE` is not `4096`; never reboot automatically. An earlier manually added kernel selection may remain; the final managed block is authoritative.
 - Verify UUID/ext4/USB identity before mutation; install the same storage check as k3s `ExecStartPre`. Missing directories, symlink redirection and unexpected filesystems fail startup.
 - Store k3s/SQLite/containerd state under `/srv/recipe-db/k3s`, kubelet state under `/srv/recipe-db/kubelet`, and local-path volumes under `/srv/recipe-db/storage`. These are directories, not separate mounts. Their parent directories are root-owned mode 0700; individual PVC contents retain the provisioner/workload's own permissions.
 - Enable required modules, forwarding/bridge settings and memory-cgroup boot options. If the running memory controller is absent, stop with explicit reboot/resume instructions; never reboot automatically.
@@ -163,5 +165,6 @@ The operator explicitly authorized the live run and supplied the following termi
 - Effective nftables input policy was default-drop with expected private IPv4 SSH/application exceptions and no external overlay-UDP allow rule. The forward chain retained the intended DNAT exceptions and direct cluster-network rejection. This is configuration evidence, not a live UDP 8472 test.
 - Both apt timers were enabled. Effective apt configuration selected Debian `trixie-security` and `Automatic-Reboot "false"`. The installed journal configuration matched the documented bounds; kubelet arguments set its managed root and three 10 MiB log files.
 - After a separately approved post-install reboot, firewall and k3s were active, the same node was Ready, and system pods recovered. Re-establishing the workstation tunnel again returned the Ready node without rerunning provisioning.
+- The initial application attempt exposed Typesense's incompatibility with the default 16 KiB kernel. After the operator selected `kernel8.img` and approved another reboot, `getconf PAGESIZE` returned `4096`, `uname -r` returned `6.18.50+rpt-rpi-v8`, and k3s was active. Tunneled kubectl again showed the same Ready node, and Typesense became Ready. The equivalent managed provisioning block still needs a live rerun/idempotence check; the earlier unchanged-run evidence predates this addition.
 
 Still unverified: a live UDP overlay boundary test, remaining interface/port combinations, an actual unattended security-update execution, effective log rotation under load, application ingress/NodePort isolation with deployed workloads, application persistence/resource measurements, backup and restore. #45 remains open; these results do not prove production application readiness or long-term USB reliability.
