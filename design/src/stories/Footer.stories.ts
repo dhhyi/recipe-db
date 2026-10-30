@@ -16,7 +16,7 @@ type Story = StoryObj;
 export const ProjectReadme: Story = {
   play: async ({ canvasElement }) => {
     const link = within(canvasElement).getByRole("link", {
-      name: "Recipe DB README auf GitHub",
+      name: "GitHub",
     });
     expect(link).toHaveAttribute(
       "href",

@@ -14,7 +14,7 @@ export class FooterComponent extends LitElement {
         style="color: var(--pico-muted-color);"
       >
         <a href="https://github.com/dhhyi/recipe-db/blob/main/README.md"
-          >Recipe DB README auf GitHub</a
+          >GitHub</a
         >
       </footer>
     `;
