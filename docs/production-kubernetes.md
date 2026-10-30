@@ -153,6 +153,17 @@ Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubec
 
 The first physical Pi token-only attempt on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
 
+The subsequent bounded physical Pi smoke passed through that same loopback ingress:
+
+- Owner-bearer GraphQL create/read/update/delete; anonymous and spoofed-identity writes rejected, invalid bearer rejected, and the denied writes left the synthetic recipe unchanged.
+- Image upload and anonymous image/thumbnail downloads with content hashes matching their URLs; indexed search and rendered browse results containing the synthetic recipe.
+- Browse and both editor HTML entry points; design CSS/JavaScript redirects resolved successfully and HTMX was reachable. This does not validate interactive editor login/writes.
+- MCP initialization, recipe read and authenticated recipe change using the separate MCP owner token; GraphQL confirmed the changed value.
+- Backend, infrastructure, dashboard and OAuth paths returned 404 through application ingress.
+- Recipes, images and Typesense pods were restarted, then the identical immutable release was reapplied. The recipe, MCP-written method and image URL/content survived; every application deployment ended Ready and the deployment operation lease was released.
+
+The synthetic recipe was deleted afterward. Dependent image cleanup remains deferred under the normal backup-maintenance contract; no test reset was used. This was an ad-hoc, explicitly targeted Pi check, not execution of the guarded local-only k3d smoke. Host reboot with retained synthetic data, sustained-load/resource thresholds, off-device backup/restore, Google login and public HTTPS remain unverified. #45 stays open.
+
 Replace the digest placeholder with the actual **artifact** digest. Keep that same reference for the initial deployment, smoke reapply and evidence.
 
 ```sh
