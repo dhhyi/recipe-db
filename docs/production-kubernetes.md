@@ -228,11 +228,13 @@ The four positional arguments are an absolute values path, immutable artifact re
 
 The script uses HTTP protocols, not a browser automation suite:
 
+The public static-asset route `/design/` serves the built Storybook; it does not expose the Storybook development server. The existing `/design/styles.css` and `/design/components.js` endpoints remain available.
+
 1. Confirms the deployed ConfigMap artifact and revision, recording available exact client tool versions in JSON. Before its first HTTP request or recipe mutation, explicitly waits for the NATS rollout, `nats-init` Job completion, and every application's Deployment rollout. Search's index-readiness sidecar requires `/health` to report `ready: true`, not merely a listening process.
 2. Creates one uniquely named recipe, reads it, updates it and reads the change. No test-only bulk-reset endpoints are used.
 3. Uploads the existing JPEG fixture using GraphQL multipart Upload, reads image metadata through GraphQL, and verifies the returned public PNG and thumbnail content hashes against their URLs.
 4. Waits within the configured deadline for the recipe in search, GraphQL browse data, and the actual server-rendered browse search response.
-5. Checks browse, both editor HTML entry points, design CSS and component JavaScript, including their same-origin hashed-asset redirects, plus the nonempty JavaScript runtime at `/design/htmx.min.js`.
+5. Checks browse, both editor HTML entry points, the Storybook page and its built JavaScript asset at `/design/`, design CSS and component JavaScript (including their same-origin hashed-asset redirects), plus the nonempty JavaScript runtime at `/design/htmx.min.js`.
 6. Initializes MCP Streamable HTTP, sends its initialized notification and calls the allowed read-only `get_recipe` tool; no MCP write capability is assumed.
 7. Asserts HTTP 404 for representative private REST, NATS, Typesense, monitoring and Kubernetes paths: `/recipes`, `/ratings`, `/inspirations`, `/search/reindex`, `/varz`, `/jsz`, `/collections`, `/metrics`, `/healthz` and `/api/v1/namespaces`. Also denies Traefik metadata/configuration endpoints, dashboard and `/oauth2/auth`. These use non-HTML requests, not maintenance-page fallbacks.
 8. Saves browse's exact replica count, scales only browse to zero, and waits for browse HTML's maintenance 503, comparing its body with the actual bundled maintenance page rather than accepting an unrelated HTML error. GraphQL, an initialized MCP read, images, both editors and design assets must still work. It restores the original replicas on success **or failure**.

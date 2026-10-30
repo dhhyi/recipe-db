@@ -16,6 +16,8 @@ export class FooterComponent extends LitElement {
         <a href="https://github.com/dhhyi/recipe-db/blob/main/README.md"
           >GitHub</a
         >
+        <span class="px-2">|</span>
+        <a href="/design/">Design</a>
       </footer>
     `;
   }
