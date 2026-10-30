@@ -317,15 +317,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("async-graphql started");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
-    axum::serve(listener, app).await?;
+    serve_until_shutdown(listener, app, shutdown_signal()).await?;
     Ok(())
+}
+
+async fn serve_until_shutdown<F>(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send,
+{
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let server = std::future::IntoFuture::into_future(
+        axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        }),
+    );
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => result,
+        _ = shutdown => {
+            let _ = shutdown_tx.send(());
+            tokio::time::timeout(std::time::Duration::from_secs(20), &mut server)
+                .await
+                .map_err(|_| std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "GraphQL graceful shutdown exceeded 20 seconds",
+                ))?
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    let interrupt = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate => {}
+    }
 }
 
 #[cfg(test)]
 mod ingress_tests {
     use super::{
-        backup_mode_barrier, mutation_request_error, trusted_graphql_ingress, IngressSecret,
-        INGRESS_HEADER,
+        backup_mode_barrier, mutation_request_error, serve_until_shutdown,
+        trusted_graphql_ingress, IngressSecret, INGRESS_HEADER,
     };
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
@@ -445,6 +497,45 @@ mod ingress_tests {
         assert!(!response.headers().contains_key(INGRESS_HEADER));
         assert_eq!(response.text().await.unwrap(), "accepted");
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_drains_an_in_flight_request() {
+        let (started_tx, mut started_rx) = tokio::sync::watch::channel(false);
+        let (finish_tx, finish_rx) = tokio::sync::watch::channel(false);
+        let app = Router::new().route(
+            "/",
+            get(move || {
+                let started_tx = started_tx.clone();
+                let mut finish_rx = finish_rx.clone();
+                async move {
+                    started_tx.send_replace(true);
+                    while !*finish_rx.borrow() {
+                        finish_rx.changed().await.unwrap();
+                    }
+                    "completed"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_until_shutdown(listener, app, async {
+            let _ = shutdown_rx.await;
+        }));
+        let request = tokio::spawn(async move {
+            reqwest::get(format!("http://{address}/"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+        started_rx.changed().await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        finish_tx.send_replace(true);
+        assert_eq!(request.await.unwrap(), "completed");
+        server.await.unwrap().unwrap();
     }
 
     #[tokio::test]

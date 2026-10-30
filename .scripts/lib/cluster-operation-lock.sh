@@ -18,8 +18,16 @@ cluster_operation_lock_acquire() {
 }
 
 cluster_operation_lock_update() {
-  local phase=$1
+  local phase=$1 current
   [[ $phase =~ ^[a-z][a-z0-9-]{0,62}$ ]] || production_fail "invalid operation lock phase"
+  [[ -n $cluster_operation_lock_holder ]] || production_fail "operation lock owner is required"
+  current=$(cluster_operation_lock_kubectl get lease recipe-db-deploy -o json) \
+    || production_fail "could not verify operation lock ownership"
+  jq -e --arg holder "$cluster_operation_lock_holder" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .spec.holderIdentity == $holder
+  ' <<< "$current" > /dev/null \
+    || production_fail "operation lock owner changed; refusing to update another operation's lock"
   cluster_operation_lock_kubectl annotate lease recipe-db-deploy \
     --overwrite "recipe-db/phase=$phase" > /dev/null
 }

@@ -43,33 +43,26 @@ The maintenance API is private and available only in backup mode:
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
-#### Manual cleanup procedure
+#### Snapshot capture
 
-The Job performs cleanup only; it does not acquire the `recipe-db-deploy` operation lock, change runtime modes, stop writers, or create a snapshot. Keep the lock and GraphQL client barrier until services have returned to production. Do not run these commands unless an exclusive backup window is already established.
+The `backup` operation coordinates with `deploy` through the same cluster-scoped `recipe-db-deploy` Lease. It validates an explicit local/Pi target, immutable release digest, active workload release, selected PVC identities, ownership and destination capacity (selected PVC requests plus 64 MiB staging headroom). The operator-provided values file supplies the target/context; the release must match every running workload. It does not read the configured application secret files.
 
-1. Acquire the shared operation lock, enable the GraphQL client barrier, switch backends to backup mode, and wait until no other writers can access the data volumes.
-2. Render the same immutable release used by the workloads, recreate the suspended cleanup Job, and resume it:
+Run only during an approved maintenance window, from a trusted workstation with the explicit target values file and a private destination filesystem. This operation changes runtime modes, briefly stops backend workloads and transfers application data; do not point it at a live Pi or production cluster during development or tests.
 
 ```sh
 VALUES="$PWD/.secrets/local-values.yaml"
 RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-mise run production-k3d render "$VALUES" "$RELEASE" > "$PWD/.secrets/backup-rendered.yaml"
-mise exec -- yq -o=yaml \
-  'select(.kind == "Job" and .metadata.name == "backup-cleanup")' \
-  "$PWD/.secrets/backup-rendered.yaml" > "$PWD/.secrets/backup-cleanup-job.yaml"
-mise run production-k3d kubectl "$VALUES" delete job backup-cleanup --ignore-not-found --wait
-mise run production-k3d kubectl "$VALUES" apply -f "$PWD/.secrets/backup-cleanup-job.yaml"
-mise run production-k3d kubectl "$VALUES" patch job backup-cleanup --type=merge \
-  -p '{"spec":{"suspend":false}}'
-mise run production-k3d kubectl "$VALUES" wait --for=condition=complete \
-  job/backup-cleanup --timeout=600s
-mise run production-k3d kubectl "$VALUES" logs job/backup-cleanup
+SNAPSHOT="$PWD/.backups/recipe-db-$(date -u +%Y%m%dT%H%M%SZ)"
+umask 077
+mkdir -p "$PWD/.backups"
+mise run production-k3d backup "$VALUES" "$RELEASE" "$SNAPSHOT"
 ```
 
-3. Continue to snapshot only after the Job succeeds. On failure, skip the snapshot and recover the workloads; cleanup already completed is idempotent and may be retried.
-4. Return services to production, confirm normal readiness, then release the client barrier and operation lock.
+The operation raises the GraphQL `MODE=backup` barrier first; GraphQL drains active connections on termination for at most 20 seconds, within Kubernetes' 30-second default pod termination grace period. It then stops every normal backup-role backend before bringing up any backup-mode backend, runs the rendered `backup-cleanup` Job (three bounded attempts), stops those backends, and exports each role-selected PVC using a temporary Pod with both PVC and mount marked read-only. Recipes, cleanup participants and tags are selected from `.project.yaml`; derived and excluded roles are not archived. The authoritative archive must contain `recipes.sqlite3`. No archive is published if cleanup or copy validation fails.
 
-The final command prints a private machine-readable summary that may contain recipe IDs. Delete and recreate completed Jobs before another run. This repository provides no end-to-end command for lock management, mode transitions, snapshot capture, upload, or retention.
+A complete snapshot is identified only by `manifest.json` (`format: recipe-db-pvc-snapshot`, version 1). It records the target/context/namespace, source artifact digest, source revision, capture timestamps, and each service/PVC archive's filename, byte count, file count and SHA-256. Archives are `<service>.tar`; SQLite database files and any present `-wal`/`-shm` sidecars are copied as part of the complete PVC contents. Verify the manifest hashes before consuming it. Incomplete runs retain `backup-state.json`; when production recovery is unsafe, the operation retains that recovery state, the GraphQL barrier and the Lease for operator investigation.
+
+This is a local snapshot interface only: it does not upload, encrypt, retain, restore, or validate physical Pi USB/root-filesystem attachment. It also does not refresh disposable browse/search projections. Mocked script tests do not constitute a real-cluster rehearsal; do not infer Pi or production readiness from them.
 
 ## Operator configuration and secrets
 
@@ -220,7 +213,7 @@ The application objects live in `recipe-db`. The intentional infrastructure exce
 
 The driver applies the two namespaces separately. Application secret checksums trigger workload replacement when credentials change. A separate route checksum in the bundled controller's pod annotations triggers a Traefik rollout when its file-provider configuration or ingress token changes; deployment waits for that exact checksum, not a previously ready controller. Identical inputs keep both checksums stable.
 
-Deployment uses the `recipe-db-deploy` Kubernetes Lease as coordination groundwork for backup/restore operations. An existing Lease blocks deployment rather than being silently stolen. This is **not** a complete backup locking protocol, transactional deployment, snapshot mechanism or proof that a backup is safe. Investigate an abandoned Lease and its owner before any manual recovery; do not automatically delete it to make deployment proceed.
+Deployment and the local snapshot operation use the same cluster-scoped `recipe-db-deploy` Lease. An existing Lease blocks either operation rather than being silently stolen. The backup workflow retains its Lease and recovery state if production recovery is unsafe; do not use `lock-recover` to bypass that state. Inspect the selected cluster, `backup-state.json`, Lease and workload modes/counts, then complete safe production recovery before considering manual abandoned-lock recovery.
 
 ## What the protocol smoke verifies
 
