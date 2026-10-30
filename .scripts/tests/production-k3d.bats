@@ -92,6 +92,7 @@ EOF
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
+  *"get service traefik -o json"*) echo '{"spec":{"type":"ClusterIP","ports":[{"port":80}]}}' ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)
     jq -n --arg bad "$MOCK_BAD_NODES" '{items:[{metadata:{name:"k3d-recipe-db-rehearsal-server-0"},
@@ -127,9 +128,14 @@ case "$*" in
       case "$argument" in
         --from-file=routes.yml=*)
           route_file=${argument#--from-file=routes.yml=}
-          jq -e --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
+          jq -e --slurpfile config "${route_file%/*}/config.json" --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
             '.http.services.recipes.loadBalancer.servers[0].url == "http://recipes.recipe-db.svc.cluster.local:4000"
-            and .http.middlewares["oauth2-forward-auth"].forwardAuth.address == "http://oauth2-proxy.recipe-db.svc.cluster.local/oauth2/auth"
+            and (if $config[0].runtime.authMode == "token-only" then
+              .http.middlewares["oauth2-forward-auth"] == null and
+              .http.routers["oauth2-public"] == null and
+              .http.routers["graphql-cookie"] == null and
+              .http.services["oauth2-proxy"] == null
+            else .http.middlewares["oauth2-forward-auth"].forwardAuth.address == "http://oauth2-proxy.recipe-db.svc.cluster.local/oauth2/auth" end)
             and .http.routers["graphql-internal"] == {
               rule:"PathPrefix(`/graphql`)",entrypoints:["rest-internal"],
               service:"recipe-db-graphql",middlewares:["graphql-ingress"]}
@@ -236,6 +242,38 @@ EOF
 set_value() {
   jq "$1" "$VALUES" > values.next
   mv values.next "$VALUES"
+}
+
+token_only_values() {
+  set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
+    .runtime.authMode="token-only" | .runtime.googleOAuthClientId="" |
+    del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+@test "token-only Pi deployment requires no OAuth secrets and strips OAuth routing" {
+  token_only_values
+  rm google-oauth-client-secret oauth2-cookie-secret
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run ! grep -q -- '--from-file=google-oauth-client-secret' "$MOCK_LOG"
+  run ! grep -q -- '--from-file=oauth2-cookie-secret' "$MOCK_LOG"
+}
+
+@test "token-only mode refuses non-loopback origins local targets and anonymous owners" {
+  token_only_values
+  set_value '.origin="http://192.168.1.218:8080"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  set_value '.origin="http://127.0.0.1:8080" | .target="local"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  set_value '.target="pi"'
+  printf '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"anonymous read-only policy"* ]]
+  run ! grep -q 'create secret' "$MOCK_LOG"
 }
 
 @test "verify is silent and uses private explicit kubeconfig with live node identity" {

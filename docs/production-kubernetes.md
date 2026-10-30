@@ -136,6 +136,21 @@ The account ID is stable and explicit; the token is not the ID. Revoke or rotate
 
 ## Create, render, deploy and inspect
 
+### Workstation-only token rehearsal on the Pi
+
+For an initial private rehearsal without Google login, set `runtime.authMode: token-only`, `runtime.googleOAuthClientId: ""`, and `origin: http://127.0.0.1:8080` (matching `httpPort`). Omit the `google-oauth-client-secret` and `oauth2-cookie-secret` keys from `secrets`; the other three secret files remain required. The default auth mode remains `google`, with its existing credential requirements unchanged.
+
+This explicit Pi-only option omits OAuth2 Proxy and Google callback/cookie routing. GraphQL still runs in production mode behind trusted ingress, strips untrusted identity headers and validates configured bearer tokens. Accounts must retain `anonymous.role: anonymous`, an empty `googleAccounts` map and at least one explicit owner token. Never elevate the credential-free role for testing. Generate separate strong, temporary owner tokens for operator/MCP clients in private files; revoke them after rehearsal.
+
+Traefik becomes a ClusterIP service, not a LAN load balancer. Access the application with a loopback-only Kubernetes port-forward carried through the existing private API SSH tunnel:
+
+```sh
+mise exec -- kubectl --kubeconfig "$PWD/provisioning/.private/pi-kubeconfig.yaml" \
+  --context recipe-db-pi -n kube-system port-forward --address 127.0.0.1 service/traefik 8080:80
+```
+
+Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubeconfig and the `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Switching an existing Google deployment to token-only or activating public exposure is not part of this procedure.
+
 Replace the digest placeholder with the actual **artifact** digest. Keep that same reference for the initial deployment, smoke reapply and evidence.
 
 ```sh

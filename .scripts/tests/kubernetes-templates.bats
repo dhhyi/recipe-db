@@ -31,6 +31,19 @@ render() {
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
 }
 
+@test "token-only Pi rehearsal omits OAuth and restricts ingress to ClusterIP" {
+  jq '.config.target="pi" | .config.context="recipe-db-pi" |
+    .config.runtime.authMode="token-only" | .config.runtime.googleOAuthClientId=""' values.json > token-values.json
+  render token-values.json
+  jq -e '
+    all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
+    and any(.items[]; .kind == "HelmChartConfig" and
+      (.spec.valuesContent | contains("ClusterIP")))
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "graphql" and
+      any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production"))
+  ' manifests.json
+}
+
 @test "Kubernetes templates select every application project including design" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '
