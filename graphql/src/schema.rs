@@ -9,6 +9,7 @@ use crate::mode::RuntimeMode;
 use crate::ratings::{RatingsApi, RatingsMutation, RatingsQuery};
 use crate::recipes::{RecipesApi, RecipesMutation, RecipesQuery};
 use crate::search::{SearchApi, SearchQuery};
+use crate::tags::{TagsApi, TagsMutation, TagsQuery};
 use crate::traefik::{TraefikApi, TraefikQuery};
 
 #[derive(MergedObject, Default)]
@@ -18,10 +19,16 @@ pub struct QueryRoot(
     RatingsQuery,
     TraefikQuery,
     SearchQuery,
+    TagsQuery,
 );
 
 #[derive(MergedObject, Default)]
-pub struct MutationRoot(RecipesMutation, RatingsMutation, ImagesMutation);
+pub struct MutationRoot(
+    RecipesMutation,
+    RatingsMutation,
+    ImagesMutation,
+    TagsMutation,
+);
 
 pub type ApiSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
@@ -39,6 +46,7 @@ pub fn build_schema(mode: RuntimeMode, publisher: Option<EventPublisher>) -> Api
     .data(LinkExtractApi::new())
     .data(ImageInlineApi::new())
     .data(TraefikApi::new());
+    builder = builder.data(TagsApi::new());
 
     if let Some(publisher) = publisher {
         builder = builder.data(publisher);
@@ -83,8 +91,34 @@ mod tests {
             "deleteRatingsForTesting",
             "deleteImagesForTesting",
             "deleteInspirationsForTesting",
+            "deleteTagsForTesting",
         ] {
             assert!(!schema.sdl().contains(operation));
         }
+    }
+
+    #[test]
+    fn categorized_tags_are_exposed_without_changing_recipe_inputs() {
+        let sdl = build_schema(RuntimeMode::Testing, None).sdl();
+        for field in [
+            "tags(category: TagCategory): [Tag!]",
+            "createTag(category: TagCategory!, name: String!): Tag",
+            "deleteTag(id: ID!): Boolean",
+            "addRecipeTag(recipeId: ID!, tagId: ID!): Boolean",
+            "removeRecipeTag(recipeId: ID!, tagId: ID!): Boolean",
+            "changeRecipeTags(recipeId: ID!, addTagIds: [ID!], removeTagIds: [ID!]): [Tag!]",
+            "tags: [Tag!]",
+        ] {
+            assert!(sdl.contains(field), "schema is missing {field}");
+        }
+        assert!(sdl.contains("enum TagCategory {\n\tCUISINE\n\tDIETARY_STYLE\n\tCOURSE"));
+        let recipe_input = sdl
+            .split("input RecipeInput {")
+            .nth(1)
+            .unwrap()
+            .split('}')
+            .next()
+            .unwrap();
+        assert!(!recipe_input.contains("tags:"));
     }
 }

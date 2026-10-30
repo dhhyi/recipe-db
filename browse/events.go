@@ -42,7 +42,7 @@ func (c *pageCache) applyEvent(data []byte) error {
 		return fmt.Errorf("invalid occurredAt: %w", err)
 	}
 	switch event.Kind {
-	case "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed":
+	case "recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed", "tags.changed":
 		if event.RecipeID == nil || *event.RecipeID == "" {
 			return errors.New("recipe event is missing recipeId")
 		}

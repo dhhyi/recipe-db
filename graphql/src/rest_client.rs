@@ -205,6 +205,29 @@ impl RestClient {
         self.request(Method::PUT, path, Some(body), None).await
     }
 
+    pub async fn put_empty(&self, path: &str) -> Result<(), RestError> {
+        self.send_no_body(Method::PUT, path).await
+    }
+
+    pub async fn patch_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, RestError> {
+        let url = self.url(path);
+        let response = self
+            .client
+            .patch(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|err| RestError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                body: err.to_string(),
+            })?;
+        Self::parse_response(response).await
+    }
+
     pub async fn put_form<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -225,10 +248,14 @@ impl RestClient {
     }
 
     pub async fn delete(&self, path: &str) -> Result<(), RestError> {
+        self.send_no_body(Method::DELETE, path).await
+    }
+
+    async fn send_no_body(&self, method: Method, path: &str) -> Result<(), RestError> {
         let url = self.url(path);
         let response = self
             .client
-            .delete(url)
+            .request(method, url)
             .send()
             .await
             .map_err(|err| RestError {
@@ -241,6 +268,19 @@ impl RestClient {
             return Err(RestError { status, body });
         }
         Ok(())
+    }
+
+    pub fn encode_path_segment(value: &str) -> String {
+        let mut encoded = String::with_capacity(value.len());
+        for byte in value.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                encoded.push(byte as char);
+            } else {
+                use std::fmt::Write;
+                write!(encoded, "%{byte:02X}").expect("writing to a String cannot fail");
+            }
+        }
+        encoded
     }
 
     async fn request<B: Serialize, T: DeserializeOwned>(

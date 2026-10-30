@@ -29,6 +29,7 @@ NATS JetStream is shared infrastructure for the [search index](../search/OPERATI
 | `rating.changed` | Confirmed rating submission; only the affected recipe ID is included |
 | `image.changed` | Confirmed image upload/replacement |
 | `inspirations.changed` | Confirmed inspirations replacement or deletion |
+| `tags.changed` | Confirmed tag assignment or removal; only the affected recipe ID is included |
 
 Per-service testing resets are private REST routes and are not exposed through GraphQL or MCP. Clearing already-absent inspirations performs no write and emits no notification. Reads, rejected writes, and direct REST mutations emit none. Repeated successful writes may emit multiple notifications even if the effective data is unchanged.
 

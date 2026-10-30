@@ -32,7 +32,7 @@ func eventData(t *testing.T, kind string, id *string) []byte {
 func TestEventContract(t *testing.T) {
 	id := "42"
 	var events [][]byte
-	for _, kind := range []string{"recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed"} {
+	for _, kind := range []string{"recipe.changed", "recipe.deleted", "rating.changed", "image.changed", "inspirations.changed", "tags.changed"} {
 		events = append(events, eventData(t, kind, &id))
 	}
 	c := testCache(t, func(context.Context, string) ([]byte, error) { return []byte("page"), nil })

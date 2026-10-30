@@ -1,4 +1,4 @@
-use async_graphql::{ComplexObject, Context, InputValueError, InputValueResult, Value};
+use async_graphql::{ComplexObject, Context, Error, InputValueError, InputValueResult, Value};
 use async_graphql::{InputObject, Scalar, ScalarType, SimpleObject};
 use serde::{Deserialize, Serialize};
 
@@ -187,5 +187,24 @@ impl Recipe {
                 Ok(None)
             }
         }
+    }
+
+    /// `null` means the tags service is unavailable; a successful empty response is `[]`.
+    async fn tags(&self, ctx: &Context<'_>) -> Option<Result<Vec<crate::tags::Tag>, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(
+            async {
+                ctx.data::<crate::tags::TagsApi>()?
+                    .recipe_tags(self.id.as_str())
+                    .await
+            }
+            .await,
+        )
     }
 }

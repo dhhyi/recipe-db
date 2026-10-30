@@ -10,12 +10,20 @@ using StrawberryShake;
 
 namespace Mcp.Tools;
 
+public enum TagCategoryChoice
+{
+    CUISINE,
+    DIETARY_STYLE,
+    COURSE,
+}
+
 [McpServerToolType]
 public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory)
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseUpper) },
     };
 
     [McpServerTool(Name = "get_recipe_schema")]
@@ -106,7 +114,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     [McpServerTool(Name = "get_recipe")]
     [Description(
         "Returns the full details of a single recipe (name, method, ingredients, rating, image, " +
-        "inspirations) by id - use this to inspect the current state of a recipe, e.g. before merging " +
+        "inspirations, tags) by id - use this to inspect the current state of a recipe, e.g. before merging " +
         "new data into it with 'change_recipe'."
     )]
     public async Task<string> GetRecipe([Description("Recipe id")] string recipeId)
@@ -202,10 +210,84 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     private static McpException GraphQLError(IReadOnlyList<IClientError> errors)
     {
         return new McpException(string.Join("; ", errors.Select(error =>
-            error.Extensions?.TryGetValue("code", out var code) == true
-                ? $"{code}: {error.Message}"
-                : error.Message)));
+        {
+            var code = error.Extensions?.TryGetValue("code", out var codeValue) == true
+                ? $"{codeValue}: "
+                : "";
+            var field = error.Extensions?.TryGetValue("field", out var fieldValue) == true
+                ? $" (field: {fieldValue})"
+                : "";
+            var status = error.Extensions?.TryGetValue("status", out var statusValue) == true
+                ? $" (status: {statusValue})"
+                : "";
+            return $"{code}{error.Message}{field}{status}";
+        })));
     }
+
+    [McpServerTool(Name = "list_tags")]
+    [Description("Lists the fresh tag inventory. Optional category is exactly one of CUISINE, DIETARY_STYLE, or COURSE; omit it to list every category.")]
+    public async Task<string> ListTags(
+        [Description("Optional category: CUISINE, DIETARY_STYLE, or COURSE")] TagCategoryChoice? category = null
+    )
+    {
+        var response = await client.ListTags.ExecuteAsync(category is null ? null : ToGraphQlCategory(category.Value));
+        if (response.Errors.Count > 0) throw GraphQLError(response.Errors);
+        return JsonSerializer.Serialize(response.Data?.Tags ?? [], JsonOptions);
+    }
+
+    [McpServerTool(Name = "create_tag")]
+    [Description(
+        "Creates a tag in CUISINE, DIETARY_STYLE, or COURSE. The first creation fixes display spelling. " +
+        "Any later creation producing the same normalized ID, including identical spelling or punctuation/accent variants, fails with tag-collision (409); it never reuses or selects an existing tag."
+    )]
+    public async Task<string> CreateTag(
+        [Description("Category: CUISINE, DIETARY_STYLE, or COURSE")] TagCategoryChoice category,
+        [Description("Tag display name")] string name
+    )
+    {
+        var response = await client.CreateTag.ExecuteAsync(ToGraphQlCategory(category), name);
+        if (response.Errors.Count > 0) throw GraphQLError(response.Errors);
+        return JsonSerializer.Serialize(response.Data?.CreateTag, JsonOptions);
+    }
+
+    [McpServerTool(Name = "delete_tag")]
+    [Description("Deletes an unused tag by its opaque tag ID. Deleting a tag with recipe assignments returns a structured backend error.")]
+    public async Task<string> DeleteTag([Description("Opaque tag ID")] string tagId)
+    {
+        var response = await client.DeleteTag.ExecuteAsync(tagId);
+        if (response.Errors.Count > 0) throw GraphQLError(response.Errors);
+        return response.Data?.DeleteTag == true
+            ? JsonSerializer.Serialize(new { deleted = true }, JsonOptions)
+            : throw new McpException("tag-delete-failed: Tag deletion did not succeed");
+    }
+
+    [McpServerTool(Name = "change_recipe_tags")]
+    [Description(
+        "Atomically adds and/or removes tag IDs from a recipe in one bulk operation. Omit either array or pass an empty array for no change; explicit null is invalid. " +
+        "Each optional array must contain unique opaque IDs; unknown IDs, duplicates, overlaps, or any invalid change reject the entire operation."
+    )]
+    public async Task<string> ChangeRecipeTags(
+        [Description("Recipe ID")] string recipeId,
+        [Description("Optional opaque tag IDs to add; omit or pass [] for no change, null is invalid")] string[] addTagIds = null!,
+        [Description("Optional opaque tag IDs to remove; omit or pass [] for no change, null is invalid")] string[] removeTagIds = null!
+    )
+    {
+        var response = await client.ChangeRecipeTags.ExecuteAsync(
+            recipeId,
+            addTagIds ?? [],
+            removeTagIds ?? []
+        );
+        if (response.Errors.Count > 0) throw GraphQLError(response.Errors);
+        return JsonSerializer.Serialize(response.Data?.ChangeRecipeTags ?? [], JsonOptions);
+    }
+
+    private static Mcp.GraphQL.TagCategory ToGraphQlCategory(TagCategoryChoice category) => category switch
+    {
+        TagCategoryChoice.CUISINE => Mcp.GraphQL.TagCategory.Cuisine,
+        TagCategoryChoice.DIETARY_STYLE => Mcp.GraphQL.TagCategory.DietaryStyle,
+        TagCategoryChoice.COURSE => Mcp.GraphQL.TagCategory.Course,
+        _ => throw new ArgumentOutOfRangeException(nameof(category)),
+    };
 
     private static RecipeInput BuildRecipeInput(JsonObject recipe)
     {

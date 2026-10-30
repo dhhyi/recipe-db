@@ -27,6 +27,8 @@ pub enum EventKind {
     ImageChanged,
     #[serde(rename = "inspirations.changed")]
     InspirationsChanged,
+    #[serde(rename = "tags.changed")]
+    TagsChanged,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -297,6 +299,7 @@ mod tests {
             EventKind::RatingChanged,
             EventKind::ImageChanged,
             EventKind::InspirationsChanged,
+            EventKind::TagsChanged,
         ];
         assert_eq!(fixtures.len(), kinds.len());
         for (event, kind) in fixtures.iter().zip(kinds) {
