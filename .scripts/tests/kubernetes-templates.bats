@@ -59,6 +59,18 @@ render() {
   ' manifests.json
 }
 
+@test "explicit private LAN rehearsal exposes only HTTP without NodePorts" {
+  jq '.config.target="pi" | .config.context="recipe-db-pi" |
+    .config.origin="http://recipe-pi.home" | .config.runtime.authMode="token-only" |
+    .config.runtime.ingressMode="private-lan" | .config.runtime.googleOAuthClientId=""' values.json > lan-values.json
+  render lan-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+  yq -o=json '.' helm-values.yaml | jq -e '
+    .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false and
+    .ports.websecure.expose.default == false and .ports["rest-internal"].expose.default == false'
+  jq -e 'all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")' manifests.json
+}
+
 @test "Kubernetes templates select every application project including design" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '

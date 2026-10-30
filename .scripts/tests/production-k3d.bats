@@ -18,6 +18,7 @@ setup() {
   export MOCK_FOREIGN_NAMESPACE=false MOCK_FOREIGN_HELM=false MOCK_HELM_PENDING=false MOCK_HELM_DELAYED=false
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
+  export MOCK_LAN=false MOCK_NODEPORT=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
     namespace:"recipe-db",origin:"http://127.0.0.1:8080",httpPort:8080,apiPort:6445,
@@ -92,7 +93,11 @@ EOF
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
-  *"get service traefik -o json"*) echo '{"spec":{"type":"ClusterIP","ports":[{"port":80}]}}' ;;
+  *"get service traefik -o json"*)
+    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" '
+      {spec:{type:(if $lan == "true" then "LoadBalancer" else "ClusterIP" end),
+        allocateLoadBalancerNodePorts:false,ports:[{port:80} +
+          (if $nodeport == "true" then {nodePort:30080} else {} end)]}}' ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)
     jq -n --arg bad "$MOCK_BAD_NODES" '{items:[{metadata:{name:"k3d-recipe-db-rehearsal-server-0"},
@@ -274,6 +279,33 @@ token_only_values() {
   [ "$status" -ne 0 ]
   [[ $output == *"anonymous read-only policy"* ]]
   run ! grep -q 'create secret' "$MOCK_LOG"
+}
+
+@test "private LAN token rehearsal is explicit and refuses public origins and NodePorts" {
+  token_only_values
+  set_value '.runtime.ingressMode="private-lan" | .origin="http://recipe-pi.home"'
+  export MOCK_LAN=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  for origin in http://192.168.1.218 http://10.1.2.3 http://172.16.0.5; do
+    ORIGIN="$origin" yq -i '.origin=strenv(ORIGIN)' "$VALUES"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -eq 0 ]
+  done
+  for origin in http://example.com http://8.8.8.8 http://192.168.1.999 http://172.32.0.1 http://recipe-pi.home:8080 https://recipe-pi.home; do
+    ORIGIN="$origin" yq -i '.origin=strenv(ORIGIN)' "$VALUES"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+  done
+  set_value '.origin="http://recipe-pi.home"'
+  export MOCK_NODEPORT=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"without NodePorts"* ]]
+  export MOCK_NODEPORT=false
+  set_value '.runtime.authMode="google"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
 }
 
 @test "verify is silent and uses private explicit kubeconfig with live node identity" {

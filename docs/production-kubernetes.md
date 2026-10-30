@@ -151,6 +151,29 @@ mise exec -- kubectl --kubeconfig "$PWD/provisioning/.private/pi-kubeconfig.yaml
 
 Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubeconfig and the `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Switching an existing Google deployment to token-only or activating public exposure is not part of this procedure.
 
+### Home-LAN HTTP token rehearsal on the Pi
+
+Accepted decision [#103](https://github.com/dhhyi/recipe-db/issues/103) makes private phone browsing part of [#45](https://github.com/dhhyi/recipe-db/issues/45). Keep the token-only account/secret requirements above, but explicitly set:
+
+```yaml
+runtime:
+  authMode: token-only
+  ingressMode: private-lan
+  googleOAuthClientId: ""
+  trustedIssuer: https://accounts.google.com
+origin: http://recipe-pi.home
+```
+
+Use the Pi's actual private hostname (ending in `.home`, `.lan` or `.local`) or RFC 1918 IPv4 address, with HTTP port 80 and no explicit port suffix. `httpPort` remains the workstation-forwarding port, not the LAN listening port. The origin controls browser-write validation; use that configured origin for same-origin browser writes. A phone may need the private IPv4 address if it cannot resolve the hostname.
+
+Deploy using the same private API tunnel and immutable release. Traefik becomes a k3s LoadBalancer on port 80 only, with NodePort allocation disabled; the internal REST entrypoint and HTTPS remain unexposed. The provisioned private-network firewall is a prerequisite: only its configured application networks may reach port 80, including forwarding rules; global IPv6 is not enabled. Do not configure router forwarding, UPnP, public DNS or public ingress. No API/SSH exposure changes are made. Setting `ingressMode: loopback` (or omitting it) restores the ClusterIP-only default after redeployment.
+
+Anonymous browsing remains read-only. Bearer GraphQL/MCP writes are temporarily allowed on trusted-LAN HTTP at the operator's explicit request; HTTP does not protect tokens or recipe data against observers or intermediaries. Do not share these credentials, add an anonymous-owner bypass or assume browser Google login works.
+
+Before any external staging/public access, replace **every rehearsal application secret**: operator/MCP/other bearer credentials, GraphQL ingress secret and Typesense API key; generate fresh Google client/cookie secrets when enabling OAuth. Update private recovery sources and roll dependent workloads consistently. Verify old bearer tokens fail, new credentials work and temporary HTTP/token-only exposure is removed. Preserve stable principal IDs where vote continuity is required. [#44](https://github.com/dhhyi/recipe-db/issues/44) owns HTTPS/external checks and this transition, [#68](https://github.com/dhhyi/recipe-db/issues/68) owns Google, [#52](https://github.com/dhhyi/recipe-db/issues/52) retains full access verification, [#43](https://github.com/dhhyi/recipe-db/issues/43) owns backup/recovery and [#104](https://github.com/dhhyi/recipe-db/issues/104) tracks measured operating limits. Private phone acceptance does not waive those requirements or complete [#17](https://github.com/dhhyi/recipe-db/issues/17).
+
+### Physical rehearsal evidence
+
 The first physical Pi token-only attempt on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
 
 The subsequent bounded physical Pi smoke passed through that same loopback ingress:

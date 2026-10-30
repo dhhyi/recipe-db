@@ -360,10 +360,14 @@ case "$command" in
     fi
     if [[ $auth_mode = token-only ]]; then
       kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
-      jq -e '.spec.type == "ClusterIP" and
+      jq -e --arg ingress "$ingress_mode" '
+        (if $ingress == "private-lan" then
+          .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
+          (.spec.ports | length == 1) and .spec.ports[0].port == 80
+         else .spec.type == "ClusterIP" end) and
         ((.spec.externalIPs // []) | length == 0) and
         all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
-        || production_fail "token-only ingress is not private ClusterIP-only"
+        || production_fail "token-only ingress does not match the requested private exposure without NodePorts"
     fi
     ;;
 esac

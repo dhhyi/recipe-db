@@ -21,6 +21,13 @@ production_config() {
     def image: type == "string" and
       test("^[a-zA-Z0-9./_-]+(:[a-zA-Z0-9_.-]+)?@sha256:[0-9a-f]{64}$|^[a-zA-Z0-9./_-]+:[a-zA-Z0-9_.-]+$") and
       (endswith(":latest") | not);
+    def private_lan_origin:
+      sub("^http://"; "") as $host |
+      test("^http://[a-zA-Z0-9][a-zA-Z0-9.-]*[.](home|lan|local)$") or
+      (try ($host | split(".") | map(tonumber) |
+        length == 4 and all(.[]; floor == . and . >= 0 and . <= 255) and
+        (.[0] == 10 or (.[0] == 192 and .[1] == 168) or
+          (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"])
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
@@ -48,8 +55,9 @@ production_config() {
     and (.infrastructure | objectkeys(["traefik","nats","typesense","maintenance","oauth2Proxy","redis"])
       and all(.[]; image)
       and (.traefik | test("^traefik:v3([.]([7-9]|[1-9][0-9])([.][0-9]+)?)?@sha256:[0-9a-f]{64}$")))
-    and (.runtime | (del(.authMode) | objectkeys(["googleOAuthClientId","trustedIssuer"]))
+    and (.runtime | (del(.authMode,.ingressMode) | objectkeys(["googleOAuthClientId","trustedIssuer"]))
       and ((.authMode // "google") == "google" or .authMode == "token-only")
+      and ((.ingressMode // "loopback") == "loopback" or .ingressMode == "private-lan")
       and (.googleOAuthClientId | type == "string")
       and (if .authMode == "token-only" then .googleOAuthClientId == "" else
         (.googleOAuthClientId | nonempty and
@@ -58,7 +66,12 @@ production_config() {
         else true end)) end)
       and .trustedIssuer == "https://accounts.google.com")
     and (if .runtime.authMode == "token-only" then
-      .target == "pi" and .origin == ("http://127.0.0.1:" + (.httpPort | tostring))
+      .target == "pi" and
+      (if .runtime.ingressMode == "private-lan" then (.origin | private_lan_origin)
+       else .origin == ("http://127.0.0.1:" + (.httpPort | tostring)) end)
+      else true end)
+    and (if .runtime.ingressMode == "private-lan" then
+      .target == "pi" and .runtime.authMode == "token-only"
       else true end)
     and (.runtime.authMode == "token-only" as $tokenOnly | .secrets |
       objectkeys(if $tokenOnly then ["auth-accounts.json","graphql-ingress-secret","typesense-api-key"]
@@ -74,6 +87,7 @@ production_config() {
   api_port=$(jq -r .apiPort "$work/config.json")
   timeout=$(jq -r .timeoutSeconds "$work/config.json")
   auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
+  ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
   if [[ $auth_mode = google ]]; then
     secret_keys+=(google-oauth-client-secret oauth2-cookie-secret)
