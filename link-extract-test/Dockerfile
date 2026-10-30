@@ -2,7 +2,7 @@
 
 # Versions are supplied by the generated Compose build arguments.
 ARG PYTHON_VERSION
-FROM python:${PYTHON_VERSION}-slim-bookworm@sha256:4e03260adeeebafccd084f3584e6b84823aba5651cfb53ef8a078ed441ddf9cd
+FROM python:${PYTHON_VERSION}-slim-trixie@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913
 
 WORKDIR /app
 COPY requirements.txt ./
