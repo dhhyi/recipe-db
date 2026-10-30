@@ -6,13 +6,12 @@ import "fmt"
 import "strconv"
 
 type BrowseState struct {
-	Query, Sort, Kind, Message  string
-	Page, PerPage, Found        int
-	RatingsOnline               bool
-	Recipes                     []gql.RecipeStub
-	TagUnavailableIDs            map[string]bool
-	NextURL                     string
-	SeenIDs                     []string
+	Query, Sort, Kind, Message string
+	Page, PerPage, Found       int
+	RatingsOnline              bool
+	Recipes                    []gql.RecipeStub
+	NextURL                    string
+	SeenIDs                    []string
 }
 
 func (state BrowseState) PaginationValues() string {
@@ -69,8 +68,8 @@ func automaticSortLabel(query string) string {
 	return "Automatisch: Relevanz"
 }
 
-templ recipeTile(item gql.RecipeStub, ratingsOnline bool, tagsUnavailable bool) {
-	<a href={ "/recipe/" + item.Id } aria-label={ recipeAccessibleLabel(item, tagsUnavailable) } hx-boost="true" data-recipe-id={ item.Id }>
+templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
+	<a href={ "/recipe/" + item.Id } aria-label={ recipeAccessibleLabel(item) } hx-boost="true" data-recipe-id={ item.Id }>
 		<recipe-tile-component itemscope itemtype="https://schema.org/Recipe">
 			<h2 slot="title" class="font-bold" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 			if item.Image != nil {
@@ -80,9 +79,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool, tagsUnavailable bool) 
 				{{ slot := "rating" }}
 				@Rating(item.Rating, false, &slot, nil)
 			}
-			if tagsUnavailable {
-				<span slot="tags" class="recipe-tags-unavailable" data-tag-unavailable aria-label="Tags nicht verfügbar">Tags nicht verfügbar</span>
-			} else if len(item.Tags) > 0 {
+			if len(item.Tags) > 0 {
 				{{ tags := orderedStubTags(item.Tags); overflowCount := len(tags) - 3 }}
 				if overflowCount < 0 {
 					{{ overflowCount = 0 }}
@@ -155,7 +152,7 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 		<div data-browse-grid class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4 mx-auto max-w-[350px] sm:max-w-none">
 			<div data-recipe-list class="contents">
 				for _, recipe := range state.Recipes {
-					@recipeTile(recipe, state.RatingsOnline, state.tagsUnavailable(recipe.Id))
+					@recipeTile(recipe, state.RatingsOnline)
 				}
 				@browsePagination(state)
 			</div>
@@ -178,7 +175,7 @@ templ BrowsePage(state BrowseState) {
 	@browseHeading(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	@browseStatus(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	for _, recipe := range state.Recipes {
-		@recipeTile(recipe, state.RatingsOnline, state.tagsUnavailable(recipe.Id))
+		@recipeTile(recipe, state.RatingsOnline)
 	}
 	@browsePagination(state)
 }

@@ -18,7 +18,6 @@ class FakeGraphQLClient:
         self.recipes_data = []
         self.assignments = {}
         self.create_calls = []
-        self.next_id = 1
 
     async def recipes(self):
         return SimpleNamespace(recipes=list(self.recipes_data))
@@ -34,20 +33,24 @@ class FakeGraphQLClient:
         return SimpleNamespace(tags=list(self.tags))
 
     async def demo_create_tag(self, category, name):
-        key = demo_data.tag_identity_key(category.value, name)
-        if any(
-            demo_data.tag_identity_key(tag.category.value, tag.name) == key
-            for tag in self.tags
-        ):
-            raise AssertionError("attempted to recreate a matching inventory tag")
-        tag = SimpleNamespace(id=f"tag-{self.next_id}", category=category, name=name)
-        self.next_id += 1
+        if any(tag.category == category and tag.name == name for tag in self.tags):
+            raise AssertionError("attempted to recreate an existing inventory tag")
+        initial = next(
+            tag
+            for tag in demo_data.load_json("tags.json")
+            if tag["category"] == category.value and tag["name"] == name
+        )
+        tag = SimpleNamespace(id=initial["id"], category=category, name=name)
         self.create_calls.append((category, name))
         self.tags.append(tag)
         return SimpleNamespace(create_tag=tag)
 
     async def demo_assign_recipe_tags(self, recipe_id, add_tag_ids):
-        self.assignments[recipe_id] = list(add_tag_ids)
+        add_tag_ids = list(add_tag_ids or [])
+        known_ids = {tag.id for tag in self.tags}
+        if any(tag_id not in known_ids for tag_id in add_tag_ids):
+            raise ValueError("unknown tag ID")
+        self.assignments[recipe_id] = add_tag_ids
         return SimpleNamespace(
             change_recipe_tags=[SimpleNamespace(id=tag_id) for tag_id in add_tag_ids]
         )
@@ -70,75 +73,66 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await demo_data.http_client.aclose()
 
-    async def test_recipe_fixtures_contain_the_requested_tag_classifications(self):
-        self.assertEqual(
-            demo_data.recipe_tag_definitions(),
-            {
-                1: [
-                    ("CUISINE", "Deutsch"),
-                    ("DIETARY_STYLE", "Vegetarisch"),
-                    ("COURSE", "Dessert"),
-                ],
-                2: [
-                    ("CUISINE", "Deutsch"),
-                    ("DIETARY_STYLE", "Vegetarisch"),
-                    ("COURSE", "Suppe"),
-                ],
-                3: [
-                    ("CUISINE", "Italienisch"),
-                    ("COURSE", "Hauptgericht"),
-                ],
-                4: [
-                    ("CUISINE", "Mediterran"),
-                    ("DIETARY_STYLE", "Vegan"),
-                    ("COURSE", "Hauptgericht"),
-                ],
-                5: [
-                    ("CUISINE", "Deutsch"),
-                    ("COURSE", "Hauptgericht"),
-                ],
-            },
-        )
+    async def test_recipe_tag_files_reference_the_imported_tag_ids(self):
+        catalog_ids = {tag["id"] for tag in demo_data.load_json("tags.json")}
+        expected = {
+            1: ["cuisine-deutsch", "dietary-style-vegetarisch", "course-dessert"],
+            2: ["cuisine-deutsch", "dietary-style-vegetarisch", "course-suppe"],
+            3: ["cuisine-italienisch", "course-hauptgericht"],
+            4: [
+                "cuisine-mediterran",
+                "dietary-style-vegan",
+                "course-hauptgericht",
+            ],
+            5: ["cuisine-deutsch", "course-hauptgericht"],
+        }
+        for number, tag_ids in expected.items():
+            with self.subTest(recipe=number):
+                self.assertEqual(
+                    demo_data.load_txt(f"recipe{number}.tags.txt"), tag_ids
+                )
+                self.assertTrue(set(tag_ids).issubset(catalog_ids))
+                self.assertNotIn("tags", demo_data.load_json(f"recipe{number}.json"))
 
-    async def test_insert_recipe_strips_fixture_metadata_and_assigns_tags(self):
-        tag_ids = {"tag": "tag-id"}
+    async def test_insert_recipe_excludes_tag_files_from_recipe_and_assigns_ids(self):
+        tag_ids = demo_data.load_txt("recipe1.tags.txt")
         with (
             patch.object(
                 demo_data, "add_recipe", new=AsyncMock(return_value="recipe-id")
             ) as add_recipe,
             patch.object(demo_data, "assign_demo_tags", new=AsyncMock()) as assign_tags,
         ):
-            recipe_id = await demo_data.insert_recipe(1, tag_ids)
+            recipe_id = await demo_data.insert_recipe(1)
 
         self.assertEqual(recipe_id, "recipe-id")
         self.assertNotIn("tags", add_recipe.await_args.args[0])
         self.assertEqual(
             assign_tags.await_args.args,
-            (
-                "recipe-id",
-                [
-                    ("CUISINE", "Deutsch"),
-                    ("DIETARY_STYLE", "Vegetarisch"),
-                    ("COURSE", "Dessert"),
-                ],
-                tag_ids,
-            ),
+            ("recipe-id", tag_ids),
         )
 
-    async def test_matching_inventory_entry_is_reused_by_normalized_identity(self):
+    async def test_matching_inventory_entry_is_reused_by_id(self):
         existing = SimpleNamespace(
-            id="existing-cuisine", category=TagCategory.CUISINE, name="Creme-brulee"
+            id="cuisine-deutsch", category=TagCategory.CUISINE, name="Deutsch"
         )
         client = FakeGraphQLClient([existing])
-        definitions = {1: [("CUISINE", "Crème brûlée")]}
 
-        tag_ids = await demo_data.seed_demo_tag_inventory(definitions, client)
+        await demo_data.import_demo_tags(client)
 
-        self.assertEqual(
-            tag_ids[demo_data.tag_identity_key("CUISINE", "Crème brûlée")],
-            existing.id,
+        self.assertEqual(len(client.tags), 8)
+        self.assertNotIn((TagCategory.CUISINE, "Deutsch"), client.create_calls)
+
+    async def test_unknown_recipe_tag_id_fails_assignment_without_name_remapping(self):
+        client = FakeGraphQLClient(
+            [
+                SimpleNamespace(
+                    id="cuisine-deutsch", category=TagCategory.CUISINE, name="Deutsch"
+                )
+            ]
         )
-        self.assertEqual(client.create_calls, [])
+
+        with self.assertRaisesRegex(ValueError, "unknown tag ID"):
+            await demo_data.assign_demo_tags("recipe", ["different-id"], client)
 
     async def test_repeated_destructive_reseeding_restores_inventory_and_assignments(
         self,
@@ -148,23 +142,21 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
         )
         client.recipes_data = [SimpleNamespace(id="old-recipe")]
         reset_client = FakeResetClient(client)
-        definitions = demo_data.recipe_tag_definitions()
 
         for cycle in range(2):
             await demo_data.delete_everything(client, reset_client)
-            tag_ids = await demo_data.seed_demo_tag_inventory(definitions, client)
-            for number, tags in definitions.items():
+            await demo_data.import_demo_tags(client)
+            for number in range(1, 6):
                 recipe_id = f"cycle-{cycle}-recipe-{number}"
                 client.recipes_data.append(SimpleNamespace(id=recipe_id))
-                await demo_data.assign_demo_tags(recipe_id, tags, tag_ids, client)
+                await demo_data.assign_demo_tags(
+                    recipe_id, demo_data.load_txt(f"recipe{number}.tags.txt"), client
+                )
 
             self.assertEqual(len(client.tags), 8)
-            for number, tags in definitions.items():
+            for number in range(1, 6):
                 recipe_id = f"cycle-{cycle}-recipe-{number}"
-                expected_ids = [
-                    tag_ids[demo_data.tag_identity_key(category, name)]
-                    for category, name in tags
-                ]
+                expected_ids = demo_data.load_txt(f"recipe{number}.tags.txt")
                 self.assertEqual(client.assignments[recipe_id], expected_ids)
 
         self.assertEqual(sum(url.endswith("/tags") for url in reset_client.urls), 2)

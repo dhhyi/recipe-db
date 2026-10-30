@@ -1,10 +1,5 @@
 {
   "name": "Milchreis",
-  "tags": [
-    { "category": "Küche", "name": "Deutsch" },
-    { "category": "Ernährung", "name": "Vegetarisch" },
-    { "category": "Gang", "name": "Dessert" }
-  ],
   "ingredients": [
     {
       "name": "Rundkörniger Reis (Milchreis, Risottoreis)",

@@ -1,0 +1,14 @@
+[
+  { "id": "cuisine-deutsch", "category": "CUISINE", "name": "Deutsch" },
+  { "id": "cuisine-italienisch", "category": "CUISINE", "name": "Italienisch" },
+  { "id": "cuisine-mediterran", "category": "CUISINE", "name": "Mediterran" },
+  {
+    "id": "dietary-style-vegetarisch",
+    "category": "DIETARY_STYLE",
+    "name": "Vegetarisch"
+  },
+  { "id": "dietary-style-vegan", "category": "DIETARY_STYLE", "name": "Vegan" },
+  { "id": "course-dessert", "category": "COURSE", "name": "Dessert" },
+  { "id": "course-suppe", "category": "COURSE", "name": "Suppe" },
+  { "id": "course-hauptgericht", "category": "COURSE", "name": "Hauptgericht" }
+]

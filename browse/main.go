@@ -28,7 +28,7 @@ var errTagsUnavailable = errors.New("recipe tags unavailable")
 
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
-	tagsOnly, _ := tagErrorsOnly(err)
+	tagsOnly := tagErrorsOnly(err)
 	if err != nil && !tagsOnly {
 		return nil, err
 	}
@@ -41,8 +41,7 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 	if resp.Recipe.Rating == nil {
 		return nil, errors.New("ratings service unavailable; refusing to cache incomplete recipe")
 	}
-	tagsUnavailable := resp.Recipe.Tags == nil || err != nil
-	ctx = templ.WithChildren(ctx, components.Detail(resp, tagsUnavailable))
+	ctx = templ.WithChildren(ctx, components.Detail(resp))
 	var html bytes.Buffer
 	if err := components.Layout(resp.Recipe.Name+" | RezeptDB").Render(ctx, &html); err != nil {
 		return nil, err

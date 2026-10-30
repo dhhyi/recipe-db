@@ -146,16 +146,6 @@ header-component {
   --recipe-tag-color: #581c87;
 }
 
-.recipe-tags-unavailable {
-  color: var(--pico-del-color);
-  display: block;
-  font-size: 0.75rem;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .recipe-tags-detail .recipe-tag {
   max-width: 100%;
   min-width: 0;

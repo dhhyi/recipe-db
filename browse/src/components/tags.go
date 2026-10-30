@@ -87,18 +87,10 @@ func tagClass(category gql.TagCategory) string {
 	}
 }
 
-func recipeAccessibleLabel(recipe gql.RecipeStub, unavailable bool) string {
+func recipeAccessibleLabel(recipe gql.RecipeStub) string {
 	labels := []string{"Rezept " + recipe.Name}
-	if unavailable {
-		labels = append(labels, "Tags nicht verfügbar")
-	} else {
-		for _, tag := range orderedStubTags(recipe.Tags) {
-			labels = append(labels, tagCategoryLabel(tag.Category)+": "+tag.Name)
-		}
+	for _, tag := range orderedStubTags(recipe.Tags) {
+		labels = append(labels, tagCategoryLabel(tag.Category)+": "+tag.Name)
 	}
 	return strings.Join(labels, ". ")
-}
-
-func (state BrowseState) tagsUnavailable(id string) bool {
-	return state.TagUnavailableIDs[id]
 }

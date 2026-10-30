@@ -1,14 +1,13 @@
 package main
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
-func TestTagErrorsOnlyExtractsAffectedRecipeIndex(t *testing.T) {
+func TestTagErrorsOnlyAcceptsTagFieldErrors(t *testing.T) {
 	err := gqlerror.List{{
 		Message: "tags unavailable",
 		Path: ast.Path{
@@ -18,9 +17,8 @@ func TestTagErrorsOnlyExtractsAffectedRecipeIndex(t *testing.T) {
 			ast.PathName("tags"),
 		},
 	}}
-	onlyTags, indexes := tagErrorsOnly(err)
-	if !onlyTags || !reflect.DeepEqual(indexes, []int{2}) {
-		t.Fatalf("unexpected tag error result: onlyTags=%t indexes=%v", onlyTags, indexes)
+	if !tagErrorsOnly(err) {
+		t.Fatal("tag-only errors should not fail recipe loading")
 	}
 }
 
@@ -29,7 +27,7 @@ func TestTagErrorsOnlyRejectsCoreFieldErrors(t *testing.T) {
 		Message: "recipe unavailable",
 		Path:    ast.Path{ast.PathName("recipe"), ast.PathName("name")},
 	}}
-	if onlyTags, _ := tagErrorsOnly(err); onlyTags {
+	if tagErrorsOnly(err) {
 		t.Fatal("core recipe errors must not be treated as tag-only degradation")
 	}
 }

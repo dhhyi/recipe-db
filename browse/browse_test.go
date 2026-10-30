@@ -68,7 +68,7 @@ func TestRecipeCardTagsAreOrderedAndCappedInServerHTML(t *testing.T) {
 	}
 }
 
-func TestRecipeCardDistinguishesEmptyAndUnavailableTags(t *testing.T) {
+func TestRecipeCardOmitsEmptyAndUnavailableTags(t *testing.T) {
 	var body bytes.Buffer
 	state := components.BrowseState{
 		Kind: "search",
@@ -76,18 +76,19 @@ func TestRecipeCardDistinguishesEmptyAndUnavailableTags(t *testing.T) {
 			{Id: "empty", Name: "Untaged", Tags: []gql.RecipeStubTagsTag{}},
 			{Id: "failed", Name: "Unavailable"},
 		},
-		TagUnavailableIDs: map[string]bool{"failed": true},
 	}
 	if err := components.Browse(state).Render(context.Background(), &body); err != nil {
 		t.Fatal(err)
 	}
 	rendered := html.UnescapeString(body.String())
-	if strings.Count(rendered, "Tags nicht verfügbar") != 3 ||
-		strings.Contains(rendered, `aria-label="Rezept Untaged. Tags nicht verfügbar"`) ||
-		!strings.Contains(rendered, `aria-label="Rezept Unavailable. Tags nicht verfügbar"`) ||
+	if strings.Contains(rendered, "Tags nicht verfügbar") ||
+		strings.Contains(rendered, `data-recipe-tag`) ||
+		strings.Contains(rendered, `aria-label="Rezept Unavailable. Tags nicht verfügbar"`) ||
+		!strings.Contains(rendered, `aria-label="Rezept Untaged"`) ||
+		!strings.Contains(rendered, `aria-label="Rezept Unavailable"`) ||
 		!strings.Contains(rendered, `data-recipe-id="empty"`) ||
 		!strings.Contains(rendered, `data-recipe-id="failed"`) {
-		t.Fatalf("empty and failed tag states are not distinguished: %s", rendered)
+		t.Fatalf("empty and unavailable tags should both be omitted: %s", rendered)
 	}
 }
 
@@ -531,9 +532,9 @@ func TestBrowseKeepsCardsOnPartialTagErrors(t *testing.T) {
 			handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
 			body := html.UnescapeString(response.Body.String())
 			if response.Code != http.StatusOK || strings.Count(body, `data-recipe-id=`) != 2 ||
-				strings.Count(body, "Tags nicht verfügbar") != 3 ||
+				strings.Contains(body, "Tags nicht verfügbar") ||
 				!strings.Contains(body, `data-recipe-id="empty"`) ||
-				!strings.Contains(body, `aria-label="Rezept Failed. Tags nicht verfügbar"`) ||
+				!strings.Contains(body, `aria-label="Rezept Failed"`) ||
 				!strings.Contains(body, `data-kind="`+wantKind+`"`) {
 				t.Fatalf("partial tag failure discarded recipe cards: %d %s", response.Code, body)
 			}

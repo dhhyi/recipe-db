@@ -362,7 +362,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	callsBeforeDegraded := recipeCalls.Load()
 	degraded := request("GET", "/recipe/42", etag)
 	if degraded.Code != http.StatusOK || degraded.Header().Get("Cache-Control") != "no-store" ||
-		degraded.Header().Get("ETag") != "" || !strings.Contains(degraded.Body.String(), "Tags nicht verfügbar") ||
+		degraded.Header().Get("ETag") != "" || strings.Contains(degraded.Body.String(), "Tags nicht verfügbar") ||
+		strings.Contains(degraded.Body.String(), "recipe-tag--") ||
 		!strings.Contains(degraded.Body.String(), "Updated") || recipeCalls.Load() != callsBeforeDegraded+1 {
 		t.Fatalf("partial tag failure did not preserve the detail without caching: %d %v %s", degraded.Code, degraded.Header(), degraded.Body.String())
 	}
