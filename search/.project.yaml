@@ -54,6 +54,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
+backupRole: derived-stateless
 graphqlSchema: "."
 generate:
   - command: python3 generate_operations.py

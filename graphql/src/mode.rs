@@ -2,6 +2,7 @@
 pub enum RuntimeMode {
     Production,
     Testing,
+    Backup,
 }
 
 impl RuntimeMode {
@@ -22,8 +23,9 @@ impl RuntimeMode {
         match value {
             None | Some("production") => Ok(Self::Production),
             Some("testing") => Ok(Self::Testing),
+            Some("backup") => Ok(Self::Backup),
             Some(value) => Err(format!(
-                "Invalid MODE={value:?}; expected 'production' or 'testing'"
+                "Invalid MODE={value:?}; expected 'production', 'testing' or 'backup'"
             )),
         }
     }
@@ -61,11 +63,12 @@ mod tests {
             RuntimeMode::parse(Some("testing")),
             Ok(RuntimeMode::Testing)
         );
+        assert_eq!(RuntimeMode::parse(Some("backup")), Ok(RuntimeMode::Backup));
     }
 
     #[test]
     fn rejects_empty_unknown_and_non_normalized_modes() {
-        for value in ["", "backup", "Production", " production", "testing "] {
+        for value in ["", "Production", " production", "testing "] {
             assert!(RuntimeMode::parse(Some(value)).is_err(), "{value:?}");
         }
     }

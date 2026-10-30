@@ -1,4 +1,4 @@
-import std/[json, os, strutils, times, uri]
+import std/[algorithm, json, os, strutils, times, uri]
 import nimcrypto/sha2
 import pixie
 
@@ -7,6 +7,7 @@ type
     root*: string
   StorageError* = object of CatchableError
   ImageNotFound* = object of CatchableError
+  ImageStateInvalid* = object of CatchableError
 
 proc validRecipeId*(id: string): bool =
   if id.len == 0 or id.len > 128 or ".." in id:
@@ -162,6 +163,73 @@ proc deleteRecipe*(store: ImageStorage, id: string): bool =
     removeFile(manifest)
   elif dirExists(manifest):
     removeDir(manifest)
+
+proc addRecipeId(ids: var seq[string], id: string) =
+  if id notin ids:
+    ids.add(id)
+
+proc recipeIds*(store: ImageStorage): seq[string] =
+  for kind, path in walkDir(store.manifestFolder):
+    if kind != pcFile:
+      raise newException(StorageError, "Unclassifiable entry in manifest storage")
+    let name = extractFilename(path)
+    if not name.endsWith(".json"):
+      raise newException(StorageError, "Unclassifiable manifest filename")
+    let id = name[0 ..< name.len - 5]
+    if not validRecipeId(id):
+      raise newException(StorageError, "Invalid recipe ID in manifest filename")
+    result.addRecipeId(id)
+
+  for kind, path in walkDir(store.publicFolder):
+    if kind != pcFile:
+      raise newException(StorageError, "Unclassifiable entry in image storage")
+    let parsed = parseImageName(extractFilename(path))
+    if not parsed.valid:
+      raise newException(StorageError, "Unclassifiable image filename")
+    result.addRecipeId(parsed.recipeId)
+
+  result.sort()
+
+proc purgeRecipeData*(store: ImageStorage, id: string) =
+  if not validRecipeId(id):
+    raise newException(StorageError, "Invalid recipe ID")
+  discard store.recipeIds()
+  discard store.deleteRecipe(id)
+
+proc compactRecipe*(store: ImageStorage, id: string) =
+  if not validRecipeId(id):
+    raise newException(StorageError, "Invalid recipe ID")
+  discard store.recipeIds()
+
+  let manifest = store.manifestPath(id)
+  let hasManifest = fileExists(manifest)
+  var outputs: seq[string]
+  for kind, path in walkDir(store.publicFolder):
+    let parsed = parseImageName(extractFilename(path))
+    if parsed.recipeId == id:
+      outputs.add(extractFilename(path))
+
+  if not hasManifest:
+    if outputs.len > 0:
+      raise newException(ImageStateInvalid, "Image outputs have no manifest")
+    return
+
+  var current: JsonNode
+  try:
+    current = store.metadata(id)
+  except CatchableError as error:
+    raise newException(ImageStateInvalid, "Cannot validate current image pair: " & error.msg)
+
+  let
+    currentNormal = parseImageName(decodeUrl(current["url"].getStr[8 .. ^1], decodePlus = false))
+    currentThumb = parseImageName(decodeUrl(current["thumbUrl"].getStr[8 .. ^1], decodePlus = false))
+  if not currentNormal.valid or not currentThumb.valid:
+    raise newException(ImageStateInvalid, "Manifest does not identify a valid image pair")
+
+  for name in outputs:
+    if name != extractFilename(decodeUrl(current["url"].getStr[8 .. ^1], decodePlus = false)) and
+        name != extractFilename(decodeUrl(current["thumbUrl"].getStr[8 .. ^1], decodePlus = false)):
+      removeFile(store.publicFolder / name)
 
 proc wipe*(store: ImageStorage) =
   removeDir(store.publicFolder)

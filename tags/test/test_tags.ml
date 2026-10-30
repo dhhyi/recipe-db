@@ -204,18 +204,24 @@ let test_runtime_modes_and_http_reset () =
   check (Tags.mode_of_environment (Some "production") = Tags.Production)
     "explicit production mode";
   check (Tags.mode_of_environment (Some "testing") = Tags.Testing) "testing mode";
+  check (Tags.mode_of_environment (Some "backup") = Tags.Backup) "backup mode";
   List.iter
     (fun mode ->
       match Tags.mode_of_environment (Some mode) with
       | _ -> fail "Invalid mode was accepted"
       | exception Invalid_argument _ -> ())
-    [ ""; "unknown"; "backup"; "Testing" ];
+    [ ""; "unknown"; "Testing" ];
   with_database (fun db ->
       let tag = Tags.create_tag db Tags.Course "Protected" in
       Tags.assign_one db "recipe" tag.id;
+      Tags.assign_one db "opaque/recipe id" tag.id;
       List.iter
         (fun mode ->
           assert_status 204 (request ~mode db "/health");
+          List.iter
+            (fun path ->
+              assert_problem 404 "not-found" (request ~mode db path))
+            [ "/maintenance/status"; "/maintenance/recipe-ids" ];
           List.iter
             (fun target ->
               assert_problem 404 "not-found" (request ~mode ~method_:`DELETE db target);
@@ -224,6 +230,42 @@ let test_runtime_modes_and_http_reset () =
                 "denied reset retains assignments")
             [ "/tags"; "/tags/" ])
         [ Tags.mode_of_environment None; Tags.Production ];
+      let backup_status = request ~mode:Tags.Backup db "/maintenance/status" in
+      assert_status 200 backup_status;
+      let backup_status_json =
+        Lwt_main.run (Dream.body backup_status) |> Yojson.Basic.from_string
+      in
+      let open Yojson.Basic.Util in
+      check (backup_status_json |> member "version" |> to_int = 1)
+        "backup API version";
+      check (backup_status_json |> member "service" |> to_string = "tags")
+        "backup API service";
+      check (backup_status_json |> member "mode" |> to_string = "backup")
+        "backup API mode";
+      let ids = request ~mode:Tags.Backup db "/maintenance/recipe-ids/" in
+      assert_status 200 ids;
+      let ids_json = Lwt_main.run (Dream.body ids) |> Yojson.Basic.from_string in
+      check
+        (ids_json |> member "recipeIds" |> to_list |> List.map to_string
+        = [ "opaque/recipe id"; "recipe" ])
+        "recipe IDs are complete, distinct, and ordered";
+      let purge =
+        request ~mode:Tags.Backup ~method_:`POST
+          ~body:{|{"recipeId":"opaque/recipe id"}|} db
+          "/maintenance/recipes/purge"
+      in
+      assert_status 204 purge;
+      assert_status 204
+        (request ~mode:Tags.Backup ~method_:`POST
+           ~body:{|{"recipeId":"opaque/recipe id"}|} db
+           "/maintenance/recipes/purge");
+      check (Tags.assigned_tags db "opaque/recipe id" = [])
+        "purge deletes assignments for the exact opaque ID";
+      check (List.length (Tags.assigned_tags db "recipe") = 1)
+        "purge preserves unrelated assignments";
+      check (Tags.tag_exists db tag.id) "purge preserves shared inventory";
+      assert_problem 503 "maintenance-mode"
+        (request ~mode:Tags.Backup ~method_:`DELETE db "/tags");
       List.iter
         (fun target ->
           assert_status 204 (request ~method_:`DELETE db target);

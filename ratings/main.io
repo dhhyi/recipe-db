@@ -4,8 +4,8 @@ doFile("lib/api.io")
 
 mode := System getEnvironmentVariable("MODE")
 if (mode == nil, mode = "production")
-if (mode != "production" and mode != "testing",
-    writeln("Invalid MODE: expected production or testing")
+if (RESTAPI validRuntimeMode(mode) == false,
+    writeln("Invalid MODE: expected production, testing or backup")
     System exit(1)
 )
 RESTAPI runtimeMode := mode

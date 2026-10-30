@@ -70,6 +70,27 @@
 #@   return {"name": "wait-for-jetstream", "image": cfg["infrastructure"]["nats"], "command": ["sh", "-ec", "until wget -q -O /dev/null 'http://nats-monitor:8222/healthz?js-enabled-only=true'; do sleep 2; done"], "resources": cfg["resources"]}
 #@ end
 
+#@ def backup_cleanup_job():
+#@   projects = [struct.decode(project) for project in data.values.projects if struct.decode(project)["category"] in ["backend", "api"]]
+#@   roles = ["authoritative-read-only", "cleanup-participant", "derived-stateless", "excluded-external-cache"]
+#@   participants = []
+#@   for project in projects:
+#@     if "backupRole" not in project or project["backupRole"] not in roles:
+#@       fail("Unclassified backup service: " + project["name"])
+#@     end
+#@     if project["backupRole"] in ["authoritative-read-only", "cleanup-participant"]:
+#@       participants.append(project["name"] + "|" + str(project["devcontainer"]["ports"][0]) + "|" + project["backupRole"] + "|" + str(project.get("backupCompact", False)).lower())
+#@     end
+#@   end
+#@   if len([project for project in projects if project["backupRole"] == "authoritative-read-only"]) != 1:
+#@     fail("Backup inventory must have exactly one authoritative source")
+#@   end
+#@   if len([project for project in projects if project["backupRole"] == "cleanup-participant"]) == 0:
+#@     fail("Backup inventory must have at least one cleanup participant")
+#@   end
+#@   return {"apiVersion": "batch/v1", "kind": "Job", "metadata": metadata("backup-cleanup"), "spec": {"suspend": True, "activeDeadlineSeconds": cfg["timeoutSeconds"], "backoffLimit": 0, "template": {"metadata": {"labels": metadata("backup-cleanup")["labels"]}, "spec": {"restartPolicy": "Never", "automountServiceAccountToken": False, "containers": [{"name": "cleanup", "image": inventory["images"]["graphql"], "command": ["/app/graphql"], "args": ["backup-cleanup"], "env": [{"name": "BACKUP_TARGET", "value": cfg["target"]}, {"name": "BACKUP_NAMESPACE", "value": ns}, {"name": "BACKUP_RELEASE", "value": data.values.artifact}, {"name": "BACKUP_REVISION", "value": inventory["revision"]}, {"name": "BACKUP_PARTICIPANTS", "value": ",".join(participants)}], "resources": cfg["resources"]}]}}}}
+#@ end
+
 #@ def project_workload(project):
 #@   p = struct.decode(project)
 #@   name = p["name"]

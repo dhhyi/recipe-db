@@ -105,7 +105,8 @@ main = do
   cacheEnabled <- case configuredMode of
     "production" -> return True
     "testing" -> return False
-    _ -> ioError $ userError "Invalid MODE; expected production or testing"
+    "backup" -> return False
+    _ -> ioError $ userError "Invalid MODE; expected production, testing or backup"
   configuredLocation <- lookupEnv "DATA_LOCATION"
   let db = fromMaybe "db" configuredLocation
   if cacheEnabled then createDirectoryIfMissing True db else return ()

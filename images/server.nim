@@ -17,8 +17,9 @@ let
   runtimeMode = case modeValue
     of "production": "production"
     of "testing": "testing"
+    of "backup": "backup"
     else: raise newException(ValueError,
-      "Invalid MODE='" & modeValue & "'; expected 'production' or 'testing'")
+      "Invalid MODE='" & modeValue & "'; expected 'production', 'testing' or 'backup'")
   verbose = getEnv("VERBOSE") == "true"
   documentRoot = getEnv("DATA_LOCATION", "public")
   dataFolder = documentRoot / imagesSubfolder
@@ -91,6 +92,10 @@ router imagesRouter:
     let recipeId = decodeUrl(@"recipeId", decodePlus = false)
     if not validRecipeId(recipeId):
       respProblem(Http400, "Bad Request", "Invalid recipe id", "invalid-recipe-id")
+    if runtimeMode == "backup":
+      respProblem(Http503, "Service Unavailable",
+          "Application writes are unavailable during backup maintenance",
+          "maintenance-mode")
 
     let contentType = ($request.headers.getOrDefault(
         "Content-Type")).split(';')[0].strip().toLowerAscii()
@@ -151,6 +156,10 @@ router imagesRouter:
     resp Http204, ""
 
   delete "/images/@recipeId":
+    if runtimeMode == "backup":
+      respProblem(Http503, "Service Unavailable",
+          "Application writes are unavailable during backup maintenance",
+          "maintenance-mode")
     let recipeId = decodeUrl(@"recipeId", decodePlus = false)
     if not validRecipeId(recipeId):
       respProblem(Http404, "Not Found", "Image not found", "image-not-found")
@@ -160,6 +169,93 @@ router imagesRouter:
     except CatchableError:
       error "Delete of '", recipeId, "' failed: ", getCurrentExceptionMsg()
       respProblem(Http500, "Internal Server Error", "Cannot delete image", "storage-error")
+    resp Http204, ""
+
+  get "/maintenance/status/?":
+    if runtimeMode != "backup":
+      respProblem(Http404, "Not Found", "Route not found", "not-found")
+    resp Http200, @[("Content-Type", "application/json"),
+        ("Cache-Control", "no-store")],
+        $(%*{"version": 1, "service": "images", "mode": "backup"})
+
+  get "/maintenance/recipe-ids/?":
+    if runtimeMode != "backup":
+      respProblem(Http404, "Not Found", "Route not found", "not-found")
+    try:
+      let ids = store.recipeIds()
+      resp Http200, @[("Content-Type", "application/json"),
+          ("Cache-Control", "no-store")], $(%*{"recipeIds": ids})
+    except CatchableError:
+      error "Maintenance image enumeration failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error",
+          "Cannot enumerate stored images", "storage-error")
+
+  post "/maintenance/recipes/purge/?":
+    if runtimeMode != "backup":
+      respProblem(Http404, "Not Found", "Route not found", "not-found")
+    let contentType = ($request.headers.getOrDefault("Content-Type"))
+      .split(';')[0].strip().toLowerAscii()
+    if contentType != "application/json":
+      respProblem(Http415, "Unsupported Media Type",
+          "Expected application/json", "unsupported-content-type")
+    var document: JsonNode
+    try:
+      document = parseJson(request.body)
+    except CatchableError:
+      respProblem(Http400, "Bad Request", "Invalid JSON", "invalid-input")
+    if document.kind != JObject or not document.hasKey("recipeId") or
+        document["recipeId"].kind != JString:
+      respProblem(Http400, "Bad Request",
+          "Expected a string recipeId", "invalid-input", "recipeId")
+    for key in document.keys:
+      if key != "recipeId":
+        respProblem(Http400, "Bad Request", "Unknown field", "invalid-input", key)
+    let recipeId = document["recipeId"].getStr
+    if not validRecipeId(recipeId):
+      respProblem(Http400, "Bad Request", "Invalid recipe id",
+          "invalid-input", "recipeId")
+    try:
+      store.purgeRecipeData(recipeId)
+    except CatchableError:
+      error "Maintenance purge failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error",
+          "Cannot delete recipe image data", "storage-error")
+    resp Http204, ""
+
+  post "/maintenance/images/compact/?":
+    if runtimeMode != "backup":
+      respProblem(Http404, "Not Found", "Route not found", "not-found")
+    let contentType = ($request.headers.getOrDefault("Content-Type"))
+      .split(';')[0].strip().toLowerAscii()
+    if contentType != "application/json":
+      respProblem(Http415, "Unsupported Media Type",
+          "Expected application/json", "unsupported-content-type")
+    var document: JsonNode
+    try:
+      document = parseJson(request.body)
+    except CatchableError:
+      respProblem(Http400, "Bad Request", "Invalid JSON", "invalid-input")
+    if document.kind != JObject or not document.hasKey("recipeId") or
+        document["recipeId"].kind != JString:
+      respProblem(Http400, "Bad Request",
+          "Expected a string recipeId", "invalid-input", "recipeId")
+    for key in document.keys:
+      if key != "recipeId":
+        respProblem(Http400, "Bad Request", "Unknown field", "invalid-input", key)
+    let recipeId = document["recipeId"].getStr
+    if not validRecipeId(recipeId):
+      respProblem(Http400, "Bad Request", "Invalid recipe id",
+          "invalid-input", "recipeId")
+    try:
+      store.compactRecipe(recipeId)
+    except ImageStateInvalid:
+      respProblem(Http409, "Conflict",
+          "The current image state cannot be safely compacted",
+          "image-state-invalid")
+    except CatchableError:
+      error "Maintenance image compaction failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error",
+          "Cannot compact stored images", "storage-error")
     resp Http204, ""
 
 proc main() =

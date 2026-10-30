@@ -92,6 +92,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
+backupRole: derived-stateless
 format: cargo fmt
 check: |
   cargo --version
