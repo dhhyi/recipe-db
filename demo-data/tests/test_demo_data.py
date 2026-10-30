@@ -3,6 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("DEMO_DATA_AUTH_TOKEN", "test-token")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -39,9 +40,7 @@ class FakeGraphQLClient:
             for tag in self.tags
         ):
             raise AssertionError("attempted to recreate a matching inventory tag")
-        tag = SimpleNamespace(
-            id=f"tag-{self.next_id}", category=category, name=name
-        )
+        tag = SimpleNamespace(id=f"tag-{self.next_id}", category=category, name=name)
         self.next_id += 1
         self.create_calls.append((category, name))
         self.tags.append(tag)
@@ -101,6 +100,31 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_insert_recipe_strips_fixture_metadata_and_assigns_tags(self):
+        tag_ids = {"tag": "tag-id"}
+        with (
+            patch.object(
+                demo_data, "add_recipe", new=AsyncMock(return_value="recipe-id")
+            ) as add_recipe,
+            patch.object(demo_data, "assign_demo_tags", new=AsyncMock()) as assign_tags,
+        ):
+            recipe_id = await demo_data.insert_recipe(1, tag_ids)
+
+        self.assertEqual(recipe_id, "recipe-id")
+        self.assertNotIn("tags", add_recipe.await_args.args[0])
+        self.assertEqual(
+            assign_tags.await_args.args,
+            (
+                "recipe-id",
+                [
+                    ("CUISINE", "Deutsch"),
+                    ("DIETARY_STYLE", "Vegetarisch"),
+                    ("COURSE", "Dessert"),
+                ],
+                tag_ids,
+            ),
+        )
+
     async def test_matching_inventory_entry_is_reused_by_normalized_identity(self):
         existing = SimpleNamespace(
             id="existing-cuisine", category=TagCategory.CUISINE, name="Creme-brulee"
@@ -116,7 +140,9 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(client.create_calls, [])
 
-    async def test_repeated_destructive_reseeding_restores_inventory_and_assignments(self):
+    async def test_repeated_destructive_reseeding_restores_inventory_and_assignments(
+        self,
+    ):
         client = FakeGraphQLClient(
             [SimpleNamespace(id="stale", category=TagCategory.COURSE, name="Old")]
         )
@@ -126,9 +152,7 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
 
         for cycle in range(2):
             await demo_data.delete_everything(client, reset_client)
-            tag_ids = await demo_data.seed_demo_tag_inventory(
-                definitions, client
-            )
+            tag_ids = await demo_data.seed_demo_tag_inventory(definitions, client)
             for number, tags in definitions.items():
                 recipe_id = f"cycle-{cycle}-recipe-{number}"
                 client.recipes_data.append(SimpleNamespace(id=recipe_id))
@@ -143,9 +167,7 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
                 ]
                 self.assertEqual(client.assignments[recipe_id], expected_ids)
 
-        self.assertEqual(
-            sum(url.endswith("/tags") for url in reset_client.urls), 2
-        )
+        self.assertEqual(sum(url.endswith("/tags") for url in reset_client.urls), 2)
         self.assertEqual(len(client.create_calls), 16)
 
 

@@ -133,7 +133,9 @@ async def random_rate_recipe(recipe_id):
 
 async def insert_recipe(number, tag_ids):
     recipe = load_json(f"recipe{number}.json")
-    tags = recipe.pop("tags", [])
+    tags = [
+        (TAG_CATEGORIES[tag["category"]], tag["name"]) for tag in recipe.pop("tags", [])
+    ]
     recipe["method"] = load_md(f"recipe{number}.method.md")
     if file_exists(f"recipe{number}.inspirations.txt"):
         recipe["inspirations"] = load_txt(f"recipe{number}.inspirations.txt")
