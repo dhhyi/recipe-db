@@ -113,39 +113,6 @@
     - name: Configure the host
       become: true
       block:
-        - name: Inspect the compatible 4 KiB Pi kernel
-          ansible.builtin.stat:
-            path: /boot/firmware/kernel8.img
-          register: compatible_kernel
-
-        - name: Require the supplied compatible kernel before changing boot settings
-          ansible.builtin.assert:
-            that:
-              - compatible_kernel.stat.exists
-              - compatible_kernel.stat.isreg
-              - compatible_kernel.stat.size > 0
-            fail_msg: "The supplied kernel8.img is missing or invalid. Restore the supported Raspberry Pi OS kernel package before continuing."
-
-        - name: Select 4 KiB pages for application image compatibility
-          ansible.builtin.blockinfile:
-            path: /boot/firmware/config.txt
-            marker: "# {mark} RECIPE DB KERNEL"
-            insertafter: EOF
-            backup: true
-            block: |
-              [all]
-              kernel=kernel8.img
-
-        - name: Check the active kernel page size
-          ansible.builtin.command: getconf PAGESIZE
-          register: kernel_page_size
-          changed_when: false
-
-        - name: Require an operator reboot before continuing with incompatible pages
-          ansible.builtin.fail:
-            msg: "The running kernel does not use 4096-byte pages required by the pinned Typesense image. Boot settings are prepared. Run sudo reboot at an approved time, reconnect, then rerun the same playbook. No reboot was performed."
-          when: kernel_page_size.stdout != '4096'
-
         - name: Install host prerequisites and security update tooling
           ansible.builtin.apt:
             name:

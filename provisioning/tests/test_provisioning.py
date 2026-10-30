@@ -161,20 +161,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn("unattended-upgrades", packages)
         self.assertNotIn("update-notifier-common", packages)
 
-    def test_compatible_kernel_is_verified_selected_and_requires_manual_reboot(self):
-        tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
-        self.assertEqual(tasks[0]["ansible.builtin.stat"]["path"], "/boot/firmware/kernel8.img")
-        self.assertIn("compatible_kernel.stat.isreg", tasks[1]["ansible.builtin.assert"]["that"])
-        self.assertIn("compatible_kernel.stat.size > 0", tasks[1]["ansible.builtin.assert"]["that"])
-        config = tasks[2]["ansible.builtin.blockinfile"]
-        self.assertEqual(config["path"], "/boot/firmware/config.txt")
-        self.assertEqual(config["insertafter"], "EOF")
-        self.assertTrue(config["backup"])
-        self.assertEqual(config["block"], "[all]\nkernel=kernel8.img\n")
-        self.assertEqual(tasks[3]["ansible.builtin.command"], "getconf PAGESIZE")
-        self.assertFalse(tasks[3]["changed_when"])
-        self.assertEqual(tasks[4]["when"], "kernel_page_size.stdout != '4096'")
-        self.assertIn("No reboot was performed", tasks[4]["ansible.builtin.fail"]["msg"])
+    def test_application_compatibility_does_not_override_the_default_pi_kernel(self):
+        contents = (ROOT / "site.yml").read_text()
+        self.assertNotIn("/boot/firmware/config.txt", contents)
+        self.assertNotIn("kernel8.img", contents)
+        self.assertNotIn("getconf PAGESIZE", contents)
 
     def test_foreign_state_is_refused(self):
         with patch.object(host.subprocess, "run") as run, patch.object(host, "Path") as path, \

@@ -31,6 +31,19 @@ render() {
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
 }
 
+@test "Pi uses the official 16 KiB ARM64 Typesense build without changing local defaults" {
+  local image="typesense/typesense:29.0-arm64-lg-page16@sha256:ab3e3b8fc63585e8246096fc610216e12d68f1165ed02b54df35be66d8f3eaa2"
+  yq -o=json '.' "$ROOT/deploy/pi.yaml" > pi-config.json
+  jq -e --arg image "$image" '.infrastructure.typesense == $image' pi-config.json
+  jq -e '.infrastructure.typesense | contains("lg-page16") | not' config.json
+  jq --slurpfile config pi-config.json '.config = $config[0]' values.json > pi-values.json
+  render pi-values.json
+  jq -e --arg image "$image" '
+    any(.items[]; .kind == "Deployment" and .metadata.name == "typesense" and
+      .spec.template.spec.containers[0].image == $image)
+  ' manifests.json
+}
+
 @test "token-only Pi rehearsal omits OAuth and restricts ingress to ClusterIP" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.runtime.authMode="token-only" | .config.runtime.googleOAuthClientId=""' values.json > token-values.json

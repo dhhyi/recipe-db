@@ -164,6 +164,8 @@ The subsequent bounded physical Pi smoke passed through that same loopback ingre
 
 The synthetic recipe was deleted afterward. Dependent image cleanup remains deferred under the normal backup-maintenance contract; no test reset was used. This was an ad-hoc, explicitly targeted Pi check, not execution of the guarded local-only k3d smoke. Host reboot with retained synthetic data, sustained-load/resource thresholds, off-device backup/restore, Google login and public HTTPS remain unverified. #45 stays open.
 
+The operator subsequently chose to restore the default 16 KiB Pi kernel. `deploy/pi.yaml` now pins the official `typesense/typesense:29.0-arm64-lg-page16` image by digest; local amd64 values remain unchanged. Upstream documents this supported image variant in its [large-page build instructions](https://typesense.org/docs/guide/install-typesense.html#large-page-size-build). This supersedes the temporary 4 KiB workaround, not the application version. Restoring the host requires removing the manually added `kernel=kernel8.img` boot override and an approved reboot; do not restore an entire older boot-config backup, which could discard other settings. Reapply the Pi deployment with the updated image and verify the kernel page size, Typesense/search readiness and retained demo recipes/images. The earlier smoke evidence above used 4 KiB pages; post-transition acceptance is pending.
+
 Replace the digest placeholder with the actual **artifact** digest. Keep that same reference for the initial deployment, smoke reapply and evidence.
 
 ```sh
