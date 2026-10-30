@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && cp node_modules/htmx.org/dist/htmx.min.js dist/design/htmx.min.js && cp node_modules/htmx.org/LICENSE dist/design/htmx.LICENSE",
+    "build": "tsc && vite build && cp node_modules/htmx.org/dist/htmx.min.js dist/design/htmx.min.js && cp node_modules/htmx.org/LICENSE dist/design/htmx.LICENSE && pnpm build-storybook --output-dir dist/storybook && cp -R dist/storybook/. dist/design/ && rm -rf dist/storybook",
     "preview": "vite preview",
     "start": "storybook dev -p 6006 --no-open",
     "lint": "eslint .",

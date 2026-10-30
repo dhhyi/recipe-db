@@ -3,7 +3,8 @@
 load test_helper
 
 setup() {
-  unset FAIL_VERIFY FAIL_DEPLOY FAIL_SEARCH FAIL_RELEASE FAIL_MAINTENANCE FAIL_HTMX \
+  unset FAIL_VERIFY FAIL_DEPLOY FAIL_SEARCH FAIL_RELEASE FAIL_MAINTENANCE FAIL_HTMX FAIL_STORYBOOK \
+    FAIL_STORYBOOK_ASSET \
     FAIL_BACKEND_EXPOSURE FAIL_MCP_MAINTENANCE FAIL_WRONG_MAINTENANCE FAIL_DELETE FAIL_INIT DELAY_BROWSE_RESTORE
   setup_fixture smoke-production-k3d.sh
   FIXTURE_ROOT=$(pwd -P)
@@ -172,6 +173,15 @@ case "$path" in
     printf 'Content-Type: application/javascript\r\n' > "$headers"; printf 'window.htmx={}' > "$output"
     if [[ ${FAIL_HTMX:-false} == true ]]; then status=404; fi
     ;;
+  /design/)
+    printf 'Content-Type: text/html\r\n' > "$headers"
+    printf '<html><script type="module" src="/design/sb-manager/runtime.js"></script></html>' > "$output"
+    if [[ ${FAIL_STORYBOOK:-false} == true ]]; then status=404; fi
+    ;;
+  /design/sb-manager/runtime.js)
+    printf 'Content-Type: application/javascript\r\n' > "$headers"; printf 'window.storybook={}' > "$output"
+    if [[ ${FAIL_STORYBOOK_ASSET:-false} == true ]]; then status=404; fi
+    ;;
   '/?q='*)
     printf 'Content-Type: text/html\r\n' > "$headers"
     printf '<html><a href="/recipe/own-smoke-id">smoke</a></html>' > "$output" ;;
@@ -332,6 +342,22 @@ run_smoke() {
 
 @test "missing HTMX runtime fails the design check and cleans the smoke recipe" {
   export FAIL_HTMX=true
+  run_smoke
+  [ "$status" -ne 0 ]
+  [ -f deleted ]
+  jq -e '.success == false and .phase == "frontend-and-design"' result.json
+}
+
+@test "missing Storybook page fails the design check and cleans the smoke recipe" {
+  export FAIL_STORYBOOK=true
+  run_smoke
+  [ "$status" -ne 0 ]
+  [ -f deleted ]
+  jq -e '.success == false and .phase == "frontend-and-design"' result.json
+}
+
+@test "missing Storybook asset fails the design check and cleans the smoke recipe" {
+  export FAIL_STORYBOOK_ASSET=true
   run_smoke
   [ "$status" -ne 0 ]
   [ -f deleted ]

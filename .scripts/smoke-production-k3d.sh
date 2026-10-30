@@ -261,6 +261,14 @@ design_assets() {
   expect_status 200
   grep -Eqi '^content-type: (application|text)/javascript' "$work/headers"
   [[ -s $work/body ]]
+  request /design/ --header 'Accept: text/html'
+  expect_status 200
+  grep -qi '^content-type: text/html' "$work/headers"
+  grep -qF 'sb-manager/runtime.js' "$work/body"
+  request /design/sb-manager/runtime.js
+  expect_status 200
+  grep -Eqi '^content-type: (application|text)/javascript' "$work/headers"
+  [[ -s $work/body ]]
 }
 phase=frontend-and-design
 frontend
