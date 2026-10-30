@@ -176,6 +176,8 @@ Physical LAN execution on 2026-10-30 passed at the operator's private IPv4 origi
 
 ### Physical rehearsal evidence
 
+The operator subsequently confirmed on 2026-10-30 that the private page was visible and working on their phone after being directed to the Pi's private IPv4 origin on home Wi-Fi. This supersedes the pending-phone status above; detailed search/image checks remain the separately recorded direct-LAN tests. #45 remains open pending #42/PR review.
+
 The first physical Pi token-only attempt on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
 
 The subsequent bounded physical Pi smoke passed through that same loopback ingress:
