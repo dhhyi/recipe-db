@@ -61,8 +61,15 @@ fn problem(request: *std.http.Server.Request, a: Allocator, status: std.http.Sta
     const body = try encode(a, .{ .type = "about:blank", .title = status.phrase(), .status = @intFromEnum(status), .detail = detail, .code = code });
     try request.respond(body, .{ .status = status, .keep_alive = false, .extra_headers = &.{.{ .name = "Content-Type", .value = "application/problem+json" }} });
 }
-fn serve(request: *std.http.Server.Request, a: Allocator, cfg: Config, state: *State) !void {
+fn serve(request: *std.http.Server.Request, a: Allocator, cfg: Config, state: *State, backup_mode: bool) !void {
     const path = request.head.target;
+    if (backup_mode) {
+        if (std.mem.eql(u8, path, "/health")) {
+            if (request.head.method != .GET) return problem(request, a, .method_not_allowed, "method-not-allowed", "Use GET for health.");
+            return request.respond("{\"ready\":true}", .{ .keep_alive = false, .extra_headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
+        }
+        return problem(request, a, .service_unavailable, "maintenance-mode", "Application requests are unavailable during backup maintenance.");
+    }
     if (std.mem.startsWith(u8, path, "/search/reindex/")) {
         if (request.head.method != .GET) return problem(request, a, .method_not_allowed, "method-not-allowed", "Use GET to inspect a rebuild job.");
         const id = std.fmt.parseInt(u64, path["/search/reindex/".len..], 10) catch return problem(request, a, .bad_request, "invalid-job-id", "Expected a numeric rebuild job ID.");
@@ -111,7 +118,7 @@ fn serve(request: *std.http.Server.Request, a: Allocator, cfg: Config, state: *S
     try request.respond(response.body, .{ .keep_alive = false, .extra_headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
 }
 
-pub fn run(cfg: Config, state: *State) !void {
+pub fn run(cfg: Config, state: *State, backup_mode: bool) !void {
     var listener = try (try std.net.Address.parseIp("0.0.0.0", cfg.port)).listen(.{ .reuse_address = true });
     defer listener.deinit();
     std.log.info("search listening on {d}", .{cfg.port});
@@ -131,6 +138,6 @@ pub fn run(cfg: Config, state: *State) !void {
         };
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        serve(&request, arena.allocator(), cfg, state) catch |err| std.log.err("HTTP response failed: {s}", .{@errorName(err)});
+        serve(&request, arena.allocator(), cfg, state, backup_mode) catch |err| std.log.err("HTTP response failed: {s}", .{@errorName(err)});
     }
 }

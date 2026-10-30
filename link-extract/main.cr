@@ -175,7 +175,9 @@ end
 
 mode = ENV["MODE"]? || "production"
 unless mode == "production" || mode == "testing"
-  raise "Invalid MODE=#{mode.inspect}; expected 'production' or 'testing'"
+  unless mode == "backup"
+    raise "Invalid MODE=#{mode.inspect}; expected 'production', 'testing' or 'backup'"
+  end
 end
 
 cache = Cache.new(ENV["DATA_LOCATION"]?) if mode == "production"

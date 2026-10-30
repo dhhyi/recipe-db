@@ -41,7 +41,10 @@ setup() {
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
 application_project_metadata_to_jsonl() {
-  printf '{"name":"recipes","category":"backend","devcontainer":{"ports":[8081],"environment":{}}}\n' > "$2"
+  printf '%s\n' \
+    '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","devcontainer":{"ports":[8081],"environment":{}}}' \
+    '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"devcontainer":{"ports":[8082],"environment":{}}}' \
+    > "$2"
 }
 EOF
   cat > .scripts/validate-production-release.sh << 'EOF'
@@ -196,6 +199,7 @@ else
   while [[ $1 != --output ]]; do shift; done
   jq -n '{schemaVersion:1,revision:("a"*40),images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
+    images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
     graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64))}}' > "$2/release.json"
 fi
 EOF
@@ -388,6 +392,8 @@ set_value() {
   [ "$status" -eq 0 ]
   [[ $output == *"kind: Deployment"* ]]
   [[ $output == *"name: recipe-db-release"* ]]
+  [[ $output == *"name: backup-cleanup"* ]]
+  [[ $output == *"suspend: true"* ]]
   [[ $output != *"kind: Secret"* ]]
 }
 
