@@ -196,3 +196,57 @@ suite "immutable image storage":
     check dirExists(store.manifestFolder)
     check toSeq(walkDir(store.publicFolder)).len == 0
     check toSeq(walkDir(store.manifestFolder)).len == 0
+
+  test "backup enumeration, orphan purge and image compaction fail closed":
+    let a = outputs("#ff0000")
+    let b = outputs("#0000ff")
+    let first = store.publish("recipe-a", a.normal, a.thumb)
+    let superseded = store.publish("recipe-a", b.normal, b.thumb)
+    let current = store.publish("recipe-a", a.normal, a.thumb)
+    discard store.publish("recipe-b", b.normal, b.thumb)
+    let orphan = store.publish("recipe-c", b.normal, b.thumb)
+    writeFile(store.manifestPath("recipe-c"), "{")
+
+    check store.recipeIds() == @["recipe-a", "recipe-b", "recipe-c"]
+    store.compactRecipe("recipe-a")
+    check store.metadata("recipe-a") == current
+    check toSeq(walkDir(store.publicFolder))
+        .mapIt(extractFilename(it.path)).len == 6
+    check fileExists(store.publicFolder / first.filename("url"))
+    check not fileExists(store.publicFolder / superseded.filename("url"))
+    check not fileExists(store.publicFolder / superseded.filename("thumbUrl"))
+
+    store.purgeRecipeData("recipe-c")
+    store.purgeRecipeData("recipe-c")
+    check store.recipeIds() == @["recipe-a", "recipe-b"]
+    check not fileExists(store.manifestPath("recipe-c"))
+    check toSeq(walkDir(store.publicFolder))
+        .mapIt(parseImageName(extractFilename(it.path)).recipeId)
+        .allIt(it != "recipe-c")
+    check store.metadata("recipe-b")["recipeId"].getStr == "recipe-b"
+    discard orphan
+
+    let historical = store.publish("recipe-a", b.normal, b.thumb)
+    writeFile(store.manifestPath("recipe-a"), "{")
+    let before = toSeq(walkDir(store.publicFolder))
+        .mapIt(readFile(it.path))
+    expect ImageStateInvalid:
+      store.compactRecipe("recipe-a")
+    check toSeq(walkDir(store.publicFolder)).mapIt(readFile(it.path)) == before
+
+    writeFile(store.manifestPath("recipe-a"), $historical)
+    removeFile(store.publicFolder / historical.filename("thumbUrl"))
+    expect ImageStateInvalid:
+      store.compactRecipe("recipe-a")
+
+    let orphanOutput = store.publish("recipe-d", a.normal, a.thumb)
+    removeFile(store.manifestPath("recipe-d"))
+    expect ImageStateInvalid:
+      store.compactRecipe("recipe-d")
+    store.purgeRecipeData("recipe-d")
+    check not fileExists(store.publicFolder / orphanOutput.filename("url"))
+
+    store.compactRecipe("absent")
+    writeFile(store.publicFolder / "unknown.png", "unknown")
+    expect StorageError:
+      discard store.recipeIds()

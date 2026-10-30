@@ -52,7 +52,7 @@ pub fn build_schema(mode: RuntimeMode, publisher: Option<EventPublisher>) -> Api
         builder = builder.data(publisher);
     }
 
-    if mode == RuntimeMode::Production {
+    if mode != RuntimeMode::Testing {
         builder = builder.disable_introspection();
     }
 
@@ -64,7 +64,7 @@ mod tests {
     use super::{build_schema, RuntimeMode};
 
     #[tokio::test]
-    async fn introspection_is_disabled_only_in_production() {
+    async fn introspection_is_disabled_outside_testing() {
         let query = "{ __schema { queryType { name } } }";
         let production = build_schema(RuntimeMode::Production, None)
             .execute(query)
@@ -79,6 +79,12 @@ mod tests {
             .await;
         assert_ne!(
             testing.data.into_json().unwrap()["__schema"],
+            serde_json::Value::Null
+        );
+
+        let backup = build_schema(RuntimeMode::Backup, None).execute(query).await;
+        assert_eq!(
+            backup.data.into_json().unwrap()["__schema"],
             serde_json::Value::Null
         );
     }

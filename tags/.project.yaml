@@ -57,6 +57,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
+backupRole: cleanup-participant
 format: opam exec --switch=5.3.0 -- dune fmt
 check: |
   opam exec --switch=5.3.0 -- dune build --profile release

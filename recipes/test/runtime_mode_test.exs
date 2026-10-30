@@ -7,12 +7,13 @@ defmodule Recipes.RuntimeModeTest do
     assert RuntimeMode.parse(nil) == :production
     assert RuntimeMode.parse("production") == :production
     assert RuntimeMode.parse("testing") == :testing
+    assert RuntimeMode.parse("backup") == :backup
   end
 
   test "rejects empty and unsupported modes" do
-    for mode <- ["", "backup", "Production", " production", "testing "] do
+    for mode <- ["", "Production", " production", "testing "] do
       assert_raise RuntimeError,
-                   ~s(Invalid MODE="#{mode}"; expected "production" or "testing"),
+                   ~s(Invalid MODE="#{mode}"; expected "production", "testing" or "backup"),
                    fn ->
                      RuntimeMode.parse(mode)
                    end

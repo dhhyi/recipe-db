@@ -60,6 +60,18 @@ DB clear := method(
     return nil
 )
 
+DB getAllRecipeIds := method(
+    result := exec("SELECT DISTINCT key FROM Ratings ORDER BY key;")
+    if (error, return error)
+    return result map(row, row at("key"))
+)
+
+DB deleteRecipeRatings := method(id,
+    safeId := id asString asMutable replaceSeq("'", "''")
+    exec("DELETE FROM Ratings WHERE key='" .. safeId .. "';")
+    return error
+)
+
 DB getAverageRating := method(id,
     safeId := id asString asMutable replaceSeq("'", "''")
     result := exec("SELECT AVG(value), COUNT(value) FROM Ratings WHERE key='" .. safeId .. "';") at(0)

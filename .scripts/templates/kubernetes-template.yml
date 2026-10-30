@@ -1,6 +1,6 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:yaml", "yaml")
-#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "config_maps", "helm_values", "wait_for_nats")
+#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "config_maps", "helm_values", "wait_for_nats", "backup_cleanup_job")
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -58,6 +58,7 @@ spec:
             - name: NATS_URL
               value: nats://nats:4222
           resources: #@ cfg["resources"]
+--- #@ backup_cleanup_job()
 ---
 apiVersion: v1
 kind: Service
@@ -93,4 +94,3 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: #@ yaml.encode(helm_values())
-

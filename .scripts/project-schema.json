@@ -5,10 +5,57 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["category"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "category": {
+            "enum": ["api", "backend"]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": {
+        "required": ["backupRole"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "backupCompact": {
+            "const": true
+          }
+        },
+        "required": ["backupCompact"]
+      },
+      "then": {
+        "properties": {
+          "backupRole": {
+            "const": "cleanup-participant"
+          }
+        },
+        "required": ["backupRole"]
+      }
+    }
+  ],
   "properties": {
     "category": {
       "type": "string",
       "enum": ["api", "frontend", "backend", "test", "job", "static"]
+    },
+    "backupRole": {
+      "description": "Backup-cleanup role for API/backend projects; required for these categories.",
+      "type": "string",
+      "enum": [
+        "authoritative-read-only",
+        "cleanup-participant",
+        "derived-stateless",
+        "excluded-external-cache"
+      ]
+    },
+    "backupCompact": {
+      "description": "Opt a cleanup participant into image compaction for its surviving recipe IDs; defaults to false.",
+      "type": "boolean"
     },
     "graphqlSchema": {
       "type": "string",

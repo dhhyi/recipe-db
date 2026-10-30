@@ -7,11 +7,31 @@ defmodule Recipes.Router do
 
   plug(:normalize_trailing_slash)
   plug(:record_request)
+  plug(:reject_backup_mutations)
   plug(:match)
   plug(:dispatch)
 
   get "/health" do
     send_resp(conn, 204, "")
+  end
+
+  get "/maintenance/status" do
+    if Application.fetch_env!(:recipes, :mode) == :backup do
+      json(conn, 200, %{version: 1, service: "recipes", mode: "backup"})
+    else
+      Problem.send(conn, 404, "Not Found", "Route not found", "not-found")
+    end
+  end
+
+  get "/maintenance/recipe-ids" do
+    if Application.fetch_env!(:recipes, :mode) == :backup do
+      case Repository.ids() do
+        {:ok, recipe_ids} -> json(conn, 200, %{recipeIds: recipe_ids})
+        {:error, error} -> database_error(conn, error)
+      end
+    else
+      Problem.send(conn, 404, "Not Found", "Route not found", "not-found")
+    end
   end
 
   get "/recipes" do
@@ -111,6 +131,23 @@ defmodule Recipes.Router do
 
       [] ->
         conn
+    end
+  end
+
+  defp reject_backup_mutations(conn, _options) do
+    if Application.fetch_env!(:recipes, :mode) == :backup and
+         conn.method in ["POST", "PUT", "PATCH", "DELETE"] and
+         List.first(conn.path_info) != "maintenance" do
+      conn
+      |> Problem.send(
+        503,
+        "Service Unavailable",
+        "Application writes are unavailable during backup maintenance",
+        "maintenance-mode"
+      )
+      |> halt()
+    else
+      conn
     end
   end
 

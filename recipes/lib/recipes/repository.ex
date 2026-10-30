@@ -15,6 +15,7 @@ defmodule Recipes.Repository do
   end
 
   def all(server \\ __MODULE__), do: GenServer.call(server, :all)
+  def ids(server \\ __MODULE__), do: GenServer.call(server, :ids)
   def clear(server \\ __MODULE__), do: GenServer.call(server, :clear)
   def create(document, server \\ __MODULE__), do: GenServer.call(server, {:create, document})
   def delete(id, server \\ __MODULE__), do: GenServer.call(server, {:delete, id})
@@ -46,6 +47,16 @@ defmodule Recipes.Repository do
     reply =
       case Exqlite.query(connection, "SELECT id, document FROM recipes ORDER BY rowid") do
         {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, &decode_row/1)}
+        {:error, error} -> {:error, error}
+      end
+
+    {:reply, reply, connection}
+  end
+
+  def handle_call(:ids, _from, connection) do
+    reply =
+      case Exqlite.query(connection, "SELECT id FROM recipes ORDER BY id") do
+        {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [id] -> id end)}
         {:error, error} -> {:error, error}
       end
 

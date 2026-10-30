@@ -2,11 +2,31 @@ Regex clone
 
 RESTAPI := Object clone
 
+RESTAPI validRuntimeMode := method(mode,
+    mode == "production" or mode == "testing" or mode == "backup"
+)
+
 RESTAPI get := method(request,
     path := request at("path")
 
     if (path at(0) == "health",
         return request sendNoContent
+    )
+
+    if (path at(0) == "maintenance",
+        if (runtimeMode != "backup", return request errorNotFound)
+        if (path size == 2 and path at(1) == "status",
+            return request sendData("{\"version\":1,\"service\":\"ratings\",\"mode\":\"backup\"}")
+        )
+        if (path size == 2 and path at(1) == "recipe-ids",
+            recipeIds := db getAllRecipeIds
+            if (recipeIds type != "List",
+                writeln("Rating maintenance enumeration failed")
+                return request errorStorage
+            )
+            return request sendData("{\"recipeIds\":" .. recipeIds asJson .. "}")
+        )
+        return request errorNotFound
     )
 
     if (path at(0) == "ratings",
@@ -31,6 +51,7 @@ RESTAPI get := method(request,
 )
 
 RESTAPI put := method(request,
+    if (runtimeMode == "backup", return request errorMaintenanceMode)
     if (request at("path") at(0) == "ratings",
         id := request at("path") at(1)
         if (id != nil,
@@ -52,8 +73,49 @@ RESTAPI put := method(request,
     return request errorNotFound
 )
 
+RESTAPI post := method(request,
+    path := request at("path")
+    if (runtimeMode != "backup" or path size != 3 or
+        path at(0) != "maintenance" or path at(1) != "recipes" or
+        path at(2) != "purge",
+        return request errorNotFound
+    )
+    contentType := request at("headers") at("content-type")
+    if (contentType == nil or
+        contentType split(";") at(0) asLowercase != "application/json",
+        return request errorUnsupportedContentType
+    )
+    payload := nil
+    parseError := try(payload = request at("rawPayload") parseJson)
+    if (parseError != nil,
+        return request errorBadRequest("Invalid JSON", "invalid-input", nil)
+    )
+    if (payload == nil or payload type != "Map",
+        return request errorBadRequest("Expected a JSON object", "invalid-input", nil)
+    )
+    if (payload at("recipeId") == nil or payload at("recipeId") type != "Sequence" or
+        payload at("recipeId") size == 0,
+        return request errorBadRequest("Expected a non-empty recipeId", "invalid-input", "recipeId")
+    )
+    if (payload at("recipeId") containsSeq("\0"),
+        return request errorBadRequest("Invalid recipeId", "invalid-input", "recipeId")
+    )
+    payload keys foreach(key,
+        if (key != "recipeId",
+            return request errorBadRequest("Unknown field", "invalid-input", key)
+        )
+    )
+    error := db deleteRecipeRatings(payload at("recipeId"))
+    if (error,
+        writeln("Rating maintenance purge failed")
+        return request errorStorage
+    )
+    return request sendNoContent
+)
+
 RESTAPI delete := method(request,
     path := request at("path")
+    if (runtimeMode == "backup", return request errorMaintenanceMode)
     collection := path size == 1 or (path size == 2 and path at(1) == "")
     if (runtimeMode == "testing",
     if (collection,
@@ -87,15 +149,32 @@ RESTAPI parseRequest := method(aSocket,
     request setMethod (httpMethod)
     request setTarget (header at(1))
 
-    contentLengthRegex := "Content-Length: (\\d+)" asRegex
-    contentLength := requestData allMatchesOfRegex(contentLengthRegex)
-    if (contentLength size > 0,
-        contentLength := contentLength at(0) at(1) asNumber
+    headers := Map clone
+    headerRegex := "([^:\r\n]+):\\s*([^\r\n]*)" asRegex
+    requestData split("\r\n") foreach(line,
+        matches := line allMatchesOfRegex(headerRegex)
+        if (matches size > 0,
+            values := matches at(0)
+            headers atPut(values at(1) asLowercase, values at(2))
+        )
+    )
+    request setHeaders(headers)
+
+    contentLength := self contentLength(headers)
+    if (contentLength != nil,
         payload := aSocket readBytes(contentLength)
         request setPayload (payload asString)
     )
 
     return request
+)
+
+RESTAPI contentLength := method(headers,
+    value := headers at("content-length")
+    if (value == nil, return nil)
+    matches := value allMatchesOfRegex("^\\s*(\\d+)\\s*$" asRegex)
+    if (matches size == 0, return nil)
+    matches at(0) at(1) asNumber
 )
 
 RESTAPI verbose := System getEnvironmentVariable("VERBOSE") == "true"
