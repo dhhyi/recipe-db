@@ -14,17 +14,24 @@ The local identity is deliberately narrow: target `local`, cluster `recipe-db-re
 
 ### Runtime mode
 
-Production workloads set `MODE=production`. The base `production`/`testing` contract and legacy-setting removal belong to #81; this deployment extends it with explicit `MODE=backup`. `production` remains the default only when `MODE` is absent. Empty or unsupported values fail startup. Backup mode retains production ingress protections, blocks ordinary application requests and writes, and enables only private maintenance APIs.
+Production workloads set `MODE=production`. An absent `MODE` defaults to production; empty or unsupported values fail startup. `testing` enables isolated test resets. `backup` keeps production ingress protections, blocks application requests and writes, and enables private maintenance APIs.
 
 ### Backup cleanup Job
 
-The renderer derives backup participants from backend/API `.project.yaml` metadata. Every selected project must declare exactly one `backupRole`: `authoritative-read-only`, `cleanup-participant`, `derived-stateless`, or `excluded-external-cache`. Rendering fails closed for unclassified projects or an inventory without one authority and at least one cleanup participant. The generated `backup-cleanup` Job uses the same immutable release as the application, carries the metadata-derived service inventory, has no service-account token, and is suspended by default.
+Recipe deletion leaves dependent data in place so the synchronous request does not cascade across services. The in-cluster cleanup Job later removes orphaned dependent data and, when configured, compacts historical images. It is suspended by default, uses the same immutable release as the workloads, and has no service-account token.
 
-The Job is the coordinator for cleanup only; it does not switch modes, stop workloads, acquire a lock, capture snapshots, upload backups, or manage retention. **Never resume or run it outside #43's exclusive backup-maintenance session.** The #43 lifecycle must hold the shared `recipe-db-deploy` operation lock, establish the GraphQL barrier and backup-mode backend workload without overlapping volume writers, then explicitly resume the suspended Job. It must wait for successful Job completion before capture. A failed Job exits nonzero and its JSON stdout summary reports completed and unresolved operations; skip capture/upload for that run and restore service through the lifecycle's recovery path. The Job uses three total attempts for retryable remote failures. Since completed Kubernetes Jobs are not reusable, the lifecycle must delete and recreate the suspended Job from the same rendered release before a later run; cleanup is idempotent and can resume from partially completed storage.
+Each API/backend project declares a `backupRole` in `.project.yaml`; the schema requires it for those categories:
 
-The supported Job interface is intentionally private and in-cluster. From the #43 maintenance session, render the same immutable release used for the workload, extract only the `backup-cleanup` Job, then delete/recreate and resume that Job through the session's guarded Kubernetes client. Do not expose it through ingress, GraphQL, or MCP, or bypass the session with a direct `kubectl` invocation. A successful cleanup leaves recipe records intact, removes dependent records for absent recipes, and compacts historical images for surviving recipes. Deleted recipes' dependent data remains until a successful cleanup; external URL-keyed caches and shared tag inventory are not cleaned. Search/browse projections are derived data and must be refreshed before the client barrier is released.
+| Role | Meaning |
+| --- | --- |
+| `authoritative-read-only` | Provides the recipe ID inventory; its records are never purged. |
+| `cleanup-participant` | Reports recipe references and purges its data for IDs absent from the authoritative inventory. |
+| `derived-stateless` | Holds rebuildable derived state and is not included in cleanup. |
+| `excluded-external-cache` | Is excluded because its cache keys or data are external to recipe ownership. |
 
-Maintenance routes are available only on the private backend services while they run in backup mode:
+`backupCompact: true` opts a cleanup participant into image compaction for surviving recipe IDs; it defaults to `false` and is currently used by `images`.
+
+The maintenance API is private and available only in backup mode:
 
 | Service | Route | Purpose |
 | --- | --- | --- |
@@ -33,11 +40,14 @@ Maintenance routes are available only on the private backend services while they
 | images, ratings, inspirations, tags | `POST /maintenance/recipes/purge` | Idempotently remove data owned by one absent recipe |
 | images | `POST /maintenance/images/compact` | Keep only the manifest-selected current image and thumbnail |
 
-Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Successful purges/compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current. Do not treat API availability alone as permission to run maintenance; only the locked #43 lifecycle may invoke it.
+Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
-This work does not change snapshot format, capture/upload, verification, or retention policy; those remain #43 responsibilities. Cleanup is not rolled back if a later snapshot or upload fails, and prior verified backups remain the recovery points.
+#### Manual cleanup procedure
 
-For a managed local rehearsal, the #43 operator integration can use the generated suspended Job as follows **only after it owns the shared lock and has completed the backup-mode transition**:
+The Job performs cleanup only; it does not acquire the `recipe-db-deploy` operation lock, change runtime modes, stop writers, or create a snapshot. Keep the lock and GraphQL client barrier until services have returned to production. Do not run these commands unless an exclusive backup window is already established.
+
+1. Acquire the shared operation lock, enable the GraphQL client barrier, switch backends to backup mode, and wait until no other writers can access the data volumes.
+2. Render the same immutable release used by the workloads, recreate the suspended cleanup Job, and resume it:
 
 ```sh
 VALUES="$PWD/.secrets/local-values.yaml"
@@ -55,7 +65,10 @@ mise run production-k3d kubectl "$VALUES" wait --for=condition=complete \
 mise run production-k3d kubectl "$VALUES" logs job/backup-cleanup
 ```
 
-The final command prints the machine-readable run summary; keep it private because it can contain recipe IDs. A failed Job is not a successful cleanup even if earlier purges completed. The #43 integration must record the nonzero result, skip snapshot capture/upload, and follow its recovery path. Re-render/recreate for the next run so the Job uses the same immutable application release and current deployment metadata. These commands do not acquire or validate the backup-maintenance lock themselves and must never be used as a standalone maintenance procedure.
+3. Continue to snapshot only after the Job succeeds. On failure, skip the snapshot and recover the workloads; cleanup already completed is idempotent and may be retried.
+4. Return services to production, confirm normal readiness, then release the client barrier and operation lock.
+
+The final command prints a private machine-readable summary that may contain recipe IDs. Delete and recreate completed Jobs before another run. This repository provides no end-to-end command for lock management, mode transitions, snapshot capture, upload, or retention.
 
 ## Operator configuration and secrets
 
@@ -147,7 +160,7 @@ The application objects live in `recipe-db`. The intentional infrastructure exce
 
 The driver applies the two namespaces separately. Application secret checksums trigger workload replacement when credentials change. A separate route checksum in the bundled controller's pod annotations triggers a Traefik rollout when its file-provider configuration or ingress token changes; deployment waits for that exact checksum, not a previously ready controller. Identical inputs keep both checksums stable.
 
-Deployment uses the `recipe-db-deploy` Kubernetes Lease as coordination groundwork for backup/restore work in #43. An existing Lease blocks deployment rather than being silently stolen. This is **not** a complete backup locking protocol, transactional deployment, snapshot mechanism or proof that a backup is safe. Investigate an abandoned Lease and its owner before any manual recovery; do not automatically delete it to make deployment proceed.
+Deployment uses the `recipe-db-deploy` Kubernetes Lease as coordination groundwork for backup/restore operations. An existing Lease blocks deployment rather than being silently stolen. This is **not** a complete backup locking protocol, transactional deployment, snapshot mechanism or proof that a backup is safe. Investigate an abandoned Lease and its owner before any manual recovery; do not automatically delete it to make deployment proceed.
 
 ## What the protocol smoke verifies
 
@@ -220,7 +233,7 @@ On 2026-10-27, the full protocol smoke passed on an x86-64 Docker/k3d deployment
 
 After confirmed deletion, a newly created cluster passed the same complete smoke from empty volumes (`success: true`, `cleanupSucceeded: true`, 11 checks). Rotating only the disposable ingress secret and redeploying the identical release replaced the bundled Traefik pod and preserved successful authenticated GraphQL reads. The disposable cluster was then explicitly deleted and the k3d cluster list verified empty. Recreating empty volumes is not a backup-restoration test.
 
-The operator explicitly authorized generated disposable-local owner and infrastructure credentials, including a non-production OAuth client placeholder. No production credentials, test fixture accounts, fabricated release inventory, or real Google browser login were used. This is not evidence of Google login, HTTPS, backup/restore, or physical Pi operation; #43-#45 retain those responsibilities.
+The operator explicitly authorized generated disposable-local owner and infrastructure credentials, including a non-production OAuth client placeholder. No production credentials, test fixture accounts, fabricated release inventory, or real Google browser login were used. This does not validate Google login, HTTPS, backup/restore, or physical Pi operation; those require separate verification.
 
 The verified tools were k3d 5.8.3 with explicit server image `rancher/k3s:v1.35.5-k3s1`, kubectl 1.35.5, ORAS 1.3.6, ytt 0.55.4, Docker 29.8.2, jq 1.8.2, yq 4.54.1 and curl 8.18.0. The bundled controller used `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. The k3d CLI's displayed default k3s version is not the selected server version.
 
