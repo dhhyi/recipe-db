@@ -22,6 +22,10 @@ export const ProjectReadme: Story = {
       "href",
       "https://github.com/dhhyi/recipe-db/blob/main/README.md",
     );
+    const designLink = within(canvasElement).getByRole("link", {
+      name: "Design",
+    });
+    expect(designLink).toHaveAttribute("href", "/design/");
   },
   render: () => html`<footer-component></footer-component>`,
 };
