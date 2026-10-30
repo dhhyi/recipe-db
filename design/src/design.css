@@ -95,7 +95,8 @@ article {
   --spacing-21: 6.854rem;
 }
 
-header-component {
+header-component,
+footer-component {
   display: contents;
 }
 
