@@ -153,6 +153,7 @@
 #@ def helm_values():
 #@   image = cfg["infrastructure"]["traefik"].split(":", 1)
 #@   values = {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
+#@   values["ports"]["rest-internal"]["observability"] = {}
 #@   if cfg["runtime"].get("authMode", "google") == "token-only":
 #@     values["service"] = {"type": "ClusterIP"}
 #@   end

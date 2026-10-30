@@ -35,6 +35,8 @@ render() {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.runtime.authMode="token-only" | .config.runtime.googleOAuthClientId=""' values.json > token-values.json
   render token-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+  yq -o=json '.' helm-values.yaml | jq -e '.ports["rest-internal"].observability == {}'
   jq -e '
     all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
     and any(.items[]; .kind == "HelmChartConfig" and
