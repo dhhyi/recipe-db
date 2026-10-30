@@ -1,0 +1,31 @@
+# Managed table only: never flush the Kubernetes/CNI ruleset.
+destroy table inet recipe_db
+table inet recipe_db {
+  chain input {
+    type filter hook input priority -10; policy drop;
+    ct state established,related accept
+    iifname "lo" accept
+    ct state invalid drop
+    iifname { "cni0", "flannel.1" } accept
+    meta l4proto { icmp, ipv6-icmp } accept
+    udp sport 67 udp dport 68 accept
+    udp sport 547 udp dport 546 accept
+{% for network in admin_networks %}
+    {{ 'ip6' if ':' in network else 'ip' }} saddr {{ network }} tcp dport 22 accept
+{% endfor %}
+{% for network in application_networks %}
+    {{ 'ip6' if ':' in network else 'ip' }} saddr {{ network }} tcp dport { 80, 443 } accept
+    {{ 'ip6' if ':' in network else 'ip' }} saddr {{ network }} udp dport 5353 accept
+{% endfor %}
+    ip6 saddr fe80::/10 udp dport 5353 accept
+  }
+  chain forward {
+    type filter hook forward priority -10; policy accept;
+    ct state established,related accept
+{% for network in application_networks if ':' not in network %}
+    ip saddr {{ network }} ip daddr { 10.42.0.0/16, 10.43.0.0/16 } meta l4proto tcp ct status dnat ct original ip daddr != { 10.42.0.0/16, 10.43.0.0/16 } ct original proto-dst { 80, 443 } accept
+{% endfor %}
+    # Do not publish arbitrary NodePorts or direct pod/service routes from LAN.
+    iifname != { "cni0", "flannel.1", "lo" } ct state new ip daddr { 10.42.0.0/16, 10.43.0.0/16 } drop
+  }
+}

@@ -1,0 +1,50 @@
+- name: Export a private explicitly named Pi administration context
+  hosts: pi
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require one target and the expected tunnel port
+      ansible.builtin.assert:
+        that:
+          - groups['pi'] | length == 1
+          - inventory_hostname == 'recipe-db-pi'
+          - tunnel_port | default(6445) | int >= 1024
+          - tunnel_port | default(6445) | int <= 65535
+
+    - name: Verify the provisioned storage before exporting access
+      ansible.builtin.command: "/usr/local/sbin/recipe-db-storage-guard {{ expected_root_uuid }} {{ data_root }}"
+      changed_when: false
+
+    - name: Read root-only kubeconfig without logging credentials
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: remote_config
+      no_log: true
+
+    - name: Save separate private kubeconfig with tunnel endpoint and explicit context
+      ansible.builtin.copy:
+        dest: .private/pi-kubeconfig.yaml
+        mode: "0600"
+        content: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: recipe-db-pi
+              cluster:
+                certificate-authority-data: {{ (remote_config.content | b64decode | from_yaml).clusters[0].cluster['certificate-authority-data'] }}
+                server: https://127.0.0.1:{{ tunnel_port | default(6445) }}
+          users:
+            - name: recipe-db-pi-admin
+              user:
+                client-certificate-data: {{ (remote_config.content | b64decode | from_yaml).users[0].user['client-certificate-data'] }}
+                client-key-data: {{ (remote_config.content | b64decode | from_yaml).users[0].user['client-key-data'] }}
+          contexts:
+            - name: recipe-db-pi
+              context:
+                cluster: recipe-db-pi
+                user: recipe-db-pi-admin
+                namespace: recipe-db
+          current-context: recipe-db-pi
+      delegate_to: localhost
+      become: false
+      no_log: true

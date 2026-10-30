@@ -18,6 +18,7 @@ setup() {
   export MOCK_FOREIGN_NAMESPACE=false MOCK_FOREIGN_HELM=false MOCK_HELM_PENDING=false MOCK_HELM_DELAYED=false
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
+  export MOCK_LAN=false MOCK_NODEPORT=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
     namespace:"recipe-db",origin:"http://127.0.0.1:8080",httpPort:8080,apiPort:6445,
@@ -92,6 +93,11 @@ EOF
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
+  *"get service traefik -o json"*)
+    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" '
+      {spec:{type:(if $lan == "true" then "LoadBalancer" else "ClusterIP" end),
+        allocateLoadBalancerNodePorts:false,ports:[{port:80} +
+          (if $nodeport == "true" then {nodePort:30080} else {} end)]}}' ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)
     jq -n --arg bad "$MOCK_BAD_NODES" '{items:[{metadata:{name:"k3d-recipe-db-rehearsal-server-0"},
@@ -127,9 +133,14 @@ case "$*" in
       case "$argument" in
         --from-file=routes.yml=*)
           route_file=${argument#--from-file=routes.yml=}
-          jq -e --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
+          jq -e --slurpfile config "${route_file%/*}/config.json" --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
             '.http.services.recipes.loadBalancer.servers[0].url == "http://recipes.recipe-db.svc.cluster.local:4000"
-            and .http.middlewares["oauth2-forward-auth"].forwardAuth.address == "http://oauth2-proxy.recipe-db.svc.cluster.local/oauth2/auth"
+            and (if $config[0].runtime.authMode == "token-only" then
+              .http.middlewares["oauth2-forward-auth"] == null and
+              .http.routers["oauth2-public"] == null and
+              .http.routers["graphql-cookie"] == null and
+              .http.services["oauth2-proxy"] == null
+            else .http.middlewares["oauth2-forward-auth"].forwardAuth.address == "http://oauth2-proxy.recipe-db.svc.cluster.local/oauth2/auth" end)
             and .http.routers["graphql-internal"] == {
               rule:"PathPrefix(`/graphql`)",entrypoints:["rest-internal"],
               service:"recipe-db-graphql",middlewares:["graphql-ingress"]}
@@ -236,6 +247,65 @@ EOF
 set_value() {
   jq "$1" "$VALUES" > values.next
   mv values.next "$VALUES"
+}
+
+token_only_values() {
+  set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
+    .runtime.authMode="token-only" | .runtime.googleOAuthClientId="" |
+    del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+@test "token-only Pi deployment requires no OAuth secrets and strips OAuth routing" {
+  token_only_values
+  rm google-oauth-client-secret oauth2-cookie-secret
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run ! grep -q -- '--from-file=google-oauth-client-secret' "$MOCK_LOG"
+  run ! grep -q -- '--from-file=oauth2-cookie-secret' "$MOCK_LOG"
+}
+
+@test "token-only mode refuses non-loopback origins local targets and anonymous owners" {
+  token_only_values
+  set_value '.origin="http://192.168.1.218:8080"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  set_value '.origin="http://127.0.0.1:8080" | .target="local"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  set_value '.target="pi"'
+  printf '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"anonymous read-only policy"* ]]
+  run ! grep -q 'create secret' "$MOCK_LOG"
+}
+
+@test "private LAN token rehearsal is explicit and refuses public origins and NodePorts" {
+  token_only_values
+  set_value '.runtime.ingressMode="private-lan" | .origin="http://recipe-pi.home"'
+  export MOCK_LAN=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  for origin in http://192.168.1.218 http://10.1.2.3 http://172.16.0.5; do
+    ORIGIN="$origin" yq -i '.origin=strenv(ORIGIN)' "$VALUES"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -eq 0 ]
+  done
+  for origin in http://example.com http://8.8.8.8 http://192.168.1.999 http://172.32.0.1 http://recipe-pi.home:8080 https://recipe-pi.home; do
+    ORIGIN="$origin" yq -i '.origin=strenv(ORIGIN)' "$VALUES"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+  done
+  set_value '.origin="http://recipe-pi.home"'
+  export MOCK_NODEPORT=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"without NodePorts"* ]]
+  export MOCK_NODEPORT=false
+  set_value '.runtime.authMode="google"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
 }
 
 @test "verify is silent and uses private explicit kubeconfig with live node identity" {

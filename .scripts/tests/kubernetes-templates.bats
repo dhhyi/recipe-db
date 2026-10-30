@@ -31,6 +31,46 @@ render() {
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
 }
 
+@test "Pi uses the official 16 KiB ARM64 Typesense build without changing local defaults" {
+  local image="typesense/typesense:29.0-arm64-lg-page16@sha256:ab3e3b8fc63585e8246096fc610216e12d68f1165ed02b54df35be66d8f3eaa2"
+  yq -o=json '.' "$ROOT/deploy/pi.yaml" > pi-config.json
+  jq -e --arg image "$image" '.infrastructure.typesense == $image' pi-config.json
+  jq -e '.infrastructure.typesense | contains("lg-page16") | not' config.json
+  jq --slurpfile config pi-config.json '.config = $config[0]' values.json > pi-values.json
+  render pi-values.json
+  jq -e --arg image "$image" '
+    any(.items[]; .kind == "Deployment" and .metadata.name == "typesense" and
+      .spec.template.spec.containers[0].image == $image)
+  ' manifests.json
+}
+
+@test "token-only Pi rehearsal omits OAuth and restricts ingress to ClusterIP" {
+  jq '.config.target="pi" | .config.context="recipe-db-pi" |
+    .config.runtime.authMode="token-only" | .config.runtime.googleOAuthClientId=""' values.json > token-values.json
+  render token-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+  yq -o=json '.' helm-values.yaml | jq -e '.ports["rest-internal"].observability == {}'
+  jq -e '
+    all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
+    and any(.items[]; .kind == "HelmChartConfig" and
+      (.spec.valuesContent | contains("ClusterIP")))
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "graphql" and
+      any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production"))
+  ' manifests.json
+}
+
+@test "explicit private LAN rehearsal exposes only HTTP without NodePorts" {
+  jq '.config.target="pi" | .config.context="recipe-db-pi" |
+    .config.origin="http://recipe-pi.home" | .config.runtime.authMode="token-only" |
+    .config.runtime.ingressMode="private-lan" | .config.runtime.googleOAuthClientId=""' values.json > lan-values.json
+  render lan-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+  yq -o=json '.' helm-values.yaml | jq -e '
+    .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false and
+    .ports.websecure.expose.default == false and .ports["rest-internal"].expose.default == false'
+  jq -e 'all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")' manifests.json
+}
+
 @test "Kubernetes templates select every application project including design" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '

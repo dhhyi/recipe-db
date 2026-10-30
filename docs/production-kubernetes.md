@@ -4,6 +4,7 @@ The production manifest renderer consumes the same project metadata and immutabl
 
 ## Prerequisites and boundaries
 
+- For initial physical Pi setup, follow the [Windows/WSL USB bootstrap guide](raspberry-pi-bootstrap.md), then the [private host provisioning guide](raspberry-pi-provisioning.md). Bootstrap evidence and provisioning tooling are not completed Pi application acceptance.
 - Run commands from the repository root, with an absolute values-file path. Examples below use `/home/runner/work/recipe-db/recipe-db`; substitute your actual absolute checkout path.
 - Local rehearsal requires an x86-64 host, a running Docker daemon with **more than 8 GiB** assigned, available loopback ports 8080 and 6445, and access to GHCR. Leave enough disk space for images and the requested PVCs.
 - The tool contract is k3d **5.8.3**, k3s **v1.35.5-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
@@ -134,6 +135,65 @@ umask 077
 The account ID is stable and explicit; the token is not the ID. Revoke or rotate the dedicated credential after rehearsal, then redeploy to apply the updated accounts file. Do not print secret files, `kubectl get secrets`, raw manifests containing credentials, or unrestricted application/proxy logs into CI output. The smoke stores Authorization in a private curl config, never in curl arguments.
 
 ## Create, render, deploy and inspect
+
+### Workstation-only token rehearsal on the Pi
+
+For an initial private rehearsal without Google login, set `runtime.authMode: token-only`, `runtime.googleOAuthClientId: ""`, and `origin: http://127.0.0.1:8080` (matching `httpPort`). Omit the `google-oauth-client-secret` and `oauth2-cookie-secret` keys from `secrets`; the other three secret files remain required. The default auth mode remains `google`, with its existing credential requirements unchanged.
+
+This explicit Pi-only option omits OAuth2 Proxy and Google callback/cookie routing. GraphQL still runs in production mode behind trusted ingress, strips untrusted identity headers and validates configured bearer tokens. Accounts must retain `anonymous.role: anonymous`, an empty `googleAccounts` map and at least one explicit owner token. Never elevate the credential-free role for testing. Generate separate strong, temporary owner tokens for operator/MCP clients in private files; revoke them after rehearsal.
+
+Traefik becomes a ClusterIP service, not a LAN load balancer. Access the application with a loopback-only Kubernetes port-forward carried through the existing private API SSH tunnel:
+
+```sh
+mise exec -- kubectl --kubeconfig "$PWD/provisioning/.private/pi-kubeconfig.yaml" \
+  --context recipe-db-pi -n kube-system port-forward --address 127.0.0.1 service/traefik 8080:80
+```
+
+Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubeconfig and the `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Switching an existing Google deployment to token-only or activating public exposure is not part of this procedure.
+
+### Home-LAN HTTP token rehearsal on the Pi
+
+Accepted decision [#103](https://github.com/dhhyi/recipe-db/issues/103) makes private phone browsing part of [#45](https://github.com/dhhyi/recipe-db/issues/45). Keep the token-only account/secret requirements above, but explicitly set:
+
+```yaml
+runtime:
+  authMode: token-only
+  ingressMode: private-lan
+  googleOAuthClientId: ""
+  trustedIssuer: https://accounts.google.com
+origin: http://recipe-pi.home
+```
+
+Use the Pi's actual private hostname (ending in `.home`, `.lan` or `.local`) or RFC 1918 IPv4 address, with HTTP port 80 and no explicit port suffix. `httpPort` remains the workstation-forwarding port, not the LAN listening port. The origin controls browser-write validation; use that configured origin for same-origin browser writes. A phone may need the private IPv4 address if it cannot resolve the hostname.
+
+Deploy using the same private API tunnel and immutable release. Traefik becomes a k3s LoadBalancer on port 80 only, with NodePort allocation disabled; the internal REST entrypoint and HTTPS remain unexposed. The provisioned private-network firewall is a prerequisite: only its configured application networks may reach port 80, including forwarding rules; global IPv6 is not enabled. Do not configure router forwarding, UPnP, public DNS or public ingress. No API/SSH exposure changes are made. Setting `ingressMode: loopback` (or omitting it) restores the ClusterIP-only default after redeployment.
+
+Anonymous browsing remains read-only. Bearer GraphQL/MCP writes are temporarily allowed on trusted-LAN HTTP at the operator's explicit request; HTTP does not protect tokens or recipe data against observers or intermediaries. Do not share these credentials, add an anonymous-owner bypass or assume browser Google login works.
+
+Before any external staging/public access, replace **every rehearsal application secret**: operator/MCP/other bearer credentials, GraphQL ingress secret and Typesense API key; generate fresh Google client/cookie secrets when enabling OAuth. Update private recovery sources and roll dependent workloads consistently. Verify old bearer tokens fail, new credentials work and temporary HTTP/token-only exposure is removed. Preserve stable principal IDs where vote continuity is required. [#44](https://github.com/dhhyi/recipe-db/issues/44) owns HTTPS/external checks and this transition, [#68](https://github.com/dhhyi/recipe-db/issues/68) owns Google, [#52](https://github.com/dhhyi/recipe-db/issues/52) retains full access verification, [#43](https://github.com/dhhyi/recipe-db/issues/43) owns backup/recovery and [#104](https://github.com/dhhyi/recipe-db/issues/104) tracks measured operating limits. Private phone acceptance does not waive those requirements or complete [#17](https://github.com/dhhyi/recipe-db/issues/17).
+
+Physical LAN execution on 2026-10-30 passed at the operator's private IPv4 origin without an application port-forward. The deployment completed with all 18 workloads Ready; Traefik exposed only LoadBalancer port 80, `allocateLoadBalancerNodePorts: false`, and no NodePorts. Direct LAN requests verified the five original demo recipe IDs/search results, ten image/thumbnail hashes, owner create/update/delete, denied anonymous/spoofed/invalid writes with unchanged state, private-route 404s and separate-token MCP initialization/listing. The temporary authorization-test recipe was removed without deleting demo records. LAN TCP probes found SSH/80 reachable and 443/6443/10250/30080 not reachable; this is selected workstation evidence, not all-interface/internet acceptance. Actual phone confirmation remains pending in #45. No secrets were rotated yet; replacement remains mandatory before external exposure.
+
+### Physical rehearsal evidence
+
+The operator subsequently confirmed on 2026-10-30 that the private page was visible and working on their phone after being directed to the Pi's private IPv4 origin on home Wi-Fi. This supersedes the pending-phone status above; detailed search/image checks remain the separately recorded direct-LAN tests. #45 remains open pending #42/PR review.
+
+The first physical Pi token-only attempt on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
+
+The subsequent bounded physical Pi smoke passed through that same loopback ingress:
+
+- Owner-bearer GraphQL create/read/update/delete; anonymous and spoofed-identity writes rejected, invalid bearer rejected, and the denied writes left the synthetic recipe unchanged.
+- Image upload and anonymous image/thumbnail downloads with content hashes matching their URLs; indexed search and rendered browse results containing the synthetic recipe.
+- Browse and both editor HTML entry points; design CSS/JavaScript redirects resolved successfully and HTMX was reachable. This does not validate interactive editor login/writes.
+- MCP initialization, recipe read and authenticated recipe change using the separate MCP owner token; GraphQL confirmed the changed value.
+- Backend, infrastructure, dashboard and OAuth paths returned 404 through application ingress.
+- Recipes, images and Typesense pods were restarted, then the identical immutable release was reapplied. The recipe, MCP-written method and image URL/content survived; every application deployment ended Ready and the deployment operation lease was released.
+
+The synthetic recipe was deleted afterward. Dependent image cleanup remains deferred under the normal backup-maintenance contract; no test reset was used. This was an ad-hoc, explicitly targeted Pi check, not execution of the guarded local-only k3d smoke. Host reboot with retained synthetic data, sustained-load/resource thresholds, off-device backup/restore, Google login and public HTTPS remain unverified. #45 stays open.
+
+The operator subsequently chose to restore the default 16 KiB Pi kernel. `deploy/pi.yaml` now pins the official `typesense/typesense:29.0-arm64-lg-page16` image by digest; local amd64 values remain unchanged. Upstream documents this supported image variant in its [large-page build instructions](https://typesense.org/docs/guide/install-typesense.html#large-page-size-build). This supersedes the temporary 4 KiB workaround, not the application version. Restoring the host requires removing the manually added `kernel=kernel8.img` boot override and an approved reboot; do not restore an entire older boot-config backup, which could discard other settings. Reapply the Pi deployment with the updated image and verify the kernel page size, Typesense/search readiness and retained demo recipes/images. The earlier smoke evidence above used 4 KiB pages; post-transition acceptance is pending.
+
+Post-transition recovery was then verified on the same day. The operator reported `16384` pages, kernel `6.18.50+rpt-rpi-2712` and active k3s; the API confirmed that kernel and the same Ready node. The exact pinned large-page image ran successfully, the immutable-release deployment completed, all 18 application deployments became Ready, and no deployment operation lease remained. All five previously imported demo recipe IDs, methods, ingredient names, inspirations and ratings survived; search indexed all five and browse rendered them. All ten image/thumbnail downloads matched their content hashes. This verifies retained demo data across the approved host reboot and image transition, not a backup restore or a repeat of every earlier authenticated smoke check.
 
 Replace the digest placeholder with the actual **artifact** digest. Keep that same reference for the initial deployment, smoke reapply and evidence.
 

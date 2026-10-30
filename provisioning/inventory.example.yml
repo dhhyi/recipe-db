@@ -1,0 +1,14 @@
+all:
+  children:
+    pi:
+      hosts:
+        recipe-db-pi:
+          ansible_host: recipe-pi.home
+          ansible_user: piadmin
+          ansible_ssh_private_key_file: .private/recipe-db-pi
+          expected_root_uuid: REPLACE-WITH-VERIFIED-ROOT-UUID
+          # Include the workstation's source subnet, not a public/all-address range.
+          admin_networks:
+            - 192.168.1.0/24
+          application_networks:
+            - 192.168.1.0/24

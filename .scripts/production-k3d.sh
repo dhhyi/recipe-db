@@ -145,8 +145,7 @@ annotate_credentials() {
   local checksum
   checksum=$(
     cd "$work"
-    sha256sum auth-accounts.json graphql-ingress-secret typesense-api-key \
-      google-oauth-client-secret oauth2-cookie-secret template-values.json | sha256sum
+    sha256sum "${secret_keys[@]}" template-values.json | sha256sum
   )
   checksum=${checksum%% *}
   route_checksum=$(sha256sum "$work/routes.yml")
@@ -167,7 +166,7 @@ routes() {
     -f "$root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
-  jq --arg ns "$namespace" --rawfile secret "$work/graphql-ingress-secret" '
+  jq --arg ns "$namespace" --arg authMode "$auth_mode" --rawfile secret "$work/graphql-ingress-secret" '
     walk(if type == "string" then
       gsub("http://(?<host>[a-z][a-z0-9-]*)(?=[:/?#]|$)";
         "http://\(.host).\($ns).svc.cluster.local")
@@ -177,6 +176,10 @@ routes() {
         service:"recipe-db-graphql",middlewares:["graphql-ingress"]}
     | .http.middlewares["graphql-ingress"] = {
         headers:{customRequestHeaders:{"X-Internal-Ingress-Token":($secret | rtrimstr("\n"))}}}
+    | if $authMode == "token-only" then
+        del(.http.routers["oauth2-public"], .http.routers["graphql-cookie"],
+          .http.middlewares["oauth2-forward-auth"], .http.services["oauth2-proxy"])
+      else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
 }
 
@@ -311,6 +314,11 @@ case "$command" in
     yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
     yq 'select(.metadata.namespace != "kube-system")' "$work/rendered.yml" > "$work/application.yml"
     connect
+    if [[ $auth_mode = token-only ]]; then
+      kube get deployment oauth2-proxy --ignore-not-found -o name > "$work/existing-oauth"
+      [[ ! -s $work/existing-oauth ]] \
+        || production_fail "token-only rehearsal requires no existing Google deployment; transition explicitly before retrying"
+    fi
     guard_helm_config
     ensure_namespace
     jq -n --arg ns "$namespace" --arg holder "$cluster-$$" \
@@ -321,7 +329,7 @@ case "$command" in
       || production_fail "recipe-db-deploy Lease exists or cannot be acquired; investigate before retrying"
     locked=true
     secret_args=()
-    for key in auth-accounts.json graphql-ingress-secret typesense-api-key google-oauth-client-secret oauth2-cookie-secret; do
+    for key in "${secret_keys[@]}"; do
       secret_args+=("--from-file=$key=$work/$key")
     done
     if ! {
@@ -349,6 +357,17 @@ case "$command" in
     }; then
       diagnostics
       production_fail "deployment failed (secret-safe diagnostics above)"
+    fi
+    if [[ $auth_mode = token-only ]]; then
+      kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
+      jq -e --arg ingress "$ingress_mode" '
+        (if $ingress == "private-lan" then
+          .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
+          (.spec.ports | length == 1) and .spec.ports[0].port == 80
+         else .spec.type == "ClusterIP" end) and
+        ((.spec.externalIPs // []) | length == 0) and
+        all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
+        || production_fail "token-only ingress does not match the requested private exposure without NodePorts"
     fi
     ;;
 esac

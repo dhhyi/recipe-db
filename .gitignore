@@ -34,3 +34,5 @@ oauth2-proxy-alpha.yml
 /.secrets
 /.production-k3d.*/
 /e2e-test/.secrets
+/provisioning/.private/
+/provisioning/**/__pycache__/

@@ -21,6 +21,13 @@ production_config() {
     def image: type == "string" and
       test("^[a-zA-Z0-9./_-]+(:[a-zA-Z0-9_.-]+)?@sha256:[0-9a-f]{64}$|^[a-zA-Z0-9./_-]+:[a-zA-Z0-9_.-]+$") and
       (endswith(":latest") | not);
+    def private_lan_origin:
+      sub("^http://"; "") as $host |
+      test("^http://[a-zA-Z0-9][a-zA-Z0-9.-]*[.](home|lan|local)$") or
+      (try ($host | split(".") | map(tonumber) |
+        length == 4 and all(.[]; floor == . and . >= 0 and . <= 255) and
+        (.[0] == 10 or (.[0] == 192 and .[1] == 168) or
+          (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"])
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
@@ -48,14 +55,28 @@ production_config() {
     and (.infrastructure | objectkeys(["traefik","nats","typesense","maintenance","oauth2Proxy","redis"])
       and all(.[]; image)
       and (.traefik | test("^traefik:v3([.]([7-9]|[1-9][0-9])([.][0-9]+)?)?@sha256:[0-9a-f]{64}$")))
-    and (.runtime | objectkeys(["googleOAuthClientId","trustedIssuer"])
-      and (.googleOAuthClientId | nonempty and
+    and (.runtime | (del(.authMode,.ingressMode) | objectkeys(["googleOAuthClientId","trustedIssuer"]))
+      and ((.authMode // "google") == "google" or .authMode == "token-only")
+      and ((.ingressMode // "loopback") == "loopback" or .ingressMode == "private-lan")
+      and (.googleOAuthClientId | type == "string")
+      and (if .authMode == "token-only" then .googleOAuthClientId == "" else
+        (.googleOAuthClientId | nonempty and
         (if $action == "render" or $action == "deploy" then
           test("^[a-zA-Z0-9._-]+[.]apps[.]googleusercontent[.]com$")
-        else true end))
+        else true end)) end)
       and .trustedIssuer == "https://accounts.google.com")
-    and (.secrets | objectkeys(["auth-accounts.json","graphql-ingress-secret","typesense-api-key",
-        "google-oauth-client-secret","oauth2-cookie-secret"])
+    and (if .runtime.authMode == "token-only" then
+      .target == "pi" and
+      (if .runtime.ingressMode == "private-lan" then (.origin | private_lan_origin)
+       else .origin == ("http://127.0.0.1:" + (.httpPort | tostring)) end)
+      else true end)
+    and (if .runtime.ingressMode == "private-lan" then
+      .target == "pi" and .runtime.authMode == "token-only"
+      else true end)
+    and (.runtime.authMode == "token-only" as $tokenOnly | .secrets |
+      objectkeys(if $tokenOnly then ["auth-accounts.json","graphql-ingress-secret","typesense-api-key"]
+        else ["auth-accounts.json","graphql-ingress-secret","typesense-api-key",
+        "google-oauth-client-secret","oauth2-cookie-secret"] end)
       and all(.[]; type == "string" and startswith("/") and (test("[\\r\\n]") | not)))
   ' "$work/config.json" > /dev/null || production_fail "invalid or incomplete production values"
   target=$(jq -r .target "$work/config.json")
@@ -65,11 +86,17 @@ production_config() {
   http_port=$(jq -r .httpPort "$work/config.json")
   api_port=$(jq -r .apiPort "$work/config.json")
   timeout=$(jq -r .timeoutSeconds "$work/config.json")
+  auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
+  ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
+  secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
+  if [[ $auth_mode = google ]]; then
+    secret_keys+=(google-oauth-client-secret oauth2-cookie-secret)
+  fi
 }
 
 production_secrets() {
   local key path decoded cookie
-  for key in auth-accounts.json graphql-ingress-secret typesense-api-key google-oauth-client-secret oauth2-cookie-secret; do
+  for key in "${secret_keys[@]}"; do
     path=$(jq -r --arg key "$key" '.secrets[$key]' "$work/config.json")
     [[ -f $path && -r $path && -s $path ]] || production_fail "missing or unreadable secret file: $key"
     # Copy once: secret validation, route rendering and Secret creation use the same bytes.
@@ -80,10 +107,18 @@ production_secrets() {
     || production_fail "invalid auth-accounts.json (expected one JSON object)"
   jq -eRs 'test("^[A-Za-z0-9_-]{43}\\n?\\z")' "$work/graphql-ingress-secret" > /dev/null \
     || production_fail "invalid secret format: graphql-ingress-secret (expected 43 URL-safe base64 characters)"
-  for key in typesense-api-key google-oauth-client-secret; do
+  if [[ $auth_mode = token-only ]]; then
+    jq -e '.anonymous.role == "anonymous" and .googleAccounts == {} and
+      (.tokens | type == "array" and length > 0) and
+      any(.tokens[]; .role == "owner")' "$work/auth-accounts.json" > /dev/null \
+      || production_fail "token-only rehearsal requires anonymous read-only policy and an explicit owner token"
+  fi
+  for key in "${secret_keys[@]:2}"; do
+    [[ $key != oauth2-cookie-secret ]] || continue
     jq -eRs 'length >= 16 and (test("^[!-~]+\\n?\\z"))' "$work/$key" > /dev/null \
       || production_fail "invalid secret format: $key"
   done
+  [[ $auth_mode = google ]] || return 0
   jq -eRs 'test("^[A-Za-z0-9+/_-]+={0,2}\\n?\\z")' "$work/oauth2-cookie-secret" > /dev/null \
     || production_fail "invalid oauth2 cookie secret"
   cookie=$(< "$work/oauth2-cookie-secret")
