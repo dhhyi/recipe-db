@@ -1,4 +1,4 @@
-FROM elixir:1.18-otp-27-slim@sha256:4d24a682c9063a6961e44a95ada95d4803d856a53a52b26568f0cc3ed62e9386 AS builder
+FROM hexpm/elixir:1.18.5-erlang-27.3.4.19-debian-trixie-20261027-slim@sha256:37e5d9e8cfb102bd3e7282362b64babd326e86bdea850470aa83367b29690955 AS builder
 
 ENV LANG=C.UTF-8 \
   LC_ALL=C.UTF-8 \
@@ -18,7 +18,7 @@ RUN mix deps.get --only prod && mix deps.compile
 COPY lib ./lib
 RUN mix compile && mix release
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runner
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runner
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libstdc++6 openssl \

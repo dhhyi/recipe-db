@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS builder
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS builder
 
 ENV OPAMYES=1
 
@@ -20,7 +20,7 @@ COPY test ./test
 RUN opam exec --switch=5.3.0 -- dune build --profile release ./bin/main.exe \
   && cp _build/default/bin/main.exe /app/tags
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runner
+FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS runner
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libev4 libgmp10 libsqlite3-0 libssl3 \
