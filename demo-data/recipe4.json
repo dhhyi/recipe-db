@@ -1,5 +1,10 @@
 {
   "name": "Schnelle Lauch-Kichererbsen-Pfanne",
+  "tags": [
+    { "category": "Küche", "name": "Mediterran" },
+    { "category": "Ernährung", "name": "Vegan" },
+    { "category": "Gang", "name": "Hauptgericht" }
+  ],
   "ingredients": [
     {
       "name": "weiße Bohnen",

@@ -1,5 +1,9 @@
 {
   "name": "Linsen Gemüse Eintopf",
+  "tags": [
+    { "category": "Küche", "name": "Deutsch" },
+    { "category": "Gang", "name": "Hauptgericht" }
+  ],
   "ingredients": [
     {
       "name": "Linsen"

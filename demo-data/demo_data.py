@@ -3,10 +3,12 @@ import json
 import os
 import sys
 import random
+import unicodedata
 
 import httpx
 from graphql_client import Client
 from graphql_client.base_model import Upload
+from graphql_client.enums import TagCategory
 from graphql_client.exceptions import GraphQLClientHttpError
 
 authorization = os.getenv("DEMO_DATA_AUTH_TOKEN")
@@ -22,6 +24,11 @@ headers = {
 http_client = httpx.AsyncClient(headers=headers, timeout=30.0)
 client = Client("http://traefik/graphql", http_client=http_client)
 rest_api = os.getenv("REST_API", "http://traefik:3000")
+TAG_CATEGORIES = {
+    "Küche": "CUISINE",
+    "Ernährung": "DIETARY_STYLE",
+    "Gang": "COURSE",
+}
 
 
 async def wait_all_online():
@@ -43,16 +50,18 @@ async def wait_all_online():
         await asyncio.sleep(1)
 
 
-async def delete_everything():
+async def delete_everything(graphql_client=None, reset_client=None):
     print("Deleting everything")
 
-    result = await client.recipes()
+    graphql_client = graphql_client or client
+    reset_client = reset_client or http_client
+    result = await graphql_client.recipes()
     for recipe in result.recipes:
-        deleted = await client.delete_recipe(recipe.id)
+        deleted = await graphql_client.delete_recipe(recipe.id)
         print(f"-> Deleted recipe {recipe.id}: {deleted.delete_recipe}")
 
-    for service in ["ratings", "images", "inspirations"]:
-        response = await http_client.delete(f"{rest_api}/{service}")
+    for service in ["ratings", "images", "inspirations", "tags"]:
+        response = await reset_client.delete(f"{rest_api}/{service}")
         response.raise_for_status()
         print(f"-> Reset {service}")
 
@@ -122,12 +131,79 @@ async def random_rate_recipe(recipe_id):
         await rate_recipe(recipe_id, random.randint(1, 5))
 
 
-async def insert_recipe(number):
+async def insert_recipe(number, tag_ids):
     recipe = load_json(f"recipe{number}.json")
+    tags = recipe.pop("tags", [])
     recipe["method"] = load_md(f"recipe{number}.method.md")
     if file_exists(f"recipe{number}.inspirations.txt"):
         recipe["inspirations"] = load_txt(f"recipe{number}.inspirations.txt")
-    return await add_recipe(recipe)
+    recipe_id = await add_recipe(recipe)
+    await assign_demo_tags(recipe_id, tags, tag_ids)
+    return recipe_id
+
+
+def recipe_tag_definitions():
+    return {
+        number: [
+            (TAG_CATEGORIES[tag["category"]], tag["name"])
+            for tag in load_json(f"recipe{number}.json").get("tags", [])
+        ]
+        for number in range(1, 6)
+    }
+
+
+def tag_identity_key(tag_category, name):
+    normalized = unicodedata.normalize("NFKD", name).casefold()
+    identity = []
+    for character in normalized:
+        character_category = unicodedata.category(character)
+        if character_category[0] in ("L", "N") and not character.isascii():
+            raise ValueError(f"Tag name does not fold to ASCII: {name}")
+        if character.isascii() and character.isalnum():
+            identity.append(character)
+    if not identity:
+        raise ValueError(f"Tag name has no ASCII letters or numbers: {name}")
+    return tag_category, "".join(identity)
+
+
+async def seed_demo_tag_inventory(tag_definitions=None, graphql_client=None):
+    graphql_client = graphql_client or client
+    if tag_definitions is None:
+        tag_definitions = recipe_tag_definitions()
+    result = await graphql_client.demo_tag_inventory()
+    if result.tags is None:
+        raise Exception("Failed to load tag inventory")
+
+    inventory = {
+        tag_identity_key(tag.category.value, tag.name): tag.id for tag in result.tags
+    }
+    tag_ids = {}
+    for tags in tag_definitions.values():
+        for category, name in tags:
+            key = tag_identity_key(category, name)
+            if key not in inventory:
+                created = await graphql_client.demo_create_tag(
+                    TagCategory(category), name
+                )
+                if created.create_tag is None:
+                    raise Exception(f"Failed to create {category} tag {name}")
+                inventory[key] = created.create_tag.id
+            tag_ids[key] = inventory[key]
+    return tag_ids
+
+
+async def assign_demo_tags(recipe_id, tags, tag_ids, graphql_client=None):
+    if not tags:
+        return
+    graphql_client = graphql_client or client
+    assigned_ids = [
+        tag_ids[tag_identity_key(category, name)] for category, name in tags
+    ]
+    result = await graphql_client.demo_assign_recipe_tags(
+        recipe_id, add_tag_ids=assigned_ids
+    )
+    if result.change_recipe_tags is None:
+        raise Exception(f"Failed to assign tags to recipe {recipe_id}")
 
 
 async def maybe_add_image(number, recipe_id):
@@ -151,23 +227,25 @@ async def main():
                 confirm_delete()
             await delete_everything()
 
-        recipe_id = await insert_recipe(1)
+        tag_ids = await seed_demo_tag_inventory()
+
+        recipe_id = await insert_recipe(1, tag_ids)
         await maybe_add_image(1, recipe_id)
         await rate_recipe(recipe_id, 4)
 
-        recipe_id = await insert_recipe(2)
+        recipe_id = await insert_recipe(2, tag_ids)
         await maybe_add_image(2, recipe_id)
         await random_rate_recipe(recipe_id)
 
-        recipe_id = await insert_recipe(3)
+        recipe_id = await insert_recipe(3, tag_ids)
         await maybe_add_image(3, recipe_id)
         await random_rate_recipe(recipe_id)
 
-        recipe_id = await insert_recipe(4)
+        recipe_id = await insert_recipe(4, tag_ids)
         await maybe_add_image(4, recipe_id)
         await random_rate_recipe(recipe_id)
 
-        recipe_id = await insert_recipe(5)
+        recipe_id = await insert_recipe(5, tag_ids)
         await maybe_add_image(5, recipe_id)
         await random_rate_recipe(recipe_id)
 

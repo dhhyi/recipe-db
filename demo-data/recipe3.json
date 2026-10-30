@@ -1,5 +1,9 @@
 {
   "name": "Spaghetti Carbonara",
+  "tags": [
+    { "category": "Küche", "name": "Italienisch" },
+    { "category": "Gang", "name": "Hauptgericht" }
+  ],
   "ingredients": [
     {
       "name": "Spaghetti",

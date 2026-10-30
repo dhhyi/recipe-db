@@ -1,5 +1,10 @@
 {
   "name": "Rote Beete Suppe",
+  "tags": [
+    { "category": "Küche", "name": "Deutsch" },
+    { "category": "Ernährung", "name": "Vegetarisch" },
+    { "category": "Gang", "name": "Suppe" }
+  ],
   "ingredients": [
     {
       "name": "Rote Beete",
