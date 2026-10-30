@@ -36,6 +36,7 @@ deploy:
     - .scripts/smoke-production-k3d.sh
     - .scripts/generate-production-build-metadata.sh
     - .scripts/lib/production-config.sh
+    - .scripts/lib/cluster-operation-lock.sh
     - .scripts/lib/project-metadata.sh
     - .scripts/templates/kubernetes*.yml
     - .scripts/validate-production-image-index.sh

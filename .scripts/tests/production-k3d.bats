@@ -8,6 +8,7 @@ setup() {
   setup_fixture production-k3d.sh
   mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/
   use_mise_tools
   setup_mock_bin
@@ -16,6 +17,7 @@ setup() {
   export MOCK_FOREIGN=false MOCK_BAD_NODES=false MOCK_LOCK=false MOCK_ROLLOUT=false MOCK_SHAPE=false MOCK_SECRET_ERROR=false
   export MOCK_ABSENT=false MOCK_MEMORY=17179869184 MOCK_PUBLIC=false
   export MOCK_FOREIGN_NAMESPACE=false MOCK_FOREIGN_HELM=false MOCK_HELM_PENDING=false MOCK_HELM_DELAYED=false
+  export MOCK_LOCK_OWNER_CHANGE=false
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
   export MOCK_LAN=false MOCK_NODEPORT=false
@@ -126,7 +128,20 @@ case "$*" in
       "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' |
       jq --arg checksum "$checksum" \
         '.spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum' ;;
-  *"create -f "*lease.json*) [[ $MOCK_LOCK != true ]] ;;
+  *"create -f "*lease.json*)
+    [[ $MOCK_LOCK != true ]] || exit 1
+    lock_file="${*: -1}"
+    cp "$lock_file" "$MOCK_LOG.lease"
+    ;;
+  *"get lease recipe-db-deploy"*)
+    [[ -f $MOCK_LOG.lease ]] || exit 0
+    if [[ $MOCK_LOCK_OWNER_CHANGE = true ]]; then
+      jq '.spec.holderIdentity="foreign-operation"' "$MOCK_LOG.lease"
+    else
+      cat "$MOCK_LOG.lease"
+    fi ;;
+  *"delete lease recipe-db-deploy"*)
+    rm -f "$MOCK_LOG.lease" ;;
   *"rollout status "*) [[ $MOCK_ROLLOUT != true ]] ;;
   *"create secret generic recipe-db-routes"*)
     for argument in "$@"; do
@@ -510,6 +525,8 @@ token_only_values() {
   grep -q 'rollout status deployment/search --timeout=600s' "$MOCK_LOG"
   grep -q -- '--namespace kube-system rollout status deployment/traefik --timeout=' "$MOCK_LOG"
   grep -q 'delete lease recipe-db-deploy' "$MOCK_LOG"
+  grep -q -- '--namespace kube-system create -f .*recipe-db-deploy-lease.json' "$MOCK_LOG"
+  grep -q -- '--namespace kube-system get lease recipe-db-deploy -o json' "$MOCK_LOG"
 }
 
 @test "application checksums are stable across identical deploys and change for rotated staged secrets" {
@@ -556,6 +573,44 @@ token_only_values() {
   [[ $output == *"cannot be acquired"* ]]
   run ! grep -q 'delete lease' "$MOCK_LOG"
   run ! grep -q 'create secret' "$MOCK_LOG"
+}
+
+@test "lock status reports the durable cluster operation holder and phase" {
+  jq -n '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+    metadata:{name:"recipe-db-deploy",labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/operation":"backup","recipe-db/phase":"capturing"}},
+    spec:{holderIdentity:"recipe-db-pi-backup-123"}}' > "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh lock-status "$VALUES"
+  [ "$status" -eq 0 ]
+  [[ $output == *'"holderIdentity": "recipe-db-pi-backup-123"'* ]]
+  [[ $output == *'"recipe-db/phase": "capturing"'* ]]
+  grep -q -- '--namespace kube-system get lease recipe-db-deploy --ignore-not-found -o json' "$MOCK_LOG"
+}
+
+@test "abandoned lock recovery requires exact holder and explicit confirmation" {
+  jq -n '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+    metadata:{name:"recipe-db-deploy",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+    spec:{holderIdentity:"recipe-db-pi-backup-123"}}' > "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh lock-recover "$VALUES" recipe-db-pi-backup-123 wrong
+  [ "$status" -ne 0 ]
+  [ -f "$MOCK_LOG.lease" ]
+  run ! grep -q 'delete lease recipe-db-deploy' "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh lock-recover "$VALUES" another-holder RECOVER-another-holder
+  [ "$status" -ne 0 ]
+  [ -f "$MOCK_LOG.lease" ]
+  run bash .scripts/production-k3d.sh lock-recover "$VALUES" recipe-db-pi-backup-123 RECOVER-recipe-db-pi-backup-123
+  [ "$status" -eq 0 ]
+  [ ! -f "$MOCK_LOG.lease" ]
+  grep -q -- '--namespace kube-system delete lease recipe-db-deploy' "$MOCK_LOG"
+}
+
+@test "deployment refuses to release a lock whose holder changed" {
+  export MOCK_LOCK_OWNER_CHANGE=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"owner changed"* ]]
+  [ -f "$MOCK_LOG.lease" ]
+  run ! grep -q 'delete lease recipe-db-deploy' "$MOCK_LOG"
 }
 
 @test "ingress secret rotation updates Traefik pod checksum and waits past stale deployment" {

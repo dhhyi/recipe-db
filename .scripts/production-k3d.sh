@@ -8,27 +8,31 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$root/.scripts/lib/production-config.sh"
 # shellcheck source=.scripts/lib/project-metadata.sh
 source "$root/.scripts/lib/project-metadata.sh"
+# shellcheck source=.scripts/lib/cluster-operation-lock.sh
+source "$root/.scripts/lib/cluster-operation-lock.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|status|delete> <absolute values.yaml> [release digest] [delete confirmation]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|status|delete|lock-status|lock-recover> <absolute values.yaml> [release digest] [confirmation]"
 command=$1
 values=$2
 shift 2
 case "$command" in
-  create | status | verify) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
+  create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   delete) [[ $# = 1 ]] || production_fail "delete requires an explicit confirmation" ;;
+  lock-recover) [[ $# = 2 ]] || production_fail "lock-recover requires an explicit holder and confirmation" ;;
   kubectl) [[ $# -gt 0 ]] || production_fail "kubectl requires arguments" ;;
   *) production_fail "unknown command" ;;
 esac
 work=$(mktemp -d "$root/.production-k3d.XXXXXXXX")
 export TMPDIR="$work"
 locked=false
+lock_holder=
 cleanup() {
   local result=$?
   trap - EXIT
   if $locked; then
-    if ! kube delete lease recipe-db-deploy --ignore-not-found > /dev/null 2>&1; then
-      printf 'production: could not release recipe-db-deploy Lease; manual investigation required\n' >&2
+    if ! cluster_operation_lock_release "$lock_holder"; then
+      printf 'production: could not safely release recipe-db-deploy Lease; manual investigation required\n' >&2
       [[ $result -ne 0 ]] || result=1
     fi
   fi
@@ -43,6 +47,10 @@ production_config "$values" "$command"
 kube() {
   kubectl --kubeconfig "$work/kubeconfig" --context "$context" --namespace "$namespace" \
     --request-timeout="${timeout}s" "$@"
+}
+
+cluster_operation_lock_kubectl() {
+  kube --namespace kube-system "$@"
 }
 
 local_identity() {
@@ -300,6 +308,14 @@ case "$command" in
     connect
     kube get deployments,pods,jobs,pvc
     ;;
+  lock-status)
+    connect
+    cluster_operation_lock_status
+    ;;
+  lock-recover)
+    connect
+    cluster_operation_lock_recover "$1" "$2"
+    ;;
   render)
     pull_release "$1"
     render
@@ -321,12 +337,9 @@ case "$command" in
     fi
     guard_helm_config
     ensure_namespace
-    jq -n --arg ns "$namespace" --arg holder "$cluster-$$" \
-      '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",metadata:{name:"recipe-db-deploy",namespace:$ns},
-        spec:{holderIdentity:$holder}}' > "$work/lease.json"
-    # Shared coordination with backup/restore (#43): never steal/expire an existing Lease.
-    kube create -f "$work/lease.json" > /dev/null 2>&1 \
-      || production_fail "recipe-db-deploy Lease exists or cannot be acquired; investigate before retrying"
+    lock_holder="$cluster-deploy-$$"
+    # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
+    cluster_operation_lock_acquire "$lock_holder" deploy "$1"
     locked=true
     secret_args=()
     for key in "${secret_keys[@]}"; do
