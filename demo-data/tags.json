@@ -1,0 +1,5 @@
+{
+  "CUISINE": ["Deutsch", "Italienisch", "Mediterran"],
+  "DIETARY_STYLE": ["Vegetarisch", "Vegan"],
+  "COURSE": ["Dessert", "Suppe", "Hauptgericht"]
+}

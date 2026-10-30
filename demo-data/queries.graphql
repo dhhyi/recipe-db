@@ -31,3 +31,25 @@ mutation AddImage($id: ID!, $file: Upload!) {
     url
   }
 }
+
+query DemoTagInventory {
+  tags {
+    id
+    category
+    name
+  }
+}
+
+mutation DemoCreateTag($category: TagCategory!, $name: String!) {
+  createTag(category: $category, name: $name) {
+    id
+    category
+    name
+  }
+}
+
+mutation DemoAssignRecipeTags($recipeId: ID!, $addTagIds: [ID!]) {
+  changeRecipeTags(recipeId: $recipeId, addTagIds: $addTagIds) {
+    id
+  }
+}

@@ -114,6 +114,83 @@ header-component {
   max-width: min(650px, 100%);
 }
 
+.recipe-tag {
+  align-items: center;
+  background: var(--recipe-tag-background);
+  border: 1px solid var(--recipe-tag-border);
+  border-radius: 9999px;
+  color: var(--recipe-tag-color);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+}
+
+.recipe-tag--cuisine {
+  --recipe-tag-background: #dbeafe;
+  --recipe-tag-border: #93c5fd;
+  --recipe-tag-color: #1e3a8a;
+}
+
+.recipe-tag--dietary-style {
+  --recipe-tag-background: #dcfce7;
+  --recipe-tag-border: #86efac;
+  --recipe-tag-color: #14532d;
+}
+
+.recipe-tag--course {
+  --recipe-tag-background: #f3e8ff;
+  --recipe-tag-border: #d8b4fe;
+  --recipe-tag-color: #581c87;
+}
+
+.recipe-tags-detail .recipe-tag {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+@media (prefers-color-scheme: dark) {
+  .recipe-tag--cuisine {
+    --recipe-tag-background: #1e3a8a;
+    --recipe-tag-border: #60a5fa;
+    --recipe-tag-color: #eff6ff;
+  }
+
+  .recipe-tag--dietary-style {
+    --recipe-tag-background: #14532d;
+    --recipe-tag-border: #4ade80;
+    --recipe-tag-color: #f0fdf4;
+  }
+
+  .recipe-tag--course {
+    --recipe-tag-background: #581c87;
+    --recipe-tag-border: #c084fc;
+    --recipe-tag-color: #faf5ff;
+  }
+}
+
+[data-theme="dark"] .recipe-tag--cuisine {
+  --recipe-tag-background: #1e3a8a;
+  --recipe-tag-border: #60a5fa;
+  --recipe-tag-color: #eff6ff;
+}
+
+[data-theme="dark"] .recipe-tag--dietary-style {
+  --recipe-tag-background: #14532d;
+  --recipe-tag-border: #4ade80;
+  --recipe-tag-color: #f0fdf4;
+}
+
+[data-theme="dark"] .recipe-tag--course {
+  --recipe-tag-background: #581c87;
+  --recipe-tag-border: #c084fc;
+  --recipe-tag-color: #faf5ff;
+}
+
 rating-component[hx-post] {
   svg {
     transition: all 0.3s ease;
@@ -128,6 +205,10 @@ rating-component[hx-post] {
       fill: #ffec17;
     }
   }
+}
+
+a:has(> recipe-tile-component) {
+  text-decoration: none;
 }
 
 a > recipe-tile-component {

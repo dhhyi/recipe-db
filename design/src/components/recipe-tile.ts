@@ -9,6 +9,7 @@ const imageNotAvailableUrl = new URL(
 @customElement("recipe-tile-component")
 export class RecipeTile extends LitElement {
   private image?: HTMLImageElement;
+  private tagResizeObserver?: ResizeObserver;
 
   static styles = css`
     :host {
@@ -22,6 +23,13 @@ export class RecipeTile extends LitElement {
       border-radius: 1rem;
     }
 
+    .tile {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      height: 100%;
+      width: 100%;
+    }
+
     :host([aria-busy="true"])::before {
       left: 50%;
       position: absolute;
@@ -30,19 +38,15 @@ export class RecipeTile extends LitElement {
       z-index: 2;
     }
 
-    .tile,
-    .image,
-    .title {
-      inset: 0;
-      position: absolute;
-    }
-
     .image {
       align-items: center;
       background: color-mix(in srgb, currentColor 8%, transparent);
       color: color-mix(in srgb, currentColor 62%, transparent);
       display: flex;
       justify-content: center;
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
       z-index: 0;
     }
 
@@ -87,8 +91,24 @@ export class RecipeTile extends LitElement {
         transparent 55%
       );
       display: flex;
+      inset: 0;
       padding: 0 0.75rem;
+      position: absolute;
       z-index: 1;
+    }
+
+    .tag-strip {
+      align-items: center;
+      display: flex;
+      gap: 0.382rem;
+      min-width: 0;
+      overflow: hidden;
+      padding: 0.382rem 0.5rem;
+      white-space: nowrap;
+    }
+
+    .tag-strip[hidden] {
+      display: none;
     }
 
     ::slotted(h2[slot="title"]),
@@ -115,6 +135,10 @@ export class RecipeTile extends LitElement {
   private handleImageSlotChange(event: Event) {
     const slot = event.currentTarget as HTMLSlotElement;
     this.updateImageFallback(slot);
+  }
+
+  private handleTagSlotChange() {
+    this.fitTags();
   }
 
   private handleImageLoad = (event: Event) => {
@@ -200,6 +224,100 @@ export class RecipeTile extends LitElement {
     if (imageSlot) {
       this.updateImageFallback(imageSlot);
     }
+    const tagStrip = this.shadowRoot?.querySelector(".tag-strip");
+    if (tagStrip) {
+      this.tagResizeObserver = new ResizeObserver(() => this.fitTags());
+      this.tagResizeObserver.observe(this);
+      this.fitTags();
+    }
+  }
+
+  disconnectedCallback() {
+    this.tagResizeObserver?.disconnect();
+    super.disconnectedCallback();
+  }
+
+  private fitTags() {
+    const strip = this.shadowRoot?.querySelector<HTMLElement>(".tag-strip");
+    const slot = strip?.querySelector<HTMLSlotElement>('slot[name="tags"]');
+    const assigned = slot?.assignedElements() ?? [];
+    const tags = assigned.filter(
+      (element): element is HTMLElement =>
+        element instanceof HTMLElement &&
+        element.hasAttribute("data-recipe-tag"),
+    );
+    const unavailable = assigned.some(
+      (element) =>
+        element instanceof HTMLElement &&
+        element.hasAttribute("data-tag-unavailable"),
+    );
+    const overflow = assigned.find(
+      (element): element is HTMLElement =>
+        element instanceof HTMLElement &&
+        element.hasAttribute("data-tag-overflow"),
+    );
+    if (!strip) {
+      return;
+    }
+    if (tags.length === 0) {
+      strip.hidden = !unavailable;
+      if (unavailable) {
+        const message = assigned.find(
+          (element): element is HTMLElement =>
+            element instanceof HTMLElement &&
+            element.hasAttribute("data-tag-unavailable"),
+        );
+        if (message) {
+          message.hidden = false;
+        }
+      }
+      return;
+    }
+    if (!overflow) {
+      return;
+    }
+
+    strip.hidden = false;
+    tags.forEach((tag) => (tag.hidden = false));
+    overflow.hidden = true;
+    const gap = Number.parseFloat(getComputedStyle(strip).columnGap) || 0;
+    const available = strip.clientWidth;
+    const maxVisible = Math.min(3, tags.length);
+    let visible = -1;
+
+    for (let count = maxVisible; count >= 0; count -= 1) {
+      const needsOverflow = count < tags.length;
+      if (needsOverflow) {
+        overflow.textContent = `+${tags.length - count}`;
+        overflow.setAttribute(
+          "aria-label",
+          `Weitere Tags: ${tags.length - count}`,
+        );
+        overflow.hidden = false;
+      }
+      const tagWidth = tags
+        .slice(0, count)
+        .reduce((width, tag) => width + tag.getBoundingClientRect().width, 0);
+      const overflowWidth = needsOverflow
+        ? overflow.getBoundingClientRect().width
+        : 0;
+      const style = getComputedStyle(strip);
+      const padding =
+        (Number.parseFloat(style.paddingLeft) || 0) +
+        (Number.parseFloat(style.paddingRight) || 0);
+      const used =
+        tagWidth +
+        overflowWidth +
+        gap * Math.max(0, count + Number(needsOverflow) - 1);
+      if (used <= available - padding) {
+        visible = count;
+        break;
+      }
+    }
+
+    tags.forEach((tag, index) => (tag.hidden = index >= visible));
+    overflow.hidden = visible < 0 || visible === tags.length;
+    strip.hidden = visible < 0;
   }
 
   render() {
@@ -213,11 +331,17 @@ export class RecipeTile extends LitElement {
             src=${imageNotAvailableUrl}
           />
           <slot name="image" @slotchange=${this.handleImageSlotChange}></slot>
+          <div class="rating" hidden>
+            <slot
+              name="rating"
+              @slotchange=${this.handleRatingSlotChange}
+            ></slot>
+          </div>
+          <div class="title"><slot name="title"></slot></div>
         </div>
-        <div class="rating" hidden>
-          <slot name="rating" @slotchange=${this.handleRatingSlotChange}></slot>
+        <div class="tag-strip" hidden>
+          <slot name="tags" @slotchange=${this.handleTagSlotChange}></slot>
         </div>
-        <div class="title"><slot name="title"></slot></div>
       </div>
     `;
   }

@@ -6,12 +6,12 @@ import "fmt"
 import "strconv"
 
 type BrowseState struct {
-	Query, Sort, Kind, Message  string
-	Page, PerPage, Found        int
-	RatingsOnline               bool
-	Recipes                     []gql.RecipeStub
-	NextURL                     string
-	SeenIDs                     []string
+	Query, Sort, Kind, Message string
+	Page, PerPage, Found       int
+	RatingsOnline              bool
+	Recipes                    []gql.RecipeStub
+	NextURL                    string
+	SeenIDs                    []string
 }
 
 func (state BrowseState) PaginationValues() string {
@@ -69,7 +69,7 @@ func automaticSortLabel(query string) string {
 }
 
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<a href={ "/recipe/" + item.Id } aria-label={ "Rezept " + item.Name } hx-boost="true" data-recipe-id={ item.Id }>
+	<a href={ "/recipe/" + item.Id } aria-label={ recipeAccessibleLabel(item) } hx-boost="true" data-recipe-id={ item.Id }>
 		<recipe-tile-component itemscope itemtype="https://schema.org/Recipe">
 			<h2 slot="title" class="font-bold" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 			if item.Image != nil {
@@ -79,6 +79,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 				{{ slot := "rating" }}
 				@Rating(item.Rating, false, &slot, nil)
 			}
+			@recipeCardTags(item.Tags)
 		</recipe-tile-component>
 	</a>
 }

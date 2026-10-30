@@ -23,6 +23,26 @@ const meta = {
 export default meta;
 type Story = StoryObj;
 
+const tags = (entries: [string, string][]) =>
+  entries.map(
+    ([category, name]) =>
+      html`<span
+        slot="tags"
+        class="recipe-tag recipe-tag--${category}"
+        data-recipe-tag
+        aria-label="${category}: ${name}"
+        >${name}</span
+      >`,
+  );
+
+const overflow = html`<span
+  slot="tags"
+  class="recipe-tag"
+  data-tag-overflow
+  hidden
+  >+1</span
+>`;
+
 export const Full: Story = {
   render: ({ rating, title }) => html`
     <a>
@@ -32,6 +52,101 @@ export const Full: Story = {
         <h2 slot="title">${title}</h2>
       </recipe-tile-component>
     </a>
+  `,
+};
+
+export const PopulatedTags: Story = {
+  render: ({ title }) => html`
+    <a>
+      <recipe-tile-component>
+        <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
+        <h2 slot="title">${title}</h2>
+        ${tags([
+          ["cuisine", "Italienisch"],
+          ["dietary-style", "Vegetarisch"],
+          ["course", "Hauptgericht"],
+        ])}
+        ${overflow}
+      </recipe-tile-component>
+    </a>
+  `,
+};
+
+export const CappedTags: Story = {
+  render: ({ title }) => html`
+    <a>
+      <recipe-tile-component>
+        <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
+        <h2 slot="title">${title}</h2>
+        ${tags([
+          ["cuisine", "Italienisch"],
+          ["dietary-style", "Vegetarisch"],
+          ["course", "Hauptgericht"],
+          ["course", "Abendessen"],
+          ["course", "Pasta"],
+        ])}
+        ${overflow}
+      </recipe-tile-component>
+    </a>
+  `,
+};
+
+export const NarrowTags: Story = {
+  render: ({ title }) => html`
+    <div style="width: 12rem">
+      <a>
+        <recipe-tile-component>
+          <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
+          <h2 slot="title">${title}</h2>
+          ${tags([
+            ["cuisine", "Italienisch"],
+            ["dietary-style", "Vegetarisch"],
+            ["course", "Hauptgericht"],
+          ])}
+          ${overflow}
+        </recipe-tile-component>
+      </a>
+    </div>
+  `,
+};
+
+export const LongNameTags: Story = {
+  render: ({ title }) => html`
+    <a>
+      <recipe-tile-component>
+        <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
+        <h2 slot="title">${title}</h2>
+        ${tags([
+          ["cuisine", "Eine außergewöhnlich lange Küchenbezeichnung"],
+          ["dietary-style", "Vegetarisch"],
+          ["course", "Hauptgericht"],
+          ["course", "Abendessen"],
+        ])}
+        ${overflow}
+      </recipe-tile-component>
+    </a>
+  `,
+};
+
+export const DarkThemeTags: Story = {
+  render: ({ title }) => html`
+    <div
+      data-theme="dark"
+      style="background: #1f2937; color: white; padding: 1rem"
+    >
+      <a>
+        <recipe-tile-component>
+          <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
+          <h2 slot="title">${title}</h2>
+          ${tags([
+            ["cuisine", "Italienisch"],
+            ["dietary-style", "Vegetarisch"],
+            ["course", "Hauptgericht"],
+          ])}
+          ${overflow}
+        </recipe-tile-component>
+      </a>
+    </div>
   `,
 };
 

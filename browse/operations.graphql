@@ -7,6 +7,11 @@ fragment Rating on Rating {
 fragment RecipeStub on Recipe {
   id
   name
+  tags {
+    id
+    category
+    name
+  }
   image {
     url
     thumbUrl
@@ -69,6 +74,11 @@ fragment RecipeDetail on Recipe {
   name
   updatedAt
   method
+  tags {
+    id
+    category
+    name
+  }
   image {
     url
     thumbUrl
