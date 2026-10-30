@@ -148,4 +148,20 @@ Record actual results, not just playbook success:
 - Root-device loss affects the entire host. The startup guard prevents starting k3s against an unexpected filesystem; it cannot protect against live USB failure, corruption or power loss.
 - After stick loss/reimaging, manually bootstrap a replacement, record its new UUID, create a fresh cluster and restore authoritative application data into empty volumes using #43 at its recorded release. Reapply secrets from private workstation sources and regenerate cluster-admin access. Do not copy stale kubeconfigs or assume arbitrary k3s/SQLite downgrades are safe. Same-device folders are not off-device backups.
 
-No physical provisioning/cluster acceptance is claimed by this document. The bootstrap checkpoint is verified; live #42 execution and the checks above remain pending until the operator explicitly authorizes and records them.
+## Physical provisioning checkpoint (2026-10-30)
+
+The operator explicitly authorized the live run and supplied the following terminal results. These are guided physical observations, not autonomous inspection or full application acceptance.
+
+- Read-only preflight: `ok=13 changed=0 unreachable=0 failed=0`.
+- Initial execution exposed an unavailable `update-notifier-common` package; it was removed and regression-tested. A subsequent run installed prerequisites and prepared memory-cgroup boot options, then stopped explicitly for an operator reboot. After that reboot, `/sys/fs/cgroup/cgroup.controllers` included `memory`.
+- Provisioning completed: `ok=51 changed=20 unreachable=0 failed=0 skipped=1`. The first idempotence attempt exposed a missing sudo requirement for inspecting root-only runtime directories; the check was corrected without weakening storage permissions.
+- Corrected second run: `ok=47 changed=0 unreachable=0 failed=0 skipped=1`. Kubeconfig export: `ok=4 changed=1 unreachable=0 failed=0`.
+- WSL kubectl through the loopback SSH tunnel and exported kubeconfig reported node `recipe-db-pi` Ready on k3s `v1.35.5+k3s1`, Debian 13/Trixie, kernel `6.18.50+rpt-rpi-2712`, containerd `2.2.3-k3s1`.
+- CoreDNS, local-path provisioner, metrics-server, Traefik and its service load balancer were Running/Ready. Traefik Helm Jobs completed; its install Job recorded one restart before successful completion.
+- Manual storage guard accepted the actual root UUID and rejected the deliberately wrong UUID with exit status 1. The local-path ConfigMap selected `/srv/recipe-db/storage`.
+- Windows LAN tests returned successful ping but failed TCP connection for Ethernet IPv4 API 6443/kubelet 10250, WLAN IPv4 API 6443, Ethernet global IPv6 SSH 22/API 6443, and WLAN global IPv6 API 6443.
+- Effective nftables input policy was default-drop with expected private IPv4 SSH/application exceptions and no external overlay-UDP allow rule. The forward chain retained the intended DNAT exceptions and direct cluster-network rejection. This is configuration evidence, not a live UDP 8472 test.
+- Both apt timers were enabled. Effective apt configuration selected Debian `trixie-security` and `Automatic-Reboot "false"`. The installed journal configuration matched the documented bounds; kubelet arguments set its managed root and three 10 MiB log files.
+- After a separately approved post-install reboot, firewall and k3s were active, the same node was Ready, and system pods recovered. Re-establishing the workstation tunnel again returned the Ready node without rerunning provisioning.
+
+Still unverified: a live UDP overlay boundary test, remaining interface/port combinations, an actual unattended security-update execution, effective log rotation under load, application ingress/NodePort isolation with deployed workloads, application persistence/resource measurements, backup and restore. #45 remains open; these results do not prove production application readiness or long-term USB reliability.

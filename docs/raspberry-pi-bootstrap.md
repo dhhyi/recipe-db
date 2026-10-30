@@ -170,4 +170,4 @@ On 2026-10-30 the operator reported:
 
 The exact stick product model was not independently established. Hostname-based SSH from WSL was subsequently confirmed by the operator on 2026-10-30.
 
-No k3s or application workloads have been installed. Continue with the [host provisioning guide](raspberry-pi-provisioning.md) for #42's automatic security updates, SSH hardening verification, bounded logs, storage startup protection and private Kubernetes administration. Backups and recovery remain #43. These bootstrap observations do not complete #42, #45 or the deployment umbrella #17.
+This bootstrap checkpoint predates k3s installation. The subsequent [host provisioning checkpoint](raspberry-pi-provisioning.md#physical-provisioning-checkpoint-2026-10-30) records successful provisioning, idempotence and cluster reboot recovery. No application workloads have been deployed. Backups and recovery remain #43; application and remaining network/operational acceptance remain #45. These bootstrap observations alone do not complete #42, #45 or the deployment umbrella #17.
