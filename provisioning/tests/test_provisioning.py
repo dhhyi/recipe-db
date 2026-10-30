@@ -127,6 +127,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("ct original proto-dst { 80, 443 } accept", rules)
         self.assertNotIn("192.168.1.218", rules)
 
+    def test_storage_preflight_can_inspect_root_only_runtime_directories(self):
+        task = next(task for task in self.play["tasks"]
+                    if task["name"] == "Verify root identity before making changes")
+        self.assertTrue(task["become"])
+        self.assertFalse(task["changed_when"])
+        self.assertIn("--preflight", task["ansible.builtin.script"]["cmd"])
+
     def test_unsupported_target_and_readonly_preflight(self):
         assertions = self.play["tasks"][0]["ansible.builtin.assert"]["that"]
         self.assertIn("ansible_facts.architecture == 'aarch64'", assertions)

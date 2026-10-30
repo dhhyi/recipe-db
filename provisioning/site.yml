@@ -48,6 +48,7 @@
         that: "'Raspberry Pi' in pi_os.stdout"
 
     - name: Verify root identity before making changes
+      become: true
       ansible.builtin.script:
         cmd: "files/storage-guard.py {{ expected_root_uuid }} {{ data_root }} --preflight"
         executable: /usr/bin/python3
