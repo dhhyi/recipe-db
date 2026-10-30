@@ -130,7 +130,8 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 				state.RatingsOnline = services.RatingsOnline
 				if !services.SearchOnline {
 					overview, overviewErr := gql.Overview(r.Context(), client)
-					if overviewErr != nil {
+					tagsOnly := tagErrorsOnly(overviewErr)
+					if overviewErr != nil && !tagsOnly || overview == nil {
 						log.Printf("failed to fetch offline browse overview: %v", overviewErr)
 						status = http.StatusBadGateway
 					} else {
@@ -162,7 +163,8 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						pageRequest := request
 						pageRequest.page = page
 						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
-						if searchErr != nil {
+						tagsOnly := tagErrorsOnly(searchErr)
+						if searchErr != nil && !tagsOnly || response == nil {
 							log.Printf("failed to search recipes: %v", searchErr)
 							status = http.StatusBadGateway
 							break

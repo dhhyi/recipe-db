@@ -15,6 +15,7 @@ import (
 	"github.com/Khan/genqlient/graphql"
 
 	"frontend/src/components"
+	gql "frontend/src/generated"
 )
 
 func TestBrowseSortSelection(t *testing.T) {
@@ -36,6 +37,58 @@ func TestBrowseSortSelection(t *testing.T) {
 				t.Fatalf("explicit versus automatic selection lost: %s", body.String())
 			}
 		})
+	}
+}
+
+func TestRecipeCardTagsAreOrderedAndCappedInServerHTML(t *testing.T) {
+	var body bytes.Buffer
+	state := components.BrowseState{
+		Kind: "search",
+		Recipes: []gql.RecipeStub{{
+			Id:   "recipe",
+			Name: "Eintopf",
+			Tags: []gql.RecipeStubTagsTag{
+				{Id: "course", Category: gql.TagCategoryCourse, Name: "Hauptgericht"},
+				{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
+				{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Deutsch"},
+				{Id: "dessert", Category: gql.TagCategoryCourse, Name: "Dessert"},
+			},
+		}},
+	}
+	if err := components.Browse(state).Render(context.Background(), &body); err != nil {
+		t.Fatal(err)
+	}
+	rendered := html.UnescapeString(body.String())
+	if !strings.Contains(rendered, `href="/recipe/recipe"`) ||
+		!strings.Contains(rendered, `aria-label="Rezept Eintopf. Küche: Deutsch. Ernährungsweise: Vegan. Gang: Dessert. Gang: Hauptgericht"`) ||
+		strings.Count(rendered, `data-recipe-tag`) != 4 ||
+		!strings.Contains(rendered, `aria-label="Weitere Tags: 1"`) ||
+		!strings.Contains(rendered, `>+1</span>`) {
+		t.Fatalf("server-rendered tag pills or card link are incorrect: %s", rendered)
+	}
+}
+
+func TestRecipeCardOmitsEmptyAndUnavailableTags(t *testing.T) {
+	var body bytes.Buffer
+	state := components.BrowseState{
+		Kind: "search",
+		Recipes: []gql.RecipeStub{
+			{Id: "empty", Name: "Untaged", Tags: []gql.RecipeStubTagsTag{}},
+			{Id: "failed", Name: "Unavailable"},
+		},
+	}
+	if err := components.Browse(state).Render(context.Background(), &body); err != nil {
+		t.Fatal(err)
+	}
+	rendered := html.UnescapeString(body.String())
+	if strings.Contains(rendered, "Tags nicht verfügbar") ||
+		strings.Contains(rendered, `data-recipe-tag`) ||
+		strings.Contains(rendered, `aria-label="Rezept Unavailable. Tags nicht verfügbar"`) ||
+		!strings.Contains(rendered, `aria-label="Rezept Untaged"`) ||
+		!strings.Contains(rendered, `aria-label="Rezept Unavailable"`) ||
+		!strings.Contains(rendered, `data-recipe-id="empty"`) ||
+		!strings.Contains(rendered, `data-recipe-id="failed"`) {
+		t.Fatalf("empty and unavailable tags should both be omitted: %s", rendered)
 	}
 }
 
@@ -320,6 +373,7 @@ func TestBrowseHTTP(t *testing.T) {
 								wantOperations = append(wantOperations, "BrowseSearch")
 							}
 						}
+
 					} else {
 						wantOperations = append(wantOperations, "Overview")
 					}
@@ -417,6 +471,72 @@ func TestBrowseHTTP(t *testing.T) {
 				if !strings.Contains(body, "<title>"+wantTitle+"</title>") {
 					t.Fatalf("incorrect query-aware title: %s", body)
 				}
+			}
+		})
+	}
+}
+
+func TestBrowseKeepsCardsOnPartialTagErrors(t *testing.T) {
+	for _, searchOnline := range []bool{false, true} {
+		name := "overview"
+		wantKind := "fallback"
+		if searchOnline {
+			name, wantKind = "search", "search"
+		}
+		t.Run(name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct{ OperationName string }
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				var response map[string]any
+				switch request.OperationName {
+				case "BrowseServices":
+					response = map[string]any{"data": map[string]any{
+						"searchOnline": searchOnline, "ratingsOnline": false,
+					}}
+				case "BrowseSearch", "Overview":
+					recipes := []any{
+						map[string]any{"id": "empty", "name": "Empty", "tags": []any{}},
+						map[string]any{"id": "failed", "name": "Failed", "tags": nil},
+					}
+					if request.OperationName == "BrowseSearch" {
+						response = map[string]any{"data": map[string]any{
+							"searchRecipes": map[string]any{
+								"recipes": recipes, "found": 2, "page": 1, "perPage": 24,
+							},
+						}}
+						response["errors"] = []any{map[string]any{
+							"message": "tags unavailable",
+							"path":    []any{"searchRecipes", "recipes", 1, "tags"},
+						}}
+					} else {
+						response = map[string]any{"data": map[string]any{
+							"recipes": recipes, "ratingsOnline": false,
+						}}
+						response["errors"] = []any{map[string]any{
+							"message": "tags unavailable",
+							"path":    []any{"recipes", 1, "tags"},
+						}}
+					}
+				default:
+					t.Errorf("unexpected operation: %s", request.OperationName)
+				}
+				if err := json.NewEncoder(w).Encode(response); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer upstream.Close()
+			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
+			body := html.UnescapeString(response.Body.String())
+			if response.Code != http.StatusOK || strings.Count(body, `data-recipe-id=`) != 2 ||
+				strings.Contains(body, "Tags nicht verfügbar") ||
+				!strings.Contains(body, `data-recipe-id="empty"`) ||
+				!strings.Contains(body, `aria-label="Rezept Failed"`) ||
+				!strings.Contains(body, `data-kind="`+wantKind+`"`) {
+				t.Fatalf("partial tag failure discarded recipe cards: %d %s", response.Code, body)
 			}
 		})
 	}

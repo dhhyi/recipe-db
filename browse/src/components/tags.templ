@@ -1,0 +1,151 @@
+package components
+
+import (
+	"sort"
+	"strconv"
+	"strings"
+
+	gql "frontend/src/generated"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
+)
+
+type recipeTag struct {
+	ID       string
+	Category gql.TagCategory
+	Name     string
+}
+
+func orderedTags(tags []recipeTag) []recipeTag {
+	sort.Slice(tags, func(i, j int) bool {
+		left, right := tags[i], tags[j]
+		if left.Category != right.Category {
+			return tagCategoryOrder(left.Category) < tagCategoryOrder(right.Category)
+		}
+		leftName := cases.Fold().String(norm.NFC.String(left.Name))
+		rightName := cases.Fold().String(norm.NFC.String(right.Name))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return left.ID < right.ID
+	})
+	return tags
+}
+
+func tagCategoryOrder(category gql.TagCategory) int {
+	switch category {
+	case gql.TagCategoryCuisine:
+		return 0
+	case gql.TagCategoryDietaryStyle:
+		return 1
+	case gql.TagCategoryCourse:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func orderedStubTags(tags []gql.RecipeStubTagsTag) []recipeTag {
+	ordered := make([]recipeTag, len(tags))
+	for i, tag := range tags {
+		ordered[i] = recipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
+	}
+	return orderedTags(ordered)
+}
+
+func orderedDetailTags(tags []gql.RecipeDetailTagsTag) []recipeTag {
+	ordered := make([]recipeTag, len(tags))
+	for i, tag := range tags {
+		ordered[i] = recipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
+	}
+	return orderedTags(ordered)
+}
+
+func tagCategoryLabel(category gql.TagCategory) string {
+	switch category {
+	case gql.TagCategoryCuisine:
+		return "Küche"
+	case gql.TagCategoryDietaryStyle:
+		return "Ernährungsweise"
+	case gql.TagCategoryCourse:
+		return "Gang"
+	default:
+		return "Tag"
+	}
+}
+
+func tagClass(category gql.TagCategory) string {
+	switch category {
+	case gql.TagCategoryCuisine:
+		return "recipe-tag recipe-tag--cuisine"
+	case gql.TagCategoryDietaryStyle:
+		return "recipe-tag recipe-tag--dietary-style"
+	case gql.TagCategoryCourse:
+		return "recipe-tag recipe-tag--course"
+	default:
+		return "recipe-tag"
+	}
+}
+
+func recipeAccessibleLabel(recipe gql.RecipeStub) string {
+	labels := []string{"Rezept " + recipe.Name}
+	for _, tag := range orderedStubTags(recipe.Tags) {
+		labels = append(labels, tagCategoryLabel(tag.Category)+": "+tag.Name)
+	}
+	return strings.Join(labels, ". ")
+}
+
+templ recipeCardTags(tags []gql.RecipeStubTagsTag) {
+	if len(tags) > 0 {
+		{{ ordered := orderedStubTags(tags); overflowCount := len(ordered) - 3 }}
+		if overflowCount < 0 {
+			{{ overflowCount = 0 }}
+		}
+		for index, tag := range ordered {
+			<span
+				slot="tags"
+				class={ tagClass(tag.Category) }
+				data-recipe-tag
+				aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }
+				hidden?={ index >= 3 }
+			>{ tag.Name }</span>
+		}
+		<span
+			slot="tags"
+			class="recipe-tag"
+			data-tag-overflow
+			aria-label={ "Weitere Tags: " + strconv.Itoa(overflowCount) }
+			hidden?={ overflowCount == 0 }
+		>{ "+" + strconv.Itoa(overflowCount) }</span>
+	}
+}
+
+templ recipeDetailTags(tags []gql.RecipeDetailTagsTag) {
+	<div id="recipe-tags" class="contents">
+		if len(tags) > 0 {
+			{{ ordered := orderedDetailTags(tags) }}
+			<section aria-label="Kategorisierte Tags" class="recipe-tags-detail flex flex-col gap-2">
+				<div class="flex flex-wrap gap-1">
+					for _, tag := range ordered {
+						<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>{ tag.Name }</span>
+					}
+				</div>
+				<ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryCuisine) } aria-hidden="true"></span>
+						<span>Küche</span>
+					</li>
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryDietaryStyle) } aria-hidden="true"></span>
+						<span>Ernährungsweise</span>
+					</li>
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryCourse) } aria-hidden="true"></span>
+						<span>Gang</span>
+					</li>
+				</ul>
+			</section>
+		}
+	</div>
+}

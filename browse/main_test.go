@@ -83,6 +83,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	var recipeCalls atomic.Int32
 	var version atomic.Int32
 	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool
+	var tagsOffline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
 	var identityRole atomic.Value
 	identityRole.Store("owner")
@@ -110,6 +111,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			data = map[string]any{
 				"recipes": []any{map[string]any{
 					"id": "42", "name": "Original",
+					"tags":  []any{},
 					"image": map[string]any{"url": imageURL, "thumbUrl": thumbURL},
 				}},
 				"ratingsOnline": false, "recipeEditOnline": false,
@@ -128,8 +130,12 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				}
 				recipe = map[string]any{
 					"id": "42", "name": name, "method": "Cook", "ingredients": []any{},
+					"tags":      []any{},
 					"createdAt": "2020-01-01T00:00:00.123456Z", "updatedAt": "2020-01-01T00:00:00.123456Z",
 					"rating": rating, "image": map[string]any{"url": imageURL, "thumbUrl": thumbURL},
+				}
+				if tagsOffline.Load() {
+					recipe.(map[string]any)["tags"] = nil
 				}
 			}
 			if imagesOffline.Load() {
@@ -172,7 +178,14 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		default:
 			t.Errorf("unexpected operation: %s", request.OperationName)
 		}
-		if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
+		response := map[string]any{"data": data}
+		if request.OperationName == "RecipeById" && tagsOffline.Load() {
+			response["errors"] = []any{map[string]any{
+				"message": "tags unavailable",
+				"path":    []any{"recipe", "tags"},
+			}}
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Error(err)
 		}
 	}))
@@ -341,6 +354,27 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		if page := request("GET", "/recipe/42", ""); page.Code != 200 {
 			t.Fatal("recovery failed")
 		}
+	}
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	tagsOffline.Store(true)
+	callsBeforeDegraded := recipeCalls.Load()
+	degraded := request("GET", "/recipe/42", etag)
+	if degraded.Code != http.StatusOK || degraded.Header().Get("Cache-Control") != "no-store" ||
+		degraded.Header().Get("ETag") != "" || strings.Contains(degraded.Body.String(), "Tags nicht verfügbar") ||
+		strings.Contains(degraded.Body.String(), "recipe-tag--") ||
+		!strings.Contains(degraded.Body.String(), "Updated") || recipeCalls.Load() != callsBeforeDegraded+1 {
+		t.Fatalf("partial tag failure did not preserve the detail without caching: %d %v %s", degraded.Code, degraded.Header(), degraded.Body.String())
+	}
+	if next := request("GET", "/recipe/42", ""); next.Code != http.StatusOK ||
+		recipeCalls.Load() != callsBeforeDegraded+2 {
+		t.Fatal("tag-degraded HTML was inserted into the shared cache")
+	}
+	tagsOffline.Store(false)
+	if recovered := request("GET", "/recipe/42", ""); recovered.Code != http.StatusOK ||
+		recovered.Header().Get("ETag") == "" || recipeCalls.Load() != callsBeforeDegraded+3 {
+		t.Fatal("tag display did not recover to cacheable HTML")
 	}
 	deleted.Store(true)
 	if err := c.invalidate("42"); err != nil {

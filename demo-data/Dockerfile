@@ -7,7 +7,7 @@ FROM python:${PYTHON_VERSION}-slim-trixie@sha256:94d3426f1def7db4a106a232ac121bf
 RUN pip install ariadne-codegen
 
 WORKDIR /app
-COPY *.graphql *.py *.toml *.sh recipe* /app/
+COPY *.graphql *.py *.toml *.sh recipe* tags.json /app/
 RUN chmod +x /app/generate.sh
 
 CMD [ "/app/generate.sh" ]
