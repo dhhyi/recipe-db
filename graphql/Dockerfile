@@ -1,4 +1,4 @@
-FROM rust:1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS chef
+FROM rust:1-slim-trixie@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247 AS chef
 
 RUN apt-get update && apt-get -y install --no-install-recommends musl-tools && apt-get clean && rm -rf /var/lib/apt/lists/*
 RUN rust_target=$(rustc -vV | sed -n 's/^host: \(.*\)-unknown-linux-gnu$/\1-unknown-linux-musl/p') \
