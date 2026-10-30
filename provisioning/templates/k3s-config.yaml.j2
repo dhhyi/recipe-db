@@ -1,0 +1,16 @@
+# Managed by recipe-db Ansible provisioning.
+data-dir: {{ data_root }}/k3s
+default-local-storage-path: {{ data_root }}/storage
+# Pod-to-API traffic uses the node address. The host firewall denies LAN access;
+# loopback remains the only workstation administration path, via SSH.
+bind-address: 0.0.0.0
+https-listen-port: 6443
+write-kubeconfig-mode: "0600"
+node-name: {{ inventory_hostname }}
+tls-san:
+  - 127.0.0.1
+secrets-encryption: true
+kubelet-arg:
+  - root-dir={{ data_root }}/kubelet
+  - container-log-max-size={{ container_log_max_size }}
+  - container-log-max-files={{ container_log_max_files }}

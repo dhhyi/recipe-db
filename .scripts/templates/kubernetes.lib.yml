@@ -131,6 +131,9 @@
 #@   redis_probe = {"exec": {"command": ["redis-cli", "ping"]}, "periodSeconds": 5, "timeoutSeconds": 2, "failureThreshold": 6}
 #@   redis = deployment("redis", images["redis"], 6379, durable=True, command=["redis-server"], args=["--appendonly", "yes", "--appendfsync", "always"], readiness=redis_probe, liveness=redis_probe)
 #@   maintenance = deployment("browse-maintenance", images["maintenance"], 80, mounts=[config_mount("maintenance-config", "/etc/nginx/conf.d"), config_mount("maintenance-html", "/usr/share/nginx/html")], volumes=[config_volume("maintenance-config"), config_volume("maintenance-html")], readiness={"tcpSocket": {"port": 80}, "periodSeconds": 5}, liveness={"tcpSocket": {"port": 80}, "periodSeconds": 10})
+#@   if cfg["runtime"].get("authMode", "google") == "token-only":
+#@     return [nats, typesense, redis, maintenance]
+#@   end
 #@   oauth = deployment("oauth2-proxy", images["oauth2Proxy"], 4180, {"OAUTH2_PROXY_REDIRECT_URL": cfg["origin"] + "/oauth2/callback", "OAUTH2_PROXY_WHITELIST_DOMAINS": cfg["origin"].split("://")[1], "OAUTH2_PROXY_COOKIE_SECURE": "false" if cfg["target"] == "local" else "true", "OAUTH2_PROXY_COOKIE_EXPIRE": "168h", "OAUTH2_PROXY_COOKIE_REFRESH": "50m", "OAUTH2_PROXY_COOKIE_HTTPONLY": "true", "OAUTH2_PROXY_COOKIE_SAMESITE": "lax"}, args=["--config=/etc/oauth2-proxy/oauth2-proxy.cfg", "--alpha-config=/etc/oauth2-proxy/alpha.yaml"], secrets=["google-oauth-client-secret", "oauth2-cookie-secret"], mounts=[config_mount("oauth-config", "/etc/oauth2-proxy")], volumes=[config_volume("oauth-config")], readiness=probe(4180, "/ready"), liveness=probe(4180, "/ping"))
 #@   return [nats, typesense, redis, maintenance, oauth]
 #@ end
@@ -140,11 +143,23 @@
 #@ end
 
 #@ def config_maps():
-#@   entries = {"nats-config": {"nats.conf": files["nats"]}, "maintenance-config": {"default.conf": files["maintenanceNginx"]}, "maintenance-html": {"unavailable.html": files["maintenanceHtml"]}, "oauth-config": {"oauth2-proxy.cfg": files["oauthConfig"], "alpha.yaml": yaml.encode(oauth_alpha())}, "recipe-db-release": {"artifact": data.values.artifact, "revision": inventory["revision"]}}
+#@   entries = {"nats-config": {"nats.conf": files["nats"]}, "maintenance-config": {"default.conf": files["maintenanceNginx"]}, "maintenance-html": {"unavailable.html": files["maintenanceHtml"]}, "recipe-db-release": {"artifact": data.values.artifact, "revision": inventory["revision"]}}
+#@   if cfg["runtime"].get("authMode", "google") == "google":
+#@     entries["oauth-config"] = {"oauth2-proxy.cfg": files["oauthConfig"], "alpha.yaml": yaml.encode(oauth_alpha())}
+#@   end
 #@   return [{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(name), "data": value} for name, value in entries.items()]
 #@ end
 
 #@ def helm_values():
 #@   image = cfg["infrastructure"]["traefik"].split(":", 1)
-#@   return {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
+#@   values = {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
+#@   values["ports"]["rest-internal"]["observability"] = {}
+#@   if cfg["runtime"].get("authMode", "google") == "token-only":
+#@     if cfg["runtime"].get("ingressMode", "loopback") == "private-lan":
+#@       values["service"] = {"type": "LoadBalancer", "spec": {"allocateLoadBalancerNodePorts": False}}
+#@     else:
+#@       values["service"] = {"type": "ClusterIP"}
+#@     end
+#@   end
+#@   return values
 #@ end
