@@ -114,7 +114,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 		}
 		state := components.BrowseState{
 			Query: request.query, Sort: request.sort, Page: request.page,
-			PerPage: browsePageSize, Kind: "error",
+			PerPage: browsePageSize, Kind: "error", TagUnavailableIDs: make(map[string]bool),
 		}
 		status := http.StatusOK
 		if err != nil {
@@ -130,11 +130,13 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 				state.RatingsOnline = services.RatingsOnline
 				if !services.SearchOnline {
 					overview, overviewErr := gql.Overview(r.Context(), client)
-					if overviewErr != nil {
+					tagsOnly, tagIndexes := tagErrorsOnly(overviewErr)
+					if overviewErr != nil && !tagsOnly || overview == nil {
 						log.Printf("failed to fetch offline browse overview: %v", overviewErr)
 						status = http.StatusBadGateway
 					} else {
 						state.Kind, state.Recipes = "fallback", overview.Recipes
+						markUnavailableTags(&state, overview.Recipes, tagIndexes)
 						state.Found = len(overview.Recipes)
 						state.Page = 1
 						state.Message = "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
@@ -162,7 +164,8 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						pageRequest := request
 						pageRequest.page = page
 						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
-						if searchErr != nil {
+						tagsOnly, tagIndexes := tagErrorsOnly(searchErr)
+						if searchErr != nil && !tagsOnly || response == nil {
 							log.Printf("failed to search recipes: %v", searchErr)
 							status = http.StatusBadGateway
 							break
@@ -174,6 +177,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 							break
 						} else {
 							state.Kind, state.Found, state.Page = "search", result.Found, page
+							markUnavailableTags(&state, result.Recipes, tagIndexes)
 							for _, recipe := range result.Recipes {
 								if !seen[recipe.Id] {
 									state.Recipes = append(state.Recipes, recipe)

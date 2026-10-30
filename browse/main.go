@@ -24,10 +24,16 @@ import (
 
 const graphqlEndpoint = "http://traefik/graphql"
 
+var errTagsUnavailable = errors.New("recipe tags unavailable")
+
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
-	if err != nil {
+	tagsOnly, _ := tagErrorsOnly(err)
+	if err != nil && !tagsOnly {
 		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("empty recipe response")
 	}
 	if resp.Recipe == nil {
 		return nil, errRecipeNotFound
@@ -35,10 +41,14 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 	if resp.Recipe.Rating == nil {
 		return nil, errors.New("ratings service unavailable; refusing to cache incomplete recipe")
 	}
-	ctx = templ.WithChildren(ctx, components.Detail(resp))
+	tagsUnavailable := resp.Recipe.Tags == nil || err != nil
+	ctx = templ.WithChildren(ctx, components.Detail(resp, tagsUnavailable))
 	var html bytes.Buffer
 	if err := components.Layout(resp.Recipe.Name+" | RezeptDB").Render(ctx, &html); err != nil {
 		return nil, err
+	}
+	if resp.Recipe.Tags == nil || err != nil {
+		return html.Bytes(), errTagsUnavailable
 	}
 	return html.Bytes(), nil
 }
@@ -251,6 +261,18 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 		w.Header().Set("Cache-Control", "private, no-store")
 		page, err := cache.get(r.Context(), id)
 		if err != nil {
+			if errors.Is(err, errTagsUnavailable) {
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Del("ETag")
+				w.WriteHeader(http.StatusOK)
+				if r.Method != http.MethodHead {
+					if _, writeErr := w.Write(page.html); writeErr != nil {
+						log.Printf("failed to serve degraded recipe: %v", writeErr)
+					}
+				}
+				return
+			}
 			log.Printf("failed to fetch recipe: %v", err)
 			if errors.Is(err, errRecipeNotFound) {
 				writeErrorPage(w, r, http.StatusNotFound, "recipe not found | RezeptDB", "recipe not found")

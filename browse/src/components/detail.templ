@@ -39,6 +39,37 @@ templ image(recipe *gql.RecipeDetail) {
 	</figure>
 }
 
+templ recipeTags(recipe *gql.RecipeDetail, unavailable bool) {
+	<div id="recipe-tags" class="contents">
+		if unavailable {
+			<p class="recipe-tags-unavailable" role="status">Tags nicht verfügbar.</p>
+		} else if len(recipe.Tags) > 0 {
+			{{ tags := orderedDetailTags(recipe.Tags) }}
+			<section aria-label="Kategorisierte Tags" class="recipe-tags-detail flex flex-col gap-2">
+				<div class="flex flex-wrap gap-1">
+					for _, tag := range tags {
+						<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>{ tag.Name }</span>
+					}
+				</div>
+				<ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryCuisine) } aria-hidden="true"></span>
+						<span>Cuisine</span>
+					</li>
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryDietaryStyle) } aria-hidden="true"></span>
+						<span>Dietary style</span>
+					</li>
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryCourse) } aria-hidden="true"></span>
+						<span>Course</span>
+					</li>
+				</ul>
+			</section>
+		}
+	</div>
+}
+
 templ ingredients(recipe *gql.RecipeDetail) {
 	<section>
 		<header>
@@ -88,7 +119,7 @@ templ method(recipe *gql.RecipeDetail) {
 	}
 }
 
-templ Detail(resp *gql.RecipeByIdResponse) {
+templ Detail(resp *gql.RecipeByIdResponse, tagsUnavailable bool) {
 	{{ recipe := resp.Recipe }}
 	<div itemscope itemtype="https://schema.org/Recipe" class="contents" hx-history="false">
 		<div class="flex flex-col sm:flex-row pt-1">
@@ -104,7 +135,12 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		</div>
 		<section class="grid">
 			if recipe.Image != nil {
+				<div class="flex flex-col gap-2">
 				@image(recipe)
+				@recipeTags(recipe, tagsUnavailable)
+				</div>
+			} else {
+				@recipeTags(recipe, tagsUnavailable)
 			}
 			if len(recipe.Ingredients) > 0 {
 				@ingredients(recipe)
