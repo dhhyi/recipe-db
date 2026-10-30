@@ -148,6 +148,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn('SystemMaxUse={{ journal_max_use }}', contents)
         self.assertIn('checksum: "sha256:{{ k3s_sha256 }}"', contents)
 
+    def test_host_packages_do_not_require_unavailable_update_notifier(self):
+        tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
+        packages = next(task["ansible.builtin.apt"]["name"] for task in tasks if "ansible.builtin.apt" in task)
+        self.assertIn("unattended-upgrades", packages)
+        self.assertNotIn("update-notifier-common", packages)
+
     def test_foreign_state_is_refused(self):
         with patch.object(host.subprocess, "run") as run, patch.object(host, "Path") as path, \
                 patch.object(host.shutil, "which", return_value=None):

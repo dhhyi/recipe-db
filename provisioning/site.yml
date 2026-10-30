@@ -119,7 +119,6 @@
               - curl
               - nftables
               - unattended-upgrades
-              - update-notifier-common
               - containernetworking-plugins
             state: present
             update_cache: true
