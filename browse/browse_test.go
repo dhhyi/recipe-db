@@ -60,7 +60,7 @@ func TestRecipeCardTagsAreOrderedAndCappedInServerHTML(t *testing.T) {
 	}
 	rendered := html.UnescapeString(body.String())
 	if !strings.Contains(rendered, `href="/recipe/recipe"`) ||
-		!strings.Contains(rendered, `aria-label="Rezept Eintopf. Cuisine: Deutsch. Dietary style: Vegan. Course: Dessert. Course: Hauptgericht"`) ||
+		!strings.Contains(rendered, `aria-label="Rezept Eintopf. Küche: Deutsch. Ernährungsweise: Vegan. Gang: Dessert. Gang: Hauptgericht"`) ||
 		strings.Count(rendered, `data-recipe-tag`) != 4 ||
 		!strings.Contains(rendered, `aria-label="Weitere Tags: 1"`) ||
 		!strings.Contains(rendered, `>+1</span>`) {

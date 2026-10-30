@@ -13,17 +13,15 @@ type Story = StoryObj;
 
 const pills = () => html`
   <div class="flex flex-wrap gap-1">
-    <span class="recipe-tag recipe-tag--cuisine" aria-label="Cuisine: Deutsch"
+    <span class="recipe-tag recipe-tag--cuisine" aria-label="Küche: Deutsch"
       >Deutsch</span
     >
     <span
       class="recipe-tag recipe-tag--dietary-style"
-      aria-label="Dietary style: Vegetarisch"
+      aria-label="Ernährungsweise: Vegetarisch"
       >Vegetarisch</span
     >
-    <span
-      class="recipe-tag recipe-tag--course"
-      aria-label="Course: Hauptgericht"
+    <span class="recipe-tag recipe-tag--course" aria-label="Gang: Hauptgericht"
       >Hauptgericht</span
     >
   </div>
@@ -33,18 +31,18 @@ const legend = () => html`
   <ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
     <li class="flex items-center gap-1">
       <span class="recipe-tag recipe-tag--cuisine" aria-hidden="true"></span>
-      <span>Cuisine</span>
+      <span>Küche</span>
     </li>
     <li class="flex items-center gap-1">
       <span
         class="recipe-tag recipe-tag--dietary-style"
         aria-hidden="true"
       ></span>
-      <span>Dietary style</span>
+      <span>Ernährungsweise</span>
     </li>
     <li class="flex items-center gap-1">
       <span class="recipe-tag recipe-tag--course" aria-hidden="true"></span>
-      <span>Course</span>
+      <span>Gang</span>
     </li>
   </ul>
 `;
@@ -67,13 +65,13 @@ export const LongNames: Story = {
       <div class="flex flex-wrap gap-1">
         <span
           class="recipe-tag recipe-tag--cuisine"
-          aria-label="Cuisine: Eine besonders lange Küchenbezeichnung"
+          aria-label="Küche: Eine besonders lange Küchenbezeichnung"
           >Eine besonders lange Küchenbezeichnung für ein traditionelles
           Gericht</span
         >
         <span
           class="recipe-tag recipe-tag--course"
-          aria-label="Course: Hauptgericht"
+          aria-label="Gang: Hauptgericht"
           >Hauptgericht</span
         >
       </div>
