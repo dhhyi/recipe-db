@@ -42,16 +42,18 @@ for (const role of ["anonymous", "member", "owner"]) {
         customElements.whenDefined("recipe-tile-component"),
       );
       for (const recipe of overviewRecipes) {
-        const tile = page.getByRole("link", {
-          name: `Rezept ${recipe.name}`,
-          exact: true,
-        });
+        const tile = page.locator(`[data-recipe-id="${recipe.id}"]`);
         await expect(tile).toBeVisible();
         await tile.scrollIntoViewIfNeeded();
         await waitForImageDecoded(
           tile.getByRole("img", { name: recipe.name, exact: true }),
         );
       }
+      await expect(
+        page.locator(
+          `[data-recipe-id="${overviewRecipes[0].id}"] [data-recipe-tag]:visible`,
+        ),
+      ).not.toHaveCount(0);
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(
         `${overviewRecipes.length} Rezepte für '${overviewRecipes[0].name}'`,
       );
@@ -62,7 +64,8 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "overview.png");
     });
 
-    test("recipe detail", async ({ page, demoRecipe, authContexts }) => {
+    test("recipe detail", async ({ page, taggedDemoRecipe, authContexts }) => {
+      const demoRecipe = taggedDemoRecipe;
       for (const [identity, rating] of [
         [await authContexts.owner(), 5],
         [await authContexts.memberOne(), 3],
@@ -86,6 +89,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await expect(
         page.getByRole("heading", { name: "Zubereitung", exact: true }),
       ).toBeVisible();
+      await expect(
+        page.locator("#recipe-tags .recipe-tags-detail > div > .recipe-tag"),
+      ).toHaveCount(3);
       const rating = page.locator("main rating-component");
       await expect(rating).toHaveCount(1);
       await expect(rating).toHaveAttribute("rating", "4");

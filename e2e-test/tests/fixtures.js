@@ -214,6 +214,82 @@ export async function uploadImage(
   return result.data.setImage;
 }
 
+const visualTagCatalog = [
+  { category: "CUISINE", name: "Deutsch" },
+  { category: "CUISINE", name: "Italienisch" },
+  { category: "CUISINE", name: "Mediterran" },
+  { category: "DIETARY_STYLE", name: "Vegetarisch" },
+  { category: "DIETARY_STYLE", name: "Vegan" },
+  { category: "COURSE", name: "Dessert" },
+  { category: "COURSE", name: "Suppe" },
+  { category: "COURSE", name: "Hauptgericht" },
+];
+
+const visualTagSeed = 0x5eed1234;
+
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6d2b79f5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+async function seedRandomRecipeTags(request, recipes) {
+  const { tags: inventory } = await graphql(
+    request,
+    "query { tags { id category name } }",
+    {},
+    "Load visual tag inventory",
+  );
+  const knownTags = new Map(
+    inventory.map((tag) => [JSON.stringify([tag.category, tag.name]), tag]),
+  );
+  const tags = [];
+  for (const { category, name } of visualTagCatalog) {
+    const key = JSON.stringify([category, name]);
+    let tag = knownTags.get(key);
+    if (!tag) {
+      const { createTag } = await graphql(
+        request,
+        "mutation($category: TagCategory!, $name: String!) { createTag(category: $category, name: $name) { id category name } }",
+        { category, name },
+        `Create visual tag "${name}"`,
+      );
+      expect(createTag).toMatchObject({
+        id: expect.any(String),
+        category,
+        name,
+      });
+      tag = createTag;
+    }
+    tags.push(tag);
+  }
+
+  const random = seededRandom(visualTagSeed);
+  for (const recipe of recipes) {
+    const count = Math.floor(random() * (tags.length + 1));
+    const shuffledTags = [...tags];
+    for (let index = shuffledTags.length - 1; index > 0; index -= 1) {
+      const otherIndex = Math.floor(random() * (index + 1));
+      [shuffledTags[index], shuffledTags[otherIndex]] = [
+        shuffledTags[otherIndex],
+        shuffledTags[index],
+      ];
+    }
+    const addTagIds = shuffledTags.slice(0, count).map((tag) => tag.id);
+    await graphql(
+      request,
+      "mutation($recipeId: ID!, $tagIds: [ID!]!) { changeRecipeTags(recipeId: $recipeId, addTagIds: $tagIds) { id } }",
+      { recipeId: recipe.id, tagIds: addTagIds },
+      `Assign visual tags to "${recipe.name}"`,
+    );
+  }
+}
+
 export const test = base.extend({
   authContexts: async (
     {
@@ -343,10 +419,15 @@ export const test = base.extend({
       );
       recipes.push(recipe);
     }
+    await seedRandomRecipeTags(request, recipes);
     for (const recipe of recipes) {
       await waitForRecipeIndexed(request, recipe.id);
     }
     await use(recipes);
+  },
+  taggedDemoRecipe: async ({ request, demoRecipe }, use) => {
+    await seedRandomRecipeTags(request, [demoRecipe]);
+    await use(demoRecipe);
   },
   searchRecipes: async ({ request }, use) => {
     const recipes = [];
