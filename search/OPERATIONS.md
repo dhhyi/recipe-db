@@ -16,7 +16,7 @@ docker compose up -d --build --wait
 
 ## GraphQL operations
 
-Named queries live in [operations.graphql](src/operations.graphql). Each recipe reload uses one query for core data, ratings, image presence, and inspirations, without service-health queries. GraphQL errors under a known optional field preserve that source's previous indexed values while successful sources update; core, unrecognized, and unscoped errors fail the reload. Null ratings or inspirations also preserve previous values, while an error-free null image confirms absence. Only an error-free null recipe authorizes deletion. [generate_operations.py](generate_operations.py) uses the pinned Python `graphql-core` dependency to validate every operation against the synchronized schema and generate independent Zig constants, including any required fragments. It does not generate response types or validate runtime variable values.
+Named queries live in [operations.graphql](src/operations.graphql). Each recipe reload uses one query for core data, ratings, image presence, inspirations, and tag IDs, without service-health queries. GraphQL errors under a known optional field preserve that source's previous indexed values while successful sources update; core, unrecognized, and unscoped errors fail the reload. Null ratings, inspirations, or tags also preserve previous values, while an error-free null image confirms absence. Tags become unique `tag_ids`; a successful empty list clears them. An unavailable tags source requires a previous `tag_ids` array, including a known empty array: a legacy document without that field is not recoverable tag data. Only an error-free null recipe authorizes deletion. [generate_operations.py](generate_operations.py) uses the pinned Python `graphql-core` dependency to validate every operation against the synchronized schema and generate independent Zig constants, including any required fragments. It does not generate response types or validate runtime variable values.
 
 `IndexRecipe` also reads required `createdAt`, `updatedAt`, and `nameSortKey`. Dates are strictly parsed from RFC 3339 and stored as `created_at`/`updated_at` int64 Unix microseconds, never indexing time or a default. Malformed/missing dates fail the reload with the recipe ID and source field in diagnostics. Fractional precision beyond microseconds is truncated. Leap seconds are rejected because Unix time cannot represent them distinctly. Rebuilds and optional-source events reuse source dates unchanged. `name_sort` copies the recipes service's German base-letter key; `recipe_id_sort` copies the stable ID. Both strings enable Typesense sorting explicitly. Confirmed unrated values index as zero average/count; source outages still preserve previous ratings or fail for new documents.
 
@@ -44,13 +44,13 @@ curl --fail-with-body http://localhost:3000/search \
   --data '{"q":"Kartofelsuppe","facet_by":"ingredients","page":1,"per_page":10}'
 ```
 
-The response contains ordered `recipeIds`, `facetCounts`, `found`, `outOf`, `page` and `perPage`. Grouped hits are flattened in group/hit order. Fetch recipe details through GraphQL. Errors use RFC 9457 Problem Details: invalid options return 400, unavailable dependencies or an incomplete index return 503.
+The response contains ordered `recipeIds`, `facetCounts`, `found`, `outOf`, `page`, `perPage`, and boolean `searchCutoff`. The latter forwards Typesense's `search_cutoff` explicitly; missing or non-boolean cutoff metadata fails with 503 rather than silently treating incomplete results as complete. Grouped hits are flattened in group/hit order. Fetch recipe details through GraphQL. Errors use RFC 9457 Problem Details: invalid options return 400, unavailable dependencies or an incomplete index return 503.
 
 Offset pagination is not a snapshot during writes. Browse deduplicates IDs client-side, but concurrent index updates can still cause skipped hits across pages; snapshot consistency is not guaranteed.
 
 A rebuild runs on startup and every 24 hours after success; failures retry after 30 seconds.
 
-The collection is **`recipes`**, defined directly by `schema.json`; there is no deployed collection to migrate or retain for rollback. Startup creates it if absent and rebuilds its documents before search becomes ready. Editing `schema.json` does not alter an already-created local collection: after schema changes, remove that disposable development collection before restarting search.
+The collection is **`recipes`**, defined directly by `schema.json`. Startup creates it if absent. For an existing populated collection, each rebuild first adds the optional faceted `tag_ids` string-array field when absent and verifies it before reloading documents. An incompatible existing tag field fails explicitly rather than dropping the collection or its recoverable data. Search becomes ready only after the entire rebuild succeeds, including tag backfill; failed migrations or unavailable tag data remain not-ready and retry normally. Restart repeats schema verification and the full rebuild. Other schema changes still require an explicit migration.
 
 To trigger and inspect a rebuild:
 
@@ -63,6 +63,8 @@ curl --fail-with-body http://localhost:3000/search/reindex
 Job lookup returns 202 while pending/running, 200 on success and 500 on failure. The latest sixteen results are retained; expired jobs return 410. IDs reset on restart. Search is unavailable during rebuilding and after a failed rebuild until recovery. `GET /health` reports liveness, not readiness; inspect `ready` in its body.
 
 Events queue during rebuilds. Active rebuild requests queue another pass; pending requests coalesce. Daily reconciliation recovers missed events and direct backend writes.
+
+Tag assignment mutations publish the existing per-recipe `tags.changed` event through GraphQL; search reloads the affected recipe. The private testing-only `DELETE /tags` reset is a direct backend operation and publishes no event. The established #58/message-bus contract explicitly does not define `tags.reset` or a GraphQL reset mutation. After a private test reset, request `POST /search/reindex` and wait for its successful completion (or restart search for the startup rebuild) before relying on tag projections. Successful empty tag reads then clear prior assignments across the full projection.
 
 Source outages never authorize deletion. Optional fields retain their previous indexed values; without a previous document, an optional-source outage blocks indexing. Restore the dependency and retry/rebuild. Malformed events remain unfinished and require recovery under the [message-bus contract](../message-bus/CONTRACT.md). Inspect status and service logs. For a corrupt/unreadable checkpoint, repair permissions or remove the checkpoint from the search data volume and restart for a full baseline; never advance it manually.
 
@@ -83,3 +85,9 @@ Typesense 29.0 accepts at most three sort fields. Browse uses these fixed expres
 Zero-valued unrated recipes follow positive ratings without missing-value directives. Explicit sorts prioritize the chosen field over relevance. ID breaks equal keys deterministically.
 
 `test_typesense.py` verifies every expression, equal keys, German keys, unrated values, and microsecond storage against the pinned engine using a uniquely named disposable collection. Run it inside the search devcontainer with `TYPESENSE_TEST_KEY_FILE` pointing to a private mounted key file; no key contents are logged. Normal checks skip these opt-in engine tests when that variable is absent. `search-test` covers source metadata, event reloads, and rebuild preservation on the full deployed stack.
+
+## Shared-tag similarity
+
+GraphQL constructs similarity searches privately: query text is the source's assigned tag IDs, `query_by=tag_ids`, exact OR-membership in `filter_by` plus source-ID exclusion, and `sort_by=_text_match:desc,recipe_id_sort:asc`. Identifier queries disable typo, prefix, and split/join expansion. Exact eligibility is independent of native relevance: Typesense may omit some theoretically overlapping recipes under its normal query matching. Do not force exhaustive token dropping or merge wildcard results. GraphQL captures every hit returned by that query across pages of 100; it rejects cutoffs rather than returning a successful partial list. Untagged sources return empty without searching.
+
+The real pinned-engine fixtures verify populated-collection tag migration, more than 100 native matches with deterministic ID ties, and exact eligibility even for typo/prefix-similar tag IDs. They deliberately assert that native multi-tag matching need not include single-overlap documents.

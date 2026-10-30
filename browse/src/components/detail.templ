@@ -126,4 +126,5 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		</small>
 	</p>
 	<a href="/" role="button">Zur Startseite</a>
+	@SimilarRecipesPlaceholder(recipe.Id)
 }

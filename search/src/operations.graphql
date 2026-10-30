@@ -28,5 +28,8 @@ query IndexRecipe($id: ID!) {
     inspirations {
       url
     }
+    tags {
+      id
+    }
   }
 }

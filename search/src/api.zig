@@ -37,9 +37,14 @@ fn search(index: *Index, a: Allocator, options: Value) !Response {
     try query.appendSlice("highlight_fields=none&highlight_full_fields=none&include_fields=id");
     const response = try index.typesense(a, "GET", query.items, null);
     if (response.status != 200) return response;
-    const root = try parse(a, response.body);
+    return .{ .status = 200, .body = try searchResponse(a, try parse(a, response.body)) };
+}
+
+fn searchResponse(a: Allocator, root: Value) ![]const u8 {
     var ids = std.ArrayList(Value).init(a);
     if (root != .object) return error.InvalidDependencyResponse;
+    const cutoff = try get(root, "search_cutoff");
+    if (cutoff != .bool) return error.InvalidDependencyResponse;
     if (root.object.get("hits")) |hits| {
         for (try array(hits)) |hit| try ids.append(str(try text(try get(try get(hit, "document"), "id"))));
     } else {
@@ -47,14 +52,37 @@ fn search(index: *Index, a: Allocator, options: Value) !Response {
             for (try array(try get(group, "hits"))) |hit| try ids.append(str(try text(try get(try get(hit, "document"), "id"))));
         }
     }
-    return .{ .status = 200, .body = try encode(a, .{
+    return try encode(a, .{
         .recipeIds = ids.items,
         .facetCounts = try get(root, "facet_counts"),
         .found = try get(root, "found"),
         .outOf = try get(root, "out_of"),
         .page = try get(root, "page"),
         .perPage = try get(try get(root, "request_params"), "per_page"),
-    }) };
+        .searchCutoff = cutoff.bool,
+    });
+}
+
+test "search cutoff is explicitly forwarded and missing or malformed metadata fails closed" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var root = try parse(a,
+        \\{"hits":[{"document":{"id":"r1"}}],"facet_counts":[],"found":1,"out_of":1,
+        \\"page":1,"request_params":{"per_page":10},"search_cutoff":false}
+    );
+    for ([_]bool{ false, true }) |cutoff| {
+        try root.object.put("search_cutoff", .{ .bool = cutoff });
+        const result = try parse(a, try searchResponse(a, root));
+        try std.testing.expectEqual(cutoff, (try get(result, "searchCutoff")).bool);
+        try std.testing.expectEqualStrings("r1", try text((try array(try get(result, "recipeIds")))[0]));
+    }
+    for ([_]Value{ .null, .{ .integer = 0 }, str("false") }) |invalid| {
+        try root.object.put("search_cutoff", invalid);
+        try std.testing.expectError(error.InvalidDependencyResponse, searchResponse(a, root));
+    }
+    _ = root.object.swapRemove("search_cutoff");
+    try std.testing.expectError(error.InvalidDependencyResponse, searchResponse(a, root));
 }
 
 fn problem(request: *std.http.Server.Request, a: Allocator, status: std.http.Status, code: []const u8, detail: []const u8) !void {
