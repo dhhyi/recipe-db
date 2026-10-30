@@ -256,6 +256,23 @@ test("lazy similarity captures exact-tag matches and appends every batch only on
   expect(refreshed).toContain(newcomer.id);
   expect(refreshed).not.toContain(removed.id);
   expect(initialRequests).toHaveLength(2);
+
+  const selected = [...matches, newcomer].find(
+    (recipe) => recipe.id === refreshed[0],
+  );
+  await cards(page).first().click();
+  await expect(page).toHaveURL(`/recipe/${selected.id}`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    selected.name,
+  );
+  await page.reload();
+  await expect(page).toHaveURL(`/recipe/${selected.id}`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+    selected.name,
+  );
+  await page.goBack();
+  await expect(page).toHaveURL(`/recipe/${source.id}`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(source.name);
 });
 
 test("pending double-click and failed append retain cards and the exact retry queue", async ({
