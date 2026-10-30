@@ -2,6 +2,7 @@ package components
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	gql "frontend/src/generated"
@@ -93,4 +94,58 @@ func recipeAccessibleLabel(recipe gql.RecipeStub) string {
 		labels = append(labels, tagCategoryLabel(tag.Category)+": "+tag.Name)
 	}
 	return strings.Join(labels, ". ")
+}
+
+templ recipeCardTags(tags []gql.RecipeStubTagsTag) {
+	if len(tags) > 0 {
+		{{ ordered := orderedStubTags(tags); overflowCount := len(ordered) - 3 }}
+		if overflowCount < 0 {
+			{{ overflowCount = 0 }}
+		}
+		for index, tag := range ordered {
+			<span
+				slot="tags"
+				class={ tagClass(tag.Category) }
+				data-recipe-tag
+				aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }
+				hidden?={ index >= 3 }
+			>{ tag.Name }</span>
+		}
+		<span
+			slot="tags"
+			class="recipe-tag"
+			data-tag-overflow
+			aria-label={ "Weitere Tags: " + strconv.Itoa(overflowCount) }
+			hidden?={ overflowCount == 0 }
+		>{ "+" + strconv.Itoa(overflowCount) }</span>
+	}
+}
+
+templ recipeDetailTags(tags []gql.RecipeDetailTagsTag) {
+	<div id="recipe-tags" class="contents">
+		if len(tags) > 0 {
+			{{ ordered := orderedDetailTags(tags) }}
+			<section aria-label="Kategorisierte Tags" class="recipe-tags-detail flex flex-col gap-2">
+				<div class="flex flex-wrap gap-1">
+					for _, tag := range ordered {
+						<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>{ tag.Name }</span>
+					}
+				</div>
+				<ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryCuisine) } aria-hidden="true"></span>
+						<span>Cuisine</span>
+					</li>
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryDietaryStyle) } aria-hidden="true"></span>
+						<span>Dietary style</span>
+					</li>
+					<li class="flex items-center gap-1">
+						<span class={ tagClass(gql.TagCategoryCourse) } aria-hidden="true"></span>
+						<span>Course</span>
+					</li>
+				</ul>
+			</section>
+		}
+	</div>
 }

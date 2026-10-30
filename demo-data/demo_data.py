@@ -143,17 +143,16 @@ async def import_demo_tags(graphql_client=None):
     if result.tags is None:
         raise Exception("Failed to load tag inventory")
 
-    inventory = {tag.id: tag for tag in result.tags}
-    for tag in initial_tags:
-        category = TagCategory(tag["category"])
-        existing = inventory.get(tag["id"])
-        if existing is not None:
-            if existing.category != category or existing.name != tag["name"]:
-                raise Exception(f"Tag ID {tag['id']} conflicts with initial tag import")
-            continue
-        created = await graphql_client.demo_create_tag(category, tag["name"])
-        if created.create_tag is None or created.create_tag.id != tag["id"]:
-            raise Exception(f"Tag ID mismatch for {tag['name']}: expected {tag['id']}")
+    inventory = {(tag.category, tag.name) for tag in result.tags}
+    for category_name, names in initial_tags.items():
+        category = TagCategory(category_name)
+        for name in names:
+            if (category, name) in inventory:
+                continue
+            created = await graphql_client.demo_create_tag(category, name)
+            if created.create_tag is None:
+                raise Exception(f"Failed to import {category_name} tag {name}")
+            inventory.add((category, name))
 
 
 async def assign_demo_tags(recipe_id, tag_ids, graphql_client=None):

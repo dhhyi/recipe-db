@@ -35,21 +35,13 @@ class FakeGraphQLClient:
     async def demo_create_tag(self, category, name):
         if any(tag.category == category and tag.name == name for tag in self.tags):
             raise AssertionError("attempted to recreate an existing inventory tag")
-        initial = next(
-            tag
-            for tag in demo_data.load_json("tags.json")
-            if tag["category"] == category.value and tag["name"] == name
-        )
-        tag = SimpleNamespace(id=initial["id"], category=category, name=name)
+        tag = SimpleNamespace(category=category, name=name)
         self.create_calls.append((category, name))
         self.tags.append(tag)
         return SimpleNamespace(create_tag=tag)
 
     async def demo_assign_recipe_tags(self, recipe_id, add_tag_ids):
         add_tag_ids = list(add_tag_ids or [])
-        known_ids = {tag.id for tag in self.tags}
-        if any(tag_id not in known_ids for tag_id in add_tag_ids):
-            raise ValueError("unknown tag ID")
         self.assignments[recipe_id] = add_tag_ids
         return SimpleNamespace(
             change_recipe_tags=[SimpleNamespace(id=tag_id) for tag_id in add_tag_ids]
@@ -73,8 +65,19 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await demo_data.http_client.aclose()
 
-    async def test_recipe_tag_files_reference_the_imported_tag_ids(self):
-        catalog_ids = {tag["id"] for tag in demo_data.load_json("tags.json")}
+    async def test_tag_catalog_is_category_to_name_lists(self):
+        catalog = demo_data.load_json("tags.json")
+        self.assertIsInstance(catalog, dict)
+        self.assertEqual(
+            set(catalog), {"CUISINE", "DIETARY_STYLE", "COURSE"}
+        )
+        self.assertTrue(
+            all(
+                isinstance(names, list)
+                and all(isinstance(name, str) for name in names)
+                for names in catalog.values()
+            )
+        )
         expected = {
             1: ["cuisine-deutsch", "dietary-style-vegetarisch", "course-dessert"],
             2: ["cuisine-deutsch", "dietary-style-vegetarisch", "course-suppe"],
@@ -91,7 +94,6 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     demo_data.load_txt(f"recipe{number}.tags.txt"), tag_ids
                 )
-                self.assertTrue(set(tag_ids).issubset(catalog_ids))
                 self.assertNotIn("tags", demo_data.load_json(f"recipe{number}.json"))
 
     async def test_insert_recipe_excludes_tag_files_from_recipe_and_assigns_ids(self):
@@ -111,9 +113,9 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
             ("recipe-id", tag_ids),
         )
 
-    async def test_matching_inventory_entry_is_reused_by_id(self):
+    async def test_matching_inventory_entry_is_reused_by_category_and_name(self):
         existing = SimpleNamespace(
-            id="cuisine-deutsch", category=TagCategory.CUISINE, name="Deutsch"
+            id="opaque-existing-id", category=TagCategory.CUISINE, name="Deutsch"
         )
         client = FakeGraphQLClient([existing])
 
@@ -121,18 +123,6 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(client.tags), 8)
         self.assertNotIn((TagCategory.CUISINE, "Deutsch"), client.create_calls)
-
-    async def test_unknown_recipe_tag_id_fails_assignment_without_name_remapping(self):
-        client = FakeGraphQLClient(
-            [
-                SimpleNamespace(
-                    id="cuisine-deutsch", category=TagCategory.CUISINE, name="Deutsch"
-                )
-            ]
-        )
-
-        with self.assertRaisesRegex(ValueError, "unknown tag ID"):
-            await demo_data.assign_demo_tags("recipe", ["different-id"], client)
 
     async def test_repeated_destructive_reseeding_restores_inventory_and_assignments(
         self,

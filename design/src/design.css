@@ -207,6 +207,10 @@ rating-component[hx-post] {
   }
 }
 
+a:has(> recipe-tile-component) {
+  text-decoration: none;
+}
+
 a > recipe-tile-component {
   transition: outline 0.3s ease-in-out;
   outline: 0px solid transparent;

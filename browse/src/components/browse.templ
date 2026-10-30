@@ -79,28 +79,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 				{{ slot := "rating" }}
 				@Rating(item.Rating, false, &slot, nil)
 			}
-			if len(item.Tags) > 0 {
-				{{ tags := orderedStubTags(item.Tags); overflowCount := len(tags) - 3 }}
-				if overflowCount < 0 {
-					{{ overflowCount = 0 }}
-				}
-				for index, tag := range tags {
-					<span
-						slot="tags"
-						class={ tagClass(tag.Category) }
-						data-recipe-tag
-						aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }
-						hidden?={ index >= 3 }
-					>{ tag.Name }</span>
-				}
-				<span
-					slot="tags"
-					class="recipe-tag"
-					data-tag-overflow
-					aria-label={ "Weitere Tags: " + strconv.Itoa(overflowCount) }
-					hidden?={ overflowCount == 0 }
-				>{ "+" + strconv.Itoa(overflowCount) }</span>
-			}
+			@recipeCardTags(item.Tags)
 		</recipe-tile-component>
 	</a>
 }
