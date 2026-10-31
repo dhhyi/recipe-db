@@ -114,7 +114,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   [[ $* != *"--resource-version="* ]] || { echo 'unknown flag: --resource-version' >&2; exit 1; }
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
-      *"get deployments,statefulsets,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
+      *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
         if [[ ${MOCK_ABANDON_WORKER:-false} == true ]]; then
           echo '{"items":[{"kind":"Pod","metadata":{"name":"restore-volume-recipes"}}]}'
         elif [[ ${MOCK_ABANDON_WRITER:-false} == true ]]; then
@@ -137,7 +137,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"apply -f "*restore-state-configmap.json)
         cp "${*: -1}" "$MOCK_LOG.cluster-restore-state"
         exit ;;
-      *"get deployments,statefulsets,daemonsets,jobs,cronjobs,pods,services,ingresses,configmaps,secrets -o json")
+      *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods,services,ingresses,configmaps,secrets -o json")
         if [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
           echo '{"items":[{"kind":"Deployment","metadata":{"name":"recipes"}}]}'
         else echo '{"items":[]}'; fi
@@ -163,15 +163,28 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         jq -c . "${*: -1}" >> "$MOCK_LOG.restore-pods"; exit ;;
       *"get pods -o json")
         jq -s '{items:.}' "$MOCK_LOG.restore-pods"; exit ;;
+      *"exec deployment/nats -- wget -qO-"*)
+        sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
+        jq -n --argjson sequence "$sequence" '{
+          account_details:[{stream_detail:[{
+            name:"RECIPE_EVENTS",state:{last_seq:$sequence},consumer_detail:[
+              {name:"search-index-v1",config:{ack_policy:"explicit",filter_subject:"recipes.events.v1"},
+                ack_floor:{stream_seq:$sequence},num_ack_pending:0,num_pending:0},
+              {name:"browse-cache-v1",config:{ack_policy:"explicit",filter_subject:"recipes.events.v1"},
+                ack_floor:{stream_seq:$sequence},num_ack_pending:0,num_pending:0}
+            ]
+          }]}]
+        }'
+        exit ;;
       *"exec "*restore-volume-*"-- sh -ec"*)
         if [[ ${MOCK_RESTORE_NONEMPTY:-} != "" && $* == *"restore-volume-$MOCK_RESTORE_NONEMPTY "* ]]; then exit 1; fi
         exit ;;
-      *"exec -i restore-volume-"*"-- tar -xpf - --numeric-owner -C /data")
+      *"exec -i restore-volume-"*"-- tar -xpkf - --numeric-owner -C /data")
         if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then exit 1; fi
         name="${*: -8:1}"
         name="${name#restore-volume-}"
         mkdir -p "$FIXTURE_ROOT/imported/$name"
-        tar -xpf - -C "$FIXTURE_ROOT/imported/$name"
+        tar -xpkf - -C "$FIXTURE_ROOT/imported/$name"
         touch "$MOCK_LOG.imported"
         exit ;;
       *"exec restore-volume-"*"-- tar -C /data -cf - .")
@@ -1602,12 +1615,18 @@ for argument in "$@"; do case "$argument" in @*) file="${argument#@}" ;; esac; d
 query=$(jq -r .query "$file")
 case "$query" in
   *"createRecipe"*)
+    sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
+    printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
     jq -r .variables.name "$file" > "$MOCK_LOG.probe-name"
     echo '{"data":{"createRecipe":{"id":"probe"}}}' ;;
   *"updateRecipe"*)
+    sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
+    printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
     jq -r .variables.name "$file" > "$MOCK_LOG.probe-name"
     echo '{"data":{"updateRecipe":{"id":"probe"}}}' ;;
   *"deleteRecipe"*)
+    sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
+    printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
     touch "$MOCK_LOG.probe-deleted"
     echo '{"data":{"deleteRecipe":true}}' ;;
   *"searchRecipes"*)
@@ -1700,7 +1719,7 @@ PY
   local checked imported last_check propagation opening
   checked=$(grep -c 'exec restore-volume-.*-- sh -ec' "$MOCK_LOG")
   [ "$checked" -ge 11 ]
-  imported=$(awk '/exec -i restore-volume-.*tar -xpf/ {print NR; exit}' "$MOCK_LOG")
+  imported=$(awk '/exec -i restore-volume-.*tar -xpkf/ {print NR; exit}' "$MOCK_LOG")
   last_check=$(awk '/exec restore-volume-typesense -- sh -ec/ {print NR; exit}' "$MOCK_LOG")
   [ "$last_check" -lt "$imported" ]
   propagation=$(awk '/recipe\/probe/ {n=NR} END {print n}' "$MOCK_LOG")
