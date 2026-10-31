@@ -87,24 +87,33 @@ kube() {
     "get persistentvolumeclaims -o")
       cat "$MOCK_PVCS"
       ;;
+    "--namespace kube-system create"*)
+      jq -e '.metadata.namespace == "kube-system"' "$5" > /dev/null
+      jq -e --arg node "$storage_node" --arg uuid "$storage_root_uuid" --arg root "$storage_data_root" '
+        .spec.nodeName == $node
+        and .spec.automountServiceAccountToken == false
+        and .spec.containers[0].securityContext.privileged == true
+        and .spec.containers[0].securityContext.readOnlyRootFilesystem == true
+        and .spec.containers[0].volumeMounts[0].readOnly == true
+        and .spec.volumes[0].hostPath.path == "/"
+        and (.spec.containers[0].command | join(" ") | contains("/usr/local/sbin/recipe-db-storage-guard"))
+        and (.spec.containers[0].command | join(" ") | contains("findmnt"))
+        and any(.spec.containers[0].env[]; .name == "EXPECTED_ROOT_UUID" and .value == $uuid)
+        and any(.spec.containers[0].env[]; .name == "DATA_ROOT" and .value == $root)
+      ' "$5" > /dev/null
+      ;;
     "create -f "*)
       if jq -e '.kind == "StorageClass"' "$3" > /dev/null; then
         cp "$3" "$MOCK_RETAINED_STORAGE_CLASS"
       else
-        jq -e --arg node "$storage_node" --arg uuid "$storage_root_uuid" --arg root "$storage_data_root" '
-          .spec.nodeName == $node
-          and .spec.automountServiceAccountToken == false
-          and .spec.containers[0].securityContext.privileged == true
-          and .spec.containers[0].securityContext.readOnlyRootFilesystem == true
-          and .spec.containers[0].volumeMounts[0].readOnly == true
-          and .spec.volumes[0].hostPath.path == "/"
-          and (.spec.containers[0].command | join(" ") | contains("/usr/local/sbin/recipe-db-storage-guard"))
-          and (.spec.containers[0].command | join(" ") | contains("findmnt"))
-          and any(.spec.containers[0].env[]; .name == "EXPECTED_ROOT_UUID" and .value == $uuid)
-          and any(.spec.containers[0].env[]; .name == "DATA_ROOT" and .value == $root)
-        ' "$3" > /dev/null
+        return 1
       fi
       ;;
+    "--namespace kube-system wait"*) ;;
+    "--namespace kube-system logs"*)
+      printf 'Verified USB-backed ext4 root and runtime storage identity\n'
+      ;;
+    "--namespace kube-system delete"*) ;;
     "patch storageclass"*)
       return 1
       ;;
@@ -114,11 +123,6 @@ kube() {
       cp "$BATS_TEST_TMPDIR/pvs-updated.json" "$MOCK_PVS"
       ;;
     "wait --for=jsonpath="*) ;;
-
-    "logs recipe-db-storage-inspection "*)
-      printf 'Verified USB-backed ext4 root and runtime storage identity\n'
-      ;;
-    "delete pod recipe-db-storage-inspection") ;;
 
     *) ;;
 
@@ -204,6 +208,21 @@ prepare_reattach_state() {
   pv=$(released_pv recipe-db-pi /srv/recipe-db/storage/pvc-12345678-1234-1234-1234-123456789abc_recipe-db_recipes recipe-db-retained)
   run production_storage_pv_identity_valid "$pv" recipes
   [ "$status" -eq 0 ]
+  pv=$(released_pv | jq -c '.status.phase = "Available" | del(.spec.claimRef.uid)')
+  run production_storage_pv_identity_valid "$pv" recipes
+  [ "$status" -eq 0 ]
+  pv=$(released_pv | jq -c '.status.phase = "Available" | del(.spec.claimRef.uid) | .spec.claimRef.name = "other"')
+  run production_storage_pv_identity_valid "$pv" recipes
+  [ "$status" -ne 0 ]
+  pv=$(released_pv | jq -c '.status.phase = "Available" | del(.spec.claimRef.uid) | .spec.claimRef.namespace = "other"')
+  run production_storage_pv_identity_valid "$pv" recipes
+  [ "$status" -ne 0 ]
+  pv=$(released_pv | jq -c '.status.phase = "Available" | del(.spec.claimRef.uid) | .spec.persistentVolumeReclaimPolicy = "Delete"')
+  run production_storage_pv_identity_valid "$pv" recipes
+  [ "$status" -ne 0 ]
+  pv=$(released_pv | jq -c '.status.phase = "Available"')
+  run production_storage_pv_identity_valid "$pv" recipes
+  [ "$status" -ne 0 ]
   pv=$(released_pv | jq '.spec.hostPath={path:.spec.local.path,type:"DirectoryOrCreate"} | del(.spec.local)')
   run production_storage_pv_identity_valid "$pv" recipes
   [ "$status" -eq 0 ]
@@ -220,8 +239,10 @@ prepare_reattach_state() {
 @test "host inspection is pinned to the validated node and uses the installed guard read-only" {
   run production_storage_inspect_host
   [ "$status" -eq 0 ]
-  [[ "$(< "$MOCK_KUBE_CALLS")" == *"create -f"* ]]
-  [[ "$(< "$MOCK_KUBE_CALLS")" == *"delete pod recipe-db-storage-inspection"* ]]
+  [[ "$(< "$MOCK_KUBE_CALLS")" == *"--namespace kube-system create -f"* ]]
+  [[ "$(< "$MOCK_KUBE_CALLS")" == *"--namespace kube-system wait --for=jsonpath="* ]]
+  [[ "$(< "$MOCK_KUBE_CALLS")" == *"--namespace kube-system logs recipe-db-storage-inspection"* ]]
+  [[ "$(< "$MOCK_KUBE_CALLS")" == *"--namespace kube-system delete pod recipe-db-storage-inspection"* ]]
 }
 
 @test "preflight creates the owned Retain class and never mutates stock local-path" {
@@ -293,7 +314,7 @@ prepare_reattach_state() {
   [[ "$(< "$MOCK_KUBE_CALLS")" != *"patch storageclass"* ]]
 }
 
-@test "prepare_claims preserves verified bound and Released local-path classes but defaults fresh PVCs" {
+@test "prepare_claims preserves bound classes and explicitly reattached PVs without risking fresh data" {
   local manifest="$BATS_TEST_TMPDIR/rendered.yml" pv
   printf '%s\n' \
     'apiVersion: v1' 'kind: PersistentVolumeClaim' 'metadata:' '  name: recipes' \
@@ -318,17 +339,21 @@ prepare_reattach_state() {
   pv=$(released_pv recipe-db-pi /srv/recipe-db/storage/pvc-12345678-1234-1234-1234-123456789abc_recipe-db_recipes recipe-db-retained)
   jq -n --argjson pv "$pv" '{items:[$pv]}' > "$work/persistent-volumes.json"
   printf '{"items":[]}\n' > "$work/persistent-volume-claims.json"
-  production_storage_prepare_claims "$manifest"
-  [ "$(yq -r '.spec.storageClassName' "$manifest")" = recipe-db-retained ]
+  run production_storage_prepare_claims "$manifest"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"must be explicitly reattached"* ]]
 
   printf '%s\n' \
     'apiVersion: v1' 'kind: PersistentVolumeClaim' 'metadata:' '  name: recipes' \
     'spec:' '  accessModes: [ReadWriteOnce]' '  storageClassName: recipe-db-retained' > "$manifest"
-  pv=$(released_pv)
-  jq -n --argjson pv "$pv" '{items:[$pv]}' > "$work/persistent-volumes.json"
-  printf '{"items":[]}\n' > "$work/persistent-volume-claims.json"
+  prepare_reattach_state recipe-db-pi \
+    /srv/recipe-db/storage/pvc-12345678-1234-1234-1234-123456789abc_recipe-db_recipes \
+    recipe-db-retained
+  run production_storage_reattach
+  [ "$status" -eq 0 ]
   production_storage_prepare_claims "$manifest"
-  [ "$(yq -r '.spec.storageClassName' "$manifest")" = local-path ]
+  [ "$(yq -r '.spec.storageClassName' "$manifest")" = recipe-db-retained ]
+  [ "$(yq -r '.spec.volumeName' "$manifest")" = pvc-recipes ]
 
   printf '%s\n' \
     'apiVersion: v1' 'kind: PersistentVolumeClaim' 'metadata:' '  name: recipes' \

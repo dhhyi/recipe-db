@@ -45,7 +45,12 @@ production_storage_pv_identity_valid() {
     and (.spec.volumeMode // "Filesystem") == "Filesystem"
     and .spec.claimRef.namespace == $namespace
     and .spec.claimRef.name == $claim
-    and (.status.phase == "Bound" or .status.phase == "Released")
+    and (
+      .status.phase == "Bound" or .status.phase == "Released" or
+      (.status.phase == "Available"
+        and .spec.persistentVolumeReclaimPolicy == "Retain"
+        and (.spec.claimRef.uid // "") == "")
+    )
     and ((.spec.local.path // .spec.hostPath.path) |
       test("^" + $root + "/storage/pvc-[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}_" +
         $namespace + "_" + $claim + "$"))
@@ -204,19 +209,19 @@ production_storage_inspect_host() {
         volumes: [{name:"host-root", hostPath:{path:"/",type:"Directory"}}]
       }
     }' > "$work/storage-inspection-pod.json"
-  kube create -f "$work/storage-inspection-pod.json" > /dev/null \
+  kube --namespace kube-system create -f "$work/storage-inspection-pod.json" > /dev/null \
     || production_fail "could not create private Pi storage inspection Pod; inspect any existing inspection Pod before retrying"
-  if ! kube wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" \
+  if ! kube --namespace kube-system wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" \
     --timeout="${timeout}s" > /dev/null; then
-    kube logs "$pod" >&2 || true
-    kube delete pod "$pod" --wait=true > /dev/null 2>&1 || true
+    kube --namespace kube-system logs "$pod" >&2 || true
+    kube --namespace kube-system delete pod "$pod" --wait=true > /dev/null 2>&1 || true
     production_fail "Pi host storage guard failed or timed out; deployment refused"
   fi
-  if ! kube logs "$pod" > /dev/null; then
-    kube delete pod "$pod" --wait=true > /dev/null 2>&1 || true
+  if ! kube --namespace kube-system logs "$pod" > /dev/null; then
+    kube --namespace kube-system delete pod "$pod" --wait=true > /dev/null 2>&1 || true
     production_fail "could not verify Pi host storage guard output"
   fi
-  kube delete pod "$pod" --wait=true > /dev/null \
+  kube --namespace kube-system delete pod "$pod" --wait=true > /dev/null \
     || production_fail "could not remove the completed private storage inspection Pod"
 }
 
@@ -326,16 +331,25 @@ production_storage_reattach() {
       ]')
     kube patch persistentvolume "$pv_name" --type=json -p "$patch" > /dev/null \
       || production_fail "atomic reattachment of Released PV $pv_name failed; no PV or data was deleted"
+    jq --arg pv "$pv_name" --arg namespace "$namespace" --arg name "$name" '
+      (.items[] | select(.metadata.name == $pv) | .spec.claimRef) = {
+        apiVersion:"v1",kind:"PersistentVolumeClaim",namespace:$namespace,name:$name
+      }
+    ' "$work/persistent-volumes.json" > "$work/persistent-volumes-reattached.json" \
+      || production_fail "could not record explicit reattachment of PV $pv_name"
+    mv "$work/persistent-volumes-reattached.json" "$work/persistent-volumes.json" \
+      || production_fail "could not record explicit reattachment of PV $pv_name"
   done < <(jq -r '.volumes | keys[]' "$work/config.json")
 }
 
 production_storage_prepare_claims() {
-  local rendered=$1 name pvc pv candidates count volume_name class classes
+  local rendered=$1 name pvc pv candidates count volume_name class classes volume_names
   production_storage_require_config
   [[ -f $rendered && -f $work/persistent-volume-claims.json &&
     -f $work/persistent-volumes.json ]] \
     || production_fail "Pi storage preflight must run before preparing rendered PVCs"
   classes='{}'
+  volume_names='{}'
   while IFS= read -r name; do
     [[ -n $name ]] || continue
     pvc=$(jq -c --arg name "$name" '.items[] | select(.metadata.name == $name)' \
@@ -357,6 +371,10 @@ production_storage_prepare_claims() {
         || production_fail "multiple retained PVs match $namespace/$name; refusing ambiguous PVC class"
       if ((count == 1)); then
         pv=$(jq -c '.[0]' <<< "$candidates")
+        if jq -e '.status.phase == "Released" and (.spec.claimRef.uid // "") != ""' \
+          <<< "$pv" > /dev/null; then
+          production_fail "Released PV for $namespace/$name must be explicitly reattached before creating its PVC"
+        fi
         jq -e '.spec.persistentVolumeReclaimPolicy == "Retain"' <<< "$pv" > /dev/null \
           || production_fail "reserved PV for $namespace/$name is not Retain"
         if ! production_storage_pv_identity_valid "$pv" "$name" \
@@ -364,6 +382,9 @@ production_storage_prepare_claims() {
           production_fail "reserved PV for $namespace/$name has incompatible identity; refusing to alter rendered PVC"
         fi
         class=$(jq -r .spec.storageClassName <<< "$pv")
+        volume_name=$(jq -r .metadata.name <<< "$pv")
+        volume_names=$(jq -c --arg name "$name" --arg volume "$volume_name" \
+          '. + {($name):$volume}' <<< "$volume_names")
       else
         class=$storage_class
       fi
@@ -374,10 +395,14 @@ production_storage_prepare_claims() {
       '. + {($name):$class}' <<< "$classes")
   done < <(jq -r '.volumes | keys[]' "$work/config.json")
 
-  STORAGE_CLASS_OVERRIDES=$classes yq -i '
+  STORAGE_CLASS_OVERRIDES=$classes STORAGE_VOLUME_OVERRIDES=$volume_names yq -i '
     if .kind == "PersistentVolumeClaim" and
       (env(STORAGE_CLASS_OVERRIDES)[.metadata.name] != null)
     then .spec.storageClassName = env(STORAGE_CLASS_OVERRIDES)[.metadata.name]
+    else . end |
+    if .kind == "PersistentVolumeClaim" and
+      (env(STORAGE_VOLUME_OVERRIDES)[.metadata.name] != null)
+    then .spec.volumeName = env(STORAGE_VOLUME_OVERRIDES)[.metadata.name]
     else . end
   ' "$rendered" || production_fail "could not prepare rendered Pi PVC storage classes"
 

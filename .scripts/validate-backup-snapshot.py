@@ -56,8 +56,10 @@ def validate(archive, layout):
             raise ValueError("missing authoritative database or unclassified PVC data")
         if kind == "sqlite" and files[name][3] != b"SQLite format 3\x00":
             raise ValueError("authoritative database is not SQLite")
-        if kind == "json" and not isinstance(json.loads(files[name][2]), dict):
-            raise ValueError("authoritative JSON database is not an object")
+        if kind == "json":
+            document = json.loads(files[name][2])
+            if not isinstance(document, dict) and document != []:
+                raise ValueError("authoritative JSON database is not an object or empty array")
     elif kind == "images":
         if directories != {"public", "manifests"}:
             raise ValueError("image PVC lacks its authoritative storage directories")

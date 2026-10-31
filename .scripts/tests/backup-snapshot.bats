@@ -41,7 +41,8 @@ def archive(entries, link=False):
 sqlite = {"kind":"sqlite", "file":"tags.sqlite"}
 files = {"tags.sqlite":b"SQLite format 3\x00database", "tags.sqlite-wal":b"wal", "tags.sqlite-shm":b"shm"}
 assert len(module.validate(archive(files), sqlite)) == 3
-assert len(module.validate(archive({"db.json":b"{}"}), {"kind":"json","file":"db.json"})) == 1
+for document in (b"{}", b"[]", b'{"recipe":["https://example.com"]}'):
+    assert len(module.validate(archive({"db.json":document}), {"kind":"json","file":"db.json"})) == 1
 normal, thumb = b"normal image", b"thumbnail"
 normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
@@ -56,7 +57,15 @@ for entries, layout, link in [
     (files | {"../escape":b"bad"}, sqlite, False),
     (files | {"/absolute":b"bad"}, sqlite, False),
     (files, sqlite, True),
+    ({}, {"kind":"json","file":"db.json"}, False),
     ({"db.json":b"["}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b'[{"recipe":[]}]'}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b'["https://example.com"]'}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b"[[]]"}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b"null"}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b"false"}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b"0"}, {"kind":"json","file":"db.json"}, False),
+    ({"db.json":b'""'}, {"kind":"json","file":"db.json"}, False),
     ({name:value for name,value in images.items() if name != "public/"+thumb_name}, {"kind":"images"}, False),
     (images | {"public/old.png":b"old"}, {"kind":"images"}, False),
     (images | {"public/"+normal_name:b"corrupted"}, {"kind":"images"}, False),

@@ -109,23 +109,28 @@ EOF
   cat > bin/kubectl << 'EOF'
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
+  [[ $* != *"--resource-version="* ]] || { echo 'unknown flag: --resource-version' >&2; exit 1; }
   if [[ $MOCK_BACKUP = true ]]; then
     handled=false
     case "$*" in
-      *" get pods --watch-only "*)
+      *" get --raw /api/v1/namespaces/recipe-db/pods?watch=true&resourceVersion=1&timeoutSeconds="*)
         while true; do
           if [[ -f $MOCK_LOG.events ]]; then cat "$MOCK_LOG.events"; fi
           sleep 0.1
         done ;;
       *" get deployments -o json"*)
-        cat "$MOCK_LOG.deployments"
+        jq --arg drift "${MOCK_RECOVERY_DRIFT:-false}" --arg cleaned "$([[ -e $MOCK_LOG.cleaned ]] && echo true || echo false)" '
+          if $drift == "true" and $cleaned == "true" then
+            (.items[] | select(.metadata.name == "tags").status.readyReplicas)=0
+          else . end
+        ' "$MOCK_LOG.deployments"
         handled=true ;;
       *" get deployment "*"-o json"*)
         name="${*: -3:1}"
         jq --arg name "$name" '.items[] | select(.metadata.name == $name)' "$MOCK_LOG.deployments"
         handled=true ;;
       *" get configmap recipe-db-release -o json"*)
-        jq -n --arg artifact "$ARTIFACT" '{data:{artifact:$artifact,revision:("a"*40)}}'
+        jq -n --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" '{data:{artifact:$artifact,revision:$revision}}'
         handled=true ;;
       *" get secret recipe-db-runtime -o json"*)
         jq -n '{metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
@@ -151,6 +156,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           }'
         fi
         handled=true ;;
+      *" get pods -l job-name=backup-cleanup -o json"*)
+        if [[ -f $MOCK_LOG.cleanup-job ]]; then
+          echo '{"items":[{"metadata":{"name":"cleanup-worker"}}]}'
+        else
+          echo '{"items":[]}'
+        fi
+        handled=true ;;
       *" get pods "*"-o json"*)
         jq --arg args "$*" '{
           metadata:{resourceVersion:"1"},
@@ -165,7 +177,18 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         }' "$MOCK_LOG.deployments"
         handled=true ;;
       *" get pod "*"--ignore-not-found -o json"*) handled=true ;;
-      *" get job backup-cleanup --ignore-not-found -o json"*) handled=true ;;
+      *" get job backup-cleanup --ignore-not-found -o json"*)
+        if [[ -f $MOCK_LOG.cleanup-job ]]; then
+          echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'
+        fi
+        handled=true ;;
+      *" apply -f "*backup-cleanup-job.yml)
+        touch "$MOCK_LOG.cleanup-job"
+        handled=true ;;
+      *" delete job backup-cleanup "*)
+        [[ ${MOCK_CLEANUP_DELETE_FAIL:-false} != true ]] || exit 1
+        rm -f "$MOCK_LOG.cleanup-job"
+        handled=true ;;
       *" get job backup-cleanup -o json"*)
         if [[ $MOCK_CLEANUP_FAIL = true ]]; then
           echo '{"status":{"conditions":[{"type":"Failed","status":"True"}]}}'
@@ -182,6 +205,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" rollout status deployment/search "*)
         [[ ${MOCK_PROJECTION_FAIL:-false} != true ]] || exit 1
+        handled=true ;;
+      *" rollout status deployment/graphql "*)
+        if [[ ${MOCK_GRAPHQL_REOPEN_FAIL:-false} = true && -e $MOCK_LOG.reopening ]]; then exit 1; fi
         handled=true ;;
       *" scale deployment/"*"--replicas="*)
         resource="${*: -2:1}"
@@ -214,6 +240,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" set env deployment/graphql MODE=production "*)
         [[ $MOCK_RECOVERY_FAIL != true ]] || exit 1
+        touch "$MOCK_LOG.reopening"
         jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[0].env[0].value)="production"' \
           "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
         mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
@@ -222,6 +249,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         service="${*: -3:1}"
         service=${service#deployment/}
         mode="${*: -2:1}"
+        if [[ $service == graphql && ${MOCK_GRAPHQL_REOPEN_FAIL:-false} = true &&
+          -e $MOCK_LOG.reopening ]]; then exit 1; fi
         jq --arg service "$service" --arg mode "${mode#MODE=}" \
           '(.items[] | select(.metadata.name == $service).spec.template.spec.containers[0].env[0].value)=$mode' \
           "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
@@ -395,10 +424,10 @@ EOF
 printf 'oras %s\n' "$*" >> "$MOCK_LOG"
 if [[ $1 = manifest ]]; then
   if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
-    jq -n --arg shape "$MOCK_SHAPE" '{
+    jq -n --arg shape "$MOCK_SHAPE" --arg revision "$MOCK_REVISION" '{
       schemaVersion:2,artifactType:"application/vnd.dhhyi.recipe-db.release.v1+json",
       annotations:{"org.opencontainers.image.source":"https://github.com/dhhyi/recipe-db",
-        "org.opencontainers.image.revision":("a"*40)},
+        "org.opencontainers.image.revision":$revision},
       layers:[{mediaType:"application/json",digest:("sha256:"+("b"*64)),size:100,
         annotations:{"org.opencontainers.image.title":(if $shape == "true" then "../escape" else "release.json" end)}}]}'
   else
@@ -411,10 +440,13 @@ if [[ $1 = manifest ]]; then
 else
   [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]] || exit 1
   while [[ $1 != --output ]]; do shift; done
-  jq -n '{schemaVersion:1,revision:("a"*40),images:{
+  jq -n --arg revision "$MOCK_REVISION" '{schemaVersion:1,revision:$revision,images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
     images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
-    graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64))}}' > "$2/release.json"
+    graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
+    tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
+    search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
+    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))}}' > "$2/release.json"
 fi
 EOF
   cat > bin/ytt << 'EOF'
@@ -472,10 +504,17 @@ EOF
       {name:"search",claim:null},{name:"browse",claim:null}] | map({
       metadata:{name:.name},generation:1,spec:{replicas:1,template:{
         metadata:{annotations:{"recipe-db/release":$artifact}},spec:{
-          containers:[{name:.name,env:[{name:"MODE",value:"production"}],
+          containers:[{name:.name,image:("ghcr.io/dhhyi/recipe-db-"+.name+"@sha256:"+("b"*64)),
+            env:[{name:"MODE",value:"production"}],
             volumeMounts:(if .claim == null then [] else [{name:"data",mountPath:"/data"}] end)}],
           volumes:(if .claim == null then [] else [{name:"data",persistentVolumeClaim:{claimName:.claim}}] end)}}},
       status:{readyReplicas:1}})}' > "$MOCK_LOG.deployments"
+  git init -q
+  git add .scripts/lib/project-metadata.sh message-bus/nats.conf \
+    browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture release inputs'
+  export MOCK_REVISION
+  MOCK_REVISION=$(git rev-parse HEAD)
 }
 
 set_value() {
@@ -1032,13 +1071,14 @@ legacy_pi_claims() {
   [ "$status" -eq 0 ]
   [ -f "$snapshot/manifest.json" ]
   [ ! -e "$snapshot/backup-state.json" ]
-  jq -e --arg artifact "$ARTIFACT" '
+  jq -e --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" '
     .format == "recipe-db-pvc-snapshot" and .formatVersion == 1
-    and .source.artifact == $artifact and .source.revision == ("a" * 40)
+    and .source.artifact == $artifact and .source.revision == $revision
     and any(.inventory[]; .service == "tags" and .role == "cleanup-participant")
     and all(.inventory[]; (.sha256 | test("^[0-9a-f]{64}$")) and .sizeBytes > 0)
   ' "$snapshot/manifest.json" > /dev/null
   [ ! -e "$MOCK_LOG.lease" ]
+  grep -q 'get --raw /api/v1/namespaces/recipe-db/pods?watch=true&resourceVersion=1&timeoutSeconds=600' "$MOCK_LOG"
   local barrier scale_normal backup_mode cleanup copy last_normal_stop
   barrier=$(grep -n 'set env deployment/graphql MODE=backup' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
   scale_normal=$(grep -n 'scale deployment/recipes --replicas=0' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
@@ -1221,4 +1261,126 @@ legacy_pi_claims() {
   jq -e '.inventory[] | select(.service == "tags") |
     any(.files[]; .path == "tags.sqlite-wal")' "$snapshot/manifest.json"
   jq -e 'all(.inventory[]; .service != "search" and .service != "browse")' "$snapshot/manifest.json"
+}
+
+@test "backup rejects image drift despite unchanged release annotations" {
+  export MOCK_BACKUP=true
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].image)="foreign:latest"' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/image-drift"
+  [ "$status" -ne 0 ]
+  [[ $output == *"container images do not match"* ]]
+  [ ! -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq 'scale deployment/|set env deployment/' "$MOCK_LOG"
+}
+
+@test "manual recovery refuses changed container digests before touching workloads" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/recovery-image-drift" holder before
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].image)="foreign:latest"' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  before=$(grep -Ec 'scale deployment/|set env deployment/' "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"container images do not match"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  [ "$(grep -Ec 'scale deployment/|set env deployment/' "$MOCK_LOG")" -eq "$before" ]
+}
+
+@test "backup refuses modified release metadata before connecting or acquiring a Lease" {
+  export MOCK_BACKUP=true
+  printf '\n# changed classification\n' >> .scripts/lib/project-metadata.sh
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/metadata-drift"
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+}
+
+@test "backup refuses untracked metadata even if gitignored" {
+  export MOCK_BACKUP=true
+  mkdir extra-backend
+  printf 'category: backend\n' > extra-backend/.project.yaml
+  printf 'extra-backend/\n' > .gitignore
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/untracked-metadata"
+  [ "$status" -ne 0 ]
+  [[ $output == *"untracked metadata"* ]]
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+}
+
+@test "backup permits unrelated checkout changes when release inputs are unchanged" {
+  export MOCK_BACKUP=true
+  printf 'unrelated documentation\n' > note.txt
+  git add note.txt
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Unrelated checkout change'
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/same-inputs"
+  [ "$status" -eq 0 ]
+}
+
+@test "acquired backup Lease can be explicitly recovered before any workload mutation" {
+  jq -n '{metadata:{name:"recipe-db-deploy",namespace:"kube-system",uid:"lease-uid",resourceVersion:"42",
+    labels:{"app.kubernetes.io/part-of":"recipe-db"},
+    annotations:{"recipe-db/operation":"backup","recipe-db/phase":"acquired"}},
+    spec:{holderIdentity:"backup-preflight"}}' > "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh lock-recover "$VALUES" backup-preflight RECOVER-backup-preflight
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq 'scale deployment/|set env deployment/' "$MOCK_LOG"
+}
+
+@test "recovered backend validation happens before GraphQL is reopened" {
+  export MOCK_BACKUP=true MOCK_RECOVERY_DRIFT=true
+  local snapshot="$FIXTURE_ROOT/backups/recovery-count-drift"
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovered backend state could not be verified"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  [ ! -e "$snapshot/manifest.json" ]
+  run ! grep -q 'set env deployment/graphql MODE=production' "$MOCK_LOG"
+}
+
+@test "failed GraphQL reopen and reblock rollout falls back to stopping all GraphQL Pods" {
+  export MOCK_BACKUP=true MOCK_GRAPHQL_REOPEN_FAIL=true
+  local snapshot="$FIXTURE_ROOT/backups/reopen-failure"
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"stopping GraphQL to preserve the client barrier"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e 'any(.items[]; .metadata.name == "graphql" and .spec.replicas == 0)' "$MOCK_LOG.deployments"
+  jq -e '.status == "recovery-required"' "$snapshot/backup-state.json"
+}
+
+@test "backup-exit stops cleanup workers before production backends resume" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/cleanup-interrupted" holder before stopped restored
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  [ -e "$MOCK_LOG.cleanup-job" ]
+  before=$(wc -l < "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.cleanup-job" ]
+  stopped=$(awk -v before="$before" 'NR > before && /get pods -l job-name=backup-cleanup/ {print NR; exit}' "$MOCK_LOG")
+  restored=$(awk -v before="$before" 'NR > before && /set env deployment\/recipes MODE=production/ {print NR; exit}' "$MOCK_LOG")
+  [ "$stopped" -lt "$restored" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "backup-exit retains the barrier and Lease if cleanup workers cannot be deleted" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/cleanup-not-stopped" holder
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  export MOCK_CLEANUP_DELETE_FAIL=true
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"cleanup workers could not be stopped"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq 'set env deployment/(recipes|graphql) MODE=production' "$MOCK_LOG"
 }

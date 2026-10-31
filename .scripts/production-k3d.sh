@@ -143,6 +143,20 @@ pull_release() {
   revision=$(jq -er .revision "$work/pulled/release.json")
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
+  case "$command" in
+    backup | backup-enter | backup-exit)
+      local inputs=(.scripts/lib/project-metadata.sh
+        .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml package.json
+        message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
+        oauth2-proxy/oauth2-proxy.cfg ':(glob)*/.project.yaml')
+      git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
+        || production_fail "backup requires the release revision in the local checkout"
+      git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
+        || production_fail "backup metadata and templates must match the immutable release revision"
+      [[ -z $(git -C "$root" ls-files --others -- "${inputs[@]}") ]] \
+        || production_fail "backup refuses untracked metadata or template inputs"
+      ;;
+  esac
   sh "$root/.scripts/validate-production-release.sh" "$work/pulled/release.json" "$revision"
   local image
   while IFS= read -r image; do
@@ -390,10 +404,26 @@ backup_role_inventory() {
     || production_fail "tags must be classified as a cleanup participant before backup"
 }
 
+backup_validate_workload_images() {
+  local deployments=$1 names=${2:-null}
+  jq -e --slurpfile release "$work/pulled/release.json" --argjson names "$names" '
+    . as $actual | all($release[0].images | to_entries[] |
+      select($names == null or (.key as $name | $names | index($name))); . as $expected |
+      [$actual.items[] | select(.metadata.name == $expected.key) |
+        .spec.template.spec.containers[] | select(.name == $expected.key) | .image]
+      == [$expected.value])
+  ' "$deployments" > /dev/null || {
+    printf 'production: workload container images do not match the immutable release inventory\n' >&2
+    return 1
+  }
+}
+
 backup_capture_workloads() {
   local artifact=$1
   kube get deployments -o json > "$work/deployments.json" \
     || production_fail "cannot inspect workload release and replicas"
+  backup_validate_workload_images "$work/deployments.json" \
+    || production_fail "refusing backup of a different workload version"
   jq -e --arg artifact "$artifact" --slurpfile projects "$work/projects.jsonl" '
     . as $deployments |
     any($deployments.items[]; .metadata.name == "graphql")
@@ -462,6 +492,26 @@ backup_capture_workloads() {
     || production_fail "private projection service is not in its normal state"
 }
 
+backup_remove_cleanup_job() {
+  local deadline=$((SECONDS + timeout))
+  kube get job backup-cleanup --ignore-not-found -o json > "$work/existing-cleanup-job.json" \
+    || return 1
+  [[ -s $work/existing-cleanup-job.json ]] || return 0
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+    "$work/existing-cleanup-job.json" > /dev/null || {
+    printf 'production: refusing to delete an unowned backup-cleanup Job\n' >&2
+    return 1
+  }
+  kube delete job backup-cleanup --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  while ((SECONDS < deadline)); do
+    kube get pods -l job-name=backup-cleanup -o json > "$work/cleanup-pods.json" || return 1
+    if jq -e '.items | length == 0' "$work/cleanup-pods.json" > /dev/null; then return 0; fi
+    sleep 1
+  done
+  printf 'production: cleanup worker Pods remain; refusing production recovery or another cleanup\n' >&2
+  return 1
+}
+
 backup_cleanup_job() {
   yq -o=yaml 'select(.kind == "Job" and .metadata.name == "backup-cleanup")' \
     "$work/rendered.yml" > "$work/backup-cleanup-job.yml"
@@ -470,16 +520,7 @@ backup_cleanup_job() {
     return 1
   }
   cluster_operation_lock_update cleanup || return 1
-  kube get job backup-cleanup --ignore-not-found -o json > "$work/existing-cleanup-job.json" \
-    || return 1
-  if [[ -s $work/existing-cleanup-job.json ]]; then
-    jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
-      "$work/existing-cleanup-job.json" > /dev/null || {
-      printf 'production: refusing to replace an unowned backup-cleanup Job\n' >&2
-      return 1
-    }
-    kube delete job backup-cleanup --wait=true --timeout="${timeout}s" > /dev/null || return 1
-  fi
+  backup_remove_cleanup_job || return 1
   kube apply -f "$work/backup-cleanup-job.yml" > /dev/null || return 1
   kube patch job backup-cleanup --type=merge -p '{"spec":{"suspend":false}}' > /dev/null || return 1
   if kube wait --for=condition=complete "job/backup-cleanup" --timeout="${timeout}s" \
@@ -488,8 +529,7 @@ backup_cleanup_job() {
       "$work/cleanup-result.json" > /dev/null; then
     return 0
   fi
-  kube delete job backup-cleanup --ignore-not-found --wait=true \
-    --timeout="${timeout}s" > /dev/null || return 1
+  backup_remove_cleanup_job || return 1
   printf 'production: cleanup exhausted its per-operation retries or failed validation; snapshot capture is prohibited\n' >&2
   return 1
 }
@@ -508,8 +548,9 @@ backup_stop() {
     "$work/stopping-pods.json" > "$work/stopping-identities.json" || return 1
   resource_version=$(jq -er '.metadata.resourceVersion' "$work/stopping-pods.json") || return 1
   kubectl --kubeconfig "$work/kubeconfig" --context "$context" --namespace "$namespace" \
-    --request-timeout="${timeout}s" get pods --watch-only --output-watch-events "--resource-version=$resource_version" \
-    -o json > "$work/termination-events.json" 2> "$work/termination-watch-error" &
+    --request-timeout="${timeout}s" get \
+    --raw "/api/v1/namespaces/$namespace/pods?watch=true&resourceVersion=$resource_version&timeoutSeconds=$timeout" \
+    > "$work/termination-events.json" 2> "$work/termination-watch-error" &
   pod_watch_pid=$!
   while IFS= read -r name; do
     kube scale "deployment/$name" --replicas=0 > /dev/null || return 1
@@ -706,6 +747,28 @@ backup_refresh_projections() {
   backup_state_write recovering projections-ready || return 1
 }
 
+backup_verify_recovered_workloads() {
+  local names=$1 name
+  kube get deployments -o json > "$work/recovered-deployments.json" || return 1
+  backup_validate_workload_images "$work/recovered-deployments.json" "$names" || return 1
+  jq -e --slurpfile prior "$work/prior-workloads.json" --argjson names "$names" '
+    . as $actual | all($prior[0][] | select(.name as $name | $names | index($name)); . as $wanted |
+      [$actual.items[] | select(.metadata.name == $wanted.name)] as $found |
+      ($found | length) == 1
+      and ($found[0].spec.replicas // 1) == $wanted.replicas
+      and ($found[0].status.readyReplicas // 0) == $wanted.replicas
+      and $found[0].spec.template.metadata.annotations["recipe-db/release"] == $wanted.release)
+  ' "$work/recovered-deployments.json" > /dev/null || return 1
+  while IFS= read -r name; do
+    jq -e --arg name "$name" '
+      any(.items[]; .metadata.name == $name and any(.spec.template.spec.containers[];
+        .name == $name and any(.env[]?; .name == "MODE" and .value == "production")))
+    ' "$work/recovered-deployments.json" > /dev/null || return 1
+  done < <(jq --argjson names "$names" -r '
+    (. + ["graphql"])[] | select(. != "browse" and (. as $name | $names | index($name)))
+  ' "$work/maintenance-workloads.json")
+}
+
 backup_restore_production() {
   local name replicas failed=false
   cluster_operation_lock_update recovering || return 1
@@ -741,6 +804,10 @@ backup_restore_production() {
     printf 'production: read-only copy Pod could not be removed; data backends remain stopped\n' >&2
     return 1
   }
+  backup_remove_cleanup_job || {
+    printf 'production: cleanup workers could not be stopped; GraphQL remains blocked\n' >&2
+    return 1
+  }
   backup_scale_zero || failed=true
   if ! $failed; then
     while IFS= read -r name; do
@@ -766,6 +833,10 @@ backup_restore_production() {
     printf 'production: projection recovery failed; GraphQL remains blocked in backup mode\n' >&2
     return 1
   fi
+  if ! backup_verify_recovered_workloads "$(jq -c '[.[] | .name | select(. != "graphql")]' "$work/prior-workloads.json")"; then
+    printf 'production: recovered backend state could not be verified; GraphQL remains blocked\n' >&2
+    return 1
+  fi
   # GraphQL is restored last so clients remain blocked until every data backend is safe.
   if ! kube set env deployment/graphql MODE=production --containers=graphql > /dev/null; then
     backup_reblock_graphql || printf 'production: recovery could not reblock GraphQL\n' >&2
@@ -775,42 +846,18 @@ backup_restore_production() {
   graphql_replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
     "$work/prior-workloads.json") || return 1
   if ! kube scale deployment/graphql "--replicas=$graphql_replicas" > /dev/null; then
-    kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || true
+    backup_reblock_graphql || printf 'production: recovery could not reblock GraphQL\n' >&2
     return 1
   fi
   kube rollout status deployment/graphql --timeout="${timeout}s" || {
-    kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || true
-    kube rollout status deployment/graphql --timeout="${timeout}s" > /dev/null 2>&1 || true
+    backup_reblock_graphql || printf 'production: recovery could not reblock GraphQL\n' >&2
     return 1
   }
   barrier_established=false
-  kube get deployments -o json > "$work/recovered-deployments.json" || {
-    backup_reblock_graphql || printf 'production: could not reestablish GraphQL barrier\n' >&2
-    return 1
-  }
-  jq -e --slurpfile prior "$work/prior-workloads.json" '
-    . as $actual | all($prior[0][]; . as $wanted |
-      [$actual.items[] | select(.metadata.name == $wanted.name)] as $found |
-      ($found | length) == 1
-      and ($found[0].spec.replicas // 1) == $wanted.replicas
-      and ($found[0].status.readyReplicas // 0) == $wanted.replicas
-      and $found[0].spec.template.metadata.annotations["recipe-db/release"] == $wanted.release)
-  ' "$work/recovered-deployments.json" > /dev/null || {
+  backup_verify_recovered_workloads '["graphql"]' || {
     backup_reblock_graphql || true
     return 1
   }
-  while IFS= read -r name; do
-    jq -e --arg name "$name" '
-      any(.items[]; .metadata.name == $name and any(.spec.template.spec.containers[];
-        .name == $name and any(.env[]?; .name == "MODE" and .value == "production")))
-    ' "$work/recovered-deployments.json" > /dev/null || {
-      backup_reblock_graphql || true
-      return 1
-    }
-  done < <({
-    jq -r '.[] | select(. != "browse")' "$work/maintenance-workloads.json"
-    printf 'graphql\n'
-  })
   backup_state_write recovered recovered || {
     backup_reblock_graphql || true
     return 1
@@ -963,6 +1010,7 @@ backup_exit() {
   retain_lock=true
   if [[ $target = pi ]]; then production_storage_preflight; fi
   kube get deployments -o json > "$work/recovery-workloads.json" || return 1
+  backup_validate_workload_images "$work/recovery-workloads.json" || return 1
   jq -e --slurpfile prior "$work/prior-workloads.json" '
     . as $actual | all($prior[0][]; . as $wanted |
       any($actual.items[]; .metadata.name == $wanted.name and
