@@ -11,11 +11,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-type RecipeTag struct {
-	ID       string
-	Category gql.TagCategory
-	Name     string
-}
+type RecipeTag = gql.RecipeTag
 
 func orderedTags(tags []RecipeTag) []RecipeTag {
 	sort.Slice(tags, func(i, j int) bool {
@@ -28,7 +24,7 @@ func orderedTags(tags []RecipeTag) []RecipeTag {
 		if leftName != rightName {
 			return leftName < rightName
 		}
-		return left.ID < right.ID
+		return left.Id < right.Id
 	})
 	return tags
 }
@@ -44,22 +40,6 @@ func tagCategoryOrder(category gql.TagCategory) int {
 	default:
 		return 3
 	}
-}
-
-func orderedStubTags(tags []gql.RecipeStubTagsTag) []RecipeTag {
-	ordered := make([]RecipeTag, len(tags))
-	for i, tag := range tags {
-		ordered[i] = RecipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
-	}
-	return orderedTags(ordered)
-}
-
-func orderedDetailTags(tags []gql.RecipeDetailTagsTag) []RecipeTag {
-	ordered := make([]RecipeTag, len(tags))
-	for i, tag := range tags {
-		ordered[i] = RecipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
-	}
-	return orderedTags(ordered)
 }
 
 func tagCategoryLabel(category gql.TagCategory) string {
@@ -90,15 +70,15 @@ func tagClass(category gql.TagCategory) string {
 
 func recipeAccessibleLabel(recipe gql.RecipeStub) string {
 	labels := []string{"Rezept " + recipe.Name}
-	for _, tag := range orderedStubTags(recipe.Tags) {
+	for _, tag := range orderedTags(recipe.Tags) {
 		labels = append(labels, tagCategoryLabel(tag.Category)+": "+tag.Name)
 	}
 	return strings.Join(labels, ". ")
 }
 
-templ recipeCardTags(tags []gql.RecipeStubTagsTag) {
+templ recipeCardTags(tags []gql.RecipeTag) {
 	if len(tags) > 0 {
-		{{ ordered := orderedStubTags(tags); overflowCount := len(ordered) - 3 }}
+		{{ ordered := orderedTags(tags); overflowCount := len(ordered) - 3 }}
 		if overflowCount < 0 {
 			{{ overflowCount = 0 }}
 		}
@@ -121,7 +101,7 @@ templ recipeCardTags(tags []gql.RecipeStubTagsTag) {
 	}
 }
 
-templ recipeDetailTags(id string, tags []gql.RecipeDetailTagsTag) {
+templ recipeDetailTags(id string, tags []gql.RecipeTag) {
 	<div
 		id="recipe-tags"
 		class="contents"
@@ -132,7 +112,7 @@ templ recipeDetailTags(id string, tags []gql.RecipeDetailTagsTag) {
 		hx-on::response-error="const status = this.querySelector('[data-tag-feedback]'); if (status) { status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false"
 	>
 		if len(tags) > 0 {
-			@recipeDetailTagList(orderedDetailTags(tags), false, id)
+			@recipeDetailTagList(orderedTags(tags), false, id)
 		}
 		<p data-tag-feedback role="status" aria-live="polite"></p>
 		<button

@@ -12,14 +12,14 @@ import (
 
 func TestOrderedTagsUsesCategoryFoldedNameAndID(t *testing.T) {
 	tags := orderedTags([]RecipeTag{
-		{ID: "course", Category: gql.TagCategoryCourse, Name: "Dessert"},
-		{ID: "z", Category: gql.TagCategoryCuisine, Name: "ÉCLAIR"},
-		{ID: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
-		{ID: "a", Category: gql.TagCategoryCuisine, Name: "e\u0301clair"},
+		{Id: "course", Category: gql.TagCategoryCourse, Name: "Dessert"},
+		{Id: "z", Category: gql.TagCategoryCuisine, Name: "ÉCLAIR"},
+		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
+		{Id: "a", Category: gql.TagCategoryCuisine, Name: "e\u0301clair"},
 	})
 	ids := make([]string, len(tags))
 	for i, tag := range tags {
-		ids[i] = tag.ID
+		ids[i] = tag.Id
 	}
 	if want := []string{"a", "z", "dietary", "course"}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("unexpected stable tag order: %v", ids)
@@ -36,7 +36,7 @@ func renderTagComponent(t *testing.T, component templ.Component) string {
 }
 
 func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
-	tags := []RecipeTag{{ID: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"}}
+	tags := []RecipeTag{{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"}}
 	for _, testCase := range []struct {
 		name                       string
 		owner, edit, picker, empty bool
@@ -92,9 +92,9 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 
 func TestTagOptionsAreGroupedAndEmptyInventoryIsExplicit(t *testing.T) {
 	tags := []RecipeTag{
-		{ID: "course", Category: gql.TagCategoryCourse, Name: "Suppe"},
-		{ID: "cuisine", Category: gql.TagCategoryCuisine, Name: "Ägyptisch"},
-		{ID: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
+		{Id: "course", Category: gql.TagCategoryCourse, Name: "Suppe"},
+		{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Ägyptisch"},
+		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 	}
 	body := renderTagComponent(t, TagOptions("42", tags))
 	if cuisine, dietary, course := strings.Index(body, "Küche"), strings.Index(body, "Ernährungsweise"), strings.Index(body, "Gang"); !(cuisine < dietary && dietary < course) {
@@ -107,7 +107,7 @@ func TestTagOptionsAreGroupedAndEmptyInventoryIsExplicit(t *testing.T) {
 }
 
 func TestRecipeDetailTagsStayReadOnlyAndLoadPermissionAwareFragment(t *testing.T) {
-	body := renderTagComponent(t, recipeDetailTags("42", []gql.RecipeDetailTagsTag{
+	body := renderTagComponent(t, recipeDetailTags("42", []gql.RecipeTag{
 		{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 	}))
 	if !strings.Contains(body, `hx-get="/recipe/42/tags"`) ||

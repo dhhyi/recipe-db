@@ -140,9 +140,9 @@ templ recipeDetailTagList(tags []RecipeTag, edit bool, id string) {
 			for _, tag := range orderedTags(tags) {
 				if edit {
 					<form
-						action={ recipeTagRemovePath(id, tag.ID) }
+						action={ recipeTagRemovePath(id, tag.Id) }
 						method="post"
-						hx-post={ recipeTagRemovePath(id, tag.ID) }
+						hx-post={ recipeTagRemovePath(id, tag.Id) }
 						hx-target="#recipe-tags"
 						hx-swap="outerHTML"
 						hx-sync="#recipe-tags:drop"
@@ -189,7 +189,7 @@ templ TagOptions(id string, tags []RecipeTag) {
 									hx-swap="outerHTML"
 									hx-sync="#recipe-tags:drop"
 								>
-									<input type="hidden" name="tagId" value={ tag.ID }/>
+									<input type="hidden" name="tagId" value={ tag.Id }/>
 									<button type="submit" class={ tagClass(tag.Category) }>{ tag.Name }</button>
 								</form>
 							</li>

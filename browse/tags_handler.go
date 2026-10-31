@@ -36,11 +36,7 @@ func loadRecipeTags(r *http.Request, client graphql.Client, id string) ([]compon
 	if err != nil || response.Recipe.Tags == nil {
 		return nil, response.MyCapabilities.CanManageRecipes, errTagsUnavailable
 	}
-	tags := make([]components.RecipeTag, len(response.Recipe.Tags))
-	for index, tag := range response.Recipe.Tags {
-		tags[index] = components.RecipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
-	}
-	return tags, response.MyCapabilities.CanManageRecipes, nil
+	return response.Recipe.Tags, response.MyCapabilities.CanManageRecipes, nil
 }
 
 func loadTagInventory(r *http.Request, client graphql.Client) ([]components.RecipeTag, error) {
@@ -51,11 +47,7 @@ func loadTagInventory(r *http.Request, client graphql.Client) ([]components.Reci
 	if response == nil || response.Tags == nil {
 		return nil, errTagsUnavailable
 	}
-	tags := make([]components.RecipeTag, len(response.Tags))
-	for index, tag := range response.Tags {
-		tags[index] = components.RecipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
-	}
-	return tags, nil
+	return response.Tags, nil
 }
 
 func tagQuery(r *http.Request) (string, error) {
@@ -82,12 +74,12 @@ func tagSearchKey(value string) string {
 func unassignedTagOptions(tags, assigned []components.RecipeTag, query string) []components.RecipeTag {
 	assignedIDs := make(map[string]bool, len(assigned))
 	for _, tag := range assigned {
-		assignedIDs[tag.ID] = true
+		assignedIDs[tag.Id] = true
 	}
 	key := tagSearchKey(query)
 	options := make([]components.RecipeTag, 0, len(tags))
 	for _, tag := range tags {
-		if !assignedIDs[tag.ID] && strings.Contains(tagSearchKey(tag.Name), key) {
+		if !assignedIDs[tag.Id] && strings.Contains(tagSearchKey(tag.Name), key) {
 			options = append(options, tag)
 		}
 	}
@@ -352,7 +344,7 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 			}
 			found := false
 			for _, tag := range tags {
-				found = found || tag.ID == tagID
+				found = found || tag.Id == tagID
 			}
 			if !found {
 				writeCurrentTagEdit(w, r, id, http.StatusBadRequest, tags, "Dieser Tag ist dem Rezept nicht zugeordnet.", false, false)
@@ -373,10 +365,10 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 			found := false
 			assigned := false
 			for _, tag := range inventory {
-				found = found || tag.ID == formTagID
+				found = found || tag.Id == formTagID
 			}
 			for _, tag := range tags {
-				assigned = assigned || tag.ID == formTagID
+				assigned = assigned || tag.Id == formTagID
 			}
 			if !found || assigned {
 				writeCurrentTagEdit(w, r, id, http.StatusBadRequest, tags, "Dieser Tag ist nicht verfügbar.", false, false)

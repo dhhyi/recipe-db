@@ -8,9 +8,7 @@ fragment RecipeStub on Recipe {
   id
   name
   tags {
-    id
-    category
-    name
+    ...RecipeTag
   }
   image {
     url
@@ -19,6 +17,12 @@ fragment RecipeStub on Recipe {
   rating {
     ...Rating
   }
+}
+
+fragment RecipeTag on Tag {
+  id
+  category
+  name
 }
 
 query Overview {
@@ -75,9 +79,7 @@ fragment RecipeDetail on Recipe {
   updatedAt
   method
   tags {
-    id
-    category
-    name
+    ...RecipeTag
   }
   image {
     url
@@ -108,18 +110,14 @@ query RecipeTags($id: ID!) {
   recipe(id: $id) {
     id
     tags {
-      id
-      category
-      name
+      ...RecipeTag
     }
   }
 }
 
 query TagInventory {
   tags {
-    id
-    category
-    name
+    ...RecipeTag
   }
 }
 
