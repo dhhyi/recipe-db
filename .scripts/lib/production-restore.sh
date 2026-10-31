@@ -214,7 +214,7 @@ restore_import() {
     # Recheck immediately before extraction; only this helper owns the mount.
     kube exec "$pod" -- sh -ec 'test -z "$(find /data -mindepth 1 -maxdepth 1 -print -quit)"' || return 1
     # Preserve numeric ownership and permission bits from the exact recorded release.
-    kube exec -i "$pod" -- tar -xpf - -C /data < "$work/validated/$archive" || return 1
+    kube exec -i "$pod" -- tar -xpf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
     kube exec "$pod" -- sync || return 1
     kube exec "$pod" -- tar -C /data -cf - . > "$work/restored-$name.tar" || return 1
     python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" "$layout" \

@@ -33,6 +33,7 @@ deploy:
     - .scripts/tests/production-smoke.bats
     - .scripts/tests/backup-snapshot.bats
     - .scripts/tests/backup-package.bats
+    - .scripts/tests/production-restore.bats
     - .scripts/tests/production-storage.bats
   inputs:
     - .scripts/production-k3d.sh

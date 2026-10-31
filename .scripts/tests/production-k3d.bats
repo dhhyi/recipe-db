@@ -129,6 +129,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           {metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
             data:{"routes.yml":(tojson|@base64)}}' "$MOCK_LOG.restore-routes"
         exit ;;
+      *"get configmap recipe-db-restore --ignore-not-found -o json")
+        if [[ -f $MOCK_LOG.cluster-restore-state ]]; then
+          cat "$MOCK_LOG.cluster-restore-state"
+        fi
+        exit ;;
+      *"apply -f "*restore-state-configmap.json)
+        cp "${*: -1}" "$MOCK_LOG.cluster-restore-state"
+        exit ;;
       *"get deployments,statefulsets,daemonsets,jobs,cronjobs,pods,services,ingresses,configmaps,secrets -o json")
         if [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
           echo '{"items":[{"kind":"Deployment","metadata":{"name":"recipes"}}]}'
@@ -158,9 +166,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"exec "*restore-volume-*"-- sh -ec"*)
         if [[ ${MOCK_RESTORE_NONEMPTY:-} != "" && $* == *"restore-volume-$MOCK_RESTORE_NONEMPTY "* ]]; then exit 1; fi
         exit ;;
-      *"exec -i restore-volume-"*"-- tar -xpf - -C /data")
+      *"exec -i restore-volume-"*"-- tar -xpf - --numeric-owner -C /data")
         if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then exit 1; fi
-        name="${*: -7:1}"
+        name="${*: -8:1}"
         name="${name#restore-volume-}"
         mkdir -p "$FIXTURE_ROOT/imported/$name"
         tar -xpf - -C "$FIXTURE_ROOT/imported/$name"
@@ -1623,6 +1631,58 @@ run_restore() {
     "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
 }
 
+restore_real_package_fixture() {
+  restore_fixture
+  cp "$BATS_TEST_DIRNAME/../validate-backup-package.py" .scripts/
+  mkdir -p provisioning/files capture
+  chmod 700 capture
+  cp "$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" provisioning/files/
+  rm "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" "$FIXTURE_ROOT/tar-data/tags/tags.sqlite-wal"
+  python3 - "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" << 'PY'
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as database:
+    database.execute("CREATE TABLE records (id TEXT PRIMARY KEY, value TEXT)")
+PY
+  python3 - "$FIXTURE_ROOT" "$RESTORE_ID" "$ARTIFACT" "$MOCK_REVISION" << 'PY'
+import hashlib, importlib.util, json, pathlib, sys, tarfile
+root, backup_id, artifact, revision = sys.argv[1:]
+root = pathlib.Path(root)
+spec = importlib.util.spec_from_file_location("upload", root / "provisioning/files/backup-upload.py")
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+spec = importlib.util.spec_from_file_location("snapshot", root / ".scripts/validate-backup-snapshot.py")
+snapshot = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(snapshot)
+inventory = []
+layouts = {"recipes":{"kind":"sqlite","file":"recipes.sqlite3"},
+           "tags":{"kind":"sqlite","file":"tags.sqlite"}, "images":{"kind":"images"}}
+for name, layout in layouts.items():
+    archive = root / "capture" / f"{name}.tar"
+    with tarfile.open(archive, "w", format=tarfile.USTAR_FORMAT) as output:
+        output.add(root / "tar-data" / name, arcname=".")
+    archive.chmod(0o600)
+    files = snapshot.validate(archive, layout)
+    inventory.append({"service":name,
+                      "role":"authoritative-read-only" if name == "recipes" else "cleanup-participant",
+                      "pvc":name, "archive":archive.name, "sizeBytes":archive.stat().st_size,
+                      "sha256":hashlib.sha256(archive.read_bytes()).hexdigest(),
+                      "fileCount":len(files), "files":files})
+manifest = {"format":upload.FORMAT,"formatVersion":1,"backupId":backup_id,
+            "capturedAt":"2026-10-31T12:34:56Z",
+            "source":{"target":"local","cluster":"recipe-db-rehearsal",
+                      "context":"k3d-recipe-db-rehearsal","namespace":"recipe-db",
+                      "artifact":artifact,"revision":revision},"inventory":inventory}
+path = root / "capture/manifest.json"
+path.write_bytes(upload.json_bytes(manifest))
+path.chmod(0o600)
+package = upload.create_package(root / "capture", root, manifest, "local-fixture", upload.DEFAULT_MAX_STAGING_BYTES)
+(root / package["archive"]).chmod(0o600)
+(root / "real-package-paths.json").write_text(json.dumps(package))
+PY
+  RESTORE_MANIFEST="$FIXTURE_ROOT/$(jq -r .manifest real-package-paths.json)"
+  RESTORE_ARCHIVE="$FIXTURE_ROOT/$(jq -r .archive real-package-paths.json)"
+}
+
 @test "restore fully imports only after ALL volumes are empty and verifies propagation before public reopening" {
   restore_fixture
   run_restore
@@ -1688,7 +1748,7 @@ run_restore() {
     jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
     [ -e "$MOCK_LOG.lease" ]
     run ! grep -Eq 'tar -xpf|delete pvc|delete pv|rm -rf /data' "$MOCK_LOG"
-    rm "$MOCK_LOG.lease" "$MOCK_LOG.claims" "$MOCK_LOG.restore-pods"
+    rm "$MOCK_LOG.lease" "$MOCK_LOG.claims" "$MOCK_LOG.restore-pods" "$MOCK_LOG.cluster-restore-state"
     : > "$MOCK_LOG"
   done
 }
@@ -1855,6 +1915,9 @@ run_restore_abandon() {
     "$RESTORE_STATE/restore-state.json"
   jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
   run ! grep -Eq 'tar -xpf|delete pvc|delete pv|scale deployment|set env deployment' "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"unresolved or abandoned restore state"* ]]
 }
 
 @test "restore abandonment rejects active writers helper Pods restartable Jobs and a missing public barrier" {
@@ -1884,4 +1947,23 @@ run_restore_abandon() {
   [[ $output == *"state, target values or holder mismatch"* ]]
   run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
   [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "restore completed state permits later ordinary immutable deployment" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "restore full CLI consumes a real packaged SQLite snapshot through the real validator with mocked cluster infrastructure" {
+  restore_real_package_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
+  [ ! -e "$MOCK_LOG.lease" ]
+  [ -e "$MOCK_LOG.probe-deleted" ]
+  cmp "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" "$FIXTURE_ROOT/imported/tags/tags.sqlite"
 }

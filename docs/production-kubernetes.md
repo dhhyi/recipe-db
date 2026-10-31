@@ -127,7 +127,16 @@ The recorded release artifact and every application image must remain available.
 
 The shared cluster-scoped Lease excludes deployment and capture. Fresh-target inspection refuses populated authoritative, derived and external-cache storage. Application writers remain stopped during data import. Public GraphQL remains blocked while the private trusted-ingress query route permits full search rebuilding. Browse's recorded image hardcodes `http://traefik/graphql`; restore must route that internal service alias to the private entrypoint without opening the public Traefik service, rather than relying on a `GRAPHQL_URL` environment override. NATS/consumers, Typesense, search/checkpoint, browse and external caches start fresh; upstream websites are not recovery prerequisites. Completion requires data verification, search readiness, representative reads and change propagation before application access reopens.
 
-A nonzero exit is never a partial success. After target mutation, preserve the private restore state directory and the Lease and leave access blocked. Inspect the saved phase, explicit target/context and `lock-status` before any operator action. Do not use `backup-exit`, ordinary deployment, a forced lock deletion or a second restore to open or overwrite a partial target. Stop any surviving operator process, retain the failed target for investigation, and select another genuinely fresh target for a new restore; any destructive disposal requires separate explicit operator approval. Automated failure tests are not evidence of a live Pi recovery. The integrated disposable-k3d rehearsal belongs to #108, and operator-approved Drive/Pi acceptance to #107.
+Cache expiry alone is not propagation evidence: browse's cache expires after one minute. The verification must establish that the fresh search and browse consumers acknowledged the probe's changes before reopening access.
+
+A nonzero exit is never a partial success. After target mutation, preserve the private restore state directory and the Lease and leave access blocked. Inspect the saved phase, explicit target/context and `lock-status` before any operator action. Do not use `backup-exit`, ordinary deployment, a forced lock deletion or a second restore to open or overwrite a partial target. Stop any surviving operator process and isolate the failed target: stop all Deployments and restartable controllers, suspend Jobs/CronJobs, remove only stopped worker/helper Pods, and retain the public routing barrier. `restore-abandon` releases the exact retained Lease only after checking the saved target/configuration, workload isolation and routing barrier; it does not delete data or reopen access:
+
+```sh
+mise run production-k3d restore-abandon "$VALUES" "$STATE_DIRECTORY" \
+  "$HOLDER" "ABANDON-$HOLDER-AFTER-ISOLATION"
+```
+
+Retain the failed target for investigation and select another genuinely fresh target for a new restore; abandonment does not make partial volumes reusable. Any destructive disposal requires separate explicit operator approval. Automated failure tests are not evidence of a live Pi recovery. The integrated disposable-k3d rehearsal belongs to #108, and operator-approved Drive/Pi acceptance to #107.
 
 ## Operator configuration and secrets
 
