@@ -177,7 +177,10 @@
             group: root
             mode: "0644"
           loop:
-            - { src: recipe-db-backup.service.j2, dest: recipe-db-backup.service }
+            - {
+                src: recipe-db-backup.service.j2,
+                dest: recipe-db-backup.service,
+              }
             - { src: recipe-db-backup.timer.j2, dest: recipe-db-backup.timer }
 
         - name: Configure required Pi memory cgroups

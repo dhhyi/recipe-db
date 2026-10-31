@@ -665,8 +665,7 @@ backup_check_archive_capacity() {
     state_bytes=0
     [[ ! -f $snapshot/backup-state.json ]] \
       || state_bytes=$(stat -c '%s' "$snapshot/backup-state.json") || return 1
-    [[ $((existing_bytes + state_bytes + bytes + 67108864)) \
-      -le $RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES ]] || {
+    [[ $((existing_bytes + state_bytes + bytes + 67108864)) -le $RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES ]] || {
       printf 'production: snapshot exceeds configured staging limit\n' >&2
       return 1
     }
