@@ -8,9 +8,7 @@ fragment RecipeStub on Recipe {
   id
   name
   tags {
-    id
-    category
-    name
+    ...RecipeTag
   }
   image {
     url
@@ -19,6 +17,12 @@ fragment RecipeStub on Recipe {
   rating {
     ...Rating
   }
+}
+
+fragment RecipeTag on Tag {
+  id
+  category
+  name
 }
 
 query Overview {
@@ -75,9 +79,7 @@ fragment RecipeDetail on Recipe {
   updatedAt
   method
   tags {
-    id
-    category
-    name
+    ...RecipeTag
   }
   image {
     url
@@ -98,6 +100,33 @@ query RecipeById($id: ID!) {
   recipe(id: $id) {
     ...RecipeDetail
   }
+}
+
+query RecipeTags($id: ID!) {
+  myCapabilities {
+    role
+    canManageRecipes
+  }
+  recipe(id: $id) {
+    id
+    tags {
+      ...RecipeTag
+    }
+  }
+}
+
+query TagInventory {
+  tags {
+    ...RecipeTag
+  }
+}
+
+mutation AddRecipeTag($recipeId: ID!, $tagId: ID!) {
+  addRecipeTag(recipeId: $recipeId, tagId: $tagId)
+}
+
+mutation RemoveRecipeTag($recipeId: ID!, $tagId: ID!) {
+  removeRecipeTag(recipeId: $recipeId, tagId: $tagId)
 }
 
 query SimilarRecipeIds($recipeId: ID!) {

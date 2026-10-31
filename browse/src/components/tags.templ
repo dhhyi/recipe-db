@@ -11,13 +11,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-type recipeTag struct {
-	ID       string
-	Category gql.TagCategory
-	Name     string
-}
-
-func orderedTags(tags []recipeTag) []recipeTag {
+func orderedTags(tags []gql.RecipeTag) []gql.RecipeTag {
 	sort.Slice(tags, func(i, j int) bool {
 		left, right := tags[i], tags[j]
 		if left.Category != right.Category {
@@ -28,7 +22,7 @@ func orderedTags(tags []recipeTag) []recipeTag {
 		if leftName != rightName {
 			return leftName < rightName
 		}
-		return left.ID < right.ID
+		return left.Id < right.Id
 	})
 	return tags
 }
@@ -44,22 +38,6 @@ func tagCategoryOrder(category gql.TagCategory) int {
 	default:
 		return 3
 	}
-}
-
-func orderedStubTags(tags []gql.RecipeStubTagsTag) []recipeTag {
-	ordered := make([]recipeTag, len(tags))
-	for i, tag := range tags {
-		ordered[i] = recipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
-	}
-	return orderedTags(ordered)
-}
-
-func orderedDetailTags(tags []gql.RecipeDetailTagsTag) []recipeTag {
-	ordered := make([]recipeTag, len(tags))
-	for i, tag := range tags {
-		ordered[i] = recipeTag{ID: tag.Id, Category: tag.Category, Name: tag.Name}
-	}
-	return orderedTags(ordered)
 }
 
 func tagCategoryLabel(category gql.TagCategory) string {
@@ -90,15 +68,15 @@ func tagClass(category gql.TagCategory) string {
 
 func recipeAccessibleLabel(recipe gql.RecipeStub) string {
 	labels := []string{"Rezept " + recipe.Name}
-	for _, tag := range orderedStubTags(recipe.Tags) {
+	for _, tag := range orderedTags(recipe.Tags) {
 		labels = append(labels, tagCategoryLabel(tag.Category)+": "+tag.Name)
 	}
 	return strings.Join(labels, ". ")
 }
 
-templ recipeCardTags(tags []gql.RecipeStubTagsTag) {
+templ recipeCardTags(tags []gql.RecipeTag) {
 	if len(tags) > 0 {
-		{{ ordered := orderedStubTags(tags); overflowCount := len(ordered) - 3 }}
+		{{ ordered := orderedTags(tags); overflowCount := len(ordered) - 3 }}
 		if overflowCount < 0 {
 			{{ overflowCount = 0 }}
 		}
@@ -121,31 +99,28 @@ templ recipeCardTags(tags []gql.RecipeStubTagsTag) {
 	}
 }
 
-templ recipeDetailTags(tags []gql.RecipeDetailTagsTag) {
-	<div id="recipe-tags" class="contents">
+templ recipeDetailTags(id string, tags []gql.RecipeTag) {
+	<div
+		id="recipe-tags"
+		class="contents"
+		hx-get={ recipeTagsPath(id) }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+		hx-on::before-swap="if (event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
+		hx-on::response-error="const status = this.querySelector('[data-tag-feedback]'); if (status) { status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false"
+	>
 		if len(tags) > 0 {
-			{{ ordered := orderedDetailTags(tags) }}
-			<section aria-label="Kategorisierte Tags" class="recipe-tags-detail flex flex-col gap-2">
-				<div class="flex flex-wrap gap-1">
-					for _, tag := range ordered {
-						<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>{ tag.Name }</span>
-					}
-				</div>
-				<ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
-					<li class="flex items-center gap-1">
-						<span class={ tagClass(gql.TagCategoryCuisine) } aria-hidden="true"></span>
-						<span>Küche</span>
-					</li>
-					<li class="flex items-center gap-1">
-						<span class={ tagClass(gql.TagCategoryDietaryStyle) } aria-hidden="true"></span>
-						<span>Ernährungsweise</span>
-					</li>
-					<li class="flex items-center gap-1">
-						<span class={ tagClass(gql.TagCategoryCourse) } aria-hidden="true"></span>
-						<span>Gang</span>
-					</li>
-				</ul>
-			</section>
+			@recipeDetailTagList(orderedTags(tags), false, id)
 		}
+		<p data-tag-feedback role="status" aria-live="polite"></p>
+		<button
+			type="button"
+			data-tag-retry
+			hidden
+			hx-get={ recipeTagsPath(id) }
+			hx-target="#recipe-tags"
+			hx-swap="outerHTML"
+			hx-sync="#recipe-tags:drop"
+		>Erneut laden</button>
 	</div>
 }

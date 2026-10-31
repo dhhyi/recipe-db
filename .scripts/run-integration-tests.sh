@@ -64,7 +64,7 @@ if ! jq -e '.services.fixtures.profiles | index("test") != null' <<< "$compose_c
   exit 2
 fi
 
-echo "WARNING: integration tests may modify application data. e2e-test deletes all recipes, ratings, images, and inspirations before each attempt, preserving the final attempt's data; volumes are not reset."
+echo "WARNING: integration tests may modify application data. e2e-test deletes all recipes, ratings, images, inspirations, and tags before each attempt, preserving the final attempt's data; volumes are not reset."
 
 fixture_started=false
 tags_test_instances_started=false

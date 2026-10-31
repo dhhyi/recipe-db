@@ -47,7 +47,7 @@ func TestRecipeCardTagsAreOrderedAndCappedInServerHTML(t *testing.T) {
 		Recipes: []gql.RecipeStub{{
 			Id:   "recipe",
 			Name: "Eintopf",
-			Tags: []gql.RecipeStubTagsTag{
+			Tags: []gql.RecipeTag{
 				{Id: "course", Category: gql.TagCategoryCourse, Name: "Hauptgericht"},
 				{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 				{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Deutsch"},
@@ -73,7 +73,7 @@ func TestRecipeCardOmitsEmptyAndUnavailableTags(t *testing.T) {
 	state := components.BrowseState{
 		Kind: "search",
 		Recipes: []gql.RecipeStub{
-			{Id: "empty", Name: "Untaged", Tags: []gql.RecipeStubTagsTag{}},
+			{Id: "empty", Name: "Untaged", Tags: []gql.RecipeTag{}},
 			{Id: "failed", Name: "Unavailable"},
 		},
 	}
