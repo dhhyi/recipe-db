@@ -145,6 +145,15 @@ for (const role of ["anonymous", "member", "owner"]) {
       await expect(
         page.locator("#recipe-tags .recipe-tags-detail > div > .recipe-tag"),
       ).toHaveCount(3);
+      const editButton = page.getByRole("button", {
+        name: "Bearbeiten",
+        exact: true,
+      });
+      if (role === "owner") {
+        await expect(editButton).toBeVisible();
+      } else {
+        await expect(editButton).toHaveCount(0);
+      }
       await waitForImageDecoded(
         page.getByRole("img", { name: source.name, exact: true }),
       );
@@ -193,9 +202,9 @@ for (const role of ["anonymous", "member", "owner"]) {
           await waitForImageDecoded(
             card.getByRole("img", { name: recipe.name, exact: true }),
           );
-          await expect(card.locator("[data-recipe-tag]:visible")).not.toHaveCount(
-            0,
-          );
+          await expect(
+            card.locator("[data-recipe-tag]:visible"),
+          ).not.toHaveCount(0);
         }
         await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
