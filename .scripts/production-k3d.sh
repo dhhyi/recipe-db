@@ -231,14 +231,31 @@ routes() {
     | if $config[0].httpsStaging then
         if all(.http.routers[]; all(.entrypoints[]; . == "web" or . == "rest-internal")) then .
         else error("existing routes must not use certificate-only staging entrypoints") end
-        |
-        .http.routers["https-staging"] = {
-          rule:("Host(`" + $config[0].httpsStaging.hostname + "`) && Path(`/`)"),
-          entrypoints:["websecure"], service:"https-staging",
-          middlewares:["identity-strip"],
-          tls:{certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]}}
-        | .http.services["https-staging"] = {
-          loadBalancer:{servers:[{url:("http://https-staging." + $ns + ".svc.cluster.local:80")}]}}
+        | ("Host(`" + $config[0].httpsStaging.hostname + "`)") as $host
+        | {certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]} as $tls
+        | if $config[0].httpsStaging.readOnlyPreview == true then
+            def preview($name; $rule):
+              .http.routers[$name] as $router |
+              if $router == null or $router.service == null then
+                error("missing required preview router: " + $name)
+              else
+                .http.routers["preview-" + $name] = ($router + {
+                  rule:($host + " && (" + $rule + ")"),
+                  entrypoints:["websecure"], tls:$tls,
+                  middlewares:(["identity-strip"] + ($router.middlewares // []))})
+              end;
+            preview("frontend";
+              "((Method(`GET`) || Method(`HEAD`)) && (Path(`/`) || Path(`/controls`) || Path(`/identity`) || PathRegexp(`^/recipe/[^/]+(/(similar|tags|controls|rating|inspirations))?$`))) || (Method(`POST`) && PathRegexp(`^/recipe/[^/]+/similar/more$`))")
+            | preview("design"; "(Method(`GET`) || Method(`HEAD`)) && PathPrefix(`/design/`)")
+            | preview("images-public"; "(Method(`GET`) || Method(`HEAD`)) && PathPrefix(`/public/`)")
+            | preview("graphql"; "(Method(`GET`) || Method(`POST`) || Method(`OPTIONS`)) && Path(`/graphql`)")
+          else
+            .http.routers["https-staging"] = {
+              rule:($host + " && Path(`/`)"), entrypoints:["websecure"],
+              service:"https-staging", middlewares:["identity-strip"], tls:$tls}
+            | .http.services["https-staging"] = {
+              loadBalancer:{servers:[{url:("http://https-staging." + $ns + ".svc.cluster.local:80")}]}}
+          end
       else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
 }
@@ -1167,8 +1184,8 @@ case "$command" in
     cat "$work/rendered.yml"
     ;;
   deploy)
-    pull_release "$1"
     production_secrets
+    pull_release "$1"
     render
     routes
     annotate_credentials

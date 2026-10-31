@@ -485,6 +485,18 @@ http:
   routers:
     graphql:
       entrypoints: [web]
+      service: recipe-db-graphql
+      middlewares: [graphql-ingress]
+    frontend:
+      entrypoints: [web]
+      service: recipe-db-frontend
+      middlewares: [frontend-compress, browse-unavailable]
+    design:
+      entrypoints: [web]
+      service: recipe-db-design
+    images-public:
+      entrypoints: [web]
+      service: recipe-db-images
   middlewares:
     oauth2-forward-auth:
       forwardAuth:
@@ -597,6 +609,63 @@ token_only_values() {
     .runtime.authMode="token-only" | .runtime.googleOAuthClientId="" |
     del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+@test "read-only preview rejects privileged policies before connecting" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+  for policy in \
+    '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}' \
+    '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}' \
+    '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"user@example.org":{"role":"owner"}}}'; do
+    printf '%s\n' "$policy" > auth-accounts.json
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"read-only preview requires"* ]]
+  done
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "preview and renewal rehearsal reject unsafe CA and flag combinations" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan"'
+  for change in \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",readOnlyPreview:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",renewalRehearsal:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:"true"}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:1}'; do
+    set_value "$change"
+    run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"invalid or incomplete production values"* ]]
+  done
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "read-only preview exposes only explicit public transports with sanitized trusted ingress" {
+  token_only_values
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e '
+    [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
+    ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql","preview-images-public"]
+    and all($secure[]; .value.rule | startswith("Host(`recipes.example.org`) && "))
+    and all($secure[]; .value.middlewares[0] == "identity-strip")
+    and all($secure[]; .value.tls.certResolver == "letsencrypt")
+    and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
+    and .["preview-frontend"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
+    and (.["preview-frontend"].rule | contains("similar/more") and (contains("rate") | not) and (contains("edit") | not))
+    and .graphql.entrypoints == ["web"]
+    and .["graphql-internal"].entrypoints == ["rest-internal"]
+    and all(.[]; (.entrypoints | index("staging-http")) == null)
+  ' "$MOCK_LOG.routers"
 }
 
 legacy_pi_claims() {

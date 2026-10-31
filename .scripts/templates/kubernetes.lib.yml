@@ -183,6 +183,12 @@
 #@     values["updateStrategy"] = {"type": "Recreate"}
 #@     values["deployment"]["initContainers"] = [{"name": "acme-permissions", "image": cfg["infrastructure"]["traefik"], "command": ["sh", "-ec", "umask 077; touch /data/acme-" + environment + ".json; chmod 600 /data/acme-" + environment + ".json"], "volumeMounts": [{"name": "data", "mountPath": "/data"}], "securityContext": {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True}}]
 #@     values["additionalArguments"].extend(["--entrypoints.staging-http.http.redirections.entrypoint.to=:443", "--entrypoints.staging-http.http.redirections.entrypoint.scheme=https", "--entrypoints.websecure.http.middlewares=identity-strip@file", "--certificatesresolvers.letsencrypt.acme.caserver=" + ca, "--certificatesresolvers.letsencrypt.acme.storage=/data/acme-" + environment + ".json", "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http"])
+#@     if https_staging.get("renewalRehearsal", False):
+#@       if environment != "staging":
+#@         fail("Renewal rehearsal is restricted to the test CA")
+#@       end
+#@       values["additionalArguments"].append("--certificatesresolvers.letsencrypt.acme.certificatesduration=8760")
+#@     end
 #@   end
 #@   return values
 #@ end

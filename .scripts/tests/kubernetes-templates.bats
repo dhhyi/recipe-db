@@ -25,6 +25,7 @@ setup() {
 }
 
 render() {
+  set -o pipefail
   mise exec -- ytt \
     -f "$ROOT/.scripts/templates/kubernetes-template.yml" \
     -f "$ROOT/.scripts/templates/kubernetes.lib.yml" \
@@ -137,6 +138,28 @@ render() {
       and (.spec.template.spec.containers[0].readinessProbe != null)
       and (.spec.template.spec.containers[0].startupProbe != null))
   ' manifests.json
+}
+
+@test "renewal rehearsal enlarges only the test CA renewal window and retains normal production settings" {
+  jq '.config.target="pi" | .config.runtime.authMode="token-only" |
+    .config.runtime.ingressMode="private-lan" |
+    .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:true}
+  ' values.json > renewal-values.json
+  render renewal-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
+    | yq -o=json '.' | jq -e '
+      .additionalArguments | index("--certificatesresolvers.letsencrypt.acme.certificatesduration=8760") != null'
+  jq '.config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}' \
+    renewal-values.json > preview-values.json
+  render preview-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
+    | yq -o=json '.' | jq -e '
+      all(.additionalArguments[]; startswith("--certificatesresolvers.letsencrypt.acme.certificatesduration=") | not)
+      and .persistence.existingClaim == "recipe-db-acme"'
+  jq '.config.httpsStaging.renewalRehearsal=true' preview-values.json > unsafe-values.json
+  run render unsafe-values.json
+  [ "$status" -ne 0 ]
+  [[ $output == *"Renewal rehearsal is restricted to the test CA"* ]]
 }
 
 @test "only explicitly durable services have independent local-path claims" {
