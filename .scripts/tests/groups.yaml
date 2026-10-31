@@ -33,9 +33,11 @@ deploy:
     - .scripts/tests/production-smoke.bats
     - .scripts/tests/backup-snapshot.bats
     - .scripts/tests/production-storage.bats
+    - .scripts/tests/public-https.bats
   inputs:
     - .scripts/production-k3d.sh
     - .scripts/smoke-production-k3d.sh
+    - .scripts/check-public-https.sh
     - .scripts/generate-production-build-metadata.sh
     - .scripts/lib/production-config.sh
     - .scripts/lib/cluster-operation-lock.sh
