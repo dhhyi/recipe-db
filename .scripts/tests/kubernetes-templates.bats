@@ -19,8 +19,9 @@ setup() {
         revision: ("b" * 40),
         images: ($projects | map({key: .name, value: ("ghcr.io/dhhyi/recipe-db-" + .name + "@sha256:" + ("c" * 64))}) | from_entries)
       },
-      files: {nats: "port: 4222", maintenanceNginx: "server {}", maintenanceHtml: "unavailable", oauthConfig: "reverse_proxy=true"}
+      files: {nats: "port: 4222", maintenanceNginx: "server {}", maintenanceHtml: "unavailable", oauthConfig: "reverse_proxy=true", designNginx: "server {}"}
     }
+
   ' > values.json
 }
 
@@ -30,6 +31,23 @@ render() {
     -f "$ROOT/.scripts/templates/kubernetes-template.yml" \
     -f "$ROOT/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
+}
+
+@test "design redirects stay origin-relative behind TLS termination and use the reviewed production config" {
+  grep -q 'absolute_redirect off;' "$ROOT/design/nginx.conf"
+  grep -Fq "return 302 \"\$real_css_file\";" "$ROOT/design/nginx.conf"
+  grep -Fq "return 302 \"\$real_js_file\";" "$ROOT/design/nginx.conf"
+  run ! grep -Fq "\$scheme://\$http_host" "$ROOT/design/nginx.conf"
+  jq --rawfile config "$ROOT/design/nginx.conf" '.files.designNginx=$config' values.json > design-values.json
+  render design-values.json
+  jq -e --rawfile config "$ROOT/design/nginx.conf" '
+    any(.items[]; .kind == "ConfigMap" and .metadata.name == "design-config"
+      and .data["default.conf"] == $config)
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "design"
+      and any(.spec.template.spec.containers[0].volumeMounts[];
+        .name == "design-config" and .mountPath == "/etc/nginx/conf.d" and .readOnly)
+      and any(.spec.template.spec.volumes[]; .configMap.name == "design-config"))
+  ' manifests.json
 }
 
 @test "Pi uses the official 16 KiB ARM64 Typesense build without changing local defaults" {

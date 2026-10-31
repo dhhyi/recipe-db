@@ -49,6 +49,7 @@ deploy:
     - deploy/**
     - ":(glob)*/.project.yaml"
     - browse-maintenance/unavailable.html
+    - design/nginx.conf
     - package.json
 tasks:
   tests:

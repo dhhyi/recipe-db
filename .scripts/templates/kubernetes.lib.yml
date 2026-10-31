@@ -122,7 +122,9 @@
 #@       init = [wait_for_nats()]
 #@     end
 #@   end
-#@   result = deployment(name, inventory["images"][name], port, env, durable, secrets=secrets, init=init)
+#@   mounts = [config_mount("design-config", "/etc/nginx/conf.d")] if name == "design" else []
+#@   volumes = [config_volume("design-config")] if name == "design" else []
+#@   result = deployment(name, inventory["images"][name], port, env, durable, secrets=secrets, init=init, mounts=mounts, volumes=volumes)
 #@   if name == "search":
 #@     result["spec"]["template"]["spec"]["containers"].append({"name": "index-readiness", "image": cfg["infrastructure"]["maintenance"], "command": ["sh", "-ec", "exec sleep infinity"], "resources": {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"memory": "32Mi"}}, "readinessProbe": {"exec": {"command": ["sh", "-ec", """wget -qO- http://127.0.0.1:3000/health | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'"""]}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 1}})
 #@   end
@@ -153,6 +155,7 @@
 
 #@ def config_maps():
 #@   entries = {"nats-config": {"nats.conf": files["nats"]}, "maintenance-config": {"default.conf": files["maintenanceNginx"]}, "maintenance-html": {"unavailable.html": files["maintenanceHtml"]}, "recipe-db-release": {"artifact": data.values.artifact, "revision": inventory["revision"]}}
+#@   entries["design-config"] = {"default.conf": files["designNginx"]}
 #@   if cfg["runtime"].get("authMode", "google") == "google":
 #@     entries["oauth-config"] = {"oauth2-proxy.cfg": files["oauthConfig"], "alpha.yaml": yaml.encode(oauth_alpha())}
 #@   end

@@ -152,7 +152,7 @@ pull_release() {
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml package.json
         message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
-        oauth2-proxy/oauth2-proxy.cfg ':(glob)*/.project.yaml')
+        oauth2-proxy/oauth2-proxy.cfg design/nginx.conf ':(glob)*/.project.yaml')
       git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
         || production_fail "backup requires the release revision in the local checkout"
       git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
@@ -177,8 +177,9 @@ render() {
     --rawfile maintenanceNginx "$root/browse-maintenance/nginx.conf" \
     --rawfile maintenanceHtml "$root/browse-maintenance/unavailable.html" \
     --rawfile oauthConfig "$root/oauth2-proxy/oauth2-proxy.cfg" \
+    --rawfile designNginx "$root/design/nginx.conf" \
     '{config:$config[0],projects:$projects,release:$release[0],artifact:$artifact,
-      files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig}}' \
+      files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig,designNginx:$designNginx}}' \
     > "$work/template-values.json"
   ytt -f "$root/.scripts/templates/kubernetes-template.yml" \
     -f "$root/.scripts/templates/kubernetes.lib.yml" \

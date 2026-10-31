@@ -8,7 +8,7 @@ setup() {
   setup_fixture production-k3d.sh
   export FIXTURE_ROOT
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
-  mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy
+  mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy design
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
@@ -76,6 +76,7 @@ EOF
   printf 'test\n' > browse-maintenance/nginx.conf
   printf 'test\n' > browse-maintenance/unavailable.html
   printf 'test\n' > oauth2-proxy/oauth2-proxy.cfg
+  printf 'test\n' > design/nginx.conf
   cat > bin/k3d << 'EOF'
 #!/usr/bin/env bash
 printf 'k3d %s\n' "$*" >> "$MOCK_LOG"
@@ -469,7 +470,7 @@ printf 'ytt %s\n' "$*" >> "$MOCK_LOG"
 while [[ $1 != --data-values-file ]]; do shift; done
 if jq -e 'has("config")' "$2" > /dev/null; then
   jq -e 'keys == ["artifact","config","files","projects","release"]
-    and (.files | keys) == ["maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
+    and (.files | keys) == ["designNginx","maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
   if [[ $MOCK_BACKUP = true ]]; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'
   else
@@ -537,7 +538,7 @@ EOF
       status:{readyReplicas:1}})}' > "$MOCK_LOG.deployments"
   git init -q
   git add .scripts/lib/project-metadata.sh message-bus/nats.conf \
-    browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg
+    browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg design/nginx.conf
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture release inputs'
   export MOCK_REVISION
   MOCK_REVISION=$(git rev-parse HEAD)

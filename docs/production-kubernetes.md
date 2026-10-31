@@ -203,6 +203,8 @@ Keep `runtime.readOnly: true` during shutdown or certificate-only fallback. It i
 
 The dedicated HTTPS listener routes only GET/HEAD browsing and its read-only fragments, GET/HEAD `/design/` assets and `/public/` images, and `/graphql` GET/POST/OPTIONS. The read-only similarity continuation uses POST `/recipe/{id}/similar/more`; POST is not inherently a mutation. GraphQL's existing anonymous capability guards deny mutations and private ratings/comments. Public GraphQL still strips untrusted identity headers before injecting the private ingress token. The frontend's existing compression/maintenance handling and internal GraphQL routes remain unchanged.
 
+Production mounts the reviewed `design/nginx.conf` as a ConfigMap. Its CSS/JS aliases and directory redirects are origin-relative, preserving HTTPS when nginx is behind Traefik's TLS termination and HTTP on the private origin. Check alias `Location` headers and actual browser asset loading: following an accidental HTTP redirect in a command-line client is not proof that an HTTPS browser will load the asset.
+
 There is no public catch-all frontend router: editor, MCP, OAuth, REST, dashboard, rating-write and tag-write paths are excluded. Browser URLs use the public HTTPS hostname; private application HTTP remains for anonymous LAN browsing, not privileged token rehearsal. Verify forbidden GraphQL operations and excluded routes leave data unchanged before enabling router forwarding. This preview is public exposure, **not** completion of Google verification, application backup/recovery, or the full launch checklist.
 
 #### Controlled test-CA renewal rehearsal
