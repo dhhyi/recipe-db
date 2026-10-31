@@ -786,21 +786,28 @@ token_only_values() {
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
 }
 
-@test "read-only preview rejects privileged policies before connecting" {
+@test "application exposure is independent of authorization policy" {
   token_only_values
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
-    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
+  export MOCK_LAN=true MOCK_HTTPS=true
   for policy in \
     '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}' \
     '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}' \
-    '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"user@example.org":{"role":"owner"}}}'; do
+    '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"user@example.org":{"role":"owner"}}}' \
+    '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}'; do
     printf '%s\n' "$policy" > auth-accounts.json
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
-    [ "$status" -ne 0 ]
-    [[ $output == *"read-only deployment requires"* ]]
+    [ "$status" -eq 0 ]
+    jq -e '.["preview-mcp"].entrypoints == ["websecure"]' "$MOCK_LOG.routers"
   done
-  run ! grep -q 'kubectl' "$MOCK_LOG"
-  run ! grep -q 'oras' "$MOCK_LOG"
+  for change in '.httpsStaging.exposeApplication=false' 'del(.httpsStaging.exposeApplication)'; do
+    set_value "$change"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -eq 0 ]
+    jq -e '[to_entries[] | select(.value.entrypoints | index("websecure"))] |
+      length == 1 and .[0].key == "https-staging"' "$MOCK_LOG.routers"
+  done
 }
 
 @test "HTTPS deployment validates private ACME contact and rolls Traefik when it changes" {
@@ -844,9 +851,10 @@ token_only_values() {
   token_only_values
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan"'
   for change in \
-    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",readOnlyPreview:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",exposeApplication:true}' \
     '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",renewalRehearsal:true}' \
-    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:"true"}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:"true"}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}' \
     '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:1}'; do
     set_value "$change"
     run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
@@ -857,11 +865,11 @@ token_only_values() {
   run ! grep -q 'oras' "$MOCK_LOG"
 }
 
-@test "read-only preview exposes only explicit public transports with sanitized trusted ingress" {
+@test "application exposure preserves client routes with sanitized trusted ingress" {
   token_only_values
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
-    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
   export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
@@ -888,7 +896,7 @@ token_only_values() {
   token_only_values
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
-    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
   export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
@@ -978,7 +986,7 @@ legacy_pi_claims() {
   run ! grep -Eq 'set env deployment/|exec backup-copy-' "$MOCK_LOG"
 }
 
-@test "token-only mode refuses non-loopback origins local targets and anonymous owners" {
+@test "token-only mode refuses non-loopback origins and local targets" {
   token_only_values
   set_value '.origin="http://192.168.1.218:8080"'
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
@@ -986,11 +994,6 @@ legacy_pi_claims() {
   set_value '.origin="http://127.0.0.1:8080" | .target="local"'
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  set_value '.target="pi"'
-  printf '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
-  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
-  [ "$status" -ne 0 ]
-  [[ $output == *"token-only deployment requires anonymous role"* ]]
   run ! grep -q 'create secret' "$MOCK_LOG"
 }
 

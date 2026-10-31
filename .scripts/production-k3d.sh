@@ -245,7 +245,7 @@ routes() {
         else error("existing routes must not use certificate-only staging entrypoints") end
         | ("Host(`" + $config[0].httpsStaging.hostname + "`)") as $host
         | {certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]} as $tls
-        | if $config[0].httpsStaging.readOnlyPreview == true then
+        | if $config[0].httpsStaging.exposeApplication == true then
             def preview($name):
               .http.routers[$name] as $router |
               if $router == null or $router.service == null then

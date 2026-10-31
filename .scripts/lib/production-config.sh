@@ -93,16 +93,16 @@ production_config() {
       .target == "pi" and .runtime.authMode == "token-only"
       and .runtime.ingressMode == "private-lan" and has("piStorage")
       and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"] +
-        (if has("readOnlyPreview") then ["readOnlyPreview"] else [] end) +
+        (if has("exposeApplication") then ["exposeApplication"] else [] end) +
         (if has("renewalRehearsal") then ["renewalRehearsal"] else [] end))
         and (.hostname | type == "string" and length <= 253
           and test("^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
           and (split(".") | all(.[]; length <= 63))
           and (test("^[0-9.]+$") | not))
         and (.acmeEnvironment == "staging" or .acmeEnvironment == "production")
-        and (if has("readOnlyPreview") then
-          (.readOnlyPreview | type == "boolean") and
-          (if .readOnlyPreview then .acmeEnvironment == "production" else true end)
+        and (if has("exposeApplication") then
+          (.exposeApplication | type == "boolean") and
+          (if .exposeApplication then .acmeEnvironment == "production" else true end)
           else true end)
         and (if has("renewalRehearsal") then
           (.renewalRehearsal | type == "boolean") and
@@ -162,17 +162,6 @@ production_secrets() {
     || production_fail "invalid auth-accounts.json (expected one JSON object)"
   jq -eRs 'test("^[A-Za-z0-9_-]{43}\\n?\\z")' "$work/graphql-ingress-secret" > /dev/null \
     || production_fail "invalid secret format: graphql-ingress-secret (expected 43 URL-safe base64 characters)"
-  if [[ $auth_mode = token-only ]]; then
-    if jq -e '.httpsStaging.readOnlyPreview == true' "$work/config.json" > /dev/null; then
-      jq -e '.anonymous.role == "anonymous" and .googleAccounts == {} and .tokens == []' \
-        "$work/auth-accounts.json" > /dev/null \
-        || production_fail "read-only deployment requires anonymous role, no bearer tokens and no Google accounts"
-    else
-      jq -e '.anonymous.role == "anonymous" and .googleAccounts == {} and
-        (.tokens | type == "array")' "$work/auth-accounts.json" > /dev/null \
-        || production_fail "token-only deployment requires anonymous role, no Google accounts and a bearer token array"
-    fi
-  fi
   for key in "${secret_keys[@]:2}"; do
     [[ $key != oauth2-cookie-secret ]] || continue
     jq -eRs 'length >= 16 and (test("^[!-~]+\\n?\\z"))' "$work/$key" > /dev/null \

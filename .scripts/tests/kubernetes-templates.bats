@@ -169,7 +169,7 @@ render() {
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
     | yq -o=json '.' | jq -e '
       .additionalArguments | index("--certificatesresolvers.letsencrypt.acme.certificatesduration=8760") != null'
-  jq '.config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}' \
+  jq '.config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}' \
     renewal-values.json > preview-values.json
   render preview-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
