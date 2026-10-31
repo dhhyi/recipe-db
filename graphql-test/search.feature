@@ -104,6 +104,6 @@ Feature: search recipes
     * retry until response.errors != null && response.errors[0].extensions.code == 'invalid-search-options'
     * method post
     * status 200
-    * match response.data == null
+    * match response.data.searchRecipes == null
     * match response.errors == '#[1]'
     * match response.errors[0].extensions contains { code: 'invalid-search-options', status: 400 }
