@@ -12,6 +12,7 @@ templ SimilarRecipesPlaceholder(id string) {
 templ SimilarRecipes(id string, recipes []gql.RecipeStub, remaining []string, failed bool) {
 	if len(recipes) > 0 || failed {
 		<section id="similar-recipes" hx-history="false">
+			<hr/>
 			<h2>Ähnliche Rezepte</h2>
 			if failed {
 				if len(remaining) > 0 {

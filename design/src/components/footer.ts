@@ -9,14 +9,14 @@ export class FooterComponent extends LitElement {
 
   render() {
     return html`
-      <footer
-        class="mt-8 border-t py-3 text-center text-sm"
-        style="color: var(--pico-muted-color);"
-      >
+      <hr />
+      <footer class="mb-3 text-center text-sm">
         <a href="https://github.com/dhhyi/recipe-db/blob/main/README.md"
           >GitHub</a
         >
-        <span class="px-2">|</span>
+        <span class="px-2" style="color: var(--pico-muted-border-color);"
+          >|</span
+        >
         <a href="/design/">Design</a>
       </footer>
     `;
