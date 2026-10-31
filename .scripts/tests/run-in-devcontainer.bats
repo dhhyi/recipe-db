@@ -20,6 +20,7 @@ test: |
 generate:
   - command: echo generated
   - command: echo finished
+format: echo formatted
 EOF
 }
 
@@ -28,9 +29,39 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$output" = "command output" ]
-  [ "$stderr" = "Using existing running container running-container" ]
+  [ "$stderr" = "Reconciling existing running container running-container" ]
   grep -Fx "devcontainer exec --container-id running-container --workspace-folder $FIXTURE_ROOT/example fish -c echo hello" "$MOCK_LOG"
-  run -1 grep -E '^(devcontainer up|docker (stop|rm))' "$MOCK_LOG"
+  grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/example" "$MOCK_LOG"
+  run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
+}
+
+@test "prepare runs generation before formatting in one reconciled container" {
+  run sh .scripts/run-in-devcontainer.sh example prepare
+
+  [ "$status" -eq 0 ]
+  grep -Fx "devcontainer exec --container-id started-container --workspace-folder $FIXTURE_ROOT/example fish -c echo generated && echo finished && echo formatted" "$MOCK_LOG"
+  [ "$(grep -c '^devcontainer up ' "$MOCK_LOG")" -eq 1 ]
+}
+
+@test "quality preparation records the reconciled container identity before execution" {
+  cat > .scripts/bazel-quality-identity.sh <<'EOF'
+#!/bin/sh
+printf 'identity %s\n' "$*" >> "$MOCK_LOG"
+EOF
+
+  run env BAZEL_QUALITY_IDENTITY=1 sh .scripts/run-in-devcontainer.sh example prepare
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'identity example started-container' "$MOCK_LOG"
+  [ "$(grep -n '^identity ' "$MOCK_LOG" | cut -d: -f1)" -lt "$(grep -n '^devcontainer exec ' "$MOCK_LOG" | cut -d: -f1)" ]
+}
+
+@test "replaces and stops an existing container when reconciliation selects another one" {
+  run env RUNNING_CONTAINER=old-container UP_CONTAINER_ID=new-container sh .scripts/run-in-devcontainer.sh example echo hello
+
+  [ "$status" -eq 0 ]
+  grep -Fx "devcontainer exec --container-id new-container --workspace-folder $FIXTURE_ROOT/example fish -c echo hello" "$MOCK_LOG"
+  [ "$(tail -n 1 "$MOCK_LOG")" = 'docker stop new-container' ]
 }
 
 @test "serializes overlapping invocations through container cleanup" {
@@ -131,11 +162,7 @@ EOF
 
       [ "$status" -eq 0 ]
       grep -F 'devcontainer exec' "$MOCK_LOG"
-      if [ "$state" = running ]; then
-        run -1 grep -F 'devcontainer up' "$MOCK_LOG"
-      else
-        grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/example" "$MOCK_LOG"
-      fi
+      grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/example" "$MOCK_LOG"
       run -1 grep -E '^docker (stop|rm)' "$MOCK_LOG"
     done
   done

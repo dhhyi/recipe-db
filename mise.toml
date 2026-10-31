@@ -94,6 +94,10 @@ file = ".scripts/sync-devcontainers.sh"
 description = "Generate Bazel build rules from project metadata and repository files"
 file = ".scripts/generate-bazel-build.sh"
 
+[tasks.bazel-quality]
+description = "Prepare project sources, resolve check identities, and run the Bazel quality aggregate"
+file = ".scripts/bazel-quality.sh"
+
 [tasks.sync]
 description = "Synchronize shared files, devcontainers, GraphQL schemas and Bazel rules"
 depends = [

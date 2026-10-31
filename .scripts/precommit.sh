@@ -39,60 +39,8 @@ if ((${#graphql_projects[@]} > 0)); then
   mise run --raw merge-graphql-schemas
 fi
 
-if ((${#projects[@]} > 0)); then
-  mise run --raw create-intranet
-fi
-
 pnpm exec prettier --log-level warn --write .
-
-format_targets=()
-check_targets=()
-format_archives=()
-check_archives=()
-for project in "${projects[@]}"; do
-  check=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project/.project.yaml")
-  if [[ -n "$check" ]]; then
-    format=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .format // ""' "$project/.project.yaml")
-    format_needed=false
-    for file in "${staged_files[@]}"; do
-      case "$file" in
-        "$project/.project.yaml" | "$project/.gitignore" | "$project/.dockerignore" | "$project/Dockerfile" | "$project/README.md") ;;
-        "$project"/*)
-          format_needed=true
-          break
-          ;;
-      esac
-    done
-    if [[ -n "$format" && "$format_needed" == true ]]; then
-      format_targets+=("//:${project}_format")
-      format_archives+=("bazel-bin/$project-format.tar")
-    else
-      generators=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project/.project.yaml")
-      if [[ "$generators" -gt 0 ]]; then
-        check_archives+=("bazel-bin/$project-generate.tar")
-      fi
-    fi
-    check_targets+=("//:${project}_check")
-  fi
-done
-
-mise run --raw generate-bazel-build
-
-if ((${#format_targets[@]} > 0)); then
-  mise run --raw bazel build --action_env=PATH --jobs=1 "${format_targets[@]}"
-  for archive in "${format_archives[@]}"; do
-    tar -xf "$archive"
-  done
-fi
-
-if ((${#check_targets[@]} > 0)); then
-  mise run --raw bazel build --action_env=PATH --jobs=1 "${check_targets[@]}"
-  for archive in "${check_archives[@]}"; do
-    tar -xf "$archive"
-  done
-fi
-
-mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel-quality
 
 for file in "${staged_files[@]}"; do
   if ! git diff --quiet -- "$file"; then

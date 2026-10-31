@@ -68,21 +68,33 @@ filegroup(
 EOF
   cmp expected-rule aggregate-rule
 
-  sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
-  grep -Fx '        ".scripts/tests/example.bats",' lint-rule
+sed -n '/name = "quality"/,/^)/p' BUILD.bazel > quality-rule
+for target in :example_check :shellcheck :test_scripts; do
+  grep -Fx "        \"$target\"," quality-rule
+done
+run -1 grep -F ':example_precommit' quality-rule
+
+sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
+grep -Fx '        ".scripts/tests/example.bats",' lint-rule
+grep -F '.generated/bazel-quality/host.identity' lint-rule
 }
 
-@test "all rules allow disk caching while disabling sandboxing and remote execution" {
-  printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
+@test "quality rules allow disk caching while checks use declared execution identities" {
+printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
 
-  run bash .scripts/generate-bazel-build.sh
+run bash .scripts/generate-bazel-build.sh
 
-  [ "$status" -eq 0 ]
-  for target in example_generate example_format example_check example_precommit shellcheck test_scripts_compose test_scripts_tooling; do
-    sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
-    grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
-  done
-  run -1 grep -F '"local"' BUILD.bazel
+[ "$status" -eq 0 ]
+for target in example_check shellcheck test_scripts_compose test_scripts_tooling; do
+  sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
+  grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
+done
+run -1 grep -F '"local"' BUILD.bazel
+run -1 grep -F 'example-format.tar' BUILD.bazel
+run -1 grep -F 'tar -xf' BUILD.bazel
+sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
+grep -Fx '        ".generated/bazel-quality/example.identity",' check-rule
+grep -Fx '    cmd = "sh $(location .scripts/bazel-check.sh) example $@",' check-rule
 }
 
 @test "includes new untracked tests but excludes ignored files" {
@@ -188,18 +200,19 @@ EOF
   [ ! -s "$MOCK_LOG" ]
 }
 
-@test "generation is deterministic and chains project precommit checks after formatting" {
+@test "generation is deterministic and preserves the legacy precommit alias" {
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
   cp BUILD.bazel expected.BUILD
   sed -n '/name = "example_precommit"/,/^)/p' BUILD.bazel > precommit-rule
-  grep -Fx '        ":example_format",' precommit-rule
+  grep -Fx '    actual = ":example_check",' precommit-rule
 
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
   cmp expected.BUILD BUILD.bazel
+  run -1 grep -E 'name = "example_(generate|format)"' BUILD.bazel
 }
 
 @test "missing generated schemas fail without replacing the existing build file" {

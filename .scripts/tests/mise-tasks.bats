@@ -397,7 +397,7 @@ EOF
   done
 }
 
-@test "CI retention is scoped to quality-checks and forwarded by both Bazel builds" {
+@test "CI retention is scoped to quality-checks and quality environment options are centralized" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.quality-checks.env.DEVCONTAINER_KEEP_RUNNING' "$workflow")" = true ]
   [ "$(yq '[.. | select(tag == "!!map" and has("DEVCONTAINER_KEEP_RUNNING"))] | length' "$workflow")" -eq 1 ]
@@ -405,12 +405,11 @@ EOF
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_URL" "$workflow")" = "https://recipes.example/oauth2/callback" ]
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_HOST" "$workflow")" = recipes.example ]
   done
-  builds=0
-  while IFS= read -r script; do
-    [[ "$script" == *'--action_env=DEVCONTAINER_KEEP_RUNNING'* ]]
-    builds=$((builds + 1))
-  done < <(yq -o=json -I=0 '.jobs.quality-checks.steps[].run | select(contains("bazel build"))' "$workflow")
-  [ "$builds" -eq 2 ]
+  [ "$(yq '[.jobs.quality-checks.steps[].run | select(contains("mise run --raw bazel-quality"))] | length' "$workflow")" -eq 1 ]
+  grep -F 'for variable in CI GITHUB_ACTIONS BUILDKIT_PROGRESS COMPOSE_PROGRESS COMPOSE_PARALLEL_LIMIT DEVCONTAINER_KEEP_RUNNING' \
+    "$BATS_TEST_DIRNAME/../bazel-quality.sh"
+  grep -F 'mise run --raw bazel build "${bazel_args[@]}" --jobs=1 //:quality' \
+    "$BATS_TEST_DIRNAME/../bazel-quality.sh"
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "validate message bus integration and recovery") | .run' "$workflow")" = "mise run test-message-bus" ]
 }
 
