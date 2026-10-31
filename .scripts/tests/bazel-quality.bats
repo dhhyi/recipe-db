@@ -65,7 +65,9 @@ EOF
 }
 
 @test "quality propagates aggregate failures" {
-  run env BAZEL_STATUS=23 bash .scripts/bazel-quality.sh
+  quality_home="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$quality_home"
+  run env HOME="$quality_home" BAZEL_STATUS=23 bash .scripts/bazel-quality.sh
 
   [ "$status" -eq 23 ]
 }
