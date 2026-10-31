@@ -92,3 +92,19 @@ EOF
   [ ! -e helper-deleted ]
   run ! grep -Eq 'tar -C /data -cf|delete pod' "$MOCK_LOG"
 }
+
+@test "restore import treats empty directories and dangling symlinks as populated data" {
+  mkdir data/empty-directory
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -ne 0 ]
+  [ -d data/empty-directory ]
+  run ! grep -q 'exec -i' "$MOCK_LOG"
+  rmdir data/empty-directory
+  ln -s ../absent-target data/dangling-link
+  : > "$MOCK_LOG"
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -ne 0 ]
+  [ -L data/dangling-link ]
+  [ ! -e data/recipes.sqlite3 ]
+  run ! grep -q 'exec -i' "$MOCK_LOG"
+}

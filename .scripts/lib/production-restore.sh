@@ -69,7 +69,8 @@ restore_abandon() {
   jq -e --arg holder "$expected" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg ns "$namespace" \
     --arg sha "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
-    .version == 1 and .holder == $holder and .status == "recovery-required"
+    .version == 1 and .holder == $holder
+    and (.status == "recovery-required" or .status == "in-progress")
     and .target == $target and .cluster == $cluster and .context == $context
     and .namespace == $ns and .configSha256 == $sha' "$state/restore-state.json" > /dev/null \
     || production_fail "restore abandonment state, target values or holder mismatch"
@@ -82,9 +83,9 @@ restore_abandon() {
     and .metadata.annotations["recipe-db/release"] == ($state | fromjson | .artifact)
     and .metadata.annotations["recipe-db/phase"] != "acquired"' <<< "$lease" > /dev/null \
     || production_fail "restore abandonment requires this exact retained post-preflight restore Lease"
-  kube get deployments,statefulsets,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json > "$work/restore-isolation.json"
+  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json > "$work/restore-isolation.json"
   jq -e 'all(.items[];
-    if .kind == "Deployment" or .kind == "StatefulSet" then
+    if .kind == "Deployment" or .kind == "StatefulSet" or .kind == "ReplicaSet" or .kind == "ReplicationController" then
       (.spec.replicas // 1) == 0 and (.status.replicas // 0) == 0
     elif .kind == "Job" then .spec.suspend == true and (.status.active // 0) == 0
     elif .kind == "CronJob" then .spec.suspend == true and (.status.active // [] | length) == 0
@@ -122,7 +123,7 @@ restore_fresh_target() {
     jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
       "$work/restore-namespace.json" > /dev/null \
       || production_fail "restore refuses an unowned namespace"
-    kube get deployments,statefulsets,daemonsets,jobs,cronjobs,pods,services,ingresses,configmaps,secrets \
+    kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods,services,ingresses,configmaps,secrets \
       -o json > "$work/restore-existing.json"
     # Kubernetes creates these namespace defaults without application state.
     jq -e '[.items[] | select(
@@ -214,7 +215,7 @@ restore_import() {
     # Recheck immediately before extraction; only this helper owns the mount.
     kube exec "$pod" -- sh -ec 'test -z "$(find /data -mindepth 1 -maxdepth 1 -print -quit)"' || return 1
     # Preserve numeric ownership and permission bits from the exact recorded release.
-    kube exec -i "$pod" -- tar -xpf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
+    kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
     kube exec "$pod" -- sync || return 1
     kube exec "$pod" -- tar -C /data -cf - . > "$work/restored-$name.tar" || return 1
     python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" "$layout" \
@@ -359,9 +360,37 @@ restore_verify_reads() {
     > "$work/restore-browse.html" 2> "$work/restore-request-error" || return 1
 }
 
+restore_stream_sequence() {
+  kube exec deployment/nats -- wget -qO- \
+    'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true' \
+    > "$work/restore-consumers.json" || return 1
+  jq -er '[.account_details[]?.stream_detail[]? | select(.name == "RECIPE_EVENTS")] |
+    select(length == 1) | .[0].state.last_seq |
+    select(type == "number" and . >= 0 and floor == .)' "$work/restore-consumers.json"
+}
+
+restore_wait_consumers() {
+  local before=$1 sequence deadline=$((SECONDS + timeout))
+  while :; do
+    if sequence=$(restore_stream_sequence) && ((sequence > before)) \
+      && jq -e --argjson sequence "$sequence" '
+        [.account_details[]?.stream_detail[]? | select(.name == "RECIPE_EVENTS") |
+          .consumer_detail[]? | select(.name == "search-index-v1" or .name == "browse-cache-v1")] |
+        length == 2 and (map(.name) | unique | length) == 2 and
+        all(.[]; .config.ack_policy == "explicit" and
+          .config.filter_subject == "recipes.events.v1" and
+          (.ack_floor.stream_seq | type == "number" and . >= $sequence) and
+          .num_ack_pending == 0 and .num_pending == 0)
+      ' "$work/restore-consumers.json" > /dev/null; then return 0; fi
+    ((SECONDS < deadline)) || return 1
+    sleep 2
+  done
+}
+
 restore_verify_propagation() {
-  local id encoded deadline probe
+  local id encoded deadline probe before
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
+  before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($name:String!) { createRecipe(value:{name:$name}) { id } }' \
     "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
   id=$(jq -er '.data.createRecipe.id | select(type == "string" and length > 0)' \
@@ -370,6 +399,7 @@ restore_verify_propagation() {
     > "$restore_state/restore-state.next" && mv "$restore_state/restore-state.next" \
     "$restore_state/restore-state.json" || return 1
   encoded=$(jq -rn --arg id "$id" '$id | @uri')
+  restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
@@ -384,8 +414,10 @@ restore_verify_propagation() {
     sleep 2
   done
   # Prime browse's cache before the update, proving invalidation rather than a first uncached read.
+  before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
     "$(jq -cn --arg id "$id" --arg name "${probe}Changed" '{id:$id,name:$name}')" || return 1
+  restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
@@ -400,8 +432,10 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+  before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($id:ID!) { deleteRecipe(id:$id) }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
+  restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id } } }' \
@@ -518,7 +552,9 @@ restore_run() {
   restore_phase "$restore_current_phase"
   # Hold public traffic before even inspecting a data mount. If an emptiness/storage
   # check fails, this Secret remains a durable barrier without any application writer.
-  yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
+  yq 'select(.metadata.namespace == "kube-system") |
+    (select(.kind == "Service" and .metadata.name == "recipe-db-internal").spec.ports[] |
+      select(.name == "web").targetPort) = 3000' "$work/rendered.yml" > "$work/infrastructure.yml"
   restore_barrier=true
   restore_routes_apply "$work/restore-barrier-routes.json"
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
@@ -590,6 +626,8 @@ restore_run() {
   restore_verify_reads
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
+  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
+    -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null
   restore_routes_apply "$work/restore-final-routes.json"
   restore_wait_public_routes
   restore_state_write succeeded complete

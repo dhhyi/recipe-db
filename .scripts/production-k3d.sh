@@ -1168,11 +1168,11 @@ case "$command" in
         || production_fail "token-only rehearsal requires no existing Google deployment; transition explicitly before retrying"
     fi
     guard_helm_config
-    ensure_namespace
     lock_holder="$cluster-deploy-$$"
     # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
     cluster_operation_lock_acquire "$lock_holder" deploy "$1"
     locked=true
+    ensure_namespace
     if [[ $target = pi ]]; then
       production_storage_preflight
       production_storage_prepare_claims "$work/rendered.yml"

@@ -1611,6 +1611,10 @@ case "$query" in
     touch "$MOCK_LOG.probe-deleted"
     echo '{"data":{"deleteRecipe":true}}' ;;
   *"searchRecipes"*)
+    if [[ ${MOCK_RESTORE_PAUSE_PROBE:-false} == true && -e $MOCK_LOG.probe-name ]]; then
+      touch "$MOCK_LOG.probe-paused"
+      sleep 2
+    fi
     if [[ $* == *"restore-request"* && $(jq -r '.variables.options.q' "$file") == "*" ]]; then
       echo '{"data":{"searchRecipes":{"recipes":[{"id":"old","name":"Old"}],"found":1}}}'
     elif [[ -e $MOCK_LOG.probe-deleted || ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
@@ -1966,4 +1970,34 @@ run_restore_abandon() {
   [ ! -e "$MOCK_LOG.lease" ]
   [ -e "$MOCK_LOG.probe-deleted" ]
   cmp "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" "$FIXTURE_ROOT/imported/tags/tags.sqlite"
+}
+
+@test "restore SIGTERM during private synthetic propagation retains the public barrier Lease and recovery state" {
+  restore_fixture
+  export MOCK_RESTORE_PAUSE_PROBE=true
+  bash .scripts/production-k3d.sh restore "$VALUES" "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" \
+    "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID" > term-output 2>&1 &
+  local pid=$! deadline=$((SECONDS + 20)) result
+  while [[ ! -e $MOCK_LOG.probe-paused ]]; do
+    if ! kill -0 "$pid" 2> /dev/null || ((SECONDS >= deadline)); then
+      kill "$pid" 2> /dev/null || true
+      wait "$pid" 2> /dev/null || true
+      cat term-output
+      return 1
+    fi
+    sleep 0.1
+  done
+  jq -e '.http.routers["restore-public-barrier"].entrypoints == ["web"]
+    and .http.routers["graphql-internal"].entrypoints == ["rest-internal"]' "$MOCK_LOG.restore-routes"
+  kill -TERM "$pid"
+  if wait "$pid"; then result=0; else result=$?; fi
+  [ "$result" -eq 143 ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required" and .phase == "verifying-propagation"
+    and .probeRecipeId == "probe"' "$RESTORE_STATE/restore-state.json"
+  jq -e '.http.routers["restore-public-barrier"].entrypoints == ["web"]' "$MOCK_LOG.restore-routes"
+  jq -e 'any(.items[]; .metadata.name == "graphql" and
+    any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "backup"))' \
+    "$MOCK_LOG.restore-deployments"
+  run ! grep -q 'from-file=routes.yml=.*restore-final-routes' "$MOCK_LOG"
 }
