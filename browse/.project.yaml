@@ -11,7 +11,7 @@ devcontainer:
       - build-essential
     user:
       - RUN mise use -g go@1.25 watchexec
-      - RUN go install github.com/a-h/templ/cmd/templ@latest
+      - RUN go install github.com/a-h/templ/cmd/templ@v0.3.1020
       - RUN go install golang.org/x/tools/gopls@latest
   ports:
     - 3000
