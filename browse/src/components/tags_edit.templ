@@ -6,8 +6,8 @@ import (
 	gql "frontend/src/generated"
 )
 
-func tagsForCategory(tags []RecipeTag, category gql.TagCategory) []RecipeTag {
-	var matching []RecipeTag
+func tagsForCategory(tags []gql.RecipeTag, category gql.TagCategory) []gql.RecipeTag {
+	var matching []gql.RecipeTag
 	for _, tag := range tags {
 		if tag.Category == category {
 			matching = append(matching, tag)
@@ -32,7 +32,7 @@ func recipeTagRemovePath(id, tagID string) string {
 	return recipeTagsPath(id) + "/" + url.PathEscape(tagID) + "/remove"
 }
 
-templ RecipeTagsWidget(id string, tags []RecipeTag, owner, edit, pickerOpen bool, feedback string, failed bool) {
+templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit, pickerOpen bool, feedback string, failed bool) {
 	<div
 		id="recipe-tags"
 		class="contents"
@@ -134,7 +134,7 @@ templ RecipeTagsWidget(id string, tags []RecipeTag, owner, edit, pickerOpen bool
 	</div>
 }
 
-templ recipeDetailTagList(tags []RecipeTag, edit bool, id string) {
+templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
 	<section aria-label="Kategorisierte Tags" class="recipe-tags-detail flex flex-col gap-2">
 		<div class="flex flex-wrap gap-1">
 			for _, tag := range orderedTags(tags) {
@@ -168,7 +168,7 @@ templ recipeDetailTagList(tags []RecipeTag, edit bool, id string) {
 	</section>
 }
 
-templ TagOptions(id string, tags []RecipeTag) {
+templ TagOptions(id string, tags []gql.RecipeTag) {
 	if len(tags) == 0 {
 		<p>Keine passenden Tags gefunden.</p>
 	} else {

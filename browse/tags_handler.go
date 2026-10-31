@@ -22,7 +22,7 @@ import (
 var errInvalidTagRequest = errors.New("invalid tag request")
 var errTagForbidden = errors.New("tag editing is not allowed")
 
-func loadRecipeTags(r *http.Request, client graphql.Client, id string) ([]components.RecipeTag, bool, error) {
+func loadRecipeTags(r *http.Request, client graphql.Client, id string) ([]gql.RecipeTag, bool, error) {
 	response, err := gql.RecipeTags(r.Context(), client, id)
 	if err != nil && !tagErrorsOnly(err) {
 		return nil, false, err
@@ -39,7 +39,7 @@ func loadRecipeTags(r *http.Request, client graphql.Client, id string) ([]compon
 	return response.Recipe.Tags, response.MyCapabilities.CanManageRecipes, nil
 }
 
-func loadTagInventory(r *http.Request, client graphql.Client) ([]components.RecipeTag, error) {
+func loadTagInventory(r *http.Request, client graphql.Client) ([]gql.RecipeTag, error) {
 	response, err := gql.TagInventory(r.Context(), client)
 	if err != nil {
 		return nil, err
@@ -71,13 +71,13 @@ func tagSearchKey(value string) string {
 	return cases.Fold().String(norm.NFC.String(value))
 }
 
-func unassignedTagOptions(tags, assigned []components.RecipeTag, query string) []components.RecipeTag {
+func unassignedTagOptions(tags, assigned []gql.RecipeTag, query string) []gql.RecipeTag {
 	assignedIDs := make(map[string]bool, len(assigned))
 	for _, tag := range assigned {
 		assignedIDs[tag.Id] = true
 	}
 	key := tagSearchKey(query)
-	options := make([]components.RecipeTag, 0, len(tags))
+	options := make([]gql.RecipeTag, 0, len(tags))
 	for _, tag := range tags {
 		if !assignedIDs[tag.Id] && strings.Contains(tagSearchKey(tag.Name), key) {
 			options = append(options, tag)
@@ -131,7 +131,7 @@ func writeTagComponent(w http.ResponseWriter, r *http.Request, status int, compo
 	}
 }
 
-func tagsWidget(id string, tags []components.RecipeTag, owner, edit, pickerOpen bool, feedback string, failed bool) templ.Component {
+func tagsWidget(id string, tags []gql.RecipeTag, owner, edit, pickerOpen bool, feedback string, failed bool) templ.Component {
 	return components.RecipeTagsWidget(id, tags, owner, edit, pickerOpen, feedback, failed)
 }
 
@@ -291,12 +291,12 @@ func invalidateRecipeTags(cache *pageCache, id string) error {
 	return cache.invalidate(id)
 }
 
-func writeCurrentTagEdit(w http.ResponseWriter, r *http.Request, id string, status int, tags []components.RecipeTag, message string, added, removed bool) {
+func writeCurrentTagEdit(w http.ResponseWriter, r *http.Request, id string, status int, tags []gql.RecipeTag, message string, added, removed bool) {
 	component := components.RecipeTagsWidget(id, tags, true, true, false, message, message != "")
 	writeTagComponent(w, r, status, component, true, added, removed)
 }
 
-func writeTagEditDenied(w http.ResponseWriter, r *http.Request, id string, status int, tags []components.RecipeTag, message string) {
+func writeTagEditDenied(w http.ResponseWriter, r *http.Request, id string, status int, tags []gql.RecipeTag, message string) {
 	writeTagComponent(w, r, status,
 		components.RecipeTagsWidget(id, tags, false, false, false, message, true), true, false, false)
 }

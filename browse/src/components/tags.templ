@@ -11,9 +11,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-type RecipeTag = gql.RecipeTag
-
-func orderedTags(tags []RecipeTag) []RecipeTag {
+func orderedTags(tags []gql.RecipeTag) []gql.RecipeTag {
 	sort.Slice(tags, func(i, j int) bool {
 		left, right := tags[i], tags[j]
 		if left.Category != right.Category {

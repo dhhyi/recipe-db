@@ -11,7 +11,7 @@ import (
 )
 
 func TestOrderedTagsUsesCategoryFoldedNameAndID(t *testing.T) {
-	tags := orderedTags([]RecipeTag{
+	tags := orderedTags([]gql.RecipeTag{
 		{Id: "course", Category: gql.TagCategoryCourse, Name: "Dessert"},
 		{Id: "z", Category: gql.TagCategoryCuisine, Name: "ÉCLAIR"},
 		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
@@ -36,7 +36,7 @@ func renderTagComponent(t *testing.T, component templ.Component) string {
 }
 
 func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
-	tags := []RecipeTag{{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"}}
+	tags := []gql.RecipeTag{{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"}}
 	for _, testCase := range []struct {
 		name                       string
 		owner, edit, picker, empty bool
@@ -91,7 +91,7 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 }
 
 func TestTagOptionsAreGroupedAndEmptyInventoryIsExplicit(t *testing.T) {
-	tags := []RecipeTag{
+	tags := []gql.RecipeTag{
 		{Id: "course", Category: gql.TagCategoryCourse, Name: "Suppe"},
 		{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Ägyptisch"},
 		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
