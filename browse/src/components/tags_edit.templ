@@ -55,6 +55,7 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 						hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')"
 						hx-on:compositionend="delete this.dataset.composing"
 						hx-on::config-request="if (this.dataset.composing) event.preventDefault()"
+						hx-on:keydown="if (event.key !== 'Enter' || event.isComposing || this.dataset.composing) return; event.preventDefault(); if (event.repeat || this.disabled) return; const options = this.closest('#recipe-tags').querySelector('#recipe-tag-options > ul'); if (options?.dataset.query !== this.value) return; const buttons = options.querySelectorAll('button[type=submit]'); if (buttons.length === 1 && !buttons[0].disabled) buttons[0].click()"
 					/>
 					<div id="recipe-tag-options" aria-live="polite">
 						<div
@@ -152,11 +153,11 @@ templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
 	</section>
 }
 
-templ TagOptions(id string, tags []gql.RecipeTag) {
+templ TagOptions(id, query string, tags []gql.RecipeTag) {
 	if len(tags) == 0 {
 		<p>Keine passenden Tags gefunden.</p>
 	} else {
-		<ul class="markerless flex flex-wrap gap-2">
+		<ul class="markerless flex flex-wrap gap-2" data-query={ query }>
 			for _, tag := range orderedTags(tags) {
 				<li>
 					<form

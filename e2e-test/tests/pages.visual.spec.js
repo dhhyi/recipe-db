@@ -194,6 +194,59 @@ for (const role of ["anonymous", "member", "owner"]) {
         });
         await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
         await screenshot(page, "tag-editor.png");
+
+        let assignments = 0;
+        page.on("request", (request) => {
+          if (
+            request.method() === "POST" &&
+            new URL(request.url()).pathname ===
+              `/recipe/${taggedDemoRecipe.id}/tags`
+          ) {
+            assignments += 1;
+          }
+        });
+        const options = page.locator(
+          "#recipe-tag-options button[type='submit']",
+        );
+        await search.fill("de");
+        await expect(options).toHaveCount(2);
+        await search.press("Enter");
+        expect(assignments).toBe(0);
+        await expect(
+          page.locator("#recipe-tags [data-tag-remove]"),
+        ).toHaveCount(3);
+
+        await search.fill(" Deutsch ");
+        await expect(options).toHaveCount(1);
+        await expect(options).toHaveText("Deutsch");
+        await search.dispatchEvent("keydown", {
+          key: "Enter",
+          isComposing: true,
+        });
+        await search.dispatchEvent("keydown", { key: "Enter", repeat: true });
+        expect(assignments).toBe(0);
+        await search.evaluate((input) => {
+          input.value = "no-matching-tag";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+          );
+        });
+        await expect(options).toHaveCount(0);
+        await search.press("Enter");
+        expect(assignments).toBe(0);
+
+        await search.fill(" Deutsch ");
+        await expect(options).toHaveCount(1);
+        await search.press("Enter");
+        await expect(
+          page.getByRole("button", { name: "Deutsch entfernen", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.locator("#recipe-tags [data-tag-remove]"),
+        ).toHaveCount(4);
+        expect(assignments).toBe(1);
+        await expect(search).toBeFocused();
       });
     }
 

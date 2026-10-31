@@ -118,10 +118,10 @@ func writeTagComponent(w http.ResponseWriter, r *http.Request, status int, compo
 		w.Header().Set("X-Tag-Replace", "true")
 	}
 	if added {
-		w.Header().Set("HX-Trigger-After-Swap", `{"recipe-tags-added":{"target":"#recipe-tags"}}`)
+		w.Header().Set("HX-Trigger-After-Settle", `{"recipe-tags-added":{"target":"#recipe-tags"}}`)
 	}
 	if removed {
-		w.Header().Set("HX-Trigger-After-Swap", `{"recipe-tag-removed":{"target":"#recipe-tags"}}`)
+		w.Header().Set("HX-Trigger-After-Settle", `{"recipe-tag-removed":{"target":"#recipe-tags"}}`)
 	}
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {
@@ -246,7 +246,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 			return
 		}
 		options := unassignedTagOptions(inventory, assigned, query)
-		writeTagComponent(w, r, http.StatusOK, components.TagOptions(id, options), false, false, false)
+		writeTagComponent(w, r, http.StatusOK, components.TagOptions(id, r.URL.Query().Get("q"), options), false, false, false)
 	}
 }
 

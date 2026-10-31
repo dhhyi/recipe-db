@@ -233,8 +233,12 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 
 	options := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=VEG", "", true)
 	if options.Code != http.StatusOK || strings.Contains(options.Body.String(), "Apfelkuchen") ||
-		!strings.Contains(options.Body.String(), "Vegan") {
+		!strings.Contains(options.Body.String(), "Vegan") || !strings.Contains(options.Body.String(), `data-query="VEG"`) {
 		t.Fatalf("search should return only matching unassigned tags: %d %s", options.Code, options.Body.String())
+	}
+	spacedOptions := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=%20VEG%20", "", true)
+	if spacedOptions.Code != http.StatusOK || !strings.Contains(spacedOptions.Body.String(), `data-query=" VEG "`) {
+		t.Fatalf("options must preserve the raw search for the Enter guard: %d %s", spacedOptions.Code, spacedOptions.Body.String())
 	}
 	matchesNone := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=not-found", "", true)
 	if matchesNone.Code != http.StatusOK || !strings.Contains(matchesNone.Body.String(), "Keine passenden Tags gefunden.") {
@@ -300,7 +304,7 @@ func TestRecipeTagMutationsUseDedicatedGraphQLAndRefreshCache(t *testing.T) {
 
 	add := tagRequest(handler, http.MethodPost, "/recipe/42/tags", url.Values{"tagId": {"dessert"}}.Encode(), true)
 	if add.Code != http.StatusOK || !strings.Contains(add.Body.String(), "Dessert") ||
-		add.Header().Get("HX-Trigger-After-Swap") == "" ||
+		add.Header().Get("HX-Trigger-After-Settle") == "" ||
 		strings.Contains(add.Body.String(), `<details class="dropdown" open`) {
 		t.Fatalf("tag addition was not confirmed in returned panel: %d %v %s", add.Code, add.Header(), add.Body.String())
 	}
@@ -316,7 +320,7 @@ func TestRecipeTagMutationsUseDedicatedGraphQLAndRefreshCache(t *testing.T) {
 
 	remove := tagRequest(handler, http.MethodPost, "/recipe/42/tags/assigned/remove", "", true)
 	if remove.Code != http.StatusOK || !strings.Contains(remove.Body.String(), "Dessert") ||
-		!strings.Contains(remove.Header().Get("HX-Trigger-After-Swap"), "recipe-tag-removed") {
+		!strings.Contains(remove.Header().Get("HX-Trigger-After-Settle"), "recipe-tag-removed") {
 		t.Fatalf("tag removal did not return refreshed assignments: %d %v %s", remove.Code, remove.Header(), remove.Body.String())
 	}
 	removeLast := tagRequest(handler, http.MethodPost, "/recipe/42/tags/dessert/remove", "", true)
@@ -368,7 +372,7 @@ func TestRecipeTagRefreshFailureDoesNotClaimMutationSuccess(t *testing.T) {
 	body := response.Body.String()
 	if response.Code != http.StatusBadGateway || !strings.Contains(body, "Apfelkuchen") ||
 		strings.Contains(body, "Dessert") || !strings.Contains(body, "möglicherweise gespeichert") ||
-		response.Header().Get("HX-Trigger-After-Swap") != "" || response.Header().Get("X-Tag-Replace") != "true" {
+		response.Header().Get("HX-Trigger-After-Settle") != "" || response.Header().Get("X-Tag-Replace") != "true" {
 		t.Fatalf("failed refresh must preserve the last confirmed assignment without claiming success: %d %v %s", response.Code, response.Header(), body)
 	}
 	state.mu.Lock()

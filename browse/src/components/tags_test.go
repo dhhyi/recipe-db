@@ -95,7 +95,7 @@ func TestTagOptionsUseOneContinuousListAndEmptyInventoryIsExplicit(t *testing.T)
 		{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Ägyptisch"},
 		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 	}
-	body := renderTagComponent(t, TagOptions("42", tags))
+	body := renderTagComponent(t, TagOptions("42", "", tags))
 	if strings.Count(body, "<ul") != 1 || strings.Count(body, "<li>") != len(tags) ||
 		strings.Contains(body, "<fieldset") || strings.Contains(body, "<legend") ||
 		strings.Contains(body, "Küche") || strings.Contains(body, "Ernährungsweise") || strings.Contains(body, "Gang") {
@@ -104,9 +104,18 @@ func TestTagOptionsUseOneContinuousListAndEmptyInventoryIsExplicit(t *testing.T)
 	if cuisine, dietary, course := strings.Index(body, "Ägyptisch"), strings.Index(body, "Vegan"), strings.Index(body, "Suppe"); !(cuisine < dietary && dietary < course) {
 		t.Fatalf("options must preserve stable tag order: %s", body)
 	}
-	if strings.Contains(renderTagComponent(t, TagOptions("42", nil)), "Tag-Auswahl konnte") ||
-		!strings.Contains(renderTagComponent(t, TagOptions("42", nil)), "Keine passenden Tags gefunden.") {
+	if strings.Contains(renderTagComponent(t, TagOptions("42", "", nil)), "Tag-Auswahl konnte") ||
+		!strings.Contains(renderTagComponent(t, TagOptions("42", "", nil)), "Keine passenden Tags gefunden.") {
 		t.Fatal("an empty search result must be distinct from an inventory failure")
+	}
+}
+
+func TestTagOptionsPreserveAndEscapeSearchForEnterGuard(t *testing.T) {
+	body := renderTagComponent(t, TagOptions("42", ` Vegan "& `, []gql.RecipeTag{
+		{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
+	}))
+	if !strings.Contains(body, `data-query=" Vegan &#34;&amp; "`) {
+		t.Fatalf("the Enter guard must receive the escaped, untrimmed search: %s", body)
 	}
 }
 
