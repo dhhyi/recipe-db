@@ -131,12 +131,12 @@ func writeTagComponent(w http.ResponseWriter, r *http.Request, status int, compo
 	}
 }
 
-func tagsWidget(id string, tags []gql.RecipeTag, owner, edit, pickerOpen bool, feedback string, failed bool) templ.Component {
-	return components.RecipeTagsWidget(id, tags, owner, edit, pickerOpen, feedback, failed)
+func tagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedback string, failed bool) templ.Component {
+	return components.RecipeTagsWidget(id, tags, owner, edit, feedback, failed)
 }
 
 func writeTagFailure(w http.ResponseWriter, r *http.Request, id string, status int, message string, replace bool) {
-	writeTagComponent(w, r, status, tagsWidget(id, nil, false, false, false, message, true), replace, false, false)
+	writeTagComponent(w, r, status, tagsWidget(id, nil, false, false, message, true), replace, false, false)
 }
 
 func parseTagEditMode(r *http.Request) (bool, error) {
@@ -185,11 +185,11 @@ func recipeTagsHandler(endpoint string) http.HandlerFunc {
 		}
 		if edit && !owner {
 			writeTagComponent(w, r, http.StatusForbidden,
-				tagsWidget(id, tags, false, false, false, "Tags bearbeiten ist nicht erlaubt.", true),
+				tagsWidget(id, tags, false, false, "Tags bearbeiten ist nicht erlaubt.", true),
 				true, false, false)
 			return
 		}
-		writeTagComponent(w, r, http.StatusOK, tagsWidget(id, tags, owner, edit, edit, "", false), true, false, false)
+		writeTagComponent(w, r, http.StatusOK, tagsWidget(id, tags, owner, edit, "", false), true, false, false)
 	}
 }
 
@@ -215,7 +215,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 				w.Header().Set("HX-Retarget", "#recipe-tags")
 				w.Header().Set("HX-Reswap", "outerHTML")
 				writeTagComponent(w, r, status,
-					tagsWidget(id, assigned, false, false, false, message, true), true, false, false)
+					tagsWidget(id, assigned, false, false, message, true), true, false, false)
 				return
 			}
 			if status == http.StatusNotFound {
@@ -233,7 +233,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 				w.Header().Set("HX-Retarget", "#recipe-tags")
 				w.Header().Set("HX-Reswap", "outerHTML")
 				writeTagComponent(w, r, status,
-					tagsWidget(id, assigned, false, false, false, "Tags bearbeiten ist nicht erlaubt.", true),
+					tagsWidget(id, assigned, false, false, "Tags bearbeiten ist nicht erlaubt.", true),
 					true, false, false)
 				return
 			}
@@ -292,13 +292,13 @@ func invalidateRecipeTags(cache *pageCache, id string) error {
 }
 
 func writeCurrentTagEdit(w http.ResponseWriter, r *http.Request, id string, status int, tags []gql.RecipeTag, message string, added, removed bool) {
-	component := components.RecipeTagsWidget(id, tags, true, true, false, message, message != "")
+	component := components.RecipeTagsWidget(id, tags, true, true, message, message != "")
 	writeTagComponent(w, r, status, component, true, added, removed)
 }
 
 func writeTagEditDenied(w http.ResponseWriter, r *http.Request, id string, status int, tags []gql.RecipeTag, message string) {
 	writeTagComponent(w, r, status,
-		components.RecipeTagsWidget(id, tags, false, false, false, message, true), true, false, false)
+		components.RecipeTagsWidget(id, tags, false, false, message, true), true, false, false)
 }
 
 func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) http.HandlerFunc {
@@ -429,7 +429,7 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 		}
 		added, removed := !remove, remove
 		writeTagComponent(w, r, http.StatusOK,
-			components.RecipeTagsWidget(id, confirmedTags, true, true, remove, "", false),
+			components.RecipeTagsWidget(id, confirmedTags, true, true, "", false),
 			true, added, removed)
 	}
 }

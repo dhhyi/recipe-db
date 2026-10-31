@@ -38,10 +38,10 @@ func renderTagComponent(t *testing.T, component templ.Component) string {
 func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 	tags := []gql.RecipeTag{{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"}}
 	for _, testCase := range []struct {
-		name                       string
-		owner, edit, picker, empty bool
-		want                       []string
-		unwant                     []string
+		name               string
+		owner, edit, empty bool
+		want               []string
+		unwant             []string
 	}{
 		{
 			name:   "public",
@@ -65,9 +65,8 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 			name:   "owner edit mode",
 			owner:  true,
 			edit:   true,
-			picker: true,
-			want:   []string{`<summary role="button" tabindex="0" data-tag-summary`, `for="recipe-tag-search"`, `type="search"`, `name="q"`, `delay:300ms`, `compositionstart`, `Vegan entfernen`, "×", "Fertig", "Tag-Zuordnung wird gespeichert", "aria-live"},
-			unwant: []string{"recipe-editor", "Save", "Discard", `name="edit"`},
+			want:   []string{`<section aria-label="Tag hinzufügen"`, `for="recipe-tag-search"`, `type="search"`, `name="q"`, `delay:300ms`, `compositionstart`, `class="recipe-tag-remove"`, `Vegan entfernen`, "×", "Fertig", "Tag-Zuordnung wird gespeichert", "aria-live"},
+			unwant: []string{"recipe-editor", "Save", "Discard", `name="edit"`, "<details", "<summary", "data-tag-summary"},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -75,7 +74,7 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 			if testCase.empty {
 				widgetTags = nil
 			}
-			body := renderTagComponent(t, RecipeTagsWidget("42", widgetTags, testCase.owner, testCase.edit, testCase.picker, "", false))
+			body := renderTagComponent(t, RecipeTagsWidget("42", widgetTags, testCase.owner, testCase.edit, "", false))
 			for _, text := range testCase.want {
 				if !strings.Contains(body, text) {
 					t.Errorf("missing %q in %s", text, body)
@@ -90,15 +89,20 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 	}
 }
 
-func TestTagOptionsAreGroupedAndEmptyInventoryIsExplicit(t *testing.T) {
+func TestTagOptionsUseOneContinuousListAndEmptyInventoryIsExplicit(t *testing.T) {
 	tags := []gql.RecipeTag{
 		{Id: "course", Category: gql.TagCategoryCourse, Name: "Suppe"},
 		{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Ägyptisch"},
 		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 	}
 	body := renderTagComponent(t, TagOptions("42", tags))
-	if cuisine, dietary, course := strings.Index(body, "Küche"), strings.Index(body, "Ernährungsweise"), strings.Index(body, "Gang"); !(cuisine < dietary && dietary < course) {
-		t.Fatalf("options are not grouped in category order: %s", body)
+	if strings.Count(body, "<ul") != 1 || strings.Count(body, "<li>") != len(tags) ||
+		strings.Contains(body, "<fieldset") || strings.Contains(body, "<legend") ||
+		strings.Contains(body, "Küche") || strings.Contains(body, "Ernährungsweise") || strings.Contains(body, "Gang") {
+		t.Fatalf("options must use one continuous list without category headings: %s", body)
+	}
+	if cuisine, dietary, course := strings.Index(body, "Ägyptisch"), strings.Index(body, "Vegan"), strings.Index(body, "Suppe"); !(cuisine < dietary && dietary < course) {
+		t.Fatalf("options must preserve stable tag order: %s", body)
 	}
 	if strings.Contains(renderTagComponent(t, TagOptions("42", nil)), "Tag-Auswahl konnte") ||
 		!strings.Contains(renderTagComponent(t, TagOptions("42", nil)), "Keine passenden Tags gefunden.") {

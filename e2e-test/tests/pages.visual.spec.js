@@ -141,17 +141,39 @@ for (const role of ["anonymous", "member", "owner"]) {
         await expect(
           page.locator("#recipe-tags [data-tag-remove]"),
         ).toHaveCount(3);
+        await expect(page.locator("#recipe-tags details")).toHaveCount(0);
+        await expect(page.locator("#recipe-tag-options > ul")).toHaveCount(1);
+        await expect(
+          page.locator(
+            "#recipe-tag-options fieldset, #recipe-tag-options legend",
+          ),
+        ).toHaveCount(0);
+        const pill = page.locator("#recipe-tags .recipe-tag").first();
+        const editHeight = (await pill.boundingBox()).height;
+        const removeButton = pill.getByRole("button");
+        expect((await removeButton.boundingBox()).height).toBeLessThanOrEqual(
+          editHeight,
+        );
+        await page.getByRole("button", { name: "Fertig", exact: true }).click();
+        await expect(editButton).toBeVisible();
+        await expect(page.locator("#recipe-tag-search")).toHaveCount(0);
+        expect((await pill.boundingBox()).height).toBeCloseTo(editHeight, 1);
+        await editButton.click();
         const search = page.getByRole("searchbox", {
           name: "Tag suchen",
           exact: true,
         });
         await search.fill("Deutsch");
         const option = page
-          .locator("#recipe-tag-options fieldset button[type='submit']")
+          .locator("#recipe-tag-options button[type='submit']")
           .first();
         await expect(option).toBeVisible();
         await expect(option).toHaveText("Deutsch");
 
+        await search.fill("");
+        await expect(
+          page.locator("#recipe-tag-options button[type='submit']"),
+        ).not.toHaveCount(1);
         await waitForImageDecoded(
           page.getByRole("img", {
             name: taggedDemoRecipe.name,
