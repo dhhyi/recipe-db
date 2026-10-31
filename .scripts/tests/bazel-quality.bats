@@ -5,11 +5,11 @@ load test_helper
 setup() {
   setup_fixture bazel-quality.sh
   setup_mock_bin
-  cat > .scripts/bazel-quality-identity.sh <<'EOF'
+  cat > .scripts/bazel-quality-identity.sh << 'EOF'
 #!/bin/sh
 printf 'identity %s\n' "$*" >> "$MOCK_LOG"
 EOF
-  cat > bin/mise <<'EOF'
+  cat > bin/mise << 'EOF'
 #!/bin/sh
   case "$*" in
     'exec -- yq '*) shift 2; exec "$@" ;;
@@ -31,16 +31,16 @@ EOF
     mkdir -p "$project"
     printf 'name: %s\n---\n' "$project" > "$project/.project.yaml"
   done
-  cat >> example/.project.yaml <<'EOF'
+  cat >> example/.project.yaml << 'EOF'
 check: echo checked
 generate:
   - command: echo generated
 format: echo formatted
 EOF
-  cat >> check-only/.project.yaml <<'EOF'
+  cat >> check-only/.project.yaml << 'EOF'
 check: echo checked
 EOF
-  cat >> generated-only/.project.yaml <<'EOF'
+  cat >> generated-only/.project.yaml << 'EOF'
 generate:
   - command: echo generated
 format: echo formatted
@@ -55,7 +55,7 @@ EOF
     bash .scripts/bazel-quality.sh
 
   [ "$status" -eq 0 ]
-  cat > expected-calls <<EOF
+  cat > expected-calls << EOF
 mise run --raw create-intranet identity=
 mise run --raw in-devcontainer check-only true identity=1
 mise run --raw in-devcontainer example prepare identity=1

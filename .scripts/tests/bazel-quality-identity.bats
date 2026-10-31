@@ -31,7 +31,7 @@ esac
 EOF
   chmod +x bin/mise bin/docker
   mkdir -p example/.devcontainer
-  cat > example/.devcontainer/devcontainer.json <<'EOF'
+  cat > example/.devcontainer/devcontainer.json << 'EOF'
 {
   "image": "example:latest",
   "build": {"context": "..", "dockerfile": "Dockerfile"},

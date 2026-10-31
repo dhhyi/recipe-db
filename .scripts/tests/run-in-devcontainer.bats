@@ -44,7 +44,7 @@ EOF
 }
 
 @test "quality preparation records the reconciled container identity before execution" {
-  cat > .scripts/bazel-quality-identity.sh <<'EOF'
+  cat > .scripts/bazel-quality-identity.sh << 'EOF'
 #!/bin/sh
 printf 'identity %s\n' "$*" >> "$MOCK_LOG"
 EOF

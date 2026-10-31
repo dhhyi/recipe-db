@@ -23,7 +23,7 @@ case "$*" in
 esac
 EOF
   chmod +x bin/mise
-  cat > .scripts/bazel-quality-identity.sh <<'EOF'
+  cat > .scripts/bazel-quality-identity.sh << 'EOF'
 #!/bin/sh
 printf 'identity %s\n' "$*" >> "$MOCK_LOG"
 EOF

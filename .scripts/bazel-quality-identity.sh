@@ -51,12 +51,12 @@ case ${1:-} in
 '*}
     docker_version=$(docker --version)
     docker_server_version=$(docker info --format '{{.ServerVersion}}')
-    [ -n "$platform_os" ] && [ -n "$platform_arch" ] && [ -n "$mise_version" ] &&
-      [ -n "$bash_version" ] && [ -n "$git_version" ] && [ -n "$tar_version" ] &&
-      [ -n "$docker_version" ] && [ -n "$docker_server_version" ] || {
-        echo "Could not resolve host tool identity" >&2
-        exit 1
-      }
+    [ -n "$platform_os" ] && [ -n "$platform_arch" ] && [ -n "$mise_version" ] \
+      && [ -n "$bash_version" ] && [ -n "$git_version" ] && [ -n "$tar_version" ] \
+      && [ -n "$docker_version" ] && [ -n "$docker_server_version" ] || {
+      echo "Could not resolve host tool identity" >&2
+      exit 1
+    }
     content=$(
       printf 'platform=%s/%s\n' "$platform_os" "$platform_arch"
       printf 'mise=%s\n' "$mise_version"
