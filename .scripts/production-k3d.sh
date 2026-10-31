@@ -576,6 +576,7 @@ backup_copy_pvc() {
   ' > "$work/copy-pod.json" || return 1
   kube create -f "$work/copy-pod.json" > /dev/null || return 1
   if ! kube wait --for=condition=Ready "pod/$pod" --timeout="${timeout}s" > /dev/null \
+    || ! backup_check_archive_capacity "$pod" \
     || ! kube exec "$pod" -- tar -C /data -cf - . > "$archive"; then
     kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
     backup_wait_pod_gone "$pod" || return 1
@@ -595,6 +596,20 @@ backup_copy_pvc() {
     --argjson fileCount "$files" --slurpfile files "$work/$name-files.json" \
     '{service:$name,role:$role,pvc:$pvc,archive:$archive,sha256:$sha256,
       sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0]}'
+}
+
+backup_check_archive_capacity() {
+  local pod=$1 bytes free_kib
+  bytes=$(kube exec "$pod" -- sh -ec 'set -o pipefail; tar -C /data -cf - . | wc -c | tr -d "[:space:]"') || {
+    printf 'production: could not measure authoritative PVC archive size\n' >&2
+    return 1
+  }
+  free_kib=$(df -Pk "$snapshot" | awk 'NR == 2 {print $4}') || return 1
+  [[ $bytes =~ ^[0-9]+$ && $free_kib =~ ^[0-9]+$ &&
+    $bytes -le $((free_kib * 1024 - 67108864)) ]] || {
+    printf 'production: snapshot filesystem lacks measured archive capacity plus 64 MiB headroom\n' >&2
+    return 1
+  }
 }
 
 backup_check_capacity() {

@@ -167,7 +167,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         fi
         handled=true ;;
       *" wait --for=condition=complete job/backup-cleanup "*)
-        [[ $MOCK_CLEANUP_FAIL != true ]] || exit 1
+        if [[ $MOCK_CLEANUP_FAIL = true ]]; then
+          rm -f "$FIXTURE_ROOT/tar-data/images/public/stale.png"
+          exit 1
+        fi
+        touch "$MOCK_LOG.cleaned"
         handled=true ;;
       *" rollout status deployment/search "*)
         [[ ${MOCK_PROJECTION_FAIL:-false} != true ]] || exit 1
@@ -178,7 +182,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         replicas="${*: -1}"
         if [[ $replicas = --replicas=0 ]]; then
           touch "$MOCK_LOG.$service.stopped"
-          jq -c --arg service "$service" --arg forced "${MOCK_FORCED_TERMINATION:-false}" '
+          forced=${MOCK_FORCED_TERMINATION:-false}
+          if [[ $forced = capture ]]; then
+            if [[ -e $MOCK_LOG.cleaned ]]; then forced=true; else forced=false; fi
+          fi
+          jq -c --arg service "$service" --arg forced "$forced" '
             .items[] | select(.metadata.name == $service) | . as $deployment |
             range(.spec.replicas) | . as $replica |
             {type:"DELETED",object:{metadata:{uid:($service+"-"+($deployment.generation|tostring)+"-"+($replica|tostring))},
@@ -217,6 +225,16 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         jq -e '.spec.volumes[0].persistentVolumeClaim.readOnly == true and
           .spec.containers[0].volumeMounts[0].readOnly == true and
           .spec.automountServiceAccountToken == false' "$pod_file" > /dev/null || exit 1
+        handled=true ;;
+      *" exec backup-copy-"*"sh -ec"*)
+        if [[ -n ${MOCK_ARCHIVE_BYTES:-} ]]; then
+          printf '%s\n' "$MOCK_ARCHIVE_BYTES"
+        else
+          service="${*: -5:1}"
+          service="${service#backup-copy-}"
+          service="${service%-*}"
+          tar -C "$FIXTURE_ROOT/tar-data/$service" -cf - . | wc -c
+        fi
         handled=true ;;
       *" exec backup-copy-"*"tar -C /data -cf - ."*)
         [[ $MOCK_COPY_FAIL != true ]] || exit 1
@@ -955,6 +973,7 @@ token_only_values() {
 
 @test "backup cleanup exhaustion restores production and never publishes a snapshot" {
   export MOCK_BACKUP=true MOCK_CLEANUP_FAIL=true
+  printf 'stale image purged before another cleanup operation failed' > "$FIXTURE_ROOT/tar-data/images/public/stale.png"
   local snapshot="$FIXTURE_ROOT/backups/snapshot-cleanup-failed"
 
   run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
@@ -962,6 +981,7 @@ token_only_values() {
   [[ $output == *"no complete snapshot was published"* ]]
   [ ! -e "$snapshot/manifest.json" ]
   [ ! -e "$snapshot/recipes.tar" ]
+  [ ! -e "$FIXTURE_ROOT/tar-data/images/public/stale.png" ]
   [ "$(grep -c 'wait --for=condition=complete job/backup-cleanup' "$MOCK_LOG")" -eq 1 ]
   [ ! -e "$MOCK_LOG.lease" ]
   grep -q 'set env deployment/graphql MODE=production' "$MOCK_LOG"
@@ -1027,11 +1047,12 @@ token_only_values() {
 }
 
 @test "forced termination prevents capture and preserves actionable recovery state" {
-  export MOCK_BACKUP=true MOCK_FORCED_TERMINATION=true
+  export MOCK_BACKUP=true MOCK_FORCED_TERMINATION=capture
   local snapshot="$FIXTURE_ROOT/backups/forced"
   run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"force-killed"* ]]
+  [ -e "$MOCK_LOG.cleaned" ]
   [ ! -e "$snapshot/manifest.json" ]
   run ! grep -q 'copy-pod.json' "$MOCK_LOG"
 }
@@ -1045,6 +1066,20 @@ token_only_values() {
   [[ $output == *"missing authoritative database"* ]]
   [ ! -e "$snapshot/manifest.json" ]
   [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "capture measures actual archive bytes instead of trusting unenforced PVC requests" {
+  export MOCK_BACKUP=true
+  export MOCK_ARCHIVE_BYTES
+  MOCK_ARCHIVE_BYTES=$(df -Pk "$FIXTURE_ROOT/backups" \
+    | awk 'NR == 2 {printf "%.0f\n", $4 * 1024 - 67108864 + 1}')
+  local snapshot="$FIXTURE_ROOT/backups/insufficient-measured-space"
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"measured archive capacity"* ]]
+  [ ! -e "$snapshot/manifest.json" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  run ! grep -q 'exec backup-copy-.*-- tar -C' "$MOCK_LOG"
 }
 
 @test "projection failure retains the barrier Lease and recovery state" {
