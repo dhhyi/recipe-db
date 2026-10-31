@@ -46,7 +46,9 @@ EOF
 }
 
 @test "quality prepares each project once, resolves identities, and builds only the aggregate" {
-  run env CI=true GITHUB_ACTIONS=true COMPOSE_PARALLEL_LIMIT=1 DEVCONTAINER_KEEP_RUNNING=true \
+  quality_home="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$quality_home"
+  run env HOME="$quality_home" CI=true GITHUB_ACTIONS=true COMPOSE_PARALLEL_LIMIT=1 DEVCONTAINER_KEEP_RUNNING=true \
     bash .scripts/bazel-quality.sh
 
   [ "$status" -eq 0 ]
@@ -57,7 +59,7 @@ mise run --raw in-devcontainer example prepare identity=1
 mise run --raw in-devcontainer generated-only prepare identity=1
 identity host
 mise run --raw generate-bazel-build identity=
-mise run --raw bazel build --action_env=PATH --action_env=CI --action_env=GITHUB_ACTIONS --action_env=BUILDKIT_PROGRESS --action_env=COMPOSE_PROGRESS --action_env=COMPOSE_PARALLEL_LIMIT --action_env=DEVCONTAINER_KEEP_RUNNING --disk_cache=$HOME/.cache/bazel-disk --jobs=1 //:quality identity=
+mise run --raw bazel build --action_env=PATH --action_env=CI --action_env=GITHUB_ACTIONS --action_env=BUILDKIT_PROGRESS --action_env=COMPOSE_PROGRESS --action_env=COMPOSE_PARALLEL_LIMIT --action_env=DEVCONTAINER_KEEP_RUNNING --disk_cache=$quality_home/.cache/bazel-disk --jobs=1 //:quality identity=
 EOF
   cmp expected-calls "$MOCK_LOG"
 }
