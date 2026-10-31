@@ -356,11 +356,15 @@ backup_role_inventory() {
     pvc=$name
     kube get pvc "$pvc" -o json > "$work/pvc.json" \
       || production_fail "backup PVC is missing: $pvc"
-    jq -e --arg ns "$namespace" --arg storage "$storage_class" '
+    if [[ $target = pi ]]; then
+      production_storage_validate_existing_claim "$name" "$(cat "$work/pvc.json")" \
+        || production_fail "backup Pi PVC identity cannot be verified: $pvc"
+    fi
+    jq -e --arg ns "$namespace" --arg storage "$storage_class" --arg target "$target" '
       .metadata.namespace == $ns
       and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
       and .status.phase == "Bound"
-      and .spec.storageClassName == $storage
+      and (.spec.storageClassName == $storage or ($target == "pi" and .spec.storageClassName == "local-path"))
       and (.spec.accessModes | index("ReadWriteOnce") != null)
     ' "$work/pvc.json" > /dev/null \
       || production_fail "backup PVC is unowned, unbound, or has unexpected storage: $pvc"
@@ -1078,8 +1082,6 @@ case "$command" in
     render
     routes
     annotate_credentials
-    yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
-    yq 'select(.metadata.namespace != "kube-system")' "$work/rendered.yml" > "$work/application.yml"
     connect
     if [[ $auth_mode = token-only ]]; then
       kube get deployment oauth2-proxy --ignore-not-found -o name > "$work/existing-oauth"
@@ -1092,7 +1094,12 @@ case "$command" in
     # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
     cluster_operation_lock_acquire "$lock_holder" deploy "$1"
     locked=true
-    if [[ $target = pi ]]; then production_storage_preflight; fi
+    if [[ $target = pi ]]; then
+      production_storage_preflight
+      production_storage_prepare_claims "$work/rendered.yml"
+    fi
+    yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
+    yq 'select(.metadata.namespace != "kube-system")' "$work/rendered.yml" > "$work/application.yml"
     secret_args=()
     for key in "${secret_keys[@]}"; do
       secret_args+=("--from-file=$key=$work/$key")

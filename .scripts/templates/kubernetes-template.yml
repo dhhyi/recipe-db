@@ -7,7 +7,7 @@ metadata:
   name: #@ ns
   labels:
     app.kubernetes.io/part-of: recipe-db
-#@ if cfg["target"] == "pi":
+#@ if cfg["target"] == "pi" and cfg.get("piStorage") != None:
 --- #@ storage_class()
 #@ end
 ---

@@ -137,12 +137,19 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" get pvc "*"-o json"*)
         pvc="${*: -3:1}"
-        jq -n --arg pvc "$pvc" '{
-          metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-          status:{phase:"Bound"},
-          spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"],
-            resources:{requests:{storage:"1Gi"}}}
-        }'
+        if [[ -f $MOCK_LOG.pvcs ]]; then
+          jq --arg name "$pvc" --arg drift "${MOCK_PVC_DRIFT:-false}" '
+            .items[] | select(.metadata.name == $name) |
+            if $drift == "true" then .metadata.uid="changed-claim-uid" else . end
+          ' "$MOCK_LOG.pvcs"
+        else
+          jq -n --arg pvc "$pvc" '{
+            metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            status:{phase:"Bound"},
+            spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"],
+              resources:{requests:{storage:"1Gi"}}}
+          }'
+        fi
         handled=true ;;
       *" get pods "*"-o json"*)
         jq --arg args "$*" '{
@@ -261,10 +268,23 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     jq -n --arg bad "$MOCK_BAD_NODES" '{items:[{metadata:{name:"k3d-recipe-db-rehearsal-server-0"},
       spec:{providerID:(if $bad == "true" then "foreign" else "k3s://k3d-recipe-db-rehearsal-server-0" end)}}]}' ;;
   *"get deployments -o json"*) echo '{"items":[{"metadata":{"name":"nats"}},{"metadata":{"name":"recipes"}},{"metadata":{"name":"search"}}]}' ;;
-  *"get storageclass local-path -o json"*) echo '{"provisioner":"rancher.io/local-path","reclaimPolicy":"Retain"}' ;;
-  *"get persistentvolumes -o json"*) echo '{"items":[]}' ;;
+  *"get storageclass local-path "*)
+    echo '{"metadata":{"name":"local-path"},"provisioner":"rancher.io/local-path","reclaimPolicy":"Delete"}' ;;
+  *"get storageclass recipe-db-retained "*)
+    echo '{"metadata":{"name":"recipe-db-retained","labels":{"app.kubernetes.io/part-of":"recipe-db"}},"provisioner":"rancher.io/local-path","parameters":{"nodePath":"/srv/recipe-db/storage"},"reclaimPolicy":"Retain","volumeBindingMode":"WaitForFirstConsumer","allowedTopologies":[{"matchLabelExpressions":[{"key":"kubernetes.io/hostname","values":["recipe-db-pi"]}]}]}' ;;
+  *"patch storageclass "*) echo 'StorageClass fields are immutable' >&2; exit 1 ;;
+  *"get persistentvolumeclaims -o json"* | *"get pvc -o json"*)
+    if [[ -f $MOCK_LOG.pvcs ]]; then cat "$MOCK_LOG.pvcs"; else echo '{"items":[]}'; fi ;;
+  *"get persistentvolumes -o json"* | *"get pv -o json"*)
+    if [[ -f $MOCK_LOG.pvs ]]; then cat "$MOCK_LOG.pvs"; else echo '{"items":[]}'; fi ;;
   *"get namespace recipe-db --ignore-not-found -o json"*)
-    if [[ $MOCK_FOREIGN_NAMESPACE = true ]]; then echo '{"metadata":{"labels":{}}}'; fi ;;
+    if [[ $MOCK_FOREIGN_NAMESPACE = true ]]; then
+      echo '{"metadata":{"labels":{}}}'
+    elif [[ -f $MOCK_LOG.pvcs ]]; then
+      echo '{"metadata":{"name":"recipe-db","labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'
+    fi ;;
+  *"get namespace recipe-db --ignore-not-found -o name"*)
+    if [[ -f $MOCK_LOG.pvcs ]]; then echo namespace/recipe-db; fi ;;
   *"get helmchartconfig traefik --ignore-not-found -o json"*)
     if [[ $MOCK_FOREIGN_HELM = true ]]; then echo '{"metadata":{"labels":{"owner":"someone-else"}}}'; fi ;;
   *"get deployment traefik -o json"*)
@@ -360,7 +380,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     last="${*: -1}"
     if yq -e 'select(.metadata.namespace == "kube-system")' "$last" > /dev/null; then exit 1; fi
     yq -r 'select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum"' \
-      "$last" >> "$MOCK_LOG.checksums" ;;
+      "$last" >> "$MOCK_LOG.checksums"
+    if [[ ${MOCK_PI:-false} = true ]]; then
+      yq -o=json -I=0 'select(.kind == "PersistentVolumeClaim")' "$last" > "$MOCK_LOG.applied-pvcs"
+    fi ;;
   *"get deployments,pods,jobs,pvc"* | *"get events "*) echo safe-status ;;
   *"config current-context") echo explicit-pi ;;
   *"config view --minify --flatten --raw") echo private-pi-kubeconfig ;;
@@ -405,6 +428,18 @@ if jq -e 'has("config")' "$2" > /dev/null; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'
   else
     printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: release\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: recipes\nspec:\n  template:\n    metadata:\n      annotations: {}\n'
+  fi
+  if [[ ${MOCK_PI:-false} = true ]]; then
+    while IFS= read -r name; do
+      printf '%s\n' '---'
+      jq --arg name "$name" '{
+        apiVersion:"v1",kind:"PersistentVolumeClaim",
+        metadata:{name:$name,namespace:.config.namespace,
+          labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+        spec:{storageClassName:.config.storageClass,accessModes:["ReadWriteOnce"],
+          volumeMode:"Filesystem",resources:{requests:{storage:.config.volumes[$name]}}}
+      }' "$2"
+    done < <(jq -r '.config.volumes | keys[]' "$2")
   fi
   printf '%s\n' '---' 'apiVersion: helm.cattle.io/v1' 'kind: HelmChartConfig' 'metadata:' '  name: traefik' '  namespace: kube-system' 'spec:' '  valuesContent: "deployment: {}"'
 else
@@ -451,10 +486,38 @@ set_value() {
 token_only_values() {
   export MOCK_PI=true
   set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
+    .storageClass="recipe-db-retained" |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .runtime.authMode="token-only" | .runtime.googleOAuthClientId="" |
     del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+legacy_pi_claims() {
+  jq '. as $config | ["recipes","images","tags"] | to_entries | {
+    items:map(
+      ("00000000-0000-0000-0000-00000000000"+(.key|tostring)) as $uid |
+      {apiVersion:"v1",kind:"PersistentVolumeClaim",
+        metadata:{name:.value,namespace:"recipe-db",uid:$uid,
+          labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+        spec:{storageClassName:"local-path",volumeName:("pvc-"+$uid),
+          accessModes:["ReadWriteOnce"],volumeMode:"Filesystem",
+          resources:{requests:{storage:$config.volumes[.value]}}},
+        status:{phase:"Bound"}})
+  }' "$VALUES" > "$MOCK_LOG.pvcs"
+  jq '{items:[.items[] | {
+    apiVersion:"v1",kind:"PersistentVolume",
+    metadata:{name:.spec.volumeName,resourceVersion:"1"},
+    spec:{storageClassName:"local-path",capacity:{storage:.spec.resources.requests.storage},
+      accessModes:["ReadWriteOnce"],volumeMode:"Filesystem",
+      persistentVolumeReclaimPolicy:"Retain",
+      hostPath:{path:("/srv/recipe-db/storage/"+.spec.volumeName+"_recipe-db_"+.metadata.name)},
+      claimRef:{namespace:"recipe-db",name:.metadata.name,uid:.metadata.uid},
+      nodeAffinity:{required:{nodeSelectorTerms:[{
+        matchExpressions:[{key:"kubernetes.io/hostname",operator:"In",values:["recipe-db-pi"]}]
+      }]}}},
+    status:{phase:"Bound"}
+  }]}' "$MOCK_LOG.pvcs" > "$MOCK_LOG.pvs"
 }
 
 @test "token-only Pi deployment requires no OAuth secrets and strips OAuth routing" {
@@ -464,6 +527,38 @@ token_only_values() {
   [ "$status" -eq 0 ]
   run ! grep -q -- '--from-file=google-oauth-client-secret' "$MOCK_LOG"
   run ! grep -q -- '--from-file=oauth2-cookie-secret' "$MOCK_LOG"
+}
+
+@test "Pi deploy preserves verified legacy bound claim classes before applying manifests" {
+  token_only_values
+  legacy_pi_claims
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -s -e 'length == 11 and
+    all(.[]; .spec.storageClassName ==
+      (if .metadata.name == "recipes" or .metadata.name == "images" or .metadata.name == "tags"
+       then "local-path" else "recipe-db-retained" end))' "$MOCK_LOG.applied-pvcs"
+  run ! grep -q 'patch storageclass' "$MOCK_LOG"
+}
+
+@test "Pi backup accepts identity-verified legacy bound claims" {
+  export MOCK_BACKUP=true
+  token_only_values
+  legacy_pi_claims
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
+  [ "$status" -eq 0 ]
+  [ -f "$FIXTURE_ROOT/snapshot/manifest.json" ]
+  run ! grep -q 'patch storageclass' "$MOCK_LOG"
+}
+
+@test "Pi backup refuses a legacy claim identity change after storage preflight" {
+  export MOCK_BACKUP=true MOCK_PVC_DRIFT=true
+  token_only_values
+  legacy_pi_claims
+  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
+  [ "$status" -ne 0 ]
+  [ ! -e "$FIXTURE_ROOT/snapshot" ]
+  run ! grep -Eq 'set env deployment/|exec backup-copy-' "$MOCK_LOG"
 }
 
 @test "token-only mode refuses non-loopback origins local targets and anonymous owners" {
@@ -588,7 +683,7 @@ token_only_values() {
 }
 
 @test "Pi lifecycle and local verification are forbidden" {
-  set_value '.target="pi" | .context="explicit-pi"'
+  set_value '.target="pi" | .context="explicit-pi" | .storageClass="recipe-db-retained"'
   for action in create verify; do
     run bash .scripts/production-k3d.sh "$action" "$VALUES"
     [ "$status" -ne 0 ]
@@ -922,7 +1017,7 @@ token_only_values() {
 }
 
 @test "Pi status extracts only its explicitly selected context" {
-  set_value '.target="pi" | .context="explicit-pi"'
+  set_value '.target="pi" | .context="explicit-pi" | .storageClass="recipe-db-retained"'
   run bash .scripts/production-k3d.sh status "$VALUES"
   [ "$status" -eq 0 ]
   grep -q '^kubectl --context explicit-pi config view --minify --flatten --raw$' "$MOCK_LOG"

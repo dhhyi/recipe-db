@@ -44,7 +44,7 @@ production_config() {
       .cluster == "recipe-db-rehearsal" and .context == "k3d-recipe-db-rehearsal"
       and .origin == ("http://127.0.0.1:" + (.httpPort | tostring))
       and .storageClass == "local-path"
-    else .context != "k3d-recipe-db-rehearsal" end)
+    else .context != "k3d-recipe-db-rehearsal" and .storageClass == "recipe-db-retained" end)
     and (if has("piStorage") then
       .target == "pi" and
       (.piStorage | objectkeys(["node","expectedRootUuid","dataRoot"])
@@ -55,6 +55,7 @@ production_config() {
       ($action == "deploy" or $action == "backup" or $action == "backup-enter"
         or $action == "backup-exit" or $action == "storage-reattach")
       then has("piStorage")
+        and .piStorage.node == .cluster
         and (.piStorage.expectedRootUuid | test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
       else true end)
     and (if $action == "storage-reattach" then .target == "pi" else true end)
@@ -102,7 +103,7 @@ production_config() {
   timeout=$(jq -r .timeoutSeconds "$work/config.json")
   storage_class=$(jq -r .storageClass "$work/config.json")
   storage_node=$(jq -r '.piStorage.node // empty' "$work/config.json")
-  storage_root_uuid=$(jq -r '.piStorage.expectedRootUuid // empty' "$work/config.json")
+  storage_root_uuid=$(jq -r '.piStorage.expectedRootUuid // empty' "$work/config.json" | tr '[:upper:]' '[:lower:]')
   storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
   auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")

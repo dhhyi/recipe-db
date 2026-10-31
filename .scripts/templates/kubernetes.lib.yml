@@ -59,7 +59,7 @@
 #@ end
 
 #@ def storage_class():
-#@   return {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": cfg["storageClass"], "labels": {"app.kubernetes.io/part-of": "recipe-db"}}, "provisioner": "rancher.io/local-path", "reclaimPolicy": "Retain", "volumeBindingMode": "WaitForFirstConsumer"}
+#@   return {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": cfg["storageClass"], "labels": {"app.kubernetes.io/part-of": "recipe-db"}}, "provisioner": "rancher.io/local-path", "parameters": {"nodePath": cfg["piStorage"]["dataRoot"] + "/storage"}, "reclaimPolicy": "Retain", "volumeBindingMode": "WaitForFirstConsumer", "allowedTopologies": [{"matchLabelExpressions": [{"key": "kubernetes.io/hostname", "values": [cfg["piStorage"]["node"]]}]}]}
 #@ end
 
 #@ def config_mount(name, path):
