@@ -120,6 +120,37 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "recipe.png");
     });
 
+    if (role === "owner") {
+      test("recipe tag editor", async ({ page, taggedDemoRecipe }) => {
+        await page.goto(`/recipe/${taggedDemoRecipe.id}`);
+        await expectHeader(page, role);
+
+        const editButton = page.getByRole("button", {
+          name: "Tags bearbeiten",
+          exact: true,
+        });
+        await expect(editButton).toBeVisible();
+        await editButton.click();
+
+        await expect(
+          page.getByRole("searchbox", { name: "Tag suchen", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Fertig", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.locator("#recipe-tags [data-tag-remove]"),
+        ).toHaveCount(3);
+        const option = page.locator(
+          "#recipe-tag-options fieldset button[type='submit']",
+        ).first();
+        await expect(option).toBeVisible();
+
+        await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+        await screenshot(page, "tag-editor.png");
+      });
+    }
+
     test("styled full-page error", async ({ page }) => {
       const response = await page.goto("/does-not-exist");
       expect(response.status()).toBe(404);
