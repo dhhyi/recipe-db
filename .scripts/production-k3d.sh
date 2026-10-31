@@ -10,16 +10,21 @@ source "$root/.scripts/lib/production-config.sh"
 source "$root/.scripts/lib/project-metadata.sh"
 # shellcheck source=.scripts/lib/cluster-operation-lock.sh
 source "$root/.scripts/lib/cluster-operation-lock.sh"
+# shellcheck source=.scripts/lib/production-storage.sh
+source "$root/.scripts/lib/production-storage.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|backup|status|delete|lock-status|lock-recover> <absolute values.yaml> [release digest] [snapshot directory|confirmation]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
 case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
-  backup) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
+  backup | backup-enter) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
+  backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
+  backup-exit) [[ $# = 3 ]] || production_fail "backup-exit requires the absolute state directory, exact holder and EXIT-<holder> confirmation" ;;
   delete) [[ $# = 1 ]] || production_fail "delete requires an explicit confirmation" ;;
+  storage-reattach) [[ $# = 1 ]] || production_fail "storage-reattach requires REATTACH-<cluster> confirmation" ;;
   lock-recover) [[ $# = 2 ]] || production_fail "lock-recover requires an explicit holder and confirmation" ;;
   kubectl) [[ $# -gt 0 ]] || production_fail "kubectl requires arguments" ;;
   *) production_fail "unknown command" ;;
@@ -31,9 +36,20 @@ retain_lock=false
 lock_holder=
 barrier_touched=false
 barrier_established=false
+pod_watch_pid=
 cleanup() {
   local result=$?
   trap - EXIT
+  if [[ -n $pod_watch_pid ]]; then
+    kill "$pod_watch_pid" 2> /dev/null || true
+    wait "$pod_watch_pid" 2> /dev/null || true
+  fi
+  if [[ $result -ne 0 ]] && $locked && $retain_lock \
+    && [[ -n ${snapshot:-} && -f $snapshot/backup-state.json ]] \
+    && [[ $(jq -r .status "$snapshot/backup-state.json") != recovery-required ]]; then
+    backup_state_write recovery-required interrupted \
+      || printf 'production: could not record interrupted recovery state\n' >&2
+  fi
   if $locked && ! $retain_lock; then
     if ! cluster_operation_lock_release "$lock_holder"; then
       printf 'production: could not safely release recipe-db-deploy Lease; manual investigation required\n' >&2
@@ -185,7 +201,9 @@ routes() {
       else . end)
     | .http.routers["graphql-internal"] = {
         rule:"PathPrefix(`/graphql`)",entrypoints:["rest-internal"],
-        service:"recipe-db-graphql",middlewares:["graphql-ingress"]}
+        service:"recipe-db-graphql-projection",middlewares:["graphql-ingress"]}
+    | .http.services["recipe-db-graphql-projection"] = {
+        loadBalancer:{servers:[{url:("http://graphql-projection." + $ns + ".svc.cluster.local:4000")}]}}
     | .http.middlewares["graphql-ingress"] = {
         headers:{customRequestHeaders:{"X-Internal-Ingress-Token":($secret | rtrimstr("\n"))}}}
     | if $authMode == "token-only" then
@@ -315,7 +333,7 @@ backup_wait_selected_pvcs_unmounted() {
 }
 
 backup_role_inventory() {
-  local project name role pvc
+  local project name role pvc layout
   local authoritative=0 participants=0
   : > "$work/backup-pvcs.jsonl"
   while IFS= read -r project; do
@@ -328,6 +346,11 @@ backup_role_inventory() {
       *) production_fail "unclassified backup service: $name" ;;
     esac
     [[ $role != authoritative-read-only && $role != cleanup-participant ]] && continue
+    layout=$(jq -ce '.backupData | select(
+      (.kind == "images" and keys == ["kind"]) or
+      ((.kind == "sqlite" or .kind == "json") and keys == ["file","kind"]
+        and (.file | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))))' <<< "$project") \
+      || production_fail "backup service has no classified authoritative layout: $name"
     jq -e --arg name "$name" '.volumes | has($name)' "$work/config.json" > /dev/null \
       || production_fail "backup service has no configured PVC: $name"
     pvc=$name
@@ -353,8 +376,8 @@ backup_role_inventory() {
         and .spec.template.metadata.annotations["recipe-db/release"] != null
     ' "$work/deployment.json" > /dev/null \
       || production_fail "backup workload does not mount its own PVC at /data: $name"
-    jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
-      '{name:$name,role:$role,pvc:$pvc}' >> "$work/backup-pvcs.jsonl"
+    jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" --argjson layout "$layout" \
+      '{name:$name,role:$role,pvc:$pvc,layout:$layout}' >> "$work/backup-pvcs.jsonl"
   done < <(jq -c 'select(.category == "backend" or .category == "api")' "$work/projects.jsonl")
   [[ $authoritative = 1 && $participants -gt 0 ]] \
     || production_fail "backup inventory requires one authoritative source and at least one cleanup participant"
@@ -372,7 +395,7 @@ backup_capture_workloads() {
     any($deployments.items[]; .metadata.name == "graphql")
     and all($deployments.items[];
       .spec.template.metadata.annotations["recipe-db/release"] == $artifact)
-    and all($projects[0][] | select(.category == "api" or .category == "backend");
+    and all($projects[] | select(.category == "api" or .category == "backend");
       . as $project |
       any($deployments.items[]; . as $deployment |
         $deployment.metadata.name == $project.name and
@@ -388,6 +411,9 @@ backup_capture_workloads() {
     release:.spec.template.metadata.annotations["recipe-db/release"],
     mode:([.spec.template.spec.containers[] | .env[]? | select(.name == "MODE") | .value][0] // "production")
   }]' "$work/deployments.json" > "$work/prior-workloads.json"
+  jq -sc '[.[] | select(.name != "graphql" and
+    (.category == "api" or .category == "backend" or .name == "browse" or .name == "mcp")) | .name]' \
+    "$work/projects.jsonl" > "$work/maintenance-workloads.json"
   jq -e 'all(.[]; .readyReplicas == .replicas)
     and any(.[]; .name == "graphql" and .replicas > 0)' \
     "$work/prior-workloads.json" > /dev/null \
@@ -410,51 +436,113 @@ backup_capture_workloads() {
     ' "$work/initial-pods.json" > /dev/null \
       || production_fail "selected PVC has an unexpected or terminating Pod: $pvc"
   done < "$work/backup-pvcs.jsonl"
+  kube get configmap recipe-db-release -o json > "$work/deployed-release.json" \
+    || production_fail "deployed immutable release metadata is missing"
+  jq -e --arg artifact "$artifact" --arg revision "$revision" \
+    '.data.artifact == $artifact and .data.revision == $revision' \
+    "$work/deployed-release.json" > /dev/null \
+    || production_fail "deployed release metadata does not match the requested release"
+  kube get secret recipe-db-runtime -o json > "$work/deployed-secret.json" 2> "$work/secret-error" \
+    || production_fail "deployed runtime Secret is missing (details suppressed)"
+  jq -e --arg ns "$namespace" --argjson keys "$(printf '%s\n' "${secret_keys[@]}" | jq -R . | jq -s .)" '
+    .metadata.namespace == $ns and
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db" and
+    (. as $secret | all($keys[]; . as $key | ($secret.data[$key] | type == "string" and length > 0)))
+  ' "$work/deployed-secret.json" > /dev/null \
+    || production_fail "deployed runtime Secret is unowned or incomplete"
+  kube get service graphql-projection -o json > "$work/projection-service.json" \
+    || production_fail "release must provide the private projection routing service"
+  jq -e '.spec.type == "ClusterIP" and .spec.selector["app.kubernetes.io/name"] == "graphql"
+    and .spec.ports == [{name:"graphql",port:4000,targetPort:4000,protocol:"TCP"}]' \
+    "$work/projection-service.json" > /dev/null \
+    || production_fail "private projection service is not in its normal state"
 }
 
 backup_cleanup_job() {
-  local attempt
   yq -o=yaml 'select(.kind == "Job" and .metadata.name == "backup-cleanup")' \
     "$work/rendered.yml" > "$work/backup-cleanup-job.yml"
   [[ -s $work/backup-cleanup-job.yml ]] || {
     printf 'production: immutable release did not render the metadata-derived cleanup Job\n' >&2
     return 1
   }
-  for attempt in 1 2 3; do
-    cluster_operation_lock_update "cleanup-$attempt"
-    kube get job backup-cleanup --ignore-not-found -o json > "$work/existing-cleanup-job.json" \
-      || return 1
-    if [[ -s $work/existing-cleanup-job.json ]]; then
-      jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
-        "$work/existing-cleanup-job.json" > /dev/null || {
-        printf 'production: refusing to replace an unowned backup-cleanup Job\n' >&2
-        return 1
-      }
-      kube delete job backup-cleanup --wait=true --timeout="${timeout}s" > /dev/null || return 1
-    fi
-    kube apply -f "$work/backup-cleanup-job.yml" > /dev/null || return 1
-    kube patch job backup-cleanup --type=merge -p '{"spec":{"suspend":false}}' > /dev/null || return 1
-    if kube wait --for=condition=complete "job/backup-cleanup" --timeout="${timeout}s" \
-      && kube get job backup-cleanup -o json > "$work/cleanup-result.json" \
-      && jq -e 'any(.status.conditions[]?; .type == "Complete" and .status == "True")' \
-        "$work/cleanup-result.json" > /dev/null; then
-      return 0
-    fi
-    printf 'production: cleanup attempt %s/3 failed; retrying the idempotent cleanup Job\n' "$attempt" >&2
-    kube delete job backup-cleanup --ignore-not-found --wait=true \
-      --timeout="${timeout}s" > /dev/null || return 1
-  done
-  printf 'production: cleanup failed after three attempts; snapshot capture is prohibited\n' >&2
+  cluster_operation_lock_update cleanup || return 1
+  kube get job backup-cleanup --ignore-not-found -o json > "$work/existing-cleanup-job.json" \
+    || return 1
+  if [[ -s $work/existing-cleanup-job.json ]]; then
+    jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+      "$work/existing-cleanup-job.json" > /dev/null || {
+      printf 'production: refusing to replace an unowned backup-cleanup Job\n' >&2
+      return 1
+    }
+    kube delete job backup-cleanup --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  fi
+  kube apply -f "$work/backup-cleanup-job.yml" > /dev/null || return 1
+  kube patch job backup-cleanup --type=merge -p '{"spec":{"suspend":false}}' > /dev/null || return 1
+  if kube wait --for=condition=complete "job/backup-cleanup" --timeout="${timeout}s" \
+    && kube get job backup-cleanup -o json > "$work/cleanup-result.json" \
+    && jq -e 'any(.status.conditions[]?; .type == "Complete" and .status == "True")' \
+      "$work/cleanup-result.json" > /dev/null; then
+    return 0
+  fi
+  kube delete job backup-cleanup --ignore-not-found --wait=true \
+    --timeout="${timeout}s" > /dev/null || return 1
+  printf 'production: cleanup exhausted its per-operation retries or failed validation; snapshot capture is prohibited\n' >&2
   return 1
 }
 
-backup_scale_zero() {
-  local name
+backup_stop() {
+  local names=$1 name resource_version deadline
+  if [[ -n $pod_watch_pid ]]; then
+    kill "$pod_watch_pid" 2> /dev/null || true
+    wait "$pod_watch_pid" 2> /dev/null || true
+    pod_watch_pid=
+  fi
+  kube get pods -o json > "$work/stopping-pods.json" || return 1
+  jq --argjson names "$names" '[.items[] |
+    select(.metadata.labels["app.kubernetes.io/name"] as $name | $names | index($name)) |
+    {uid:.metadata.uid,name:.metadata.name}]' \
+    "$work/stopping-pods.json" > "$work/stopping-identities.json" || return 1
+  resource_version=$(jq -er '.metadata.resourceVersion' "$work/stopping-pods.json") || return 1
+  kubectl --kubeconfig "$work/kubeconfig" --context "$context" --namespace "$namespace" \
+    --request-timeout="${timeout}s" get pods --watch-only --output-watch-events "--resource-version=$resource_version" \
+    -o json > "$work/termination-events.json" 2> "$work/termination-watch-error" &
+  pod_watch_pid=$!
   while IFS= read -r name; do
     kube scale "deployment/$name" --replicas=0 > /dev/null || return 1
-  done < <(jq -r '.name' "$work/backup-pvcs.jsonl")
+  done < <(jq -r '.[]' <<< "$names")
   while IFS= read -r name; do backup_wait_pods_gone "$name" || return 1; done \
-    < <(jq -r '.name' "$work/backup-pvcs.jsonl")
+    < <(jq -r '.[]' <<< "$names")
+  deadline=$((SECONDS + timeout))
+  while ! jq -se --slurpfile expected "$work/stopping-identities.json" '
+    . as $events | all($expected[0][]; . as $pod |
+      any($events[]; .type == "DELETED" and .object.metadata.uid == $pod.uid))
+  ' "$work/termination-events.json" > /dev/null 2>&1; do
+    if ((SECONDS >= deadline)) || ! kill -0 "$pod_watch_pid" 2> /dev/null; then
+      printf 'production: clean Pod termination could not be observed; capture is prohibited\n' >&2
+      return 1
+    fi
+    sleep 1
+  done
+  kill "$pod_watch_pid" 2> /dev/null || true
+  wait "$pod_watch_pid" 2> /dev/null || true
+  pod_watch_pid=
+  jq -se --slurpfile expected "$work/stopping-identities.json" '
+    . as $events | all($expected[0][]; . as $pod |
+      any($events[]; .type == "DELETED" and .object.metadata.uid == $pod.uid and
+        (.object.status.containerStatuses | length) > 0 and
+        all(.object.status.containerStatuses[];
+          .state.terminated != null and
+          (.state.terminated.exitCode == 0 or
+            (.state.terminated.exitCode == 143 and (.state.terminated.signal // 15) == 15)) and
+          .state.terminated.reason != "OOMKilled")))
+  ' "$work/termination-events.json" > /dev/null || {
+    printf 'production: workload was force-killed or failed its bounded drain; capture is prohibited\n' >&2
+    return 1
+  }
+}
+
+backup_scale_zero() {
+  backup_stop "$(< "$work/maintenance-workloads.json")" || return 1
   backup_wait_selected_pvcs_unmounted || return 1
 }
 
@@ -473,7 +561,7 @@ backup_start_modes() {
 }
 
 backup_copy_pvc() {
-  local name=$1 pvc=$2 role=$3 pod archive listing size sha files
+  local name=$1 pvc=$2 role=$3 layout=$4 pod archive size sha files
   pod="backup-copy-${name}-${backup_id##*-}"
   archive="$snapshot/$name.tar"
   jq -n --arg name "$pod" --arg namespace "$namespace" --arg image "$copy_image" \
@@ -496,22 +584,17 @@ backup_copy_pvc() {
   kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
   backup_wait_pod_gone "$pod" || return 1
   [[ -s $archive ]] || return 1
-  listing="$work/$name-files.txt"
-  tar -tf "$archive" > "$listing" || return 1
-  if [[ $role = authoritative-read-only ]] \
-    && ! grep -Eq '(^|/)recipes\.sqlite3$' "$listing"; then
-    printf 'production: authoritative recipe PVC lacks recipes.sqlite3; refusing an empty or incomplete snapshot\n' >&2
-    return 1
-  fi
+  python3 "$root/.scripts/validate-backup-snapshot.py" "$archive" "$layout" \
+    > "$work/$name-files.json" || return 1
   size=$(stat -c '%s' "$archive") || return 1
   sha=$(sha256sum "$archive") || return 1
   sha=${sha%% *}
-  files=$(wc -l < "$listing")
+  files=$(jq 'length' "$work/$name-files.json")
   jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
     --arg archive "$name.tar" --arg sha256 "$sha" --argjson sizeBytes "$size" \
-    --argjson fileCount "$files" \
+    --argjson fileCount "$files" --slurpfile files "$work/$name-files.json" \
     '{service:$name,role:$role,pvc:$pvc,archive:$archive,sha256:$sha256,
-      sizeBytes:$sizeBytes,fileCount:$fileCount}'
+      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0]}'
 }
 
 backup_check_capacity() {
@@ -528,15 +611,16 @@ backup_check_capacity() {
 }
 
 backup_capture() {
-  local entry name role pvc
+  local entry name role pvc layout
   local inventory="$work/archive-inventory.jsonl"
   : > "$inventory" || return 1
   while IFS= read -r entry; do
     name=$(jq -r .name <<< "$entry")
     role=$(jq -r .role <<< "$entry")
     pvc=$(jq -r .pvc <<< "$entry")
-    cluster_operation_lock_update "copy-$name"
-    backup_copy_pvc "$name" "$pvc" "$role" >> "$inventory" || return 1
+    layout=$(jq -c .layout <<< "$entry")
+    cluster_operation_lock_update "copy-$name" || return 1
+    backup_copy_pvc "$name" "$pvc" "$role" "$layout" >> "$inventory" || return 1
   done < "$work/backup-pvcs.jsonl"
   jq -s '.' "$inventory" > "$work/archive-inventory.json" || return 1
   captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -559,9 +643,48 @@ backup_remove_copy_pods() {
 }
 
 backup_reblock_graphql() {
-  kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null \
-    && kube rollout status deployment/graphql --timeout="${timeout}s" \
-    && barrier_established=true
+  if kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null \
+    && kube rollout status deployment/graphql --timeout="${timeout}s"; then
+    barrier_established=true
+    return 0
+  fi
+  printf 'production: GraphQL backup rollout failed; stopping GraphQL to preserve the client barrier\n' >&2
+  if kube scale deployment/graphql --replicas=0 > /dev/null && backup_wait_pods_gone graphql; then
+    barrier_established=true
+    return 0
+  fi
+  printf 'production: could not verify the GraphQL client barrier; immediate operator intervention required\n' >&2
+  return 1
+}
+
+backup_projection_route() {
+  local port=$1
+  kube patch service graphql-projection --type=merge \
+    -p "{\"spec\":{\"ports\":[{\"name\":\"graphql\",\"port\":4000,\"targetPort\":$port,\"protocol\":\"TCP\"}]}}" \
+    > /dev/null
+}
+
+backup_refresh_projections() {
+  local name replicas refresh_replicas
+  cluster_operation_lock_update projection-refresh || return 1
+  backup_projection_route 4001 || return 1
+  for name in search browse; do
+    replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
+      "$work/prior-workloads.json") || {
+      printf 'production: required disposable projection workload is missing: %s\n' "$name" >&2
+      return 1
+    }
+    refresh_replicas=$replicas
+    ((refresh_replicas > 0)) || refresh_replicas=1
+    kube set env "deployment/$name" MODE=production "--containers=$name" > /dev/null || return 1
+    kube rollout restart "deployment/$name" > /dev/null || return 1
+    kube scale "deployment/$name" "--replicas=$refresh_replicas" > /dev/null || return 1
+    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
+    if ((replicas == 0)); then
+      backup_stop "$(jq -cn --arg name "$name" '[$name]')" || return 1
+    fi
+  done
+  backup_state_write recovering projections-ready || return 1
 }
 
 backup_restore_production() {
@@ -604,21 +727,29 @@ backup_restore_production() {
     while IFS= read -r name; do
       kube set env "deployment/$name" MODE=production "--containers=$name" > /dev/null || failed=true
       replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
-        "$work/prior-workloads.json") || { failed=true; continue; }
+        "$work/prior-workloads.json") || {
+        failed=true
+        continue
+      }
       kube scale "deployment/$name" "--replicas=$replicas" > /dev/null || failed=true
       if ((replicas > 0)); then
         kube rollout status "deployment/$name" --timeout="${timeout}s" || failed=true
       else
         backup_wait_pods_gone "$name" || failed=true
       fi
-    done < <(jq -r '.name' "$work/backup-pvcs.jsonl")
+    done < <(jq -r '.[] | select(. != "search" and . != "browse")' "$work/maintenance-workloads.json")
   fi
   if $failed; then
     printf 'production: backend recovery failed; GraphQL remains blocked in backup mode\n' >&2
     return 1
   fi
+  if ! backup_refresh_projections || ! backup_projection_route 4000; then
+    printf 'production: projection recovery failed; GraphQL remains blocked in backup mode\n' >&2
+    return 1
+  fi
   # GraphQL is restored last so clients remain blocked until every data backend is safe.
   if ! kube set env deployment/graphql MODE=production --containers=graphql > /dev/null; then
+    backup_reblock_graphql || printf 'production: recovery could not reblock GraphQL\n' >&2
     return 1
   fi
   local graphql_replicas
@@ -634,7 +765,10 @@ backup_restore_production() {
     return 1
   }
   barrier_established=false
-  kube get deployments -o json > "$work/recovered-deployments.json" || return 1
+  kube get deployments -o json > "$work/recovered-deployments.json" || {
+    backup_reblock_graphql || printf 'production: could not reestablish GraphQL barrier\n' >&2
+    return 1
+  }
   jq -e --slurpfile prior "$work/prior-workloads.json" '
     . as $actual | all($prior[0][]; . as $wanted |
       [$actual.items[] | select(.metadata.name == $wanted.name)] as $found |
@@ -654,7 +788,10 @@ backup_restore_production() {
       backup_reblock_graphql || true
       return 1
     }
-  done < <({ jq -r '.name' "$work/backup-pvcs.jsonl"; printf 'graphql\n'; })
+  done < <({
+    jq -r '.[] | select(. != "browse")' "$work/maintenance-workloads.json"
+    printf 'graphql\n'
+  })
   backup_state_write recovered recovered || {
     backup_reblock_graphql || true
     return 1
@@ -677,29 +814,38 @@ backup_run() {
   pull_release "$artifact"
   render
   connect
+  backup_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
+  lock_holder="$backup_id"
+  cluster_operation_lock_acquire "$lock_holder" backup "$artifact"
+  locked=true
+  if [[ $target = pi ]]; then
+    case "$snapshot/" in
+      "$storage_data_root/"* | /var/lib/rancher/*) production_fail "snapshot destination must not be inside Pi runtime or production storage" ;;
+    esac
+    production_storage_preflight
+  fi
   application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
   storage_class=$(jq -r .storageClass "$work/config.json")
   backup_role_inventory
   backup_capture_workloads "$artifact"
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   backup_check_capacity "$parent"
-  backup_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
   mkdir -m 700 -- "$snapshot" || production_fail "could not create private snapshot directory"
   jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
     --arg revision "$revision" --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --slurpfile workloads "$work/prior-workloads.json" \
     --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+    --slurpfile maintenance "$work/maintenance-workloads.json" \
+    --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
     '{backupId:$id,status:"in-progress",phase:"prepared",startedAt:$startedAt,
       source:{target:$target,cluster:$cluster,context:$context,namespace:$namespace,
         artifact:$artifact,revision:$revision},
-      priorWorkloads:$workloads[0],selectedPVCs:$pvcs}' > "$snapshot/backup-state.json" \
+      configSha256:$configSha256,priorWorkloads:$workloads[0],
+      maintenanceWorkloads:$maintenance[0],selectedPVCs:$pvcs}' > "$snapshot/backup-state.json" \
     || production_fail "could not persist recovery state"
-  lock_holder="$backup_id"
   # Never let an EXIT/TERM trap release this Lease mid-transition.
   retain_lock=true
-  cluster_operation_lock_acquire "$lock_holder" backup "$artifact"
-  locked=true
   if ! backup_run_locked "$artifact"; then
     local primary_error="backup capture failed before a complete archive inventory was published"
     if ! backup_restore_production; then
@@ -716,6 +862,10 @@ backup_run() {
       "$primary_error" >&2
     return 1
   fi
+  if [[ $command = backup-enter ]]; then
+    backup_state_write backup-mode maintenance-entered || return 1
+    return 0
+  fi
   if ! backup_restore_production; then
     retain_lock=true
     backup_state_write recovery-required recovery-required || true
@@ -724,6 +874,11 @@ backup_run() {
       "$snapshot" >&2
     return 1
   fi
+  cluster_operation_lock_release "$lock_holder" || {
+    printf 'production: recovery succeeded but the backup Lease could not be released; state is retained\n' >&2
+    return 1
+  }
+  locked=false
   retain_lock=false
   jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
@@ -742,20 +897,100 @@ backup_run() {
   printf 'production: complete PVC snapshot written to %s/manifest.json\n' "$snapshot"
 }
 
-backup_run_locked() {
-  local name replicas
+backup_load_state() {
+  snapshot=$1
+  [[ $snapshot = /* && -d $snapshot && $(realpath -e "$snapshot") = "$snapshot" &&
+  -f $snapshot/backup-state.json && ! -L $snapshot/backup-state.json ]] \
+    || production_fail "recovery requires the original absolute, non-symlink state directory"
+  jq -e --arg target "$target" --arg cluster "$cluster" --arg context "$context" \
+    --arg namespace "$namespace" --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    .source.target == $target and .source.cluster == $cluster and .source.context == $context
+    and .source.namespace == $namespace and .configSha256 == $config
+    and (.backupId | test("^backup-[0-9]+-[0-9]+$"))
+    and (.priorWorkloads | type == "array" and length > 0)
+    and all(.priorWorkloads[]; (.name | test("^[a-z][a-z0-9-]+$")) and
+      (.replicas | type == "number" and . >= 0 and floor == .))
+    and (.maintenanceWorkloads | type == "array" and length > 0)
+    and (. as $state | all(.maintenanceWorkloads[]; . as $name |
+      any($state.priorWorkloads[]; .name == $name)))
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "recovery state does not match the explicit target and original values"
+  backup_id=$(jq -r .backupId "$snapshot/backup-state.json")
+  jq -c .priorWorkloads "$snapshot/backup-state.json" > "$work/prior-workloads.json"
+  jq -c .maintenanceWorkloads "$snapshot/backup-state.json" > "$work/maintenance-workloads.json"
+  jq -c '.selectedPVCs[]' "$snapshot/backup-state.json" > "$work/backup-pvcs.jsonl"
+}
+
+backup_exit() {
+  local expected=$2 confirmation=$3 current release
+  backup_load_state "$1"
+  [[ $expected = "$backup_id" && $confirmation = "EXIT-$expected" ]] \
+    || production_fail "backup-exit requires the exact saved holder and EXIT-<holder> confirmation"
+  release=$(jq -er .source.artifact "$snapshot/backup-state.json")
+  pull_release "$release"
+  [[ $revision = "$(jq -r .source.revision "$snapshot/backup-state.json")" ]] \
+    || production_fail "recovery release revision changed"
+  connect
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect recovery Lease"
+  jq -e --arg holder "$expected" --arg release "$release" '
+    .spec.holderIdentity == $holder and
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db" and
+    .metadata.annotations["recipe-db/operation"] == "backup" and
+    .metadata.annotations["recipe-db/release"] == $release
+  ' <<< "$current" > /dev/null || production_fail "recovery Lease does not match this backup"
+  cluster_operation_lock_holder=$expected
+  lock_holder=$expected
+  locked=true
+  retain_lock=true
+  if [[ $target = pi ]]; then production_storage_preflight; fi
+  kube get deployments -o json > "$work/recovery-workloads.json" || return 1
+  jq -e --slurpfile prior "$work/prior-workloads.json" '
+    . as $actual | all($prior[0][]; . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name and
+        .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release))
+  ' "$work/recovery-workloads.json" > /dev/null || {
+    printf 'production: recovery workloads have changed releases; retain the barrier and investigate\n' >&2
+    return 1
+  }
+  backup_establish_barrier || return 1
+  if ! backup_restore_production; then
+    backup_state_write recovery-required recovery-required \
+      || printf 'production: could not persist recovery failure\n' >&2
+    printf 'production: backup-exit failed; clients remain blocked and the Lease is retained\n' >&2
+    return 1
+  fi
+  retain_lock=false
+  backup_state_write recovered safely-recovered || return 1
+  printf 'production: production restored; recovery state retained at %s/backup-state.json\n' "$snapshot"
+}
+
+backup_establish_barrier() {
+  local replicas
   cluster_operation_lock_update barrier || return 1
   barrier_touched=true
+  backup_stop '["graphql"]' || return 1
   kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || return 1
+  replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' "$work/prior-workloads.json") || return 1
+  kube scale deployment/graphql "--replicas=$replicas" > /dev/null || return 1
   kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
   barrier_established=true
   backup_state_write barrier graphql-barrier || return 1
+}
+
+backup_run_locked() {
+  backup_establish_barrier || return 1
   cluster_operation_lock_update backend-transition || return 1
   backup_start_modes || return 1
   backup_state_write backup-mode backend-backup-mode || return 1
   backup_cleanup_job || return 1
-  backup_scale_zero || return 1
   backup_state_write cleanup-complete cleanup-complete || return 1
+  if [[ $command = backup-enter ]]; then
+    printf 'production: backup mode entered; holder=%s; recovery state=%s/backup-state.json\n' \
+      "$lock_holder" "$snapshot"
+    return 0
+  fi
+  backup_scale_zero || return 1
+  backup_state_write writers-stopped writers-stopped || return 1
   backup_capture || return 1
 }
 
@@ -842,12 +1077,14 @@ case "$command" in
     # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
     cluster_operation_lock_acquire "$lock_holder" deploy "$1"
     locked=true
+    if [[ $target = pi ]]; then production_storage_preflight; fi
     secret_args=()
     for key in "${secret_keys[@]}"; do
       secret_args+=("--from-file=$key=$work/$key")
     done
     if ! {
       kube create secret generic recipe-db-runtime "${secret_args[@]}" --dry-run=client -o json \
+        | jq '.metadata.labels["app.kubernetes.io/part-of"] = "recipe-db"' \
         | kube apply -f - > /dev/null
     } 2> "$work/runtime-secret-error"; then
       production_fail "runtime Secret could not be applied (details suppressed to protect secrets)"
@@ -884,7 +1121,27 @@ case "$command" in
         || production_fail "token-only ingress does not match the requested private exposure without NodePorts"
     fi
     ;;
-  backup)
+  backup | backup-enter)
     backup_run "$1" "$2"
+    ;;
+  backup-status)
+    backup_load_state "$1"
+    connect
+    cluster_operation_lock_status > "$work/current-lock.json"
+    jq -n --slurpfile state "$snapshot/backup-state.json" --slurpfile lease "$work/current-lock.json" \
+      '{state:$state[0],lease:($lease[0] // null)}'
+    ;;
+  backup-exit)
+    backup_exit "$1" "$2" "$3"
+    ;;
+  storage-reattach)
+    [[ $target = pi && $1 = "REATTACH-$cluster" ]] \
+      || production_fail "storage reattachment requires target pi and REATTACH-<cluster> confirmation"
+    connect
+    lock_holder="$cluster-storage-reattach-$$"
+    cluster_operation_lock_acquire "$lock_holder" restore-storage
+    locked=true
+    production_storage_preflight
+    production_storage_reattach
     ;;
 esac

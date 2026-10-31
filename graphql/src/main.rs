@@ -119,6 +119,15 @@ async fn graphql(
     method: Method,
     request: GraphQLRequest,
 ) -> GraphQLResponse {
+    execute_graphql(state, headers, method, request.into_inner()).await
+}
+
+async fn execute_graphql(
+    state: GraphQLState,
+    headers: HeaderMap,
+    method: Method,
+    request: async_graphql::Request,
+) -> GraphQLResponse {
     let context = match state.auth_policy.request_context(&headers) {
         Ok(context) => context,
         Err(error) => {
@@ -133,11 +142,48 @@ async fn graphql(
             return async_graphql::Response::from_errors(vec![error]).into();
         }
     };
-    let request = request.into_inner();
     if let Some(error) = mutation_request_error(&headers, method, &request) {
         return async_graphql::Response::from_errors(vec![error]).into();
     }
     state.schema.execute(request.data(context)).await.into()
+}
+
+async fn projection_graphql(
+    State(state): State<GraphQLState>,
+    request: GraphQLRequest,
+) -> GraphQLResponse {
+    let request = request.into_inner();
+    if let Ok(document) = async_graphql::parser::parse_query(&request.query) {
+        if document.operations.iter().any(|(_, operation)| {
+            operation.node.ty != async_graphql::parser::types::OperationType::Query
+        }) {
+            let mut error =
+                async_graphql::ServerError::new("Projection refresh accepts queries only", None);
+            let mut extensions = async_graphql::ErrorExtensionValues::default();
+            extensions.set("code", "projection-read-only");
+            extensions.set("status", 405);
+            error.extensions = Some(extensions);
+            return async_graphql::Response::from_errors(vec![error]).into();
+        }
+    }
+    execute_graphql(state, HeaderMap::new(), Method::POST, request).await
+}
+
+fn projection_router(
+    mode: mode::RuntimeMode,
+    state: GraphQLState,
+    secret: IngressSecret,
+) -> Router {
+    if mode != mode::RuntimeMode::Backup {
+        return Router::new();
+    }
+    Router::new()
+        .route("/graphql", post(projection_graphql))
+        .route_layer(middleware::from_fn_with_state(
+            secret,
+            trusted_graphql_ingress,
+        ))
+        .with_state(state)
 }
 
 fn mutation_request_error(
@@ -291,6 +337,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         None
     };
+    let projection_app = ingress_secret
+        .clone()
+        .map(|secret| projection_router(runtime_mode, graphql_state.clone(), secret));
     let graphql_route = if runtime_mode != mode::RuntimeMode::Testing {
         post(graphql).get(graphql)
     } else {
@@ -317,7 +366,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("async-graphql started");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
-    serve_until_shutdown(listener, app, shutdown_signal()).await?;
+    if runtime_mode == mode::RuntimeMode::Backup {
+        let projection_listener = tokio::net::TcpListener::bind("0.0.0.0:4001").await?;
+        tokio::try_join!(
+            serve_until_shutdown(listener, app, shutdown_signal()),
+            serve_until_shutdown(
+                projection_listener,
+                projection_app.expect("backup requires trusted ingress"),
+                shutdown_signal(),
+            )
+        )?;
+    } else {
+        serve_until_shutdown(listener, app, shutdown_signal()).await?;
+    }
     Ok(())
 }
 
@@ -376,8 +437,8 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod ingress_tests {
     use super::{
-        backup_mode_barrier, mutation_request_error, serve_until_shutdown,
-        trusted_graphql_ingress, IngressSecret, INGRESS_HEADER,
+        backup_mode_barrier, mutation_request_error, serve_until_shutdown, trusted_graphql_ingress,
+        IngressSecret, INGRESS_HEADER,
     };
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
@@ -594,5 +655,76 @@ mod ingress_tests {
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn projection_queries_require_ingress_and_backup_mode_and_never_allow_mutations() {
+        let state = super::GraphQLState {
+            schema: crate::schema::build_schema(crate::mode::RuntimeMode::Backup, None),
+            auth_policy: crate::auth::AuthPolicy::from_json(
+                r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
+                "https://accounts.google.com",
+            )
+            .unwrap(),
+        };
+        let token = "a".repeat(43);
+        let client = reqwest::Client::new();
+        for mode in [
+            crate::mode::RuntimeMode::Production,
+            crate::mode::RuntimeMode::Testing,
+            crate::mode::RuntimeMode::Backup,
+        ] {
+            let app = super::projection_router(
+                mode,
+                state.clone(),
+                IngressSecret::parse(token.clone()).unwrap(),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let url = format!("http://{address}/graphql");
+            let request = serde_json::json!({"query":"{ __typename }"});
+            let denied = client.post(&url).json(&request).send().await.unwrap();
+            assert_eq!(
+                denied.status(),
+                if mode == crate::mode::RuntimeMode::Backup {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::NOT_FOUND
+                }
+            );
+            let response = client
+                .post(&url)
+                .header(INGRESS_HEADER, &token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            if mode == crate::mode::RuntimeMode::Backup {
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.json::<serde_json::Value>().await.unwrap();
+                assert_eq!(body["data"]["__typename"], "QueryRoot");
+                for query in [
+                    "mutation { deleteRecipe(id: \"unused\") }",
+                    "query Read { __typename } mutation Write { deleteRecipe(id: \"unused\") }",
+                ] {
+                    let response = client
+                        .post(&url)
+                        .header(INGRESS_HEADER, &token)
+                        .json(&serde_json::json!({"query":query,"operationName":"Read"}))
+                        .send()
+                        .await
+                        .unwrap();
+                    let body = response.json::<serde_json::Value>().await.unwrap();
+                    assert_eq!(
+                        body["errors"][0]["extensions"]["code"],
+                        "projection-read-only"
+                    );
+                }
+            } else {
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            }
+            server.abort();
+        }
     }
 }

@@ -7,6 +7,10 @@ httpPort: 8080
 apiPort: 6445
 timeoutSeconds: 900
 storageClass: local-path
+piStorage:
+  node: recipe-db-pi
+  expectedRootUuid: REPLACE-WITH-VERIFIED-ROOT-UUID
+  dataRoot: /srv/recipe-db
 volumes:
   recipes: 1Gi
   images: 2Gi

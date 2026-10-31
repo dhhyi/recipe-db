@@ -19,6 +19,7 @@ Review these before authorizing a live run:
 - Install host prerequisites, nftables and unattended-upgrades.
 - Verify UUID/ext4/USB identity before mutation; install the same storage check as k3s `ExecStartPre`. Missing directories, symlink redirection and unexpected filesystems fail startup.
 - Store k3s/SQLite/containerd state under `/srv/recipe-db/k3s`, kubelet state under `/srv/recipe-db/kubelet`, and local-path volumes under `/srv/recipe-db/storage`. These are directories, not separate mounts. Their parent directories are root-owned mode 0700; individual PVC contents retain the provisioner/workload's own permissions.
+- Pi application storage uses the `local-path` StorageClass with `Retain`. Before deployment, the production storage preflight verifies the configured node and USB root, then upgrades existing application PVs to `Retain` before any namespace can be replaced.
 - Enable required modules, forwarding/bridge settings and memory-cgroup boot options. If the running memory controller is absent, stop with explicit reboot/resume instructions; never reboot automatically.
 - Enable one k3s server with SQLite/containerd, bundled Traefik, local-path provisioner and encrypted Kubernetes Secrets at rest. No application workloads/secrets, extra nodes or distributed storage are installed.
 - Keep non-root key-based SSH and disable root/password/keyboard-interactive SSH login. Verify effective configuration before reloading SSH.
@@ -29,6 +30,14 @@ Review these before authorizing a live run:
 - Bound each container's CRI logs to three 10 MiB files. Pinned k3s also rotates containerd's own log at 50 MB with three compressed backups and 28-day retention. These are log bounds, not a bound on images, data or total disk use.
 
 No disk partitioning, formatting, reset, deletion, automatic reboot, application deployment or public router forwarding occurs. Existing unmanaged k3s/state, active UFW/firewalld or unexpected nftables tables fail preflight instead of being adopted or removed.
+
+## Application storage identity and reattachment
+
+Before Pi deploy, backup or storage-reattachment operations, replace `deploy/pi.yaml`'s `piStorage.expectedRootUuid` placeholder with the UUID verified during provisioning. Keep `piStorage.node` equal to the provisioned k3s node name (`recipe-db-pi`) and `piStorage.dataRoot` equal to `data_root` in `provisioning/group_vars/pi.yml`. These values are checked against the selected explicit Kubernetes context; Pi deploy/backup/reattachment refuses missing or malformed identity. Rendering and status inspection may omit the Pi storage block.
+
+The locked preflight verifies the node is Ready, then runs the installed `recipe-db-storage-guard` in a short-lived privileged inspection Pod pinned to that node. The Pod mounts the host root read-only and has no service-account token. The check confirms the expected USB-backed ext4 root and every managed runtime path. An incompatible StorageClass, PVC or PV path/node identity fails closed; existing directories are never auto-adopted.
+
+Retained application PVs survive deletion of the application namespace and can be explicitly reattached only to the same namespace and claim name. Reattachment is serialized by the shared cluster operation lock and checks the prior claim, local-path, configured node, storage-root path and capacity before atomically reserving the existing PV. It does not delete PVs, PVCs or host directories. A mismatch or ambiguous Released PV requires operator investigation; do not manually clear claim references or remove data paths as a shortcut. Deleting the entire local rehearsal cluster remains destructive and is unchanged.
 
 ## Prepare private operator inputs
 
@@ -131,7 +140,7 @@ Record actual results, not just playbook success:
 
 1. USB-only boot/reboot, exact OS/model/version, root UUID and k3s version.
 2. Fresh provisioning and unchanged second run; contents/state preserved.
-3. Root-owned storage paths and local-path ConfigMap point to the selected USB: `sudo k3s kubectl -n kube-system get configmap local-path-config -o yaml`.
+3. Root-owned storage paths and local-path ConfigMap point to the selected USB: `sudo k3s kubectl -n kube-system get configmap local-path-config -o yaml`. After application deployment, confirm application PVs use `Retain`; namespace deletion/reattachment rehearsal must use isolated test claims, never production data.
 4. Startup guard succeeds for the configured UUID. Run it manually with a deliberately different UUID and require failure; **do not** change the live unit, unmount or unplug the root device to test this.
 5. From a separate LAN workstation, new SSH works; direct node port 6443, kubelet 10250 and overlay UDP 8472 are not exposed. Check enabled IPv4/IPv6 paths separately. Successful tunnel kubectl is not proof of blocked LAN API.
 6. API, node, bundled Traefik and local-path provisioner are healthy, including pod-to-API operation. After later deployment, verify real private ingress traffic as well as denied backend/NodePort routes.

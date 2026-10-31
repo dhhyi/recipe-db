@@ -60,6 +60,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 backupRole: authoritative-read-only
+backupData: { kind: sqlite, file: recipes.sqlite3 }
 format: mix format
 check: |
   elixir --version

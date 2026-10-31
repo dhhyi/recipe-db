@@ -70,6 +70,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 backupRole: cleanup-participant
+backupData: { kind: json, file: db.json }
 prettier:
   ignore:
     - "*.lua"
