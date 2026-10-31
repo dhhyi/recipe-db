@@ -146,6 +146,24 @@ for (const role of ["anonymous", "member", "owner"]) {
         ).first();
         await expect(option).toBeVisible();
 
+        await waitForImageDecoded(
+          page.getByRole("img", {
+            name: taggedDemoRecipe.name,
+            exact: true,
+          }),
+        );
+        await page
+          .getByRole("button", { name: "Zur Startseite" })
+          .scrollIntoViewIfNeeded();
+        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(page.locator(".htmx-settling")).toHaveCount(0);
+        const updatedAt = page.getByText(
+          /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
+        );
+        await expect(updatedAt).toBeVisible();
+        await updatedAt.evaluate((element) => {
+          element.textContent = "Zuletzt aktualisiert: gerade eben";
+        });
         await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
         await screenshot(page, "tag-editor.png");
       });
