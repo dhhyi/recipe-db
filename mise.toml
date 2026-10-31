@@ -94,6 +94,10 @@ file = ".scripts/sync-devcontainers.sh"
 description = "Generate Bazel build rules from project metadata and repository files"
 file = ".scripts/generate-bazel-build.sh"
 
+[tasks.bazel-quality]
+description = "Prepare project sources, resolve check identities, and run the Bazel quality aggregate"
+file = ".scripts/bazel-quality.sh"
+
 [tasks.sync]
 description = "Synchronize shared files, devcontainers, GraphQL schemas and Bazel rules"
 depends = [
@@ -178,7 +182,7 @@ depends = ["export-graphql-schema"]
 file = ".scripts/merge-graphql-schemas.sh"
 
 [tasks.in-devcontainer]
-description = "Run a command in a project devcontainer: [--rm | --keep-running] <project> [--rm | --keep-running] <command> [args...]; retention also via DEVCONTAINER_KEEP_RUNNING=true"
+description = "Run a command in a project devcontainer: [--rm | --keep-running | --check-only] <project> [--rm | --keep-running | --check-only] <command> [args...]; retention also via DEVCONTAINER_KEEP_RUNNING=true"
 file = ".scripts/run-in-devcontainer.sh"
 raw_args = true
 

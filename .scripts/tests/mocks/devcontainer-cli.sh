@@ -7,7 +7,7 @@ case "$1" in
     if [[ -v UP_JSON ]]; then
       printf '%s\n' "$UP_JSON"
     else
-      printf '%s\n' '{"containerId":"started-container"}'
+      printf '{"containerId":"%s"}\n' "${UP_CONTAINER_ID:-${RUNNING_CONTAINER:-started-container}}"
     fi
     exit "${UP_STATUS:-0}"
     ;;

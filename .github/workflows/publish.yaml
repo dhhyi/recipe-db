@@ -62,43 +62,11 @@ jobs:
           restore-keys: |
             bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-
 
-      - name: format project files
+      - name: prepare sources and run Bazel quality checks
         run: |
           pnpm exec prettier --log-level warn --write .
-          echo "::group::generate format targets"
-          mise run --raw generate-bazel-build
-          targets=$(mise run --raw bazel query 'attr(name, "_format$", //:all)')
-          mapfile -t format_targets <<< "$targets"
-          echo "::endgroup::"
-          mise run --raw bazel build \
-            --action_env=PATH \
-            --action_env=CI \
-            --action_env=GITHUB_ACTIONS \
-            --action_env=BUILDKIT_PROGRESS \
-            --action_env=COMPOSE_PROGRESS \
-            --action_env=COMPOSE_PARALLEL_LIMIT \
-            --action_env=DEVCONTAINER_KEEP_RUNNING \
-            --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
-          echo "::group::extract formatted files and check diff"
-          for target in "${format_targets[@]}"; do
-            project=${target#//:}
-            tar -xf "bazel-bin/${project%_format}-format.tar"
-          done
+          mise run --raw bazel-quality
           git diff --exit-code
-          echo "::endgroup::"
-
-      - name: Bazel precommit checks and unit tests
-        run: |
-          mise run --raw generate-bazel-build
-          mise run --raw bazel build \
-            --action_env=PATH \
-            --action_env=CI \
-            --action_env=GITHUB_ACTIONS \
-            --action_env=BUILDKIT_PROGRESS \
-            --action_env=COMPOSE_PROGRESS \
-            --action_env=COMPOSE_PARALLEL_LIMIT \
-            --action_env=DEVCONTAINER_KEEP_RUNNING \
-            --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
 
       - name: validate message bus integration and recovery
         run: mise run test-message-bus

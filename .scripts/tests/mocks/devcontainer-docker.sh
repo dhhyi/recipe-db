@@ -14,6 +14,7 @@ case "$1" in
       printf '%s' "${RUNNING_CONTAINER:-}"
     fi
     ;;
+  start) exit "${START_STATUS:-0}" ;;
   stop | rm) exit "${CLEANUP_STATUS:-0}" ;;
   *)
     echo "Unexpected docker invocation: $*" >&2

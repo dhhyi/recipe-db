@@ -13,37 +13,77 @@ quote() {
   jq -Rn --arg value "$1" '$value'
 }
 
-emit_rule() {
-  local name=$1 archive=$2 script=$3 dependency=$4
-  shift 4
+emit_check_rule() {
+  local project=$1 identity=$2
+  shift 2
   {
     printf '\ngenrule(\n'
-    printf '    name = "%s",\n' "$name"
+    printf '    name = "%s_check",\n' "$project"
     printf '    srcs = [\n'
     for file in "$@"; do
       printf '        %s,\n' "$(quote "$file")"
     done
-    if [[ -n "$dependency" ]]; then
-      printf '        %s,\n' "$(quote ":$dependency")"
-    fi
-    printf '        %s,\n' "$(quote "$script")"
-    if [[ "$archive" == *.tar ]]; then
-      printf '        %s,\n' "$(quote .scripts/bazel-artifacts.sh)"
-    fi
+    printf '        %s,\n' "$(quote "$identity")"
+    printf '        %s,\n' "$(quote .generated/bazel-quality/host.identity)"
+    printf '        %s,\n' "$(quote .scripts/bazel-check.sh)"
     printf '        %s,\n' "$(quote .scripts/run-in-devcontainer.sh)"
     printf '        %s,\n' "$(quote mise.toml)"
+    printf '        %s,\n' "$(quote .bazelversion)"
     printf '    ],\n'
-    printf '    outs = ["%s"],\n' "$archive"
-    printf '    cmd = "sh %s %s %s' "\$(location $script)" "$project" "\$@"
-    if [[ -n "$dependency" ]]; then
-      printf ' %s' "\$(location :$dependency)"
-    fi
-    printf '",\n'
+    printf '    outs = ["%s-check.ok"],\n' "$project"
+    printf "    cmd = \"sh \$(location .scripts/bazel-check.sh) %s \$@\",\n" "$project"
     printf '    tags = ["no-sandbox", "no-remote"],\n'
+    printf ')\n'
+    printf '\nalias(\n'
+    printf '    name = "%s_precommit",\n' "$project"
+    printf '    actual = ":%s_check",\n' "$project"
     printf ')\n'
   } >> "$output"
 }
 
+include_generated_outputs() {
+  local project=$1 project_file=$2 pattern output_file relative_file project_root old_ifs
+  local -a matches
+
+  while IFS= read -r pattern; do
+    case "$pattern" in
+      '' | /* | .. | ../* | */../* | */..)
+        printf 'Invalid generated output glob: %s\n' "$pattern" >&2
+        exit 1
+        ;;
+    esac
+    old_ifs=$IFS
+    IFS=
+    # Expand the declared glob without splitting filenames on whitespace.
+    # shellcheck disable=SC2206
+    matches=("$project"/$pattern)
+    IFS=$old_ifs
+    matched=false
+    for output_file in "${matches[@]}"; do
+      [[ -f "$output_file" ]] || continue
+      project_root=$(realpath "$project")
+      case "$(realpath "$output_file")" in
+        "$project_root"/*) ;;
+        *)
+          printf 'Generated output escapes project: %s\n' "$output_file" >&2
+          exit 1
+          ;;
+      esac
+      relative_file=$output_file
+      if [[ -z ${included_files["$relative_file"]+x} ]]; then
+        files+=("$relative_file")
+        included_files["$relative_file"]=1
+      fi
+      matched=true
+    done
+    if [[ "$matched" == false && ${BAZEL_QUALITY_PREPARED:-} == 1 ]]; then
+      printf 'Generated output glob matched no files: %s/%s\n' "$project" "$pattern" >&2
+      exit 1
+    fi
+  done < <(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[] | select(.output != null) | .output' "$project_file")
+}
+
+quality_targets=()
 for project_file in */.project.yaml; do
   project=${project_file%/.project.yaml}
   check=$(yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project_file")
@@ -52,11 +92,9 @@ for project_file in */.project.yaml; do
   [[ -n "$check" || -n "$format" || "$generators" -gt 0 ]] || continue
 
   files=()
-  format_files=()
   declare -A included_files=()
   while IFS= read -r -d '' file; do
     [[ -f "$file" ]] || continue
-    format_files+=("$file")
     case "${file##*/}" in
       README.md | Dockerfile | .dockerignore) continue ;;
     esac
@@ -74,8 +112,13 @@ for project_file in */.project.yaml; do
     schema_file=$(realpath --relative-to="$workspace_root" "$schema_file")
     if [[ -z ${included_files["$schema_file"]+x} ]]; then
       files+=("$schema_file")
-      format_files+=("$schema_file")
     fi
+  fi
+
+  if [[ "$generators" -gt 0 ]]; then
+    shopt -s globstar nullglob dotglob
+    include_generated_outputs "$project" "$project_file"
+    shopt -u globstar nullglob dotglob
   fi
 
   if [[ "$project" == design ]]; then
@@ -101,23 +144,13 @@ for project_file in */.project.yaml; do
     done
   fi
 
-  generation_dependency=
-  if [[ "$generators" -gt 0 ]]; then
-    generation_dependency="${project}_generate"
-    emit_rule "$generation_dependency" "$project-generate.tar" .scripts/generate-bazel.sh "" "${format_files[@]}"
-  fi
-
-  if [[ -n "$format" ]]; then
-    emit_rule "${project}_format" "$project-format.tar" .scripts/format-bazel.sh "$generation_dependency" "${format_files[@]}"
-  fi
-
   if [[ -n "$check" ]]; then
-    emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-check.sh "$generation_dependency" "${files[@]}"
-    check_dependency=$generation_dependency
-    if [[ -n "$format" ]]; then
-      check_dependency="${project}_format"
-    fi
-    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$check_dependency" "${files[@]}"
+    for file in "$project/Dockerfile" "$project/.dockerignore"; do
+      [[ -f "$file" ]] && files+=("$file")
+    done
+    identity=".generated/bazel-quality/$project.identity"
+    quality_targets+=(":${project}_check")
+    emit_check_rule "$project" "$identity" "${files[@]}"
   fi
 done
 
@@ -130,7 +163,7 @@ done
     printf '        %s,\n' "$(quote "$file")"
   done < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '*.bash' '*.bats' | sort -zu)
   printf '    ],\n'
-  printf '    tools = ["mise.toml"],\n'
+  printf '    tools = ["mise.toml", ".bazelversion", ".generated/bazel-quality/host.identity"],\n'
   printf '    outs = ["shellcheck.ok"],\n'
   printf '    cmd = "mise exec -- shellcheck %s && touch %s",\n' "\$(SRCS)" "\$@"
   printf '    tags = ["no-sandbox", "no-remote"],\n'
@@ -200,7 +233,7 @@ for group in $(jq -r 'keys[]' <<< "$group_specs"); do
       printf '        %s,\n' "$(quote "$file")"
     done < <(printf '%s\n' "${!group_files[@]}" | sort)
     printf '    ],\n'
-    printf '    tools = ["mise.toml", ".bazelversion"],\n'
+    printf '    tools = ["mise.toml", ".bazelversion", ".generated/bazel-quality/host.identity"],\n'
     printf '    outs = ["test-scripts-%s.ok"],\n' "$group"
     printf '    cmd = "mise run --raw test-scripts %s && touch %s",\n' "$group" "\$@"
     printf '    tags = ["no-sandbox", "no-remote"],\n'
@@ -215,6 +248,19 @@ done
   while IFS= read -r group; do
     printf '        ":test_scripts_%s",\n' "$group"
   done < <(jq -r 'keys[]' <<< "$group_specs")
+  printf '    ],\n'
+  printf ')\n'
+} >> "$output"
+
+{
+  printf '\nfilegroup(\n'
+  printf '    name = "quality",\n'
+  printf '    srcs = [\n'
+  for target in "${quality_targets[@]}"; do
+    printf '        "%s",\n' "$target"
+  done
+  printf '        ":shellcheck",\n'
+  printf '        ":test_scripts",\n'
   printf '    ],\n'
   printf ')\n'
 } >> "$output"

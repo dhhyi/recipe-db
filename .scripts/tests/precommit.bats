@@ -43,7 +43,7 @@ setup() {
   [ ! -s "$MOCK_LOG" ]
 }
 
-@test "precommit builds the cacheable script-test and lint targets for root file changes" {
+@test "precommit runs the shared Bazel quality aggregate for root file changes" {
   touch root.txt
   git add root.txt
 
@@ -52,13 +52,12 @@ setup() {
   [ "$status" -eq 0 ]
   cat > expected-calls << 'EOF'
 pnpm exec prettier --log-level warn --write .
-mise run --raw generate-bazel-build
-mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel-quality
 EOF
   cmp expected-calls "$MOCK_LOG"
 }
 
-@test "precommit completes project formatting before building project checks" {
+@test "precommit runs project preparation and checks through the shared quality aggregate" {
   touch example/main.txt
   mkdir other
   printf '%s\n' 'name: other' '---' 'format: echo formatted' 'check: echo checked' > other/.project.yaml
@@ -68,13 +67,8 @@ EOF
   run bash .scripts/precommit.sh
 
   [ "$status" -eq 0 ]
-  grep 'bazel build' "$MOCK_LOG" > bazel-calls
-  cat > expected-calls << 'EOF'
-mise run --raw bazel build --action_env=PATH --jobs=1 //:example_format //:other_format
-mise run --raw bazel build --action_env=PATH --jobs=1 //:example_check //:other_check
-mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
-EOF
-  cmp expected-calls bazel-calls
+  [ "$(grep -c '^mise run --raw bazel-quality$' "$MOCK_LOG")" -eq 1 ]
+  run -1 grep -F 'bazel build' "$MOCK_LOG"
 }
 
 @test "precommit propagates failures of its Bazel checks" {

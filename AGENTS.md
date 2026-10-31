@@ -79,9 +79,11 @@ When instructed to create a Git worktree, run `mise install` from the new worktr
 
 When running checks, linting, or regression tests for Bazel scripts, run them directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules, not a requirement to duplicate the pre-commit hook's checks.
 
-For a single topic group, use `mise run test-scripts <group>` or `mise run --raw bazel build --action_env=PATH --jobs=1 //:test_scripts_<group>`. Use the `bazel` Mise task for direct Bazel commands, as the hook and CI do: it constructs PATH from Mise-managed tool directories, the Mise executable's directory and fixed system directories (`/usr/local/bin:/usr/bin:/bin`), excluding caller-specific Git/VS Code paths. Keep `--action_env=PATH` on builds so tool-path changes still invalidate actions. Groups and their explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `tasks`, `devcontainer`, and `tooling`. Assign every new Bats suite to exactly one group and keep its inputs complete; generation rejects unassigned suites and patterns matching no files.
+Run the supported quality workflow with `mise run --raw bazel-quality`. It performs project generation and formatting before regenerating `BUILD.bazel`, records execution identities, and builds the single `//:quality` aggregate. Do not run project formatters or generators as cacheable Bazel actions. The aggregate includes exactly one project check path, ShellCheck, and all script-test groups; `//:<project>_precommit` remains an alias of `//:<project>_check`.
 
-Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
+For a single host script-test group, use `mise run test-scripts <group>` or `mise run --raw bazel build --action_env=PATH --jobs=1 //:test_scripts_<group>`. Use the `bazel` Mise task for direct Bazel commands. Its canonical launcher removes caller-specific Git/VS Code PATH entries while retaining Mise and system tools; keep `--action_env=PATH` so meaningful tool-path changes invalidate actions. CI additionally sets intentional action environment values, so cross-platform cache sharing is not promised. Groups and their explicit inputs are defined in `.scripts/tests/groups.yaml`; assign every new Bats suite to exactly one group and keep its inputs complete.
+
+Project generator, format, and check commands invoked by the quality workflow must still run in their respective devcontainers. Check actions must not extract source-replacing archives.
 
 ## Committing during autonomous implementation
 

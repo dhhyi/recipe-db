@@ -41,7 +41,7 @@ EOF
     grep -Fx "        \"$file\"," test-rule
   done
   [ "$(grep -c '^        "' test-rule)" -eq 5 ]
-  grep -Fx '    tools = ["mise.toml", ".bazelversion"],' test-rule
+  grep -Fx '    tools = ["mise.toml", ".bazelversion", ".generated/bazel-quality/host.identity"],' test-rule
   grep -Fx '    outs = ["test-scripts-compose.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts compose && touch $@",' test-rule
   grep -Fx '    tags = ["no-sandbox", "no-remote"],' test-rule
@@ -56,7 +56,7 @@ EOF
   grep -Fx '    outs = ["test-scripts-tooling.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts tooling && touch $@",' test-rule
 
-  sed -n '/^filegroup(/,/^)/p' BUILD.bazel > aggregate-rule
+  sed -n '/^filegroup(/,/^)/p' BUILD.bazel | sed -n '1,/^)/p' > aggregate-rule
   cat > expected-rule << 'EOF'
 filegroup(
     name = "test_scripts",
@@ -68,21 +68,80 @@ filegroup(
 EOF
   cmp expected-rule aggregate-rule
 
-  sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
-  grep -Fx '        ".scripts/tests/example.bats",' lint-rule
+sed -n '/name = "quality"/,/^)/p' BUILD.bazel > quality-rule
+for target in :example_check :shellcheck :test_scripts; do
+  grep -Fx "        \"$target\"," quality-rule
+done
+run -1 grep -F ':example_precommit' quality-rule
+
+sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
+grep -Fx '        ".scripts/tests/example.bats",' lint-rule
+grep -F '.generated/bazel-quality/host.identity' lint-rule
 }
 
-@test "all rules allow disk caching while disabling sandboxing and remote execution" {
-  printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
+@test "quality rules allow disk caching while checks use declared execution identities" {
+printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
 
-  run bash .scripts/generate-bazel-build.sh
+run env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
 
-  [ "$status" -eq 0 ]
-  for target in example_generate example_format example_check example_precommit shellcheck test_scripts_compose test_scripts_tooling; do
-    sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
-    grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
-  done
-  run -1 grep -F '"local"' BUILD.bazel
+[ "$status" -eq 0 ]
+for target in example_check shellcheck test_scripts_compose test_scripts_tooling; do
+  sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
+  grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
+done
+run -1 grep -F '"local"' BUILD.bazel
+run -1 grep -F 'example-format.tar' BUILD.bazel
+run -1 grep -F 'tar -xf' BUILD.bazel
+sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
+grep -Fx '        ".generated/bazel-quality/example.identity",' check-rule
+grep -Fx '        ".generated/bazel-quality/host.identity",' check-rule
+grep -Fx "    cmd = \"sh \$(location .scripts/bazel-check.sh) example \$@\"," check-rule
+}
+
+@test "project checks include ignored generated outputs and reject missing outputs" {
+mkdir -p example/src/generated
+touch example/src/generated/graphql.go
+printf '%s\n' 'example/src/generated/graphql.go' > .gitignore
+cat >> example/.project.yaml <<'EOF'
+generate:
+- command: echo generated
+  output: src/generated/*.go
+EOF
+
+run env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 0 ]
+sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
+grep -Fx '        "example/src/generated/graphql.go",' check-rule
+
+rm example/src/generated/graphql.go
+run --separate-stderr env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 1 ]
+[ "$stderr" = "Generated output glob matched no files: example/src/generated/*.go" ]
+}
+
+@test "generated output patterns cannot escape their project" {
+touch outside.go
+cat >> example/.project.yaml <<'EOF'
+generate:
+- command: echo generated
+  output: ../outside.go
+EOF
+
+run --separate-stderr env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 1 ]
+[ "$stderr" = "Invalid generated output glob: ../outside.go" ]
+
+sed -i 's|../outside.go|src/generated/escape.go|' example/.project.yaml
+mkdir -p example/src/generated
+ln -s "$FIXTURE_ROOT/outside.go" example/src/generated/escape.go
+
+run --separate-stderr env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 1 ]
+[ "$stderr" = "Generated output escapes project: example/src/generated/escape.go" ]
 }
 
 @test "includes new untracked tests but excludes ignored files" {
@@ -188,18 +247,19 @@ EOF
   [ ! -s "$MOCK_LOG" ]
 }
 
-@test "generation is deterministic and chains project precommit checks after formatting" {
+@test "generation is deterministic and preserves the legacy precommit alias" {
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
   cp BUILD.bazel expected.BUILD
   sed -n '/name = "example_precommit"/,/^)/p' BUILD.bazel > precommit-rule
-  grep -Fx '        ":example_format",' precommit-rule
+  grep -Fx '    actual = ":example_check",' precommit-rule
 
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
   cmp expected.BUILD BUILD.bazel
+  run -1 grep -E 'name = "example_(generate|format)"' BUILD.bazel
 }
 
 @test "missing generated schemas fail without replacing the existing build file" {

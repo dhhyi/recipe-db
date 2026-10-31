@@ -5,6 +5,7 @@ project_root=$(cd "$(dirname "$0")/.." && pwd -P)
 remove_after=false
 keep_running=false
 stop_after=false
+check_only=false
 container_id=
 
 case ${DEVCONTAINER_KEEP_RUNNING:-} in
@@ -20,6 +21,7 @@ while :; do
   case ${1:-} in
     --rm) remove_after=true ;;
     --keep-running) keep_running=true ;;
+    --check-only) check_only=true ;;
     *) break ;;
   esac
   shift
@@ -36,6 +38,7 @@ while :; do
   case ${1:-} in
     --rm) remove_after=true ;;
     --keep-running) keep_running=true ;;
+    --check-only) check_only=true ;;
     *) break ;;
   esac
   shift
@@ -59,23 +62,52 @@ if [ ! -f "$project_file" ]; then
   exit 1
 fi
 
-if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
-  if [ "$1" = generate ]; then
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ] || [ "$1" = generate ] || [ "$1" = prepare ]; }; then
+  run_command=
+  if [ "$1" = prepare ]; then
+    for target in generate format; do
+      if [ "$target" = generate ]; then
+        script=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[].command' "$project_file")
+      else
+        script=$(yq eval-all -r 'select(documentIndex == 1) | .format // ""' "$project_file")
+      fi
+      [ -n "$script" ] || continue
+      command=$(printf '%s\n' "$script" | awk '
+        NF && $0 !~ /^#/ {
+          if (seen) printf " && "
+          printf "%s", $0
+          seen = 1
+        }
+      ')
+      [ -n "$command" ] || continue
+      if [ -n "$run_command" ]; then
+        run_command="$run_command && $command"
+      else
+        run_command=$command
+      fi
+    done
+  elif [ "$1" = generate ]; then
     script=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[].command' "$project_file")
   else
     script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
   fi
-  if [ -z "$script" ]; then
-    echo "Project does not have $1 command" >&2
+  if [ "$1" != prepare ]; then
+    if [ -z "$script" ]; then
+      echo "Project does not have $1 command" >&2
+      exit 1
+    fi
+    run_command=$(printf '%s\n' "$script" | awk '
+      NF && $0 !~ /^#/ {
+        if (seen) printf " && "
+        printf "%s", $0
+        seen = 1
+      }
+    ')
+  fi
+  if [ -z "$run_command" ]; then
+    echo "Project does not have generation or format commands" >&2
     exit 1
   fi
-  run_command=$(printf '%s\n' "$script" | awk '
-    NF && $0 !~ /^#/ {
-      if (seen) printf " && "
-      printf "%s", $0
-      seen = 1
-    }
-  ')
 else
   run_command=$*
 fi
@@ -118,20 +150,51 @@ fi
 config_file=$project_dir/.devcontainer/devcontainer.json
 label=devcontainer.config_file=$config_file
 containers=$(docker ps --filter "label=$label" --format '{{.ID}}')
-container_id=$(printf '%s\n' "$containers" | sed -n '1p')
-if [ -n "$container_id" ]; then
-  echo "Using existing running container $container_id" >&2
+running_container_id=$(printf '%s\n' "$containers" | sed -n '1p')
+if [ "$check_only" = true ]; then
+  if [ -n "$running_container_id" ]; then
+    container_id=$running_container_id
+    echo "Using prepared running container $container_id" >&2
+  else
+    containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
+    stopped_container_id=$(printf '%s\n' "$containers" | sed -n '1p')
+    if [ -z "$stopped_container_id" ]; then
+      echo "No prepared container found for project $project" >&2
+      exit 1
+    fi
+    echo "Starting prepared stopped container $stopped_container_id" >&2
+    docker start "$stopped_container_id" >&2
+    container_id=$stopped_container_id
+    if [ "$retain" = false ]; then
+      stop_after=true
+    fi
+  fi
+elif [ -n "$running_container_id" ]; then
+  echo "Reconciling existing running container $running_container_id" >&2
 else
   containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
-  container_id=$(printf '%s\n' "$containers" | sed -n '1p')
-  if [ -n "$container_id" ]; then
-    echo "Starting existing stopped container $container_id" >&2
+  stopped_container_id=$(printf '%s\n' "$containers" | sed -n '1p')
+  if [ -n "$stopped_container_id" ]; then
+    echo "Starting existing stopped container $stopped_container_id" >&2
   fi
+fi
+
+if [ "$check_only" = true ]; then
+  :
+elif [ "${BAZEL_QUALITY_IDENTITY:-}" = 1 ]; then
+  container_result=$(devcontainer up --workspace-folder "$project_dir" --remove-existing-container --build-no-cache)
+else
   container_result=$(devcontainer up --workspace-folder "$project_dir")
+fi
+if [ "$check_only" != true ]; then
   container_id=$(printf '%s\n' "$container_result" | jq -er '.containerId')
-  if [ "$retain" = false ]; then
-    stop_after=true
-  fi
+fi
+if [ "$check_only" != true ] && [ "$container_id" != "$running_container_id" ] && [ "$retain" = false ]; then
+  stop_after=true
+fi
+
+if [ "$check_only" != true ] && [ "${BAZEL_QUALITY_IDENTITY:-}" = 1 ]; then
+  sh "$project_root/.scripts/bazel-quality-identity.sh" "$project" "$container_id"
 fi
 
 devcontainer exec --container-id "$container_id" --workspace-folder "$project_dir" fish -c "$run_command"

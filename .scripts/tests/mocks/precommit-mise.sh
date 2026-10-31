@@ -3,7 +3,7 @@ set -euo pipefail
 
 printf 'mise %s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
-  'run --raw generate-bazel-build' | 'run --raw create-intranet') ;;
+  'run --raw bazel-quality') exit "${BAZEL_STATUS:-0}" ;;
   'exec -- yq eval-all -r '*)
     if [[ "$*" == *'.check // ""'* ]]; then
       printf '%s\n' 'echo checked'
@@ -15,15 +15,6 @@ case "$*" in
       echo "Unexpected yq invocation: $*" >&2
       exit 99
     fi
-    ;;
-  'run --raw bazel build --action_env=PATH --jobs=1 '*)
-    for project in example other; do
-      if [[ "$*" == *"//:${project}_format"* ]]; then
-        mkdir -p bazel-bin
-        tar -cf "bazel-bin/$project-format.tar" --files-from /dev/null
-      fi
-    done
-    exit "${BAZEL_STATUS:-0}"
     ;;
   *)
     echo "Unexpected mise invocation: $*" >&2

@@ -50,6 +50,8 @@ deploy:
     - package.json
 tasks:
   tests:
+    - .scripts/tests/bazel-quality.bats
+    - .scripts/tests/bazel-quality-identity.bats
     - .scripts/tests/bazel.bats
     - .scripts/tests/mise-tasks.bats
     - .scripts/tests/mise-freshness.bats
