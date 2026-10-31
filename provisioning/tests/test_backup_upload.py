@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -21,12 +22,16 @@ SPEC.loader.exec_module(backup)
 
 def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at="2026-10-31T10:00:00Z",
              artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64, revision="a" * 40,
-             mtime=1730000000):
+             mtime=1730000000, root_directory=False):
     files = files or {"recipes.sqlite3": b"sqlite data"}
     path.mkdir(parents=True)
     entries = []
     archive_path = path / "recipes.tar"
     with tarfile.open(archive_path, "w") as archive:
+        if root_directory:
+            root = tarfile.TarInfo(".")
+            root.type = tarfile.DIRTYPE
+            archive.addfile(root)
         for name, content in sorted(files.items()):
             member = tarfile.TarInfo(name)
             member.size = len(content)
@@ -94,10 +99,13 @@ def remote_path(value):
     return Path(os.environ["FAKE_REMOTE"]) / value.split(":", 1)[1]
 if action == "lsf":
     folder = remote_path(args[1])
-    if folder.exists():
-        for child in sorted(folder.iterdir()):
-            if child.is_file():
-                print(child.name)
+    if not folder.is_dir():
+        raise SystemExit(3)
+    for child in sorted(folder.iterdir()):
+        if child.is_file():
+            print(child.name)
+elif action == "mkdir":
+    remote_path(args[1]).mkdir(parents=True, exist_ok=True)
 elif action == "copyto":
     source, destination = Path(args[1]), remote_path(args[2])
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +176,10 @@ else:
             backup.upload_snapshot(incomplete, self.config)
         self.assertEqual(backup.report_status(self.config)["status"], "capture-failure")
 
+    def test_snapshot_root_directory_entry_is_accepted(self):
+        source = self.make_snapshot(root_directory=True)
+        self.assertEqual(backup.validate_snapshot(source)["backupId"], "backup-20261031T100000-1")
+
     def test_missing_check_record_is_overdue(self):
         self.assertEqual(backup.report_status(self.config)["status"], "overdue")
 
@@ -218,7 +230,14 @@ else:
         (self.remote / "backups" / "recipe-db-pi" / baseline["archive"]).write_bytes(b"corrupted")
         third = self.make_snapshot("third", backup_id="backup-20261031T120000-4",
                                    captured_at="2026-10-31T12:00:00Z")
-        self.assertEqual(backup.upload_snapshot(third, self.config), "verified-upload")
+        with self.assertRaises(backup.BackupError) as error:
+            backup.upload_snapshot(third, self.config)
+        self.assertEqual(error.exception.status, "retention-failure")
+        self.assertEqual(backup.read_json(self.state / "baseline.json")["backupId"],
+                         "backup-20261031T120000-4")
+        remote_folder = self.remote / "backups" / "recipe-db-pi"
+        (remote_folder / baseline["archive"]).unlink()
+        (remote_folder / baseline["manifest"]).unlink()
         baseline = backup.read_json(self.state / "baseline.json")
         (self.remote / "backups" / "recipe-db-pi" / baseline["manifest"]).write_bytes(b"[]")
         baseline["manifestSizeBytes"] = 2
@@ -330,6 +349,38 @@ else:
         self.assertTrue((self.state / "baseline.json").is_file())
         self.assertEqual(backup.report_status(self.config)["status"], "retention-failure")
 
+    def test_retention_aborts_before_deleting_when_newer_candidate_is_corrupt(self):
+        self.seed_remote_points(31)
+        folder = self.remote / "backups" / "recipe-db-pi"
+        corrupt = folder / "recipe-db-recipe-db-pi-20260102T060000Z-backup-0030.tar.gz"
+        corrupt.write_bytes(b"corrupted")
+        oldest = folder / "recipe-db-recipe-db-pi-20260101T000000Z-backup-0000.manifest.json"
+        with self.assertRaises(backup.BackupError) as error:
+            backup.upload_snapshot(self.make_snapshot(), self.config)
+        self.assertEqual(error.exception.status, "retention-failure")
+        self.assertEqual(error.exception.code, "remote-point-integrity")
+        self.assertTrue(oldest.exists())
+        self.assertEqual(backup.report_status(self.config)["status"], "retention-failure")
+
+    def test_stale_capture_deletes_only_explicitly_recovered_state(self):
+        captures = self.state / "staging"
+        captures.mkdir(parents=True)
+        recovered = captures / "capture-recovered"
+        recovered.mkdir()
+        (recovered / "backup-state.json").write_text(
+            '{"status":"failed","phase":"safely-recovered"}'
+        )
+        backup.reconcile_stale_captures(self.state)
+        self.assertFalse(recovered.exists())
+
+        unresolved = captures / "capture-unresolved"
+        unresolved.mkdir()
+        (unresolved / "backup-state.json").write_text('{"status":"in-progress"}')
+        with self.assertRaises(backup.BackupError):
+            backup.reconcile_stale_captures(self.state)
+        self.assertTrue((self.state / "recovery-capture-unresolved" /
+                         "capture-unresolved" / "backup-state.json").exists())
+
     def test_capture_restart_interrupt_and_overdue_statuses(self):
         command = Path(self.config["captureCommand"])
         command.write_text("#!/bin/sh\n[ \"$KUBECONFIG\" = /expected/private/kubeconfig ] || exit 2\nexit 1\n")
@@ -345,15 +396,33 @@ else:
             backup.run_nightly(self.config)
         self.assertEqual(backup.report_status(self.config)["status"], "restart-failure")
 
+        marker = self.root / "capture-was-started"
+        command.write_text(f"#!/bin/sh\ntouch {marker}\n")
+        command.chmod(0o755)
+        with self.assertRaises(backup.BackupError):
+            backup.run_nightly(self.config)
+        self.assertFalse(marker.exists())
+
         for child in self.state.glob("recovery-*"):
             if child.is_dir():
                 shutil.rmtree(child)
-        command.write_text("#!/bin/sh\nsleep 30\n")
+        sentinel = self.root / "capture-descendant-survived"
+        command.write_text(
+            "#!/bin/sh\n"
+            "mkdir -p \"$1\"\n"
+            "printf '{\"status\":\"in-progress\",\"phase\":\"prepared\"}' > \"$1/backup-state.json\"\n"
+            f"(sleep 2; touch {sentinel}) &\n"
+            "wait\n"
+        )
         command.chmod(0o755)
-        with patch.object(backup.subprocess, "run", side_effect=subprocess.TimeoutExpired("capture", 60)):
-            with self.assertRaises(backup.BackupError):
-                backup.run_nightly(self.config)
-        self.assertEqual(backup.report_status(self.config)["status"], "interrupted")
+        self.config["captureTimeoutSeconds"] = 1
+        with self.assertRaises(backup.BackupError):
+            backup.run_nightly(self.config)
+        self.assertEqual(backup.report_status(self.config)["status"], "restart-failure")
+        recovery_state = next(self.state.glob("recovery-*/capture-*/backup-state.json"))
+        self.assertEqual(backup.read_json(recovery_state)["status"], "in-progress")
+        time.sleep(2.2)
+        self.assertFalse(sentinel.exists())
 
         backup.write_status(self.config, "verified-unchanged", "content-unchanged")
         path = self.state / "status.json"

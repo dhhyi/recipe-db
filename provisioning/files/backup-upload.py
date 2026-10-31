@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 
 FORMAT = "recipe-db-pvc-snapshot"
@@ -29,6 +30,7 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 BACKUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 REMOTE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MAX_REMOTE_MANIFEST_BYTES = 128 * 1024**2
+SAFE_RECOVERY_STATES = {("failed", "safely-recovered"), ("recovered", "safely-recovered")}
 
 
 class BackupError(Exception):
@@ -54,6 +56,17 @@ def read_json(path, max_bytes=MAX_MANIFEST_BYTES):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > max_bytes:
         raise ValueError("invalid metadata file")
     return json.loads(path.read_text())
+
+
+def lifecycle_state(snapshot):
+    try:
+        return read_json(Path(snapshot) / "backup-state.json")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def safely_recovered(state):
+    return isinstance(state, dict) and (state.get("status"), state.get("phase")) in SAFE_RECOVERY_STATES
 
 
 def validate_timestamp(value):
@@ -137,6 +150,8 @@ def validate_snapshot(snapshot):
             with tarfile.open(archive, "r:") as source_tar:
                 for member in source_tar:
                     name = member.name.removeprefix("./")
+                    if name in ("", ".") and member.isdir():
+                        continue
                     path = PurePosixPath(name)
                     if path.is_absolute() or ".." in path.parts or str(path) != name:
                         raise ValueError("unsafe archive path")
@@ -518,8 +533,15 @@ def complete_remote_points(config, names):
                 or not snapshot_manifest["inventory"] \
                 or snapshot_manifest.get("source") != source:
             continue
-        if archive["sizeBytes"] > config["maxStagingBytes"]:
-            continue
+        manifest_bytes = json_bytes(document)
+        try:
+            manifest_hash = remote_hash(config, name, len(manifest_bytes))
+            archive_hash = remote_hash(config, archive["name"], archive["sizeBytes"])
+        except BackupError as error:
+            raise BackupError("retention-failure", "remote-point-integrity") from error
+        if manifest_hash != hashlib.sha256(manifest_bytes).hexdigest() \
+                or archive_hash != archive["sha256"]:
+            raise BackupError("retention-failure", "remote-point-integrity")
         points.append((captured, backup_id, archive["name"], name))
     return points
 
@@ -558,16 +580,49 @@ def reconcile_stale_captures(state):
         if path.is_symlink() or not path.is_dir():
             continue
         recovery_state = path / "backup-state.json"
-        if recovery_state.is_file() and not recovery_state.is_symlink():
-            try:
-                status = read_json(recovery_state).get("status")
-            except (OSError, ValueError, json.JSONDecodeError):
-                status = None
-            if status == "recovery-required":
-                preserved = ensure_private_dir(Path(state) / f"recovery-{path.name}")
-                shutil.move(str(path), str(preserved / path.name))
-                raise BackupError("restart-failure", "recovery-required")
+        if not (recovery_state.exists() or recovery_state.is_symlink()) \
+                or not safely_recovered(lifecycle_state(path)):
+            preserved = ensure_private_dir(Path(state) / f"recovery-{path.name}")
+            shutil.move(str(path), str(preserved / path.name))
+            raise BackupError("restart-failure", "recovery-required")
         shutil.rmtree(path)
+
+
+def preserve_unresolved_capture(snapshot, state):
+    recovery_root = ensure_private_dir(Path(state) / f"recovery-{snapshot.name}")
+    shutil.move(str(snapshot), str(recovery_root / snapshot.name))
+
+
+def has_unresolved_recovery(state):
+    for path in Path(state).glob("recovery-*"):
+        if path.is_symlink() or not path.is_dir():
+            return True
+        records = list(path.rglob("backup-state.json"))
+        if not records or any(not safely_recovered(lifecycle_state(record.parent)) for record in records):
+            return True
+    return False
+
+
+def terminate_capture_process_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10
+    while True:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        if time.monotonic() >= deadline:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            break
+        time.sleep(0.1)
+    process.wait()
 
 
 def upload_snapshot(snapshot, config):
@@ -589,6 +644,7 @@ def upload_snapshot(snapshot, config):
     if not isinstance(baseline, dict):
         baseline = None
     try:
+        rclone(config, "mkdir", remote_base(config))
         names = remote_names(config)
         if baseline and baseline.get("fingerprint") == fingerprint and verify_baseline(config, baseline, names):
             value = write_status(config, "verified-unchanged", "content-unchanged",
@@ -662,10 +718,9 @@ def run_nightly(config):
         except BackupError as error:
             write_status(config, error.status, error.code)
             raise
-        for child in state.glob("recovery-*"):
-            if child.is_dir() and (child / "backup-state.json").is_file():
-                write_status(config, "restart-failure", "recovery-required")
-                raise BackupError("restart-failure", "recovery-required")
+        if has_unresolved_recovery(state):
+            write_status(config, "restart-failure", "recovery-required")
+            raise BackupError("restart-failure", "recovery-required")
         clear_stale_staging(config["stagingDirectory"])
         capture = Path(config["captureCommand"])
         if capture.is_symlink() or not capture.is_file() or not os.access(capture, os.X_OK):
@@ -674,10 +729,9 @@ def run_nightly(config):
         snapshots = ensure_private_dir(state / "staging")
         snapshot = snapshots / f"capture-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [str(capture), str(snapshot)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=config["captureTimeoutSeconds"], check=False,
                 env={
                     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "KUBECONFIG": os.environ.get(
@@ -687,17 +741,19 @@ def run_nightly(config):
                         config["maxStagingBytes"] // 2,
                     ),
                 },
+                start_new_session=True,
             )
-            if result.returncode:
-                recovery = snapshot / "backup-state.json"
-                if recovery.is_file():
-                    backup_state = read_json(recovery)
-                    if backup_state.get("status") == "recovery-required":
-                        preserved = ensure_private_dir(state / f"recovery-{snapshot.name}")
-                        shutil.move(str(snapshot), str(preserved / snapshot.name))
-                        status = "restart-failure"
-                    else:
-                        status = "capture-failure"
+            try:
+                result = process.wait(timeout=config["captureTimeoutSeconds"])
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                terminate_capture_process_group(process)
+                raise
+            if result:
+                recovery_state = snapshot / "backup-state.json"
+                if (recovery_state.exists() or recovery_state.is_symlink()) \
+                        and not safely_recovered(lifecycle_state(snapshot)):
+                    preserve_unresolved_capture(snapshot, state)
+                    status = "restart-failure"
                 else:
                     status = "capture-failure"
                 write_status(config, status, "capture-command-failed")
@@ -706,16 +762,12 @@ def run_nightly(config):
             shutil.rmtree(snapshot)
             return status
         except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-            if snapshot.exists() and (snapshot / "backup-state.json").is_file():
-                try:
-                    recovery = read_json(snapshot / "backup-state.json")
-                except (OSError, ValueError, json.JSONDecodeError):
-                    recovery = {}
-                if recovery.get("status") == "recovery-required":
-                    preserved = ensure_private_dir(state / f"recovery-{snapshot.name}")
-                    shutil.move(str(snapshot), str(preserved / snapshot.name))
-                    write_status(config, "restart-failure", "recovery-required")
-                    raise BackupError("restart-failure", "recovery-required") from error
+            recovery_state = snapshot / "backup-state.json"
+            if snapshot.exists() and (recovery_state.exists() or recovery_state.is_symlink()) \
+                    and not safely_recovered(lifecycle_state(snapshot)):
+                preserve_unresolved_capture(snapshot, state)
+                write_status(config, "restart-failure", "recovery-required")
+                raise BackupError("restart-failure", "recovery-required") from error
             write_status(config, "interrupted", "capture-interrupted")
             raise BackupError("interrupted", "capture-interrupted") from error
         finally:
