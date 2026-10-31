@@ -295,7 +295,7 @@ def safe_config(path):
     if rclone_config.is_symlink() or not rclone_config.is_file() or rclone_config.stat().st_mode & 0o077:
         raise ValueError("rclone configuration must be private")
     config["maxStagingBytes"] = int(config.get("maxStagingBytes", DEFAULT_MAX_STAGING_BYTES))
-    if 256 * 1024**2 <= config["maxStagingBytes"] <= 100 * 1024**3:
+    if not 256 * 1024**2 <= config["maxStagingBytes"] <= 100 * 1024**3:
         raise ValueError("invalid staging limit")
     config["captureTimeoutSeconds"] = int(config.get("captureTimeoutSeconds", 5400))
     if not 60 <= config["captureTimeoutSeconds"] <= 7200:
