@@ -45,7 +45,7 @@ Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}
 
 #### Snapshot capture
 
-The `backup`, `backup-enter`, `backup-exit`, `deploy`, and `storage-reattach` operations coordinate through the same `recipe-db-deploy` Lease in `kube-system`, outside the replaceable application namespace. They do not expire or automatically steal a Lease. Backup validates the explicit target/context, immutable release digest/revision, actual project container images, deployed runtime Secret, selected PVC identities, ownership and destination capacity. Backup and recovery require the release commit locally and unchanged metadata/template inputs relative to it; untracked inputs are refused, while unrelated checkout changes are allowed. This binds the authoritative inventory and cleanup definition to the release without fetching or executing another checkout. Preflight requires selected PVC requests plus 64 MiB staging headroom; because local-path requests do not enforce a quota, capture also measures each stopped PVC's exact tar byte count before copying and requires actual free space plus the same headroom. This includes sparse-file expansion and previously copied archives. It does not read the configured application secret files. The snapshot validator requires Python 3 with its standard library.
+The `backup`, `backup-enter`, `backup-exit`, `restore`, `deploy`, and `storage-reattach` operations coordinate through the same `recipe-db-deploy` Lease in `kube-system`, outside the replaceable application namespace. They do not expire or automatically steal a Lease. Backup validates the explicit target/context, immutable release digest/revision, actual project container images, deployed runtime Secret, selected PVC identities, ownership and destination capacity. Backup and recovery require the release commit locally and unchanged metadata/template inputs relative to it; untracked inputs are refused, while unrelated checkout changes are allowed. This binds the authoritative inventory and cleanup definition to the release without fetching or executing another checkout. Preflight requires selected PVC requests plus 64 MiB staging headroom; because local-path requests do not enforce a quota, capture also measures each stopped PVC's exact tar byte count before copying and requires actual free space plus the same headroom. This includes sparse-file expansion and previously copied archives. It does not read the configured application secret files. The snapshot validator requires Python 3 with its standard library.
 
 Run only during an approved maintenance window, from a trusted workstation with the explicit target values file and a private destination filesystem. This operation changes runtime modes, briefly stops backend workloads and transfers application data; do not point it at a live Pi or production cluster during development or tests.
 
@@ -104,7 +104,30 @@ mise run production-k3d deploy "$VALUES" "$RELEASE"
 
 Reattachment checks the old namespace/claim, requested capacity, node and guarded path, and changes the claim reference atomically without deleting PVs, PVCs or directories. Ordinary redeployments keep bound claims. Host reprovisioning does not format/remove application storage. Local k3d's explicitly confirmed whole-cluster deletion still destroys rehearsal data.
 
-The snapshot capture remains the lifecycle interface; remote upload and retention now consume it without changing its capture behavior. Archive encryption and archive restore remain separate work. Mocked tests are not a real-cluster or physical Pi rehearsal; no physical acceptance is claimed.
+#### Fresh-deployment restore
+
+Restore is recovery at the backup's recorded immutable application release, not an upgrade or in-place repair. Use a newly provisioned, explicitly identified local k3d or Pi k3s target. Never deploy the normal application first: initialization populates databases and derived volumes, making that target unsuitable for restore. Existing or partially restored data must not be wiped, merged or overwritten to make a target pass.
+
+Select a complete package and its sibling manifest from a verified restore point. For remote backups, download both files with the private operator-owned rclone configuration into a private local directory before invoking restore; a failed download is not a restore candidate. Keep backup contents, credentials and private command output out of CI artifacts/logs. Listing or byte size alone does not verify a downloaded backup.
+
+```sh
+umask 077
+VALUES="$PWD/.secrets/fresh-target-values.yaml"
+PACKAGE_MANIFEST="$PWD/.backups/<complete-backup>.manifest.json"
+PACKAGE_ARCHIVE="$PWD/.backups/<complete-backup>.tar.gz"
+BACKUP_ID='<exact-backupId-from-manifest>'
+STATE_DIRECTORY="$PWD/.backups/restore-<new-operation>"
+mise run production-k3d restore "$VALUES" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" \
+  "$BACKUP_ID" "$STATE_DIRECTORY" "RESTORE-$BACKUP_ID"
+```
+
+All file arguments are absolute. The values file explicitly selects target, context, namespace, storage and workstation-held secret inputs; confirmation binds the operation to the selected backup identity. Preserve the original package/manifest pair. Restore validates the supported package/snapshot formats, release identity, archive and file sizes/SHA-256 hashes, complete metadata-derived authoritative inventory and current image/thumbnail pairs. Links, special files, duplicate entries and unsafe paths are refused. Validation stages only classified regular files privately, never extracts arbitrary paths into the target.
+
+The recorded release artifact and every application image must remain available. The corresponding release commit and unchanged render inputs must be present locally, and all configured secret inputs must be supplied independently; secrets are not recovered from backup. The accounts file must include an explicit owner bearer token for the private create/update/delete propagation probe. The probe uses only its own new recipe, verifies search and browse changes, and removes that recipe before completion; an interrupted probe's identity is retained in recovery state. No mutable image tag, replacement release, application build or implicit upgrade substitutes for a missing prerequisite. Pi restore retains the provisioning/storage-identity safeguards above; this command does not provision or reimage a device.
+
+The shared cluster-scoped Lease excludes deployment and capture. Fresh-target inspection refuses populated authoritative, derived and external-cache storage. Application writers remain stopped during data import. Public GraphQL remains blocked while the private trusted-ingress query route permits full search rebuilding. NATS/consumers, Typesense, search/checkpoint, browse and external caches start fresh; upstream websites are not recovery prerequisites. Completion requires data verification, search readiness, representative reads and change propagation before application access reopens.
+
+A nonzero exit is never a partial success. After target mutation, preserve the private restore state directory and the Lease and leave access blocked. Inspect the saved phase, explicit target/context and `lock-status` before any operator action. Do not use `backup-exit`, ordinary deployment, a forced lock deletion or a second restore to open or overwrite a partial target. Stop any surviving operator process, retain the failed target for investigation, and select another genuinely fresh target for a new restore; any destructive disposal requires separate explicit operator approval. Automated failure tests are not evidence of a live Pi recovery. The integrated disposable-k3d rehearsal belongs to #108, and operator-approved Drive/Pi acceptance to #107.
 
 ## Operator configuration and secrets
 

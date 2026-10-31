@@ -12,6 +12,8 @@ source "$root/.scripts/lib/project-metadata.sh"
 source "$root/.scripts/lib/cluster-operation-lock.sh"
 # shellcheck source=.scripts/lib/production-storage.sh
 source "$root/.scripts/lib/production-storage.sh"
+# shellcheck source=.scripts/lib/production-restore.sh
+source "$root/.scripts/lib/production-restore.sh"
 
 [[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
@@ -21,6 +23,7 @@ case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup | backup-enter) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
+  restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
   backup-exit) [[ $# = 3 ]] || production_fail "backup-exit requires the absolute state directory, exact holder and EXIT-<holder> confirmation" ;;
   delete) [[ $# = 1 ]] || production_fail "delete requires an explicit confirmation" ;;
@@ -40,6 +43,7 @@ pod_watch_pid=
 cleanup() {
   local result=$?
   trap - EXIT
+  restore_cleanup "$result"
   if [[ -n $pod_watch_pid ]]; then
     kill "$pod_watch_pid" 2> /dev/null || true
     wait "$pod_watch_pid" 2> /dev/null || true
@@ -148,7 +152,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup | backup-enter | backup-exit)
+    backup | backup-enter | backup-exit | restore)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml package.json
         message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
@@ -1208,6 +1212,9 @@ case "$command" in
     ;;
   backup | backup-enter)
     backup_run "$1" "$2"
+    ;;
+  restore)
+    restore_run "$1" "$2" "$3" "$4" "$5"
     ;;
   backup-status)
     backup_load_state "$1"
