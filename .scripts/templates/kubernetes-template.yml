@@ -1,12 +1,15 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:yaml", "yaml")
-#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "config_maps", "helm_values", "wait_for_nats", "backup_cleanup_job")
+#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "storage_class", "config_maps", "helm_values", "wait_for_nats", "backup_cleanup_job")
 apiVersion: v1
 kind: Namespace
 metadata:
   name: #@ ns
   labels:
     app.kubernetes.io/part-of: recipe-db
+#@ if cfg["target"] == "pi" and cfg.get("piStorage") != None:
+--- #@ storage_class()
+#@ end
 ---
 #@ for config in config_maps():
 --- #@ config
@@ -34,6 +37,41 @@ spec:
 #@ for name in cfg["volumes"]:
 --- #@ pvc(name)
 #@ end
+---
+apiVersion: v1
+kind: Service
+metadata: #@ metadata("graphql-projection")
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: graphql
+  ports:
+    - name: graphql
+      port: 4000
+      targetPort: 4000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: #@ metadata("graphql-ingress")
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: graphql
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 4000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - protocol: TCP
+          port: 4001
 ---
 apiVersion: batch/v1
 kind: Job

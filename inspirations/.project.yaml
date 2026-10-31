@@ -70,6 +70,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 backupRole: cleanup-participant
+backupData: { kind: json, file: db.json }
 prettier:
   ignore:
     - "*.lua"
@@ -79,4 +80,6 @@ format: |
   lua-format *.rockspec -i --column-table-limit=1
 check: |
   lua -v
-  luacheck *.lua
+  luacheck *.lua tests/*.lua
+  mkdir -p tests/storage-fixture
+  lua tests/storage.lua tests/storage-fixture; set result $status; rmdir tests/storage-fixture; exit $result

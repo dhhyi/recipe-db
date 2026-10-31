@@ -29,7 +29,8 @@ production_config() {
         (.[0] == 10 or (.[0] == 192 and .[1] == 168) or
           (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
-      "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"])
+      "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"] +
+      (if has("piStorage") then ["piStorage"] else [] end))
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
     and (.target == "local" or .target == "pi")
     and (.cluster | name) and (.namespace == "recipe-db")
@@ -43,7 +44,21 @@ production_config() {
       .cluster == "recipe-db-rehearsal" and .context == "k3d-recipe-db-rehearsal"
       and .origin == ("http://127.0.0.1:" + (.httpPort | tostring))
       and .storageClass == "local-path"
-    else .context != "k3d-recipe-db-rehearsal" end)
+    else .context != "k3d-recipe-db-rehearsal" and .storageClass == "recipe-db-retained" end)
+    and (if has("piStorage") then
+      .target == "pi" and
+      (.piStorage | objectkeys(["node","expectedRootUuid","dataRoot"])
+        and (.node | name) and (.expectedRootUuid | nonempty)
+        and (.dataRoot | type == "string" and test("^/srv/[a-zA-Z0-9_-]+$")))
+      else true end)
+    and (if .target == "pi" and
+      ($action == "deploy" or $action == "backup" or $action == "backup-enter"
+        or $action == "backup-exit" or $action == "storage-reattach")
+      then has("piStorage")
+        and .piStorage.node == .cluster
+        and (.piStorage.expectedRootUuid | test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
+      else true end)
+    and (if $action == "storage-reattach" then .target == "pi" else true end)
     and (.volumes | objectkeys(["recipes","images","ratings","inspirations","image-inline","link-extract",
       "nats","typesense","search","redis","tags"])
       and all(.[]; quantity))
@@ -86,6 +101,10 @@ production_config() {
   http_port=$(jq -r .httpPort "$work/config.json")
   api_port=$(jq -r .apiPort "$work/config.json")
   timeout=$(jq -r .timeoutSeconds "$work/config.json")
+  storage_class=$(jq -r .storageClass "$work/config.json")
+  storage_node=$(jq -r '.piStorage.node // empty' "$work/config.json")
+  storage_root_uuid=$(jq -r '.piStorage.expectedRootUuid // empty' "$work/config.json" | tr '[:upper:]' '[:lower:]')
+  storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
   auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)

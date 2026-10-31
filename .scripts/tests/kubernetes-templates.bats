@@ -42,6 +42,17 @@ render() {
     any(.items[]; .kind == "Deployment" and .metadata.name == "typesense" and
       .spec.template.spec.containers[0].image == $image)
   ' manifests.json
+  jq -e '
+    any(.items[]; .kind == "StorageClass" and .metadata.name == "recipe-db-retained"
+      and .provisioner == "rancher.io/local-path"
+      and .parameters.nodePath == "/srv/recipe-db/storage"
+      and .reclaimPolicy == "Retain"
+      and .volumeBindingMode == "WaitForFirstConsumer"
+      and .allowedTopologies == [{matchLabelExpressions:[{key:"kubernetes.io/hostname",values:["recipe-db-pi"]}]}])
+  ' manifests.json
+  jq -e '
+    any(.items[]; .kind == "StorageClass" and .metadata.name == "local-path") | not
+  ' manifests.json
 }
 
 @test "token-only Pi rehearsal omits OAuth and restricts ingress to ClusterIP" {
@@ -112,7 +123,7 @@ render() {
     .items[] | select(.kind == "Deployment" and .metadata.name == "search") |
     .spec.template.spec.containers as $containers |
     $containers[0].livenessProbe.httpGet.path == "/health"
-    and any($containers[0].env[]; .name == "GRAPHQL_URL" and .value == "http://traefik/graphql")
+    and any($containers[0].env[]; .name == "GRAPHQL_URL" and .value == "http://traefik:3000/graphql")
     and ($containers[1].readinessProbe.exec.command[2] | contains("ready"))
     and ($containers[1] | has("livenessProbe") | not)
   ' manifests.json

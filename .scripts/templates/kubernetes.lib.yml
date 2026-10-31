@@ -58,6 +58,10 @@
 #@   return {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": metadata(name), "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": cfg["storageClass"], "resources": {"requests": {"storage": cfg["volumes"][name]}}}}
 #@ end
 
+#@ def storage_class():
+#@   return {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": cfg["storageClass"], "labels": {"app.kubernetes.io/part-of": "recipe-db"}}, "provisioner": "rancher.io/local-path", "parameters": {"nodePath": cfg["piStorage"]["dataRoot"] + "/storage"}, "reclaimPolicy": "Retain", "volumeBindingMode": "WaitForFirstConsumer", "allowedTopologies": [{"matchLabelExpressions": [{"key": "kubernetes.io/hostname", "values": [cfg["piStorage"]["node"]]}]}]}
+#@ end
+
 #@ def config_mount(name, path):
 #@   return {"name": name, "mountPath": path, "readOnly": True}
 #@ end
@@ -108,7 +112,7 @@
 #@     secrets = ["auth-accounts.json", "graphql-ingress-secret"]
 #@     init = [wait_for_nats()]
 #@   elif name == "search":
-#@     env.update({"GRAPHQL_URL": "http://traefik/graphql", "STATE_DIRECTORY": "/data", "TYPESENSE_API_KEY_FILE": "/run/secrets/typesense-api-key"})
+#@     env.update({"GRAPHQL_URL": "http://traefik:3000/graphql", "STATE_DIRECTORY": "/data", "TYPESENSE_API_KEY_FILE": "/run/secrets/typesense-api-key"})
 #@     secrets = ["typesense-api-key"]
 #@     init = [wait_for_nats()]
 #@   elif name in ["browse", "mcp"]:

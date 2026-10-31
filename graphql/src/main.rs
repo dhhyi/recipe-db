@@ -119,6 +119,15 @@ async fn graphql(
     method: Method,
     request: GraphQLRequest,
 ) -> GraphQLResponse {
+    execute_graphql(state, headers, method, request.into_inner()).await
+}
+
+async fn execute_graphql(
+    state: GraphQLState,
+    headers: HeaderMap,
+    method: Method,
+    request: async_graphql::Request,
+) -> GraphQLResponse {
     let context = match state.auth_policy.request_context(&headers) {
         Ok(context) => context,
         Err(error) => {
@@ -133,11 +142,48 @@ async fn graphql(
             return async_graphql::Response::from_errors(vec![error]).into();
         }
     };
-    let request = request.into_inner();
     if let Some(error) = mutation_request_error(&headers, method, &request) {
         return async_graphql::Response::from_errors(vec![error]).into();
     }
     state.schema.execute(request.data(context)).await.into()
+}
+
+async fn projection_graphql(
+    State(state): State<GraphQLState>,
+    request: GraphQLRequest,
+) -> GraphQLResponse {
+    let request = request.into_inner();
+    if let Ok(document) = async_graphql::parser::parse_query(&request.query) {
+        if document.operations.iter().any(|(_, operation)| {
+            operation.node.ty != async_graphql::parser::types::OperationType::Query
+        }) {
+            let mut error =
+                async_graphql::ServerError::new("Projection refresh accepts queries only", None);
+            let mut extensions = async_graphql::ErrorExtensionValues::default();
+            extensions.set("code", "projection-read-only");
+            extensions.set("status", 405);
+            error.extensions = Some(extensions);
+            return async_graphql::Response::from_errors(vec![error]).into();
+        }
+    }
+    execute_graphql(state, HeaderMap::new(), Method::POST, request).await
+}
+
+fn projection_router(
+    mode: mode::RuntimeMode,
+    state: GraphQLState,
+    secret: IngressSecret,
+) -> Router {
+    if mode != mode::RuntimeMode::Backup {
+        return Router::new();
+    }
+    Router::new()
+        .route("/graphql", post(projection_graphql))
+        .route_layer(middleware::from_fn_with_state(
+            secret,
+            trusted_graphql_ingress,
+        ))
+        .with_state(state)
 }
 
 fn mutation_request_error(
@@ -291,6 +337,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     } else {
         None
     };
+    let projection_app = ingress_secret
+        .clone()
+        .map(|secret| projection_router(runtime_mode, graphql_state.clone(), secret));
     let graphql_route = if runtime_mode != mode::RuntimeMode::Testing {
         post(graphql).get(graphql)
     } else {
@@ -317,15 +366,79 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     println!("async-graphql started");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
-    axum::serve(listener, app).await?;
+    if runtime_mode == mode::RuntimeMode::Backup {
+        let projection_listener = tokio::net::TcpListener::bind("0.0.0.0:4001").await?;
+        tokio::try_join!(
+            serve_until_shutdown(listener, app, shutdown_signal()),
+            serve_until_shutdown(
+                projection_listener,
+                projection_app.expect("backup requires trusted ingress"),
+                shutdown_signal(),
+            )
+        )?;
+    } else {
+        serve_until_shutdown(listener, app, shutdown_signal()).await?;
+    }
     Ok(())
+}
+
+async fn serve_until_shutdown<F>(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send,
+{
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let server = std::future::IntoFuture::into_future(
+        axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        }),
+    );
+    tokio::pin!(server);
+    tokio::select! {
+        result = &mut server => result,
+        _ = shutdown => {
+            let _ = shutdown_tx.send(());
+            tokio::time::timeout(std::time::Duration::from_secs(20), &mut server)
+                .await
+                .map_err(|_| std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "GraphQL graceful shutdown exceeded 20 seconds",
+                ))?
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    let interrupt = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate => {}
+    }
 }
 
 #[cfg(test)]
 mod ingress_tests {
     use super::{
-        backup_mode_barrier, mutation_request_error, trusted_graphql_ingress, IngressSecret,
-        INGRESS_HEADER,
+        backup_mode_barrier, mutation_request_error, serve_until_shutdown, trusted_graphql_ingress,
+        IngressSecret, INGRESS_HEADER,
     };
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
@@ -448,6 +561,45 @@ mod ingress_tests {
     }
 
     #[tokio::test]
+    async fn graceful_shutdown_drains_an_in_flight_request() {
+        let (started_tx, mut started_rx) = tokio::sync::watch::channel(false);
+        let (finish_tx, finish_rx) = tokio::sync::watch::channel(false);
+        let app = Router::new().route(
+            "/",
+            get(move || {
+                let started_tx = started_tx.clone();
+                let mut finish_rx = finish_rx.clone();
+                async move {
+                    started_tx.send_replace(true);
+                    while !*finish_rx.borrow() {
+                        finish_rx.changed().await.unwrap();
+                    }
+                    "completed"
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_until_shutdown(listener, app, async {
+            let _ = shutdown_rx.await;
+        }));
+        let request = tokio::spawn(async move {
+            reqwest::get(format!("http://{address}/"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+        started_rx.changed().await.unwrap();
+        shutdown_tx.send(()).unwrap();
+        finish_tx.send_replace(true);
+        assert_eq!(request.await.unwrap(), "completed");
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn backup_barrier_rejects_all_graphql_http_requests_without_running_handlers() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -503,5 +655,76 @@ mod ingress_tests {
 
         assert_eq!(HANDLER_CALLS.load(Ordering::SeqCst), 0);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn projection_queries_require_ingress_and_backup_mode_and_never_allow_mutations() {
+        let state = super::GraphQLState {
+            schema: crate::schema::build_schema(crate::mode::RuntimeMode::Backup, None),
+            auth_policy: crate::auth::AuthPolicy::from_json(
+                r#"{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}"#,
+                "https://accounts.google.com",
+            )
+            .unwrap(),
+        };
+        let token = "a".repeat(43);
+        let client = reqwest::Client::new();
+        for mode in [
+            crate::mode::RuntimeMode::Production,
+            crate::mode::RuntimeMode::Testing,
+            crate::mode::RuntimeMode::Backup,
+        ] {
+            let app = super::projection_router(
+                mode,
+                state.clone(),
+                IngressSecret::parse(token.clone()).unwrap(),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let url = format!("http://{address}/graphql");
+            let request = serde_json::json!({"query":"{ __typename }"});
+            let denied = client.post(&url).json(&request).send().await.unwrap();
+            assert_eq!(
+                denied.status(),
+                if mode == crate::mode::RuntimeMode::Backup {
+                    StatusCode::FORBIDDEN
+                } else {
+                    StatusCode::NOT_FOUND
+                }
+            );
+            let response = client
+                .post(&url)
+                .header(INGRESS_HEADER, &token)
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            if mode == crate::mode::RuntimeMode::Backup {
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.json::<serde_json::Value>().await.unwrap();
+                assert_eq!(body["data"]["__typename"], "QueryRoot");
+                for query in [
+                    "mutation { deleteRecipe(id: \"unused\") }",
+                    "query Read { __typename } mutation Write { deleteRecipe(id: \"unused\") }",
+                ] {
+                    let response = client
+                        .post(&url)
+                        .header(INGRESS_HEADER, &token)
+                        .json(&serde_json::json!({"query":query,"operationName":"Read"}))
+                        .send()
+                        .await
+                        .unwrap();
+                    let body = response.json::<serde_json::Value>().await.unwrap();
+                    assert_eq!(
+                        body["errors"][0]["extensions"]["code"],
+                        "projection-read-only"
+                    );
+                }
+            } else {
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            }
+            server.abort();
+        }
     }
 }

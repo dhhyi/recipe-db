@@ -31,11 +31,16 @@ deploy:
     - .scripts/tests/kubernetes-templates.bats
     - .scripts/tests/production-k3d.bats
     - .scripts/tests/production-smoke.bats
+    - .scripts/tests/backup-snapshot.bats
+    - .scripts/tests/production-storage.bats
   inputs:
     - .scripts/production-k3d.sh
     - .scripts/smoke-production-k3d.sh
     - .scripts/generate-production-build-metadata.sh
     - .scripts/lib/production-config.sh
+    - .scripts/lib/cluster-operation-lock.sh
+    - .scripts/lib/production-storage.sh
+    - .scripts/validate-backup-snapshot.py
     - .scripts/lib/project-metadata.sh
     - .scripts/templates/kubernetes*.yml
     - .scripts/validate-production-image-index.sh
