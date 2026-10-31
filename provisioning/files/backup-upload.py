@@ -23,9 +23,12 @@ FORMAT = "recipe-db-pvc-snapshot"
 PACKAGE_FORMAT = "recipe-db-backup"
 STATUS_FORMAT = "recipe-db-backup-status"
 DEFAULT_MAX_STAGING_BYTES = 8 * 1024**3
-MAX_MANIFEST_BYTES = 4 * 1024**2
+MAX_MANIFEST_BYTES = 64 * 1024**2
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+BACKUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+REMOTE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+MAX_REMOTE_MANIFEST_BYTES = 128 * 1024**2
 
 
 class BackupError(Exception):
@@ -72,7 +75,7 @@ def validate_snapshot(snapshot):
         raise ValueError("unsupported snapshot format")
     if (snapshot / "backup-state.json").exists():
         raise ValueError("snapshot is incomplete")
-    if not NAME_PATTERN.fullmatch(manifest.get("backupId", "")):
+    if not BACKUP_ID_PATTERN.fullmatch(manifest.get("backupId", "")):
         raise ValueError("invalid backup identity")
     source = manifest.get("source")
     if not isinstance(source, dict) or not all(
@@ -211,27 +214,30 @@ def create_package(snapshot, stage, manifest, deployment_id, max_bytes):
     archive_path = stage / archive_name
     source_manifest_bytes = (snapshot / "manifest.json").read_bytes()
     input_size = sum((snapshot / item["archive"]).stat().st_size for item in manifest["inventory"])
-    if input_size + len(source_manifest_bytes) + 1024 * 1024 > max_bytes:
+    if input_size * 2 + len(source_manifest_bytes) * 3 + input_size // 100 + 1024 * 1024 > max_bytes:
         raise BackupError("capture-failure", "staging-limit")
     free = shutil.disk_usage(stage).free
-    if free < input_size * 2 + 64 * 1024**2:
+    if free < input_size * 2 + input_size // 100 + 64 * 1024**2:
         raise BackupError("capture-failure", "staging-space")
-    with open(archive_path, "xb") as output:
-        with gzip.GzipFile(filename="", fileobj=output, mode="wb", mtime=0, compresslevel=6) as compressed:
-            with tarfile.open(fileobj=compressed, mode="w", format=tarfile.USTAR_FORMAT) as bundle:
-                add_bytes(bundle, "manifest.json", source_manifest_bytes)
-                for entry in sorted(manifest["inventory"], key=lambda item: item["archive"]):
-                    source_path = snapshot / entry["archive"]
-                    info = tarfile.TarInfo(entry["archive"])
-                    info.size = source_path.stat().st_size
-                    info.mode = 0o600
-                    info.mtime = 0
-                    info.uid = info.gid = 0
-                    info.uname = info.gname = ""
-                    with open(source_path, "rb") as stream:
-                        bundle.addfile(info, stream)
+    try:
+        with open(archive_path, "xb") as output:
+            with gzip.GzipFile(filename="", fileobj=output, mode="wb", mtime=0, compresslevel=6) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w", format=tarfile.USTAR_FORMAT) as bundle:
+                    add_bytes(bundle, "manifest.json", source_manifest_bytes)
+                    for entry in sorted(manifest["inventory"], key=lambda item: item["archive"]):
+                        source_path = snapshot / entry["archive"]
+                        info = tarfile.TarInfo(entry["archive"])
+                        info.size = source_path.stat().st_size
+                        info.mode = 0o600
+                        info.mtime = 0
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = ""
+                        with open(source_path, "rb") as stream:
+                            bundle.addfile(info, stream)
+    except OSError as error:
+        raise BackupError("capture-failure", "staging-write") from error
     archive_size = archive_path.stat().st_size
-    if archive_size > max_bytes or archive_size + input_size > max_bytes:
+    if archive_size > max_bytes:
         raise BackupError("capture-failure", "staging-limit")
     archive_digest = hashlib.sha256()
     with open(archive_path, "rb") as stream:
@@ -250,8 +256,13 @@ def create_package(snapshot, stage, manifest, deployment_id, max_bytes):
         "archive": {"name": archive_name, "sizeBytes": archive_size, "sha256": archive_hash},
     }
     metadata_path = stage / metadata_name
-    metadata_path.write_bytes(json_bytes(package_manifest))
-    os.chmod(metadata_path, 0o600)
+    try:
+        metadata_path.write_bytes(json_bytes(package_manifest))
+        os.chmod(metadata_path, 0o600)
+    except OSError as error:
+        raise BackupError("capture-failure", "staging-write") from error
+    if input_size + len(source_manifest_bytes) + archive_size + metadata_path.stat().st_size > max_bytes:
+        raise BackupError("capture-failure", "staging-limit")
     return {
         "archive": archive_name,
         "manifest": metadata_name,
@@ -284,7 +295,7 @@ def safe_config(path):
     if rclone_config.is_symlink() or not rclone_config.is_file() or rclone_config.stat().st_mode & 0o077:
         raise ValueError("rclone configuration must be private")
     config["maxStagingBytes"] = int(config.get("maxStagingBytes", DEFAULT_MAX_STAGING_BYTES))
-    if not 1024**2 <= config["maxStagingBytes"] <= 100 * 1024**3:
+    if 256 * 1024**2 <= config["maxStagingBytes"] <= 100 * 1024**3:
         raise ValueError("invalid staging limit")
     config["captureTimeoutSeconds"] = int(config.get("captureTimeoutSeconds", 5400))
     if not 60 <= config["captureTimeoutSeconds"] <= 7200:
@@ -353,7 +364,7 @@ def write_status(config, status, code, backup_id=None, last_upload=None):
     return value
 
 
-def rclone(config, *args, timeout=900):
+def rclone(config, *args, timeout=3600):
     command = [
         "rclone", *args, "--config", config["rcloneConfig"], "--log-level", "ERROR",
         "--log-file", "/dev/null", "--retries", "2", "--low-level-retries", "2",
@@ -380,11 +391,12 @@ def remote_names(config):
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise BackupError("upload-failure", "remote-list") from error
-    return {line for line in result.stdout.splitlines() if NAME_PATTERN.fullmatch(line)}
+    return {line for line in result.stdout.splitlines() if REMOTE_FILENAME_PATTERN.fullmatch(line)}
 
 
 def remote_hash(config, name, expected_size):
-    if type(expected_size) is not int or expected_size < 0:
+    if type(expected_size) is not int or expected_size < 0 \
+            or expected_size > config["maxStagingBytes"]:
         raise BackupError("upload-failure", "invalid-remote-size")
     command = ["rclone", "cat", remote_base(config) + "/" + name,
                "--config", config["rcloneConfig"], "--log-level", "ERROR", "--log-file", "/dev/null"]
@@ -399,6 +411,7 @@ def remote_hash(config, name, expected_size):
             size += len(block)
             if size > expected_size:
                 process.kill()
+                process.wait()
                 raise BackupError("upload-failure", "remote-integrity")
             digest.update(block)
         result = process.wait(timeout=900)
@@ -406,13 +419,17 @@ def remote_hash(config, name, expected_size):
         process.kill()
         process.wait()
         raise BackupError("upload-failure", "remote-read") from error
+    except BaseException:
+        process.kill()
+        process.wait()
+        raise
     if result != 0 or size != expected_size:
         raise BackupError("upload-failure", "remote-integrity")
     return digest.hexdigest()
 
 
 def read_remote_manifest(config, name):
-    max_bytes = MAX_MANIFEST_BYTES
+    max_bytes = MAX_REMOTE_MANIFEST_BYTES
     command = ["rclone", "cat", remote_base(config) + "/" + name,
                "--config", config["rcloneConfig"], "--log-level", "ERROR", "--log-file", "/dev/null"]
     try:
@@ -444,9 +461,10 @@ def verify_baseline(config, baseline, names):
         if remote_hash(config, metadata_name, baseline["manifestSizeBytes"]) != baseline["manifestSha256"]:
             return False
         remote_manifest = read_remote_manifest(config, metadata_name)
+        if not isinstance(remote_manifest, dict) or not isinstance(remote_manifest.get("archive"), dict):
+            return False
         return (
-            remote_manifest is not None
-            and remote_manifest.get("format") == PACKAGE_FORMAT
+            remote_manifest.get("format") == PACKAGE_FORMAT
             and remote_manifest.get("deploymentId") == config["deploymentId"]
             and remote_manifest.get("archive", {}).get("name") == archive_name
             and remote_manifest.get("contentFingerprint") == baseline.get("fingerprint")
@@ -466,7 +484,10 @@ def complete_remote_points(config, names):
                 or document.get("formatVersion") != 1 or document.get("deploymentId") != config["deploymentId"]:
             continue
         archive = document.get("archive")
-        if not isinstance(archive, dict) or archive.get("name") not in names \
+        if not isinstance(archive, dict) \
+                or not isinstance(archive.get("name"), str) \
+                or not REMOTE_FILENAME_PATTERN.fullmatch(archive["name"]) \
+                or archive["name"] not in names \
                 or not isinstance(archive.get("sha256"), str) or not HASH_PATTERN.fullmatch(archive["sha256"]) \
                 or type(archive.get("sizeBytes")) is not int or archive["sizeBytes"] < 0:
             continue
@@ -478,23 +499,26 @@ def complete_remote_points(config, names):
         except (KeyError, ValueError):
             continue
         expected_prefix = f"recipe-db-{config['deploymentId']}-{stamp}-{backup_id}"
-        if not isinstance(backup_id, str) or not NAME_PATTERN.fullmatch(backup_id) \
+        source = document.get("source")
+        if not isinstance(backup_id, str) or not BACKUP_ID_PATTERN.fullmatch(backup_id) \
                 or name != expected_prefix + ".manifest.json" \
                 or archive["name"] != expected_prefix + ".tar.gz" \
                 or not isinstance(document.get("contentFingerprint"), str) \
                 or not HASH_PATTERN.fullmatch(document["contentFingerprint"]) \
+                or not isinstance(source, dict) \
+                or not re.fullmatch(r"ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}",
+                                    str(source.get("artifact", ""))) \
+                or not re.fullmatch(r"[0-9a-f]{40}", str(source.get("revision", ""))) \
                 or not isinstance(snapshot_manifest, dict) \
                 or snapshot_manifest.get("format") != FORMAT \
                 or snapshot_manifest.get("formatVersion") != 1 \
                 or snapshot_manifest.get("backupId") != backup_id \
-                or snapshot_manifest.get("source") != document.get("source"):
+                or snapshot_manifest.get("capturedAt") != document.get("capturedAt") \
+                or not isinstance(snapshot_manifest.get("inventory"), list) \
+                or not snapshot_manifest["inventory"] \
+                or snapshot_manifest.get("source") != source:
             continue
-        try:
-            archive_hash = remote_hash(config, archive["name"], archive["sizeBytes"])
-            metadata_hash = remote_hash(config, name, len(json_bytes(document)))
-        except (KeyError, ValueError, BackupError):
-            continue
-        if archive_hash != archive["sha256"] or metadata_hash != hashlib.sha256(json_bytes(document)).hexdigest():
+        if archive["sizeBytes"] > config["maxStagingBytes"]:
             continue
         points.append((captured, backup_id, archive["name"], name))
     return points
@@ -503,12 +527,16 @@ def complete_remote_points(config, names):
 def prune(config, names, current_archive, current_manifest):
     points = complete_remote_points(config, names)
     points.sort(key=lambda point: (point[0], point[1]))
-    keep = {(current_archive, current_manifest)}
-    for _, _, archive, manifest in points[-30:]:
-        keep.add((archive, manifest))
-    for _, _, archive, manifest in points:
-        if (archive, manifest) in keep:
-            continue
+    for _, _, archive, manifest in points[:-30]:
+        document = read_remote_manifest(config, manifest)
+        if not isinstance(document, dict) or not isinstance(document.get("archive"), dict):
+            raise BackupError("retention-failure", "remote-point-metadata")
+        archive_metadata = document["archive"]
+        if remote_hash(config, archive, archive_metadata["sizeBytes"]) != archive_metadata["sha256"]:
+            raise BackupError("retention-failure", "remote-point-integrity")
+        manifest_bytes = json_bytes(document)
+        if remote_hash(config, manifest, len(manifest_bytes)) != hashlib.sha256(manifest_bytes).hexdigest():
+            raise BackupError("retention-failure", "remote-point-integrity")
         rclone(config, "deletefile", remote_base(config) + "/" + manifest)
         rclone(config, "deletefile", remote_base(config) + "/" + archive)
 
@@ -543,7 +571,7 @@ def reconcile_stale_captures(state):
 
 
 def upload_snapshot(snapshot, config):
-    state_dir = ensure_private_dir(config["stateDirectory"])
+    ensure_private_dir(config["stateDirectory"])
     stage_root = ensure_private_dir(config["stagingDirectory"])
     baseline_file = baseline_path(config)
     try:
@@ -558,11 +586,13 @@ def upload_snapshot(snapshot, config):
             baseline = read_json(baseline_file)
         except (OSError, ValueError, json.JSONDecodeError):
             baseline = None
+    if not isinstance(baseline, dict):
+        baseline = None
     try:
         names = remote_names(config)
         if baseline and baseline.get("fingerprint") == fingerprint and verify_baseline(config, baseline, names):
             value = write_status(config, "verified-unchanged", "content-unchanged",
-                                 manifest["backupId"])
+                                 manifest["backupId"], baseline.get("lastUpload"))
             return value["status"]
         with tempfile.TemporaryDirectory(prefix="publish-", dir=stage_root) as temporary:
             package = create_package(snapshot, temporary, manifest, config["deploymentId"],
@@ -579,6 +609,7 @@ def upload_snapshot(snapshot, config):
             manifest_size = (Path(temporary) / package["manifest"]).stat().st_size
             if remote_hash(config, package["manifest"], manifest_size) != package["manifestSha256"]:
                 raise BackupError("upload-failure", "manifest-integrity")
+            last_upload = datetime.now(timezone.utc).isoformat(timespec="seconds")
             new_baseline = {
                 "fingerprint": package["fingerprint"],
                 "backupId": package["backupId"],
@@ -589,16 +620,17 @@ def upload_snapshot(snapshot, config):
                 "archiveSha256": package["archiveSha256"],
                 "manifestSha256": package["manifestSha256"],
                 "capturedAt": package["capturedAt"],
+                "lastUpload": last_upload,
             }
             atomic_json(baseline_file, new_baseline)
-        last_upload = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
             prune(config, names | {package["archive"], package["manifest"]},
                   package["archive"], package["manifest"])
-        except BackupError as error:
-            write_status(config, "retention-failure", error.code,
+        except (BackupError, OSError, TypeError, ValueError, KeyError) as error:
+            code = error.code if isinstance(error, BackupError) else "retention-metadata"
+            write_status(config, "retention-failure", code,
                          manifest["backupId"], last_upload)
-            raise BackupError("retention-failure", error.code) from error
+            raise BackupError("retention-failure", code) from error
         write_status(config, "verified-upload", "remote-readback",
                      manifest["backupId"], last_upload)
         return "verified-upload"
@@ -606,7 +638,7 @@ def upload_snapshot(snapshot, config):
         prior_upload = None
         if baseline_file.is_file() and not baseline_file.is_symlink():
             try:
-                prior_upload = read_json(status_path(config)).get("lastUpload")
+                prior_upload = read_json(baseline_file).get("lastUpload")
             except (OSError, ValueError, json.JSONDecodeError):
                 pass
         if error.status != "retention-failure":
@@ -621,6 +653,7 @@ def run_nightly(config):
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as error:
+        os.close(lock_fd)
         write_status(config, "interrupted", "already-running")
         raise BackupError("interrupted", "already-running") from error
     try:
@@ -645,7 +678,15 @@ def run_nightly(config):
                 [str(capture), str(snapshot)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=config["captureTimeoutSeconds"], check=False,
-                env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+                env={
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "KUBECONFIG": os.environ.get(
+                        "KUBECONFIG", "/etc/recipe-db/backup-kubeconfig.yaml",
+                    ),
+                    "RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES": str(
+                        config["maxStagingBytes"] // 2,
+                    ),
+                },
             )
             if result.returncode:
                 recovery = snapshot / "backup-state.json"
@@ -679,7 +720,13 @@ def run_nightly(config):
             raise BackupError("interrupted", "capture-interrupted") from error
         finally:
             if snapshot.exists():
-                shutil.rmtree(snapshot)
+                shutil.rmtree(snapshot, ignore_errors=True)
+    except KeyboardInterrupt as error:
+        write_status(config, "interrupted", "process-interrupted")
+        raise BackupError("interrupted", "process-interrupted") from error
+    except (OSError, TypeError, ValueError) as error:
+        write_status(config, "capture-failure", "local-operation")
+        raise BackupError("capture-failure", "local-operation") from error
     finally:
         os.close(lock_fd)
 
@@ -707,9 +754,8 @@ def report_status(config):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("nightly", "upload", "status"))
+    parser.add_argument("action", choices=("nightly", "status"))
     parser.add_argument("--config", required=True)
-    parser.add_argument("--snapshot")
     args = parser.parse_args()
     config = safe_config(args.config)
     def interrupt(signum, frame):
@@ -721,12 +767,7 @@ def main():
     if args.action == "status":
         print(json.dumps(report_status(config), sort_keys=True))
         return 0
-    if args.action == "upload":
-        if not args.snapshot:
-            raise ValueError("upload requires a snapshot directory")
-        upload_snapshot(args.snapshot, config)
-    else:
-        run_nightly(config)
+    run_nightly(config)
     return 0
 
 

@@ -20,7 +20,8 @@ SPEC.loader.exec_module(backup)
 
 
 def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at="2026-10-31T10:00:00Z",
-             artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64, revision="a" * 40):
+             artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64, revision="a" * 40,
+             mtime=1730000000):
     files = files or {"recipes.sqlite3": b"sqlite data"}
     path.mkdir(parents=True)
     entries = []
@@ -29,7 +30,7 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
         for name, content in sorted(files.items()):
             member = tarfile.TarInfo(name)
             member.size = len(content)
-            member.mtime = 1730000000
+            member.mtime = mtime
             archive.addfile(member, io.BytesIO(content))
             entries.append({"path": name, "sizeBytes": len(content),
                             "sha256": hashlib.sha256(content).hexdigest()})
@@ -72,7 +73,7 @@ class BackupUploadTests(unittest.TestCase):
             "stateDirectory": str(self.state),
             "stagingDirectory": str(self.staging),
             "captureCommand": str(self.root / "capture"),
-            "maxStagingBytes": 64 * 1024**2,
+            "maxStagingBytes": 256 * 1024**2,
             "captureTimeoutSeconds": 60,
         }))
         self.config_path.chmod(0o600)
@@ -125,7 +126,7 @@ else:
     def test_release_aware_fingerprint_ignores_capture_times_and_ids(self):
         first = self.make_snapshot("first")
         second = self.make_snapshot("second", backup_id="another-id",
-                                    captured_at="2026-10-31T11:00:00Z")
+                                    captured_at="2026-10-31T11:00:00Z", mtime=1760000000)
         release = self.make_snapshot("release", backup_id="release-id",
                                      artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "b" * 64,
                                      revision="b" * 40)
@@ -166,6 +167,9 @@ else:
         with self.assertRaises(backup.BackupError):
             backup.upload_snapshot(incomplete, self.config)
         self.assertEqual(backup.report_status(self.config)["status"], "capture-failure")
+
+    def test_missing_check_record_is_overdue(self):
+        self.assertEqual(backup.report_status(self.config)["status"], "overdue")
 
     def test_image_snapshot_with_owned_directories_is_accepted(self):
         image_dir = self.root / "image-snapshot"
@@ -215,6 +219,14 @@ else:
         third = self.make_snapshot("third", backup_id="backup-20261031T120000-4",
                                    captured_at="2026-10-31T12:00:00Z")
         self.assertEqual(backup.upload_snapshot(third, self.config), "verified-upload")
+        baseline = backup.read_json(self.state / "baseline.json")
+        (self.remote / "backups" / "recipe-db-pi" / baseline["manifest"]).write_bytes(b"[]")
+        baseline["manifestSizeBytes"] = 2
+        baseline["manifestSha256"] = hashlib.sha256(b"[]").hexdigest()
+        (self.state / "baseline.json").write_bytes(backup.json_bytes(baseline))
+        fourth = self.make_snapshot("fourth", backup_id="backup-20261031T130000-5",
+                                   captured_at="2026-10-31T13:00:00Z")
+        self.assertEqual(backup.upload_snapshot(fourth, self.config), "verified-upload")
 
     def test_failed_upload_preserves_verified_baseline_and_hides_remote_diagnostics(self):
         self.assertEqual(backup.upload_snapshot(self.make_snapshot(), self.config), "verified-upload")
@@ -248,6 +260,10 @@ else:
             with self.assertRaises(backup.BackupError) as error:
                 backup.create_package(source, stage, manifest, "recipe-db-pi", 64 * 1024**2)
         self.assertEqual(error.exception.code, "staging-space")
+        with patch.object(backup.gzip, "GzipFile", side_effect=OSError("disk full")):
+            with self.assertRaises(backup.BackupError) as error:
+                backup.create_package(source, stage, manifest, "recipe-db-pi", 64 * 1024**2)
+        self.assertEqual(error.exception.code, "staging-write")
 
     def seed_remote_points(self, count):
         folder = self.remote / "backups" / "recipe-db-pi"
@@ -261,16 +277,32 @@ else:
             document = {
                 "format": "recipe-db-backup", "formatVersion": 1, "deploymentId": "recipe-db-pi",
                 "backupId": f"backup-{index:04d}", "capturedAt": f"2026-01-{index // 24 + 1:02d}T{index % 24:02d}:00:00Z",
-                "source": {"artifact": "release", "revision": "a" * 40},
+                "source": {"target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+                           "namespace": "recipe-db",
+                           "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+                           "revision": "a" * 40},
                 "contentFingerprint": "b" * 64,
                 "snapshotManifest": {
                     "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
-                    "backupId": f"backup-{index:04d}", "source": {"artifact": "release", "revision": "a" * 40},
+                    "backupId": f"backup-{index:04d}",
+                    "capturedAt": f"2026-01-{index // 24 + 1:02d}T{index % 24:02d}:00:00Z",
+                    "source": {"target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+                               "namespace": "recipe-db",
+                               "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+                               "revision": "a" * 40},
+                    "inventory": [{"service": "recipes"}],
                 },
                 "archive": {"name": archive_name, "sizeBytes": len(data),
                             "sha256": hashlib.sha256(data).hexdigest()},
             }
             (folder / (prefix + ".manifest.json")).write_bytes(backup.json_bytes(document))
+        malformed_prefix = "recipe-db-recipe-db-pi-20250101T000000Z-backup-malformed"
+        (folder / (malformed_prefix + ".tar.gz")).write_text("unrecognized")
+        (folder / (malformed_prefix + ".manifest.json")).write_bytes(backup.json_bytes({
+            "format": "recipe-db-backup", "formatVersion": 1, "deploymentId": "recipe-db-pi",
+            "backupId": "backup-malformed", "capturedAt": "2025-01-01T00:00:00Z",
+            "archive": {"name": ["not", "a", "filename"], "sha256": "a" * 64, "sizeBytes": 1},
+        }))
         (folder / "unrelated.txt").write_text("keep")
         (folder / "recipe-db-pi-orphan.tar.gz").write_text("incomplete")
 
@@ -280,10 +312,14 @@ else:
         folder = self.remote / "backups" / "recipe-db-pi"
         manifests = list(folder.glob("*.manifest.json"))
         archives = list(folder.glob("*.tar.gz"))
-        self.assertEqual(len(manifests), 30)
-        self.assertEqual(len(archives), 31)  # One incomplete, unrecognized archive is never pruned.
+        self.assertEqual(len(manifests), 31)  # 30 complete points and one unrecognized manifest.
+        self.assertEqual(len(archives), 32)  # Incomplete and malformed points are never pruned.
         self.assertTrue((folder / "unrelated.txt").exists())
         self.assertTrue((folder / "recipe-db-pi-orphan.tar.gz").exists())
+        self.assertTrue((folder / "recipe-db-recipe-db-pi-20250101T000000Z-backup-malformed.manifest.json").exists())
+        self.assertFalse((folder / "recipe-db-recipe-db-pi-20260101T000000Z-backup-0000.manifest.json").exists())
+        self.assertFalse((folder / "recipe-db-recipe-db-pi-20260101T010000Z-backup-0001.manifest.json").exists())
+        self.assertTrue((folder / "recipe-db-recipe-db-pi-20260101T020000Z-backup-0002.manifest.json").exists())
         self.assertTrue((folder / "recipe-db-recipe-db-pi-20260102T060000Z-backup-0030.tar.gz").exists())
 
     def test_retention_failure_keeps_verified_baseline_and_reports_separately(self):
@@ -296,10 +332,11 @@ else:
 
     def test_capture_restart_interrupt_and_overdue_statuses(self):
         command = Path(self.config["captureCommand"])
-        command.write_text("#!/bin/sh\nexit 1\n")
+        command.write_text("#!/bin/sh\n[ \"$KUBECONFIG\" = /expected/private/kubeconfig ] || exit 2\nexit 1\n")
         command.chmod(0o755)
-        with self.assertRaises(backup.BackupError):
-            backup.run_nightly(self.config)
+        with patch.dict(os.environ, {"KUBECONFIG": "/expected/private/kubeconfig"}):
+            with self.assertRaises(backup.BackupError):
+                backup.run_nightly(self.config)
         self.assertEqual(backup.report_status(self.config)["status"], "capture-failure")
 
         command.write_text("#!/bin/sh\nmkdir -p \"$1\"\nprintf '{\"status\":\"recovery-required\"}' > \"$1/backup-state.json\"\nexit 1\n")

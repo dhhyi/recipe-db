@@ -63,6 +63,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 production_config "$values" "$command"
+if [[ -n ${RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES:-} ]]; then
+  [[ $RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES =~ ^[1-9][0-9]*$ ]] \
+    || production_fail "invalid configured backup staging limit"
+fi
 
 kube() {
   kubectl --kubeconfig "$work/kubeconfig" --context "$context" --namespace "$namespace" \
@@ -644,7 +648,7 @@ backup_copy_pvc() {
 }
 
 backup_check_archive_capacity() {
-  local pod=$1 bytes free_kib
+  local pod=$1 bytes free_kib existing_bytes state_bytes
   bytes=$(kube exec "$pod" -- sh -ec 'set -o pipefail; tar -C /data -cf - . | wc -c | tr -d "[:space:]"') || {
     printf 'production: could not measure authoritative PVC archive size\n' >&2
     return 1
@@ -655,6 +659,18 @@ backup_check_archive_capacity() {
     printf 'production: snapshot filesystem lacks measured archive capacity plus 64 MiB headroom\n' >&2
     return 1
   }
+  if [[ -n ${RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES:-} ]]; then
+    existing_bytes=$(find "$snapshot" -maxdepth 1 -type f -name '*.tar' -printf '%s\n' \
+      | awk '{sum += $1} END {printf "%.0f", sum}') || return 1
+    state_bytes=0
+    [[ ! -f $snapshot/backup-state.json ]] \
+      || state_bytes=$(stat -c '%s' "$snapshot/backup-state.json") || return 1
+    [[ $((existing_bytes + state_bytes + bytes + 67108864)) \
+      -le $RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES ]] || {
+      printf 'production: snapshot exceeds configured staging limit\n' >&2
+      return 1
+    }
+  fi
 }
 
 backup_check_capacity() {

@@ -115,7 +115,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("TimeoutStartSec=2h", service)
         self.assertIn("Environment=KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml", service)
         self.assertIn("ExecStart=/usr/local/sbin/recipe-db-backup-upload nightly", service)
-        self.assertIn("ReadWritePaths=/var/lib/recipe-db-backup /opt/recipe-db", service)
+        self.assertIn("ReadWritePaths=/var/lib/recipe-db-backup", service)
         self.assertIn("OnCalendar=*-*-* 02:15:00", timer)
         self.assertIn("Persistent=false", timer)
         self.assertIn("RandomizedDelaySec=15min", timer)
