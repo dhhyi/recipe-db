@@ -141,10 +141,16 @@ for (const role of ["anonymous", "member", "owner"]) {
         await expect(
           page.locator("#recipe-tags [data-tag-remove]"),
         ).toHaveCount(3);
-        const option = page.locator(
-          "#recipe-tag-options fieldset button[type='submit']",
-        ).first();
+        const search = page.getByRole("searchbox", {
+          name: "Tag suchen",
+          exact: true,
+        });
+        await search.fill("Deutsch");
+        const option = page
+          .locator("#recipe-tag-options fieldset button[type='submit']")
+          .first();
         await expect(option).toBeVisible();
+        await expect(option).toHaveText("Deutsch");
 
         await waitForImageDecoded(
           page.getByRole("img", {
