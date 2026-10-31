@@ -56,7 +56,7 @@ EOF
   grep -Fx '    outs = ["test-scripts-tooling.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts tooling && touch $@",' test-rule
 
-  sed -n '/^filegroup(/,/^)/p' BUILD.bazel > aggregate-rule
+  sed -n '/^filegroup(/,/^)/p' BUILD.bazel | sed -n '1,/^)/p' > aggregate-rule
   cat > expected-rule << 'EOF'
 filegroup(
     name = "test_scripts",
