@@ -18,6 +18,8 @@
           - data_root is match('^/srv/[a-zA-Z0-9_-]+$')
           - k3s_version is match('^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$')
           - k3s_sha256 is match('^[0-9a-f]{64}$')
+          - rclone_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+          - rclone_sha256 is match('^[0-9a-f]{64}$')
           - admin_networks is defined and admin_networks | length > 0
           - application_networks is defined and application_networks | length > 0
           - journal_max_use is match('^[1-9][0-9]*[KMG]$')
@@ -124,6 +126,62 @@
             state: present
             update_cache: true
             cache_valid_time: 3600
+
+        - name: Create private backup configuration and state directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          loop:
+            - /etc/recipe-db
+            - /var/cache/recipe-db
+            - /var/lib/recipe-db-backup
+
+        - name: Download checksum-pinned ARM64 rclone package
+          ansible.builtin.get_url:
+            url: "https://downloads.rclone.org/v{{ rclone_version }}/rclone-v{{ rclone_version }}-linux-arm64.deb"
+            dest: "/var/cache/recipe-db/rclone-v{{ rclone_version }}-linux-arm64.deb"
+            checksum: "sha256:{{ rclone_sha256 }}"
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Install checksum-pinned rclone
+          ansible.builtin.apt:
+            deb: "/var/cache/recipe-db/rclone-v{{ rclone_version }}-linux-arm64.deb"
+
+        - name: Verify installed rclone version
+          ansible.builtin.command: rclone version
+          register: rclone_installed
+          changed_when: false
+
+        - name: Require pinned rclone version
+          ansible.builtin.assert:
+            that: "rclone_installed.stdout_lines[0] == ('rclone v' ~ rclone_version)"
+
+        - name: Install verified backup publisher
+          ansible.builtin.copy:
+            src: files/backup-upload.py
+            dest: /usr/local/sbin/recipe-db-backup-upload
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Install nightly backup service and timer
+          ansible.builtin.template:
+            src: "{{ item.src }}"
+            dest: "/etc/systemd/system/{{ item.dest }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop:
+            - {
+                src: recipe-db-backup.service.j2,
+                dest: recipe-db-backup.service,
+              }
+            - { src: recipe-db-backup.timer.j2, dest: recipe-db-backup.timer }
 
         - name: Configure required Pi memory cgroups
           ansible.builtin.replace:
@@ -372,6 +430,37 @@
         - name: Verify the single node is Ready
           ansible.builtin.command: /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
           changed_when: false
+
+        - name: Copy the root-only local kubeconfig for the backup service
+          ansible.builtin.copy:
+            src: /etc/rancher/k3s/k3s.yaml
+            dest: /etc/recipe-db/backup-kubeconfig.yaml
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+
+        - name: List private backup kubeconfig contexts
+          ansible.builtin.command: /usr/local/bin/k3s kubectl config get-contexts -o name
+          environment:
+            KUBECONFIG: /etc/recipe-db/backup-kubeconfig.yaml
+          register: backup_contexts
+          changed_when: false
+
+        - name: Name the local backup kubeconfig context
+          ansible.builtin.command: /usr/local/bin/k3s kubectl config rename-context default recipe-db-pi
+          environment:
+            KUBECONFIG: /etc/recipe-db/backup-kubeconfig.yaml
+          when: "'recipe-db-pi' not in backup_contexts.stdout_lines"
+          changed_when: true
+
+        - name: Enable nightly backup timer
+          ansible.builtin.systemd_service:
+            name: recipe-db-backup.timer
+            daemon_reload: true
+            enabled: true
+            state: started
 
         - name: Verify bundled Traefik is available
           ansible.builtin.command: /usr/local/bin/k3s kubectl -n kube-system rollout status deployment/traefik --timeout=300s

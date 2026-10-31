@@ -107,6 +107,38 @@ class ContractTests(unittest.TestCase):
         for key in ("cluster-init", "datastore-endpoint", "disable", "server", "node-ip", "advertise-address"):
             self.assertNotIn(key, config)
 
+    def test_backup_systemd_contract_is_private_bounded_and_non_catching_up(self):
+        service = self.render("recipe-db-backup.service.j2")
+        timer = self.render("recipe-db-backup.timer.j2")
+        self.assertIn("ConditionPathExists=/etc/recipe-db/backup.json", service)
+        self.assertIn("UMask=0077", service)
+        self.assertIn("TimeoutStartSec=2h", service)
+        self.assertIn("Environment=KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml", service)
+        self.assertIn("ExecStart=/usr/local/sbin/recipe-db-backup-upload nightly", service)
+        self.assertIn("ReadWritePaths=/var/lib/recipe-db-backup", service)
+        self.assertIn("OnCalendar=*-*-* 02:15:00", timer)
+        self.assertIn("Persistent=false", timer)
+        self.assertIn("RandomizedDelaySec=15min", timer)
+        self.assertEqual(self.defaults["rclone_version"], "1.75.2")
+        self.assertRegex(self.defaults["rclone_sha256"], r"^[0-9a-f]{64}$")
+        tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
+        private_dirs = next(task for task in tasks if task.get("name") == "Create private backup configuration and state directories")
+        self.assertEqual(private_dirs["ansible.builtin.file"]["mode"], "0700")
+        installs = [task for task in tasks if task.get("name") == "Install nightly backup service and timer"]
+        self.assertEqual(len(installs), 1)
+        copy_kubeconfig = next(task for task in tasks
+                               if task.get("name") == "Copy the root-only local kubeconfig for the backup service")
+        self.assertTrue(copy_kubeconfig["no_log"])
+        self.assertEqual(copy_kubeconfig["ansible.builtin.copy"]["mode"], "0600")
+        self.assertEqual(copy_kubeconfig["ansible.builtin.copy"]["dest"],
+                         "/etc/recipe-db/backup-kubeconfig.yaml")
+        context_task = next(task for task in tasks if task.get("name") == "Name the local backup kubeconfig context")
+        self.assertEqual(context_task["environment"]["KUBECONFIG"],
+                         "/etc/recipe-db/backup-kubeconfig.yaml")
+        rclone_task = next(task for task in tasks if task.get("name") == "Download checksum-pinned ARM64 rclone package")
+        self.assertIn("{{ rclone_sha256 }}", rclone_task["ansible.builtin.get_url"]["checksum"])
+        self.assertIn("{{ rclone_version }}", rclone_task["ansible.builtin.get_url"]["url"])
+
     def test_startup_guard_has_no_separate_mount(self):
         unit = self.render("k3s.service.j2")
         self.assertIn(f"ExecStartPre=/usr/local/sbin/recipe-db-storage-guard {UUID} /srv/recipe-db", unit)
