@@ -12,8 +12,10 @@ source "$root/.scripts/lib/project-metadata.sh"
 source "$root/.scripts/lib/cluster-operation-lock.sh"
 # shellcheck source=.scripts/lib/production-storage.sh
 source "$root/.scripts/lib/production-storage.sh"
+# shellcheck source=.scripts/lib/production-restore.sh
+source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
@@ -21,6 +23,8 @@ case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup | backup-enter) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
+  restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
   backup-exit) [[ $# = 3 ]] || production_fail "backup-exit requires the absolute state directory, exact holder and EXIT-<holder> confirmation" ;;
   delete) [[ $# = 1 ]] || production_fail "delete requires an explicit confirmation" ;;
@@ -40,6 +44,7 @@ pod_watch_pid=
 cleanup() {
   local result=$?
   trap - EXIT
+  restore_cleanup "$result"
   if [[ -n $pod_watch_pid ]]; then
     kill "$pod_watch_pid" 2> /dev/null || true
     wait "$pod_watch_pid" 2> /dev/null || true
@@ -148,9 +153,11 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup | backup-enter | backup-exit)
+    backup | backup-enter | backup-exit | restore)
       local inputs=(.scripts/lib/project-metadata.sh
-        .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml package.json
+        .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
+        .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
+        .scripts/templates/service-template.lib.yml package.json
         message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
         oauth2-proxy/oauth2-proxy.cfg design/nginx.conf ':(glob)*/.project.yaml')
       git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
@@ -311,6 +318,13 @@ ensure_namespace() {
     jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
       "$work/existing-namespace.json" > /dev/null \
       || production_fail "refusing to adopt an unowned application namespace"
+    kube get configmap recipe-db-restore --ignore-not-found -o json > "$work/existing-restore-state.json"
+    if [[ -s $work/existing-restore-state.json ]]; then
+      jq -e '.data["restore-state.json"] | fromjson |
+        .status == "succeeded" and .phase == "complete"' \
+        "$work/existing-restore-state.json" > /dev/null \
+        || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
+    fi
   else
     jq -n --arg ns "$namespace" '{apiVersion:"v1",kind:"Namespace",
       metadata:{name:$ns,labels:{"app.kubernetes.io/part-of":"recipe-db"}}}' > "$work/namespace.json"
@@ -363,6 +377,10 @@ wait_deployments() {
 
 backup_state_write() {
   local status=$1 phase=$2
+  if [[ $command == restore ]]; then
+    restore_state_write in-progress "$phase"
+    return
+  fi
   jq --arg status "$status" --arg phase "$phase" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.status=$status | .phase=$phase | .updatedAt=$updatedAt' \
@@ -1216,11 +1234,11 @@ case "$command" in
     fi
     guard_helm_config
     guard_acme_claim
-    ensure_namespace
     lock_holder="$cluster-deploy-$$"
     # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
     cluster_operation_lock_acquire "$lock_holder" deploy "$1"
     locked=true
+    ensure_namespace
     if [[ $target = pi ]]; then
       production_storage_preflight
       production_storage_prepare_claims "$work/rendered.yml"
@@ -1283,6 +1301,12 @@ case "$command" in
     ;;
   backup | backup-enter)
     backup_run "$1" "$2"
+    ;;
+  restore)
+    restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  restore-abandon)
+    restore_abandon "$1" "$2" "$3"
     ;;
   backup-status)
     backup_load_state "$1"

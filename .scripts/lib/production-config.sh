@@ -54,7 +54,7 @@ production_config() {
       else true end)
     and (if .target == "pi" and
       ($action == "deploy" or $action == "backup" or $action == "backup-enter"
-        or $action == "backup-exit" or $action == "storage-reattach")
+        or $action == "backup-exit" or $action == "restore" or $action == "storage-reattach")
       then has("piStorage")
         and .piStorage.node == .cluster
         and (.piStorage.expectedRootUuid | test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
@@ -79,7 +79,7 @@ production_config() {
       and (.googleOAuthClientId | type == "string")
       and (if .authMode == "token-only" then .googleOAuthClientId == "" else
         (.googleOAuthClientId | nonempty and
-        (if $action == "render" or $action == "deploy" then
+        (if $action == "render" or $action == "deploy" or $action == "restore" then
           test("^[a-zA-Z0-9._-]+[.]apps[.]googleusercontent[.]com$")
         else true end)) end)
       and .trustedIssuer == "https://accounts.google.com")
