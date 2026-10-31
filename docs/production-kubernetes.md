@@ -43,33 +43,52 @@ The maintenance API is private and available only in backup mode:
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
-#### Manual cleanup procedure
+#### Snapshot capture
 
-The Job performs cleanup only; it does not acquire the `recipe-db-deploy` operation lock, change runtime modes, stop writers, or create a snapshot. Keep the lock and GraphQL client barrier until services have returned to production. Do not run these commands unless an exclusive backup window is already established.
+The `backup`, `backup-enter`, `backup-exit`, `deploy`, and `storage-reattach` operations coordinate through the same `recipe-db-deploy` Lease in `kube-system`, outside the replaceable application namespace. They do not expire or automatically steal a Lease. Backup validates the explicit target/context, immutable release digest/revision, actual project container images, deployed runtime Secret, selected PVC identities, ownership and destination capacity. Backup and recovery require the release commit locally and unchanged metadata/template inputs relative to it; untracked inputs are refused, while unrelated checkout changes are allowed. This binds the authoritative inventory and cleanup definition to the release without fetching or executing another checkout. Preflight requires selected PVC requests plus 64 MiB staging headroom; because local-path requests do not enforce a quota, capture also measures each stopped PVC's exact tar byte count before copying and requires actual free space plus the same headroom. This includes sparse-file expansion and previously copied archives. It does not read the configured application secret files. The snapshot validator requires Python 3 with its standard library.
 
-1. Acquire the shared operation lock, enable the GraphQL client barrier, switch backends to backup mode, and wait until no other writers can access the data volumes.
-2. Render the same immutable release used by the workloads, recreate the suspended cleanup Job, and resume it:
+Run only during an approved maintenance window, from a trusted workstation with the explicit target values file and a private destination filesystem. This operation changes runtime modes, briefly stops backend workloads and transfers application data; do not point it at a live Pi or production cluster during development or tests.
 
 ```sh
 VALUES="$PWD/.secrets/local-values.yaml"
 RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-mise run production-k3d render "$VALUES" "$RELEASE" > "$PWD/.secrets/backup-rendered.yaml"
-mise exec -- yq -o=yaml \
-  'select(.kind == "Job" and .metadata.name == "backup-cleanup")' \
-  "$PWD/.secrets/backup-rendered.yaml" > "$PWD/.secrets/backup-cleanup-job.yaml"
-mise run production-k3d kubectl "$VALUES" delete job backup-cleanup --ignore-not-found --wait
-mise run production-k3d kubectl "$VALUES" apply -f "$PWD/.secrets/backup-cleanup-job.yaml"
-mise run production-k3d kubectl "$VALUES" patch job backup-cleanup --type=merge \
-  -p '{"spec":{"suspend":false}}'
-mise run production-k3d kubectl "$VALUES" wait --for=condition=complete \
-  job/backup-cleanup --timeout=600s
-mise run production-k3d kubectl "$VALUES" logs job/backup-cleanup
+SNAPSHOT="$PWD/.backups/recipe-db-$(date -u +%Y%m%dT%H%M%SZ)"
+umask 077
+mkdir -p "$PWD/.backups"
+mise run production-k3d backup "$VALUES" "$RELEASE" "$SNAPSHOT"
 ```
 
-3. Continue to snapshot only after the Job succeeds. On failure, skip the snapshot and recover the workloads; cleanup already completed is idempotent and may be retried.
-4. Return services to production, confirm normal readiness, then release the client barrier and operation lock.
+The operation stops and drains the normal GraphQL Pods first, then raises the `MODE=backup` barrier before touching data backends. GraphQL drains active connections for at most 20 seconds, within Kubernetes' 30-second default termination grace period. A resource-versioned Pod watch must observe normal termination; a missing termination record, failed drain, OOM or SIGKILL prohibits capture. It stops normal backend/projection workloads before bringing up any authoritative backup-mode backend. The rendered `backup-cleanup` Job runs once: its existing worker retries each retryable operation once plus two retries, without repeating permanent failures or duplicating cleanup logic. Completed purges are not rolled back on failure.
 
-The final command prints a private machine-readable summary that may contain recipe IDs. Delete and recreate completed Jobs before another run. This repository provides no end-to-end command for lock management, mode transitions, snapshot capture, upload, or retention.
+After cleanup, all remaining data writers terminate before role-selected PVCs are exported with temporary read-only copy Pods. `.project.yaml` supplies both `backupRole` and `backupData` (SQLite, JSON or image-manifest layout). Capture rejects missing databases, undeclared files/directories, links, unsafe archive paths, and missing, corrupted or unselected image pairs. Recipes, ratings, inspirations, tags inventory/assignments, SQLite recovery sidecars and current image/thumbnail pairs are included. Derived/external caches, logs, container images, OS/k3s state and secrets are excluded. An empty image dataset still requires both owned storage directories. No archive is published if cleanup, termination or copy validation fails.
+
+A complete snapshot is identified only by `manifest.json` (`format: recipe-db-pvc-snapshot`, `formatVersion: 1`). It records `backupId`, `startedAt`, `capturedAt`, `completedAt`, `source` (`target`, `cluster`, `context`, `namespace`, immutable `artifact`, `revision`) and `inventory`. Each inventory entry contains `service`, `role`, `pvc`, `archive`, `sizeBytes`, `fileCount`, `sha256` and `files`; each regular-file entry has its archive-relative `path`, `sizeBytes` and `sha256`. Archives are `<service>.tar`, with no secrets or outer packaging. Present SQLite `-wal`, `-shm` and `-journal` sidecars belong to their database. Downstream packaging must require the manifest, verify archive and file hashes, reject unsafe extraction paths, and preserve this versioned inventory. Staging directories are created privately, never overwritten or recursively removed by the lifecycle.
+
+Recovery stops any owned cleanup Job and waits for its worker Pods to disappear before restarting production backends. It restores prior production workload counts, restarts search for a complete baseline and browse for an empty HTML cache, and verifies backend counts, modes, readiness and container images before restoring GraphQL last. Search uses trusted ingress on private port 3000; during rebuilding only its internal GraphQL service is redirected to a backup-only, ingress-token-protected, query-only listener. Public GraphQL/MCP operations remain blocked; maintenance/reset APIs are never routed through this listener. The internal route returns to its normal port before GraphQL reopens. A failed recovery retains the barrier, Lease and durable state, and reports the primary and recovery failures.
+
+For explicit maintainer operations, pass the same release and a new private state directory:
+
+```sh
+mise run production-k3d backup-enter "$VALUES" "$RELEASE" "$STATE_DIRECTORY"
+mise run production-k3d backup-status "$VALUES" "$STATE_DIRECTORY"
+# Copy the exact holder reported by status; first verify no operator/process is still active.
+mise run production-k3d backup-exit "$VALUES" "$STATE_DIRECTORY" "$HOLDER" "EXIT-$HOLDER"
+```
+
+`backup-enter` performs the barrier, backend transition and cleanup, but no capture; successful entry deliberately keeps the Lease. `backup-exit` requires the original state directory and unchanged explicit values, exact holder and immutable release, and repeats safe recovery after an interrupted process/host. `backup-state.json` persists prior counts, selected PVC layouts, target/release and phase before workload mutation; shell traps are not its durability mechanism. Preserve that directory when recovery fails. `lock-status` exposes the surviving holder/phase; `lock-recover` requires `RECOVER-<holder>` for abandoned non-backup operations. It also permits a backup Lease still in `acquired` preflight, before any workload mutation, including an interruption before the state directory exists. The phase advances atomically before the first workload change; all later backup phases require `backup-exit`. Always verify the original process/operator has stopped before recovery; UID/resource-version deletion preconditions refuse a Lease that advances concurrently.
+
+Pi deploy/backup/recovery requires `piStorage.node`, the verified `piStorage.expectedRootUuid`, and `piStorage.dataRoot` from the provisioning contract. Under the shared Lease, a temporary read-only host-inspection Pod runs the installed storage guard and verifies one ready ARM64 k3s node, USB/ext4 root identity, runtime directories and each existing PV path's filesystem. New claims use the owned `recipe-db-retained` StorageClass, with `Retain` set at creation and provisioning pinned to the configured node and data root. Stock `local-path` remains unchanged because StorageClass reclaim policies are immutable. Existing verified `local-path` claims preserve their immutable class during redeployment and reattachment; only their PV reclaim policy is upgraded to `Retain`. Namespace/application deletion therefore does not trigger deletion of those data directories. Missing, foreign, ambiguous or redirected storage is refused. Replace the checked-in UUID placeholder only with the verified operator value; no UUID is inferred.
+
+After intentional namespace/PVC deletion, stop any previous operator, preserve the retained PVs and directories, and explicitly reserve compatible Released PVs before redeploying:
+
+```sh
+mise run production-k3d storage-reattach "$VALUES" "REATTACH-recipe-db-pi"
+mise run production-k3d deploy "$VALUES" "$RELEASE"
+```
+
+Reattachment checks the old namespace/claim, requested capacity, node and guarded path, and changes the claim reference atomically without deleting PVs, PVCs or directories. Ordinary redeployments keep bound claims. Host reprovisioning does not format/remove application storage. Local k3d's explicitly confirmed whole-cluster deletion still destroys rehearsal data.
+
+This remains a local snapshot interface: archive encryption, remote upload, retention and archive restore are separate children of #43. Mocked tests are not a real-cluster or physical Pi rehearsal; no physical acceptance is claimed.
 
 ## Operator configuration and secrets
 
@@ -220,7 +239,7 @@ The application objects live in `recipe-db`. The intentional infrastructure exce
 
 The driver applies the two namespaces separately. Application secret checksums trigger workload replacement when credentials change. A separate route checksum in the bundled controller's pod annotations triggers a Traefik rollout when its file-provider configuration or ingress token changes; deployment waits for that exact checksum, not a previously ready controller. Identical inputs keep both checksums stable.
 
-Deployment uses the `recipe-db-deploy` Kubernetes Lease as coordination groundwork for backup/restore operations. An existing Lease blocks deployment rather than being silently stolen. This is **not** a complete backup locking protocol, transactional deployment, snapshot mechanism or proof that a backup is safe. Investigate an abandoned Lease and its owner before any manual recovery; do not automatically delete it to make deployment proceed.
+Deployment and the local snapshot operation use the same cluster-scoped `recipe-db-deploy` Lease. An existing Lease blocks either operation rather than being silently stolen. The backup workflow retains its Lease and recovery state if production recovery is unsafe; do not use `lock-recover` to bypass that state. Inspect the selected cluster, `backup-state.json`, Lease and workload modes/counts, then complete safe production recovery before considering manual abandoned-lock recovery.
 
 ## What the protocol smoke verifies
 
@@ -247,7 +266,7 @@ The JSON result contains `success`, `phase`, completed checks, artifact, revisio
 
 ## Storage, Pi adaptation and destructive deletion
 
-Both values files use independent `ReadWriteOnce` PVCs and the default k3s `local-path` storage class. On a Pi the default provisioner directory is `/var/lib/rancher/k3s/storage`. The target Pi uses the **same 128 GB USB device** for its OS and this directory; this plan does not require or imply a separate SSD, host bind mount, or custom `/mnt/ssd` mount.
+Both values files use independent `ReadWriteOnce` PVCs. Local rehearsal uses the default k3s `local-path` storage class; new Pi claims use `recipe-db-retained` and the provisioned `/srv/recipe-db/storage` directory. Verified legacy Pi claims retain their existing `local-path` class and data directories. The target Pi uses the **same 128 GB USB device** for its OS and these directories; this plan does not require or imply a separate SSD, host bind mount, or custom `/mnt/ssd` mount.
 
 The checked-in initial values request the following storage:
 

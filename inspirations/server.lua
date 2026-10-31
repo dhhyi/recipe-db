@@ -20,7 +20,9 @@ local function database_location()
             location = location .. "/db.json"
         end
         local directory = location:match("(.*/)")
-        if directory ~= nil then os.execute("mkdir -p " .. directory) end
+        if directory ~= nil and mode ~= "backup" then
+            os.execute("mkdir -p " .. directory)
+        end
     end
     return location
 end
@@ -30,7 +32,13 @@ print("Database location: " .. db_location)
 
 -- function that loads data from a file
 local function load_data()
-    local file = io.open(db_location, "r")
+    local file, open_error, error_code = io.open(db_location, "r")
+    if not file then
+        if error_code == 2 then return false end
+        io.stderr:write("Cannot read inspirations storage: ",
+                        tostring(open_error), "\n")
+        os.exit(1)
+    end
     if file then
         local contents = file:read("*a")
         file:close()
@@ -57,6 +65,7 @@ local function load_data()
         end
         data = loaded
     end
+    return true
 end
 
 -- function that saves data to a file
@@ -271,7 +280,18 @@ app.add_handler("DELETE", "/inspirations/...", function(captures)
     return nil, {[":status"] = "204"}
 end)
 
-load_data()
+if not load_data() then
+    if mode == "backup" then
+        io.stderr:write("Cannot read inspirations storage: database missing\n")
+        os.exit(1)
+    end
+    local saved, save_error = save_data(data)
+    if not saved then
+        io.stderr:write("Cannot initialize inspirations storage: ",
+                        tostring(save_error), "\n")
+        os.exit(1)
+    end
+end
 
 if os.getenv("VERBOSE") ~= "true" then
     local function noop() end

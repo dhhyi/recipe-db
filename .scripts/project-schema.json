@@ -57,6 +57,16 @@
       "description": "Opt a cleanup participant into image compaction for its surviving recipe IDs; defaults to false.",
       "type": "boolean"
     },
+    "backupData": {
+      "description": "Authoritative PVC layout consumed by snapshot validation; no derived files or secrets are permitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["sqlite", "json", "images"] },
+        "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+      }
+    },
     "graphqlSchema": {
       "type": "string",
       "minLength": 1
