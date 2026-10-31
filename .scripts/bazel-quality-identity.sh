@@ -39,15 +39,33 @@ case ${1:-} in
         error("an active Mise tool version is unresolved")
       end
     ')
+    platform_os=$(uname -s)
+    platform_arch=$(uname -m)
+    mise_version=$(mise --version)
+    bash_version=$(bash --version)
+    bash_version=${bash_version%%'
+'*}
+    git_version=$(git --version)
+    tar_version=$(tar --version)
+    tar_version=${tar_version%%'
+'*}
+    docker_version=$(docker --version)
+    docker_server_version=$(docker info --format '{{.ServerVersion}}')
+    [ -n "$platform_os" ] && [ -n "$platform_arch" ] && [ -n "$mise_version" ] &&
+      [ -n "$bash_version" ] && [ -n "$git_version" ] && [ -n "$tar_version" ] &&
+      [ -n "$docker_version" ] && [ -n "$docker_server_version" ] || {
+        echo "Could not resolve host tool identity" >&2
+        exit 1
+      }
     content=$(
-      printf 'platform=%s/%s\n' "$(uname -s)" "$(uname -m)"
-      printf 'mise=%s\n' "$(mise --version)"
+      printf 'platform=%s/%s\n' "$platform_os" "$platform_arch"
+      printf 'mise=%s\n' "$mise_version"
       printf 'tools=%s\n' "$tools"
-      printf 'bash=%s\n' "$(bash --version | sed -n '1p')"
-      printf 'git=%s\n' "$(git --version)"
-      printf 'tar=%s\n' "$(tar --version | sed -n '1p')"
-      printf 'docker=%s\n' "$(docker --version)"
-      printf 'docker-server=%s\n' "$(docker info --format '{{.ServerVersion}}')"
+      printf 'bash=%s\n' "$bash_version"
+      printf 'git=%s\n' "$git_version"
+      printf 'tar=%s\n' "$tar_version"
+      printf 'docker=%s\n' "$docker_version"
+      printf 'docker-server=%s\n' "$docker_server_version"
     )
     write_identity "$identity_dir/host.identity" "$content"
     ;;

@@ -82,7 +82,7 @@ grep -F '.generated/bazel-quality/host.identity' lint-rule
 @test "quality rules allow disk caching while checks use declared execution identities" {
 printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
 
-run bash .scripts/generate-bazel-build.sh
+run env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
 
 [ "$status" -eq 0 ]
 for target in example_check shellcheck test_scripts_compose test_scripts_tooling; do
@@ -94,7 +94,54 @@ run -1 grep -F 'example-format.tar' BUILD.bazel
 run -1 grep -F 'tar -xf' BUILD.bazel
 sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
 grep -Fx '        ".generated/bazel-quality/example.identity",' check-rule
+grep -Fx '        ".generated/bazel-quality/host.identity",' check-rule
 grep -Fx "    cmd = \"sh \$(location .scripts/bazel-check.sh) example \$@\"," check-rule
+}
+
+@test "project checks include ignored generated outputs and reject missing outputs" {
+mkdir -p example/src/generated
+touch example/src/generated/graphql.go
+printf '%s\n' 'example/src/generated/graphql.go' > .gitignore
+cat >> example/.project.yaml <<'EOF'
+generate:
+- command: echo generated
+  output: src/generated/*.go
+EOF
+
+run env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 0 ]
+sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
+grep -Fx '        "example/src/generated/graphql.go",' check-rule
+
+rm example/src/generated/graphql.go
+run --separate-stderr env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 1 ]
+[ "$stderr" = "Generated output glob matched no files: example/src/generated/*.go" ]
+}
+
+@test "generated output patterns cannot escape their project" {
+touch outside.go
+cat >> example/.project.yaml <<'EOF'
+generate:
+- command: echo generated
+  output: ../outside.go
+EOF
+
+run --separate-stderr env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 1 ]
+[ "$stderr" = "Invalid generated output glob: ../outside.go" ]
+
+sed -i 's|../outside.go|src/generated/escape.go|' example/.project.yaml
+mkdir -p example/src/generated
+ln -s "$FIXTURE_ROOT/outside.go" example/src/generated/escape.go
+
+run --separate-stderr env BAZEL_QUALITY_PREPARED=1 bash .scripts/generate-bazel-build.sh
+
+[ "$status" -eq 1 ]
+[ "$stderr" = "Generated output escapes project: example/src/generated/escape.go" ]
 }
 
 @test "includes new untracked tests but excludes ignored files" {

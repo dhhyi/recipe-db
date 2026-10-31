@@ -19,7 +19,10 @@ EOF
 #!/bin/sh
 case "$*" in
   --version) printf '%s\n' 'Docker version 29.0' ;;
-  "info --format {{.ServerVersion}}") printf '%s\n' 29.0 ;;
+  "info --format {{.ServerVersion}}")
+    [ "${DOCKER_INFO_STATUS:-0}" = 0 ] || exit "$DOCKER_INFO_STATUS"
+    printf '%s\n' 29.0
+    ;;
   "inspect --format {{.Image}} container-id") printf '%s\n' "${IMAGE_ID-sha256:image-one}" ;;
   "image inspect --format {{.Os}}/{{.Architecture}} sha256:image-one") printf '%s\n' linux/amd64 ;;
   "image inspect --format {{.Os}}/{{.Architecture}} sha256:image-two") printf '%s\n' linux/arm64 ;;
@@ -36,6 +39,13 @@ EOF
   "containerEnv": {"TOKEN": "do-not-hash"}
 }
 EOF
+}
+
+@test "host identity lookup failures are not masked by formatting" {
+  run env DOCKER_INFO_STATUS=23 sh .scripts/bazel-quality-identity.sh host
+
+  [ "$status" -eq 23 ]
+  [ ! -e .generated/bazel-quality/host.identity ]
 }
 
 @test "host identity tracks selected tool versions without private paths and keeps stable output unchanged" {

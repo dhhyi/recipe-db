@@ -53,7 +53,19 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -Fx 'identity example started-container' "$MOCK_LOG"
+  grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/example --remove-existing-container --build-no-cache" "$MOCK_LOG"
   [ "$(grep -n '^identity ' "$MOCK_LOG" | cut -d: -f1)" -lt "$(grep -n '^devcontainer exec ' "$MOCK_LOG" | cut -d: -f1)" ]
+}
+
+@test "check-only uses prepared containers without rerunning devcontainer lifecycle hooks" {
+  printf '%s\n' 'check: echo checked' >> example/.project.yaml
+  run env STOPPED_CONTAINER=prepared-container sh .scripts/run-in-devcontainer.sh --check-only example check
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker start prepared-container' "$MOCK_LOG"
+  grep -Fx "devcontainer exec --container-id prepared-container --workspace-folder $FIXTURE_ROOT/example fish -c echo checked" "$MOCK_LOG"
+  run -1 grep -F 'devcontainer up' "$MOCK_LOG"
+  [ "$(tail -n 1 "$MOCK_LOG")" = 'docker stop prepared-container' ]
 }
 
 @test "replaces and stops an existing container when reconciliation selects another one" {

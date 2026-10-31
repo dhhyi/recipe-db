@@ -24,6 +24,7 @@ emit_check_rule() {
       printf '        %s,\n' "$(quote "$file")"
     done
     printf '        %s,\n' "$(quote "$identity")"
+    printf '        %s,\n' "$(quote .generated/bazel-quality/host.identity)"
     printf '        %s,\n' "$(quote .scripts/bazel-check.sh)"
     printf '        %s,\n' "$(quote .scripts/run-in-devcontainer.sh)"
     printf '        %s,\n' "$(quote mise.toml)"
@@ -38,6 +39,48 @@ emit_check_rule() {
     printf '    actual = ":%s_check",\n' "$project"
     printf ')\n'
   } >> "$output"
+}
+
+include_generated_outputs() {
+  local project=$1 project_file=$2 pattern output_file relative_file project_root old_ifs
+  local -a matches
+
+  while IFS= read -r pattern; do
+    case "$pattern" in
+      '' | /* | .. | ../* | */../* | */..)
+        printf 'Invalid generated output glob: %s\n' "$pattern" >&2
+        exit 1
+        ;;
+    esac
+    old_ifs=$IFS
+    IFS=
+    # Expand the declared glob without splitting filenames on whitespace.
+    # shellcheck disable=SC2206
+    matches=("$project"/$pattern)
+    IFS=$old_ifs
+    matched=false
+    for output_file in "${matches[@]}"; do
+      [[ -f "$output_file" ]] || continue
+      project_root=$(realpath "$project")
+      case "$(realpath "$output_file")" in
+        "$project_root"/*) ;;
+        *)
+          printf 'Generated output escapes project: %s\n' "$output_file" >&2
+          exit 1
+          ;;
+      esac
+      relative_file=$output_file
+      if [[ -z ${included_files["$relative_file"]+x} ]]; then
+        files+=("$relative_file")
+        included_files["$relative_file"]=1
+      fi
+      matched=true
+    done
+    if [[ "$matched" == false && ${BAZEL_QUALITY_PREPARED:-} == 1 ]]; then
+      printf 'Generated output glob matched no files: %s/%s\n' "$project" "$pattern" >&2
+      exit 1
+    fi
+  done < <(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[] | select(.output != null) | .output' "$project_file")
 }
 
 quality_targets=()
@@ -70,6 +113,12 @@ for project_file in */.project.yaml; do
     if [[ -z ${included_files["$schema_file"]+x} ]]; then
       files+=("$schema_file")
     fi
+  fi
+
+  if [[ "$generators" -gt 0 ]]; then
+    shopt -s globstar nullglob dotglob
+    include_generated_outputs "$project" "$project_file"
+    shopt -u globstar nullglob dotglob
   fi
 
   if [[ "$project" == design ]]; then

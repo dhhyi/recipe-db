@@ -23,6 +23,10 @@ case "$*" in
 esac
 EOF
   chmod +x bin/mise
+  cat > .scripts/bazel-quality-identity.sh <<'EOF'
+#!/bin/sh
+printf 'identity %s\n' "$*" >> "$MOCK_LOG"
+EOF
 }
 
 @test "Bazel uses the same canonical PATH in direct and hook environments" {
@@ -30,6 +34,7 @@ EOF
   [ "$status" -eq 0 ]
   direct_output=$output
   [ "${lines[0]}" = "/tools/first/bin:/tools/second/bin:$FIXTURE_ROOT/bin:/usr/local/bin:/usr/bin:/bin" ]
+  [ "$(grep -c '^identity host$' "$MOCK_LOG")" -eq 1 ]
 
   run env PATH="/usr/lib/git-core:$FIXTURE_ROOT/bin:/vscode/bin:/usr/bin:/bin" /bin/bash .scripts/bazel.sh build --action_env=PATH //:shellcheck
   [ "$status" -eq 0 ]

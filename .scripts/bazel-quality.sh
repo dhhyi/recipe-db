@@ -21,7 +21,7 @@ for project_file in */.project.yaml; do
 done
 
 sh .scripts/bazel-quality-identity.sh host
-mise run --raw generate-bazel-build
+BAZEL_QUALITY_PREPARED=1 mise run --raw generate-bazel-build
 
 bazel_args=(--action_env=PATH)
 for variable in CI GITHUB_ACTIONS BUILDKIT_PROGRESS COMPOSE_PROGRESS COMPOSE_PARALLEL_LIMIT DEVCONTAINER_KEEP_RUNNING; do

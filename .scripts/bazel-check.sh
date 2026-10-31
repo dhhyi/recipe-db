@@ -7,5 +7,5 @@ workspace_root=$(cd -- "$(dirname -- "$script_path")/.." && pwd -P)
 output=$(realpath -m "$2")
 
 cd "$workspace_root"
-mise run --raw in-devcontainer "$project" check
+mise run --raw in-devcontainer --check-only "$project" check
 touch "$output"

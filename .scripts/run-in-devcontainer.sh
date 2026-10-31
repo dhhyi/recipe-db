@@ -5,6 +5,7 @@ project_root=$(cd "$(dirname "$0")/.." && pwd -P)
 remove_after=false
 keep_running=false
 stop_after=false
+check_only=false
 container_id=
 
 case ${DEVCONTAINER_KEEP_RUNNING:-} in
@@ -20,6 +21,7 @@ while :; do
   case ${1:-} in
     --rm) remove_after=true ;;
     --keep-running) keep_running=true ;;
+    --check-only) check_only=true ;;
     *) break ;;
   esac
   shift
@@ -36,6 +38,7 @@ while :; do
   case ${1:-} in
     --rm) remove_after=true ;;
     --keep-running) keep_running=true ;;
+    --check-only) check_only=true ;;
     *) break ;;
   esac
   shift
@@ -148,7 +151,25 @@ config_file=$project_dir/.devcontainer/devcontainer.json
 label=devcontainer.config_file=$config_file
 containers=$(docker ps --filter "label=$label" --format '{{.ID}}')
 running_container_id=$(printf '%s\n' "$containers" | sed -n '1p')
-if [ -n "$running_container_id" ]; then
+if [ "$check_only" = true ]; then
+  if [ -n "$running_container_id" ]; then
+    container_id=$running_container_id
+    echo "Using prepared running container $container_id" >&2
+  else
+    containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
+    stopped_container_id=$(printf '%s\n' "$containers" | sed -n '1p')
+    if [ -z "$stopped_container_id" ]; then
+      echo "No prepared container found for project $project" >&2
+      exit 1
+    fi
+    echo "Starting prepared stopped container $stopped_container_id" >&2
+    docker start "$stopped_container_id" >&2
+    container_id=$stopped_container_id
+    if [ "$retain" = false ]; then
+      stop_after=true
+    fi
+  fi
+elif [ -n "$running_container_id" ]; then
   echo "Reconciling existing running container $running_container_id" >&2
 else
   containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
@@ -158,13 +179,21 @@ else
   fi
 fi
 
-container_result=$(devcontainer up --workspace-folder "$project_dir")
-container_id=$(printf '%s\n' "$container_result" | jq -er '.containerId')
-if [ "$container_id" != "$running_container_id" ] && [ "$retain" = false ]; then
+if [ "$check_only" = true ]; then
+  :
+elif [ "${BAZEL_QUALITY_IDENTITY:-}" = 1 ]; then
+  container_result=$(devcontainer up --workspace-folder "$project_dir" --remove-existing-container --build-no-cache)
+else
+  container_result=$(devcontainer up --workspace-folder "$project_dir")
+fi
+if [ "$check_only" != true ]; then
+  container_id=$(printf '%s\n' "$container_result" | jq -er '.containerId')
+fi
+if [ "$check_only" != true ] && [ "$container_id" != "$running_container_id" ] && [ "$retain" = false ]; then
   stop_after=true
 fi
 
-if [ "${BAZEL_QUALITY_IDENTITY:-}" = 1 ]; then
+if [ "$check_only" != true ] && [ "${BAZEL_QUALITY_IDENTITY:-}" = 1 ]; then
   sh "$project_root/.scripts/bazel-quality-identity.sh" "$project" "$container_id"
 fi
 
