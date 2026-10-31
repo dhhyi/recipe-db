@@ -17,6 +17,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 import tarfile
 
@@ -70,12 +71,36 @@ layouts = {
     "inspirations": ("cleanup-participant", {"kind": "json", "file": "db.json"}),
     "ratings": ("cleanup-participant", {"kind": "sqlite", "file": "db.sqlite"}),
 }
+
+
+def sqlite_files(name, wal=False):
+    path = root / (name + ".sqlite")
+    connection = sqlite3.connect(path)
+    if wal:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+    connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT)")
+    connection.execute("INSERT INTO records VALUES (1, 'baseline')")
+    connection.commit()
+    if wal:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        connection.execute("INSERT INTO records VALUES (2, 'WAL-only recent row')")
+        connection.commit()
+    values = [(layouts[name][1]["file"], path.read_bytes(), None)]
+    if wal:
+        for suffix in ("-wal", "-shm"):
+            values.append((layouts[name][1]["file"] + suffix,
+                           path.with_name(path.name + suffix).read_bytes(), None))
+        assert len(values[1][1]) > 32
+    connection.close()
+    return values
+
+
 entries = {
-    "recipes": [("recipes.sqlite3", b"SQLite format 3\x00recipes", None)],
-    "tags": [("tags.sqlite", b"SQLite format 3\x00tags", None), ("tags.sqlite-wal", b"wal", None)],
+    "recipes": sqlite_files("recipes"),
+    "tags": sqlite_files("tags", wal=True),
     "images": image_files,
     "inspirations": [("db.json", b"{}", None)],
-    "ratings": [("db.sqlite", b"SQLite format 3\x00ratings", None)],
+    "ratings": sqlite_files("ratings") + [("db.sqlite-journal", b"", None)],
 }
 
 
@@ -126,14 +151,14 @@ def fixture():
     return case, metadata, archive, projects, manifest
 
 
-def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None):
+def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None, inner_service="images"):
     document = json.loads(metadata.read_bytes())
     manifest = manifest or document["snapshotManifest"]
     content = []
     for item in manifest["inventory"]:
         path = metadata.parent / "capture" / item["archive"]
-        data = inner if inner is not None and item["service"] == "images" else path.read_bytes()
-        if inner is not None and item["service"] == "images":
+        data = inner if inner is not None and item["service"] == inner_service else path.read_bytes()
+        if inner is not None and item["service"] == inner_service:
             item["sizeBytes"] = len(data)
             item["sha256"] = hashlib.sha256(data).hexdigest()
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as source:
@@ -200,6 +225,9 @@ if group == "valid":
         item["archive"] for item in manifest["inventory"]
     }
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in output.iterdir())
+    assert all((output / item["archive"]).read_bytes()
+               == (case / "capture" / item["archive"]).read_bytes()
+               for item in manifest["inventory"])
     assert module.upload.validate_snapshot(output) == manifest
     try:
         module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
@@ -311,6 +339,51 @@ elif group == "identity":
         module.MAX_BYTES = 100
     reject(bounded, before=True)
     module.MAX_BYTES = original_limit
+elif group == "sqlite":
+    case, metadata, archive, projects, manifest = fixture()
+    output = case / "snapshot"
+    output.mkdir(mode=0o700)
+    original_connect = module.sqlite3.connect
+    observed = []
+    def checking_connect(database_uri, **kwargs):
+        assert "?mode=ro" in database_uri
+        database = output / ".sqlite-check" / "tags.sqlite"
+        assert database.stat().st_mode & 0o777 == 0o600
+        assert database.with_name(database.name + "-wal").is_file()
+        assert database.with_name(database.name + "-shm").is_file()
+        connection = original_connect(database_uri, **kwargs)
+        observed.extend(connection.execute("SELECT value FROM records ORDER BY id").fetchall())
+        return connection
+    module.sqlite3.connect = checking_connect
+    try:
+        module.validate_sqlite(case / "capture" / "tags.tar", layouts["tags"][1], output)
+    finally:
+        module.sqlite3.connect = original_connect
+    assert observed == [("baseline",), ("WAL-only recent row",)]
+    assert not (output / ".sqlite-check").exists()
+    assert (case / "capture" / "tags.tar").read_bytes() == tar_bytes(entries["tags"])
+    for offset in (0, 100, 4096):
+        values = list(entries["recipes"])
+        name, content, kind = values[0]
+        corrupt = bytearray(content)
+        corrupt[offset] ^= 0xff
+        values[0] = (name, bytes(corrupt), kind)
+        reject(lambda c, m, a, p, s, values=values:
+               repack(m, a, inner=tar_bytes(values), inner_service="recipes"))
+    for offset in (0, 24, 32 + 16, 32 + 24):
+        values = list(entries["tags"])
+        name, content, kind = values[1]
+        corrupt = bytearray(content)
+        corrupt[offset] ^= 0xff
+        values[1] = (name, bytes(corrupt), kind)
+        reject(lambda c, m, a, p, s, values=values:
+               repack(m, a, inner=tar_bytes(values), inner_service="tags"))
+    for length in (16, len(entries["tags"][1][1]) - 1):
+        values = list(entries["tags"])
+        name, content, kind = values[1]
+        values[1] = (name, content[:length], kind)
+        reject(lambda c, m, a, p, s, values=values:
+               repack(m, a, inner=tar_bytes(values), inner_service="tags"))
 elif group == "unsafe":
     for name, kind in [
         ("../escape", None), ("/absolute", None), ("./recipes.tar", None),
@@ -367,4 +440,8 @@ PY
 
 @test "backup package rejects unsafe outer and inner entries and incomplete image pairs" {
   package_cases unsafe
+}
+
+@test "backup package checks real SQLite integrity and WAL-only recent rows without changing staged archives" {
+  package_cases sqlite
 }

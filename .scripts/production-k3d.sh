@@ -15,7 +15,7 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
@@ -24,6 +24,7 @@ case "$command" in
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup | backup-enter) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
   backup-exit) [[ $# = 3 ]] || production_fail "backup-exit requires the absolute state directory, exact holder and EXIT-<holder> confirmation" ;;
   delete) [[ $# = 1 ]] || production_fail "delete requires an explicit confirmation" ;;
@@ -304,6 +305,10 @@ wait_deployments() {
 
 backup_state_write() {
   local status=$1 phase=$2
+  if [[ $command == restore ]]; then
+    restore_state_write in-progress "$phase"
+    return
+  fi
   jq --arg status "$status" --arg phase "$phase" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.status=$status | .phase=$phase | .updatedAt=$updatedAt' \
@@ -1215,6 +1220,9 @@ case "$command" in
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  restore-abandon)
+    restore_abandon "$1" "$2" "$3"
     ;;
   backup-status)
     backup_load_state "$1"

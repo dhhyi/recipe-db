@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared with the lifecycle driver: local and Pi use the identical restore state machine.
-# shellcheck disable=SC2154
+# SC2016: GraphQL variables and remote shell expressions must stay literal.
+# shellcheck disable=SC2034,SC2154,SC2016
 
 restore_state_write() {
   local status=$1 phase=$2
@@ -18,6 +19,7 @@ restore_state_write() {
 }
 
 restore_phase() {
+  restore_current_phase=$1
   restore_state_write in-progress "$1" || return 1
   cluster_operation_lock_update "restore-$1"
 }
@@ -45,14 +47,73 @@ restore_cleanup() {
   if [[ ${restore_barrier:-false} == true ]]; then
     restore_routes_apply "$work/restore-barrier-routes.json" \
       || printf 'production: could not reassert public restore barrier; isolate ingress immediately\n' >&2
-    backup_reblock_graphql \
-      || printf 'production: could not reblock GraphQL; isolate ingress immediately\n' >&2
+    if [[ ${restore_application_installed:-false} == true ]]; then
+      backup_reblock_graphql \
+        || printf 'production: could not reblock GraphQL; isolate ingress immediately\n' >&2
+    fi
   fi
   restore_state_write recovery-required "${restore_current_phase:-interrupted}" \
     || printf 'production: could not update durable restore recovery state\n' >&2
   printf 'production: restore FAILED; no success recorded; Lease holder %s retained\n' "$lock_holder" >&2
   printf 'production: recovery state: %s/restore-state.json (also ConfigMap recipe-db-restore when created)\n' "$restore_state" >&2
-  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation, select a new empty target, then recover this exact holder with lock-recover only after all restore workers are stopped and the target is isolated.\n' >&2
+  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. Stop every Deployment and worker Pod, then use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation; select a new empty target for another restore.\n' >&2
+}
+
+restore_abandon() {
+  local state=$1 expected=$2 confirmation=$3 lease
+  [[ $confirmation == "ABANDON-$expected-AFTER-ISOLATION" ]] \
+    || production_fail "restore abandonment requires exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation"
+  [[ $state == /* && -d $state && ! -L $state && $(realpath -e "$state") == "$state"
+    && -f $state/restore-state.json && ! -L $state/restore-state.json ]] \
+    || production_fail "restore abandonment requires the original absolute regular recovery state"
+  jq -e --arg holder "$expected" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg ns "$namespace" \
+    --arg sha "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    .version == 1 and .holder == $holder and .status == "recovery-required"
+    and .target == $target and .cluster == $cluster and .context == $context
+    and .namespace == $ns and .configSha256 == $sha' "$state/restore-state.json" > /dev/null \
+    || production_fail "restore abandonment state, target values or holder mismatch"
+  connect
+  lease=$(cluster_operation_lock_status)
+  jq -e --arg holder "$expected" --rawfile state "$state/restore-state.json" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/release"] == ($state | fromjson | .artifact)
+    and .metadata.annotations["recipe-db/phase"] != "acquired"' <<< "$lease" > /dev/null \
+    || production_fail "restore abandonment requires this exact retained post-preflight restore Lease"
+  kube get deployments,statefulsets,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json > "$work/restore-isolation.json"
+  jq -e 'all(.items[];
+    if .kind == "Deployment" or .kind == "StatefulSet" then
+      (.spec.replicas // 1) == 0 and (.status.replicas // 0) == 0
+    elif .kind == "Job" then .spec.suspend == true and (.status.active // 0) == 0
+    elif .kind == "CronJob" then .spec.suspend == true and (.status.active // [] | length) == 0
+    else false end)' "$work/restore-isolation.json" > /dev/null \
+    || production_fail "restore abandonment requires zero running or restartable workloads and no helper/worker Pods; isolate the target first"
+  # Read this private Secret only into private staging; never print its contents.
+  kube --namespace kube-system get secret recipe-db-routes -o json \
+    > "$work/restore-isolation-routes-secret.json" 2> "$work/restore-isolation-routes-error"
+  jq -e --arg ns "$namespace" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | @base64d | fromjson |
+      .http.services["restore-maintenance"].loadBalancer.servers ==
+        [{url:("http://browse-maintenance."+$ns+".svc.cluster.local:80")}]
+      and ((.tcp.routers // {}) | length) == 0 and ((.udp.routers // {}) | length) == 0
+      and (.http.routers |
+        .["restore-public-barrier"].entrypoints == ["web"]
+        and .["restore-public-barrier"].service == "restore-maintenance"
+        and ([to_entries[] | select(.key != "restore-public-barrier") |
+          (.value.entrypoints // ["web"])[] | select(. == "web")] | length == 0)))' \
+    "$work/restore-isolation-routes-secret.json" > /dev/null 2>&1 \
+    || production_fail "restore abandonment requires the retained public barrier; isolate ingress first"
+  restore_state=$state
+  restore_cluster_state=true
+  restore_state_write recovery-required isolated-new-target-required
+  # The captured server UID/resourceVersion prevents deleting a changed holder.
+  cluster_operation_lock_delete "$lease"
+  restore_state_write abandoned isolated-new-target-required \
+    || production_fail "isolation verified and Lease released, but abandonment state update failed; keep this target isolated and investigate"
+  printf 'production: restore abandoned after isolation; data and public barrier preserved. Select a new empty target; never reuse this partial import.\n'
 }
 
 restore_fresh_target() {
@@ -163,7 +224,7 @@ restore_import() {
       printf 'production: restored authoritative data/image pair verification failed: %s\n' "$name" >&2
       return 1
     }
-  done < <(jq -c '.archives[]' "$work/restore-manifest.json")
+  done < <(jq -c '.inventory[]' "$work/restore-manifest.json")
   while IFS= read -r name; do
     restore_verify_volume_identity "$name" || return 1
     kube delete pod "restore-volume-$name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
@@ -194,12 +255,12 @@ restore_start() {
 }
 
 restore_forward() {
-  local resource=$1 port=$2 file=$3 pid deadline=$((SECONDS + timeout))
-  if [[ $resource == deployment/traefik ]]; then
-    kube --namespace kube-system port-forward --address=127.0.0.1 "$resource" ":$port" > "$file" 2>&1 &
-  else
-    kube port-forward --address=127.0.0.1 "$resource" ":$port" > "$file" 2>&1 &
-  fi
+  local resource=$1 port=$2 file=$3 pid forward_namespace=$namespace deadline=$((SECONDS + timeout))
+  [[ $resource != deployment/traefik ]] || forward_namespace=kube-system
+  # Launch the executable, not the kube shell function, so the saved PID owns the tunnel.
+  kubectl --kubeconfig "$work/kubeconfig" --context "$context" --namespace "$forward_namespace" \
+    --request-timeout="${timeout}s" port-forward --address=127.0.0.1 "$resource" ":$port" \
+    > "$file" 2>&1 &
   pid=$!
   if [[ $resource == service/browse ]]; then restore_browse_pid=$pid; else restore_forward_pid=$pid; fi
   while ((SECONDS < deadline)); do
@@ -226,33 +287,68 @@ restore_graphql() {
     "$work/restore-response.json" > /dev/null
 }
 
-restore_verify_reads() {
-  local expected name id encoded
+restore_prepare_expected_reads() {
   # Extract only an already validated SQLite layout into private staging; no target mutations.
   python3 - "$work/validated/recipes.tar" "$work" > "$work/restore-expected-recipes.json" << 'PY'
-import json, pathlib, sqlite3, sys, tarfile
+import json, pathlib, shutil, sqlite3, sys, tarfile
 root = pathlib.Path(sys.argv[2])
 with tarfile.open(sys.argv[1], "r:") as source:
     for member in source:
         name = member.name.removeprefix("./")
         if name.startswith("recipes.sqlite3") and member.isfile():
-            (root / name).write_bytes(source.extractfile(member).read())
+            with (root / name).open("wb") as destination:
+                shutil.copyfileobj(source.extractfile(member), destination)
 with sqlite3.connect(f"file:{root / 'recipes.sqlite3'}?mode=ro", uri=True) as database:
-    print(json.dumps([{"id": row[0], "name": json.loads(row[1])["name"]}
-                     for row in database.execute("SELECT id, document FROM recipes ORDER BY id")]))
+    recipes = [{"id": row[0], "name": json.loads(row[1])["name"]}
+               for row in database.execute("SELECT id, document FROM recipes ORDER BY id")]
+ids = {recipe["id"] for recipe in recipes}
+images = []
+with tarfile.open(root / "validated/images.tar", "r:") as source:
+    for member in source:
+        name = member.name.removeprefix("./")
+        if name.startswith("manifests/") and member.isfile():
+            image = json.load(source.extractfile(member))
+            if image["recipeId"] not in ids:
+                raise ValueError("image manifest references an absent authoritative recipe")
+            images.append(image)
+(root / "restore-expected-image.json").write_text(json.dumps(
+    sorted(images, key=lambda image: image["recipeId"])[0] if images else None))
+print(json.dumps(recipes))
 PY
+}
+
+restore_verify_reads() {
+  local expected name id encoded image url sha observed
   restore_graphql 'query { recipes { id name } }' || return 1
   jq -e --slurpfile expected "$work/restore-expected-recipes.json" \
     '(.data.recipes | sort_by(.id)) == ($expected[0] | sort_by(.id))' \
     "$work/restore-response.json" > /dev/null || return 1
   expected=$(jq -c '.[0] // empty' "$work/restore-expected-recipes.json")
   [[ -n $expected ]] || return 0
+  image=$(cat "$work/restore-expected-image.json")
+  if [[ $image != null ]]; then
+    expected=$(jq -c --arg id "$(jq -r .recipeId <<< "$image")" '.[] | select(.id == $id)' \
+      "$work/restore-expected-recipes.json")
+  fi
   id=$(jq -r .id <<< "$expected")
   name=$(jq -r .name <<< "$expected")
   restore_graphql 'query($id: ID!) { recipe(id:$id) { id name image { url thumbUrl } rating { count } } }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
   jq -e --arg id "$id" --arg name "$name" '.data.recipe.id == $id and .data.recipe.name == $name
     and .data.recipe.rating != null' "$work/restore-response.json" > /dev/null || return 1
+  if [[ $image != null ]]; then
+    jq -e --argjson expected "$image" '.data.recipe.image.url == $expected.url
+      and .data.recipe.image.thumbUrl == $expected.thumbUrl' "$work/restore-response.json" > /dev/null || return 1
+    while IFS= read -r url; do
+      sha=$(jq -er --arg path "${url#/}" '.inventory[] | select(.service == "images") |
+        .files[] | select(.path == $path) | .sha256' "$work/restore-manifest.json") || return 1
+      curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+        "http://127.0.0.1:$restore_graphql_port$url" > "$work/restore-image.bin" \
+        2> "$work/restore-request-error" || return 1
+      observed=$(sha256sum "$work/restore-image.bin") || return 1
+      [[ ${observed%% *} == "$sha" ]] || return 1
+    done < <(jq -r '.url,.thumbUrl' <<< "$image")
+  fi
   restore_graphql 'query($options: JSON!) { searchRecipes(options:$options) { recipes { id name } found } }' \
     "$(jq -cn --arg id "$id" '{options:{q:"*",query_by:"name",filter_by:("id:=`"+$id+"`")}}')" || return 1
   jq -e --arg id "$id" 'any(.data.searchRecipes.recipes[]; .id == $id)' \
@@ -264,7 +360,8 @@ PY
 }
 
 restore_verify_propagation() {
-  local id encoded deadline probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
+  local id encoded deadline probe
+  probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
   restore_graphql 'mutation($name:String!) { createRecipe(value:{name:$name}) { id } }' \
     "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
   id=$(jq -er '.data.createRecipe.id | select(type == "string" and length > 0)' \
@@ -321,8 +418,23 @@ restore_verify_propagation() {
     && mv "$restore_state/restore-state.next" "$restore_state/restore-state.json"
 }
 
+restore_wait_public_routes() {
+  local deadline=$((SECONDS + timeout))
+  while :; do
+    if curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+      "http://127.0.0.1:$restore_graphql_port/api/http/routers" > "$work/restore-observed-routers.json" \
+      2> "$work/restore-request-error" \
+      && jq -e 'type == "array" and
+        all(.[]; .name != "restore-public-barrier@file") and
+        any(.[]; .name == "graphql@file" and .status == "enabled")' \
+        "$work/restore-observed-routers.json" > /dev/null 2>&1; then return 0; fi
+    ((SECONDS < deadline)) || return 1
+    sleep 2
+  done
+}
+
 restore_run() {
-  local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5 parent key name port
+  local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5 parent key name image_port
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ && $confirmation == "RESTORE-$expected" ]] \
     || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
   for name in "$manifest" "$archive"; do
@@ -349,6 +461,7 @@ restore_run() {
   [[ $revision == "$(jq -er .source.revision "$work/restore-manifest.json")" ]] \
     || production_fail "backup source revision differs from the immutable release artifact"
   production_secrets
+  restore_prepare_expected_reads
   # A real mutation, through normal trusted GraphQL ingress, is required to prove propagation.
   jq -er '[.tokens[]? | select(.role == "owner") | .secret][0] |
     select(type == "string" and test("^[A-Za-z0-9._~+/-]+=*$"))' \
@@ -358,9 +471,15 @@ restore_run() {
   render
   routes
   cp "$work/routes.yml" "$work/restore-final-routes.json"
-  jq '.http.routers |= with_entries(select((.value.entrypoints | index("web")) == null)) |
+  image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
+  jq --argjson port "$image_port" --arg ns "$namespace" '
+    .http.routers |= with_entries(select((.value.entrypoints | index("web")) == null)) |
     .http.routers["restore-public-barrier"]={rule:"PathPrefix(`/`)",entrypoints:["web"],
       priority:2147482647,service:"restore-maintenance"} |
+    .http.routers["restore-internal-images"]={rule:"PathPrefix(`/public/`)",
+      entrypoints:["rest-internal"],service:"restore-image-static"} |
+    .http.services["restore-image-static"]={loadBalancer:{servers:[
+      {url:("http://images."+$ns+".svc.cluster.local:"+($port|tostring))}]}} |
     .http.services["restore-maintenance"]={loadBalancer:{servers:[
       {url:"http://browse-maintenance.recipe-db.svc.cluster.local:80"}]}}' \
     "$work/routes.yml" > "$work/restore-barrier-routes.json"
@@ -375,8 +494,6 @@ restore_run() {
     "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
   jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
     .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
-  # Reused projection rebuild records its phase through backup_state_write.
-  snapshot=$state
   connect
   lock_holder="restore-$expected-$$"
   cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
@@ -392,17 +509,26 @@ restore_run() {
       namespace:$ns,artifact:$artifact,revision:$revision,configSha256:$configSha256,
       status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
     > "$state/restore-state.json"
-  cp "$state/restore-state.json" "$state/backup-state.json"
   retain_lock=true
   restore_started=true
+  restore_phase preparing-target
+  ensure_namespace
+  restore_cluster_state=true
+  restore_current_phase=installing-barrier
+  restore_phase "$restore_current_phase"
+  # Hold public traffic before even inspecting a data mount. If an emptiness/storage
+  # check fails, this Secret remains a durable barrier without any application writer.
+  yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
+  restore_barrier=true
+  restore_routes_apply "$work/restore-barrier-routes.json"
+  kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
+  wait_traefik
   restore_current_phase=storage-preflight
   restore_phase "$restore_current_phase"
   if [[ $target == pi ]]; then
     production_storage_preflight
     production_storage_prepare_claims "$work/rendered.yml"
   fi
-  ensure_namespace
-  restore_cluster_state=true
   restore_phase checking-empty-volumes
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
@@ -419,11 +545,13 @@ restore_run() {
   while IFS= read -r name; do restore_volume_pod "$name"; done \
     < <(jq -r '.volumes | keys[]' "$work/config.json")
   # No application process exists, and ALL authoritative/derived/external-cache PVCs are empty.
-  restore_current_phase=installing-barrier
+  restore_current_phase=installing-stopped-workloads
   restore_phase "$restore_current_phase"
   yq '(select(.kind == "Deployment").spec.replicas) = 0 |
     (select(.kind == "Deployment" and .metadata.name == "graphql").spec.template.spec.containers[] |
-      select(.name == "graphql").env[] | select(.name == "MODE").value) = "backup"' \
+      select(.name == "graphql").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and (.metadata.name == "browse" or .metadata.name == "mcp")).spec.template.spec.containers[].env[] |
+      select(.name == "GRAPHQL_URL").value) = "http://traefik:3000/graphql"' \
     "$work/rendered.yml" > "$work/restore-stopped.yml"
   yq 'select(.metadata.namespace == "kube-system")' "$work/restore-stopped.yml" > "$work/infrastructure.yml"
   yq 'select(.metadata.namespace != "kube-system" and .kind != "PersistentVolumeClaim"
@@ -437,11 +565,8 @@ restore_run() {
       | jq '.metadata.labels["app.kubernetes.io/part-of"]="recipe-db"' \
       | kube apply -f - > /dev/null
   } 2> "$work/restore-secret-error"
-  restore_barrier=true
-  restore_routes_apply "$work/restore-barrier-routes.json"
-  kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
+  restore_application_installed=true
   kube apply -f "$work/application.yml" > /dev/null
-  wait_traefik
   barrier_established=true
   restore_import
   restore_current_phase=rebuilding
@@ -466,7 +591,10 @@ restore_run() {
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
   restore_routes_apply "$work/restore-final-routes.json"
+  restore_wait_public_routes
   restore_state_write succeeded complete
+  cluster_operation_lock_release "$lock_holder"
+  locked=false
   retain_lock=false
   restore_started=false
   printf 'production: restore %s verified; public ingress reopened; state %s/restore-state.json\n' "$expected" "$state"

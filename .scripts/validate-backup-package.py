@@ -9,7 +9,9 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import sqlite3
 import stat
+import struct
 import sys
 import tarfile
 
@@ -148,7 +150,8 @@ def check_manifest(package, archive, backup_id, projects):
         raise ValueError("incomplete authoritative dataset")
     if upload.content_fingerprint(manifest) != package.get("contentFingerprint"):
         raise ValueError("content fingerprint mismatch")
-    if sum(size or 0 for size in expected.values()) + archive.stat().st_size + MAX_METADATA > MAX_BYTES:
+    sizes = [size for size in expected.values() if size is not None]
+    if sum(sizes) + 2 * max(sizes) + archive.stat().st_size + MAX_METADATA + 65536 > MAX_BYTES:
         raise ValueError("staging limit exceeded")
     return manifest, expected
 
@@ -246,6 +249,89 @@ def check_inner_bounds(archive):
                 raise ValueError("unexpected trailing snapshot data")
 
 
+def wal_checksum(data, order, checksum=(0, 0)):
+    words = struct.unpack(order + str(len(data) // 4) + "I", data)
+    first, second = checksum
+    for index in range(0, len(words), 2):
+        first = (first + words[index] + second) & 0xffffffff
+        second = (second + words[index + 1] + first) & 0xffffffff
+    return first, second
+
+
+def validate_wal(database):
+    wal = database.with_name(database.name + "-wal")
+    if not wal.exists() or wal.stat().st_size == 0:
+        return
+    with open(wal, "rb") as source:
+        header = source.read(32)
+        if len(header) != 32:
+            raise ValueError("truncated SQLite WAL header")
+        magic, version, page_size = struct.unpack(">III", header[:12])
+        if magic not in (0x377f0682, 0x377f0683) or version != 3007000 \
+                or page_size < 512 or page_size > 65536 or page_size & (page_size - 1) \
+                or (wal.stat().st_size - 32) % (24 + page_size):
+            raise ValueError("invalid SQLite WAL format")
+        with open(database, "rb") as data:
+            data.seek(16)
+            database_page_size = int.from_bytes(data.read(2), "big")
+        if page_size != (65536 if database_page_size == 1 else database_page_size):
+            raise ValueError("SQLite WAL page size mismatch")
+        order = "<" if magic == 0x377f0682 else ">"
+        checksum = wal_checksum(header[:24], order)
+        if checksum != struct.unpack(">II", header[24:32]):
+            raise ValueError("SQLite WAL header checksum mismatch")
+        while frame := source.read(24 + page_size):
+            if frame[8:16] != header[16:24] or int.from_bytes(frame[:4], "big") == 0:
+                raise ValueError("SQLite WAL frame identity mismatch")
+            checksum = wal_checksum(frame[:8] + frame[24:], order, checksum)
+            if checksum != struct.unpack(">II", frame[16:24]):
+                raise ValueError("SQLite WAL frame checksum mismatch")
+
+
+def validate_sqlite(archive, layout, output):
+    private = output / ".sqlite-check"
+    private.mkdir(mode=0o700)
+    try:
+        allowed = {layout["file"] + suffix for suffix in ("", "-wal", "-shm", "-journal")}
+        copied = 0
+        with tarfile.open(archive, "r:") as source:
+            for member in source:
+                if member.isdir():
+                    continue
+                name = member.name.removeprefix("./")
+                if name not in allowed or not member.isreg():
+                    raise ValueError("unclassified SQLite validation input")
+                copied += member.size
+                if copied > archive.stat().st_size:
+                    raise ValueError("SQLite validation staging limit exceeded")
+                descriptor = os.open(private / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(descriptor, "wb") as destination:
+                    stream = source.extractfile(member)
+                    remaining = member.size
+                    while remaining:
+                        block = stream.read(min(1024 * 1024, remaining))
+                        if not block:
+                            raise ValueError("truncated SQLite validation input")
+                        destination.write(block)
+                        remaining -= len(block)
+        database = private / layout["file"]
+        validate_wal(database)
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)
+        try:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("PRAGMA trusted_schema=OFF")
+            connection.execute("PRAGMA cache_size=-8192")
+            connection.execute("PRAGMA mmap_size=0")
+            if connection.execute("PRAGMA integrity_check(1)").fetchall() != [("ok",)]:
+                raise ValueError("SQLite database integrity check failed")
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise ValueError("SQLite database is unreadable or corrupt") from error
+    finally:
+        shutil.rmtree(private)
+
+
 def validate(package_path, archive_path, output_path, projects_path, backup_id):
     package_path = private_file(package_path, MAX_METADATA)
     archive = private_file(archive_path, MAX_BYTES)
@@ -261,7 +347,8 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
     if package_path.name != archive.name.removesuffix(".tar.gz") + ".manifest.json":
         raise ValueError("package manifest name mismatch")
     bundle_pass(archive, manifest, expected)
-    required = sum(size or 0 for size in expected.values()) + MAX_METADATA
+    sizes = [size for size in expected.values() if size is not None]
+    required = sum(sizes) + 2 * max(sizes) + MAX_METADATA + 65536
     if shutil.disk_usage(output.parent).free < required:
         raise ValueError("insufficient staging space")
     output.mkdir(mode=0o700)
@@ -274,9 +361,12 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
             check_inner_bounds(output / item["archive"])
         validated = upload.validate_snapshot(output)
         for item in validated["inventory"]:
-            observed = snapshot.validate(output / item["archive"], projects[item["service"]][1])
+            layout = projects[item["service"]][1]
+            observed = snapshot.validate(output / item["archive"], layout)
             if observed != item["files"]:
                 raise ValueError("authoritative file inventory mismatch")
+            if layout["kind"] == "sqlite":
+                validate_sqlite(output / item["archive"], layout, output)
         return validated
     except BaseException:
         shutil.rmtree(output)

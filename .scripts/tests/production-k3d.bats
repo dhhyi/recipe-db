@@ -51,7 +51,7 @@ setup() {
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
 application_project_metadata_to_jsonl() {
-  if [[ $MOCK_BACKUP = true ]]; then
+  if [[ $MOCK_BACKUP = true || $MOCK_RESTORE = true ]]; then
     printf '%s\n' \
       '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"devcontainer":{"ports":[8081],"environment":{}}}' \
       '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"backupData":{"kind":"images"},"devcontainer":{"ports":[8082],"environment":{}}}' \
@@ -114,6 +114,21 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   [[ $* != *"--resource-version="* ]] || { echo 'unknown flag: --resource-version' >&2; exit 1; }
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
+      *"get deployments,statefulsets,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
+        if [[ ${MOCK_ABANDON_WORKER:-false} == true ]]; then
+          echo '{"items":[{"kind":"Pod","metadata":{"name":"restore-volume-recipes"}}]}'
+        elif [[ ${MOCK_ABANDON_WRITER:-false} == true ]]; then
+          echo '{"items":[{"kind":"Deployment","spec":{"replicas":1},"status":{"replicas":1}}]}'
+        elif [[ ${MOCK_ABANDON_JOB:-false} == true ]]; then
+          echo '{"items":[{"kind":"Job","spec":{"suspend":false},"status":{"active":0}}]}'
+        else echo '{"items":[{"kind":"Deployment","spec":{"replicas":0},"status":{"replicas":0}},{"kind":"Job","spec":{"suspend":true},"status":{"active":0}}]}'; fi
+        exit ;;
+      *"get secret recipe-db-routes -o json")
+        jq --arg bad "${MOCK_ABANDON_BAD_BARRIER:-false}" '
+          if $bad == "true" then .http.routers.graphql={entrypoints:["web"]} else . end |
+          {metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            data:{"routes.yml":(tojson|@base64)}}' "$MOCK_LOG.restore-routes"
+        exit ;;
       *"get deployments,statefulsets,daemonsets,jobs,cronjobs,pods,services,ingresses,configmaps,secrets -o json")
         if [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
           echo '{"items":[{"kind":"Deployment","metadata":{"name":"recipes"}}]}'
@@ -145,10 +160,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"exec -i restore-volume-"*"-- tar -xpf - -C /data")
         if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then exit 1; fi
-        name="${*: -9:1}"
+        name="${*: -7:1}"
         name="${name#restore-volume-}"
         mkdir -p "$FIXTURE_ROOT/imported/$name"
         tar -xpf - -C "$FIXTURE_ROOT/imported/$name"
+        touch "$MOCK_LOG.imported"
         exit ;;
       *"exec restore-volume-"*"-- tar -C /data -cf - .")
         name="${*: -8:1}"
@@ -157,7 +173,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"exec restore-volume-"*"-- sync") exit ;;
       *"delete pod restore-volume-"*)
-        jq -s --arg name "${*: -4:1}" '.[] | select(.metadata.name != $name)' "$MOCK_LOG.restore-pods" \
+        jq -s --arg name "${*: -3:1}" '.[] | select(.metadata.name != $name)' "$MOCK_LOG.restore-pods" \
           > "$MOCK_LOG.restore-pods.next"
         mv "$MOCK_LOG.restore-pods.next" "$MOCK_LOG.restore-pods"; exit ;;
       *"get pod restore-volume-"*) exit ;;
@@ -166,6 +182,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         echo "Forwarding from 127.0.0.1:$port -> 3000"
         exec sleep 600 ;;
       *"replace -f "*recipe-db-deploy-update.json) cp "${*: -1}" "$MOCK_LOG.lease"; exit ;;
+      *"get lease recipe-db-deploy"*)
+        if [[ ${MOCK_RESTORE_LOCK_DRIFT:-false} == true && -e $MOCK_LOG.imported ]]; then
+          jq '.spec.holderIdentity="foreign-operation"' "$MOCK_LOG.lease"
+          exit
+        fi ;;
       *"create secret generic recipe-db-routes"*)
         for arg in "$@"; do
           case "$arg" in --from-file=routes.yml=*) cp "${arg#--from-file=routes.yml=}" "$MOCK_LOG.restore-routes" ;; esac
@@ -541,7 +562,8 @@ if jq -e 'has("config")' "$2" > /dev/null; then
       . as $name | {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
       spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
       spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
-        env:[{name:"MODE",value:"production"}]}]}}}}' "$2" | while IFS= read -r doc; do
+        env:([{name:"MODE",value:"production"}] +
+          (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}]}}}}' "$2" | while IFS= read -r doc; do
         printf '%s\n---\n' "$doc"
       done
     jq -c '.config.volumes | keys[] | {apiVersion:"v1",kind:"PersistentVolumeClaim",
@@ -1491,9 +1513,9 @@ legacy_pi_claims() {
 }
 
 restore_fixture() {
-  export MOCK_RESTORE=true MOCK_BACKUP=true
+  export MOCK_RESTORE=true MOCK_BACKUP=false
   export RESTORE_ID=backup-20261031123456-42
-  export RESTORE_MANIFEST="$FIXTURE_ROOT/package.json" RESTORE_ARCHIVE="$FIXTURE_ROOT/package.tar"
+  export RESTORE_MANIFEST="$FIXTURE_ROOT/backup-package.json" RESTORE_ARCHIVE="$FIXTURE_ROOT/package.tar"
   export RESTORE_STATE="$FIXTURE_ROOT/backups/restore"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"restore-owner","secret":"private-restore-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
   rm "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3"
@@ -1503,6 +1525,18 @@ with sqlite3.connect(sys.argv[1]) as db:
     db.execute("CREATE TABLE recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)")
     db.execute("INSERT INTO recipes VALUES (?, ?)", ("old", json.dumps({"name":"Old"})))
 PY
+  if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
+    printf 'restored-full-image\n' > image-full
+    printf 'restored-thumbnail\n' > image-thumb
+    full_sha=$(sha256sum image-full); full_sha=${full_sha%% *}
+    thumb_sha=$(sha256sum image-thumb); thumb_sha=${thumb_sha%% *}
+    cp image-full "$FIXTURE_ROOT/tar-data/images/public/old-$full_sha.png"
+    cp image-thumb "$FIXTURE_ROOT/tar-data/images/public/old-$thumb_sha-thumb.png"
+    jq -n --arg full "/public/old-$full_sha.png" --arg thumb "/public/old-$thumb_sha-thumb.png" \
+      --argjson size "$(stat -c '%s' image-full)" \
+      '{recipeId:"old",url:$full,thumbUrl:$thumb,size:$size}' \
+      > "$FIXTURE_ROOT/tar-data/images/manifests/old.json"
+  fi
   : > restore-archives.jsonl
   for name in recipes images tags; do
     tar -C "$FIXTURE_ROOT/tar-data/$name" -cf "$FIXTURE_ROOT/$name.tar" .
@@ -1517,7 +1551,7 @@ PY
   done
   jq -n --arg id "$RESTORE_ID" --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" \
     --slurpfile archives restore-archives.jsonl \
-    '{backupId:$id,source:{artifact:$artifact,revision:$revision},archives:$archives}' > "$RESTORE_MANIFEST"
+    '{backupId:$id,source:{artifact:$artifact,revision:$revision},inventory:$archives}' > "$RESTORE_MANIFEST"
   printf 'package-fixture\n' > "$RESTORE_ARCHIVE"
   cat > .scripts/validate-backup-package.py << 'PY'
 import json, os, pathlib, shutil, sys
@@ -1529,7 +1563,7 @@ package = json.loads(pathlib.Path(manifest).read_text())
 assert package["backupId"] == expected
 assert pathlib.Path(archive).is_file() and pathlib.Path(projects).is_file()
 pathlib.Path(output).mkdir()
-for item in package["archives"]:
+for item in package["inventory"]:
     shutil.copy(pathlib.Path(manifest).parent / item["archive"], pathlib.Path(output) / item["archive"])
 print(json.dumps(package))
 PY
@@ -1537,6 +1571,17 @@ PY
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$MOCK_LOG"
 if [[ ${MOCK_RESTORE_HTTP_FAIL:-false} == true ]]; then exit 1; fi
+if [[ $* == *"api/http/routers"* ]]; then
+  if [[ ${MOCK_RESTORE_ROUTE_STALE:-false} == true ]]; then
+    echo '[{"name":"restore-public-barrier@file","status":"enabled"}]'
+  else echo '[{"name":"graphql@file","status":"enabled"}]'; fi
+  exit
+fi
+if [[ $* == *"/public/"* ]]; then
+  url="${*: -1}"; name="${url##*/}"
+  cat "$FIXTURE_ROOT/tar-data/images/public/$name"
+  exit
+fi
 if [[ $* == *"18082"* ]]; then
   if [[ $* == *"recipe/old"* ]]; then echo Old; exit; fi
   if [[ -e $MOCK_LOG.probe-deleted ]]; then
@@ -1560,9 +1605,13 @@ case "$query" in
   *"searchRecipes"*)
     if [[ $* == *"restore-request"* && $(jq -r '.variables.options.q' "$file") == "*" ]]; then
       echo '{"data":{"searchRecipes":{"recipes":[{"id":"old","name":"Old"}],"found":1}}}'
-    elif [[ -e $MOCK_LOG.probe-deleted ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
+    elif [[ -e $MOCK_LOG.probe-deleted || ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
     else jq -n --rawfile name "$MOCK_LOG.probe-name" '{data:{searchRecipes:{recipes:[{id:"probe",name:($name|rtrimstr("\n"))}]}}}'; fi ;;
-  *"recipe(id"*) echo '{"data":{"recipe":{"id":"old","name":"Old","image":null,"rating":{"count":0}}}}' ;;
+  *"recipe(id"*)
+    if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
+      jq '{data:{recipe:{id:"old",name:"Old",image:{url:.url,thumbUrl:.thumbUrl},rating:{count:0}}}}' \
+        "$FIXTURE_ROOT/tar-data/images/manifests/old.json"
+    else echo '{"data":{"recipe":{"id":"old","name":"Old","image":null,"rating":{"count":0}}}}'; fi ;;
   *) echo '{"data":{"recipes":[{"id":"old","name":"Old"}]}}' ;;
 esac
 EOF
@@ -1594,6 +1643,9 @@ run_restore() {
   opening=$(awk '/from-file=routes.yml=.*restore-final-routes/ {print NR; exit}' "$MOCK_LOG")
   [ "$propagation" -lt "$opening" ]
   jq -e '.http.routers["restore-public-barrier"] == null' "$MOCK_LOG.restore-routes"
+  jq -e 'any(.items[]; .metadata.name == "browse" and
+    any(.spec.template.spec.containers[].env[]; .name == "GRAPHQL_URL"
+      and .value == "http://traefik:3000/graphql"))' "$MOCK_LOG.restore-deployments"
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
@@ -1646,7 +1698,7 @@ run_restore() {
   export MOCK_LOCK=true
   run_restore
   [ "$status" -ne 0 ]
-  [[ $output == *"Lease"* ]]
+  [[ $output == *"cluster operation lock"* ]]
   [ ! -e "$RESTORE_STATE" ]
   grep -q -- '--namespace kube-system.*create -f .*recipe-db-deploy-lease.json' "$MOCK_LOG"
   run ! grep -Eq 'restore-volume-pod.json|apply -f .*application.yml|delete --raw' "$MOCK_LOG"
@@ -1688,4 +1740,148 @@ run_restore() {
   jq -e '.status == "recovery-required" and .phase == "verifying-reads"' "$RESTORE_STATE/restore-state.json"
   run ! grep -q 'from-file=routes.yml=.*restore-final-routes' "$MOCK_LOG"
   jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+}
+
+@test "restore verifies restored full image and thumbnail bytes only on the private static ingress" {
+  export MOCK_RESTORE_IMAGE=true
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'curl .*18081/public/old-' "$MOCK_LOG")" -eq 4 ]
+  jq -e '.status == "succeeded"' "$RESTORE_STATE/restore-state.json"
+}
+
+@test "restore propagation failure records its synthetic recipe and keeps public ingress blocked" {
+  restore_fixture
+  set_value '.timeoutSeconds=3'
+  export MOCK_RESTORE_PROPAGATION_FAIL=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required" and .phase == "verifying-propagation"
+    and .probeRecipeId == "probe"' "$RESTORE_STATE/restore-state.json"
+  run ! grep -q 'from-file=routes.yml=.*restore-final-routes' "$MOCK_LOG"
+}
+
+@test "restore waits for actual Traefik route convergence and reblocks a failed cutover" {
+  restore_fixture
+  set_value '.timeoutSeconds=3'
+  export MOCK_RESTORE_ROUTE_STALE=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output != *"verified; public ingress reopened"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required" and .phase == "opening-public-ingress"' \
+    "$RESTORE_STATE/restore-state.json"
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+}
+
+@test "restore loses shared Lease ownership mid-import without deleting another holder or opening clients" {
+  restore_fixture
+  export MOCK_RESTORE_LOCK_DRIFT=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  run ! grep -Eq 'delete --raw|restore-final-routes' "$MOCK_LOG"
+}
+
+@test "restore rejects changed release inputs and missing owner token before connecting" {
+  restore_fixture
+  printf '# changed release metadata\n' >> .scripts/lib/project-metadata.sh
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"must match the immutable release"* ]]
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+  git checkout -- .scripts/lib/project-metadata.sh
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"explicit owner token"* ]]
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+}
+
+restore_retained_fixture() {
+  restore_fixture
+  export RESTORE_HOLDER=restore-retained-42
+  mkdir -p "$RESTORE_STATE"
+  jq -n --arg holder "$RESTORE_HOLDER" --arg artifact "$ARTIFACT" \
+    --arg sha "$(sha256sum "$VALUES" | cut -d ' ' -f 1)" --slurpfile config "$VALUES" '
+    {version:1,holder:$holder,status:"recovery-required",artifact:$artifact,
+      target:$config[0].target,cluster:$config[0].cluster,context:$config[0].context,
+      namespace:$config[0].namespace,configSha256:$sha}' > "$RESTORE_STATE/restore-state.json"
+  # production_config serializes with jq, so hash that same canonical representation.
+  jq '.' "$VALUES" > canonical-values.json
+  sha=$(sha256sum canonical-values.json); sha=${sha%% *}
+  jq --arg sha "$sha" '.configSha256=$sha' "$RESTORE_STATE/restore-state.json" > state.next
+  mv state.next "$RESTORE_STATE/restore-state.json"
+  jq -n --arg holder "$RESTORE_HOLDER" --arg artifact "$ARTIFACT" '
+    {metadata:{name:"recipe-db-deploy",namespace:"kube-system",uid:"lease-uid",resourceVersion:"42",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/operation":"restore","recipe-db/phase":"restore-import-recipes",
+        "recipe-db/release":$artifact}},spec:{holderIdentity:$holder}}' > "$MOCK_LOG.lease"
+  jq -n '{http:{routers:{"restore-public-barrier":{entrypoints:["web"],service:"restore-maintenance"}},
+    services:{"restore-maintenance":{loadBalancer:{servers:[
+      {url:"http://browse-maintenance.recipe-db.svc.cluster.local:80"}]}}}}}' > "$MOCK_LOG.restore-routes"
+}
+
+run_restore_abandon() {
+  run bash .scripts/production-k3d.sh restore-abandon "$VALUES" "$RESTORE_STATE" \
+    "$RESTORE_HOLDER" "ABANDON-$RESTORE_HOLDER-AFTER-ISOLATION"
+}
+
+@test "restore acquired Lease alone can recover but post-mutation Lease cannot use unconditional lock-recover" {
+  restore_retained_fixture
+  run bash .scripts/production-k3d.sh lock-recover "$VALUES" "$RESTORE_HOLDER" "RECOVER-$RESTORE_HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"restore-abandon with saved state"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq '.metadata.annotations["recipe-db/phase"]="acquired"' "$MOCK_LOG.lease" > lease.next
+  mv lease.next "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh lock-recover "$VALUES" "$RESTORE_HOLDER" "RECOVER-$RESTORE_HOLDER"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "restore abandonment releases only an investigated isolated target while preserving data and public barrier" {
+  restore_retained_fixture
+  printf 'partial authoritative data\n' > partial-data
+  run_restore_abandon
+  [ "$status" -eq 0 ]
+  [[ $output == *"data and public barrier preserved"* ]]
+  [ ! -e "$MOCK_LOG.lease" ]
+  [ "$(cat partial-data)" = "partial authoritative data" ]
+  jq -e '.status == "abandoned" and .phase == "isolated-new-target-required"' \
+    "$RESTORE_STATE/restore-state.json"
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+  run ! grep -Eq 'tar -xpf|delete pvc|delete pv|scale deployment|set env deployment' "$MOCK_LOG"
+}
+
+@test "restore abandonment rejects active writers helper Pods restartable Jobs and a missing public barrier" {
+  restore_retained_fixture
+  for flag in MOCK_ABANDON_WRITER MOCK_ABANDON_WORKER MOCK_ABANDON_JOB MOCK_ABANDON_BAD_BARRIER; do
+    export "$flag=true"
+    run_restore_abandon
+    [ "$status" -ne 0 ]
+    [ -e "$MOCK_LOG.lease" ]
+    jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+    unset "$flag"
+  done
+  run ! grep -q 'delete --raw' "$MOCK_LOG"
+}
+
+@test "restore abandonment rejects wrong confirmation holder and changed target values before connecting" {
+  restore_retained_fixture
+  run bash .scripts/production-k3d.sh restore-abandon "$VALUES" "$RESTORE_STATE" \
+    "$RESTORE_HOLDER" "RECOVER-$RESTORE_HOLDER"
+  [ "$status" -ne 0 ]
+  run bash .scripts/production-k3d.sh restore-abandon "$VALUES" "$RESTORE_STATE" \
+    wrong-holder ABANDON-wrong-holder-AFTER-ISOLATION
+  [ "$status" -ne 0 ]
+  set_value '.timeoutSeconds=599'
+  run_restore_abandon
+  [ "$status" -ne 0 ]
+  [[ $output == *"state, target values or holder mismatch"* ]]
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+  [ -e "$MOCK_LOG.lease" ]
 }
