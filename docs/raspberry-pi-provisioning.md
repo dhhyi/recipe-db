@@ -9,6 +9,7 @@ Imaging and working public-key SSH are prerequisites; start with the [bootstrap 
 - Baseline image: `2026-10-06-raspios-trixie-arm64-lite.img.xz`, [official download](https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz). Compressed SHA-256: `483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843`. Compare the downloaded file with `sha256sum` in WSL before selecting it as a custom image in Imager. Imager can also fetch this image and verify its extracted checksum. Never bypass the physical-device erase confirmation.
 - Controller: Python 3.13.9 and ansible-core 2.20.1 in the generated `provisioning` devcontainer. The `tooling` project category keeps this administrative environment out of application releases and Compose services.
 - k3s `v1.35.5+k3s1`, matching the local rehearsal's version. The ARM64 binary SHA-256 is pinned in `provisioning/group_vars/pi.yml`, from the [versioned release checksums](https://github.com/k3s-io/k3s/releases/download/v1.35.5%2Bk3s1/sha256sum-arm64.txt). No floating installation script is executed.
+- rclone `1.75.2`; the versioned official ARM64 `.deb` and its SHA-256 are pinned in `provisioning/group_vars/pi.yml`.
 
 The initial physical Pi reported Debian 13.7; its exact flashed image date was not recorded. Do not reimage it merely to recover that metadata. Preflight checks the actual OS, Pi model, architecture and root identity. Syntax/unit tests do not establish that this OS/k3s combination passes physical acceptance.
 
@@ -17,6 +18,7 @@ The initial physical Pi reported Debian 13.7; its exact flashed image date was n
 Review these before authorizing a live run:
 
 - Install host prerequisites, nftables and unattended-upgrades.
+- Install rclone 1.75.2 from the checksum-pinned ARM64 package and enable the nightly backup systemd timer. The timer does not run until an operator supplies the private capture and rclone configuration; its enabled state does not establish backup health. See the [backup packaging and operations contract](production-kubernetes.md#verified-remote-packaging).
 - Verify UUID/ext4/USB identity before mutation; install the same storage check as k3s `ExecStartPre`. Missing directories, symlink redirection and unexpected filesystems fail startup.
 - Store k3s/SQLite/containerd state under `/srv/recipe-db/k3s`, kubelet state under `/srv/recipe-db/kubelet`, and local-path volumes under `/srv/recipe-db/storage`. These are directories, not separate mounts. Their parent directories are root-owned mode 0700; individual PVC contents retain the provisioner/workload's own permissions.
 - New Pi application volumes use the owned `recipe-db-retained` StorageClass, pinned to `/srv/recipe-db/storage` and the configured Pi node, with `Retain` from creation. The stock `local-path` StorageClass remains untouched. Preflight upgrades only identity-verified existing application PVs to `Retain` before namespace replacement.
@@ -146,6 +148,8 @@ Record actual results, not just playbook success:
 6. API, node, bundled Traefik and local-path provisioner are healthy, including pod-to-API operation. After later deployment, verify real private ingress traffic as well as denied backend/NodePort routes.
 7. Inspect journal/CRI bounds, `apt-config dump`, apt timers and unattended upgrade logs. Confirm no automatic reboot and no automatic k3s upgrades.
 8. Approved host reboot restores the cluster; later application/data recovery, resource measurements and backup/restore remain separate acceptance work.
+
+The backup service/timer configuration is installed by the playbook but is not authorized, run, or physically validated as part of this provisioning spec. Do not place Google credentials or a capture command's private inputs in the repository.
 
 ## Maintenance, failure and recovery
 

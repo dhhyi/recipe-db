@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Recipe DB off-device backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=15min
+Persistent=false
+Unit=recipe-db-backup.service
+
+[Install]
+WantedBy=timers.target

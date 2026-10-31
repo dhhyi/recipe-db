@@ -1,0 +1,22 @@
+[Unit]
+Description=Capture and verify the nightly Recipe DB off-device backup
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/recipe-db/backup.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml
+ExecStart=/usr/local/sbin/recipe-db-backup-upload nightly --config /etc/recipe-db/backup.json
+TimeoutStartSec=2h
+TimeoutStopSec=5min
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/recipe-db-backup
+RestrictSUIDSGID=true
+LockPersonality=true
