@@ -408,7 +408,7 @@ EOF
   [ "$(yq '[.jobs.quality-checks.steps[].run | select(contains("mise run --raw bazel-quality"))] | length' "$workflow")" -eq 1 ]
   grep -F 'for variable in CI GITHUB_ACTIONS BUILDKIT_PROGRESS COMPOSE_PROGRESS COMPOSE_PARALLEL_LIMIT DEVCONTAINER_KEEP_RUNNING' \
     "$BATS_TEST_DIRNAME/../bazel-quality.sh"
-  grep -F 'mise run --raw bazel build "${bazel_args[@]}" --jobs=1 //:quality' \
+  grep -F "mise run --raw bazel build \"\${bazel_args[@]}\" --jobs=1 //:quality" \
     "$BATS_TEST_DIRNAME/../bazel-quality.sh"
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "validate message bus integration and recovery") | .run' "$workflow")" = "mise run test-message-bus" ]
 }

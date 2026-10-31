@@ -94,7 +94,7 @@ run -1 grep -F 'example-format.tar' BUILD.bazel
 run -1 grep -F 'tar -xf' BUILD.bazel
 sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
 grep -Fx '        ".generated/bazel-quality/example.identity",' check-rule
-grep -Fx '    cmd = "sh $(location .scripts/bazel-check.sh) example $@",' check-rule
+grep -Fx "    cmd = \"sh \$(location .scripts/bazel-check.sh) example \$@\"," check-rule
 }
 
 @test "includes new untracked tests but excludes ignored files" {

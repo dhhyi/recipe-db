@@ -30,7 +30,7 @@ emit_check_rule() {
     printf '        %s,\n' "$(quote .bazelversion)"
     printf '    ],\n'
     printf '    outs = ["%s-check.ok"],\n' "$project"
-    printf '    cmd = "sh $(location .scripts/bazel-check.sh) %s $@",\n' "$project"
+    printf "    cmd = \"sh \$(location .scripts/bazel-check.sh) %s \$@\",\n" "$project"
     printf '    tags = ["no-sandbox", "no-remote"],\n'
     printf ')\n'
     printf '\nalias(\n'
