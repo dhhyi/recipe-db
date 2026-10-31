@@ -623,7 +623,7 @@ token_only_values() {
 
 @test "read-only preview rejects privileged policies before connecting" {
   token_only_values
-  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" | .runtime.readOnly=true |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
   for policy in \
     '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}' \
@@ -632,7 +632,7 @@ token_only_values() {
     printf '%s\n' "$policy" > auth-accounts.json
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
-    [[ $output == *"read-only preview requires"* ]]
+    [[ $output == *"read-only deployment requires"* ]]
   done
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"
@@ -695,7 +695,7 @@ token_only_values() {
 @test "read-only preview exposes only explicit public transports with sanitized trusted ingress" {
   token_only_values
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
-  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" | .runtime.readOnly=true |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
   export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
@@ -713,6 +713,25 @@ token_only_values() {
     and .["graphql-internal"].entrypoints == ["rest-internal"]
     and all(.[]; (.entrypoints | index("staging-http")) == null)
   ' "$MOCK_LOG.routers"
+}
+
+@test "public preview requires explicit read-only policy and private shutdown never restores owner tokens" {
+  token_only_values
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
+  set_value '.runtime.readOnly=true | del(.httpsStaging)'
+  export MOCK_LAN=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e 'all(.[]; (.entrypoints | index("websecure")) == null)' "$MOCK_LOG.routers"
+  set_value '.runtime.readOnly="true"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
 }
 
 legacy_pi_claims() {
