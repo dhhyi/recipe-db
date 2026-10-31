@@ -159,7 +159,7 @@ pull_release() {
         .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
         .scripts/templates/service-template.lib.yml package.json
         message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
-        oauth2-proxy/oauth2-proxy.cfg ':(glob)*/.project.yaml')
+        oauth2-proxy/oauth2-proxy.cfg design/nginx.conf ':(glob)*/.project.yaml')
       git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
         || production_fail "backup requires the release revision in the local checkout"
       git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
@@ -184,8 +184,9 @@ render() {
     --rawfile maintenanceNginx "$root/browse-maintenance/nginx.conf" \
     --rawfile maintenanceHtml "$root/browse-maintenance/unavailable.html" \
     --rawfile oauthConfig "$root/oauth2-proxy/oauth2-proxy.cfg" \
+    --rawfile designNginx "$root/design/nginx.conf" \
     '{config:$config[0],projects:$projects,release:$release[0],artifact:$artifact,
-      files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig}}' \
+      files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig,designNginx:$designNginx}}' \
     > "$work/template-values.json"
   ytt -f "$root/.scripts/templates/kubernetes-template.yml" \
     -f "$root/.scripts/templates/kubernetes.lib.yml" \
@@ -196,12 +197,16 @@ render() {
 
 annotate_credentials() {
   local checksum
+  local route_inputs=(routes.yml config.json)
   checksum=$(
     cd "$work"
     sha256sum "${secret_keys[@]}" template-values.json | sha256sum
   )
   checksum=${checksum%% *}
-  route_checksum=$(sha256sum "$work/routes.yml")
+  if [[ -f $work/acme-account-email ]]; then
+    route_inputs+=(acme-account-email)
+  fi
+  route_checksum=$(cd "$work" && sha256sum "${route_inputs[@]}" | sha256sum)
   route_checksum=${route_checksum%% *}
   SECRET_CHECKSUM="$checksum" ROUTES_CHECKSUM="$route_checksum" yq \
     '(select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum") = strenv(SECRET_CHECKSUM) |
@@ -219,7 +224,7 @@ routes() {
     -f "$root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
-  jq --arg ns "$namespace" --arg authMode "$auth_mode" --rawfile secret "$work/graphql-ingress-secret" '
+  jq --arg ns "$namespace" --arg authMode "$auth_mode" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
     walk(if type == "string" then
       gsub("http://(?<host>[a-z][a-z0-9-]*)(?=[:/?#]|$)";
         "http://\(.host).\($ns).svc.cluster.local")
@@ -234,6 +239,37 @@ routes() {
     | if $authMode == "token-only" then
         del(.http.routers["oauth2-public"], .http.routers["graphql-cookie"],
           .http.middlewares["oauth2-forward-auth"], .http.services["oauth2-proxy"])
+      else . end
+    | if $config[0].httpsStaging then
+        if all(.http.routers[]; all(.entrypoints[]; . == "web" or . == "rest-internal")) then .
+        else error("existing routes must not use certificate-only staging entrypoints") end
+        | ("Host(`" + $config[0].httpsStaging.hostname + "`)") as $host
+        | {certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]} as $tls
+        | if $config[0].httpsStaging.exposeApplication == true then
+            def preview($name):
+              .http.routers[$name] as $router |
+              if $router == null or $router.service == null then
+                error("missing required preview router: " + $name)
+              else
+                .http.routers["preview-" + $name] = ($router + {
+                  rule:($host + " && (" + $router.rule + ")"),
+                  entrypoints:["websecure"], tls:$tls,
+                  middlewares:(["identity-strip"] + ($router.middlewares // []))})
+              end;
+            preview("frontend")
+            | preview("design")
+            | preview("images-public")
+            | preview("graphql")
+            | preview("recipes-edit")
+            | preview("images-edit")
+            | preview("mcp")
+          else
+            .http.routers["https-staging"] = {
+              rule:($host + " && Path(`/`)"), entrypoints:["websecure"],
+              service:"https-staging", middlewares:["identity-strip"], tls:$tls}
+            | .http.services["https-staging"] = {
+              loadBalancer:{servers:[{url:("http://https-staging." + $ns + ".svc.cluster.local:80")}]}}
+          end
       else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
 }
@@ -252,6 +288,29 @@ guard_helm_config() {
     jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
       "$work/existing-helm-config.json" > /dev/null \
       || production_fail "refusing to overwrite an unowned Traefik HelmChartConfig"
+  fi
+}
+
+guard_acme_claim() {
+  [[ $(jq -r 'has("httpsStaging")' "$work/config.json") == true ]] || return 0
+  kube --namespace kube-system get pvc recipe-db-acme --ignore-not-found -o json \
+    > "$work/existing-acme-claim.json"
+  if [[ -s $work/existing-acme-claim.json ]]; then
+    jq -e --arg class "$storage_class" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.storageClassName == $class
+      and .spec.accessModes == ["ReadWriteOnce"]
+      and .spec.resources.requests.storage == "64Mi"
+    ' "$work/existing-acme-claim.json" > /dev/null \
+      || production_fail "refusing to overwrite an unowned or incompatible ACME claim"
+  fi
+  kube --namespace kube-system get secret recipe-db-acme-contact --ignore-not-found -o json \
+    > "$work/existing-acme-contact.json" 2> "$work/acme-contact-error" \
+    || production_fail "cannot inspect existing ACME contact Secret (details suppressed)"
+  if [[ -s $work/existing-acme-contact.json ]]; then
+    jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+      "$work/existing-acme-contact.json" > /dev/null \
+      || production_fail "refusing to overwrite an unowned ACME contact Secret"
   fi
 }
 
@@ -284,11 +343,17 @@ wait_traefik() {
   # A rollout status call alone can observe the old deployment before the Helm controller acts.
   while ((SECONDS < deadline)); do
     if kube --namespace kube-system get deployment traefik -o json > "$work/traefik.json" 2> /dev/null \
-      && jq -e --arg image "$expected" --arg checksum "$route_checksum" '
+      && jq -e --arg image "$expected" --arg checksum "$route_checksum" \
+        --argjson https "$(jq 'has("httpsStaging")' "$work/config.json")" '
         .spec.template.metadata.annotations["recipe-db/routes-checksum"] == $checksum
         and any(.spec.template.spec.containers[]?;
           (.image | sub("^docker.io/"; "")) == ($image | sub("^docker.io/"; ""))
           and any(.args[]?; . == "--providers.file.filename=/etc/recipe-db/routes.yml")
+          and (if $https then
+            any(.args[]?; . == "--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)")
+            and any(.env[]?; .name == "ACME_ACCOUNT_EMAIL"
+              and .valueFrom.secretKeyRef == {name:"recipe-db-acme-contact",key:"email"})
+            else true end)
           and any(.ports[]?; .containerPort == 3000)
           and any(.volumeMounts[]?; .mountPath == "/etc/recipe-db"))
         and any(.spec.template.spec.volumes[]?; .secret.secretName == "recipe-db-routes")
@@ -1158,8 +1223,8 @@ case "$command" in
     cat "$work/rendered.yml"
     ;;
   deploy)
-    pull_release "$1"
     production_secrets
+    pull_release "$1"
     render
     routes
     annotate_credentials
@@ -1170,6 +1235,7 @@ case "$command" in
         || production_fail "token-only rehearsal requires no existing Google deployment; transition explicitly before retrying"
     fi
     guard_helm_config
+    guard_acme_claim
     lock_holder="$cluster-deploy-$$"
     # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
     cluster_operation_lock_acquire "$lock_holder" deploy "$1"
@@ -1199,6 +1265,16 @@ case "$command" in
     } 2> "$work/route-secret-error"; then
       production_fail "route Secret could not be applied (details suppressed to protect secrets)"
     fi
+    if [[ -f $work/acme-account-email ]]; then
+      if ! {
+        kube --namespace kube-system create secret generic recipe-db-acme-contact \
+          "--from-file=email=$work/acme-account-email" --dry-run=client -o json \
+          | jq '.metadata.labels["app.kubernetes.io/part-of"] = "recipe-db"' \
+          | kube --namespace kube-system apply -f - > /dev/null
+      } 2> "$work/acme-contact-error"; then
+        production_fail "ACME contact Secret could not be applied (details suppressed to protect contact)"
+      fi
+    fi
     if ! {
       # Job pod templates are immutable; provisioning is deliberately idempotent.
       kube delete job nats-init --ignore-not-found --wait=true --timeout="${timeout}s" > /dev/null \
@@ -1214,10 +1290,11 @@ case "$command" in
     fi
     if [[ $auth_mode = token-only ]]; then
       kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
-      jq -e --arg ingress "$ingress_mode" '
+      jq -e --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
         (if $ingress == "private-lan" then
           .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
-          (.spec.ports | length == 1) and .spec.ports[0].port == 80
+          ([.spec.ports[].port] | sort) ==
+            (if $config[0].httpsStaging then [80,8081,8443] else [80] end)
          else .spec.type == "ClusterIP" end) and
         ((.spec.externalIPs // []) | length == 0) and
         all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \

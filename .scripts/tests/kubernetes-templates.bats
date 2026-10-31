@@ -19,16 +19,35 @@ setup() {
         revision: ("b" * 40),
         images: ($projects | map({key: .name, value: ("ghcr.io/dhhyi/recipe-db-" + .name + "@sha256:" + ("c" * 64))}) | from_entries)
       },
-      files: {nats: "port: 4222", maintenanceNginx: "server {}", maintenanceHtml: "unavailable", oauthConfig: "reverse_proxy=true"}
+      files: {nats: "port: 4222", maintenanceNginx: "server {}", maintenanceHtml: "unavailable", oauthConfig: "reverse_proxy=true", designNginx: "server {}"}
     }
+
   ' > values.json
 }
 
 render() {
+  set -o pipefail
   mise exec -- ytt \
     -f "$ROOT/.scripts/templates/kubernetes-template.yml" \
     -f "$ROOT/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
+}
+
+@test "design redirects stay origin-relative behind TLS termination and use the reviewed production config" {
+  grep -q 'absolute_redirect off;' "$ROOT/design/nginx.conf"
+  grep -Fq "return 302 \"\$real_css_file\";" "$ROOT/design/nginx.conf"
+  grep -Fq "return 302 \"\$real_js_file\";" "$ROOT/design/nginx.conf"
+  run ! grep -Fq "\$scheme://\$http_host" "$ROOT/design/nginx.conf"
+  jq --rawfile config "$ROOT/design/nginx.conf" '.files.designNginx=$config' values.json > design-values.json
+  render design-values.json
+  jq -e --rawfile config "$ROOT/design/nginx.conf" '
+    any(.items[]; .kind == "ConfigMap" and .metadata.name == "design-config"
+      and .data["default.conf"] == $config)
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "design"
+      and any(.spec.template.spec.containers[0].volumeMounts[];
+        .name == "design-config" and .mountPath == "/etc/nginx/conf.d" and .readOnly)
+      and any(.spec.template.spec.volumes[]; .configMap.name == "design-config"))
+  ' manifests.json
 }
 
 @test "Pi uses the official 16 KiB ARM64 Typesense build without changing local defaults" {
@@ -82,6 +101,50 @@ render() {
   jq -e 'all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")' manifests.json
 }
 
+@test "certificate-only staging preserves private HTTP and persists separate ACME environments" {
+  for environment in staging production; do
+    jq --arg environment "$environment" '
+      .config.target="pi" | .config.context="recipe-db-pi" |
+      .config.storageClass="recipe-db-retained" |
+      .config.origin="http://recipe-pi.home" | .config.runtime.authMode="token-only" |
+      .config.runtime.ingressMode="private-lan" | .config.runtime.googleOAuthClientId="" |
+      .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:$environment}
+    ' values.json > https-values.json
+    render https-values.json
+    jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+    yq -o=json '.' helm-values.yaml | jq -e --arg environment "$environment" '
+      .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
+      and .ports["staging-http"].exposedPort == 8081
+      and .ports["staging-http"].port == 8001
+      and .ports.websecure.exposedPort == 8443 and .ports.websecure.expose.default == true
+      and .ports["rest-internal"].expose.default == false
+      and .persistence.existingClaim == "recipe-db-acme" and .persistence.path == "/data"
+      and .podSecurityContext.fsGroup == 65532 and .updateStrategy.type == "Recreate"
+      and .env == [{name:"ACME_ACCOUNT_EMAIL",valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)") != null)
+      and (.deployment.initContainers[0].command[2] |
+        contains("chmod 600 /data/acme-" + $environment + ".json"))
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http") != null)
+      and (.additionalArguments | index("--entrypoints.staging-http.http.redirections.entrypoint.to=:443") != null)
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme-" + $environment + ".json") != null)
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.caserver=" +
+        (if $environment == "production" then "https://acme-v02.api.letsencrypt.org/directory"
+         else "https://acme-staging-v02.api.letsencrypt.org/directory" end)) != null)'
+    jq -e '
+      any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme"
+        and .metadata.namespace == "kube-system" and .spec.storageClassName == "recipe-db-retained"
+        and .spec.resources.requests.storage == "64Mi")
+      and any(.items[]; .kind == "Service" and .metadata.name == "recipe-db-internal"
+        and any(.spec.ports[]; .port == 80 and .targetPort == 8000))
+      and any(.items[]; .kind == "Deployment" and .metadata.name == "https-staging"
+        and .spec.template.spec.automountServiceAccountToken == false)
+      and any(.items[]; .kind == "ConfigMap" and .metadata.name == "https-staging-config"
+        and (.data["default.conf"] | contains("location = /") and contains("location / { return 404; }")))
+      and all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
+    ' manifests.json
+  done
+}
+
 @test "Kubernetes templates select every application project including design" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '
@@ -95,6 +158,28 @@ render() {
       and (.spec.template.spec.containers[0].readinessProbe != null)
       and (.spec.template.spec.containers[0].startupProbe != null))
   ' manifests.json
+}
+
+@test "renewal rehearsal enlarges only the test CA renewal window and retains normal production settings" {
+  jq '.config.target="pi" | .config.runtime.authMode="token-only" |
+    .config.runtime.ingressMode="private-lan" |
+    .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:true}
+  ' values.json > renewal-values.json
+  render renewal-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
+    | yq -o=json '.' | jq -e '
+      .additionalArguments | index("--certificatesresolvers.letsencrypt.acme.certificatesduration=8760") != null'
+  jq '.config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}' \
+    renewal-values.json > preview-values.json
+  render preview-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
+    | yq -o=json '.' | jq -e '
+      all(.additionalArguments[]; startswith("--certificatesresolvers.letsencrypt.acme.certificatesduration=") | not)
+      and .persistence.existingClaim == "recipe-db-acme"'
+  jq '.config.httpsStaging.renewalRehearsal=true' preview-values.json > unsafe-values.json
+  run render unsafe-values.json
+  [ "$status" -ne 0 ]
+  [[ $output == *"Renewal rehearsal is restricted to the test CA"* ]]
 }
 
 @test "only explicitly durable services have independent local-path claims" {

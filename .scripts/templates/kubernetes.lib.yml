@@ -6,6 +6,7 @@
 #@ inventory = struct.decode(data.values.release)
 #@ files = struct.decode(data.values.files)
 #@ ns = cfg["namespace"]
+#@ https_staging = cfg.get("httpsStaging")
 
 #@ def metadata(name, namespace=ns):
 #@   return {"name": name, "namespace": namespace, "labels": {"app.kubernetes.io/part-of": "recipe-db", "app.kubernetes.io/name": name}}
@@ -121,7 +122,9 @@
 #@       init = [wait_for_nats()]
 #@     end
 #@   end
-#@   result = deployment(name, inventory["images"][name], port, env, durable, secrets=secrets, init=init)
+#@   mounts = [config_mount("design-config", "/etc/nginx/conf.d")] if name == "design" else []
+#@   volumes = [config_volume("design-config")] if name == "design" else []
+#@   result = deployment(name, inventory["images"][name], port, env, durable, secrets=secrets, init=init, mounts=mounts, volumes=volumes)
 #@   if name == "search":
 #@     result["spec"]["template"]["spec"]["containers"].append({"name": "index-readiness", "image": cfg["infrastructure"]["maintenance"], "command": ["sh", "-ec", "exec sleep infinity"], "resources": {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"memory": "32Mi"}}, "readinessProbe": {"exec": {"command": ["sh", "-ec", """wget -qO- http://127.0.0.1:3000/health | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'"""]}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 1}})
 #@   end
@@ -135,6 +138,10 @@
 #@   redis_probe = {"exec": {"command": ["redis-cli", "ping"]}, "periodSeconds": 5, "timeoutSeconds": 2, "failureThreshold": 6}
 #@   redis = deployment("redis", images["redis"], 6379, durable=True, command=["redis-server"], args=["--appendonly", "yes", "--appendfsync", "always"], readiness=redis_probe, liveness=redis_probe)
 #@   maintenance = deployment("browse-maintenance", images["maintenance"], 80, mounts=[config_mount("maintenance-config", "/etc/nginx/conf.d"), config_mount("maintenance-html", "/usr/share/nginx/html")], volumes=[config_volume("maintenance-config"), config_volume("maintenance-html")], readiness={"tcpSocket": {"port": 80}, "periodSeconds": 5}, liveness={"tcpSocket": {"port": 80}, "periodSeconds": 10})
+#@   if https_staging != None:
+#@     staging = deployment("https-staging", images["maintenance"], 80, mounts=[config_mount("https-staging-config", "/etc/nginx/conf.d")], volumes=[config_volume("https-staging-config")], readiness=probe(80, "/"), liveness=probe(80, "/"))
+#@     return [nats, typesense, redis, maintenance, staging]
+#@   end
 #@   if cfg["runtime"].get("authMode", "google") == "token-only":
 #@     return [nats, typesense, redis, maintenance]
 #@   end
@@ -148,8 +155,12 @@
 
 #@ def config_maps():
 #@   entries = {"nats-config": {"nats.conf": files["nats"]}, "maintenance-config": {"default.conf": files["maintenanceNginx"]}, "maintenance-html": {"unavailable.html": files["maintenanceHtml"]}, "recipe-db-release": {"artifact": data.values.artifact, "revision": inventory["revision"]}}
+#@   entries["design-config"] = {"default.conf": files["designNginx"]}
 #@   if cfg["runtime"].get("authMode", "google") == "google":
 #@     entries["oauth-config"] = {"oauth2-proxy.cfg": files["oauthConfig"], "alpha.yaml": yaml.encode(oauth_alpha())}
+#@   end
+#@   if https_staging != None:
+#@     entries["https-staging-config"] = {"default.conf": 'server { listen 80; server_tokens off; location = / { default_type text/plain; add_header Cache-Control "no-store" always; return 200 "Recipe DB HTTPS staging ready\\n"; } location / { return 404; } }'}
 #@   end
 #@   return [{"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata(name), "data": value} for name, value in entries.items()]
 #@ end
@@ -163,6 +174,25 @@
 #@       values["service"] = {"type": "LoadBalancer", "spec": {"allocateLoadBalancerNodePorts": False}}
 #@     else:
 #@       values["service"] = {"type": "ClusterIP"}
+#@     end
+#@   end
+#@   if https_staging != None:
+#@     environment = https_staging["acmeEnvironment"]
+#@     ca = "https://acme-v02.api.letsencrypt.org/directory" if environment == "production" else "https://acme-staging-v02.api.letsencrypt.org/directory"
+#@     values["ports"]["staging-http"] = {"port": 8001, "expose": {"default": True}, "exposedPort": 8081, "protocol": "TCP", "observability": {}}
+#@     values["ports"]["websecure"] = {"port": 8443, "expose": {"default": True}, "exposedPort": 8443, "protocol": "TCP"}
+#@     values["persistence"] = {"enabled": True, "existingClaim": "recipe-db-acme", "path": "/data"}
+#@     values["podSecurityContext"] = {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True, "fsGroup": 65532}
+#@     values["updateStrategy"] = {"type": "Recreate"}
+#@     values["env"] = [{"name": "ACME_ACCOUNT_EMAIL", "valueFrom": {"secretKeyRef": {"name": "recipe-db-acme-contact", "key": "email"}}}]
+#@     values["deployment"]["initContainers"] = [{"name": "acme-permissions", "image": cfg["infrastructure"]["traefik"], "command": ["sh", "-ec", "umask 077; touch /data/acme-" + environment + ".json; chmod 600 /data/acme-" + environment + ".json"], "volumeMounts": [{"name": "data", "mountPath": "/data"}], "securityContext": {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True}}]
+#@     values["additionalArguments"].extend(["--entrypoints.staging-http.http.redirections.entrypoint.to=:443", "--entrypoints.staging-http.http.redirections.entrypoint.scheme=https", "--entrypoints.websecure.http.middlewares=identity-strip@file", "--certificatesresolvers.letsencrypt.acme.caserver=" + ca, "--certificatesresolvers.letsencrypt.acme.storage=/data/acme-" + environment + ".json", "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http"])
+#@     values["additionalArguments"].append("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)")
+#@     if https_staging.get("renewalRehearsal", False):
+#@       if environment != "staging":
+#@         fail("Renewal rehearsal is restricted to the test CA")
+#@       end
+#@       values["additionalArguments"].append("--certificatesresolvers.letsencrypt.acme.certificatesduration=8760")
 #@     end
 #@   end
 #@   return values
