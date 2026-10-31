@@ -1085,13 +1085,15 @@ legacy_pi_claims() {
   grep -Eq '^[0-9a-f]{64}$' "$MOCK_LOG.route-checksum"
 }
 
-@test "deploy refuses foreign namespace before creating secrets or taking its lock" {
+@test "deploy refuses a foreign namespace after acquiring and releasing its external lock" {
   export MOCK_FOREIGN_NAMESPACE=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
   [[ $output == *"unowned application namespace"* ]]
   run ! grep -q 'create secret' "$MOCK_LOG"
-  run ! grep -q 'create -f .*lease.json' "$MOCK_LOG"
+  grep -q 'create -f .*recipe-db-deploy-lease.json' "$MOCK_LOG"
+  grep -q 'delete --raw.*/leases/recipe-db-deploy' "$MOCK_LOG"
+  [ ! -e "$MOCK_LOG.lease" ]
 }
 
 @test "deploy refuses foreign Traefik HelmChartConfig before any cluster mutation" {
@@ -1770,7 +1772,7 @@ PY
     [[ $output == *"populated; NOTHING will be wiped"* ]]
     jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
     [ -e "$MOCK_LOG.lease" ]
-    run ! grep -Eq 'tar -xpf|delete pvc|delete pv|rm -rf /data' "$MOCK_LOG"
+    run ! grep -Eq 'tar -xpk?f|delete pvc|delete pv|rm -rf /data' "$MOCK_LOG"
     rm "$MOCK_LOG.lease" "$MOCK_LOG.claims" "$MOCK_LOG.restore-pods" "$MOCK_LOG.cluster-restore-state"
     : > "$MOCK_LOG"
   done
@@ -1937,7 +1939,7 @@ run_restore_abandon() {
   jq -e '.status == "abandoned" and .phase == "isolated-new-target-required"' \
     "$RESTORE_STATE/restore-state.json"
   jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
-  run ! grep -Eq 'tar -xpf|delete pvc|delete pv|scale deployment|set env deployment' "$MOCK_LOG"
+  run ! grep -Eq 'tar -xpk?f|delete pvc|delete pv|scale deployment|set env deployment' "$MOCK_LOG"
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
   [[ $output == *"unresolved or abandoned restore state"* ]]

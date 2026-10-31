@@ -52,11 +52,11 @@ kube() {
             {persistentVolumeClaim:{claimName:"recipes"}}]}}] else [] end)}' ;;
     "exec restore-volume-recipes -- sh -ec "*)
       [[ -z $(find "$root/data" -mindepth 1 -maxdepth 1 -print -quit) ]] ;;
-    "exec -i restore-volume-recipes -- tar -xpf - --numeric-owner -C /data")
+    "exec -i restore-volume-recipes -- tar -xpkf - --numeric-owner -C /data")
       [[ ${MOCK_TRANSFER_FAIL:-false} != true ]] || return 1
       # The real helper runs as root. Check its exact numeric-owner command above,
       # then avoid changing ownership on the non-root regression-test host.
-      tar -xpf - --no-same-owner -C "$root/data" ;;
+      tar -xpkf - --no-same-owner -C "$root/data" ;;
     "exec restore-volume-recipes -- sync") ;;
     "exec restore-volume-recipes -- tar -C /data -cf - .")
       tar -C "$root/data" -cf - . ;;
@@ -71,7 +71,7 @@ EOF
 @test "restore import preserves numeric ownership rather than mapping archived usernames in the helper image" {
   run bash .scripts/restore-import-harness.sh
   [ "$status" -eq 0 ]
-  grep -q 'tar -xpf - --numeric-owner -C /data' "$MOCK_LOG"
+  grep -q 'tar -xpkf - --numeric-owner -C /data' "$MOCK_LOG"
   [ "$(stat -c '%a' data/recipes.sqlite3)" = 640 ]
   [ -e helper-deleted ]
 }
