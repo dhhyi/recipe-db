@@ -102,6 +102,8 @@ render() {
       and .ports["rest-internal"].expose.default == false
       and .persistence.existingClaim == "recipe-db-acme" and .persistence.path == "/data"
       and .podSecurityContext.fsGroup == 65532 and .updateStrategy.type == "Recreate"
+      and .env == [{name:"ACME_ACCOUNT_EMAIL",valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)") != null)
       and (.deployment.initContainers[0].command[2] |
         contains("chmod 600 /data/acme-" + $environment + ".json"))
       and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http") != null)

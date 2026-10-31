@@ -26,6 +26,7 @@ setup() {
   export MOCK_STALE_ROUTES=false
   export MOCK_LAN=false MOCK_NODEPORT=false
   export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
+  export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
@@ -46,6 +47,7 @@ setup() {
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > graphql-ingress-secret
   printf 'private-typesense-value-for-tests' > typesense-api-key
+  printf 'acme@example.org\n' > acme-account-email
   printf 'private-oauth-client-value-for-tests' > google-oauth-client-secret
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
@@ -318,6 +320,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     if [[ -f $MOCK_LOG.pvcs ]]; then echo namespace/recipe-db; fi ;;
   *"get pvc recipe-db-acme --ignore-not-found -o json"*)
     if [[ $MOCK_FOREIGN_ACME == true ]]; then echo '{"metadata":{"labels":{}}}'; fi ;;
+  *"get secret recipe-db-acme-contact --ignore-not-found -o json"*)
+    if [[ $MOCK_FOREIGN_ACME_CONTACT == true ]]; then echo '{"metadata":{"labels":{}}}'; fi ;;
   *"get helmchartconfig traefik --ignore-not-found -o json"*)
     if [[ $MOCK_FOREIGN_HELM = true ]]; then echo '{"metadata":{"labels":{"owner":"someone-else"}}}'; fi ;;
   *"get deployment traefik -o json"*)
@@ -337,8 +341,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       "args":["--providers.file.filename=/etc/recipe-db/routes.yml"],
       "ports":[{"containerPort":3000}],"volumeMounts":[{"mountPath":"/etc/recipe-db"}]}],
       "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' |
-      jq --arg checksum "$checksum" \
-        '.spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum' ;;
+      jq --arg checksum "$checksum" --argjson https "$(jq 'has("httpsStaging")' "$VALUES")" '
+        .spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum |
+        if $https then
+          .spec.template.spec.containers[0].args += ["--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)"] |
+          .spec.template.spec.containers[0].env = [{name:"ACME_ACCOUNT_EMAIL",
+            valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
+        else . end' ;;
   *"create -f "*lease.json*)
     [[ $MOCK_LOCK != true ]] || exit 1
     lock_file="${*: -1}"
@@ -607,6 +616,7 @@ token_only_values() {
     .storageClass="recipe-db-retained" |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .runtime.authMode="token-only" | .runtime.googleOAuthClientId="" |
+    .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email")) |
     del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
 }
@@ -626,6 +636,43 @@ token_only_values() {
   done
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "HTTPS deployment validates private ACME contact and rolls Traefik when it changes" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production"}'
+  for value in '' 'not-an-email' 'acme@example.org
+--injected'; do
+    printf '%s' "$value" > acme-account-email
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"acme-account-email"* ]]
+    [[ $output != *"injected"* ]]
+  done
+  printf 'acme@example.org\n' > acme-account-email
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output != *"acme@example.org"* ]]
+  grep -q 'create secret generic recipe-db-acme-contact' "$MOCK_LOG"
+  local original
+  original=$(cat "$MOCK_LOG.route-checksum")
+  printf 'changed@example.org' > acme-account-email
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$original" != "$(cat "$MOCK_LOG.route-checksum")" ]
+}
+
+@test "HTTPS deployment refuses unowned ACME contact before applying credentials" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production"}'
+  export MOCK_FOREIGN_ACME_CONTACT=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"unowned ACME contact Secret"* ]]
+  run ! grep -q 'create secret' "$MOCK_LOG"
 }
 
 @test "preview and renewal rehearsal reject unsafe CA and flag combinations" {

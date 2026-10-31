@@ -181,8 +181,10 @@
 #@     values["persistence"] = {"enabled": True, "existingClaim": "recipe-db-acme", "path": "/data"}
 #@     values["podSecurityContext"] = {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True, "fsGroup": 65532}
 #@     values["updateStrategy"] = {"type": "Recreate"}
+#@     values["env"] = [{"name": "ACME_ACCOUNT_EMAIL", "valueFrom": {"secretKeyRef": {"name": "recipe-db-acme-contact", "key": "email"}}}]
 #@     values["deployment"]["initContainers"] = [{"name": "acme-permissions", "image": cfg["infrastructure"]["traefik"], "command": ["sh", "-ec", "umask 077; touch /data/acme-" + environment + ".json; chmod 600 /data/acme-" + environment + ".json"], "volumeMounts": [{"name": "data", "mountPath": "/data"}], "securityContext": {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True}}]
 #@     values["additionalArguments"].extend(["--entrypoints.staging-http.http.redirections.entrypoint.to=:443", "--entrypoints.staging-http.http.redirections.entrypoint.scheme=https", "--entrypoints.websecure.http.middlewares=identity-strip@file", "--certificatesresolvers.letsencrypt.acme.caserver=" + ca, "--certificatesresolvers.letsencrypt.acme.storage=/data/acme-" + environment + ".json", "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http"])
+#@     values["additionalArguments"].append("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)")
 #@     if https_staging.get("renewalRehearsal", False):
 #@       if environment != "staging":
 #@         fail("Renewal rehearsal is restricted to the test CA")

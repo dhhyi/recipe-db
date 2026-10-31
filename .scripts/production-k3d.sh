@@ -189,12 +189,16 @@ render() {
 
 annotate_credentials() {
   local checksum
+  local route_inputs=(routes.yml config.json)
   checksum=$(
     cd "$work"
     sha256sum "${secret_keys[@]}" template-values.json | sha256sum
   )
   checksum=${checksum%% *}
-  route_checksum=$(cd "$work" && sha256sum routes.yml config.json | sha256sum)
+  if [[ -f $work/acme-account-email ]]; then
+    route_inputs+=(acme-account-email)
+  fi
+  route_checksum=$(cd "$work" && sha256sum "${route_inputs[@]}" | sha256sum)
   route_checksum=${route_checksum%% *}
   SECRET_CHECKSUM="$checksum" ROUTES_CHECKSUM="$route_checksum" yq \
     '(select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum") = strenv(SECRET_CHECKSUM) |
@@ -290,6 +294,14 @@ guard_acme_claim() {
     ' "$work/existing-acme-claim.json" > /dev/null \
       || production_fail "refusing to overwrite an unowned or incompatible ACME claim"
   fi
+  kube --namespace kube-system get secret recipe-db-acme-contact --ignore-not-found -o json \
+    > "$work/existing-acme-contact.json" 2> "$work/acme-contact-error" \
+    || production_fail "cannot inspect existing ACME contact Secret (details suppressed)"
+  if [[ -s $work/existing-acme-contact.json ]]; then
+    jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+      "$work/existing-acme-contact.json" > /dev/null \
+      || production_fail "refusing to overwrite an unowned ACME contact Secret"
+  fi
 }
 
 ensure_namespace() {
@@ -314,11 +326,17 @@ wait_traefik() {
   # A rollout status call alone can observe the old deployment before the Helm controller acts.
   while ((SECONDS < deadline)); do
     if kube --namespace kube-system get deployment traefik -o json > "$work/traefik.json" 2> /dev/null \
-      && jq -e --arg image "$expected" --arg checksum "$route_checksum" '
+      && jq -e --arg image "$expected" --arg checksum "$route_checksum" \
+        --argjson https "$(jq 'has("httpsStaging")' "$work/config.json")" '
         .spec.template.metadata.annotations["recipe-db/routes-checksum"] == $checksum
         and any(.spec.template.spec.containers[]?;
           (.image | sub("^docker.io/"; "")) == ($image | sub("^docker.io/"; ""))
           and any(.args[]?; . == "--providers.file.filename=/etc/recipe-db/routes.yml")
+          and (if $https then
+            any(.args[]?; . == "--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)")
+            and any(.env[]?; .name == "ACME_ACCOUNT_EMAIL"
+              and .valueFrom.secretKeyRef == {name:"recipe-db-acme-contact",key:"email"})
+            else true end)
           and any(.ports[]?; .containerPort == 3000)
           and any(.volumeMounts[]?; .mountPath == "/etc/recipe-db"))
         and any(.spec.template.spec.volumes[]?; .secret.secretName == "recipe-db-routes")
@@ -1225,6 +1243,16 @@ case "$command" in
         | kube --namespace kube-system apply -f - > /dev/null
     } 2> "$work/route-secret-error"; then
       production_fail "route Secret could not be applied (details suppressed to protect secrets)"
+    fi
+    if [[ -f $work/acme-account-email ]]; then
+      if ! {
+        kube --namespace kube-system create secret generic recipe-db-acme-contact \
+          "--from-file=email=$work/acme-account-email" --dry-run=client -o json \
+          | jq '.metadata.labels["app.kubernetes.io/part-of"] = "recipe-db"' \
+          | kube --namespace kube-system apply -f - > /dev/null
+      } 2> "$work/acme-contact-error"; then
+        production_fail "ACME contact Secret could not be applied (details suppressed to protect contact)"
+      fi
     fi
     if ! {
       # Job pod templates are immutable; provisioning is deliberately idempotent.
