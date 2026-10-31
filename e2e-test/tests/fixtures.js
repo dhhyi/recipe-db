@@ -36,7 +36,7 @@ async function resetApplicationData(request) {
       id,
     });
   }
-  for (const service of ["ratings", "images", "inspirations"]) {
+  for (const service of ["ratings", "images", "inspirations", "tags"]) {
     await resetRestService(request, service);
   }
   await expect

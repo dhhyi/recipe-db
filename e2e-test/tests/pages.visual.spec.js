@@ -120,6 +120,136 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "recipe.png");
     });
 
+    if (role === "owner") {
+      test("recipe tag editor", async ({ page, taggedDemoRecipe }) => {
+        await page.goto(`/recipe/${taggedDemoRecipe.id}`);
+        await expectHeader(page, role);
+
+        const editButton = page.getByRole("button", {
+          name: "Tags bearbeiten",
+          exact: true,
+        });
+        await expect(editButton).toBeVisible();
+        await editButton.click();
+
+        await expect(
+          page.getByRole("searchbox", { name: "Tag suchen", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.getByRole("button", { name: "Fertig", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.locator("#recipe-tags [data-tag-remove]"),
+        ).toHaveCount(3);
+        await expect(page.locator("#recipe-tags details")).toHaveCount(0);
+        await expect(page.locator("#recipe-tag-options > ul")).toHaveCount(1);
+        await expect(
+          page.locator(
+            "#recipe-tag-options fieldset, #recipe-tag-options legend",
+          ),
+        ).toHaveCount(0);
+        const pill = page.locator("#recipe-tags .recipe-tag").first();
+        const editHeight = (await pill.boundingBox()).height;
+        const removeButton = pill.getByRole("button");
+        expect((await removeButton.boundingBox()).height).toBeLessThanOrEqual(
+          editHeight,
+        );
+        await page.getByRole("button", { name: "Fertig", exact: true }).click();
+        await expect(editButton).toBeVisible();
+        await expect(page.locator("#recipe-tag-search")).toHaveCount(0);
+        expect((await pill.boundingBox()).height).toBeCloseTo(editHeight, 1);
+        await editButton.click();
+        const search = page.getByRole("searchbox", {
+          name: "Tag suchen",
+          exact: true,
+        });
+        await search.fill("Deutsch");
+        const option = page
+          .locator("#recipe-tag-options button[type='submit']")
+          .first();
+        await expect(option).toBeVisible();
+        await expect(option).toHaveText("Deutsch");
+
+        await search.fill("");
+        await expect(
+          page.locator("#recipe-tag-options button[type='submit']"),
+        ).not.toHaveCount(1);
+        await waitForImageDecoded(
+          page.getByRole("img", {
+            name: taggedDemoRecipe.name,
+            exact: true,
+          }),
+        );
+        await page
+          .getByRole("button", { name: "Zur Startseite" })
+          .scrollIntoViewIfNeeded();
+        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(page.locator(".htmx-settling")).toHaveCount(0);
+        const updatedAt = page.getByText(
+          /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
+        );
+        await expect(updatedAt).toBeVisible();
+        await updatedAt.evaluate((element) => {
+          element.textContent = "Zuletzt aktualisiert: gerade eben";
+        });
+        await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+        await screenshot(page, "tag-editor.png");
+
+        let assignments = 0;
+        page.on("request", (request) => {
+          if (
+            request.method() === "POST" &&
+            new URL(request.url()).pathname ===
+              `/recipe/${taggedDemoRecipe.id}/tags`
+          ) {
+            assignments += 1;
+          }
+        });
+        const options = page.locator(
+          "#recipe-tag-options button[type='submit']",
+        );
+        await search.fill("de");
+        await expect(options).toHaveCount(2);
+        await search.press("Enter");
+        expect(assignments).toBe(0);
+        await expect(
+          page.locator("#recipe-tags [data-tag-remove]"),
+        ).toHaveCount(3);
+
+        await search.fill(" Deutsch ");
+        await expect(options).toHaveCount(1);
+        await expect(options).toHaveText("Deutsch");
+        await search.dispatchEvent("keydown", {
+          key: "Enter",
+          isComposing: true,
+        });
+        await search.dispatchEvent("keydown", { key: "Enter", repeat: true });
+        expect(assignments).toBe(0);
+        await search.evaluate((input) => {
+          input.value = "no-matching-tag";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+          );
+        });
+        await expect(options).toHaveCount(0);
+        await search.press("Enter");
+        expect(assignments).toBe(0);
+
+        await search.fill(" Deutsch ");
+        await expect(options).toHaveCount(1);
+        await search.press("Enter");
+        await expect(
+          page.getByRole("button", { name: "Deutsch entfernen", exact: true }),
+        ).toBeVisible();
+        await expect(
+          page.locator("#recipe-tags [data-tag-remove]"),
+        ).toHaveCount(4);
+        expect(assignments).toBe(1);
+        await expect(search).toBeFocused();
+      });
+    }
+
     test("styled full-page error", async ({ page }) => {
       const response = await page.goto("/does-not-exist");
       expect(response.status()).toBe(404);

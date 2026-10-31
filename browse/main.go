@@ -111,6 +111,23 @@ func writeRatingDeniedPage(w http.ResponseWriter, r *http.Request, status int) {
 	}
 }
 
+func tagRouteAllowedMethods(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "recipe" || parts[1] == "" || parts[2] != "tags" {
+		return ""
+	}
+	switch {
+	case len(parts) == 3:
+		return "GET, HEAD, POST"
+	case len(parts) == 4 && parts[3] == "options":
+		return "GET, HEAD"
+	case len(parts) == 5 && parts[4] == "remove" && parts[3] != "":
+		return "POST"
+	default:
+		return ""
+	}
+}
+
 func ratingAuthorizationStatus(err error, upstreamStatus int) int {
 	if upstreamStatus == http.StatusUnauthorized || upstreamStatus == http.StatusForbidden {
 		return upstreamStatus
@@ -135,6 +152,10 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", browseHandler(client))
+	mux.HandleFunc("GET /recipe/{id}/tags", recipeTagsHandler(endpoint))
+	mux.HandleFunc("GET /recipe/{id}/tags/options", recipeTagOptionsHandler(endpoint))
+	mux.HandleFunc("POST /recipe/{id}/tags", recipeTagMutationHandler(endpoint, cache, false))
+	mux.HandleFunc("POST /recipe/{id}/tags/{tagId}/remove", recipeTagMutationHandler(endpoint, cache, true))
 	mux.HandleFunc("GET /recipe/{id}/similar", similarRecipesHandler(endpoint, false))
 	mux.HandleFunc("POST /recipe/{id}/similar/more", similarRecipesHandler(endpoint, true))
 
@@ -304,6 +325,11 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if allowed := tagRouteAllowedMethods(r.URL.EscapedPath()); allowed != "" {
+				w.Header().Set("Allow", allowed)
+				http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+				return
+			}
 			id := strings.TrimPrefix(r.URL.Path, "/recipe/")
 			if r.URL.Path == "/" || id != r.URL.Path && id != "" && !strings.Contains(id, "/") {
 				w.Header().Set("Allow", "GET, HEAD")

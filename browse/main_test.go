@@ -249,6 +249,11 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		!strings.Contains(pageHTML, "aggregateRating") || strings.Contains(pageHTML, `value="test"`) {
 		t.Fatal("shared page does not separate live content or contains user data")
 	}
+	if !strings.Contains(pageHTML, `hx-get="/recipe/42/tags"`) ||
+		strings.Contains(pageHTML, "Tags bearbeiten") || strings.Contains(pageHTML, "data-tag-remove") ||
+		strings.Contains(pageHTML, "hx-post") {
+		t.Fatal("cached recipe HTML must contain only read-only tag markup and the live tag-fragment placeholder")
+	}
 	etag := first.Header().Get("ETag")
 	if etag == "" || first.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatal("missing browser revalidation headers")
