@@ -1,0 +1,54 @@
+package components
+
+import gql "frontend/src/generated"
+
+templ SimilarRecipesPlaceholder(id string) {
+	<div id="similar-recipes" hx-get={ "/recipe/" + id + "/similar" } hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="find button" hx-push-url="false" hx-replace-url="false" hx-history="false" hx-on::send-error="htmx.trigger(this, 'similar-error')" hx-on::response-error="htmx.trigger(this, 'similar-error')" hx-on::timeout="htmx.trigger(this, 'similar-error')" hx-on:similar-error="this.querySelector('[data-similar-error]').hidden = false; this.querySelector('button').textContent = 'Erneut versuchen'">
+		<p data-similar-error hidden role="status">Ähnliche Rezepte konnten nicht geladen werden</p>
+		<button type="button" hx-get={ "/recipe/" + id + "/similar" } hx-target="#similar-recipes" hx-swap="outerHTML" hx-sync="#similar-recipes:drop" hx-disabled-elt="this">Ähnliche Rezepte laden</button>
+	</div>
+}
+
+templ SimilarRecipes(id string, recipes []gql.RecipeStub, remaining []string, failed bool) {
+	if len(recipes) > 0 || failed {
+		<section id="similar-recipes" hx-history="false">
+			<hr/>
+			<h2>Ähnliche Rezepte</h2>
+			if failed {
+				if len(remaining) > 0 {
+					<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 md:gap-4">
+						@SimilarRecipesBatch(id, nil, remaining, true)
+					</div>
+				} else {
+					<p role="status">Ähnliche Rezepte konnten nicht geladen werden</p>
+					<button type="button" hx-get={ "/recipe/" + id + "/similar" } hx-target="#similar-recipes" hx-swap="outerHTML" hx-sync="#similar-recipes:drop" hx-disabled-elt="this" hx-push-url="false" hx-replace-url="false">Erneut versuchen</button>
+				}
+			} else {
+				<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 md:gap-4">
+					@SimilarRecipesBatch(id, recipes, remaining, false)
+				</div>
+			}
+		</section>
+	} else {
+		<div id="similar-recipes" hidden></div>
+	}
+}
+
+templ SimilarRecipesBatch(id string, recipes []gql.RecipeStub, remaining []string, failed bool) {
+	for _, recipe := range recipes {
+		@recipeTile(recipe, true)
+	}
+	if len(remaining) > 0 {
+		<form id="similar-recipes-more" method="post" action={ "/recipe/" + id + "/similar/more" } hx-post={ "/recipe/" + id + "/similar/more" } hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="find button" hx-push-url="false" hx-replace-url="false" hx-history="false" hx-on::send-error="htmx.trigger(this, 'similar-error')" hx-on::response-error="htmx.trigger(this, 'similar-error')" hx-on::timeout="htmx.trigger(this, 'similar-error')" hx-on:similar-error="this.querySelector('[data-similar-error]').hidden = false; this.querySelector('button').textContent = 'Erneut versuchen'" class="col-span-full">
+			for _, candidate := range remaining {
+				<input type="hidden" name="remainingId" value={ candidate }/>
+			}
+			<p data-similar-error hidden?={ !failed } role="status">Ähnliche Rezepte konnten nicht geladen werden</p>
+			if failed {
+				<button type="submit">Erneut versuchen</button>
+			} else {
+				<button type="submit">Mehr anzeigen</button>
+			}
+		</form>
+	}
+}

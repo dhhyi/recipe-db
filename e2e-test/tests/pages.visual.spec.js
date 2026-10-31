@@ -132,6 +132,86 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "browse-error.png");
     });
 
+    test("recipe detail with five related recipes", async ({
+      page,
+      relatedDemoRecipes: { source, matches },
+    }) => {
+      test.setTimeout(120_000);
+      await page.goto(`/recipe/${source.id}`);
+      await expectHeader(page, role);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+        source.name,
+      );
+      await expect(
+        page.locator("#recipe-tags .recipe-tags-detail > div > .recipe-tag"),
+      ).toHaveCount(3);
+      const editButton = page.getByRole("button", {
+        name: "Bearbeiten",
+        exact: true,
+      });
+      if (role === "owner") {
+        await expect(editButton).toBeVisible();
+      } else {
+        await expect(editButton).toHaveCount(0);
+      }
+      await waitForImageDecoded(
+        page.getByRole("img", { name: source.name, exact: true }),
+      );
+      const updatedAt = page.getByText(
+        /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
+      );
+      await expect(updatedAt).toBeVisible();
+      await updatedAt.evaluate((element) => {
+        element.textContent = "Zuletzt aktualisiert: gerade eben";
+      });
+      const section = page.locator("#similar-recipes");
+      await section.scrollIntoViewIfNeeded();
+      const cards = section.locator("a[data-recipe-id]");
+      const button = section.getByRole("button", {
+        name: "Mehr anzeigen",
+        exact: true,
+      });
+      await expect(cards).toHaveCount(3);
+      await expect(button).toBeVisible();
+      await expect(section.locator('input[name="remainingId"]')).toHaveCount(2);
+      const url = page.url();
+      for (const count of [3, 5]) {
+        if (count === 5) {
+          while (await button.count()) {
+            const previousCount = await cards.count();
+            await button.scrollIntoViewIfNeeded();
+            await button.click();
+            await expect(cards).toHaveCount(Math.min(previousCount + 3, 5));
+            await expect(page).toHaveURL(url);
+          }
+          await expect(button).toHaveCount(0);
+          await expect(section.locator("form")).toHaveCount(0);
+        }
+        await expect(cards).toHaveCount(count);
+        expect(
+          await cards.evaluateAll((elements) =>
+            elements.map((element) => element.dataset.recipeId),
+          ),
+        ).toEqual(matches.slice(0, count).map((recipe) => recipe.id));
+        await page.evaluate(() =>
+          customElements.whenDefined("recipe-tile-component"),
+        );
+        for (const recipe of matches.slice(0, count)) {
+          const card = section.locator(`[data-recipe-id="${recipe.id}"]`);
+          await card.scrollIntoViewIfNeeded();
+          await waitForImageDecoded(
+            card.getByRole("img", { name: recipe.name, exact: true }),
+          );
+          await expect(
+            card.locator("[data-recipe-tag]:visible"),
+          ).not.toHaveCount(0);
+        }
+        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(page.locator(".htmx-settling")).toHaveCount(0);
+        await screenshot(page, `recipe-related-${count}.png`);
+      }
+    });
+
     test("recipe editor", async ({ page, demoRecipe }) => {
       await page.goto(`/edit/${demoRecipe.id}`);
       if (role === "owner") {
