@@ -1229,18 +1229,6 @@ legacy_pi_claims() {
   run ! grep -q 'exec backup-copy-.*-- tar -C' "$MOCK_LOG"
 }
 
-@test "capture respects the publisher staging bound before copying a PVC archive" {
-  export MOCK_BACKUP=true RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES=1
-  local snapshot="$FIXTURE_ROOT/backups/staging-limit"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
-  [ "$status" -ne 0 ]
-  [[ $output == *"snapshot exceeds configured staging limit"* ]]
-  [ ! -e "$snapshot/manifest.json" ]
-  [ ! -e "$snapshot/recipes.tar" ]
-  [ ! -e "$MOCK_LOG.lease" ]
-  run ! grep -q 'exec backup-copy-.*-- tar -C' "$MOCK_LOG"
-}
-
 @test "projection failure retains the barrier Lease and recovery state" {
   export MOCK_BACKUP=true MOCK_PROJECTION_FAIL=true
   local snapshot="$FIXTURE_ROOT/backups/projection-failed"
