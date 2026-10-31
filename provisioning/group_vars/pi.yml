@@ -1,6 +1,8 @@
 data_root: /srv/recipe-db
 k3s_version: v1.35.5+k3s1
 k3s_sha256: aced90bea6a4e025abef4cf6db7d8cc316a7d20a2b963f809852a37f2b9dbc03
+rclone_version: 1.75.2
+rclone_sha256: 7e1e8d69654941b7b7df84ee74c5f7fb09cce7d5496947fb7bf16b55ff427d10
 # Changing a pinned version/checksum requires explicit operator approval.
 allow_k3s_upgrade: false
 journal_max_use: 128M

@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -146,12 +147,12 @@ def validate_snapshot(snapshot):
                     stream = source_tar.extractfile(member)
                     if stream is None:
                         raise ValueError("unreadable archive member")
-                    file_hash = hashlib.sha256()
+                    file_digest = hashlib.sha256()
                     size = 0
                     while block := stream.read(1024 * 1024):
-                        file_hash.update(block)
+                        file_digest.update(block)
                         size += len(block)
-                    observed[name] = (size, file_hash.hexdigest())
+                    observed[name] = (size, file_digest.hexdigest())
         except tarfile.TarError as error:
             raise ValueError("invalid archive") from error
         if observed != expected_files or file_hash(archive) != pvc["sha256"]:
@@ -273,8 +274,12 @@ def safe_config(path):
             raise ValueError("incomplete configuration")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", config["deploymentId"]):
         raise ValueError("invalid deployment")
-    if not re.fullmatch(r"[A-Za-z0-9_-]+:.+", config["remote"]):
+    remote_name, remote_folder = config["remote"].split(":", 1) if ":" in config["remote"] else ("", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", remote_name) or not remote_folder \
+            or remote_folder.startswith("/") or ".." in remote_folder.split("/"):
         raise ValueError("invalid remote")
+    for key in ("rcloneConfig", "stateDirectory", "stagingDirectory", "captureCommand"):
+        config[key] = str(absolute_path(config[key]))
     rclone_config = Path(config["rcloneConfig"])
     if rclone_config.is_symlink() or not rclone_config.is_file() or rclone_config.stat().st_mode & 0o077:
         raise ValueError("rclone configuration must be private")
@@ -284,9 +289,6 @@ def safe_config(path):
     config["captureTimeoutSeconds"] = int(config.get("captureTimeoutSeconds", 5400))
     if not 60 <= config["captureTimeoutSeconds"] <= 7200:
         raise ValueError("invalid capture timeout")
-    capture = config.get("captureCommand")
-    if not isinstance(capture, str) or not capture.startswith("/"):
-        raise ValueError("invalid capture command")
     return config
 
 
@@ -307,6 +309,23 @@ def atomic_json(path, value):
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def absolute_path(value):
+    path = Path(value)
+    if not path.is_absolute() or ".." in path.parts:
+        raise ValueError("configuration paths must be absolute")
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            raise ValueError("configuration paths must not traverse symlinks")
+    return path
 
 
 def status_path(config):
@@ -448,20 +467,36 @@ def complete_remote_points(config, names):
             continue
         archive = document.get("archive")
         if not isinstance(archive, dict) or archive.get("name") not in names \
-                or not isinstance(archive.get("sha256"), str) or not HASH_PATTERN.fullmatch(archive["sha256"]):
+                or not isinstance(archive.get("sha256"), str) or not HASH_PATTERN.fullmatch(archive["sha256"]) \
+                or type(archive.get("sizeBytes")) is not int or archive["sizeBytes"] < 0:
             continue
-        expected_name = name.removesuffix(".manifest.json") + ".tar.gz"
-        if archive["name"] != expected_name:
+        snapshot_manifest = document.get("snapshotManifest")
+        backup_id = document.get("backupId")
+        try:
+            captured = validate_timestamp(document["capturedAt"])
+            stamp = captured.strftime("%Y%m%dT%H%M%SZ")
+        except (KeyError, ValueError):
+            continue
+        expected_prefix = f"recipe-db-{config['deploymentId']}-{stamp}-{backup_id}"
+        if not isinstance(backup_id, str) or not NAME_PATTERN.fullmatch(backup_id) \
+                or name != expected_prefix + ".manifest.json" \
+                or archive["name"] != expected_prefix + ".tar.gz" \
+                or not isinstance(document.get("contentFingerprint"), str) \
+                or not HASH_PATTERN.fullmatch(document["contentFingerprint"]) \
+                or not isinstance(snapshot_manifest, dict) \
+                or snapshot_manifest.get("format") != FORMAT \
+                or snapshot_manifest.get("formatVersion") != 1 \
+                or snapshot_manifest.get("backupId") != backup_id \
+                or snapshot_manifest.get("source") != document.get("source"):
             continue
         try:
-            capture_order = validate_timestamp(document["capturedAt"])
             archive_hash = remote_hash(config, archive["name"], archive["sizeBytes"])
             metadata_hash = remote_hash(config, name, len(json_bytes(document)))
         except (KeyError, ValueError, BackupError):
             continue
         if archive_hash != archive["sha256"] or metadata_hash != hashlib.sha256(json_bytes(document)).hexdigest():
             continue
-        points.append((capture_order, document.get("backupId", ""), archive["name"], name))
+        points.append((captured, backup_id, archive["name"], name))
     return points
 
 
@@ -486,6 +521,24 @@ def clear_stale_staging(stage_root):
     for path in Path(stage_root).glob("publish-*"):
         if path.is_symlink() or not path.is_dir():
             continue
+        shutil.rmtree(path)
+
+
+def reconcile_stale_captures(state):
+    captures = ensure_private_dir(Path(state) / "staging")
+    for path in captures.glob("capture-*"):
+        if path.is_symlink() or not path.is_dir():
+            continue
+        recovery_state = path / "backup-state.json"
+        if recovery_state.is_file() and not recovery_state.is_symlink():
+            try:
+                status = read_json(recovery_state).get("status")
+            except (OSError, ValueError, json.JSONDecodeError):
+                status = None
+            if status == "recovery-required":
+                preserved = ensure_private_dir(Path(state) / f"recovery-{path.name}")
+                shutil.move(str(path), str(preserved / path.name))
+                raise BackupError("restart-failure", "recovery-required")
         shutil.rmtree(path)
 
 
@@ -545,7 +598,7 @@ def upload_snapshot(snapshot, config):
         except BackupError as error:
             write_status(config, "retention-failure", error.code,
                          manifest["backupId"], last_upload)
-            raise
+            raise BackupError("retention-failure", error.code) from error
         write_status(config, "verified-upload", "remote-readback",
                      manifest["backupId"], last_upload)
         return "verified-upload"
@@ -570,57 +623,64 @@ def run_nightly(config):
     except BlockingIOError as error:
         write_status(config, "interrupted", "already-running")
         raise BackupError("interrupted", "already-running") from error
-    for child in state.glob("recovery-*"):
-        if child.is_dir() and (child / "backup-state.json").is_file():
-            write_status(config, "restart-failure", "recovery-required")
-            raise BackupError("restart-failure", "recovery-required")
-    clear_stale_staging(config["stagingDirectory"])
-    capture = Path(config["captureCommand"])
-    if capture.is_symlink() or not capture.is_file() or not os.access(capture, os.X_OK):
-        write_status(config, "capture-failure", "capture-command-unavailable")
-        raise BackupError("capture-failure", "capture-command-unavailable")
-    snapshots = ensure_private_dir(state / "staging")
-    snapshot = snapshots / f"capture-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
     try:
-        result = subprocess.run(
-            [str(capture), str(snapshot)], stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=config["captureTimeoutSeconds"], check=False,
-            env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-        )
-        if result.returncode:
-            recovery = snapshot / "backup-state.json"
-            if recovery.is_file():
-                backup_state = read_json(recovery)
-                if backup_state.get("status") == "recovery-required":
-                    preserved = ensure_private_dir(state / f"recovery-{snapshot.name}")
-                    shutil.move(str(snapshot), str(preserved / snapshot.name))
-                    status = "restart-failure"
+        try:
+            reconcile_stale_captures(state)
+        except BackupError as error:
+            write_status(config, error.status, error.code)
+            raise
+        for child in state.glob("recovery-*"):
+            if child.is_dir() and (child / "backup-state.json").is_file():
+                write_status(config, "restart-failure", "recovery-required")
+                raise BackupError("restart-failure", "recovery-required")
+        clear_stale_staging(config["stagingDirectory"])
+        capture = Path(config["captureCommand"])
+        if capture.is_symlink() or not capture.is_file() or not os.access(capture, os.X_OK):
+            write_status(config, "capture-failure", "capture-command-unavailable")
+            raise BackupError("capture-failure", "capture-command-unavailable")
+        snapshots = ensure_private_dir(state / "staging")
+        snapshot = snapshots / f"capture-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
+        try:
+            result = subprocess.run(
+                [str(capture), str(snapshot)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=config["captureTimeoutSeconds"], check=False,
+                env={"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+            )
+            if result.returncode:
+                recovery = snapshot / "backup-state.json"
+                if recovery.is_file():
+                    backup_state = read_json(recovery)
+                    if backup_state.get("status") == "recovery-required":
+                        preserved = ensure_private_dir(state / f"recovery-{snapshot.name}")
+                        shutil.move(str(snapshot), str(preserved / snapshot.name))
+                        status = "restart-failure"
+                    else:
+                        status = "capture-failure"
                 else:
                     status = "capture-failure"
-            else:
-                status = "capture-failure"
-            write_status(config, status, "capture-command-failed")
-            raise BackupError(status, "capture-command-failed")
-        status = upload_snapshot(snapshot, config)
-        shutil.rmtree(snapshot)
-        return status
-    except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
-        if snapshot.exists() and (snapshot / "backup-state.json").is_file():
-            try:
-                recovery = read_json(snapshot / "backup-state.json")
-            except (OSError, ValueError, json.JSONDecodeError):
-                recovery = {}
-            if recovery.get("status") == "recovery-required":
-                preserved = ensure_private_dir(state / f"recovery-{snapshot.name}")
-                shutil.move(str(snapshot), str(preserved / snapshot.name))
-                write_status(config, "restart-failure", "recovery-required")
-                raise BackupError("restart-failure", "recovery-required") from error
-        write_status(config, "interrupted", "capture-interrupted")
-        raise BackupError("interrupted", "capture-interrupted") from error
-    finally:
-        if snapshot.exists():
+                write_status(config, status, "capture-command-failed")
+                raise BackupError(status, "capture-command-failed")
+            status = upload_snapshot(snapshot, config)
             shutil.rmtree(snapshot)
+            return status
+        except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+            if snapshot.exists() and (snapshot / "backup-state.json").is_file():
+                try:
+                    recovery = read_json(snapshot / "backup-state.json")
+                except (OSError, ValueError, json.JSONDecodeError):
+                    recovery = {}
+                if recovery.get("status") == "recovery-required":
+                    preserved = ensure_private_dir(state / f"recovery-{snapshot.name}")
+                    shutil.move(str(snapshot), str(preserved / snapshot.name))
+                    write_status(config, "restart-failure", "recovery-required")
+                    raise BackupError("restart-failure", "recovery-required") from error
+            write_status(config, "interrupted", "capture-interrupted")
+            raise BackupError("interrupted", "capture-interrupted") from error
+        finally:
+            if snapshot.exists():
+                shutil.rmtree(snapshot)
+    finally:
         os.close(lock_fd)
 
 
@@ -629,9 +689,12 @@ def report_status(config):
     try:
         value = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
-        return {"format": STATUS_FORMAT, "status": "capture-failure", "code": "no-check-record",
+        return {"format": STATUS_FORMAT, "status": "overdue", "code": "no-check-record",
                 "lastCheck": None, "lastUpload": None, "backupId": None}
-    if value.get("lastCheck"):
+    if not value.get("lastCheck"):
+        value["status"] = "overdue"
+        value["code"] = "no-check-record"
+    else:
         try:
             if datetime.now(timezone.utc) - validate_timestamp(value["lastCheck"]) > timedelta(hours=26):
                 value["status"] = "overdue"
@@ -649,6 +712,10 @@ def main():
     parser.add_argument("--snapshot")
     args = parser.parse_args()
     config = safe_config(args.config)
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt)
     ensure_private_dir(config["stateDirectory"])
     ensure_private_dir(config["stagingDirectory"])
     if args.action == "status":

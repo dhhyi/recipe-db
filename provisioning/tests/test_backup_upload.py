@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +101,8 @@ elif action == "copyto":
     source, destination = Path(args[1]), remote_path(args[2])
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
+    if os.environ.get("FAKE_RCLONE_CORRUPT") == action:
+        destination.write_bytes(b"corrupted remote bytes")
 elif action == "cat":
     sys.stdout.buffer.write(remote_path(args[1]).read_bytes())
 elif action == "deletefile":
@@ -160,6 +163,39 @@ else:
         (corrupted / "recipes.tar").write_bytes(b"corrupt")
         with self.assertRaises(ValueError):
             backup.validate_snapshot(corrupted)
+        with self.assertRaises(backup.BackupError):
+            backup.upload_snapshot(incomplete, self.config)
+        self.assertEqual(backup.report_status(self.config)["status"], "capture-failure")
+
+    def test_image_snapshot_with_owned_directories_is_accepted(self):
+        image_dir = self.root / "image-snapshot"
+        image_dir.mkdir()
+        files = {"public/a.png": b"image", "manifests/a.json": b'{"recipeId":"a"}'}
+        archive_path = image_dir / "images.tar"
+        with tarfile.open(archive_path, "w") as archive:
+            for name in ("public", "manifests"):
+                directory = tarfile.TarInfo(name)
+                directory.type = tarfile.DIRTYPE
+                archive.addfile(directory)
+            for name, content in sorted(files.items()):
+                member = tarfile.TarInfo(name)
+                member.size = len(content)
+                archive.addfile(member, io.BytesIO(content))
+        entries = [{"path": name, "sizeBytes": len(value), "sha256": hashlib.sha256(value).hexdigest()}
+                   for name, value in sorted(files.items())]
+        archive_bytes = archive_path.read_bytes()
+        manifest = {
+            "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-images",
+            "capturedAt": "2026-10-31T10:00:00Z",
+            "source": {"target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+                       "namespace": "recipe-db", "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+                       "revision": "a" * 40},
+            "inventory": [{"service": "images", "role": "cleanup-participant", "pvc": "images",
+                           "archive": "images.tar", "sizeBytes": len(archive_bytes), "fileCount": len(entries),
+                           "sha256": hashlib.sha256(archive_bytes).hexdigest(), "files": entries}],
+        }
+        (image_dir / "manifest.json").write_bytes(backup.json_bytes(manifest))
+        self.assertEqual(backup.validate_snapshot(image_dir), manifest)
 
     def test_verified_upload_then_unchanged_requires_remote_readback(self):
         first = self.make_snapshot()
@@ -192,6 +228,27 @@ else:
         self.assertEqual(status["status"], "upload-failure")
         self.assertNotIn("SENSITIVE", json.dumps(status))
 
+    def test_remote_integrity_failure_does_not_advance_baseline(self):
+        self.assertEqual(backup.upload_snapshot(self.make_snapshot(), self.config), "verified-upload")
+        baseline = (self.state / "baseline.json").read_bytes()
+        changed = self.make_snapshot("changed", files={"recipes.sqlite3": b"changed"})
+        with patch.dict(os.environ, {"FAKE_RCLONE_CORRUPT": "copyto"}):
+            with self.assertRaises(backup.BackupError):
+                backup.upload_snapshot(changed, self.config)
+        self.assertEqual((self.state / "baseline.json").read_bytes(), baseline)
+        self.assertEqual(backup.report_status(self.config)["status"], "upload-failure")
+
+    def test_disk_full_staging_is_a_capture_failure(self):
+        source = self.make_snapshot()
+        manifest = backup.validate_snapshot(source)
+        stage = self.root / "small-stage"
+        stage.mkdir()
+        with patch.object(backup.shutil, "disk_usage",
+                          return_value=SimpleNamespace(free=0, total=0, used=0)):
+            with self.assertRaises(backup.BackupError) as error:
+                backup.create_package(source, stage, manifest, "recipe-db-pi", 64 * 1024**2)
+        self.assertEqual(error.exception.code, "staging-space")
+
     def seed_remote_points(self, count):
         folder = self.remote / "backups" / "recipe-db-pi"
         folder.mkdir(parents=True, exist_ok=True)
@@ -204,6 +261,12 @@ else:
             document = {
                 "format": "recipe-db-backup", "formatVersion": 1, "deploymentId": "recipe-db-pi",
                 "backupId": f"backup-{index:04d}", "capturedAt": f"2026-01-{index // 24 + 1:02d}T{index % 24:02d}:00:00Z",
+                "source": {"artifact": "release", "revision": "a" * 40},
+                "contentFingerprint": "b" * 64,
+                "snapshotManifest": {
+                    "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
+                    "backupId": f"backup-{index:04d}", "source": {"artifact": "release", "revision": "a" * 40},
+                },
                 "archive": {"name": archive_name, "sizeBytes": len(data),
                             "sha256": hashlib.sha256(data).hexdigest()},
             }
@@ -233,6 +296,12 @@ else:
 
     def test_capture_restart_interrupt_and_overdue_statuses(self):
         command = Path(self.config["captureCommand"])
+        command.write_text("#!/bin/sh\nexit 1\n")
+        command.chmod(0o755)
+        with self.assertRaises(backup.BackupError):
+            backup.run_nightly(self.config)
+        self.assertEqual(backup.report_status(self.config)["status"], "capture-failure")
+
         command.write_text("#!/bin/sh\nmkdir -p \"$1\"\nprintf '{\"status\":\"recovery-required\"}' > \"$1/backup-state.json\"\nexit 1\n")
         command.chmod(0o755)
         with self.assertRaises(backup.BackupError):
