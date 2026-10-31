@@ -165,18 +165,29 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         jq -s '{items:.}' "$MOCK_LOG.restore-pods"; exit ;;
       *"exec deployment/nats -- wget -qO-"*)
         sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
-        jq -n --argjson sequence "$sequence" '{
+        config_requested=false
+        [[ $* == *"config=true"* ]] && config_requested=true
+        jq -n --argjson sequence "$sequence" --argjson config_requested "$config_requested" '{
           account_details:[{stream_detail:[{
             name:"RECIPE_EVENTS",state:{last_seq:$sequence},consumer_detail:[
-              {name:"search-index-v1",config:{ack_policy:"explicit",filter_subject:"recipes.events.v1"},
-                ack_floor:{stream_seq:$sequence},num_ack_pending:0,num_pending:0},
-              {name:"browse-cache-v1",config:{ack_policy:"explicit",filter_subject:"recipes.events.v1"},
-                ack_floor:{stream_seq:$sequence},num_ack_pending:0,num_pending:0}
+              {name:"search-index-v1"} +
+                (if $config_requested then {config:{ack_policy:"explicit",filter_subject:"recipes.events.v1"}} else {} end) +
+                {ack_floor:{stream_seq:$sequence},num_ack_pending:0,num_pending:0},
+              {name:"browse-cache-v1"} +
+                (if $config_requested then {config:{ack_policy:"explicit",filter_subject:"recipes.events.v1"}} else {} end) +
+                {ack_floor:{stream_seq:$sequence},num_ack_pending:0,num_pending:0}
             ]
           }]}]
         }'
         exit ;;
       *"exec "*restore-volume-*"-- sh -ec"*)
+        if [[ ${MOCK_RESTORE_FIND_FAIL:-false} == true ]]; then
+          mkdir -p "$FIXTURE_ROOT/find-error"
+          printf '#!/bin/sh\nexit 1\n' > "$FIXTURE_ROOT/find-error/find"
+          chmod +x "$FIXTURE_ROOT/find-error/find"
+          PATH="$FIXTURE_ROOT/find-error:$PATH" sh -ec "${@: -1}"
+          exit $?
+        fi
         if [[ ${MOCK_RESTORE_NONEMPTY:-} != "" && $* == *"restore-volume-$MOCK_RESTORE_NONEMPTY "* ]]; then exit 1; fi
         exit ;;
       *"exec -i restore-volume-"*"-- tar -xpkf - --numeric-owner -C /data")
@@ -1551,8 +1562,10 @@ PY
   if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
     printf 'restored-full-image\n' > image-full
     printf 'restored-thumbnail\n' > image-thumb
-    full_sha=$(sha256sum image-full); full_sha=${full_sha%% *}
-    thumb_sha=$(sha256sum image-thumb); thumb_sha=${thumb_sha%% *}
+    full_sha=$(sha256sum image-full)
+    full_sha=${full_sha%% *}
+    thumb_sha=$(sha256sum image-thumb)
+    thumb_sha=${thumb_sha%% *}
     cp image-full "$FIXTURE_ROOT/tar-data/images/public/old-$full_sha.png"
     cp image-thumb "$FIXTURE_ROOT/tar-data/images/public/old-$thumb_sha-thumb.png"
     jq -n --arg full "/public/old-$full_sha.png" --arg thumb "/public/old-$thumb_sha-thumb.png" \
@@ -1778,6 +1791,16 @@ PY
   done
 }
 
+@test "restore fails closed when the destination volume scan fails" {
+  restore_fixture
+  export MOCK_RESTORE_FIND_FAIL=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"populated; NOTHING will be wiped"* ]]
+  [ ! -e "$MOCK_LOG.imported" ]
+  run ! grep -q 'exec -i restore-volume-' "$MOCK_LOG"
+}
+
 @test "restore shares kube-system Lease with deploy and backup and never steals a busy holder" {
   restore_fixture
   export MOCK_LOCK=true
@@ -1886,6 +1909,46 @@ PY
   run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
 }
 
+@test "restore rejects modified routing templates before connecting" {
+  restore_fixture
+  local template
+  for template in \
+    .scripts/templates/traefik-template.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml \
+    .scripts/templates/service-template.lib.yml; do
+    printf 'release route template\n' > "$template"
+  done
+  git add .scripts/templates
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture route templates'
+  MOCK_REVISION=$(git rev-parse HEAD)
+  export MOCK_REVISION
+  jq --arg revision "$MOCK_REVISION" '.source.revision=$revision' "$RESTORE_MANIFEST" \
+    > "$RESTORE_MANIFEST.next"
+  mv "$RESTORE_MANIFEST.next" "$RESTORE_MANIFEST"
+  for template in \
+    .scripts/templates/traefik-template.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml \
+    .scripts/templates/service-template.lib.yml; do
+    printf 'modified route template\n' >> "$template"
+    run_restore
+    [ "$status" -ne 0 ]
+    [[ $output == *"must match the immutable release"* ]]
+    git checkout -- "$template"
+  done
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+}
+
+@test "restore refuses untracked routing templates before connecting" {
+  restore_fixture
+  printf 'untracked route template\n' > .scripts/templates/traefik-template.yml
+  printf 'untracked route template\n' > .scripts/templates/browse-maintenance-template.lib.yml
+  printf 'untracked route template\n' > .scripts/templates/service-template.lib.yml
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"untracked metadata or template inputs"* ]]
+  run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+}
+
 restore_retained_fixture() {
   restore_fixture
   export RESTORE_HOLDER=restore-retained-42
@@ -1897,7 +1960,8 @@ restore_retained_fixture() {
       namespace:$config[0].namespace,configSha256:$sha}' > "$RESTORE_STATE/restore-state.json"
   # production_config serializes with jq, so hash that same canonical representation.
   jq '.' "$VALUES" > canonical-values.json
-  sha=$(sha256sum canonical-values.json); sha=${sha%% *}
+  sha=$(sha256sum canonical-values.json)
+  sha=${sha%% *}
   jq --arg sha "$sha" '.configSha256=$sha' "$RESTORE_STATE/restore-state.json" > state.next
   mv state.next "$RESTORE_STATE/restore-state.json"
   jq -n --arg holder "$RESTORE_HOLDER" --arg artifact "$ARTIFACT" '

@@ -63,8 +63,8 @@ restore_abandon() {
   local state=$1 expected=$2 confirmation=$3 lease
   [[ $confirmation == "ABANDON-$expected-AFTER-ISOLATION" ]] \
     || production_fail "restore abandonment requires exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation"
-  [[ $state == /* && -d $state && ! -L $state && $(realpath -e "$state") == "$state"
-    && -f $state/restore-state.json && ! -L $state/restore-state.json ]] \
+  [[ $state == /* && -d $state && ! -L $state && $(realpath -e "$state") == "$state" &&
+  -f $state/restore-state.json && ! -L $state/restore-state.json ]] \
     || production_fail "restore abandonment requires the original absolute regular recovery state"
   jq -e --arg holder "$expected" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg ns "$namespace" \
@@ -179,7 +179,7 @@ restore_volume_pod() {
     production_storage_validate_existing_claim "$name" "$(cat "$work/restore-pvc.json")" || return 1
   fi
   # Hidden files, initialized databases and apparently disposable caches all count as data.
-  kube exec "$pod" -- sh -ec 'test -z "$(find /data -mindepth 1 -maxdepth 1 -print -quit)"' || {
+  kube exec "$pod" -- sh -ec 'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit); test -z "$entries"' || {
     printf 'production: destination volume %s is populated; NOTHING will be wiped, overwritten or merged\n' "$name" >&2
     return 1
   }
@@ -213,7 +213,7 @@ restore_import() {
       and .[0].metadata.labels["app.kubernetes.io/name"] == "restore-volume"' \
       "$work/restore-mounted-pods.json" > /dev/null || return 1
     # Recheck immediately before extraction; only this helper owns the mount.
-    kube exec "$pod" -- sh -ec 'test -z "$(find /data -mindepth 1 -maxdepth 1 -print -quit)"' || return 1
+    kube exec "$pod" -- sh -ec 'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit); test -z "$entries"' || return 1
     # Preserve numeric ownership and permission bits from the exact recorded release.
     kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
     kube exec "$pod" -- sync || return 1
@@ -362,7 +362,7 @@ restore_verify_reads() {
 
 restore_stream_sequence() {
   kube exec deployment/nats -- wget -qO- \
-    'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true' \
+    'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true&config=true' \
     > "$work/restore-consumers.json" || return 1
   jq -er '[.account_details[]?.stream_detail[]? | select(.name == "RECIPE_EVENTS")] |
     select(length == 1) | .[0].state.last_seq |
@@ -478,8 +478,8 @@ restore_run() {
   [[ $state == /* && ! -e $state && ! -L $state ]] \
     || production_fail "restore state must be a new absolute directory"
   parent=$(dirname "$state")
-  [[ -d $parent && $(realpath -e "$parent") == "$parent"
-    && $(basename "$state") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
+  [[ -d $parent && $(realpath -e "$parent") == "$parent" &&
+  $(basename "$state") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
     || production_fail "restore state parent must exist without symlink traversal"
   case "$state/" in
     "$root/.secrets/"* | /var/lib/rancher/*) production_fail "restore state cannot be inside credentials or runtime storage" ;;

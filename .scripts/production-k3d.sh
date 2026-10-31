@@ -155,7 +155,9 @@ pull_release() {
   case "$command" in
     backup | backup-enter | backup-exit | restore)
       local inputs=(.scripts/lib/project-metadata.sh
-        .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml package.json
+        .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
+        .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
+        .scripts/templates/service-template.lib.yml package.json
         message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
         oauth2-proxy/oauth2-proxy.cfg ':(glob)*/.project.yaml')
       git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \

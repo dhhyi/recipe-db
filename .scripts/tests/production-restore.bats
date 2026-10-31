@@ -51,6 +51,13 @@ kube() {
           {metadata:{name:"unexpected-writer"},spec:{volumes:[
             {persistentVolumeClaim:{claimName:"recipes"}}]}}] else [] end)}' ;;
     "exec restore-volume-recipes -- sh -ec "*)
+      if [[ ${MOCK_FIND_FAIL:-false} == true ]]; then
+        mkdir -p "$root/find-error"
+        printf '#!/bin/sh\nexit 1\n' > "$root/find-error/find"
+        chmod +x "$root/find-error/find"
+        PATH="$root/find-error:$PATH" sh -ec "${@: -1}"
+        exit $?
+      fi
       [[ -z $(find "$root/data" -mindepth 1 -maxdepth 1 -print -quit) ]] ;;
     "exec -i restore-volume-recipes -- tar -xpkf - --numeric-owner -C /data")
       [[ ${MOCK_TRANSFER_FAIL:-false} != true ]] || return 1
@@ -91,6 +98,14 @@ EOF
   [ "$status" -ne 0 ]
   [ ! -e helper-deleted ]
   run ! grep -Eq 'tar -C /data -cf|delete pod' "$MOCK_LOG"
+}
+
+@test "restore import fails closed when the destination volume scan fails" {
+  export MOCK_FIND_FAIL=true
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -ne 0 ]
+  [ ! -e data/recipes.sqlite3 ]
+  run ! grep -q 'exec -i' "$MOCK_LOG"
 }
 
 @test "restore import treats empty directories and dangling symlinks as populated data" {
