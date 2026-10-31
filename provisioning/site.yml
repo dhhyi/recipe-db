@@ -5,6 +5,7 @@
   any_errors_fatal: true
   tasks:
     - name: Validate explicit operator inputs and supported host
+      tags: firewall
       ansible.builtin.assert:
         that:
           - groups['pi'] | length == 1
@@ -22,6 +23,8 @@
           - rclone_sha256 is match('^[0-9a-f]{64}$')
           - admin_networks is defined and admin_networks | length > 0
           - application_networks is defined and application_networks | length > 0
+          - public_https_enabled is boolean
+          - not public_https_enabled or ansible_facts.default_ipv4.address is defined
           - journal_max_use is match('^[1-9][0-9]*[KMG]$')
           - journal_keep_free is match('^[1-9][0-9]*[KMG]$')
           - journal_max_file is match('^[1-9][0-9]*[KMG]$')
@@ -50,6 +53,7 @@
         that: "'Raspberry Pi' in pi_os.stdout"
 
     - name: Verify root identity before making changes
+      tags: firewall
       become: true
       ansible.builtin.script:
         cmd: "files/storage-guard.py {{ expected_root_uuid }} {{ data_root }} --preflight"
@@ -57,6 +61,7 @@
       changed_when: false
 
     - name: Verify private network inputs and current SSH source
+      tags: firewall
       ansible.builtin.script:
         cmd: "files/network-preflight.py {{ admin_networks | to_json | quote }} {{ application_networks | to_json | quote }}"
         executable: /usr/bin/python3
@@ -109,6 +114,7 @@
         msg: "Preflight passed. Target={{ inventory_hostname }}, OS={{ ansible_facts.distribution_version }}, USB root={{ expected_root_uuid }}, k3s={{ k3s_version }}"
 
     - name: Stop after read-only preflight when requested
+      tags: firewall
       ansible.builtin.meta: end_host
       when: preflight_only | default(false) | bool
 
@@ -272,6 +278,7 @@
           changed_when: sysctl_config.changed
 
         - name: Install private host firewall configuration
+          tags: firewall
           ansible.builtin.template:
             src: firewall.nft.j2
             dest: /etc/recipe-db-firewall.nft
@@ -279,6 +286,7 @@
           notify: Reload private firewall
 
         - name: Install firewall service without replacing other nftables tables
+          tags: firewall
           ansible.builtin.copy:
             dest: /etc/systemd/system/recipe-db-firewall.service
             mode: "0644"
@@ -297,10 +305,12 @@
           notify: Reload private firewall
 
         - name: Validate firewall syntax before activation
+          tags: firewall
           ansible.builtin.command: nft --check -f /etc/recipe-db-firewall.nft
           changed_when: false
 
         - name: Enable private firewall
+          tags: firewall
           ansible.builtin.systemd_service:
             name: recipe-db-firewall
             daemon_reload: true

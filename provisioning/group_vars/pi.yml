@@ -10,3 +10,4 @@ journal_keep_free: 1G
 journal_max_file: 16M
 container_log_max_size: 10Mi
 container_log_max_files: 3
+public_https_enabled: false
