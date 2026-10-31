@@ -20,7 +20,7 @@ EOF
 case "$*" in
   --version) printf '%s\n' 'Docker version 29.0' ;;
   "info --format {{.ServerVersion}}") printf '%s\n' 29.0 ;;
-  "inspect --format {{.Image}} container-id") printf '%s\n' "${IMAGE_ID:-sha256:image-one}" ;;
+  "inspect --format {{.Image}} container-id") printf '%s\n' "${IMAGE_ID-sha256:image-one}" ;;
   "image inspect --format {{.Os}}/{{.Architecture}} sha256:image-one") printf '%s\n' linux/amd64 ;;
   "image inspect --format {{.Os}}/{{.Architecture}} sha256:image-two") printf '%s\n' linux/arm64 ;;
   *) exit 99 ;;
@@ -73,6 +73,13 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(stat -c %i "$identity")" = "$inode" ]
+
+  before_config_change=$(cat "$identity")
+  sed -i 's/"version": "1.2.3"/"version": "1.2.4"/' example/.devcontainer/devcontainer.json
+  run sh .scripts/bazel-quality-identity.sh example container-id
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$identity")" != "$before_config_change" ]
 
   run env IMAGE_ID=sha256:image-two sh .scripts/bazel-quality-identity.sh example container-id
 

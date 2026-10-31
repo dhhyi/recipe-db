@@ -11,12 +11,16 @@ printf 'identity %s\n' "$*" >> "$MOCK_LOG"
 EOF
   cat > bin/mise <<'EOF'
 #!/bin/sh
-printf 'mise %s identity=%s\n' "$*" "${BAZEL_QUALITY_IDENTITY:-}" >> "$MOCK_LOG"
-case "$*" in
-  'exec -- yq '*) shift 2; exec "$@" ;;
-  'run --raw create-intranet' | 'run --raw in-devcontainer '* | 'run --raw generate-bazel-build') ;;
-  'run --raw bazel build '* ) exit "${BAZEL_STATUS:-0}" ;;
-  *) echo "Unexpected mise invocation: $*" >&2; exit 99 ;;
+  case "$*" in
+    'exec -- yq '*) shift 2; exec "$@" ;;
+    'run --raw create-intranet' | 'run --raw in-devcontainer '* | 'run --raw generate-bazel-build')
+      printf 'mise %s identity=%s\n' "$*" "${BAZEL_QUALITY_IDENTITY:-}" >> "$MOCK_LOG"
+      ;;
+    'run --raw bazel build '*)
+      printf 'mise %s identity=%s\n' "$*" "${BAZEL_QUALITY_IDENTITY:-}" >> "$MOCK_LOG"
+      exit "${BAZEL_STATUS:-0}"
+      ;;
+    *) echo "Unexpected mise invocation: $*" >&2; exit 99 ;;
 esac
 EOF
   chmod +x bin/mise
@@ -53,7 +57,7 @@ mise run --raw in-devcontainer example prepare identity=1
 mise run --raw in-devcontainer generated-only prepare identity=1
 identity host
 mise run --raw generate-bazel-build identity=
-mise run --raw bazel build --action_env=PATH --action_env=CI --action_env=GITHUB_ACTIONS --action_env=COMPOSE_PARALLEL_LIMIT --action_env=DEVCONTAINER_KEEP_RUNNING --jobs=1 --disk_cache=$HOME/.cache/bazel-disk //:quality identity=
+mise run --raw bazel build --action_env=PATH --action_env=CI --action_env=GITHUB_ACTIONS --action_env=BUILDKIT_PROGRESS --action_env=COMPOSE_PROGRESS --action_env=COMPOSE_PARALLEL_LIMIT --action_env=DEVCONTAINER_KEEP_RUNNING --disk_cache=$HOME/.cache/bazel-disk --jobs=1 //:quality identity=
 EOF
   cmp expected-calls "$MOCK_LOG"
 }

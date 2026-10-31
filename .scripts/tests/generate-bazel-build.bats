@@ -41,7 +41,7 @@ EOF
     grep -Fx "        \"$file\"," test-rule
   done
   [ "$(grep -c '^        "' test-rule)" -eq 5 ]
-  grep -Fx '    tools = ["mise.toml", ".bazelversion"],' test-rule
+  grep -Fx '    tools = ["mise.toml", ".bazelversion", ".generated/bazel-quality/host.identity"],' test-rule
   grep -Fx '    outs = ["test-scripts-compose.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts compose && touch $@",' test-rule
   grep -Fx '    tags = ["no-sandbox", "no-remote"],' test-rule
