@@ -50,9 +50,10 @@ Feature: Search recipes on the deployed stack
       | outOf       |
       | page        |
       | perPage     |
+      | searchCutoff |
     And the response contains:
       """
-      {"found": 3, "page": 2, "perPage": 1}
+      {"found": 3, "page": 2, "perPage": 1, "searchCutoff": false}
       """
     And outOf is at least 3
     And the ingredient facet counts "Kartoffeln" 2 times
@@ -98,6 +99,17 @@ Feature: Search recipes on the deployed stack
       {"q": "Zwiebeln", "query_by": "method"}
       """
     Then eventually the results contain none of "soup"
+
+  Scenario: Tag assignment, rebuild and confirmed empty tags update exact eligibility
+    When I add an isolated tag to "soup" through GraphQL
+    And I search for scoped recipes with that exact tag
+    Then eventually the results are exactly "soup"
+    When I rebuild the search index successfully
+    And I search for scoped recipes with that exact tag
+    Then the results are exactly "soup"
+    When I remove that tag from "soup" through GraphQL
+    And I search for scoped recipes with that exact tag
+    Then eventually the results are empty
 
   Scenario: Image presence survives a rebuild
     When I search for scoped recipes with images

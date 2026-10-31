@@ -429,6 +429,60 @@ export const test = base.extend({
     await seedRandomRecipeTags(request, [demoRecipe]);
     await use(demoRecipe);
   },
+  relatedDemoRecipes: async ({ request, taggedDemoRecipe }, use) => {
+    const { recipe: source } = await graphql(
+      request,
+      "query($id: ID!) { recipe(id: $id) { tags { id } } }",
+      { id: taggedDemoRecipe.id },
+    );
+    expect(source.tags).toHaveLength(3);
+    const matches = [];
+    for (let index = 1; index <= 5; index += 1) {
+      matches.push(await createRecipe(request, `E2E Milchreis ${index}`));
+    }
+    // Equal tag scores use UUID order; assign visual content in that order.
+    matches.sort((left, right) => left.id.localeCompare(right.id));
+    const names = [
+      "E2E Milchreis mit Zimt",
+      "E2E Milchreis mit Beeren",
+      "E2E Milchreis mit Apfel",
+      "E2E Milchreis mit Vanille",
+      "E2E Milchreis mit Kirschen",
+    ];
+    for (const [index, recipe] of matches.entries()) {
+      recipe.name = names[index];
+      await graphql(
+        request,
+        "mutation($id: ID!, $value: RecipeInput!) { updateRecipe(id: $id, value: $value) { id } }",
+        { id: recipe.id, value: { name: recipe.name } },
+      );
+      await uploadImage(
+        request,
+        recipe,
+        index % 2 === 0 ? "milchreis.png" : "image-b.png",
+      );
+      await graphql(
+        request,
+        "mutation($id: ID!, $tags: [ID!]!) { changeRecipeTags(recipeId: $id, addTagIds: $tags) { id } }",
+        { id: recipe.id, tags: source.tags.map((tag) => tag.id) },
+      );
+      await waitForRecipeIndexed(request, recipe.id);
+    }
+    await expect
+      .poll(
+        async () => {
+          const { similarRecipeIds } = await graphql(
+            request,
+            "query($id: ID!) { similarRecipeIds(recipeId: $id) }",
+            { id: taggedDemoRecipe.id },
+          );
+          return similarRecipeIds;
+        },
+        { message: "Five related visual recipes converge", timeout: 60_000 },
+      )
+      .toEqual(matches.map((recipe) => recipe.id));
+    await use({ source: taggedDemoRecipe, matches });
+  },
   searchRecipes: async ({ request }, use) => {
     const recipes = [];
     for (let index = 1; index <= 25; index++) {

@@ -14,6 +14,7 @@
       "facet": true
     },
     { "name": "ingredient_units", "type": "string[]", "facet": true },
+    { "name": "tag_ids", "type": "string[]", "optional": true, "facet": true },
     { "name": "inspiration_urls", "type": "string[]", "optional": true },
     {
       "name": "rating_average",

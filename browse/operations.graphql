@@ -100,6 +100,16 @@ query RecipeById($id: ID!) {
   }
 }
 
+query SimilarRecipeIds($recipeId: ID!) {
+  similarRecipeIds(recipeId: $recipeId)
+}
+
+query SimilarRecipeCard($id: ID!) {
+  recipe(id: $id) {
+    ...RecipeStub
+  }
+}
+
 query RecipeControls {
   myCapabilities {
     role
