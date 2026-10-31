@@ -187,6 +187,21 @@ def add_inspiration(context, recipe):
 def search_inspiration(context):
     search(context, q=context.inspiration_url, query_by="inspiration_urls")
 
+@when('I add an isolated tag to "{recipe}" through GraphQL')
+def add_tag(context, recipe):
+    context.tag_id = context.client.create_tag()
+    context.client.tag(context.recipes[recipe], context.tag_id)
+
+
+@when('I remove that tag from "{recipe}" through GraphQL')
+def remove_tag(context, recipe):
+    context.client.tag(context.recipes[recipe], context.tag_id, add=False)
+
+
+@when("I search for scoped recipes with that exact tag")
+def search_tag(context):
+    search(context, filter_by=context.client.filter + f" && tag_ids:=`{context.tag_id}`")
+
 
 @when('I upload the fixture image to "{recipe}" through GraphQL')
 def upload_image(context, recipe):

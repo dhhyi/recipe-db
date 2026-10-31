@@ -105,11 +105,11 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 		<section class="grid">
 			if recipe.Image != nil {
 				<div class="flex flex-col gap-2">
-				@image(recipe)
-				@recipeDetailTags(recipe.Id, recipe.Tags)
+					@image(recipe)
+					@recipeDetailTags(recipe.Id, recipe.Tags)
 				</div>
 			} else {
-			@recipeDetailTags(recipe.Id, recipe.Tags)
+				@recipeDetailTags(recipe.Id, recipe.Tags)
 			}
 			if len(recipe.Ingredients) > 0 {
 				@ingredients(recipe)
@@ -125,5 +125,8 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 			Zuletzt aktualisiert: { util.RelativeTimeInGerman(recipe.UpdatedAt) }
 		</small>
 	</p>
-	<a href="/" role="button">Zur Startseite</a>
+	<p>
+		<a href="/" role="button">Zur Startseite</a>
+	</p>
+	@SimilarRecipesPlaceholder(recipe.Id)
 }

@@ -93,6 +93,7 @@ def publish(recipe_id, kind="recipe.changed", event_id=None):
 class SearchSession:
     def __init__(self):
         self.ids = []
+        self.tag_ids = []
         self.scope = "searchtest" + uuid.uuid4().hex
         self.filter = f"ingredients:={self.scope}"
 
@@ -132,6 +133,22 @@ class SearchSession:
                 assert status in (204, 404), (status, raw)
         if self.ids:
             wait_for(lambda: not self.search()["recipeIds"])
+        for tag_id in self.tag_ids:
+            gql("mutation($id: ID!) { deleteTag(id: $id) }", {"id": tag_id})
+
+    def create_tag(self):
+        tag_id = gql(
+            "mutation($name: String!) { createTag(category: COURSE, name: $name) { id } }",
+            {"name": self.scope})["createTag"]["id"]
+        self.tag_ids.append(tag_id)
+        return tag_id
+
+    def tag(self, recipe_id, tag_id, add=True):
+        mutation = "addRecipeTag" if add else "removeRecipeTag"
+        result = gql(
+            f"mutation($recipe: ID!, $tag: ID!) {{ {mutation}(recipeId: $recipe, tagId: $tag) }}",
+            {"recipe": recipe_id, "tag": tag_id})
+        assert result[mutation], result
 
     def search(self, **options):
         status, raw, _ = request(REST + "/search", "POST",

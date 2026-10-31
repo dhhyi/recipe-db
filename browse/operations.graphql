@@ -131,6 +131,16 @@ mutation RemoveRecipeTag($recipeId: ID!, $tagId: ID!) {
   removeRecipeTag(recipeId: $recipeId, tagId: $tagId)
 }
 
+query SimilarRecipeIds($recipeId: ID!) {
+  similarRecipeIds(recipeId: $recipeId)
+}
+
+query SimilarRecipeCard($id: ID!) {
+  recipe(id: $id) {
+    ...RecipeStub
+  }
+}
+
 query RecipeControls {
   myCapabilities {
     role

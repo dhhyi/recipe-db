@@ -156,6 +156,8 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 	mux.HandleFunc("GET /recipe/{id}/tags/options", recipeTagOptionsHandler(endpoint))
 	mux.HandleFunc("POST /recipe/{id}/tags", recipeTagMutationHandler(endpoint, cache, false))
 	mux.HandleFunc("POST /recipe/{id}/tags/{tagId}/remove", recipeTagMutationHandler(endpoint, cache, true))
+	mux.HandleFunc("GET /recipe/{id}/similar", similarRecipesHandler(endpoint, false))
+	mux.HandleFunc("POST /recipe/{id}/similar/more", similarRecipesHandler(endpoint, true))
 
 	mux.HandleFunc("/recipe/{id}/rate", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")

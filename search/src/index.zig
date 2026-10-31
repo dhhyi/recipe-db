@@ -18,7 +18,19 @@ const operations = @import("operations.zig");
 
 pub const collection = "/collections/recipes";
 
-const OptionalSource = enum { rating, image, inspirations };
+fn tagSchemaPresent(schema: Value) !bool {
+    for (try array(try get(schema, "fields"))) |field| {
+        if (!std.mem.eql(u8, try text(try get(field, "name")), "tag_ids")) continue;
+        if (!std.mem.eql(u8, try text(try get(field, "type")), "string[]") or
+            try get(field, "facet") != .bool or !(try get(field, "facet")).bool or
+            try get(field, "optional") != .bool or !(try get(field, "optional")).bool)
+            return error.TypesenseSchema;
+        return true;
+    }
+    return false;
+}
+
+const OptionalSource = enum { rating, image, inspirations, tags };
 const GraphqlResponse = struct {
     data: Value,
     failed: std.EnumSet(OptionalSource) = std.EnumSet(OptionalSource).initEmpty(),
@@ -81,7 +93,17 @@ pub const Index = struct {
     }
     fn schema(self: *Index, a: Allocator) !void {
         const existing = try self.typesense(a, "GET", collection, null);
-        if (existing.status == 200) return;
+        if (existing.status == 200) {
+            if (try tagSchemaPresent(try parse(a, existing.body))) return;
+            const migrated = try self.typesense(a, "PATCH", collection,
+                \\{"fields":[{"name":"tag_ids","type":"string[]","optional":true,"facet":true}]}
+            );
+            if (migrated.status != 200) return error.TypesenseSchema;
+            // Confirm the deployed schema, not merely acceptance of the update.
+            const updated = try self.typesense(a, "GET", collection, null);
+            if (updated.status != 200 or !try tagSchemaPresent(try parse(a, updated.body))) return error.TypesenseSchema;
+            return;
+        }
         if (existing.status != 404) return error.TypesenseUnavailable;
         const response = try self.typesense(a, "POST", "/collections", @embedFile("schema.json"));
         if (response.status != 201) return error.TypesenseSchema;
@@ -166,20 +188,32 @@ fn recipeDocument(a: Allocator, recipe: Value, failed: std.EnumSet(OptionalSourc
     try optional(a, &doc, old, recipe, failed, .rating, &.{ "rating_average", "rating_count" });
     try optional(a, &doc, old, recipe, failed, .image, &.{"has_image"});
     try optional(a, &doc, old, recipe, failed, .inspirations, &.{"inspiration_urls"});
+    try optional(a, &doc, old, recipe, failed, .tags, &.{"tag_ids"});
     return doc;
 }
 
 fn optional(a: Allocator, doc: *Value, old: ?Value, recipe: Value, failed: std.EnumSet(OptionalSource), source: OptionalSource, names: []const []const u8) !void {
     if (failed.contains(source)) {
         std.log.warn("optional source {s} unavailable (GraphQL error)", .{@tagName(source)});
-        return preserve(doc, old, names);
+        return preserveSource(doc, old, source, names);
     }
     const value = try get(recipe, @tagName(source));
     if (value == .null and source != .image) {
         std.log.warn("optional source {s} unavailable (GraphQL null)", .{@tagName(source)});
-        return preserve(doc, old, names);
+        return preserveSource(doc, old, source, names);
     }
     switch (source) {
+        .tags => {
+            var ids = std.ArrayList(Value).init(a);
+            var seen = std.StringHashMap(void).init(a);
+            for (try array(value)) |tag| {
+                const id = try text(try get(tag, "id"));
+                if (id.len == 0) return error.InvalidDependencyResponse;
+                if ((try seen.getOrPut(id)).found_existing) continue;
+                try ids.append(str(id));
+            }
+            try doc.object.put("tag_ids", .{ .array = ids });
+        },
         .image => {
             if (value != .null and value != .object) return error.InvalidDependencyResponse;
             try doc.object.put("has_image", .{ .bool = value != .null });
@@ -196,6 +230,17 @@ fn optional(a: Allocator, doc: *Value, old: ?Value, recipe: Value, failed: std.E
             }
         },
     }
+}
+
+fn preserveSource(doc: *Value, old: ?Value, source: OptionalSource, names: []const []const u8) !void {
+    if (source == .tags) {
+        const previous = old orelse return error.OptionalSourceUnavailableWithoutPreviousDocument;
+        const ids = get(previous, "tag_ids") catch return error.OptionalSourceUnavailableWithoutPreviousDocument;
+        for (try array(ids)) |id| {
+            if ((try text(id)).len == 0) return error.InvalidDependencyResponse;
+        }
+    }
+    try preserve(doc, old, names);
 }
 
 fn preserve(doc: *Value, old: ?Value, names: []const []const u8) !void {
@@ -248,6 +293,59 @@ test "unrated values become sortable zeros and optional reloads preserve source 
         try std.testing.expectEqual((try get(doc, field)).integer, (try get(reloaded, field)).integer);
     }
 }
+
+test "tag IDs are unique, empty success clears, and errors or null require recoverable tag data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var recipe = try parse(a, recipeFixture);
+    const old = try parse(a, previousFixture);
+    var failed = std.EnumSet(OptionalSource).initEmpty();
+    try recipe.object.put("tags", try parse(a, "[{\"id\":\"tag-b\"},{\"id\":\"tag-a\"},{\"id\":\"tag-b\"}]"));
+    const fresh = try recipeDocument(a, recipe, failed, null, "r1");
+    const ids = try array(try get(fresh, "tag_ids"));
+    try std.testing.expectEqual(@as(usize, 2), ids.len);
+    try std.testing.expectEqualStrings("tag-b", try text(ids[0]));
+    try std.testing.expectEqualStrings("tag-a", try text(ids[1]));
+    const cleared = try recipeDocument(a, try parse(a, recipeFixture), failed, old, "r1");
+    try std.testing.expectEqual(@as(usize, 0), (try array(try get(cleared, "tag_ids"))).len);
+    try recipe.object.put("tags", .null);
+    for (0..2) |step| {
+        if (step == 1) {
+            const response = try graphqlResponse(try parse(a,
+                \\{"data":{"recipe":{}},"errors":[{"message":"offline","path":["recipe","tags",0,"id"]}]}
+            ), true);
+            failed = response.failed;
+            _ = recipe.object.swapRemove("tags");
+        }
+        const preserved = try recipeDocument(a, recipe, failed, old, "r1");
+        try std.testing.expectEqualStrings("old-tag", try text((try array(try get(preserved, "tag_ids")))[0]));
+        try std.testing.expectError(error.OptionalSourceUnavailableWithoutPreviousDocument, recipeDocument(a, recipe, failed, null, "r1"));
+        var legacy = try parse(a, previousFixture);
+        _ = legacy.object.swapRemove("tag_ids");
+        try std.testing.expectError(error.OptionalSourceUnavailableWithoutPreviousDocument, recipeDocument(a, recipe, failed, legacy, "r1"));
+        const known_empty = try recipeDocument(a, recipe, failed, cleared, "r1");
+        try std.testing.expectEqual(@as(usize, 0), (try array(try get(known_empty, "tag_ids"))).len);
+    }
+}
+
+test "tag schema reconciliation requires an optional faceted string array" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expect(try tagSchemaPresent(try parse(a, @embedFile("schema.json"))));
+    try std.testing.expect(!try tagSchemaPresent(try parse(a, "{\"fields\":[]}")));
+    for ([_][]const u8{
+        \\{"name":"tag_ids","type":"string","optional":true,"facet":true}
+        ,
+        \\{"name":"tag_ids","type":"string[]","optional":false,"facet":true}
+        ,
+        \\{"name":"tag_ids","type":"string[]","optional":true,"facet":false}
+        ,
+    }) |field| {
+        try std.testing.expectError(error.TypesenseSchema, tagSchemaPresent(try parse(a, try std.fmt.allocPrint(a, "{{\"fields\":[{s}]}}", .{field}))));
+    }
+}
 pub fn escape(a: Allocator, value: []const u8) ![]const u8 {
     var out = std.ArrayList(u8).init(a);
     for (value) |ch| {
@@ -264,11 +362,11 @@ fn docPath(a: Allocator, id: []const u8) ![]const u8 {
 const recipeFixture =
     \\{"id":"r1","name":"Updated","nameSortKey":"updated","createdAt":"2026-10-08T13:00:00.123456Z",
     \\"updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],
-    \\"rating":{"average":5,"count":2},"image":null,"inspirations":[]}
+    \\"rating":{"average":5,"count":2},"image":null,"inspirations":[],"tags":[]}
 ;
 const previousFixture =
     \\{"id":"r1","name":"Old","method":"Old method","rating_average":3,"rating_count":1,
-    \\"has_image":true,"inspiration_urls":["https://old.example"]}
+    \\"has_image":true,"inspiration_urls":["https://old.example"],"tag_ids":["old-tag"]}
 ;
 
 test "mixed GraphQL success updates healthy sources and preserves only failed sources" {
@@ -331,7 +429,7 @@ test "multiple optional errors preserve all affected sources without hiding core
     const a = arena.allocator();
     const root = try parse(a,
         \\{"data":{"recipe":{"id":"r1","name":"Updated","nameSortKey":"updated",
-        \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[]}},
+        \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],"tags":[]}},
         \\"errors":[{"message":"offline","path":["recipe","image"]},
         \\{"message":"offline","path":["recipe","rating"]},
         \\{"message":"offline","path":["recipe","inspirations"]}]}
@@ -421,7 +519,7 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
                         try request.respond(
                             \\{"data":{"recipe":{"id":"r1","name":"Updated","nameSortKey":"updated",
                             \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],
-                            \\"rating":{"average":5,"count":2},"inspirations":[]}},
+                            \\"rating":{"average":5,"count":2},"inspirations":[],"tags":[]}},
                             \\"errors":[{"message":"images unavailable","path":["recipe","image"]}]}
                         , .{ .keep_alive = false });
                     },
@@ -537,6 +635,117 @@ test "startup rebuild creates the recipe collection from the current schema" {
     thread.join();
     if (fixture.failure) |err| return err;
     try result;
+}
+
+test "legacy migration retries across restart and manual rebuild clears a private source reset" {
+    const Fixture = struct {
+        server: *std.net.Server,
+        failure: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            self.serve() catch |err| {
+                self.failure = err;
+            };
+        }
+        fn serve(self: *@This()) !void {
+            var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+            defer arena.deinit();
+            const a = arena.allocator();
+            // First rebuild migrates but cannot backfill tags; retry succeeds, then restart
+            // reuses the migrated schema. A final manual rebuild observes a private
+            // source reset and clears tags from every recipe without a reset event.
+            const paths = [_][]const u8{
+                collection,                    collection,                               collection,                        "/graphql",                    "/graphql",                               collection ++ "/documents/r1",
+                collection,                    "/graphql",                               "/graphql",                        collection ++ "/documents/r1", collection ++ "/documents?action=upsert", collection ++ "/documents/export",
+                collection,                    "/graphql",                               "/graphql",                        collection ++ "/documents/r1", collection ++ "/documents?action=upsert", collection ++ "/documents/export",
+                collection,                    "/graphql",                               "/graphql",                        collection ++ "/documents/r1", collection ++ "/documents?action=upsert", "/graphql",
+                collection ++ "/documents/r2", collection ++ "/documents?action=upsert", collection ++ "/documents/export",
+            };
+            for (paths, 0..) |path, step| {
+                var fds = [_]std.posix.pollfd{.{ .fd = self.server.stream.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+                if (try std.posix.poll(&fds, 5000) == 0) return error.FixtureTimeout;
+                const connection = try self.server.accept();
+                defer connection.stream.close();
+                var buffer: [8192]u8 = undefined;
+                var server = std.http.Server.init(connection, &buffer);
+                var request = try server.receiveHead();
+                const body = try (try request.reader()).readAllAlloc(a, 8192);
+                try std.testing.expectEqualStrings(path, request.head.target);
+                switch (step) {
+                    0 => try request.respond("{\"fields\":[],\"num_documents\":1}", .{ .keep_alive = false }),
+                    1 => {
+                        try std.testing.expectEqual(.PATCH, request.head.method);
+                        try std.testing.expect(try tagSchemaPresent(try parse(a, body)));
+                        try request.respond("{}", .{ .keep_alive = false });
+                    },
+                    2, 6, 12, 18 => try request.respond(@embedFile("schema.json"), .{ .keep_alive = false }),
+                    3, 7, 13 => try request.respond("{\"data\":{\"recipes\":[{\"id\":\"r1\"}]}}", .{ .keep_alive = false }),
+                    19 => try request.respond("{\"data\":{\"recipes\":[{\"id\":\"r1\"},{\"id\":\"r2\"}]}}", .{ .keep_alive = false }),
+                    4, 8, 14 => {
+                        var recipe = try parse(a, recipeFixture);
+                        try recipe.object.put("tags", if (step == 4) .null else try parse(a, "[{\"id\":\"migrated-tag\"}]"));
+                        try request.respond(try encode(a, .{ .data = .{ .recipe = recipe } }), .{ .keep_alive = false });
+                    },
+                    5, 9 => {
+                        var legacy = try parse(a, previousFixture);
+                        _ = legacy.object.swapRemove("tag_ids");
+                        try request.respond(try encode(a, legacy), .{ .keep_alive = false });
+                    },
+                    15, 21, 24 => try request.respond("{\"tag_ids\":[\"migrated-tag\"]}", .{ .keep_alive = false }),
+                    20, 23 => {
+                        var recipe = try parse(a, recipeFixture);
+                        try recipe.object.put("id", str(if (step == 20) "r1" else "r2"));
+                        try request.respond(try encode(a, .{ .data = .{ .recipe = recipe } }), .{ .keep_alive = false });
+                    },
+                    10, 16 => {
+                        const doc = try parse(a, body);
+                        try std.testing.expectEqualStrings("migrated-tag", try text((try array(try get(doc, "tag_ids")))[0]));
+                        try request.respond("{}", .{ .keep_alive = false });
+                    },
+                    11, 17 => try request.respond("{\"id\":\"r1\",\"tag_ids\":[\"migrated-tag\"]}\n", .{ .keep_alive = false }),
+                    22, 25 => {
+                        const doc = try parse(a, body);
+                        try std.testing.expectEqualStrings(if (step == 22) "r1" else "r2", try text(try get(doc, "id")));
+                        try std.testing.expectEqual(@as(usize, 0), (try array(try get(doc, "tag_ids"))).len);
+                        try request.respond("{}", .{ .keep_alive = false });
+                    },
+                    26 => try request.respond("{\"id\":\"r1\",\"tag_ids\":[]}\n{\"id\":\"r2\",\"tag_ids\":[]}\n", .{ .keep_alive = false }),
+                    else => unreachable,
+                }
+            }
+        }
+    };
+    if (c.curl_global_init(c.CURL_GLOBAL_DEFAULT) != c.CURLE_OK) return error.CurlInit;
+    defer c.curl_global_cleanup();
+    var server = try (try std.net.Address.parseIp("127.0.0.1", 0)).listen(.{});
+    defer server.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const base = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}", .{server.listen_address.getPort()});
+    const cfg = Config{
+        .graphql = try std.mem.concat(a, u8, &.{ base, "/graphql" }),
+        .typesense = base,
+        .key = "",
+        .nats = "",
+        .port = 0,
+        .state_dir = "",
+        .checkpoint = 0,
+    };
+    var fixture = Fixture{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Fixture.run, .{&fixture});
+    var index = Index{ .cfg = cfg };
+    const first = index.rebuild(a);
+    const retry = index.rebuild(a);
+    var restarted = Index{ .cfg = cfg };
+    const restart = restarted.rebuild(a);
+    const reset_recovery = restarted.rebuild(a);
+    thread.join();
+    if (fixture.failure) |err| return err;
+    try std.testing.expectError(error.OptionalSourceUnavailableWithoutPreviousDocument, first);
+    try retry;
+    try restart;
+    try reset_recovery;
 }
 
 test "unavailable optional source requires a previous document, including known absence" {
