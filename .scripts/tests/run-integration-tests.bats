@@ -82,7 +82,7 @@ EOF
   run bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"e2e-test deletes all recipes, ratings, images, and inspirations before each attempt"* ]]
+  [[ "$output" == *"e2e-test deletes all recipes, ratings, images, inspirations, and tags before each attempt"* ]]
   [[ "$output" == *"preserving the final attempt's data; volumes are not reset."* ]]
   cat > expected-calls << 'EOF'
 docker compose --profile test config --format json
