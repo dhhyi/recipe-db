@@ -17,6 +17,9 @@ table inet recipe_db {
     {{ 'ip6' if ':' in network else 'ip' }} saddr {{ network }} tcp dport { 80, 443 } accept
     {{ 'ip6' if ':' in network else 'ip' }} saddr {{ network }} udp dport 5353 accept
 {% endfor %}
+{% if public_https_enabled %}
+    meta nfproto ipv4 tcp dport { 8081, 8443 } accept comment "recipe-db-public-https"
+{% endif %}
     ip6 saddr fe80::/10 udp dport 5353 accept
   }
   chain forward {
@@ -25,6 +28,9 @@ table inet recipe_db {
 {% for network in application_networks if ':' not in network %}
     ip saddr {{ network }} ip daddr { 10.42.0.0/16, 10.43.0.0/16 } meta l4proto tcp ct status dnat ct original ip daddr != { 10.42.0.0/16, 10.43.0.0/16 } ct original proto-dst { 80, 443 } accept
 {% endfor %}
+{% if public_https_enabled %}
+    ip daddr { 10.42.0.0/16, 10.43.0.0/16 } meta l4proto tcp ct status dnat ct original ip daddr {{ ansible_facts.default_ipv4.address }} ct original proto-dst { 8081, 8443 } accept comment "recipe-db-public-https"
+{% endif %}
     # Do not publish arbitrary NodePorts or direct pod/service routes from LAN.
     iifname != { "cni0", "flannel.1", "lo" } ct state new ip daddr { 10.42.0.0/16, 10.43.0.0/16 } drop
   }

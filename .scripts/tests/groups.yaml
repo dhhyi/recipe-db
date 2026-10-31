@@ -35,9 +35,11 @@ deploy:
     - .scripts/tests/backup-package.bats
     - .scripts/tests/production-restore.bats
     - .scripts/tests/production-storage.bats
+    - .scripts/tests/public-https.bats
   inputs:
     - .scripts/production-k3d.sh
     - .scripts/smoke-production-k3d.sh
+    - .scripts/check-public-https.sh
     - .scripts/generate-production-build-metadata.sh
     - .scripts/lib/production-config.sh
     - .scripts/lib/cluster-operation-lock.sh
@@ -52,6 +54,7 @@ deploy:
     - deploy/**
     - ":(glob)*/.project.yaml"
     - browse-maintenance/unavailable.html
+    - design/nginx.conf
     - package.json
 tasks:
   tests:

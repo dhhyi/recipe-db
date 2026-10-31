@@ -8,7 +8,7 @@ setup() {
   setup_fixture production-k3d.sh
   export FIXTURE_ROOT
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
-  mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy
+  mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy design
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
@@ -26,6 +26,8 @@ setup() {
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
   export MOCK_LAN=false MOCK_NODEPORT=false
+  export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
+  export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
   export MOCK_RESTORE=false
   jq -n --arg root "$FIXTURE_ROOT" '{
@@ -47,6 +49,7 @@ setup() {
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > graphql-ingress-secret
   printf 'private-typesense-value-for-tests' > typesense-api-key
+  printf 'acme@example.org\n' > acme-account-email
   printf 'private-oauth-client-value-for-tests' > google-oauth-client-secret
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
@@ -75,6 +78,7 @@ EOF
   printf 'test\n' > browse-maintenance/nginx.conf
   printf 'test\n' > browse-maintenance/unavailable.html
   printf 'test\n' > oauth2-proxy/oauth2-proxy.cfg
+  printf 'test\n' > design/nginx.conf
   cat > bin/k3d << 'EOF'
 #!/usr/bin/env bash
 printf 'k3d %s\n' "$*" >> "$MOCK_LOG"
@@ -417,10 +421,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   fi
   case "$*" in
   *"get service traefik -o json"*)
-    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" '
+    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" --arg https "$MOCK_HTTPS" '
       {spec:{type:(if $lan == "true" then "LoadBalancer" else "ClusterIP" end),
         allocateLoadBalancerNodePorts:false,ports:[{port:80} +
-          (if $nodeport == "true" then {nodePort:30080} else {} end)]}}' ;;
+          (if $nodeport == "true" then {nodePort:30080} else {} end)] +
+          (if $https == "true" then [{port:8081},{port:8443}] else [] end)}}' ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)
     if [[ ${MOCK_PI:-false} = true ]]; then
@@ -447,6 +452,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     fi ;;
   *"get namespace recipe-db --ignore-not-found -o name"*)
     if [[ -f $MOCK_LOG.pvcs ]]; then echo namespace/recipe-db; fi ;;
+  *"get pvc recipe-db-acme --ignore-not-found -o json"*)
+    if [[ $MOCK_FOREIGN_ACME == true ]]; then echo '{"metadata":{"labels":{}}}'; fi ;;
+  *"get secret recipe-db-acme-contact --ignore-not-found -o json"*)
+    if [[ $MOCK_FOREIGN_ACME_CONTACT == true ]]; then echo '{"metadata":{"labels":{}}}'; fi ;;
   *"get helmchartconfig traefik --ignore-not-found -o json"*)
     if [[ $MOCK_FOREIGN_HELM = true ]]; then echo '{"metadata":{"labels":{"owner":"someone-else"}}}'; fi ;;
   *"get deployment traefik -o json"*)
@@ -466,8 +475,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       "args":["--providers.file.filename=/etc/recipe-db/routes.yml"],
       "ports":[{"containerPort":3000}],"volumeMounts":[{"mountPath":"/etc/recipe-db"}]}],
       "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' |
-      jq --arg checksum "$checksum" \
-        '.spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum' ;;
+      jq --arg checksum "$checksum" --argjson https "$(jq 'has("httpsStaging")' "$VALUES")" '
+        .spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum |
+        if $https then
+          .spec.template.spec.containers[0].args += ["--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)"] |
+          .spec.template.spec.containers[0].env = [{name:"ACME_ACCOUNT_EMAIL",
+            valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
+        else . end' ;;
   *"create -f "*lease.json*)
     [[ $MOCK_LOCK != true ]] || exit 1
     lock_file="${*: -1}"
@@ -493,6 +507,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       case "$argument" in
         --from-file=routes.yml=*)
           route_file=${argument#--from-file=routes.yml=}
+          jq '.http.routers' "$route_file" > "$MOCK_LOG.routers"
           jq -e --slurpfile config "${route_file%/*}/config.json" --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
             '.http.services.recipes.loadBalancer.servers[0].url == "http://recipes.recipe-db.svc.cluster.local:4000"
             and (if $config[0].runtime.authMode == "token-only" then
@@ -588,7 +603,7 @@ printf 'ytt %s\n' "$*" >> "$MOCK_LOG"
 while [[ $1 != --data-values-file ]]; do shift; done
 if jq -e 'has("config")' "$2" > /dev/null; then
   jq -e 'keys == ["artifact","config","files","projects","release"]
-    and (.files | keys) == ["maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
+    and (.files | keys) == ["designNginx","maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
   if [[ $MOCK_RESTORE == true ]]; then
     jq -c '. as $input | ["graphql","recipes","images","tags","search","browse","nats","typesense","redis","browse-maintenance"][] |
       . as $name | {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
@@ -626,7 +641,36 @@ else
 http:
   routers:
     graphql:
+      rule: PathPrefix(`/graphql`)
       entrypoints: [web]
+      service: recipe-db-graphql
+      middlewares: [graphql-ingress]
+    frontend:
+      rule: PathPrefix(`/`)
+      entrypoints: [web]
+      service: recipe-db-frontend
+      middlewares: [frontend-compress, browse-unavailable]
+    design:
+      rule: PathPrefix(`/design/`)
+      entrypoints: [web]
+      service: recipe-db-design
+    images-public:
+      rule: PathPrefix(`/public/`)
+      entrypoints: [web]
+      service: recipe-db-images
+    recipes-edit:
+      rule: PathPrefix(`/edit`)
+      entrypoints: [web]
+      service: recipe-db-recipes-edit
+      middlewares: [recipes-edit-strip]
+    images-edit:
+      rule: PathPrefix(`/images`)
+      entrypoints: [web]
+      service: recipe-db-images-edit
+    mcp:
+      rule: PathPrefix(`/mcp`)
+      entrypoints: [web]
+      service: recipe-db-mcp
   middlewares:
     oauth2-forward-auth:
       forwardAuth:
@@ -658,7 +702,7 @@ EOF
       status:{readyReplicas:1}})}' > "$MOCK_LOG.deployments"
   git init -q
   git add .scripts/lib/project-metadata.sh message-bus/nats.conf \
-    browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg
+    browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg design/nginx.conf
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture release inputs'
   export MOCK_REVISION
   MOCK_REVISION=$(git rev-parse HEAD)
@@ -669,14 +713,209 @@ set_value() {
   mv values.next "$VALUES"
 }
 
+@test "HTTPS staging rejects unsupported deployment modes before connection" {
+  set_value '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production"}'
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "HTTPS staging rejects unsafe hostname and unknown CA environment before connection" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan"'
+  for change in \
+    '.httpsStaging={hostname:"127.0.0.1",acmeEnvironment:"production"}' \
+    '.httpsStaging={hostname:"bad`host.example.org",acmeEnvironment:"production"}' \
+    '.httpsStaging={hostname:"-bad.example.org",acmeEnvironment:"production"}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",publicApplication:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"unknown"}'; do
+    set_value "$change"
+    run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"invalid or incomplete production values"* ]]
+  done
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "HTTPS staging refuses unowned ACME storage before mutating the cluster" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging"}'
+  export MOCK_FOREIGN_ACME=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"unowned or incompatible ACME claim"* ]]
+  run ! grep -q 'create secret' "$MOCK_LOG"
+  run ! grep -q 'create -f .*lease.json' "$MOCK_LOG"
+}
+
+@test "certificate-only staging routes exclude application and infrastructure endpoints" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging"}'
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e '
+    [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
+    ($secure | length) == 1 and $secure[0].key == "https-staging"
+    and $secure[0].value.rule == "Host(`recipes.example.org`) && Path(`/`)"
+    and $secure[0].value.tls == {certResolver:"letsencrypt",domains:[{main:"recipes.example.org"}]}
+    and all(.[]; (.entrypoints | index("staging-http")) == null)
+    and .graphql.entrypoints == ["web"]
+    and .["graphql-internal"].entrypoints == ["rest-internal"]
+  ' "$MOCK_LOG.routers"
+  # A stale private-only Service must not be reported as a successful staging rollout.
+  export MOCK_HTTPS=false
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requested private exposure"* ]]
+}
+
 token_only_values() {
   export MOCK_PI=true
   set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
     .storageClass="recipe-db-retained" |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .runtime.authMode="token-only" | .runtime.googleOAuthClientId="" |
+    .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email")) |
     del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+@test "application exposure is independent of authorization policy" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
+  export MOCK_LAN=true MOCK_HTTPS=true
+  for policy in \
+    '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}' \
+    '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}' \
+    '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{"user@example.org":{"role":"owner"}}}' \
+    '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}'; do
+    printf '%s\n' "$policy" > auth-accounts.json
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -eq 0 ]
+    jq -e '.["preview-mcp"].entrypoints == ["websecure"]' "$MOCK_LOG.routers"
+  done
+  for change in '.httpsStaging.exposeApplication=false' 'del(.httpsStaging.exposeApplication)'; do
+    set_value "$change"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -eq 0 ]
+    jq -e '[to_entries[] | select(.value.entrypoints | index("websecure"))] |
+      length == 1 and .[0].key == "https-staging"' "$MOCK_LOG.routers"
+  done
+}
+
+@test "HTTPS deployment validates private ACME contact and rolls Traefik when it changes" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production"}'
+  for value in '' 'not-an-email' 'acme@example.org
+--injected'; do
+    printf '%s' "$value" > acme-account-email
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"acme-account-email"* ]]
+    [[ $output != *"injected"* ]]
+  done
+  printf 'acme@example.org\n' > acme-account-email
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output != *"acme@example.org"* ]]
+  grep -q 'create secret generic recipe-db-acme-contact' "$MOCK_LOG"
+  local original
+  original=$(cat "$MOCK_LOG.route-checksum")
+  printf 'changed@example.org' > acme-account-email
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$original" != "$(cat "$MOCK_LOG.route-checksum")" ]
+}
+
+@test "HTTPS deployment refuses unowned ACME contact before applying credentials" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production"}'
+  export MOCK_FOREIGN_ACME_CONTACT=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"unowned ACME contact Secret"* ]]
+  run ! grep -q 'create secret' "$MOCK_LOG"
+}
+
+@test "preview and renewal rehearsal reject unsafe CA and flag combinations" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan"'
+  for change in \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",exposeApplication:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",renewalRehearsal:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:"true"}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:1}'; do
+    set_value "$change"
+    run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"invalid or incomplete production values"* ]]
+  done
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "application exposure preserves client routes with sanitized trusted ingress" {
+  token_only_values
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e '
+    . as $routers |
+    [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
+    ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql","preview-images-edit","preview-images-public","preview-mcp","preview-recipes-edit"]
+    and all($secure[]; .value.rule | startswith("Host(`recipes.example.org`) && "))
+    and all($secure[]; .value.middlewares[0] == "identity-strip")
+    and all($secure[]; .value.tls.certResolver == "letsencrypt")
+    and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
+    and .["preview-frontend"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
+    and all($secure[]; .key as $name |
+      .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
+    and .["preview-recipes-edit"].middlewares == ["identity-strip","recipes-edit-strip"]
+    and .["preview-mcp"].service == .mcp.service
+    and .graphql.entrypoints == ["web"]
+    and .["graphql-internal"].entrypoints == ["rest-internal"]
+    and all(.[]; (.entrypoints | index("staging-http")) == null)
+  ' "$MOCK_LOG.routers"
+}
+
+@test "anonymous-only policy deploys without extra flags and survives public shutdown" {
+  token_only_values
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  set_value 'del(.httpsStaging)'
+  export MOCK_HTTPS=false
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e 'all(.[]; (.entrypoints | index("websecure")) == null)' "$MOCK_LOG.routers"
+  set_value '.runtime.readOnly="true"'
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
+}
+
+@test "token-only deployment accepts member tokens without requiring an owner" {
+  token_only_values
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"member","secret":"private-member-token","role":"member"}],"googleAccounts":{}}\n' > auth-accounts.json
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
 }
 
 legacy_pi_claims() {
@@ -747,7 +986,7 @@ legacy_pi_claims() {
   run ! grep -Eq 'set env deployment/|exec backup-copy-' "$MOCK_LOG"
 }
 
-@test "token-only mode refuses non-loopback origins local targets and anonymous owners" {
+@test "token-only mode refuses non-loopback origins and local targets" {
   token_only_values
   set_value '.origin="http://192.168.1.218:8080"'
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
@@ -755,11 +994,6 @@ legacy_pi_claims() {
   set_value '.origin="http://127.0.0.1:8080" | .target="local"'
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  set_value '.target="pi"'
-  printf '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
-  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
-  [ "$status" -ne 0 ]
-  [[ $output == *"anonymous read-only policy"* ]]
   run ! grep -q 'create secret' "$MOCK_LOG"
 }
 

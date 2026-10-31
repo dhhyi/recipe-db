@@ -30,7 +30,8 @@ production_config() {
           (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"] +
-      (if has("piStorage") then ["piStorage"] else [] end))
+      (if has("piStorage") then ["piStorage"] else [] end) +
+      (if has("httpsStaging") then ["httpsStaging"] else [] end))
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
     and (.target == "local" or .target == "pi")
     and (.cluster | name) and (.namespace == "recipe-db")
@@ -88,10 +89,32 @@ production_config() {
     and (if .runtime.ingressMode == "private-lan" then
       .target == "pi" and .runtime.authMode == "token-only"
       else true end)
+    and (if has("httpsStaging") then
+      .target == "pi" and .runtime.authMode == "token-only"
+      and .runtime.ingressMode == "private-lan" and has("piStorage")
+      and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"] +
+        (if has("exposeApplication") then ["exposeApplication"] else [] end) +
+        (if has("renewalRehearsal") then ["renewalRehearsal"] else [] end))
+        and (.hostname | type == "string" and length <= 253
+          and test("^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+          and (split(".") | all(.[]; length <= 63))
+          and (test("^[0-9.]+$") | not))
+        and (.acmeEnvironment == "staging" or .acmeEnvironment == "production")
+        and (if has("exposeApplication") then
+          (.exposeApplication | type == "boolean") and
+          (if .exposeApplication then .acmeEnvironment == "production" else true end)
+          else true end)
+        and (if has("renewalRehearsal") then
+          (.renewalRehearsal | type == "boolean") and
+          (if .renewalRehearsal then .acmeEnvironment == "staging" else true end)
+          else true end))
+      else true end)
+    and (if has("httpsStaging") then .secrets | has("acme-account-email") else true end)
     and (.runtime.authMode == "token-only" as $tokenOnly | .secrets |
-      objectkeys(if $tokenOnly then ["auth-accounts.json","graphql-ingress-secret","typesense-api-key"]
+      objectkeys((if $tokenOnly then ["auth-accounts.json","graphql-ingress-secret","typesense-api-key"]
         else ["auth-accounts.json","graphql-ingress-secret","typesense-api-key",
-        "google-oauth-client-secret","oauth2-cookie-secret"] end)
+        "google-oauth-client-secret","oauth2-cookie-secret"] end) +
+        (if has("acme-account-email") then ["acme-account-email"] else [] end))
       and all(.[]; type == "string" and startswith("/") and (test("[\\r\\n]") | not)))
   ' "$work/config.json" > /dev/null || production_fail "invalid or incomplete production values"
   target=$(jq -r .target "$work/config.json")
@@ -107,6 +130,7 @@ production_config() {
   storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
   auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
+  acme_email_path=$(jq -r '.secrets["acme-account-email"] // empty' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
   if [[ $auth_mode = google ]]; then
     secret_keys+=(google-oauth-client-secret oauth2-cookie-secret)
@@ -121,17 +145,23 @@ production_secrets() {
     # Copy once: secret validation, route rendering and Secret creation use the same bytes.
     cp -- "$path" "$work/$key"
   done
+  if jq -e 'has("httpsStaging")' "$work/config.json" > /dev/null; then
+    [[ -f $acme_email_path && -r $acme_email_path && -s $acme_email_path ]] \
+      || production_fail "missing or unreadable secret file: acme-account-email"
+    cp -- "$acme_email_path" "$work/acme-account-email"
+    jq -eRs '
+      length <= 255 and
+      test("^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?([.][A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+\\n?\\z")
+    ' "$work/acme-account-email" > /dev/null \
+      || production_fail "invalid secret format: acme-account-email"
+    tr -d '\n' < "$work/acme-account-email" > "$work/acme-email-normalized"
+    mv "$work/acme-email-normalized" "$work/acme-account-email"
+  fi
   # GraphQL is the sole authorization-policy validator; deployment only checks the envelope.
   jq -se 'length == 1 and (.[0] | type == "object")' "$work/auth-accounts.json" > /dev/null 2>&1 \
     || production_fail "invalid auth-accounts.json (expected one JSON object)"
   jq -eRs 'test("^[A-Za-z0-9_-]{43}\\n?\\z")' "$work/graphql-ingress-secret" > /dev/null \
     || production_fail "invalid secret format: graphql-ingress-secret (expected 43 URL-safe base64 characters)"
-  if [[ $auth_mode = token-only ]]; then
-    jq -e '.anonymous.role == "anonymous" and .googleAccounts == {} and
-      (.tokens | type == "array" and length > 0) and
-      any(.tokens[]; .role == "owner")' "$work/auth-accounts.json" > /dev/null \
-      || production_fail "token-only rehearsal requires anonymous read-only policy and an explicit owner token"
-  fi
   for key in "${secret_keys[@]:2}"; do
     [[ $key != oauth2-cookie-secret ]] || continue
     jq -eRs 'length >= 16 and (test("^[!-~]+\\n?\\z"))' "$work/$key" > /dev/null \

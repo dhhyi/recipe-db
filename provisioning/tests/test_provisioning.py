@@ -158,6 +158,46 @@ class ContractTests(unittest.TestCase):
         self.assertIn('iifname { "cni0", "flannel.1" } accept', rules)
         self.assertIn("ct original proto-dst { 80, 443 } accept", rules)
         self.assertNotIn("192.168.1.218", rules)
+        self.assertNotIn("8081", rules)
+        self.assertNotIn("8443", rules)
+        self.assertFalse(self.defaults["public_https_enabled"])
+
+    def test_public_https_is_ipv4_only_and_limited_to_dedicated_dnat_ports(self):
+        self.values["public_https_enabled"] = True
+        rules = self.render("firewall.nft.j2")
+        self.assertIn('meta nfproto ipv4 tcp dport { 8081, 8443 } accept comment "recipe-db-public-https"', rules)
+        self.assertIn("ct status dnat ct original ip daddr 192.168.1.218 ct original proto-dst { 8081, 8443 } accept", rules)
+        self.assertLess(rules.index('ct original proto-dst { 8081, 8443 }'),
+                        rules.index('ct state new ip daddr'))
+        for line in rules.splitlines():
+            if "recipe-db-public-https" in line:
+                self.assertNotIn("ip6", line)
+                self.assertNotIn("udp", line)
+                self.assertNotIn("6443", line)
+                self.assertNotIn("8472", line)
+        self.assertIn("ip saddr 192.168.1.0/24 tcp dport 22 accept", rules)
+        self.values["public_https_enabled"] = False
+        self.assertNotIn("recipe-db-public-https", self.render("firewall.nft.j2"))
+
+    def test_firewall_only_run_retains_input_and_lockout_guards(self):
+        assertions = self.play["tasks"][0]["ansible.builtin.assert"]["that"]
+        self.assertIn("public_https_enabled is boolean", assertions)
+        for name in (
+            "Validate explicit operator inputs and supported host",
+            "Verify root identity before making changes",
+            "Verify private network inputs and current SSH source",
+            "Stop after read-only preflight when requested",
+        ):
+            task = next(task for task in self.play["tasks"] if task["name"] == name)
+            self.assertEqual(task["tags"], "firewall")
+        tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
+        tagged = {task["name"] for task in tasks if task.get("tags") == "firewall"}
+        self.assertEqual(tagged, {
+            "Install private host firewall configuration",
+            "Install firewall service without replacing other nftables tables",
+            "Validate firewall syntax before activation",
+            "Enable private firewall",
+        })
 
     def test_storage_preflight_can_inspect_root_only_runtime_directories(self):
         task = next(task for task in self.play["tasks"]

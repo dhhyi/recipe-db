@@ -33,6 +33,22 @@ Review these before authorizing a live run:
 
 No disk partitioning, formatting, reset, deletion, automatic reboot, application deployment or public router forwarding occurs. Existing unmanaged k3s/state, active UFW/firewalld or unexpected nftables tables fail preflight instead of being adopted or removed.
 
+## Opt-in dedicated IPv4 HTTPS listeners
+
+The default `public_https_enabled: false` preserves private ingress. Under [#44](https://github.com/dhhyi/recipe-db/issues/44), explicitly set this **boolean** to `true` in the private inventory only after approving certificate-only staging or the anonymous-only preview described in the [HTTPS operations guide](production-kubernetes.md#certificate-only-https-staging-on-the-pi).
+
+This adds only IPv4 TCP 8081/8443 host ingress and Kubernetes DNAT to those original ports at the Pi's current default IPv4 address. It does not expose private application TCP 80, IPv6, SSH/API, NodePorts, direct backends or UDP 8472. Existing private-network and CNI allowances remain unchanged. Router external TCP 80->Pi 8081 and 443->Pi 8443 are separate manual operator controls. Keep the Pi's address reserved in the router; reapply the firewall after an address change.
+
+From the provisioning devcontainer, use the existing private inventory and reviewed checkout:
+
+```sh
+ansible-playbook -i .private/inventory.yml site.yml --tags firewall
+```
+
+Invoke that command through `mise run --raw in-devcontainer provisioning` when running from the host. The `firewall` tag retains supported-host/input validation, storage identity checks and current SSH-source lockout protection; it does not run package installs, k3s upgrades or unrelated provisioning. Syntax is checked before activation and the managed service persists the rules across reboot. An existing service is reloaded by the notified handler. Never flush the entire nftables ruleset.
+
+For full external shutdown, remove router forwards, remove `httpsStaging` and redeploy to close existing listener connections, then set `public_https_enabled: false` and reapply the tagged firewall tasks. Firewall/router rule removal alone may leave established connections alive. Keep the ACME PVC and private administration intact. Re-enable only after restoring the approved mode and verifying listener/policy boundaries. HTTP-01 renewal needs external TCP 80 challenge reachability; disabling it pauses renewal even if the HTTPS certificate is still valid.
+
 ## Application storage identity and reattachment
 
 Before Pi deploy, backup or storage-reattachment operations, replace `deploy/pi.yaml`'s `piStorage.expectedRootUuid` placeholder with the UUID verified during provisioning. Keep `piStorage.node` equal to the provisioned k3s node name (`recipe-db-pi`) and `piStorage.dataRoot` equal to `data_root` in `provisioning/group_vars/pi.yml`. These values are checked against the selected explicit Kubernetes context; Pi deploy/backup/reattachment refuses missing or malformed identity. Rendering and status inspection may omit the Pi storage block.
