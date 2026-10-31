@@ -246,21 +246,23 @@ routes() {
         | ("Host(`" + $config[0].httpsStaging.hostname + "`)") as $host
         | {certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]} as $tls
         | if $config[0].httpsStaging.readOnlyPreview == true then
-            def preview($name; $rule):
+            def preview($name):
               .http.routers[$name] as $router |
               if $router == null or $router.service == null then
                 error("missing required preview router: " + $name)
               else
                 .http.routers["preview-" + $name] = ($router + {
-                  rule:($host + " && (" + $rule + ")"),
+                  rule:($host + " && (" + $router.rule + ")"),
                   entrypoints:["websecure"], tls:$tls,
                   middlewares:(["identity-strip"] + ($router.middlewares // []))})
               end;
-            preview("frontend";
-              "((Method(`GET`) || Method(`HEAD`)) && (Path(`/`) || Path(`/controls`) || Path(`/identity`) || PathRegexp(`^/recipe/[^/]+(/(similar|tags|controls|rating|inspirations))?$`))) || (Method(`POST`) && PathRegexp(`^/recipe/[^/]+/similar/more$`))")
-            | preview("design"; "(Method(`GET`) || Method(`HEAD`)) && PathPrefix(`/design/`)")
-            | preview("images-public"; "(Method(`GET`) || Method(`HEAD`)) && PathPrefix(`/public/`)")
-            | preview("graphql"; "(Method(`GET`) || Method(`POST`) || Method(`OPTIONS`)) && Path(`/graphql`)")
+            preview("frontend")
+            | preview("design")
+            | preview("images-public")
+            | preview("graphql")
+            | preview("recipes-edit")
+            | preview("images-edit")
+            | preview("mcp")
           else
             .http.routers["https-staging"] = {
               rule:($host + " && Path(`/`)"), entrypoints:["websecure"],

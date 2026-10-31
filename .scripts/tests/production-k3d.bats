@@ -641,19 +641,36 @@ else
 http:
   routers:
     graphql:
+      rule: PathPrefix(`/graphql`)
       entrypoints: [web]
       service: recipe-db-graphql
       middlewares: [graphql-ingress]
     frontend:
+      rule: PathPrefix(`/`)
       entrypoints: [web]
       service: recipe-db-frontend
       middlewares: [frontend-compress, browse-unavailable]
     design:
+      rule: PathPrefix(`/design/`)
       entrypoints: [web]
       service: recipe-db-design
     images-public:
+      rule: PathPrefix(`/public/`)
       entrypoints: [web]
       service: recipe-db-images
+    recipes-edit:
+      rule: PathPrefix(`/edit`)
+      entrypoints: [web]
+      service: recipe-db-recipes-edit
+      middlewares: [recipes-edit-strip]
+    images-edit:
+      rule: PathPrefix(`/images`)
+      entrypoints: [web]
+      service: recipe-db-images-edit
+    mcp:
+      rule: PathPrefix(`/mcp`)
+      entrypoints: [web]
+      service: recipe-db-mcp
   middlewares:
     oauth2-forward-auth:
       forwardAuth:
@@ -771,7 +788,7 @@ token_only_values() {
 
 @test "read-only preview rejects privileged policies before connecting" {
   token_only_values
-  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" | .runtime.readOnly=true |
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
   for policy in \
     '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"owner","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}' \
@@ -843,36 +860,40 @@ token_only_values() {
 @test "read-only preview exposes only explicit public transports with sanitized trusted ingress" {
   token_only_values
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
-  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" | .runtime.readOnly=true |
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
   export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   jq -e '
+    . as $routers |
     [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
-    ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql","preview-images-public"]
+    ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql","preview-images-edit","preview-images-public","preview-mcp","preview-recipes-edit"]
     and all($secure[]; .value.rule | startswith("Host(`recipes.example.org`) && "))
     and all($secure[]; .value.middlewares[0] == "identity-strip")
     and all($secure[]; .value.tls.certResolver == "letsencrypt")
     and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
     and .["preview-frontend"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
-    and (.["preview-frontend"].rule | contains("similar/more") and (contains("rate") | not) and (contains("edit") | not))
+    and all($secure[]; .key as $name |
+      .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
+    and .["preview-recipes-edit"].middlewares == ["identity-strip","recipes-edit-strip"]
+    and .["preview-mcp"].service == .mcp.service
     and .graphql.entrypoints == ["web"]
     and .["graphql-internal"].entrypoints == ["rest-internal"]
     and all(.[]; (.entrypoints | index("staging-http")) == null)
   ' "$MOCK_LOG.routers"
 }
 
-@test "public preview requires explicit read-only policy and private shutdown never restores owner tokens" {
+@test "anonymous-only policy deploys without extra flags and survives public shutdown" {
   token_only_values
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",readOnlyPreview:true}'
+  export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
-  [ "$status" -ne 0 ]
-  [[ $output == *"invalid or incomplete production values"* ]]
-  set_value '.runtime.readOnly=true | del(.httpsStaging)'
-  export MOCK_LAN=true
+  [ "$status" -eq 0 ]
+  set_value 'del(.httpsStaging)'
+  export MOCK_HTTPS=false
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   jq -e 'all(.[]; (.entrypoints | index("websecure")) == null)' "$MOCK_LOG.routers"
@@ -880,6 +901,13 @@ token_only_values() {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
   [[ $output == *"invalid or incomplete production values"* ]]
+}
+
+@test "token-only deployment accepts member tokens without requiring an owner" {
+  token_only_values
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"member","secret":"private-member-token","role":"member"}],"googleAccounts":{}}\n' > auth-accounts.json
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
 }
 
 legacy_pi_claims() {
@@ -962,7 +990,7 @@ legacy_pi_claims() {
   printf '{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  [[ $output == *"anonymous read-only policy"* ]]
+  [[ $output == *"token-only deployment requires anonymous role"* ]]
   run ! grep -q 'create secret' "$MOCK_LOG"
 }
 

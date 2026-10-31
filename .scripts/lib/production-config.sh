@@ -71,11 +71,9 @@ production_config() {
     and (.infrastructure | objectkeys(["traefik","nats","typesense","maintenance","oauth2Proxy","redis"])
       and all(.[]; image)
       and (.traefik | test("^traefik:v3([.]([7-9]|[1-9][0-9])([.][0-9]+)?)?@sha256:[0-9a-f]{64}$")))
-    and (.runtime | (del(.authMode,.ingressMode,.readOnly) | objectkeys(["googleOAuthClientId","trustedIssuer"]))
+    and (.runtime | (del(.authMode,.ingressMode) | objectkeys(["googleOAuthClientId","trustedIssuer"]))
       and ((.authMode // "google") == "google" or .authMode == "token-only")
       and ((.ingressMode // "loopback") == "loopback" or .ingressMode == "private-lan")
-      and (if has("readOnly") then (.readOnly | type == "boolean") and
-        (if .readOnly then .authMode == "token-only" else true end) else true end)
       and (.googleOAuthClientId | type == "string")
       and (if .authMode == "token-only" then .googleOAuthClientId == "" else
         (.googleOAuthClientId | nonempty and
@@ -94,7 +92,6 @@ production_config() {
     and (if has("httpsStaging") then
       .target == "pi" and .runtime.authMode == "token-only"
       and .runtime.ingressMode == "private-lan" and has("piStorage")
-      and (if .httpsStaging.readOnlyPreview == true then .runtime.readOnly == true else true end)
       and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"] +
         (if has("readOnlyPreview") then ["readOnlyPreview"] else [] end) +
         (if has("renewalRehearsal") then ["renewalRehearsal"] else [] end))
@@ -133,7 +130,6 @@ production_config() {
   storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
   auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
-  read_only_policy=$(jq -r '.runtime.readOnly // false' "$work/config.json")
   acme_email_path=$(jq -r '.secrets["acme-account-email"] // empty' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
   if [[ $auth_mode = google ]]; then
@@ -167,15 +163,14 @@ production_secrets() {
   jq -eRs 'test("^[A-Za-z0-9_-]{43}\\n?\\z")' "$work/graphql-ingress-secret" > /dev/null \
     || production_fail "invalid secret format: graphql-ingress-secret (expected 43 URL-safe base64 characters)"
   if [[ $auth_mode = token-only ]]; then
-    if [[ $read_only_policy = true ]]; then
+    if jq -e '.httpsStaging.readOnlyPreview == true' "$work/config.json" > /dev/null; then
       jq -e '.anonymous.role == "anonymous" and .googleAccounts == {} and .tokens == []' \
         "$work/auth-accounts.json" > /dev/null \
         || production_fail "read-only deployment requires anonymous role, no bearer tokens and no Google accounts"
     else
       jq -e '.anonymous.role == "anonymous" and .googleAccounts == {} and
-        (.tokens | type == "array" and length > 0) and
-        any(.tokens[]; .role == "owner")' "$work/auth-accounts.json" > /dev/null \
-        || production_fail "token-only rehearsal requires anonymous read-only policy and an explicit owner token"
+        (.tokens | type == "array")' "$work/auth-accounts.json" > /dev/null \
+        || production_fail "token-only deployment requires anonymous role, no Google accounts and a bearer token array"
     fi
   fi
   for key in "${secret_keys[@]:2}"; do
