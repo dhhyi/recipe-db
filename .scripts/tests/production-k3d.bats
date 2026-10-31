@@ -25,6 +25,7 @@ setup() {
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
   export MOCK_LAN=false MOCK_NODEPORT=false
+  export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
   export MOCK_BACKUP=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
@@ -284,10 +285,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   fi
   case "$*" in
   *"get service traefik -o json"*)
-    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" '
+    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" --arg https "$MOCK_HTTPS" '
       {spec:{type:(if $lan == "true" then "LoadBalancer" else "ClusterIP" end),
         allocateLoadBalancerNodePorts:false,ports:[{port:80} +
-          (if $nodeport == "true" then {nodePort:30080} else {} end)]}}' ;;
+          (if $nodeport == "true" then {nodePort:30080} else {} end)] +
+          (if $https == "true" then [{port:8081},{port:8443}] else [] end)}}' ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)
     if [[ ${MOCK_PI:-false} = true ]]; then
@@ -314,6 +316,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     fi ;;
   *"get namespace recipe-db --ignore-not-found -o name"*)
     if [[ -f $MOCK_LOG.pvcs ]]; then echo namespace/recipe-db; fi ;;
+  *"get pvc recipe-db-acme --ignore-not-found -o json"*)
+    if [[ $MOCK_FOREIGN_ACME == true ]]; then echo '{"metadata":{"labels":{}}}'; fi ;;
   *"get helmchartconfig traefik --ignore-not-found -o json"*)
     if [[ $MOCK_FOREIGN_HELM = true ]]; then echo '{"metadata":{"labels":{"owner":"someone-else"}}}'; fi ;;
   *"get deployment traefik -o json"*)
@@ -360,6 +364,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       case "$argument" in
         --from-file=routes.yml=*)
           route_file=${argument#--from-file=routes.yml=}
+          jq '.http.routers' "$route_file" > "$MOCK_LOG.routers"
           jq -e --slurpfile config "${route_file%/*}/config.json" --rawfile ingress "${route_file%/*}/graphql-ingress-secret" \
             '.http.services.recipes.loadBalancer.servers[0].url == "http://recipes.recipe-db.svc.cluster.local:4000"
             and (if $config[0].runtime.authMode == "token-only" then
@@ -520,6 +525,68 @@ EOF
 set_value() {
   jq "$1" "$VALUES" > values.next
   mv values.next "$VALUES"
+}
+
+@test "HTTPS staging rejects unsupported deployment modes before connection" {
+  set_value '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production"}'
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "HTTPS staging rejects unsafe hostname and unknown CA environment before connection" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan"'
+  for change in \
+    '.httpsStaging={hostname:"127.0.0.1",acmeEnvironment:"production"}' \
+    '.httpsStaging={hostname:"bad`host.example.org",acmeEnvironment:"production"}' \
+    '.httpsStaging={hostname:"-bad.example.org",acmeEnvironment:"production"}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",publicApplication:true}' \
+    '.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"unknown"}'; do
+    set_value "$change"
+    run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"invalid or incomplete production values"* ]]
+  done
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "HTTPS staging refuses unowned ACME storage before mutating the cluster" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging"}'
+  export MOCK_FOREIGN_ACME=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"unowned or incompatible ACME claim"* ]]
+  run ! grep -q 'create secret' "$MOCK_LOG"
+  run ! grep -q 'create -f .*lease.json' "$MOCK_LOG"
+}
+
+@test "certificate-only staging routes exclude application and infrastructure endpoints" {
+  token_only_values
+  set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging"}'
+  export MOCK_LAN=true MOCK_HTTPS=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e '
+    [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
+    ($secure | length) == 1 and $secure[0].key == "https-staging"
+    and $secure[0].value.rule == "Host(`recipes.example.org`) && Path(`/`)"
+    and $secure[0].value.tls == {certResolver:"letsencrypt",domains:[{main:"recipes.example.org"}]}
+    and all(.[]; (.entrypoints | index("staging-http")) == null)
+    and .graphql.entrypoints == ["web"]
+    and .["graphql-internal"].entrypoints == ["rest-internal"]
+  ' "$MOCK_LOG.routers"
+  # A stale private-only Service must not be reported as a successful staging rollout.
+  export MOCK_HTTPS=false
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requested private exposure"* ]]
 }
 
 token_only_values() {

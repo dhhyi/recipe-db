@@ -194,7 +194,7 @@ annotate_credentials() {
     sha256sum "${secret_keys[@]}" template-values.json | sha256sum
   )
   checksum=${checksum%% *}
-  route_checksum=$(sha256sum "$work/routes.yml")
+  route_checksum=$(cd "$work" && sha256sum routes.yml config.json | sha256sum)
   route_checksum=${route_checksum%% *}
   SECRET_CHECKSUM="$checksum" ROUTES_CHECKSUM="$route_checksum" yq \
     '(select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum") = strenv(SECRET_CHECKSUM) |
@@ -212,7 +212,7 @@ routes() {
     -f "$root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
-  jq --arg ns "$namespace" --arg authMode "$auth_mode" --rawfile secret "$work/graphql-ingress-secret" '
+  jq --arg ns "$namespace" --arg authMode "$auth_mode" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
     walk(if type == "string" then
       gsub("http://(?<host>[a-z][a-z0-9-]*)(?=[:/?#]|$)";
         "http://\(.host).\($ns).svc.cluster.local")
@@ -227,6 +227,18 @@ routes() {
     | if $authMode == "token-only" then
         del(.http.routers["oauth2-public"], .http.routers["graphql-cookie"],
           .http.middlewares["oauth2-forward-auth"], .http.services["oauth2-proxy"])
+      else . end
+    | if $config[0].httpsStaging then
+        if all(.http.routers[]; all(.entrypoints[]; . == "web" or . == "rest-internal")) then .
+        else error("existing routes must not use certificate-only staging entrypoints") end
+        |
+        .http.routers["https-staging"] = {
+          rule:("Host(`" + $config[0].httpsStaging.hostname + "`) && Path(`/`)"),
+          entrypoints:["websecure"], service:"https-staging",
+          middlewares:["identity-strip"],
+          tls:{certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]}}
+        | .http.services["https-staging"] = {
+          loadBalancer:{servers:[{url:("http://https-staging." + $ns + ".svc.cluster.local:80")}]}}
       else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
 }
@@ -245,6 +257,21 @@ guard_helm_config() {
     jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
       "$work/existing-helm-config.json" > /dev/null \
       || production_fail "refusing to overwrite an unowned Traefik HelmChartConfig"
+  fi
+}
+
+guard_acme_claim() {
+  [[ $(jq -r 'has("httpsStaging")' "$work/config.json") == true ]] || return 0
+  kube --namespace kube-system get pvc recipe-db-acme --ignore-not-found -o json \
+    > "$work/existing-acme-claim.json"
+  if [[ -s $work/existing-acme-claim.json ]]; then
+    jq -e --arg class "$storage_class" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.storageClassName == $class
+      and .spec.accessModes == ["ReadWriteOnce"]
+      and .spec.resources.requests.storage == "64Mi"
+    ' "$work/existing-acme-claim.json" > /dev/null \
+      || production_fail "refusing to overwrite an unowned or incompatible ACME claim"
   fi
 }
 
@@ -1152,6 +1179,7 @@ case "$command" in
         || production_fail "token-only rehearsal requires no existing Google deployment; transition explicitly before retrying"
     fi
     guard_helm_config
+    guard_acme_claim
     ensure_namespace
     lock_holder="$cluster-deploy-$$"
     # Keep coordination outside the application namespace so namespace replacement cannot drop the lock.
@@ -1196,10 +1224,11 @@ case "$command" in
     fi
     if [[ $auth_mode = token-only ]]; then
       kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
-      jq -e --arg ingress "$ingress_mode" '
+      jq -e --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
         (if $ingress == "private-lan" then
           .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
-          (.spec.ports | length == 1) and .spec.ports[0].port == 80
+          ([.spec.ports[].port] | sort) ==
+            (if $config[0].httpsStaging then [80,8081,8443] else [80] end)
          else .spec.type == "ClusterIP" end) and
         ((.spec.externalIPs // []) | length == 0) and
         all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \

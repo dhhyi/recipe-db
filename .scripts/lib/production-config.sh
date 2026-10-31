@@ -30,7 +30,8 @@ production_config() {
           (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"] +
-      (if has("piStorage") then ["piStorage"] else [] end))
+      (if has("piStorage") then ["piStorage"] else [] end) +
+      (if has("httpsStaging") then ["httpsStaging"] else [] end))
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
     and (.target == "local" or .target == "pi")
     and (.cluster | name) and (.namespace == "recipe-db")
@@ -87,6 +88,16 @@ production_config() {
       else true end)
     and (if .runtime.ingressMode == "private-lan" then
       .target == "pi" and .runtime.authMode == "token-only"
+      else true end)
+    and (if has("httpsStaging") then
+      .target == "pi" and .runtime.authMode == "token-only"
+      and .runtime.ingressMode == "private-lan" and has("piStorage")
+      and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"])
+        and (.hostname | type == "string" and length <= 253
+          and test("^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
+          and (split(".") | all(.[]; length <= 63))
+          and (test("^[0-9.]+$") | not))
+        and (.acmeEnvironment == "staging" or .acmeEnvironment == "production"))
       else true end)
     and (.runtime.authMode == "token-only" as $tokenOnly | .secrets |
       objectkeys(if $tokenOnly then ["auth-accounts.json","graphql-ingress-secret","typesense-api-key"]

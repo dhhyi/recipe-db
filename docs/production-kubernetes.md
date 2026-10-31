@@ -171,6 +171,28 @@ The account ID is stable and explicit; the token is not the ID. Revoke or rotate
 
 ## Create, render, deploy and inspect
 
+### Certificate-only HTTPS staging on the Pi
+
+After rehearsal credential replacement, an operator may add this optional block to the private Pi values file. Keep `runtime.authMode: token-only`, `runtime.ingressMode: private-lan`, and the existing private LAN `origin`:
+
+```yaml
+httpsStaging:
+  hostname: your-hostname.example.org
+  acmeEnvironment: staging
+```
+
+This enables a separate Traefik HTTP entrypoint on Pi TCP 8081 and HTTPS on TCP 8443. Existing private LAN application HTTP on TCP 80 and internal GraphQL ingress remain unchanged. The HTTPS entrypoint serves only a fixed staging-check response at `/` for the configured hostname; application, OAuth, MCP, static, image, and infrastructure paths have no staging router and return 404.
+
+Only after inspecting the deployed listeners, the operator forwards router TCP 80 to Pi TCP 8081 and router TCP 443 to Pi TCP 8443. The private host firewall also requires explicitly approved exceptions for these two destination ports and their Kubernetes DNAT paths. Do not forward to the application's Pi TCP 80, open SSH/Kubernetes/backend ports, flush nftables, or publish an unverified IPv6 record. This deployment command does not change the router or host firewall.
+
+Traefik answers Let's Encrypt HTTP-01 challenges on the staging HTTP entrypoint; ordinary requests redirect to external HTTPS port 443. No Dynu API credential is needed. Begin with the ACME staging environment to test validation without production rate limits. Its test certificates are **not browser-trusted**: successful test issuance is not trusted-HTTPS acceptance. Change `acmeEnvironment` to `production` and redeploy to obtain the trusted certificate. Use the hostname, not the numeric IP, and do not bypass certificate validation for production acceptance.
+
+ACME account keys and certificates persist in the private `recipe-db-acme` PVC in `kube-system`, using the owned retained Pi StorageClass. Traefik runs as UID/GID 65532, uses a single Recreate deployment, and initializes each environment's ACME file with mode 0600. Test and production use separate files; ordinary redeployments must not delete the claim. The claim is outside application backup capture: protect it separately as private recovery material or explicitly reissue after recovery, accounting for CA rate limits. Never publish ACME files, private keys, raw Secret data, or unrestricted proxy logs.
+
+Traefik automatically renews certificates while DNS and inbound challenge access remain usable. Before acceptance, verify the trusted hostname/chain, root response, 404s for `/graphql`, `/mcp`, `/oauth2/callback`, `/design`, `/images`, and `/api`, HTTP redirects, private LAN browsing, retained state across redeployment, and actual renewal evidence. Inspect certificate expiry and ACME failure diagnostics locally without publishing credentials; successful initial issuance alone does not prove renewal. Certificate hostnames are public in certificate transparency logs.
+
+To disable external staging, remove the two router forwards and their temporary host firewall exceptions. Removing `httpsStaging` and redeploying also removes the staging listeners/routes; it deliberately retains the ACME PVC and the unexposed staging workload. This milestone is not Google-provider verification or public go-live. Those remain gated by the agreed protected route boundary and the deployment/authentication acceptance issues.
+
 ### Workstation-only token rehearsal on the Pi
 
 For an initial private rehearsal without Google login, set `runtime.authMode: token-only`, `runtime.googleOAuthClientId: ""`, and `origin: http://127.0.0.1:8080` (matching `httpPort`). Omit the `google-oauth-client-secret` and `oauth2-cookie-secret` keys from `secrets`; the other three secret files remain required. The default auth mode remains `google`, with its existing credential requirements unchanged.

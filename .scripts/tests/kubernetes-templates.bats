@@ -82,6 +82,48 @@ render() {
   jq -e 'all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")' manifests.json
 }
 
+@test "certificate-only staging preserves private HTTP and persists separate ACME environments" {
+  for environment in staging production; do
+    jq --arg environment "$environment" '
+      .config.target="pi" | .config.context="recipe-db-pi" |
+      .config.storageClass="recipe-db-retained" |
+      .config.origin="http://recipe-pi.home" | .config.runtime.authMode="token-only" |
+      .config.runtime.ingressMode="private-lan" | .config.runtime.googleOAuthClientId="" |
+      .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:$environment}
+    ' values.json > https-values.json
+    render https-values.json
+    jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+    yq -o=json '.' helm-values.yaml | jq -e --arg environment "$environment" '
+      .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
+      and .ports["staging-http"].exposedPort == 8081
+      and .ports["staging-http"].port == 8001
+      and .ports.websecure.exposedPort == 8443 and .ports.websecure.expose.default == true
+      and .ports["rest-internal"].expose.default == false
+      and .persistence.existingClaim == "recipe-db-acme" and .persistence.path == "/data"
+      and .podSecurityContext.fsGroup == 65532 and .updateStrategy.type == "Recreate"
+      and (.deployment.initContainers[0].command[2] |
+        contains("chmod 600 /data/acme-" + $environment + ".json"))
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http") != null)
+      and (.additionalArguments | index("--entrypoints.staging-http.http.redirections.entrypoint.to=:443") != null)
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme-" + $environment + ".json") != null)
+      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.caserver=" +
+        (if $environment == "production" then "https://acme-v02.api.letsencrypt.org/directory"
+         else "https://acme-staging-v02.api.letsencrypt.org/directory" end)) != null)'
+    jq -e '
+      any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme"
+        and .metadata.namespace == "kube-system" and .spec.storageClassName == "recipe-db-retained"
+        and .spec.resources.requests.storage == "64Mi")
+      and any(.items[]; .kind == "Service" and .metadata.name == "recipe-db-internal"
+        and any(.spec.ports[]; .port == 80 and .targetPort == 8000))
+      and any(.items[]; .kind == "Deployment" and .metadata.name == "https-staging"
+        and .spec.template.spec.automountServiceAccountToken == false)
+      and any(.items[]; .kind == "ConfigMap" and .metadata.name == "https-staging-config"
+        and (.data["default.conf"] | contains("location = /") and contains("location / { return 404; }")))
+      and all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
+    ' manifests.json
+  done
+}
+
 @test "Kubernetes templates select every application project including design" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '
