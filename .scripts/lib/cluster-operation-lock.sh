@@ -127,10 +127,15 @@ cluster_operation_lock_recover() {
       cluster_operation_lock_fail "operation lock holder mismatch; refusing recovery"
       return 1
     }
-  jq -e '.metadata.annotations["recipe-db/operation"] != "backup"
+  jq -e '(.metadata.annotations["recipe-db/operation"] != "backup"
+      and .metadata.annotations["recipe-db/operation"] != "restore")
     or .metadata.annotations["recipe-db/phase"] == "acquired"' <<< "$current" > /dev/null \
     || {
-      cluster_operation_lock_fail "backup locks past preflight require backup-exit with saved recovery state, not unconditional release"
+      if [[ $(jq -r '.metadata.annotations["recipe-db/operation"]' <<< "$current") == restore ]]; then
+        cluster_operation_lock_fail "restore locks past preflight require restore-abandon with saved state after investigation and target isolation; never rerun import into populated volumes"
+      else
+        cluster_operation_lock_fail "backup locks past preflight require backup-exit with saved recovery state, not unconditional release"
+      fi
       return 1
     }
   cluster_operation_lock_delete "$current" \

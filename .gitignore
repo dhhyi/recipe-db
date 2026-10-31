@@ -5,6 +5,8 @@ target
 dist-newstyle
 .docker
 .DS_Store
+/.restore-test-work/
+/.scripts/**/__pycache__/
 
 # dependencies
 node_modules

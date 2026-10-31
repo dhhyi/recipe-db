@@ -32,6 +32,8 @@ deploy:
     - .scripts/tests/production-k3d.bats
     - .scripts/tests/production-smoke.bats
     - .scripts/tests/backup-snapshot.bats
+    - .scripts/tests/backup-package.bats
+    - .scripts/tests/production-restore.bats
     - .scripts/tests/production-storage.bats
   inputs:
     - .scripts/production-k3d.sh
@@ -40,7 +42,10 @@ deploy:
     - .scripts/lib/production-config.sh
     - .scripts/lib/cluster-operation-lock.sh
     - .scripts/lib/production-storage.sh
+    - .scripts/lib/production-restore.sh
     - .scripts/validate-backup-snapshot.py
+    - .scripts/validate-backup-package.py
+    - provisioning/files/backup-upload.py
     - .scripts/lib/project-metadata.sh
     - .scripts/templates/kubernetes*.yml
     - .scripts/validate-production-image-index.sh
