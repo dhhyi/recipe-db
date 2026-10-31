@@ -1,5 +1,6 @@
 (ns recipes-edit.events
-  (:require [clojure.walk :as walk]
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [re-frame.core :as rf]
             [re-graph.core :as re-graph]
             [recipes-edit.model :as model])
@@ -42,6 +43,26 @@
         401 :authentication-required
         403 :forbidden
         nil))))
+
+(defn- optional-inspirations-errors? [errors]
+  (and (seq errors)
+       (every? (fn [{:keys [extensions path]}]
+                 (and (= "service-unavailable" (:code extensions))
+                      (= 503 (:status extensions))
+                      (= "inspirations" (:service extensions))
+                      (= ["recipe" "inspirations"] path)))
+               errors)))
+
+(defn- partial-write [errors]
+  (some (fn [{:keys [extensions]}]
+          (let [{:keys [recipeId completedSteps]} extensions]
+            (when (and (string? recipeId) (seq completedSteps))
+              {:recipe-id recipeId
+               :completed-steps completedSteps})))
+        errors))
+
+(defn- unknown-write-outcome? [errors]
+  (some #(= "unknown" (get-in % [:extensions :outcome])) errors))
 
 (rf/reg-fx
  ::replace-url
@@ -97,12 +118,13 @@
  (fn [db [_ {:keys [response]}]]
    (let [{:keys [data errors]} (normalize-response response)]
      (cond
-       (seq errors) (assoc db :status :error :feedback {:kind :error :message (model/error-message errors)})
+       (and (seq errors) (not (optional-inspirations-errors? errors)))
+       (assoc db :status :error :feedback {:kind :error :message (model/error-message errors)})
        (nil? (:recipe data)) (assoc db :status :not-found)
        :else (let [form (model/recipe->form (:recipe data))]
                (assoc db
                       :status :idle
-                      :inspirations-online (:inspirationsOnline data)
+                      :inspirations-online (if (seq errors) false (:inspirationsOnline data))
                       :form form
                       :baseline form))))))
 
@@ -183,6 +205,7 @@
              (= :loading status)
              (= :not-found status)
              (= :error status)
+             (= :outcome-unknown status)
              (not (model/dirty? (:form db) (:baseline db))))
        {}
        (let [{:keys [page]} (:route db)
@@ -204,12 +227,54 @@
                      :status :idle
                      :authorization authorization
                      :authorization-message (model/error-message errors))}
-         (if (some model/empty-name-error? errors)
-           {:db (assoc db :status :idle :name-error? true :save-failed? true :feedback nil)}
-           {:db (assoc db :status :idle
-                       :name-error? false
-                       :save-failed? true
-                       :feedback {:kind :error :message (model/error-message errors)})}))
+         (let [{:keys [recipe-id completed-steps]} (partial-write errors)
+               page (get-in db [:route :page])
+               creating? (and (= :new page) (some #{"recipe-created"} completed-steps))
+               updating? (and (= :edit page) (= recipe-id (get-in db [:route :id])))
+               partial? (or creating? updating?)]
+           (if partial?
+             (merge
+              {:db (assoc db
+                          :status :loading
+                          :route (if creating?
+                                   (assoc (:route db) :page :edit :id recipe-id)
+                                   (:route db))
+                          :save-failed? true
+                          :feedback {:kind :error
+                                     :message (str "Recipe " recipe-id
+                                                   " has completed steps: "
+                                                   (str/join ", " completed-steps)
+                                                   ". Review the saved recipe before retrying. "
+                                                   (model/error-message errors))})
+               :dispatch [::re-graph/query
+                          {:id :recipe
+                           :query recipe-query
+                           :variables {:id recipe-id}
+                           :callback [::recipe-loaded]}]}
+              (when creating? {::replace-url (str "/edit/" recipe-id)}))
+             (if (unknown-write-outcome? errors)
+               (if (= :edit page)
+                 {:db (assoc db
+                             :status :loading
+                             :save-failed? true
+                             :feedback {:kind :error
+                                        :message "The save outcome is unknown. The recipe is being reloaded; review its saved state before retrying."})
+                  :dispatch [::re-graph/query
+                             {:id :recipe
+                              :query recipe-query
+                              :variables {:id (get-in db [:route :id])}
+                              :callback [::recipe-loaded]}]}
+                 {:db (assoc db
+                             :status :outcome-unknown
+                             :save-failed? true
+                             :feedback {:kind :error
+                                        :message "The save outcome is unknown; the recipe may already exist. Do not retry until you have checked the recipe overview."})})
+               (if (some model/empty-name-error? errors)
+                 {:db (assoc db :status :idle :name-error? true :save-failed? true :feedback nil)}
+                 {:db (assoc db :status :idle
+                             :name-error? false
+                             :save-failed? true
+                             :feedback {:kind :error :message (model/error-message errors)})})))))
 
        (= :new (get-in db [:route :page]))
        (if-let [id (get-in data [:createRecipe :id])]

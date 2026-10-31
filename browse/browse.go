@@ -126,12 +126,15 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			if serviceErr != nil {
 				log.Printf("failed to fetch browse service status: %v", serviceErr)
 				status = http.StatusBadGateway
+			} else if services.SearchOnline == nil || services.RatingsOnline == nil {
+				log.Printf("browse service status response was incomplete")
+				status = http.StatusBadGateway
 			} else {
-				state.RatingsOnline = services.RatingsOnline
-				if !services.SearchOnline {
+				state.RatingsOnline = *services.RatingsOnline
+				if !*services.SearchOnline {
 					overview, overviewErr := gql.Overview(r.Context(), client)
-					tagsOnly := tagErrorsOnly(overviewErr)
-					if overviewErr != nil && !tagsOnly || overview == nil {
+					optionalOnly := optionalServiceErrors(overviewErr)
+					if overviewErr != nil && !optionalOnly || overview == nil {
 						log.Printf("failed to fetch offline browse overview: %v", overviewErr)
 						status = http.StatusBadGateway
 					} else {
@@ -163,11 +166,14 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						pageRequest := request
 						pageRequest.page = page
 						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
-						tagsOnly := tagErrorsOnly(searchErr)
-						if searchErr != nil && !tagsOnly || response == nil {
+						optionalOnly := optionalServiceErrors(searchErr)
+						if searchErr != nil && !optionalOnly || response == nil || response.SearchRecipes == nil {
 							log.Printf("failed to search recipes: %v", searchErr)
 							status = http.StatusBadGateway
 							break
+						}
+						if searchErr != nil {
+							log.Printf("search results contain unavailable recipe enrichment: %v", searchErr)
 						}
 						result := response.SearchRecipes
 						if result.Page != page || result.PerPage != browsePageSize || result.Found < 0 {
@@ -177,8 +183,11 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						} else {
 							state.Kind, state.Found, state.Page = "search", result.Found, page
 							for _, recipe := range result.Recipes {
+								if recipe == nil {
+									continue
+								}
 								if !seen[recipe.Id] {
-									state.Recipes = append(state.Recipes, recipe)
+									state.Recipes = append(state.Recipes, *recipe)
 									seen[recipe.Id] = true
 									state.SeenIDs = append(state.SeenIDs, recipe.Id)
 								}

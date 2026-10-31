@@ -91,6 +91,41 @@
     (is (= (:form next-db) (:baseline next-db)))
     (is (true? (:inspirations-online next-db)))))
 
+(deftest recipe-loaded-keeps-core-data-on-inspirations-outage
+  (let [db {:status :loading
+            :route {:page :edit :id "123"}}
+        next-db (event-db db [::events/recipe-loaded
+                              {:response {:data {:recipe {:name "Soup"
+                                                          :method "Boil"
+                                                          :ingredients []
+                                                          :inspirations nil}
+                                                 :inspirationsOnline true}
+                                          :errors [{:message "inspirations service is unavailable"
+                                                    :path ["recipe" "inspirations"]
+                                                    :extensions {:code "service-unavailable"
+                                                                 :status 503
+                                                                 :service "inspirations"}}]}}])]
+    (is (= :idle (:status next-db)))
+    (is (= "Soup" (get-in next-db [:form :name])))
+    (is (= (model/normalize-inspirations []) (get-in next-db [:form :inspirations])))
+    (is (false? (:inspirations-online next-db)))
+    (is (= (:form next-db) (:baseline next-db)))))
+
+(deftest recipe-loaded-does-not-ignore-discovery-or-application-errors
+  (doseq [error [{:message "Traefik unavailable"
+                  :path ["inspirationsOnline"]
+                  :extensions {:code "service-unavailable" :status 503 :service "traefik"}}
+                 {:message "Invalid inspirations"
+                  :path ["recipe" "inspirations"]
+                  :extensions {:code "invalid-inspirations" :status 400 :service "inspirations"}}]]
+    (let [next-db (event-db {:status :loading
+                             :route {:page :edit :id "123"}}
+                            [::events/recipe-loaded
+                             {:response {:data {:recipe {:name "Soup"}}
+                                         :errors [error]}}])]
+      (is (= :error (:status next-db)))
+      (is (some? (get-in next-db [:feedback :message]))))))
+
 (deftest set-name-clears-success-feedback-when-form-becomes-dirty
   (let [baseline {:name "Soup"
                   :method "Boil"
@@ -130,7 +165,7 @@
 
 (deftest save-event-guards-and-builds-mutation-request
   (testing "no-op when state is not saveable"
-    (doseq [status [:saving :loading :not-found :error]]
+    (doseq [status [:saving :loading :not-found :error :outcome-unknown]]
       (let [db {:status status
                 :route {:page :new}
                 :authorization :allowed
@@ -192,6 +227,89 @@
     (is (= form (:baseline next-db)))
     (is (= {:kind :success :message "Gespeichert"} (:feedback next-db)))
     (is (= "/edit/321" (::events/replace-url effects)))))
+
+(deftest saved-event-partial-create-opens-the-confirmed-recipe
+  (let [db {:status :saving
+            :route {:page :new}
+            :form (model/blank-form)
+            :baseline (model/blank-form)}
+        effects (event-effects db [::events/saved
+                                   {:response {:data {:createRecipe nil}
+                                               :errors [{:message "inspirations unavailable"
+                                                         :extensions {:recipeId "321"
+                                                                      :completedSteps ["recipe-created"]
+                                                                      :outcome "partial"}}]}}])
+        next-db (:db effects)]
+    (is (= :loading (:status next-db)))
+    (is (= {:page :edit :id "321"} (:route next-db)))
+    (is (true? (:save-failed? next-db)))
+    (is (re-find #"recipe-created" (get-in next-db [:feedback :message])))
+    (is (= [::re-graph/query
+            {:id :recipe
+             :query events/recipe-query
+             :variables {:id "321"}
+             :callback [::events/recipe-loaded]}]
+           (:dispatch effects)))
+    (is (= "/edit/321" (::events/replace-url effects)))))
+
+(deftest saved-event-partial-update-reloads-confirmed-recipe-state
+  (let [db {:status :saving
+            :route {:page :edit :id "321"}
+            :form (model/blank-form)
+            :baseline (model/blank-form)}
+        effects (event-effects db [::events/saved
+                                   {:response {:data {:updateRecipe nil}
+                                               :errors [{:message "recipe update failed"
+                                                         :extensions {:recipeId "321"
+                                                                      :completedSteps ["inspirations-updated"]
+                                                                      :outcome "partial"}}]}}])
+        next-db (:db effects)]
+    (is (= :loading (:status next-db)))
+    (is (= {:page :edit :id "321"} (:route next-db)))
+    (is (re-find #"inspirations-updated" (get-in next-db [:feedback :message])))
+    (is (= [::re-graph/query
+            {:id :recipe
+             :query events/recipe-query
+             :variables {:id "321"}
+             :callback [::events/recipe-loaded]}]
+           (:dispatch effects)))
+    (is (nil? (::events/replace-url effects)))))
+
+(deftest saved-event-unknown-create-outcome-prevents-blind-retry
+  (let [db {:status :saving
+            :route {:page :new}
+            :form (model/blank-form)
+            :baseline (model/blank-form)}
+        next-db (event-db db [::events/saved
+                              {:response {:data {:createRecipe nil}
+                                          :errors [{:message "recipe service failed"
+                                                    :extensions {:code "downstream-request-failed"
+                                                                 :status 500
+                                                                 :service "recipes"
+                                                                 :outcome "unknown"}}]}}])]
+    (is (= :outcome-unknown (:status next-db)))
+    (is (re-find #"Do not retry" (get-in next-db [:feedback :message])))
+    (is (= {} (event-effects next-db [::events/save])))))
+
+(deftest saved-event-unknown-update-reloads-the-current-recipe
+  (let [db {:status :saving
+            :route {:page :edit :id "321"}
+            :form (model/blank-form)
+            :baseline (model/blank-form)}
+        effects (event-effects db [::events/saved
+                                   {:response {:data {:updateRecipe nil}
+                                               :errors [{:message "recipe service failed"
+                                                         :extensions {:code "downstream-request-failed"
+                                                                      :status 500
+                                                                      :service "recipes"
+                                                                      :outcome "unknown"}}]}}])]
+    (is (= :loading (get-in effects [:db :status])))
+    (is (= [::re-graph/query
+            {:id :recipe
+             :query events/recipe-query
+             :variables {:id "321"}
+             :callback [::events/recipe-loaded]}]
+           (:dispatch effects)))))
 
 (deftest saved-event-validation-errors-preserve-form-and-baseline
   (let [form {:name ""

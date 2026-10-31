@@ -1,5 +1,7 @@
-use async_graphql::{Context, Error, ErrorExtensions, Json, Object, SimpleObject, ID};
-use futures::future::try_join_all;
+use async_graphql::{
+    ComplexObject, Context, Error, ErrorExtensions, Json, Object, SimpleObject, ID,
+};
+use futures::future::join_all;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -161,12 +163,44 @@ impl SearchApi {
 }
 
 #[derive(SimpleObject)]
+#[graphql(complex)]
 pub struct RecipeSearchResult {
-    recipes: Vec<Recipe>,
+    #[graphql(skip)]
+    recipe_ids: Vec<String>,
     found: i32,
     page: i32,
     per_page: i32,
     facets: Json<Value>,
+}
+
+#[ComplexObject]
+impl RecipeSearchResult {
+    async fn recipes(&self, ctx: &Context<'_>) -> Vec<Option<Recipe>> {
+        let api = match ctx.data::<RecipesApi>() {
+            Ok(api) => api,
+            Err(error) => {
+                let mut error = error.into_server_error(ctx.item.pos);
+                error = ctx.set_error_path(error);
+                ctx.add_error(error);
+                return vec![None; self.recipe_ids.len()];
+            }
+        };
+        let results = join_all(self.recipe_ids.iter().map(|id| api.get_recipe(id))).await;
+        results
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| match result {
+                Ok(recipe) => recipe,
+                Err(error) => {
+                    let mut error = error.into_server_error(ctx.item.pos);
+                    error = ctx.set_error_path(error);
+                    error.path.push(async_graphql::PathSegment::Index(index));
+                    ctx.add_error(error);
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -219,27 +253,27 @@ impl SearchQuery {
         &self,
         ctx: &Context<'_>,
         options: Json<Value>,
-    ) -> Result<RecipeSearchResult, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadPublic)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        let result = ctx.data::<SearchApi>()?.search(&options.0).await?;
-        let recipes_api = ctx.data::<RecipesApi>()?;
-        let recipes = try_join_all(
-            result
-                .recipe_ids
-                .iter()
-                .map(|id| recipes_api.get_recipe(id)),
+    ) -> Option<Result<RecipeSearchResult, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(
+            async {
+                let result = ctx.data::<SearchApi>()?.search(&options.0).await?;
+                Ok(RecipeSearchResult {
+                    recipe_ids: result.recipe_ids,
+                    found: result.found,
+                    page: result.page,
+                    per_page: result.per_page,
+                    facets: Json(result.facet_counts),
+                })
+            }
+            .await,
         )
-        .await?;
-
-        Ok(RecipeSearchResult {
-            recipes: recipes.into_iter().flatten().collect(),
-            found: result.found,
-            page: result.page,
-            per_page: result.per_page,
-            facets: Json(result.facet_counts),
-        })
     }
 }
 

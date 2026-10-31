@@ -149,7 +149,12 @@
         [return-action state]]]
       :allowed
       (case (:page route)
-        :new [:<> [:h1 "Neues Rezept"] [recipe-form state]]
+        :new (if (= :outcome-unknown status)
+               [:<>
+                [:h1 "Speichern unklar"]
+                [:p.feedback.error {:role "alert"} (:message feedback)]
+                [return-action state]]
+               [:<> [:h1 "Neues Rezept"] [recipe-form state]])
         :edit [:<>
                [:h1 "Rezept bearbeiten"]
                (case status
