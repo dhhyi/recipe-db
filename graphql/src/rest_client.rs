@@ -193,7 +193,10 @@ impl RestClient {
         }
     }
 
-    pub fn with_ignored_services(mut self, ignored: crate::ignored_services::IgnoredServices) -> Self {
+    pub fn with_ignored_services(
+        mut self,
+        ignored: crate::ignored_services::IgnoredServices,
+    ) -> Self {
         self.ignored = ignored;
         self
     }

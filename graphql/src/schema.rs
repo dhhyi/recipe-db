@@ -1,8 +1,8 @@
 use async_graphql::{EmptySubscription, MergedObject, ObjectType, Request, Response, Schema};
 
 use crate::events::EventPublisher;
-use crate::image_inline::ImageInlineApi;
 use crate::ignored_services::{IgnoredServices, TestingMutation};
+use crate::image_inline::ImageInlineApi;
 use crate::images::{ImagesApi, ImagesMutation};
 use crate::inspirations::InspirationsApi;
 use crate::link_extract::LinkExtractApi;
@@ -58,9 +58,17 @@ impl ApiSchema {
 
 pub fn build_schema(mode: RuntimeMode, publisher: Option<EventPublisher>) -> ApiSchema {
     if mode == RuntimeMode::Testing {
-        ApiSchema::Testing(build_with_mutation(TestingMutationRoot::default(), mode, publisher))
+        ApiSchema::Testing(build_with_mutation(
+            TestingMutationRoot::default(),
+            mode,
+            publisher,
+        ))
     } else {
-        ApiSchema::Normal(build_with_mutation(MutationRoot::default(), mode, publisher))
+        ApiSchema::Normal(build_with_mutation(
+            MutationRoot::default(),
+            mode,
+            publisher,
+        ))
     }
 }
 
@@ -70,20 +78,16 @@ fn build_with_mutation<M: ObjectType + 'static>(
     publisher: Option<EventPublisher>,
 ) -> Schema<QueryRoot, M, EmptySubscription> {
     let ignored = IgnoredServices::default();
-    let mut builder = Schema::build(
-        QueryRoot::default(),
-        mutation,
-        EmptySubscription,
-    )
-    .data(RecipesApi::new(ignored.clone()))
-    .data(SearchApi::new(ignored.clone()))
-    .data(RatingsApi::new(ignored.clone()))
-    .data(ImagesApi::new(ignored.clone()))
-    .data(InspirationsApi::new(ignored.clone()))
-    .data(LinkExtractApi::new(ignored.clone()))
-    .data(ImageInlineApi::new(ignored.clone()))
-    .data(TraefikApi::new(ignored.clone()))
-    .data(TagsApi::new(ignored.clone()));
+    let mut builder = Schema::build(QueryRoot::default(), mutation, EmptySubscription)
+        .data(RecipesApi::new(ignored.clone()))
+        .data(SearchApi::new(ignored.clone()))
+        .data(RatingsApi::new(ignored.clone()))
+        .data(ImagesApi::new(ignored.clone()))
+        .data(InspirationsApi::new(ignored.clone()))
+        .data(LinkExtractApi::new(ignored.clone()))
+        .data(ImageInlineApi::new(ignored.clone()))
+        .data(TraefikApi::new(ignored.clone()))
+        .data(TagsApi::new(ignored.clone()));
     if mode == RuntimeMode::Testing {
         builder = builder.data(ignored);
     }

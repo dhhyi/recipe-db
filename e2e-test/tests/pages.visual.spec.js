@@ -91,6 +91,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await expect(page.locator("[data-recipe-id]")).toHaveCount(
         degradedRecipes.length,
       );
+      await expect(page.locator("[data-recipe-id] h2")).toHaveText(
+        degradedRecipes.map((recipe) => recipe.name),
+      );
       for (const recipe of degradedRecipes) {
         await expect(
           page.locator(`[data-recipe-id="${recipe.id}"] h2`),
@@ -113,8 +116,8 @@ for (const role of ["anonymous", "member", "owner"]) {
         recipe.name,
       );
       await expect(page.locator('[itemprop="recipeIngredient"]')).toHaveText([
-        "200g Milchreis",
-        "500ml Milch",
+        "200 g Milchreis",
+        "500 ml Milch",
         "Salz",
         "(optional) Zimt",
       ]);
@@ -126,6 +129,9 @@ for (const role of ["anonymous", "member", "owner"]) {
         0,
       );
       await expect(page.locator("#recipe-tags .recipe-tag")).toHaveCount(0);
+      await expect(
+        page.getByRole("heading", { name: "Inspirationen", exact: true }),
+      ).toHaveCount(0);
       await expect(page.locator("#recipe-tags [data-tag-feedback]")).toHaveText(
         "Tags konnten nicht geladen werden.",
       );

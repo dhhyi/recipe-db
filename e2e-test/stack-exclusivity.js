@@ -4,6 +4,7 @@ import { stackLock, stackSafety } from "./tests/ignored-services.helpers.js";
 export default async function setup(config) {
   if (
     config.workers !== 1 ||
+    config.fullyParallel ||
     config.projects.some((project) => project.fullyParallel)
   ) {
     throw new Error(

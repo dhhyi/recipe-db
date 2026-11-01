@@ -1,7 +1,34 @@
 import { test, expect } from "@playwright/test";
 import { ignoredServicesLifecycle } from "./ignored-services.helpers.js";
+import setup from "../stack-exclusivity.js";
 
-function harness({ failIgnore = false, failClear = false } = {}) {
+test("configuration overrides cannot parallelize instance-wide mutations", async () => {
+  for (const config of [
+    { workers: 2, fullyParallel: false, projects: [] },
+    { workers: 1, fullyParallel: true, projects: [] },
+    {
+      workers: 1,
+      fullyParallel: false,
+      projects: [{ fullyParallel: true }],
+    },
+  ]) {
+    await expect(setup(config)).rejects.toThrow(
+      "workers must be 1 and fullyParallel must be false",
+    );
+  }
+});
+
+test("another invocation cannot acquire the active stack lock", async () => {
+  await expect(
+    setup({ workers: 1, fullyParallel: false, projects: [] }),
+  ).rejects.toThrow("The E2E stack is already locked");
+});
+
+function harness({
+  failIgnore = false,
+  failClear = false,
+  clearResult = [],
+} = {}) {
   const calls = [];
   let poisoned = false;
   const lifecycle = ignoredServicesLifecycle(
@@ -9,7 +36,7 @@ function harness({ failIgnore = false, failClear = false } = {}) {
       calls.push([...names]);
       if (names.length && failIgnore) throw new Error("ignore failed");
       if (!names.length && failClear) throw new Error("cleanup failed");
-      return [...new Set(names)];
+      return names.length ? [...new Set(names)] : clearResult;
     },
     {
       async assertSafe() {
@@ -103,4 +130,46 @@ test("failed initial clearing never performs a data reset", async () => {
     lifecycle.resetAndUse(async () => calls.push("later reset"), async () => {}),
   ).rejects.toThrow("no later reset allowed");
   expect(calls).toEqual([[], []]);
+});
+
+test("a nonempty cleanup response is a failure, not a healthy stack", async () => {
+  const { lifecycle, calls } = harness({ clearResult: ["search"] });
+  await expect(
+    lifecycle.ignoreAndUse(["search"], async () => {}),
+  ).rejects.toThrow("Failed to restore ignored services");
+  await expect(
+    lifecycle.resetAndUse(async () => calls.push("forbidden reset"), async () => {}),
+  ).rejects.toThrow("no later reset allowed");
+  expect(calls).toEqual([["search"], []]);
+});
+
+test("an outer successful cleanup does not permit resets after an inner failure", async () => {
+  let poisoned = false;
+  let clears = 0;
+  const calls = [];
+  const lifecycle = ignoredServicesLifecycle(
+    async (names) => {
+      calls.push(names);
+      if (!names.length && ++clears === 2) throw new Error("inner cleanup failed");
+      return names;
+    },
+    {
+      async assertSafe() {
+        if (poisoned) throw new Error("no later reset allowed");
+      },
+      async poison() {
+        poisoned = true;
+      },
+    },
+  );
+  await expect(
+    lifecycle.resetAndUse(
+      async () => calls.push("reset"),
+      () => lifecycle.ignoreAndUse(["search"], async () => {}),
+    ),
+  ).rejects.toThrow("Failed to restore ignored services");
+  await expect(
+    lifecycle.resetAndUse(async () => calls.push("forbidden reset"), async () => {}),
+  ).rejects.toThrow("no later reset allowed");
+  expect(calls).toEqual([[], "reset", ["search"], [], []]);
 });

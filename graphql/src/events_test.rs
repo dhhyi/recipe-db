@@ -204,6 +204,10 @@ async fn denied_mutations_have_no_backend_side_effects() {
     );
     let backend = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let schema = crate::schema::build_schema(crate::mode::RuntimeMode::Testing, None);
+    let response = schema
+        .execute(r#"mutation { setIgnoredServices(names: ["recipes", "ratings", "images", "inspirations"]) }"#)
+        .await;
+    assert!(response.errors.is_empty(), "{response:?}");
 
     for (role, query, expected_status) in [
         (
@@ -266,6 +270,75 @@ async fn denied_mutations_have_no_backend_side_effects() {
         std::env::set_var("REST_ENDPOINT", value);
     } else {
         std::env::remove_var("REST_ENDPOINT");
+    }
+}
+
+#[tokio::test]
+async fn ignored_services_writes_are_not_dispatched_and_publish_no_events() {
+    let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+    let previous_endpoint = std::env::var_os("REST_ENDPOINT");
+    let backend = mock_backend().await;
+    let publisher = EventPublisher::new(ConnectionSettings {
+        url: "nats://127.0.0.1:1".into(),
+    });
+    let schema =
+        crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher.clone()));
+    let response = schema
+        .execute(r#"mutation { setIgnoredServices(names: ["recipes", "ratings", "images", "inspirations", "tags"]) }"#)
+        .await;
+    assert!(response.errors.is_empty());
+    for query in [
+        r#"mutation { createRecipe(value: {name: "Ignored"}) { id } }"#,
+        r#"mutation { updateRecipe(id: "42", value: {name: "Ignored"}) { id } }"#,
+        r#"mutation { deleteRecipe(id: "42") }"#,
+        r#"mutation { rate(id: "42", rating: 5) { count } }"#,
+        r#"mutation { updateRecipe(id: "42", value: {inspirations: ["https://example.com"]}) { id } }"#,
+        r#"mutation { createTag(category: CUISINE, name: "Ignored") { id } }"#,
+        r#"mutation { deleteTag(id: "42") }"#,
+    ] {
+        let response = schema
+            .execute(Request::new(query).data(crate::test_context("owner")))
+            .await;
+        assert_eq!(response.errors.len(), 1, "{response:?}");
+        let extensions = response.errors[0].extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!("service-unavailable"))
+        );
+        assert_eq!(
+            extensions.get("outcome"),
+            Some(&async_graphql::value!("not-dispatched"))
+        );
+    }
+    assert_eq!(publisher.status().published, 0);
+    assert_eq!(publisher.status().failed, 0);
+    assert!(!publisher.status().connected);
+    assert!(schema
+        .execute(r#"mutation { setIgnoredServices(names: ["tags"]) }"#)
+        .await
+        .errors
+        .is_empty());
+    for query in [
+        r#"mutation { addRecipeTag(recipeId: "42", tagId: "42") }"#,
+        r#"mutation { removeRecipeTag(recipeId: "42", tagId: "42") }"#,
+    ] {
+        let response = schema
+            .execute(Request::new(query).data(crate::test_context("owner")))
+            .await;
+        let extensions = response.errors[0].extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!("service-unavailable"))
+        );
+        assert_eq!(
+            extensions.get("outcome"),
+            Some(&async_graphql::value!("not-dispatched"))
+        );
+    }
+    backend.abort();
+    match previous_endpoint {
+        Some(value) => std::env::set_var("REST_ENDPOINT", value),
+        None => std::env::remove_var("REST_ENDPOINT"),
     }
 }
 
@@ -408,6 +481,58 @@ async fn bus_contract() {
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
     execute(&schema, "{ recipes { id } }", true).await;
     publisher.notify("42", EventKind::TagsChanged).await;
+    for (ignored, query, completed_step, service) in [
+        (
+            "inspirations",
+            r#"mutation { createRecipe(value: {name: "Ignored partial", inspirations: ["https://example.com"]}) { id } }"#,
+            "recipe-created",
+            "inspirations",
+        ),
+        (
+            "recipes",
+            r#"mutation { updateRecipe(id: "42", value: {name: "Ignored partial", inspirations: ["https://example.com"]}) { id } }"#,
+            "inspirations-updated",
+            "recipes",
+        ),
+    ] {
+        execute(
+            &schema,
+            &format!(r#"mutation {{ setIgnoredServices(names: ["{ignored}"]) }}"#),
+            true,
+        )
+        .await;
+        let response = schema
+            .execute(Request::new(query).data(crate::test_context("owner")))
+            .await;
+        assert_eq!(response.errors.len(), 1, "{response:?}");
+        let extensions = response.errors[0].extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!("service-unavailable"))
+        );
+        assert_eq!(
+            extensions.get("service"),
+            Some(&async_graphql::value!(service))
+        );
+        assert_eq!(
+            extensions.get("outcome"),
+            Some(&async_graphql::value!("partial"))
+        );
+        assert_eq!(
+            extensions.get("recipeId"),
+            Some(&async_graphql::value!("42"))
+        );
+        assert_eq!(
+            extensions.get("completedSteps"),
+            Some(&async_graphql::value!([completed_step]))
+        );
+    }
+    execute(
+        &schema,
+        r#"mutation { setIgnoredServices(names: []) }"#,
+        true,
+    )
+    .await;
 
     let expected = [
         ("42", EventKind::RecipeChanged),
@@ -421,6 +546,8 @@ async fn bus_contract() {
         ("42", EventKind::ImageChanged),
         ("42", EventKind::RecipeDeleted),
         ("42", EventKind::TagsChanged),
+        ("42", EventKind::RecipeChanged),
+        ("42", EventKind::InspirationsChanged),
     ];
     let search = settings.consumer(CONSUMERS[0]).await;
     assert_events(&search, &expected).await;
