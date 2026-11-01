@@ -2,6 +2,7 @@
 
 module Main (main) where
 
+import Control.Concurrent (myThreadId, throwTo)
 import Control.Exception (SomeException, displayException, throwIO, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.Aeson (object, (.=))
@@ -27,7 +28,9 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (Status, status204, status400, status500, statusCode, statusIsSuccessful)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (lookupEnv)
+import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
+import System.Posix.Signals (Handler (Catch), installHandler, sigTERM)
 import Web.Scotty (ActionM, ScottyM, get, json, queryParamMaybe, scotty, setHeader, status, text)
 
 -- extension -> mime type, mirroring the previous Perl implementation's table
@@ -111,4 +114,7 @@ main = do
   let db = fromMaybe "db" configuredLocation
   if cacheEnabled then createDirectoryIfMissing True db else return ()
   manager <- newManager tlsManagerSettings
+  -- As PID 1 the process ignores SIGTERM unless a handler is installed.
+  mainThread <- myThreadId
+  _ <- installHandler sigTERM (Catch (throwTo mainThread ExitSuccess)) Nothing
   scotty 3000 (app cacheEnabled db manager)

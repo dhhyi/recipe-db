@@ -129,7 +129,7 @@
 #@     result["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 120
 #@   end
 #@   if name == "search":
-#@     result["spec"]["template"]["spec"]["containers"].append({"name": "index-readiness", "image": cfg["infrastructure"]["maintenance"], "command": ["sh", "-ec", "exec sleep infinity"], "resources": {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"memory": "32Mi"}}, "readinessProbe": {"exec": {"command": ["sh", "-ec", """wget -qO- http://127.0.0.1:3000/health | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'"""]}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 1}})
+#@     result["spec"]["template"]["spec"]["containers"].append({"name": "index-readiness", "image": cfg["infrastructure"]["maintenance"], "command": ["sh", "-ec", "trap 'exit 0' TERM; sleep infinity & wait"], "resources": {"requests": {"cpu": "5m", "memory": "8Mi"}, "limits": {"memory": "32Mi"}}, "readinessProbe": {"exec": {"command": ["sh", "-ec", """wget -qO- http://127.0.0.1:3000/health | grep -Eq '"ready"[[:space:]]*:[[:space:]]*true'"""]}, "periodSeconds": 5, "timeoutSeconds": 3, "failureThreshold": 1}})
 #@   end
 #@   return result
 #@ end
