@@ -101,13 +101,19 @@ for (const role of ["anonymous", "member", "owner"]) {
           page.locator(`[data-recipe-id="${recipe.id}"] h2`),
         ).toHaveText(recipe.name);
       }
-      await expect(page.locator("main img, main rating-component")).toHaveCount(
-        0,
-      );
+      await expect(
+        page.locator('main img[itemprop="image"], main rating-component'),
+      ).toHaveCount(0);
       await expect(page.locator("main [data-recipe-tag]")).toHaveCount(0);
       await page.evaluate(() =>
         customElements.whenDefined("recipe-tile-component"),
       );
+      const placeholders = page.locator("recipe-tile-component .fallback-image");
+      await expect(placeholders).toHaveCount(degradedRecipes.length);
+      for (const placeholder of await placeholders.all()) {
+        await expect(placeholder).toBeVisible();
+        await waitForImageDecoded(placeholder);
+      }
       await screenshot(page, "degraded-overview.png");
 
       const recipe = degradedRecipes[0];
@@ -135,7 +141,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         page.getByRole("heading", { name: "Inspirationen", exact: true }),
       ).toHaveCount(0);
       await expect(page.locator("#recipe-tags [data-tag-feedback]")).toHaveText(
-        "Tags konnten nicht geladen werden.",
+        "Tags konnten nicht aktualisiert werden.",
       );
       await expect(
         page.getByRole("button", { name: "Erneut laden", exact: true }),
