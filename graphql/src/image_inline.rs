@@ -7,9 +7,9 @@ pub struct ImageInlineApi {
 }
 
 impl ImageInlineApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("image-inline"),
+            client: RestClient::new("image-inline").with_ignored_services(ignored),
         }
     }
 

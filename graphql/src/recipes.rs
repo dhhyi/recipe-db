@@ -10,9 +10,9 @@ pub struct RecipesApi {
 }
 
 impl RecipesApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("recipes"),
+            client: RestClient::new("recipes").with_ignored_services(ignored),
         }
     }
 

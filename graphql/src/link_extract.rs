@@ -8,9 +8,9 @@ pub struct LinkExtractApi {
 }
 
 impl LinkExtractApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("link-extract"),
+            client: RestClient::new("link-extract").with_ignored_services(ignored),
         }
     }
 

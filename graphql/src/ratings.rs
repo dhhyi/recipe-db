@@ -44,9 +44,9 @@ pub struct RatingsApi {
 }
 
 impl RatingsApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("ratings"),
+            client: RestClient::new("ratings").with_ignored_services(ignored),
         }
     }
 
