@@ -60,6 +60,11 @@ description = "Run protocol and persistence checks against a guarded local produ
 run = "bash .scripts/smoke-production-k3d.sh"
 raw_args = true
 
+[tasks.production-backup-recovery-k3d]
+description = "Run a complete synthetic backup and fresh-target recovery rehearsal in k3d"
+run = "bash .scripts/backup-recovery-k3d.sh"
+raw_args = true
+
 [tasks.test-auth-ingress]
 description = "Verify production ingress token routing and configuration isolation with real Traefik"
 env = { TEST_AUTH_INGRESS = "true" }
