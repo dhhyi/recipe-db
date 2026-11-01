@@ -84,7 +84,7 @@ if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = format-c
   ')
   if [ "$1" = format ] || [ "$1" = format-check ]; then
     run_command="set --local argv $format_arguments; if test (count \$argv) -gt 0; $run_command; end"
-    if [ "$1" = format-check ]; then
+    if [ "$1" = format-check ] || printf '%s' "$script" | grep -q 'format-apply-copy'; then
       format_inputs=$(bash "$project_root/.scripts/format-files.sh" "$project" --inputs)
       format_check_script=$(jq -Rrs '@sh' < "$project_root/.scripts/format-check.sh")
       format_apply=$(yq eval-all -r 'select(documentIndex == 1) | .format.apply' "$project_file")
@@ -97,6 +97,9 @@ if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = format-c
       ' | jq -Rrs '@sh')
       run_command="function format-check-copy
 sh -c $format_check_script format-check-copy \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] $format_inputs
+end
+function format-apply-copy
+sh -c $format_check_script format-apply-copy --apply \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] $format_inputs
 end
 set --local format_apply $format_apply
 $run_command"

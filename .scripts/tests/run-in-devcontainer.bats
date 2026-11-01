@@ -63,6 +63,8 @@ EOF
   done
   grep -F "'nested/new.txt'" format-args
   run -1 grep -F "'nested/b.txt'" format-args
+  grep -F "'other.md'" "$MOCK_LOG"
+  run -1 grep -F "\$format_inputs" "$MOCK_LOG"
 }
 
 @test "invalid format globs fail before container discovery" {
@@ -77,6 +79,27 @@ EOF
 
   [ "$status" -eq 2 ]
   [[ "$output" == *"Invalid format.files"* ]]
+  [ ! -s "$MOCK_LOG" ]
+}
+
+@test "format file discovery failures are not mistaken for an empty successful check" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  check: echo check
+  apply: echo apply
+  files: ["**/*.txt"]
+EOF
+  cat > bin/git << 'EOF'
+#!/bin/sh
+echo 'Unable to list project files' >&2
+exit 19
+EOF
+  chmod +x bin/git
+
+  run sh .scripts/run-in-devcontainer.sh example format-check
+
+  [ "$status" -eq 19 ]
+  [[ "$output" == *"Unable to list project files"* ]]
   [ ! -s "$MOCK_LOG" ]
 }
 

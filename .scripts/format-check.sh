@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+operation=check
+if [ "${1:-}" = --apply ]; then
+  operation=apply
+  shift
+fi
 command=$1
 count=$2
 shift 2
@@ -18,7 +23,14 @@ for file in "$@"; do
 done
 
 # Reuse installed dependencies, never link formatter source inputs.
-for directory in node_modules deps .pnpm-store; do
+if [ -d "$original/node_modules" ]; then
+  mkdir -p "$temporary/project/node_modules"
+  for entry in "$original/node_modules"/* "$original/node_modules"/.[!.]* "$original/node_modules"/..?*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    ln -s -- "$entry" "$temporary/project/node_modules/$(basename -- "$entry")"
+  done
+fi
+for directory in deps .pnpm-store; do
   if [ -d "$original/$directory" ] && [ ! -e "$temporary/project/$directory" ]; then
     ln -s "$original/$directory" "$temporary/project/$directory"
   fi
@@ -48,8 +60,12 @@ fi
 result=0
 for file in "$@"; do
   if ! cmp -s -- "$original/$file" "$temporary/project/$file"; then
-    printf 'Unformatted file: %s\n' "$file" >&2
-    result=3
+    if [ "$operation" = apply ]; then
+      cp -- "$temporary/project/$file" "$original/$file"
+    else
+      printf 'Unformatted file: %s\n' "$file" >&2
+      result=3
+    fi
   fi
 done
 exit "$result"

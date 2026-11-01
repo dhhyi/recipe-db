@@ -60,9 +60,9 @@ category: backend
 backupRole: cleanup-participant
 backupData: { kind: sqlite, file: tags.sqlite }
 format:
-  check: format-check-copy $format_apply $argv
-  apply: opam exec --switch=5.3.0 -- dune build --auto-promote (string replace -r '$' '.formatted' $argv)
-  files: ["**/*.ml", "**/*.mli", "**/dune", "dune-project"]
+  check: format-check-copy 'opam exec --switch=5.3.0 -- dune fmt; or opam exec --switch=5.3.0 -- dune fmt' $argv
+  apply: format-apply-copy 'opam exec --switch=5.3.0 -- dune fmt; or opam exec --switch=5.3.0 -- dune fmt' $argv
+  files: ["**/*.ml", "**/*.mli", "**/dune"]
 check: |
   opam exec --switch=5.3.0 -- dune build --profile release
   opam exec --switch=5.3.0 -- dune runtest

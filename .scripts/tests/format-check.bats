@@ -15,10 +15,12 @@ printf '%s\n' "$@" > "$MOCK_LOG"
 case "$command" in
   fail) printf 'tool failure\n' >&2; exit 17 ;;
   format)
+    [ ! -L node_modules ]
     for file in "$@"; do
       sed -i 's/unformatted/formatted/g' "$file"
     done
     ;;
+  format-all) sed -i 's/unformatted/formatted/g' ./*.txt ;;
   *) exit 99 ;;
 esac
 EOF
@@ -58,6 +60,25 @@ EOF
   [ "$status" -eq 2 ]
   [[ "$output" == *"tool failure"* ]]
   [[ "$output" == *"Formatter/tool failed"* ]]
+  [ "$(cat "a file.txt")" = unformatted ]
+}
+
+@test "copy apply preserves native project-wide formatting but writes only selected files" {
+  printf '%s\n' unformatted > unselected.txt
+
+  run sh ../.scripts/format-check.sh --apply format-all 1 "a file.txt" \
+    "a file.txt" unselected.txt formatter.conf
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "a file.txt")" = formatted ]
+  [ "$(cat unselected.txt)" = unformatted ]
+  [ "$(cat formatter.conf)" = configuration ]
+}
+
+@test "copy apply leaves selected files unchanged on tool errors" {
+  run sh ../.scripts/format-check.sh --apply fail 1 "a file.txt" "a file.txt" formatter.conf
+
+  [ "$status" -eq 2 ]
   [ "$(cat "a file.txt")" = unformatted ]
 }
 
@@ -118,7 +139,7 @@ EOF
 format_build() {
   bash .scripts/generate-bazel-build.sh
   bash .scripts/bazel.sh --batch --output_base="$BATS_TEST_TMPDIR/bazel" build \
-    --action_env=PATH --jobs=1 //:example_format_check //:other_format_check
+    --action_env=PATH --jobs=1 "$@" //:example_format_check //:other_format_check
 }
 
 @test "Bazel caches read-only checks and invalidates only affected project inputs" {
@@ -172,4 +193,18 @@ format_build() {
   run format_build
   [ "$status" -eq 0 ]
   [ "$(grep -c '^check:example' check-calls.log)" -eq "$before" ]
+}
+
+@test "successful format checks are restored from disk cache after cleaning outputs" {
+  setup_bazel_fixture
+  run format_build --disk_cache="$BATS_TEST_TMPDIR/disk-cache"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^check:' check-calls.log)" -eq 2 ]
+
+  run bash .scripts/bazel.sh --batch --output_base="$BATS_TEST_TMPDIR/bazel" clean
+  [ "$status" -eq 0 ]
+
+  run format_build --disk_cache="$BATS_TEST_TMPDIR/disk-cache"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^check:' check-calls.log)" -eq 2 ]
 }

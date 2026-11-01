@@ -18,6 +18,10 @@ done < <(jq -r '.[]' <<< "$patterns")
 if [[ ${2:-} == --inputs ]]; then
   pathspecs=("$project/")
 fi
+file_list=$(mktemp)
+trap 'rm -f "$file_list"' EXIT
+git ls-files --cached --others --exclude-standard -z -- "${pathspecs[@]}" > "$file_list"
+sort -zu "$file_list" -o "$file_list"
 while IFS= read -r -d '' file; do
   [[ -f "$file" ]] || continue
   if [[ ${2:-} == --shell || ${2:-} == --inputs ]]; then
@@ -25,4 +29,4 @@ while IFS= read -r -d '' file; do
   else
     printf '%s\0' "${file#"$project/"}"
   fi
-done < <(git ls-files --cached --others --exclude-standard -z -- "${pathspecs[@]}" | sort -zu)
+done < "$file_list"

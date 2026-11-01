@@ -11,19 +11,9 @@ format:
   files: ["**/*.go"]
 ```
 
-`mise run --raw in-devcontainer <project> format-check` checks formatting;
-`format` applies it. Both commands receive the same sorted, project-relative
-files as fish `$argv`. Globs use Git's `:(glob)` semantics, include tracked and
-non-ignored untracked files, and exclude deleted files.
+`mise run --raw in-devcontainer <project> format-check` checks formatting; `format` applies it. Both commands receive the same sorted, project-relative files as fish `$argv`. Globs use Git's `:(glob)` semantics, include tracked and non-ignored untracked files, and exclude deleted files.
 
-Checks must not modify checkout files. `format-check-copy` runs `$format_apply`
-(the configured apply command) on temporary source/configuration copies inside
-the devcontainer and compares the selected files. It returns 3 for unformatted
-files and 2 for formatter errors. Custom check commands should use the same exit
-codes; other failures are fatal. CI only checks. Precommit uses cacheable Bazel
-checks, applies only when formatting is needed, then rechecks to cache the
-formatted state. Keep formatter configuration and tool/version declarations in
-the project so their changes invalidate its check; root documentation does not.
+Checks must not modify checkout files. `format-check-copy` runs `$format_apply` (the configured apply command) on temporary source/configuration copies inside the devcontainer and compares the selected files. It returns 3 for unformatted files and 2 for formatter errors. Custom check commands should use the same exit codes; other failures are fatal. CI only checks. Precommit uses cacheable Bazel checks, applies only when formatting is needed, then rechecks to cache the formatted state. Keep formatter configuration and tool/version declarations in the project so their changes invalidate its check; root documentation does not. For tools that only accept a whole project, use `format-apply-copy 'formatter command' $argv` to copy back only selected files, paired with `format-check-copy 'formatter command' $argv`.
 
 ## Issue planning and refinement
 
