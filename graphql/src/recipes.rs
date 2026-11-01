@@ -1,4 +1,4 @@
-use async_graphql::{Context, Error, Object, ID};
+use async_graphql::{Context, Error, ErrorExtensions, Object, ID};
 use reqwest::StatusCode;
 
 use crate::events::{EventKind, EventPublisher};
@@ -77,18 +77,26 @@ pub struct RecipesQuery;
 
 #[Object]
 impl RecipesQuery {
-    async fn recipe(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Recipe>, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadPublic)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<RecipesApi>()?.get_recipe(id.as_str()).await
+    async fn recipe(&self, ctx: &Context<'_>, id: ID) -> Option<Result<Option<Recipe>, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(async { ctx.data::<RecipesApi>()?.get_recipe(id.as_str()).await }.await)
     }
 
-    async fn recipes(&self, ctx: &Context<'_>) -> Result<Vec<Recipe>, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadPublic)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<RecipesApi>()?.get_recipes().await
+    async fn recipes(&self, ctx: &Context<'_>) -> Option<Result<Vec<Recipe>, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(async { ctx.data::<RecipesApi>()?.get_recipes().await }.await)
     }
 }
 
@@ -101,11 +109,11 @@ async fn apply_inspirations(
     ctx: &Context<'_>,
     id: &str,
     inspirations: &async_graphql::MaybeUndefined<Vec<String>>,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let inspirations_api = ctx.data::<crate::inspirations::InspirationsApi>()?;
     let publisher = ctx.data::<EventPublisher>()?;
     match inspirations {
-        async_graphql::MaybeUndefined::Undefined => Ok(()),
+        async_graphql::MaybeUndefined::Undefined => Ok(false),
         async_graphql::MaybeUndefined::Null => {
             inspirations_api.set_inspirations(id, &[], publisher).await
         }
@@ -113,6 +121,19 @@ async fn apply_inspirations(
             inspirations_api.set_inspirations(id, urls, publisher).await
         }
     }
+}
+
+fn with_partial_effects(error: Error, recipe_id: &str, completed_steps: &[&str]) -> Error {
+    let outcome_unknown = error.extensions.as_ref().is_some_and(|extensions| {
+        extensions.get("outcome") == Some(&async_graphql::Value::from("unknown"))
+    });
+    error.extend_with(|_, extensions| {
+        extensions.set("recipeId", recipe_id);
+        extensions.set("completedSteps", completed_steps);
+        if !outcome_unknown {
+            extensions.set("outcome", "partial");
+        }
+    })
 }
 
 #[Object]
@@ -146,7 +167,15 @@ impl RecipesMutation {
                     .data::<RecipesApi>()?
                     .create_recipe(&value, publisher)
                     .await?;
-                apply_inspirations(ctx, recipe.id.as_str(), &value.inspirations).await?;
+                if let Err(error) =
+                    apply_inspirations(ctx, recipe.id.as_str(), &value.inspirations).await
+                {
+                    return Err(with_partial_effects(
+                        error,
+                        recipe.id.as_str(),
+                        &["recipe-created"],
+                    ));
+                }
                 Ok(recipe)
             }
             .await,
@@ -176,10 +205,21 @@ impl RecipesMutation {
         }
         Some(
             async {
-                apply_inspirations(ctx, id.as_str(), &value.inspirations).await?;
-                ctx.data::<RecipesApi>()?
+                let inspirations_changed =
+                    apply_inspirations(ctx, id.as_str(), &value.inspirations).await?;
+                match ctx
+                    .data::<RecipesApi>()?
                     .update_recipe(id.as_str(), &value, ctx.data::<EventPublisher>()?)
                     .await
+                {
+                    Ok(recipe) => Ok(recipe),
+                    Err(error) if inspirations_changed => Err(with_partial_effects(
+                        error,
+                        id.as_str(),
+                        &["inspirations-updated"],
+                    )),
+                    Err(error) => Err(error),
+                }
             }
             .await,
         )
