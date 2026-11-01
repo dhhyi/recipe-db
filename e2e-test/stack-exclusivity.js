@@ -1,6 +1,11 @@
 import { mkdir, rm } from "node:fs/promises";
 import { stackLock, stackSafety } from "./tests/ignored-services.helpers.js";
 
+export async function releaseStackLock() {
+  await stackSafety.assertSafe();
+  await rm(stackLock, { recursive: true });
+}
+
 export default async function setup(config) {
   if (
     config.workers !== 1 ||
@@ -20,8 +25,5 @@ export default async function setup(config) {
       "The E2E stack is already locked. Do not run concurrent tests against this stack. If cleanup failed, restore setIgnoredServices(names: []) before removing target/outage-stack.lock.",
     );
   }
-  return async () => {
-    await stackSafety.assertSafe();
-    await rm(stackLock, { recursive: true });
-  };
+  return releaseStackLock;
 }

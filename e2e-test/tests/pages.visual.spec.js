@@ -84,10 +84,12 @@ for (const role of ["anonymous", "member", "owner"]) {
         "Suche nicht verfügbar. Alle Rezepte werden angezeigt.",
       );
       await expect(page.locator("#browse-query")).toBeDisabled();
-      await expect(page.getByRole("button", { name: "Suchen", exact: true }))
-        .toBeDisabled();
-      await expect(page.getByRole("combobox", { name: "Sortieren nach" }))
-        .toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "Suchen", exact: true }),
+      ).toBeDisabled();
+      await expect(
+        page.getByRole("combobox", { name: "Sortieren nach" }),
+      ).toBeDisabled();
       await expect(page.locator("[data-recipe-id]")).toHaveCount(
         degradedRecipes.length,
       );
@@ -135,8 +137,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await expect(page.locator("#recipe-tags [data-tag-feedback]")).toHaveText(
         "Tags konnten nicht geladen werden.",
       );
-      await expect(page.getByRole("button", { name: "Erneut laden", exact: true }))
-        .toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Erneut laden", exact: true }),
+      ).toBeVisible();
       const similar = page.locator("#similar-recipes");
       await similar.scrollIntoViewIfNeeded();
       await expect(similar.getByRole("status")).toHaveText(

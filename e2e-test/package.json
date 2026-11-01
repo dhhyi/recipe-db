@@ -4,7 +4,7 @@
   "private": true,
   "description": "Responsive full-stack end-to-end tests with Playwright Chromium",
   "scripts": {
-    "check": "for file in playwright.config.js tests/*.js; do node --check \"$file\" || exit; done",
+    "check": "for file in playwright.config.js stack-exclusivity.js tests/*.js; do node --check \"$file\" || exit; done",
     "test": "playwright test"
   },
   "license": "MIT",

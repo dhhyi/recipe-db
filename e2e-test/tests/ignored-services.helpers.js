@@ -1,4 +1,4 @@
-import { access, writeFile } from "node:fs/promises";
+import { access, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 export const ignoredAuxiliaryServices = [
@@ -17,15 +17,23 @@ export const stackLock = fileURLToPath(
 
 export const stackSafety = {
   async assertSafe() {
-    try {
-      await access(`${stackLock}/cleanup-failed`);
-    } catch (error) {
-      if (error.code === "ENOENT") return;
-      throw error;
+    for (const marker of ["cleanup-failed", "active"]) {
+      try {
+        await access(`${stackLock}/${marker}`);
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      throw new Error(
+        "Ignored-service cleanup is unconfirmed; no later data reset is allowed. Restore setIgnoredServices(names: []) and remove target/outage-stack.lock before retrying.",
+      );
     }
-    throw new Error(
-      "Ignored-service cleanup failed; no later data reset is allowed. Restore setIgnoredServices(names: []) and remove target/outage-stack.lock before retrying.",
-    );
+  },
+  async markActive() {
+    await writeFile(`${stackLock}/active`, "cleanup unconfirmed\n");
+  },
+  async confirmClear() {
+    await rm(`${stackLock}/active`, { force: true });
   },
   async poison() {
     await writeFile(`${stackLock}/cleanup-failed`, "cleanup failed\n");
@@ -39,6 +47,7 @@ export function ignoredServicesLifecycle(mutate, safety = stackSafety) {
       if (!Array.isArray(effective) || effective.length !== 0) {
         throw new Error("Clearing ignored services did not return an empty list");
       }
+      await safety.confirmClear();
     } catch (error) {
       await safety.poison();
       throw new Error("Failed to restore ignored services", { cause: error });
@@ -59,6 +68,7 @@ export function ignoredServicesLifecycle(mutate, safety = stackSafety) {
     async ignoreAndUse(names, use) {
       await safety.assertSafe();
       try {
+        if (names.length) await safety.markActive();
         const effective = await mutate(names);
         const expected = [...new Set(names)];
         if (
