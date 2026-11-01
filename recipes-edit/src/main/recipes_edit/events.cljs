@@ -251,7 +251,9 @@
                                                    " has completed steps: "
                                                    (str/join ", " completed-steps)
                                                    ". Review the saved recipe before retrying. "
-                                                   (model/error-message errors))})
+                                                  (model/error-message errors)
+                                                  (when (unknown-write-outcome? errors)
+                                                    " The remaining write has an unknown outcome and may still complete."))})
                :dispatch [::re-graph/query
                           {:id :recipe
                            :query recipe-query
