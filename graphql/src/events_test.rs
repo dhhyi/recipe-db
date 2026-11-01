@@ -309,6 +309,10 @@ async fn ignored_services_writes_are_not_dispatched_and_publish_no_events() {
             extensions.get("outcome"),
             Some(&async_graphql::value!("not-dispatched"))
         );
+        assert_eq!(
+            extensions.get("dispatched"),
+            Some(&async_graphql::value!(false))
+        );
     }
     assert_eq!(publisher.status().published, 0);
     assert_eq!(publisher.status().failed, 0);
@@ -513,6 +517,10 @@ async fn bus_contract() {
         assert_eq!(
             extensions.get("service"),
             Some(&async_graphql::value!(service))
+        );
+        assert_eq!(
+            extensions.get("dispatched"),
+            Some(&async_graphql::value!(false))
         );
         assert_eq!(
             extensions.get("outcome"),

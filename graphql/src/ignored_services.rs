@@ -210,6 +210,7 @@ mod tests {
                     extensions.get("outcome"),
                     Some(&Value::from("not-dispatched"))
                 );
+                assert_eq!(extensions.get("dispatched"), Some(&Value::from(false)));
             }
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);

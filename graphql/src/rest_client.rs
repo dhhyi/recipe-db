@@ -101,6 +101,9 @@ impl RestError {
                     extensions.set("code", "service-unavailable");
                     extensions.set("status", 503);
                     extensions.set("service", self.service);
+                    if self.not_dispatched {
+                        extensions.set("dispatched", false);
+                    }
                     if self.unknown_outcome {
                         extensions.set("outcome", "unknown");
                     } else if self.not_dispatched {
