@@ -22,9 +22,9 @@ templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
 	@editFields(
 		id,
-		resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline != nil && *resp.RecipeEditOnline,
-		resp.ImagesOnline != nil && *resp.ImagesOnline,
-		resp.MyCapabilities.CanManageImages && resp.ImageEditOnline != nil && *resp.ImageEditOnline,
+		resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline,
+		resp.ImagesOnline,
+		resp.MyCapabilities.CanManageImages && resp.ImageEditOnline,
 	)
 }
 

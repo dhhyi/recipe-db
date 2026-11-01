@@ -126,12 +126,9 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			if serviceErr != nil {
 				log.Printf("failed to fetch browse service status: %v", serviceErr)
 				status = http.StatusBadGateway
-			} else if services.SearchOnline == nil || services.RatingsOnline == nil {
-				log.Printf("browse service status response was incomplete")
-				status = http.StatusBadGateway
 			} else {
-				state.RatingsOnline = *services.RatingsOnline
-				if !*services.SearchOnline {
+				state.RatingsOnline = services.RatingsOnline
+				if !services.SearchOnline {
 					overview, overviewErr := gql.Overview(r.Context(), client)
 					optionalOnly := optionalServiceErrors(overviewErr)
 					if overviewErr != nil && !optionalOnly || overview == nil {

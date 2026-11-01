@@ -87,57 +87,47 @@ pub struct TraefikQuery;
 
 #[Object]
 impl TraefikQuery {
-    async fn online_services(&self, ctx: &Context<'_>) -> Option<Result<Vec<String>, Error>> {
+    async fn online_services(&self, ctx: &Context<'_>) -> Result<Vec<String>, Error> {
         let request = match ctx.data::<crate::auth::RequestContext>() {
             Ok(request) => request,
-            Err(error) => return Some(Err(error)),
+            Err(error) => return Err(error),
         };
         if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
-            return Some(Err(error.into_graphql_error()));
+            return Err(error.into_graphql_error());
         }
-        Some(async { ctx.data::<TraefikApi>()?.get_online_services().await }.await)
+        ctx.data::<TraefikApi>()?.get_online_services().await
     }
 
     async fn is_service_online(
         &self,
         ctx: &Context<'_>,
         name: String,
-    ) -> Option<Result<bool, Error>> {
+    ) -> Result<bool, Error> {
         let request = match ctx.data::<crate::auth::RequestContext>() {
             Ok(request) => request,
-            Err(error) => return Some(Err(error)),
+            Err(error) => return Err(error),
         };
         if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
-            return Some(Err(error.into_graphql_error()));
+            return Err(error.into_graphql_error());
         }
-        Some(
-            async {
-                let online = ctx.data::<TraefikApi>()?.get_online_services().await?;
-                Ok(online.contains(&name))
-            }
-            .await,
-        )
+        let online = ctx.data::<TraefikApi>()?.get_online_services().await?;
+        Ok(online.contains(&name))
     }
 
     async fn all_services_online(
         &self,
         ctx: &Context<'_>,
         names: Vec<String>,
-    ) -> Option<Result<bool, Error>> {
+    ) -> Result<bool, Error> {
         let request = match ctx.data::<crate::auth::RequestContext>() {
             Ok(request) => request,
-            Err(error) => return Some(Err(error)),
+            Err(error) => return Err(error),
         };
         if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
-            return Some(Err(error.into_graphql_error()));
+            return Err(error.into_graphql_error());
         }
-        Some(
-            async {
-                let online = ctx.data::<TraefikApi>()?.get_online_services().await?;
-                Ok(names.iter().all(|name| online.contains(name)))
-            }
-            .await,
-        )
+        let online = ctx.data::<TraefikApi>()?.get_online_services().await?;
+        Ok(names.iter().all(|name| online.contains(name)))
     }
 }
 
@@ -205,12 +195,7 @@ mod tests {
             .await;
         assert_eq!(
             response.data.into_json().unwrap(),
-            json!({
-                "myCapabilities": {"role": "anonymous"},
-                "onlineServices": null,
-                "isServiceOnline": null,
-                "allServicesOnline": null
-            })
+            json!({"myCapabilities": {"role": "anonymous"}})
         );
         assert_eq!(response.errors.len(), 3);
         for error in &response.errors {

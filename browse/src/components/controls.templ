@@ -4,7 +4,7 @@ import gql "frontend/src/generated"
 
 templ BrowseControls(resp *gql.BrowseControlsResponse) {
 	<div id="browse-controls" class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none">
-		if resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline != nil && *resp.RecipeEditOnline {
+		if resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline {
 			<a href="/edit/new" data-add-recipe role="button" class="pointer-events-auto mr-2">Rezept hinzufügen</a>
 		}
 	</div>
