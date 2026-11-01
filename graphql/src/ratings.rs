@@ -95,11 +95,15 @@ pub struct RatingsQuery;
 
 #[Object]
 impl RatingsQuery {
-    async fn rating(&self, ctx: &Context<'_>, id: ID) -> Result<Rating, Error> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadAggregateRatings)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<RatingsApi>()?.get_rating(id.as_str()).await
+    async fn rating(&self, ctx: &Context<'_>, id: ID) -> Option<Result<Rating, Error>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadAggregateRatings) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(async { ctx.data::<RatingsApi>()?.get_rating(id.as_str()).await }.await)
     }
 }
 

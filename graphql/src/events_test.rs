@@ -297,8 +297,59 @@ async fn bus_contract() {
     )
     .await;
     execute(&schema, r#"mutation { updateRecipe(id: "42", value: {name: "Updated", inspirations: ["https://example.com"]}) { id } }"#, true).await;
-    execute(&schema, r#"mutation { createRecipe(value: {name: "partial-create", inspirations: ["https://example.com"]}) { id } }"#, false).await;
-    execute(&schema, r#"mutation { updateRecipe(id: "42", value: {name: "invalid", inspirations: ["https://example.com"]}) { id } }"#, false).await;
+    let response = schema
+        .execute(
+            Request::new(
+                r#"mutation { createRecipe(value: {name: "partial-create", inspirations: ["https://example.com"]}) { id } }"#,
+            )
+            .data(crate::test_context("owner")),
+        )
+        .await;
+    assert_eq!(response.errors.len(), 1);
+    let extensions = response.errors[0].extensions.as_ref().unwrap();
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::value!("service-unavailable"))
+    );
+    assert_eq!(
+        extensions.get("service"),
+        Some(&async_graphql::value!("inspirations"))
+    );
+    assert_eq!(
+        extensions.get("outcome"),
+        Some(&async_graphql::value!("unknown"))
+    );
+    assert_eq!(
+        extensions.get("recipeId"),
+        Some(&async_graphql::value!("partial-create"))
+    );
+    assert_eq!(
+        extensions.get("completedSteps"),
+        Some(&async_graphql::value!(["recipe-created"]))
+    );
+
+    let response = schema
+        .execute(
+            Request::new(
+                r#"mutation { updateRecipe(id: "42", value: {name: "invalid", inspirations: ["https://example.com"]}) { id } }"#,
+            )
+            .data(crate::test_context("owner")),
+        )
+        .await;
+    assert_eq!(response.errors.len(), 1);
+    let extensions = response.errors[0].extensions.as_ref().unwrap();
+    assert_eq!(
+        extensions.get("outcome"),
+        Some(&async_graphql::value!("partial"))
+    );
+    assert_eq!(
+        extensions.get("recipeId"),
+        Some(&async_graphql::value!("42"))
+    );
+    assert_eq!(
+        extensions.get("completedSteps"),
+        Some(&async_graphql::value!(["inspirations-updated"]))
+    );
     execute(
         &schema,
         r#"mutation { updateRecipe(id: "42", value: {name: "invalid"}) { id } }"#,

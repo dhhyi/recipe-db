@@ -138,29 +138,36 @@ impl Recipe {
     async fn rating(
         &self,
         ctx: &Context<'_>,
-    ) -> async_graphql::Result<Option<crate::ratings::Rating>> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadAggregateRatings)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        match ctx.data::<RatingsApi>()?.get_rating(self.id.as_str()).await {
-            Ok(rating) => Ok(Some(rating)),
-            Err(err) => {
-                eprintln!("ratings service unavailable: {err:?}");
-                Ok(None)
-            }
+    ) -> Option<async_graphql::Result<crate::ratings::Rating>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadAggregateRatings) {
+            return Some(Err(error.into_graphql_error()));
         }
+        Some(async { ctx.data::<RatingsApi>()?.get_rating(self.id.as_str()).await }.await)
     }
 
     async fn image(
         &self,
         ctx: &Context<'_>,
-    ) -> async_graphql::Result<Option<crate::images::ImageMetadata>> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadPublic)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        ctx.data::<ImagesApi>()?
-            .get_image_metadata(self.id.as_str())
-            .await
+    ) -> Option<async_graphql::Result<Option<crate::images::ImageMetadata>>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(
+            async {
+                ctx.data::<ImagesApi>()?
+                    .get_image_metadata(self.id.as_str())
+                    .await
+            }
+            .await,
+        )
     }
 
     /// `null` means the inspirations service is unavailable (as opposed to `[]`, which means the
@@ -168,25 +175,27 @@ impl Recipe {
     async fn inspirations(
         &self,
         ctx: &Context<'_>,
-    ) -> async_graphql::Result<Option<Vec<crate::link::Link>>> {
-        ctx.data::<crate::auth::RequestContext>()?
-            .require(crate::auth::Capability::ReadPublic)
-            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
-        match ctx
-            .data::<InspirationsApi>()?
-            .get_inspirations(self.id.as_str())
-            .await
-        {
-            Ok(urls) => Ok(Some(
-                urls.into_iter()
-                    .map(|url| crate::link::Link { url })
-                    .collect(),
-            )),
-            Err(err) => {
-                eprintln!("inspirations service unavailable: {err:?}");
-                Ok(None)
-            }
+    ) -> Option<async_graphql::Result<Vec<crate::link::Link>>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
         }
+        Some(
+            async {
+                ctx.data::<InspirationsApi>()?
+                    .get_inspirations(self.id.as_str())
+                    .await
+                    .map(|urls| {
+                        urls.into_iter()
+                            .map(|url| crate::link::Link { url })
+                            .collect()
+                    })
+            }
+            .await,
+        )
     }
 
     /// `null` means the tags service is unavailable; a successful empty response is `[]`.
