@@ -124,7 +124,13 @@
        :else (let [form (model/recipe->form (:recipe data))]
                (assoc db
                       :status :idle
-                      :inspirations-online (if (seq errors) false (:inspirationsOnline data))
+                     :inspirations-online (if (seq errors) false (:inspirationsOnline data))
+                     :feedback (if (seq errors)
+                                 {:kind :error
+                                  :message (str (when (= :error (get-in db [:feedback :kind]))
+                                                  (str (get-in db [:feedback :message]) "; "))
+                                                (model/error-message errors))}
+                                 (:feedback db))
                       :form form
                       :baseline form))))))
 
