@@ -30,7 +30,10 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 test: mvn --batch-mode --no-transfer-progress test
-format: mvn --batch-mode --no-transfer-progress spotless:apply
+format:
+  check: format-check-copy $format_apply $argv
+  apply: mvn --batch-mode --no-transfer-progress "-DspotlessFiles="(string join , $argv) spotless:apply
+  files: ["src/**/*.java"]
 check: |
   java --version
   mvn --version

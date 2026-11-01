@@ -59,7 +59,10 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 backupData: { kind: sqlite, file: tags.sqlite }
-format: opam exec --switch=5.3.0 -- dune fmt
+format:
+  check: format-check-copy 'opam exec --switch=5.3.0 -- dune fmt; or opam exec --switch=5.3.0 -- dune fmt' $argv
+  apply: format-apply-copy 'opam exec --switch=5.3.0 -- dune fmt; or opam exec --switch=5.3.0 -- dune fmt' $argv
+  files: ["**/*.ml", "**/*.mli", "**/dune"]
 check: |
   opam exec --switch=5.3.0 -- dune build --profile release
   opam exec --switch=5.3.0 -- dune runtest

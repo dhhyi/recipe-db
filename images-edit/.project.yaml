@@ -100,9 +100,12 @@ prettier:
 generate:
   - command: pnpm codegen
     output: src/Api/**/*.elm
-format: |
-  nginx-formatter -indent=4
-  pnpm exec elm-format --yes .
+format:
+  check: format-check-copy $format_apply $argv
+  apply: |
+    for file in (string match '*.conf' $argv); nginx-formatter -indent=4 -input "$file"; or exit $status; end
+    set sources (string match '*.elm' $argv); if test (count $sources) -gt 0; pnpm exec elm-format --yes $sources; end
+  files: ["nginx.conf", "**/*.elm"]
 check: |
   pnpm exec elm --version
   pnpm build

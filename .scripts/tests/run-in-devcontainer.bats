@@ -5,9 +5,11 @@ load test_helper
 setup() {
   unset DEVCONTAINER_KEEP_RUNNING
   setup_fixture run-in-devcontainer.sh
+  cp "$BATS_TEST_DIRNAME/../format-files.sh" "$BATS_TEST_DIRNAME/../format-check.sh" .scripts/
   setup_mock_bin
   install_mock devcontainer-docker.sh docker
   install_mock devcontainer-cli.sh devcontainer
+  git init -q
   mkdir example
   cat > example/.project.yaml << 'EOF'
 name: example
@@ -31,6 +33,74 @@ EOF
   [ "$stderr" = "Using existing running container running-container" ]
   grep -Fx "devcontainer exec --container-id running-container --workspace-folder $FIXTURE_ROOT/example fish -c echo hello" "$MOCK_LOG"
   run -1 grep -E '^(devcontainer up|docker (stop|rm))' "$MOCK_LOG"
+}
+
+@test "format check and apply receive identical sorted globs including additions and removals" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  check: printf '%s\n' $argv
+  apply: printf '%s\n' $argv
+  files: ["**/*.txt", "nested/*.txt"]
+EOF
+  mkdir -p example/nested
+  touch "example/a file.txt" example/nested/b.txt example/ignored.txt example/other.md
+  printf '%s\n' ignored.txt > example/.gitignore
+
+  for change in initial added removed; do
+    case "$change" in
+      added) touch example/nested/new.txt ;;
+      removed) rm example/nested/b.txt ;;
+    esac
+    for operation in format format-check; do
+      : > "$MOCK_LOG"
+      run sh .scripts/run-in-devcontainer.sh example "$operation"
+      [ "$status" -eq 0 ]
+      sed -n 's/^.*set --local argv/set --local argv/p' "$MOCK_LOG" > "$operation-args"
+    done
+    cmp format-args format-check-args
+    grep -F "'a file.txt' 'nested/" format-args
+    run -1 grep -E "ignored.txt|other.md" format-args
+  done
+  grep -F "'nested/new.txt'" format-args
+  run -1 grep -F "'nested/b.txt'" format-args
+  grep -F "'other.md'" "$MOCK_LOG"
+  run -1 grep -F "\$format_inputs" "$MOCK_LOG"
+}
+
+@test "invalid format globs fail before container discovery" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  check: echo check
+  apply: echo apply
+  files: ["../outside.txt"]
+EOF
+
+  run sh .scripts/run-in-devcontainer.sh example format
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Invalid format.files"* ]]
+  [ ! -s "$MOCK_LOG" ]
+}
+
+@test "format file discovery failures are not mistaken for an empty successful check" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  check: echo check
+  apply: echo apply
+  files: ["**/*.txt"]
+EOF
+  cat > bin/git << 'EOF'
+#!/bin/sh
+echo 'Unable to list project files' >&2
+exit 19
+EOF
+  chmod +x bin/git
+
+  run sh .scripts/run-in-devcontainer.sh example format-check
+
+  [ "$status" -eq 19 ]
+  [[ "$output" == *"Unable to list project files"* ]]
+  [ ! -s "$MOCK_LOG" ]
 }
 
 @test "serializes overlapping invocations through container cleanup" {

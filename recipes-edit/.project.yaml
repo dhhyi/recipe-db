@@ -104,9 +104,20 @@ graphqlSchema: "."
 tailwindSources:
   - index.html
   - src
-format: |
-  nginx-formatter -indent=4
-  clojure -M:format fix src deps.edn shadow-cljs.edn
+format:
+  check: format-check-copy $format_apply $argv
+  apply: |
+    for file in (string match '*.conf' $argv); nginx-formatter -indent=4 -input "$file"; or exit $status; end
+    set sources (string match -rv '\.conf$' $argv); if test (count $sources) -gt 0; clojure -M:format fix $sources; end
+  files:
+    [
+      "nginx.conf",
+      "src/**/*.clj",
+      "src/**/*.cljs",
+      "src/**/*.cljc",
+      "deps.edn",
+      "shadow-cljs.edn",
+    ]
 check: |
   java --version
   clojure --version

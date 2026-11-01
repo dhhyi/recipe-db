@@ -61,7 +61,19 @@ traefik:
 category: backend
 backupRole: authoritative-read-only
 backupData: { kind: sqlite, file: recipes.sqlite3 }
-format: mix format
+format:
+  check: format-check-copy $format_apply $argv
+  apply: mix format $argv
+  files:
+    [
+      "mix.exs",
+      "config/**/*.ex",
+      "config/**/*.exs",
+      "lib/**/*.ex",
+      "lib/**/*.exs",
+      "test/**/*.ex",
+      "test/**/*.exs",
+    ]
 check: |
   elixir --version
   mix compile --warnings-as-errors

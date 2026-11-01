@@ -97,9 +97,22 @@ category: frontend
 dockerContext: "."
 tailwindSources:
   - src/components
-format: |
-  nginx-formatter -indent=4
-  pnpm lint --fix
+format:
+  check: format-check-copy $format_apply $argv
+  apply: |
+    for file in (string match '*.conf' $argv); nginx-formatter -indent=4 -input "$file"; or exit $status; end
+    set sources (string match -rv '\.conf$' $argv); if test (count $sources) -gt 0; pnpm exec eslint --fix $sources; end
+  files:
+    [
+      "nginx.conf",
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.mts",
+      "**/*.cts",
+      "**/*.js",
+      "**/*.mjs",
+      "**/*.cjs",
+    ]
 check: |
   pnpm --version
   pnpm exec storybook --version

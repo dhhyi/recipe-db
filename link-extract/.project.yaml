@@ -55,7 +55,10 @@ prettier:
     - "*.cr"
     - shard.yml
     - target
-format: crystal tool format
+format:
+  check: format-check-copy $format_apply $argv
+  apply: crystal tool format $argv
+  files: ["**/*.cr"]
 check: |
   crystal --version
   mkdir -p target

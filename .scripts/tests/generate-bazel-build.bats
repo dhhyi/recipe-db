@@ -9,10 +9,14 @@ setup() {
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
-format: echo formatted
+format:
+  check: echo checked
+  apply: echo formatted
+  files: ["**/*.txt"]
 check: echo checked
 EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml
   cat > .scripts/tests/groups.yaml << 'EOF'
@@ -78,7 +82,7 @@ EOF
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
-  for target in example_generate example_format example_check example_precommit shellcheck test_scripts_compose test_scripts_tooling; do
+  for target in example_generate example_format_check example_check example_precommit shellcheck test_scripts_compose test_scripts_tooling; do
     sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
     grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
   done
@@ -188,13 +192,13 @@ EOF
   [ ! -s "$MOCK_LOG" ]
 }
 
-@test "generation is deterministic and chains project precommit checks after formatting" {
+@test "generation is deterministic and chains project precommit checks after read-only formatting" {
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
   cp BUILD.bazel expected.BUILD
   sed -n '/name = "example_precommit"/,/^)/p' BUILD.bazel > precommit-rule
-  grep -Fx '        ":example_format",' precommit-rule
+  grep -Fx '        ":example_format_check",' precommit-rule
 
   run bash .scripts/generate-bazel-build.sh
 
@@ -214,4 +218,39 @@ EOF
   run find . -maxdepth 1 -name '.BUILD.bazel.*' -print -quit
   [ "$status" -eq 0 ]
   [ -z "$output" ]
+}
+
+@test "format checks model source config command tool and file membership independently of docs" {
+  mkdir other
+  cp example/.project.yaml other/.project.yaml
+  mkdir -p example/.devcontainer
+  printf '%s\n' '.devcontainer/' > example/.gitignore
+  touch example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile
+  touch other/main.txt example/Dockerfile example/formatter.conf
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > original-example
+  sed -n '/name = "other_format_check"/,/^)/p' BUILD.bazel > original-other
+  for input in example/main.txt example/.project.yaml example/Dockerfile example/formatter.conf \
+    example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile \
+    .scripts/format-files.sh .scripts/format-check.sh .scripts/run-in-devcontainer.sh mise.toml; do
+    grep -Fx "        \"$input\"," original-example
+  done
+  run -1 grep -E 'tar|:example_generate|:example_format"' original-example
+
+  touch README.md example/README.md other/README.md
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > current-example
+  cmp original-example current-example
+
+  touch example/new.txt
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > current-example
+  grep -Fx '        "example/new.txt",' current-example
+  sed -n '/name = "other_format_check"/,/^)/p' BUILD.bazel > current-other
+  cmp original-other current-other
+
+  rm example/new.txt
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > current-example
+  cmp original-example current-example
 }

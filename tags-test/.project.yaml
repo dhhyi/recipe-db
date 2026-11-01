@@ -35,7 +35,10 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 test: GRADLE_USER_HOME=target/gradle-cache gradle --no-daemon --project-cache-dir target/gradle-project-cache test
-format: gradle --no-daemon spotlessApply
+format:
+  check: format-check-copy $format_apply $argv
+  apply: gradle --no-daemon "-PspotlessFiles="(string join , $argv) spotlessApply
+  files: ["src/**/*.groovy", "*.gradle"]
 check: |
   java --version
   gradle --version
