@@ -33,11 +33,14 @@ deploy:
     - .scripts/tests/production-smoke.bats
     - .scripts/tests/backup-snapshot.bats
     - .scripts/tests/backup-package.bats
+    - .scripts/tests/backup-recovery-k3d.bats
     - .scripts/tests/production-restore.bats
     - .scripts/tests/production-storage.bats
     - .scripts/tests/public-https.bats
   inputs:
     - .scripts/production-k3d.sh
+    - .scripts/backup-recovery-k3d.sh
+    - .scripts/tests/fixtures/rclone-local
     - .scripts/smoke-production-k3d.sh
     - .scripts/check-public-https.sh
     - .scripts/generate-production-build-metadata.sh

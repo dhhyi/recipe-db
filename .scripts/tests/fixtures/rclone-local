@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=${FAKE_RCLONE_ROOT:?}
+arguments=()
+while (($#)); do
+  case "$1" in
+    --config | --log-level | --log-file)
+      (($# >= 2)) || exit 2
+      shift 2
+      ;;
+    *)
+      arguments+=("$1")
+      shift
+      ;;
+  esac
+done
+
+operation=${arguments[0]:-}
+remote_path() {
+  local remote=$1 relative
+  [[ $remote == fake-e2e:* ]] || exit 2
+  relative=${remote#fake-e2e:}
+  [[ $relative != /* && $relative != *..* ]] || exit 2
+  printf '%s/%s' "$root" "$relative"
+}
+
+case "$operation" in
+  mkdir)
+    mkdir -p -- "$(remote_path "${arguments[1]}")"
+    ;;
+  lsf)
+    directory=$(remote_path "${arguments[1]}")
+    if [[ -d $directory ]]; then
+      find "$directory" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort
+    fi
+    ;;
+  cat)
+    cat -- "$(remote_path "${arguments[1]}")"
+    ;;
+  copyto)
+    source=${arguments[1]}
+    destination=$(remote_path "${arguments[2]}")
+    mkdir -p -- "$(dirname "$destination")"
+    cp -- "$source" "$destination"
+    ;;
+  deletefile)
+    rm -- "$(remote_path "${arguments[1]}")"
+    ;;
+  *)
+    printf 'unsupported fake rclone operation\n' >&2
+    exit 2
+    ;;
+esac
