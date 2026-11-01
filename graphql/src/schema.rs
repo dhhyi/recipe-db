@@ -32,7 +32,14 @@ pub struct MutationRoot(
 );
 
 #[derive(MergedObject, Default)]
-pub struct TestingMutationRoot(MutationRoot, TestingMutation);
+#[graphql(name = "MutationRoot")]
+pub struct TestingMutationRoot(
+    RecipesMutation,
+    RatingsMutation,
+    ImagesMutation,
+    TagsMutation,
+    TestingMutation,
+);
 
 #[derive(Clone)]
 pub enum ApiSchema {

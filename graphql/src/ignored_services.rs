@@ -74,6 +74,7 @@ mod tests {
             }
         }
         let schema = build_schema(RuntimeMode::Testing, None);
+        assert!(schema.sdl().contains("mutation: MutationRoot"));
         assert!(schema
             .sdl()
             .contains("setIgnoredServices(names: [String!]!): [String!]!"));
