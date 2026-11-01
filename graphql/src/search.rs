@@ -93,7 +93,7 @@ impl SearchApi {
 
     async fn search(&self, options: &Value) -> Result<SearchResponse, Error> {
         self.client
-            .post("", options)
+            .post_read_only("", options)
             .await
             .map_err(RestError::into_error)
     }
@@ -108,7 +108,7 @@ impl SearchApi {
             options["page"] = page.into();
             let result: SimilarSearchResponse = self
                 .client
-                .post("", &options)
+                .post_read_only("", &options)
                 .await
                 .map_err(RestError::into_error)?;
             let count = result.recipe_ids.len() as u64;

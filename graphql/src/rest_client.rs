@@ -195,7 +195,8 @@ impl RestClient {
     }
 
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, RestError> {
-        self.request::<(), T>(Method::GET, path, None, None).await
+        self.request::<(), T>(Method::GET, path, None, None, false)
+            .await
     }
 
     pub async fn get_with_query<T: DeserializeOwned>(
@@ -243,7 +244,17 @@ impl RestClient {
         path: &str,
         body: &B,
     ) -> Result<T, RestError> {
-        self.request(Method::POST, path, Some(body), None).await
+        self.request(Method::POST, path, Some(body), None, true)
+            .await
+    }
+
+    pub async fn post_read_only<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, RestError> {
+        self.request(Method::POST, path, Some(body), None, false)
+            .await
     }
 
     pub async fn post_bytes<T: DeserializeOwned>(
@@ -291,7 +302,8 @@ impl RestClient {
         path: &str,
         body: &B,
     ) -> Result<T, RestError> {
-        self.request(Method::PUT, path, Some(body), None).await
+        self.request(Method::PUT, path, Some(body), None, true)
+            .await
     }
 
     pub async fn put_empty(&self, path: &str) -> Result<(), RestError> {
@@ -373,9 +385,9 @@ impl RestClient {
         path: &str,
         body: Option<&B>,
         query: Option<&[(&str, &str)]>,
+        is_write: bool,
     ) -> Result<T, RestError> {
         let url = self.url(path);
-        let is_write = method != Method::GET;
         let mut request = self.client.request(method, url);
         if let Some(body) = body {
             request = request.json(body);
@@ -395,7 +407,10 @@ impl RestClient {
 mod tests {
     use super::{RestClient, RestError};
     use async_graphql::Value;
-    use axum::{routing::get, Json, Router};
+    use axum::{
+        routing::{get, post},
+        Json, Router,
+    };
     use reqwest::{Client, StatusCode};
     use serde_json::json;
     use std::time::Duration;
@@ -537,5 +552,41 @@ mod tests {
         assert_eq!(extension(&error, "status"), Some(&Value::from(503)));
         assert_eq!(extension(&error, "service"), Some(&Value::from("search")));
         assert_eq!(extension(&error, "outcome"), Some(&Value::from("unknown")));
+    }
+
+    #[tokio::test]
+    async fn a_read_only_post_gateway_error_has_no_unknown_outcome() {
+        let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let app = Router::new().route(
+            "/search",
+            post(|| async { (StatusCode::GATEWAY_TIMEOUT, "upstream timeout") }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let previous = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var("REST_ENDPOINT", endpoint);
+        let client = RestClient {
+            client: Client::new(),
+            base_path: "search".to_string(),
+            service: "search".to_string(),
+        };
+        let result = client
+            .post_read_only::<_, serde_json::Value>("", &json!({"query": "pasta"}))
+            .await;
+        task.abort();
+        if let Some(value) = previous {
+            std::env::set_var("REST_ENDPOINT", value);
+        } else {
+            std::env::remove_var("REST_ENDPOINT");
+        }
+        let error = result.unwrap_err().into_error();
+        assert_eq!(
+            extension(&error, "code"),
+            Some(&Value::from("service-unavailable"))
+        );
+        assert_eq!(extension(&error, "status"), Some(&Value::from(503)));
+        assert_eq!(extension(&error, "service"), Some(&Value::from("search")));
+        assert_eq!(extension(&error, "outcome"), None);
     }
 }
