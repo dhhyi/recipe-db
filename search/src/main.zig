@@ -15,7 +15,14 @@ fn parseMode(value: ?[]const u8) !RuntimeMode {
     return error.InvalidRuntimeMode;
 }
 
+fn terminate(_: c_int) callconv(.C) void {
+    std.posix.exit(0);
+}
+
 pub fn main() !void {
+    // As PID 1 the process ignores SIGTERM unless a handler is installed.
+    const action = std.posix.Sigaction{ .handler = .{ .handler = terminate }, .mask = std.posix.empty_sigset, .flags = 0 };
+    std.posix.sigaction(std.posix.SIG.TERM, &action, null);
     const mode_value = std.process.getEnvVarOwned(std.heap.page_allocator, "MODE") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,

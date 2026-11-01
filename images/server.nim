@@ -1,4 +1,4 @@
-import std/[httpcore, json, logging, os, strutils, uri]
+import std/[httpcore, json, logging, os, posix, strutils, uri]
 
 import jester
 import pixie
@@ -259,6 +259,9 @@ router imagesRouter:
     resp Http204, ""
 
 proc main() =
+  # As PID 1 the process ignores SIGTERM unless a handler is installed.
+  onSignal(SIGTERM):
+    quit(0)
   addHandler(newConsoleLogger(
     levelThreshold = if verbose: lvlInfo else: lvlWarn,
     fmtStr = "$levelname ",

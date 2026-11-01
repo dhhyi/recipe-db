@@ -144,6 +144,10 @@ The supported runtime modes are `production`, `testing`, and `backup`. An absent
 
 Every REST API that owns stored data must provide a private delete-all-data API for isolated testing as `DELETE` on its root collection resource (for example, `DELETE /recipes` or `DELETE /images`, not the server root `/` or a separate `/reset` endpoint), available only with explicit `MODE=testing`. Preserve supported trailing-slash variants; stateless APIs do not need a meaningless reset endpoint. Clear all service-owned test data, not configuration, credentials, other services' storage, or backups. Production (including unset `MODE`) and backup mode must not expose or execute these resets; cover supported route variants and verify denied requests leave data unchanged. Do not expose resets through public ingress, GraphQL, or MCP.
 
+## Service shutdown
+
+Every service container (including shell wrappers and sidecars) must exit 0 within seconds of SIGTERM. Containers run the service as PID 1, where the kernel ignores signals without an installed handler, so install one explicitly (or `trap` TERM in shell commands). Backup capture refuses Pods that were SIGKILLed (exit 137); the 120-second termination grace is only an upper bound, not a substitute for clean exit.
+
 ## REST API health endpoints
 
 Every REST backend must provide a non-mutating `GET /health` endpoint in every supported runtime mode. Keep it reachable by internal health probes without exposing sensitive information or requiring public ingress access. Preserve existing response contracts; recipes, images, ratings and inspirations currently return `204 No Content` when healthy. Distinguish liveness from readiness: readiness must reflect whether the selected mode is ready, not whether ordinary application writes are enabled. A healthy backup-mode service may intentionally reject normal application operations.
