@@ -1,6 +1,7 @@
 use async_graphql::{Error, ErrorExtensions};
 use reqwest::{Client, Method, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::error::Error as _;
 use std::time::Duration;
 
 /// Thin wrapper around a REST backend, mirroring the old `RESTDataSource` base class.
@@ -52,10 +53,17 @@ impl RestError {
     }
 
     fn transport(error: reqwest::Error, service: &str, is_write: bool) -> Self {
-        let unavailable = error.is_connect() || error.is_timeout() || error.is_body();
+        let in_flight_connection_failure = is_in_flight_connection_failure(&error);
+        let unavailable = error.is_connect()
+            || error.is_timeout()
+            || error.is_body()
+            || in_flight_connection_failure;
         let unknown_outcome = is_write
             && !error.is_connect()
-            && (error.is_timeout() || error.is_body() || error.is_decode());
+            && (error.is_timeout()
+                || error.is_body()
+                || error.is_decode()
+                || in_flight_connection_failure);
         eprintln!("downstream request to {service} failed: {error:?}");
         Self {
             status: if unavailable {
@@ -127,6 +135,38 @@ impl RestError {
             }
         })
     }
+}
+
+fn is_in_flight_connection_failure(error: &reqwest::Error) -> bool {
+    if !error.is_request() || error.is_connect() {
+        return false;
+    }
+
+    let mut cause = error.source();
+    while let Some(source) = cause {
+        if source
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_incomplete_message)
+        {
+            return true;
+        }
+        if source
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::UnexpectedEof
+                )
+            })
+        {
+            return true;
+        }
+        cause = source.source();
+    }
+    false
 }
 
 impl RestClient {
@@ -413,10 +453,38 @@ mod tests {
     };
     use reqwest::{Client, StatusCode};
     use serde_json::json;
+    use std::io::{Read, Write};
     use std::time::Duration;
 
     fn extension<'a>(error: &'a async_graphql::Error, key: &str) -> Option<&'a Value> {
         error.extensions.as_ref()?.get(key)
+    }
+
+    fn receive_request(stream: &mut std::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let count = stream.read(&mut chunk).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..count]);
+            if let Some(header_end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+        }
+        String::from_utf8(request).unwrap()
     }
 
     #[test]
@@ -587,6 +655,96 @@ mod tests {
         );
         assert_eq!(extension(&error, "status"), Some(&Value::from(503)));
         assert_eq!(extension(&error, "service"), Some(&Value::from("search")));
+        assert_eq!(extension(&error, "outcome"), None);
+    }
+
+    #[tokio::test]
+    async fn a_write_disconnected_after_receipt_has_an_unknown_outcome() {
+        let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let backend = tokio::task::spawn_blocking(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = receive_request(&mut stream);
+            assert!(request.starts_with("POST /recipes "));
+        });
+        let previous = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var("REST_ENDPOINT", endpoint);
+        let result = RestClient::new("recipes")
+            .post::<_, serde_json::Value>("", &json!({"name": "pasta"}))
+            .await;
+        let backend_result = backend.await;
+        if let Some(value) = previous {
+            std::env::set_var("REST_ENDPOINT", value);
+        } else {
+            std::env::remove_var("REST_ENDPOINT");
+        }
+
+        assert!(backend_result.is_ok());
+        let error = result.unwrap_err().into_error();
+        assert_eq!(
+            extension(&error, "code"),
+            Some(&Value::from("service-unavailable"))
+        );
+        assert_eq!(extension(&error, "status"), Some(&Value::from(503)));
+        assert_eq!(extension(&error, "service"), Some(&Value::from("recipes")));
+        assert_eq!(extension(&error, "outcome"), Some(&Value::from("unknown")));
+    }
+
+    #[tokio::test]
+    async fn a_pre_dispatch_connect_failure_is_not_an_unknown_outcome() {
+        let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let previous = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var("REST_ENDPOINT", endpoint);
+        let result = RestClient::new("recipes")
+            .post::<_, serde_json::Value>("", &json!({"name": "pasta"}))
+            .await;
+        if let Some(value) = previous {
+            std::env::set_var("REST_ENDPOINT", value);
+        } else {
+            std::env::remove_var("REST_ENDPOINT");
+        }
+
+        let error = result.unwrap_err().into_error();
+        assert_eq!(
+            extension(&error, "code"),
+            Some(&Value::from("service-unavailable"))
+        );
+        assert_eq!(extension(&error, "outcome"), None);
+    }
+
+    #[tokio::test]
+    async fn a_protocol_error_is_not_an_unknown_outcome() {
+        let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let backend = tokio::task::spawn_blocking(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = receive_request(&mut stream);
+            assert!(request.starts_with("POST /recipes "));
+            stream.write_all(b"not an HTTP response\r\n\r\n").unwrap();
+        });
+        let previous = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var("REST_ENDPOINT", endpoint);
+        let result = RestClient::new("recipes")
+            .post::<_, serde_json::Value>("", &json!({"name": "pasta"}))
+            .await;
+        let backend_result = backend.await;
+        if let Some(value) = previous {
+            std::env::set_var("REST_ENDPOINT", value);
+        } else {
+            std::env::remove_var("REST_ENDPOINT");
+        }
+
+        assert!(backend_result.is_ok());
+        let error = result.unwrap_err().into_error();
+        assert_eq!(
+            extension(&error, "code"),
+            Some(&Value::from("downstream-request-failed"))
+        );
         assert_eq!(extension(&error, "outcome"), None);
     }
 }
