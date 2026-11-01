@@ -1,6 +1,10 @@
 import { test as base, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { createAuthIdentity } from "./auth-contexts.js";
+import {
+  ignoredAuxiliaryServices,
+  ignoredServicesLifecycle,
+} from "./ignored-services.helpers.js";
 
 export { expect };
 
@@ -21,6 +25,18 @@ export async function graphql(
   const result = JSON.parse(body);
   expect(result.errors, `${context} returned GraphQL errors`).toBeUndefined();
   return result.data;
+}
+
+export function serviceLifecycle(request) {
+  return ignoredServicesLifecycle(async (names) => {
+    const { setIgnoredServices } = await graphql(
+      request,
+      "mutation($names: [String!]!) { setIgnoredServices(names: $names) }",
+      { names },
+      "Set ignored services",
+    );
+    return setIgnoredServices;
+  });
 }
 
 async function resetRestService(request, service) {
@@ -388,8 +404,10 @@ export const test = base.extend({
   },
   resetApplicationData: [
     async ({ request }, use) => {
-      await resetApplicationData(request);
-      await use();
+      await serviceLifecycle(request).resetAndUse(
+        () => resetApplicationData(request),
+        use,
+      );
     },
     { auto: true },
   ],
@@ -424,6 +442,12 @@ export const test = base.extend({
       await waitForRecipeIndexed(request, recipe.id);
     }
     await use(recipes);
+  },
+  degradedRecipes: async ({ request, overviewRecipes }, use) => {
+    await serviceLifecycle(request).ignoreAndUse(
+      ignoredAuxiliaryServices,
+      () => use(overviewRecipes),
+    );
   },
   taggedDemoRecipe: async ({ request, demoRecipe }, use) => {
     await seedRandomRecipeTags(request, [demoRecipe]);

@@ -1,6 +1,7 @@
-use async_graphql::{EmptySubscription, MergedObject, Schema};
+use async_graphql::{EmptySubscription, MergedObject, ObjectType, Request, Response, Schema};
 
 use crate::events::EventPublisher;
+use crate::ignored_services::{IgnoredServices, TestingMutation};
 use crate::image_inline::ImageInlineApi;
 use crate::images::{ImagesApi, ImagesMutation};
 use crate::inspirations::InspirationsApi;
@@ -30,23 +31,73 @@ pub struct MutationRoot(
     TagsMutation,
 );
 
-pub type ApiSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
+#[derive(MergedObject, Default)]
+#[graphql(name = "MutationRoot")]
+pub struct TestingMutationRoot(
+    RecipesMutation,
+    RatingsMutation,
+    ImagesMutation,
+    TagsMutation,
+    TestingMutation,
+);
+
+#[derive(Clone)]
+pub enum ApiSchema {
+    Normal(Schema<QueryRoot, MutationRoot, EmptySubscription>),
+    Testing(Schema<QueryRoot, TestingMutationRoot, EmptySubscription>),
+}
+
+impl ApiSchema {
+    pub async fn execute(&self, request: impl Into<Request>) -> Response {
+        match self {
+            Self::Normal(schema) => schema.execute(request).await,
+            Self::Testing(schema) => schema.execute(request).await,
+        }
+    }
+
+    pub fn sdl(&self) -> String {
+        match self {
+            Self::Normal(schema) => schema.sdl(),
+            Self::Testing(schema) => schema.sdl(),
+        }
+    }
+}
 
 pub fn build_schema(mode: RuntimeMode, publisher: Option<EventPublisher>) -> ApiSchema {
-    let mut builder = Schema::build(
-        QueryRoot::default(),
-        MutationRoot::default(),
-        EmptySubscription,
-    )
-    .data(RecipesApi::new())
-    .data(SearchApi::new())
-    .data(RatingsApi::new())
-    .data(ImagesApi::new())
-    .data(InspirationsApi::new())
-    .data(LinkExtractApi::new())
-    .data(ImageInlineApi::new())
-    .data(TraefikApi::new());
-    builder = builder.data(TagsApi::new());
+    if mode == RuntimeMode::Testing {
+        ApiSchema::Testing(build_with_mutation(
+            TestingMutationRoot::default(),
+            mode,
+            publisher,
+        ))
+    } else {
+        ApiSchema::Normal(build_with_mutation(
+            MutationRoot::default(),
+            mode,
+            publisher,
+        ))
+    }
+}
+
+fn build_with_mutation<M: ObjectType + 'static>(
+    mutation: M,
+    mode: RuntimeMode,
+    publisher: Option<EventPublisher>,
+) -> Schema<QueryRoot, M, EmptySubscription> {
+    let ignored = IgnoredServices::default();
+    let mut builder = Schema::build(QueryRoot::default(), mutation, EmptySubscription)
+        .data(RecipesApi::new(ignored.clone()))
+        .data(SearchApi::new(ignored.clone()))
+        .data(RatingsApi::new(ignored.clone()))
+        .data(ImagesApi::new(ignored.clone()))
+        .data(InspirationsApi::new(ignored.clone()))
+        .data(LinkExtractApi::new(ignored.clone()))
+        .data(ImageInlineApi::new(ignored.clone()))
+        .data(TraefikApi::new(ignored.clone()))
+        .data(TagsApi::new(ignored.clone()));
+    if mode == RuntimeMode::Testing {
+        builder = builder.data(ignored);
+    }
 
     if let Some(publisher) = publisher {
         builder = builder.data(publisher);

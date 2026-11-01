@@ -64,6 +64,106 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "overview.png");
     });
 
+    test("degraded overview and recipe detail", async ({
+      page,
+      degradedRecipes,
+    }) => {
+      test.setTimeout(120_000);
+      // No healthy page is fetched first: SSR must observe the real outage.
+      const overview = await page.goto("/");
+      expect(overview.status()).toBe(200);
+      await expectHeader(page, role);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+        "Alle Rezepte",
+      );
+      await expect(page.locator("#browse-metadata")).toHaveAttribute(
+        "data-kind",
+        "fallback",
+      );
+      await expect(page.locator("#browse-metadata")).toHaveText(
+        "Suche nicht verfügbar. Alle Rezepte werden angezeigt.",
+      );
+      await expect(page.locator("#browse-query")).toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "Suchen", exact: true }),
+      ).toBeDisabled();
+      await expect(
+        page.getByRole("combobox", { name: "Sortieren nach" }),
+      ).toBeDisabled();
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(
+        degradedRecipes.length,
+      );
+      await expect(page.locator("[data-recipe-id] h2")).toHaveText(
+        degradedRecipes.map((recipe) => recipe.name),
+      );
+      for (const recipe of degradedRecipes) {
+        await expect(
+          page.locator(`[data-recipe-id="${recipe.id}"] h2`),
+        ).toHaveText(recipe.name);
+      }
+      await expect(
+        page.locator('main img[itemprop="image"], main rating-component'),
+      ).toHaveCount(0);
+      await expect(page.locator("main [data-recipe-tag]")).toHaveCount(0);
+      await page.evaluate(() =>
+        customElements.whenDefined("recipe-tile-component"),
+      );
+      const placeholders = page.locator("recipe-tile-component .fallback-image");
+      await expect(placeholders).toHaveCount(degradedRecipes.length);
+      for (const placeholder of await placeholders.all()) {
+        await expect(placeholder).toBeVisible();
+        await waitForImageDecoded(placeholder);
+      }
+      await screenshot(page, "degraded-overview.png");
+
+      const recipe = degradedRecipes[0];
+      const detail = await page.goto(`/recipe/${recipe.id}`);
+      expect(detail.status()).toBe(200);
+      await expectHeader(page, role);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+        recipe.name,
+      );
+      await expect(page.locator('[itemprop="recipeIngredient"]')).toHaveText([
+        "200 g Milchreis",
+        "500 ml Milch",
+        "Salz",
+        "(optional) Zimt",
+      ]);
+      await expect(page.locator('[itemprop="recipeInstructions"] p')).toHaveText([
+        "Milchreis und Milch langsam aufkochen.",
+        "Unter Rühren garen und mit Salz abschmecken.",
+      ]);
+      await expect(page.locator("main img, main rating-component")).toHaveCount(
+        0,
+      );
+      await expect(page.locator("#recipe-tags .recipe-tag")).toHaveCount(0);
+      await expect(
+        page.getByRole("heading", { name: "Inspirationen", exact: true }),
+      ).toHaveCount(0);
+      await expect(page.locator("#recipe-tags [data-tag-feedback]")).toHaveText(
+        "Tags konnten nicht aktualisiert werden.",
+      );
+      await expect(
+        page.getByRole("button", { name: "Erneut laden", exact: true }),
+      ).toBeVisible();
+      const similar = page.locator("#similar-recipes");
+      await similar.scrollIntoViewIfNeeded();
+      await expect(similar.getByRole("status")).toHaveText(
+        "Ähnliche Rezepte konnten nicht geladen werden",
+      );
+      await expect(
+        similar.getByRole("button", { name: "Erneut versuchen", exact: true }),
+      ).toBeVisible();
+      await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+      await expect(page.locator(".htmx-settling")).toHaveCount(0);
+      const updatedAt = page.getByText(/^Zuletzt aktualisiert: /);
+      await expect(updatedAt).toBeVisible();
+      await updatedAt.evaluate((element) => {
+        element.textContent = "Zuletzt aktualisiert: gerade eben";
+      });
+      await screenshot(page, "degraded-recipe.png");
+    });
+
     test("recipe detail", async ({ page, taggedDemoRecipe, authContexts }) => {
       const demoRecipe = taggedDemoRecipe;
       for (const [identity, rating] of [
