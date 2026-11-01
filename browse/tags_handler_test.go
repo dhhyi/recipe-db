@@ -60,7 +60,10 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 					"myCapabilities": capabilities,
 					"recipe":         map[string]any{"id": "42", "tags": nil},
 				},
-				"errors": []any{map[string]any{"message": "tags unavailable", "path": []any{"recipe", "tags"}}},
+				"errors": []any{map[string]any{
+					"message": "tags unavailable", "path": []any{"recipe", "tags"},
+					"extensions": map[string]any{"code": "service-unavailable", "status": 503, "service": "tags"},
+				}},
 			}
 		} else {
 			data = map[string]any{

@@ -25,11 +25,12 @@ import (
 const graphqlEndpoint = "http://traefik/graphql"
 
 var errTagsUnavailable = errors.New("recipe tags unavailable")
+var errOptionalServicesUnavailable = errors.New("optional recipe services unavailable")
 
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
-	tagsOnly := tagErrorsOnly(err)
-	if err != nil && !tagsOnly {
+	optionalOnly := optionalServiceErrors(err)
+	if err != nil && !optionalOnly {
 		return nil, err
 	}
 	if resp == nil {
@@ -38,16 +39,24 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 	if resp.Recipe == nil {
 		return nil, errRecipeNotFound
 	}
-	if resp.Recipe.Rating == nil {
-		return nil, errors.New("ratings service unavailable; refusing to cache incomplete recipe")
+	if resp.Recipe.Rating == nil && !serviceUnavailableField(err, "ratings", "rating") {
+		return nil, errors.New("recipe rating was null without a ratings outage error")
 	}
 	ctx = templ.WithChildren(ctx, components.Detail(resp))
 	var html bytes.Buffer
 	if err := components.Layout(resp.Recipe.Name+" | RezeptDB").Render(ctx, &html); err != nil {
 		return nil, err
 	}
-	if resp.Recipe.Tags == nil || err != nil {
+	if resp.Recipe.Tags == nil {
+		if !serviceUnavailableField(err, "tags", "tags") {
+			return nil, errors.New("recipe tags were null without a tags outage error")
+		}
+		log.Printf("recipe %s tags are unavailable: %v", id, err)
 		return html.Bytes(), errTagsUnavailable
+	}
+	if optionalOnly {
+		log.Printf("recipe %s has unavailable optional fields: %v", id, err)
+		return html.Bytes(), errOptionalServicesUnavailable
 	}
 	return html.Bytes(), nil
 }
@@ -224,7 +233,7 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			return
 		}
 		if !capabilities.MyCapabilities.CanRate {
-			templ.Handler(components.RecipeRatingWidget(id, &capabilities.Rating, false, nil)).ServeHTTP(w, r)
+			templ.Handler(components.RecipeRatingWidget(id, capabilities.Rating, false, nil)).ServeHTTP(w, r)
 			return
 		}
 		client, _ = requestScopedClient(endpoint, r, w)
@@ -244,8 +253,12 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			return
 		}
 		resp, err := gql.RecipeInspirations(r.Context(), client, id)
-		if err != nil {
+		if err != nil && !optionalServiceErrors(err) {
 			log.Printf("failed to fetch recipe inspirations: %v", err)
+			http.Error(w, "failed to fetch recipe inspirations", http.StatusInternalServerError)
+			return
+		}
+		if resp == nil {
 			http.Error(w, "failed to fetch recipe inspirations", http.StatusInternalServerError)
 			return
 		}
@@ -283,7 +296,7 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 		w.Header().Set("Cache-Control", "private, no-store")
 		page, err := cache.get(r.Context(), id)
 		if err != nil {
-			if errors.Is(err, errTagsUnavailable) {
+			if errors.Is(err, errTagsUnavailable) || errors.Is(err, errOptionalServicesUnavailable) {
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Del("ETag")

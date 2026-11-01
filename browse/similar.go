@@ -75,7 +75,7 @@ func hydrateSimilarRecipes(ctx context.Context, client graphql.Client, queue []s
 		if inaccessibleSimilarRecipe(err) {
 			continue
 		}
-		if err != nil && !tagErrorsOnly(err) {
+		if err != nil && !optionalServiceErrors(err) {
 			return nil, nil, err
 		}
 		if response == nil {

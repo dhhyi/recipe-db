@@ -115,18 +115,65 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     [Description(
         "Returns the full details of a single recipe (name, method, ingredients, rating, image, " +
         "inspirations, tags) by id - use this to inspect the current state of a recipe, e.g. before merging " +
-        "new data into it with 'change_recipe'."
+        "new data into it with 'change_recipe'. Optional enrichment outages return the recipe with an " +
+        "errors array describing the unavailable fields."
     )]
     public async Task<string> GetRecipe([Description("Recipe id")] string recipeId)
     {
         var response = await client.GetRecipe.ExecuteAsync(recipeId);
-        if (response.Errors.Count > 0)
+        var optionalErrors = response.Errors.Count > 0 && response.Errors.All(IsOptionalRecipeError);
+        if (response.Errors.Count > 0 && !optionalErrors)
         {
             throw GraphQLError(response.Errors);
         }
 
         var recipe = response.Data?.Recipe;
-        return recipe is null ? "Recipe not found" : JsonSerializer.Serialize(recipe, JsonOptions);
+        if (recipe is null)
+        {
+            return "Recipe not found";
+        }
+
+        return optionalErrors
+            ? JsonSerializer.Serialize(
+                new
+                {
+                    recipe,
+                    errors = response.Errors.Select(error => new
+                    {
+                        error.Message,
+                        error.Path,
+                        code = error.Extensions?.GetValueOrDefault("code"),
+                        status = error.Extensions?.GetValueOrDefault("status"),
+                        service = error.Extensions?.GetValueOrDefault("service"),
+                    }),
+                },
+                JsonOptions
+            )
+            : JsonSerializer.Serialize(recipe, JsonOptions);
+    }
+
+    private static bool IsOptionalRecipeError(IClientError error)
+    {
+        var extensions = error.Extensions;
+        if (
+            extensions?.GetValueOrDefault("code")?.ToString() != "service-unavailable"
+            || extensions.GetValueOrDefault("status")?.ToString() != "503"
+            || error.Path is not { Count: >= 2 } path
+            || !string.Equals(path[0]?.ToString(), "recipe", StringComparison.Ordinal)
+        )
+        {
+            return false;
+        }
+
+        var service = path[1]?.ToString();
+        return service switch
+        {
+            "rating" => extensions.GetValueOrDefault("service")?.ToString() == "ratings",
+            "image" => extensions.GetValueOrDefault("service")?.ToString() == "images",
+            "inspirations" => extensions.GetValueOrDefault("service")?.ToString() == "inspirations",
+            "tags" => extensions.GetValueOrDefault("service")?.ToString() == "tags",
+            _ => false,
+        };
     }
 
     [McpServerTool(Name = "change_recipe")]
@@ -220,7 +267,16 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
             var status = error.Extensions?.TryGetValue("status", out var statusValue) == true
                 ? $" (status: {statusValue})"
                 : "";
-            return $"{code}{error.Message}{field}{status}";
+            var partialEffects = error.Extensions is { } extensions
+                ? new[] { "recipeId", "completedSteps", "outcome" }
+                    .Where(extensions.ContainsKey)
+                    .Select(key => $"{key}: {JsonSerializer.Serialize(extensions[key], JsonOptions)}")
+                    .ToArray()
+                : [];
+            var effects = partialEffects.Length == 0
+                ? ""
+                : $" ({string.Join(", ", partialEffects)})";
+            return $"{code}{error.Message}{field}{status}{effects}";
         })));
     }
 

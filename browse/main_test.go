@@ -124,6 +124,10 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				if ratingsOffline.Load() {
 					rating = nil
 				}
+				var image any = map[string]any{"url": imageURL, "thumbUrl": thumbURL}
+				if imagesOffline.Load() {
+					image = nil
+				}
 				name := "Original"
 				if version.Load() > 0 {
 					name = "Updated"
@@ -132,19 +136,11 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 					"id": "42", "name": name, "method": "Cook", "ingredients": []any{},
 					"tags":      []any{},
 					"createdAt": "2020-01-01T00:00:00.123456Z", "updatedAt": "2020-01-01T00:00:00.123456Z",
-					"rating": rating, "image": map[string]any{"url": imageURL, "thumbUrl": thumbURL},
+					"rating": rating, "image": image,
 				}
 				if tagsOffline.Load() {
 					recipe.(map[string]any)["tags"] = nil
 				}
-			}
-			if imagesOffline.Load() {
-				if err := json.NewEncoder(w).Encode(map[string]any{
-					"errors": []any{map[string]any{"message": "images unavailable"}},
-				}); err != nil {
-					t.Error(err)
-				}
-				return
 			}
 			data = map[string]any{"recipe": recipe}
 		case "RecipeControls":
@@ -179,11 +175,36 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			t.Errorf("unexpected operation: %s", request.OperationName)
 		}
 		response := map[string]any{"data": data}
+		var errors []any
+		if request.OperationName == "RecipeById" && ratingsOffline.Load() {
+			errors = append(errors, map[string]any{
+				"message": "ratings unavailable",
+				"path":    []any{"recipe", "rating"},
+				"extensions": map[string]any{
+					"code": "service-unavailable", "status": 503, "service": "ratings",
+				},
+			})
+		}
+		if request.OperationName == "RecipeById" && imagesOffline.Load() {
+			errors = append(errors, map[string]any{
+				"message": "images unavailable",
+				"path":    []any{"recipe", "image"},
+				"extensions": map[string]any{
+					"code": "service-unavailable", "status": 503, "service": "images",
+				},
+			})
+		}
 		if request.OperationName == "RecipeById" && tagsOffline.Load() {
-			response["errors"] = []any{map[string]any{
+			errors = append(errors, map[string]any{
 				"message": "tags unavailable",
 				"path":    []any{"recipe", "tags"},
-			}}
+				"extensions": map[string]any{
+					"code": "service-unavailable", "status": 503, "service": "tags",
+				},
+			})
+		}
+		if len(errors) > 0 {
+			response["errors"] = errors
 		}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Error(err)
@@ -349,11 +370,14 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		}
 		offline.Store(true)
 		page := request("GET", "/recipe/42", etag)
-		assertStyledErrorPage(t, page, http.StatusInternalServerError, "failed to fetch recipe | RezeptDB", "failed to fetch recipe", false)
+		if page.Code != http.StatusOK || page.Header().Get("Cache-Control") != "no-store" ||
+			page.Header().Get("ETag") != "" || !strings.Contains(page.Body.String(), "Updated") {
+			t.Fatalf("optional outage did not preserve uncached recipe data: %d %v %s", page.Code, page.Header(), page.Body.String())
+		}
 		head := request("HEAD", "/recipe/42", etag)
-		assertStyledErrorPage(t, head, http.StatusInternalServerError, "failed to fetch recipe | RezeptDB", "failed to fetch recipe", true)
-		if page.Header().Get("ETag") != "" {
-			t.Fatal("failed recipe response retained a successful-page ETag")
+		if head.Code != http.StatusOK || head.Header().Get("Cache-Control") != "no-store" ||
+			head.Header().Get("ETag") != "" || head.Body.Len() != 0 {
+			t.Fatalf("optional outage HEAD response was not uncached: %d %v", head.Code, head.Header())
 		}
 		offline.Store(false)
 		if page := request("GET", "/recipe/42", ""); page.Code != 200 {

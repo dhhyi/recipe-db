@@ -509,6 +509,9 @@ func TestBrowseKeepsCardsOnPartialTagErrors(t *testing.T) {
 						response["errors"] = []any{map[string]any{
 							"message": "tags unavailable",
 							"path":    []any{"searchRecipes", "recipes", 1, "tags"},
+							"extensions": map[string]any{
+								"code": "service-unavailable", "status": 503, "service": "tags",
+							},
 						}}
 					} else {
 						response = map[string]any{"data": map[string]any{
@@ -517,6 +520,9 @@ func TestBrowseKeepsCardsOnPartialTagErrors(t *testing.T) {
 						response["errors"] = []any{map[string]any{
 							"message": "tags unavailable",
 							"path":    []any{"recipes", 1, "tags"},
+							"extensions": map[string]any{
+								"code": "service-unavailable", "status": 503, "service": "tags",
+							},
 						}}
 					}
 				default:

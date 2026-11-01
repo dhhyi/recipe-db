@@ -46,6 +46,11 @@ fn graphqlResponse(root: Value, allow_optional_errors: bool) !GraphqlResponse {
             const path = try array(try get(err, "path"));
             if (path.len < 2 or !std.mem.eql(u8, try text(path[0]), "recipe")) return error.GraphqlError;
             const source = std.meta.stringToEnum(OptionalSource, try text(path[1])) orelse return error.GraphqlError;
+            const extensions = try get(err, "extensions");
+            if (!std.mem.eql(u8, try text(try get(extensions, "code")), "service-unavailable") or
+                try get(extensions, "status") != .integer or (try get(extensions, "status")).integer != 503 or
+                !std.mem.eql(u8, try text(try get(extensions, "service")), serviceName(source)))
+                return error.GraphqlError;
             for (path[2..]) |segment| switch (segment) {
                 .string => {},
                 .integer => |index| if (index < 0) return error.InvalidDependencyResponse,
@@ -57,6 +62,15 @@ fn graphqlResponse(root: Value, allow_optional_errors: bool) !GraphqlResponse {
     // Only an error-free null recipe confirms deletion.
     if (result.failed.count() != 0 and try get(result.data, "recipe") == .null) return error.GraphqlError;
     return result;
+}
+
+fn serviceName(source: OptionalSource) []const u8 {
+    return switch (source) {
+        .rating => "ratings",
+        .image => "images",
+        .inspirations => "inspirations",
+        .tags => "tags",
+    };
 }
 
 pub const Index = struct {
@@ -313,7 +327,7 @@ test "tag IDs are unique, empty success clears, and errors or null require recov
     for (0..2) |step| {
         if (step == 1) {
             const response = try graphqlResponse(try parse(a,
-                \\{"data":{"recipe":{}},"errors":[{"message":"offline","path":["recipe","tags",0,"id"]}]}
+                \\{"data":{"recipe":{}},"errors":[{"message":"offline","path":["recipe","tags",0,"id"],"extensions":{"code":"service-unavailable","status":503,"service":"tags"}}]}
             ), true);
             failed = response.failed;
             _ = recipe.object.swapRemove("tags");
@@ -383,8 +397,8 @@ test "mixed GraphQL success updates healthy sources and preserves only failed so
         ,
     }, [_]OptionalSource{ .image, .rating, .inspirations }) |path, source| {
         const root = try parse(a, try std.fmt.allocPrint(a,
-            \\{{"data":{{"recipe":{s}}},"errors":[{{"message":"source failed","path":{s}}}]}}
-        , .{ recipeFixture, path }));
+            \\{{"data":{{"recipe":{s}}},"errors":[{{"message":"source failed","path":{s},"extensions":{{"code":"service-unavailable","status":503,"service":"{s}"}}}}]}}
+        , .{ recipeFixture, path, serviceName(source) }));
         const response = try graphqlResponse(root, true);
         var recipe = try get(response.data, "recipe");
         // async-graphql can omit failed fields instead of serializing them as null.
@@ -430,9 +444,9 @@ test "multiple optional errors preserve all affected sources without hiding core
     const root = try parse(a,
         \\{"data":{"recipe":{"id":"r1","name":"Updated","nameSortKey":"updated",
         \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],"tags":[]}},
-        \\"errors":[{"message":"offline","path":["recipe","image"]},
-        \\{"message":"offline","path":["recipe","rating"]},
-        \\{"message":"offline","path":["recipe","inspirations"]}]}
+        \\"errors":[{"message":"offline","path":["recipe","image"],"extensions":{"code":"service-unavailable","status":503,"service":"images"}},
+        \\{"message":"offline","path":["recipe","rating"],"extensions":{"code":"service-unavailable","status":503,"service":"ratings"}},
+        \\{"message":"offline","path":["recipe","inspirations"],"extensions":{"code":"service-unavailable","status":503,"service":"inspirations"}}]}
     );
     const response = try graphqlResponse(root, true);
     const doc = try recipeDocument(a, try get(response.data, "recipe"), response.failed, try parse(a, previousFixture), "r1");
@@ -459,7 +473,7 @@ test "only error-free null recipes confirm deletion and malformed errors fail cl
     ), true);
     try std.testing.expect(try get(deleted.data, "recipe") == .null);
     for ([_][]const u8{
-        \\{"data":{"recipe":null},"errors":[{"message":"failed","path":["recipe","image"]}]}
+        \\{"data":{"recipe":null},"errors":[{"message":"failed","path":["recipe","image"],"extensions":{"code":"service-unavailable","status":503,"service":"images"}}]}
         ,
         \\{"data":{"recipe":null},"errors":[{"message":"failed","path":["recipe"]}]}
         ,
@@ -484,6 +498,9 @@ test "only error-free null recipes confirm deletion and malformed errors fail cl
     }) |bytes| {
         try std.testing.expectError(error.InvalidDependencyResponse, graphqlResponse(try parse(a, bytes), true));
     }
+    try std.testing.expectError(error.GraphqlError, graphqlResponse(try parse(a,
+        \\{"data":{"recipe":{}},"errors":[{"message":"failed","path":["recipe","image"],"extensions":{"code":"service-unavailable","status":503,"service":"ratings"}}]}
+    ), true));
 }
 
 test "reload uses one GraphQL request and writes a mixed-success document" {
@@ -520,7 +537,7 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
                             \\{"data":{"recipe":{"id":"r1","name":"Updated","nameSortKey":"updated",
                             \\"createdAt":"2026-10-08T13:00:00.123456Z","updatedAt":"2026-10-09T14:00:00.654321Z","method":null,"ingredients":[],
                             \\"rating":{"average":5,"count":2},"inspirations":[],"tags":[]}},
-                            \\"errors":[{"message":"images unavailable","path":["recipe","image"]}]}
+                            \\"errors":[{"message":"images unavailable","path":["recipe","image"],"extensions":{"code":"service-unavailable","status":503,"service":"images"}}]}
                         , .{ .keep_alive = false });
                     },
                     1 => {

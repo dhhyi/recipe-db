@@ -10,14 +10,21 @@ pub struct Link {
 
 #[ComplexObject]
 impl Link {
-    async fn extracted(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<ExtractedLink>> {
+    async fn extracted(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Option<async_graphql::Result<Option<ExtractedLink>>> {
         if !self.url.starts_with("http") {
-            return Ok(None);
+            return None;
         }
-        Ok(ctx
-            .data::<crate::link_extract::LinkExtractApi>()?
-            .get_extracted_link(&self.url)
-            .await)
+        Some(
+            async {
+                ctx.data::<crate::link_extract::LinkExtractApi>()?
+                    .get_extracted_link(&self.url)
+                    .await
+            }
+            .await,
+        )
     }
 }
 
@@ -34,15 +41,18 @@ pub struct ExtractedLink {
 
 #[ComplexObject]
 impl ExtractedLink {
-    async fn inlined_favicon(&self, ctx: &Context<'_>) -> async_graphql::Result<Option<String>> {
+    async fn inlined_favicon(&self, ctx: &Context<'_>) -> Option<async_graphql::Result<String>> {
         match &self.favicon {
-            Some(favicon) if favicon.starts_with("data:") => Ok(Some(favicon.clone())),
-            Some(favicon) if favicon.starts_with("http") => Ok(Some(
-                ctx.data::<crate::image_inline::ImageInlineApi>()?
-                    .get_inlined_image(favicon)
-                    .await?,
-            )),
-            _ => Ok(None),
+            Some(favicon) if favicon.starts_with("data:") => Some(Ok(favicon.clone())),
+            Some(favicon) if favicon.starts_with("http") => Some(
+                async {
+                    ctx.data::<crate::image_inline::ImageInlineApi>()?
+                        .get_inlined_image(favicon)
+                        .await
+                }
+                .await,
+            ),
+            _ => None,
         }
     }
 }

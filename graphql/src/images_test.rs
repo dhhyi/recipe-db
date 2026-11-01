@@ -2,6 +2,7 @@ use async_graphql::{Request, UploadValue, Variables};
 use axum::{
     extract::{Path, Query},
     http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -74,16 +75,90 @@ async fn image_metadata_passthrough_and_upstream_errors() {
         .route(
             "/ratings/{id}",
             get(
-                |Path(_id): Path<String>,
+                |Path(id): Path<String>,
                  Query(query): Query<HashMap<String, String>>| async move {
                     if let Some(user_id) = query.get("userId") {
                         assert_eq!(user_id, "credential-free:v1");
-                        Json(json!({"rating": null}))
+                        (StatusCode::OK, Json(json!({"rating": null})))
+                    } else if id == "offline" {
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({"detail": "Unavailable", "code": "unavailable"})),
+                        )
                     } else {
-                        Json(json!({"rating": 4.0, "count": 2}))
+                        (
+                            StatusCode::OK,
+                            Json(json!({"rating": 4.0, "count": 2})),
+                        )
                     }
                 },
             ),
+        )
+        .route(
+            "/inspirations/{id}",
+            get(|Path(id): Path<String>| async move {
+                if id == "offline" {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"detail": "Unavailable", "code": "unavailable"})),
+                    )
+                } else if id == "link-offline" {
+                    (
+                        StatusCode::OK,
+                        Json(json!(["https://example.test/extract-offline"])),
+                    )
+                } else if id == "inline-offline" {
+                    (
+                        StatusCode::OK,
+                        Json(json!(["https://example.test/inline-offline"])),
+                    )
+                } else if id == "absent" {
+                    (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({
+                            "detail": "Inspiration not found",
+                            "code": "inspiration-not-found"
+                        })),
+                    )
+                } else {
+                    (StatusCode::OK, Json(json!([])))
+                }
+            }),
+        )
+        .route(
+            "/link-extract",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                if query["url"].ends_with("extract-offline") {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"detail": "Unavailable", "code": "unavailable"})),
+                    )
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "url": query["url"],
+                            "canonical": query["url"],
+                            "favicon": "https://example.test/favicon.png",
+                            "title": "Example"
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/image-inline/",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                if query["url"].ends_with("favicon.png") {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({"detail": "Unavailable", "code": "unavailable"})),
+                    )
+                        .into_response()
+                } else {
+                    "data:image/png;base64,ZmFrZQ==".into_response()
+                }
+            }),
         )
         .route("/images/{id}", post(|Path(id): Path<String>, Query(query): Query<HashMap<String, String>>, headers: HeaderMap, body: axum::body::Bytes| async move {
             assert_eq!(body.as_ref(), std::fs::read("testdata/image.svg").unwrap());
@@ -155,6 +230,18 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                 }}})
             );
         }
+        if id == "offline" {
+            let extensions = result.errors[0].extensions.as_ref().unwrap();
+            assert_eq!(
+                extensions.get("code"),
+                Some(&async_graphql::value!("service-unavailable"))
+            );
+            assert_eq!(extensions.get("status"), Some(&async_graphql::value!(503)));
+            assert_eq!(
+                extensions.get("service"),
+                Some(&async_graphql::value!("images"))
+            );
+        }
     }
     let response = schema
         .execute(
@@ -206,8 +293,139 @@ async fn image_metadata_passthrough_and_upstream_errors() {
     ));
     assert_eq!(
         result.data.into_json().unwrap(),
-        json!({"recipe": {"id": "offline"}})
+        json!({"recipe": {"id": "offline", "image": null}})
     );
+    let response = schema
+        .execute(
+            Request::new(
+                r#"{ myCapabilities { role } recipe(id: "offline") { id name rating { average } image { url } inspirations { url } } }"#,
+            )
+            .data(crate::test_context("owner")),
+        )
+        .await;
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({
+            "myCapabilities": {"role": "owner"},
+            "recipe": {
+                "id": "offline",
+                "name": "Test",
+                "rating": null,
+                "image": null,
+                "inspirations": null
+            }
+        })
+    );
+    assert_eq!(response.errors.len(), 3);
+    for error in &response.errors {
+        let async_graphql::PathSegment::Field(field) = error.path.last().unwrap() else {
+            panic!("expected an error on an enrichment field: {error:?}");
+        };
+        let service = match field.as_str() {
+            "rating" => "ratings",
+            "image" => "images",
+            "inspirations" => "inspirations",
+            field => panic!("unexpected enrichment error field {field}"),
+        };
+        assert!(matches!(
+            error.path.as_slice(),
+            [
+                async_graphql::PathSegment::Field(recipe),
+                async_graphql::PathSegment::Field(actual)
+            ] if recipe == "recipe" && actual == field.as_str()
+        ));
+        let extensions = error.extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!("service-unavailable"))
+        );
+        assert_eq!(extensions.get("status"), Some(&async_graphql::value!(503)));
+        assert_eq!(
+            extensions.get("service"),
+            Some(&async_graphql::Value::from(service))
+        );
+    }
+    let response = schema
+        .execute(
+            Request::new(r#"{ recipe(id: "absent") { inspirations { url } } }"#)
+                .data(crate::test_context("owner")),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"recipe": {"inspirations": []}})
+    );
+    for (id, failed_field, service) in [
+        ("link-offline", "extracted", "link-extract"),
+        ("inline-offline", "inlinedFavicon", "image-inline"),
+    ] {
+        let response = schema
+            .execute(
+                Request::new(format!(
+                    r#"{{ recipe(id: "{id}") {{ name inspirations {{ url extracted {{ title inlinedFavicon }} }} }} }}"#
+                ))
+                .data(crate::test_context("owner")),
+            )
+            .await;
+        assert_eq!(response.errors.len(), 1, "{id}");
+        let error = &response.errors[0];
+        let expected = if failed_field == "extracted" {
+            vec![
+                async_graphql::PathSegment::Field("recipe".into()),
+                async_graphql::PathSegment::Field("inspirations".into()),
+                async_graphql::PathSegment::Index(0),
+                async_graphql::PathSegment::Field("extracted".into()),
+            ]
+        } else {
+            vec![
+                async_graphql::PathSegment::Field("recipe".into()),
+                async_graphql::PathSegment::Field("inspirations".into()),
+                async_graphql::PathSegment::Index(0),
+                async_graphql::PathSegment::Field("extracted".into()),
+                async_graphql::PathSegment::Field("inlinedFavicon".into()),
+            ]
+        };
+        assert_eq!(error.path, expected, "{id}");
+        let extensions = error.extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!("service-unavailable"))
+        );
+        assert_eq!(extensions.get("status"), Some(&async_graphql::value!(503)));
+        assert_eq!(
+            extensions.get("service"),
+            Some(&async_graphql::Value::from(service))
+        );
+        let data = response.data.into_json().unwrap();
+        assert_eq!(data["recipe"]["name"], "Test");
+        assert_eq!(
+            data["recipe"]["inspirations"][0]["url"],
+            format!(
+                "https://example.test/{}-offline",
+                if id == "link-offline" {
+                    "extract"
+                } else {
+                    "inline"
+                }
+            )
+        );
+        if failed_field == "extracted" {
+            assert_eq!(
+                data["recipe"]["inspirations"][0]["extracted"],
+                serde_json::Value::Null
+            );
+        } else {
+            assert_eq!(
+                data["recipe"]["inspirations"][0]["extracted"]["title"],
+                "Example"
+            );
+            assert_eq!(
+                data["recipe"]["inspirations"][0]["extracted"]["inlinedFavicon"],
+                serde_json::Value::Null
+            );
+        }
+    }
     for (id, expect_error) in [("deleted", false), ("unrouted-recipe", true)] {
         let result = schema
             .execute(

@@ -76,15 +76,30 @@ async fn search(
     let mut fixture = fixture.lock().unwrap();
     fixture.requests.push(options.clone());
     let page = options["page"].as_u64().unwrap() as usize;
-    if fixture.mode == "failed-first" || (fixture.mode == "failed-page" && page == 2) {
+    if fixture.mode == "failed-first"
+        || (fixture.mode == "failed-page" && page == 2)
+        || matches!(
+            fixture.mode.as_str(),
+            "failed-502" | "failed-503" | "failed-504"
+        )
+    {
+        let status = match fixture.mode.as_str() {
+            "failed-502" => StatusCode::BAD_GATEWAY,
+            "failed-504" => StatusCode::GATEWAY_TIMEOUT,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        };
         return (
-            StatusCode::SERVICE_UNAVAILABLE,
+            status,
             Json(json!({"detail": "Search unavailable", "code": "search-unavailable"})),
         );
     }
-    let mut ids = ((page - 1) * 100..fixture.count.min(page * 100))
-        .map(|index| format!("match-{index:04}"))
-        .collect::<Vec<_>>();
+    let mut ids = if fixture.mode == "offline-recipe-in-search" {
+        vec!["match-0000".to_string(), "offline".to_string()]
+    } else {
+        ((page - 1) * 100..fixture.count.min(page * 100))
+            .map(|index| format!("match-{index:04}"))
+            .collect::<Vec<_>>()
+    };
     if fixture.mode == "duplicates" && page == 2 {
         ids[0] = "match-0000".into();
     }
@@ -281,8 +296,9 @@ async fn similarity_errors_never_return_successful_partial_ids() {
         if mode == "failed-page" {
             assert_eq!(fixture.lock().unwrap().requests.len(), 2);
             let extensions = response.errors[0].extensions.as_ref().unwrap();
-            assert_eq!(extensions.get("code"), Some(&"search-unavailable".into()));
+            assert_eq!(extensions.get("code"), Some(&"service-unavailable".into()));
             assert_eq!(extensions.get("status"), Some(&503.into()));
+            assert_eq!(extensions.get("service"), Some(&"search".into()));
         }
         if matches!(mode, "cutoff" | "camel-cutoff") {
             let extensions = response.errors[0].extensions.as_ref().unwrap();
@@ -290,6 +306,119 @@ async fn similarity_errors_never_return_successful_partial_ids() {
             assert_eq!(extensions.get("status"), Some(&503.into()));
         }
     }
+}
+
+#[tokio::test]
+async fn search_outage_preserves_unrelated_root_fields() {
+    let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+    let fixture = Arc::new(Mutex::new(Fixture {
+        count: 1,
+        mode: "failed-first".into(),
+        ..Default::default()
+    }));
+    let _server = start(fixture).await;
+    let schema = crate::schema::build_schema(crate::mode::RuntimeMode::Testing, None);
+    let response = schema
+        .execute(
+            Request::new(
+                "query($options: JSON!) { myCapabilities { role } searchRecipes(options: $options) { found } }",
+            )
+            .variables(Variables::from_json(json!({"options": {"page": 1}})))
+            .data(crate::test_context("anonymous")),
+        )
+        .await;
+
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"myCapabilities": {"role": "anonymous"}, "searchRecipes": null})
+    );
+    assert_eq!(response.errors.len(), 1);
+    assert_eq!(
+        response.errors[0].path,
+        vec![async_graphql::PathSegment::Field("searchRecipes".into())]
+    );
+    let extensions = response.errors[0].extensions.as_ref().unwrap();
+    assert_eq!(extensions.get("code"), Some(&"service-unavailable".into()));
+    assert_eq!(extensions.get("status"), Some(&503.into()));
+    assert_eq!(extensions.get("service"), Some(&"search".into()));
+}
+
+#[tokio::test]
+async fn gateway_outage_statuses_use_the_canonical_service_error() {
+    let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+    let fixture = Arc::new(Mutex::new(Fixture::default()));
+    let _server = start(fixture.clone()).await;
+    let schema = crate::schema::build_schema(crate::mode::RuntimeMode::Testing, None);
+
+    for mode in ["failed-502", "failed-503", "failed-504"] {
+        *fixture.lock().unwrap() = Fixture {
+            mode: mode.into(),
+            ..Default::default()
+        };
+        let response = schema
+            .execute(
+                Request::new(
+                    "query($options: JSON!) { searchRecipes(options: $options) { found } }",
+                )
+                .variables(Variables::from_json(json!({"options": {"page": 1}})))
+                .data(crate::test_context("anonymous")),
+            )
+            .await;
+        assert_eq!(
+            response.data.into_json().unwrap(),
+            json!({"searchRecipes": null}),
+            "{mode}"
+        );
+        let extensions = response.errors[0].extensions.as_ref().unwrap();
+        assert_eq!(extensions.get("code"), Some(&"service-unavailable".into()));
+        assert_eq!(extensions.get("status"), Some(&503.into()));
+        assert_eq!(extensions.get("service"), Some(&"search".into()));
+        assert!(!response.errors[0].message.contains("Search unavailable"));
+    }
+}
+
+#[tokio::test]
+async fn one_unavailable_search_result_preserves_sibling_recipes() {
+    let _lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+    let fixture = Arc::new(Mutex::new(Fixture {
+        count: 2,
+        mode: "offline-recipe-in-search".into(),
+        ..Default::default()
+    }));
+    let _server = start(fixture).await;
+    let schema = crate::schema::build_schema(crate::mode::RuntimeMode::Testing, None);
+    let response = schema
+        .execute(
+            Request::new(
+                "query($options: JSON!) { searchRecipes(options: $options) { recipes { id name } found } }",
+            )
+            .variables(Variables::from_json(json!({"options": {"page": 1}})))
+            .data(crate::test_context("anonymous")),
+        )
+        .await;
+
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({
+            "searchRecipes": {
+                "recipes": [{"id": "match-0000", "name": "Source"}, null],
+                "found": 2
+            }
+        })
+    );
+    assert_eq!(response.errors.len(), 1);
+    assert_eq!(
+        response.errors[0].path,
+        vec![
+            async_graphql::PathSegment::Field("searchRecipes".into()),
+            async_graphql::PathSegment::Field("recipes".into()),
+            async_graphql::PathSegment::Index(1),
+        ]
+    );
+    let extensions = response.errors[0].extensions.as_ref().unwrap();
+    assert_eq!(extensions.get("code"), Some(&"service-unavailable".into()));
+    assert_eq!(extensions.get("status"), Some(&503.into()));
+    assert_eq!(extensions.get("service"), Some(&"recipes".into()));
 }
 
 #[tokio::test]
@@ -331,6 +460,12 @@ async fn similarity_source_and_tags_failures_are_distinct_from_empty_success() {
             assert_eq!(extensions.get("code"), Some(&"recipe-not-found".into()));
             assert_eq!(extensions.get("field"), Some(&"recipeId".into()));
             assert_eq!(extensions.get("status"), Some(&404.into()));
+        }
+        if id == "tags-offline" {
+            let extensions = response.errors[0].extensions.as_ref().unwrap();
+            assert_eq!(extensions.get("code"), Some(&"service-unavailable".into()));
+            assert_eq!(extensions.get("status"), Some(&503.into()));
+            assert_eq!(extensions.get("service"), Some(&"tags".into()));
         }
     }
     *fixture.lock().unwrap() = Fixture::default();

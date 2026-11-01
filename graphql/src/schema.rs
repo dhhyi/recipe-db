@@ -104,6 +104,18 @@ mod tests {
     }
 
     #[test]
+    fn availability_fields_are_non_null() {
+        let sdl = build_schema(RuntimeMode::Testing, None).sdl();
+        for field in [
+            "onlineServices: [String!]!",
+            "isServiceOnline(name: String!): Boolean!",
+            "allServicesOnline(names: [String!]!): Boolean!",
+        ] {
+            assert!(sdl.contains(field), "schema is missing {field}");
+        }
+    }
+
+    #[test]
     fn categorized_tags_are_exposed_without_changing_recipe_inputs() {
         let sdl = build_schema(RuntimeMode::Testing, None).sdl();
         for field in [

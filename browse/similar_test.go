@@ -77,11 +77,14 @@ func similarTestHandler(t *testing.T, backend *similarTestBackend) http.Handler 
 			case backend.fail:
 				response["errors"] = []any{map[string]any{
 					"message": "recipes unavailable", "path": []string{"recipe"},
-					"extensions": map[string]any{"code": "service-unavailable", "status": 503},
+					"extensions": map[string]any{"code": "service-unavailable", "status": 503, "service": "recipes"},
 				}}
 			case backend.tagError:
 				recipe.(map[string]any)["tags"] = nil
-				response["errors"] = []any{map[string]any{"message": "tags unavailable", "path": []string{"recipe", "tags"}}}
+				response["errors"] = []any{map[string]any{
+					"message": "tags unavailable", "path": []string{"recipe", "tags"},
+					"extensions": map[string]any{"code": "service-unavailable", "status": 503, "service": "tags"},
+				}}
 			case backend.denied:
 				response["data"] = map[string]any{"recipe": nil}
 				response["errors"] = []any{map[string]any{
