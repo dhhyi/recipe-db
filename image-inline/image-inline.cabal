@@ -19,6 +19,7 @@ executable image-inline
     http-client-tls,
     http-types,
     scotty,
-    text
+    text,
+    unix
   default-language: Haskell2010
   ghc-options: -Wall -threaded -optl-static -optl-pthread
