@@ -96,9 +96,8 @@ if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = format-c
         }
       ' | jq -Rrs '@sh')
       run_command="function format-check-copy
-sh -c $format_check_script format-check-copy \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] \$format_inputs
+sh -c $format_check_script format-check-copy \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] $format_inputs
 end
-set --local format_inputs $format_inputs
 set --local format_apply $format_apply
 $run_command"
     fi

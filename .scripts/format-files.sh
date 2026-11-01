@@ -21,7 +21,7 @@ fi
 while IFS= read -r -d '' file; do
   [[ -f "$file" ]] || continue
   if [[ ${2:-} == --shell || ${2:-} == --inputs ]]; then
-    jq -rj --arg file "${file#"$project/"}" '($file | @sh) + " "'
+    jq -nrj --arg file "${file#"$project/"}" '($file | @sh) + " "'
   else
     printf '%s\0' "${file#"$project/"}"
   fi

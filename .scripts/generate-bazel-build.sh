@@ -121,6 +121,12 @@ for project_file in */.project.yaml; do
       formatting_inputs+=("$file")
       formatting_included["$file"]=1
     done
+    for file in "$project/.devcontainer/devcontainer.json" "$project/.devcontainer/Dockerfile"; do
+      if [[ -f "$file" && -z ${formatting_included["$file"]+x} ]]; then
+        formatting_inputs+=("$file")
+        formatting_included["$file"]=1
+      fi
+    done
     resolved=$(mktemp)
     if ! bash .scripts/format-files.sh "$project" > "$resolved"; then
       rm -f "$resolved"
@@ -138,11 +144,11 @@ for project_file in */.project.yaml; do
 
   if [[ -n "$check" ]]; then
     emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-check.sh "$generation_dependency" "${files[@]}"
-    check_dependency=$generation_dependency
+    precommit_files=("${files[@]}")
     if [[ -n "$format" ]]; then
-      check_dependency="${project}_format_check"
+      precommit_files+=(":${project}_format_check")
     fi
-    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$check_dependency" "${files[@]}"
+    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$generation_dependency" "${precommit_files[@]}"
   fi
 done
 

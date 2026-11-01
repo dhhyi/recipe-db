@@ -96,6 +96,7 @@ devcontainer:
 tooling:
   tests:
     - .scripts/tests/generate-bazel-build.bats
+    - .scripts/tests/format-check.bats
     - .scripts/tests/sync-ignore-files.bats
     - .scripts/tests/sync-tailwind.bats
     - .scripts/tests/merge-graphql-schemas.bats
@@ -103,6 +104,11 @@ tooling:
   inputs:
     - .scripts/generate-bazel-build.sh
     - .scripts/format-files.sh
+    - .scripts/format-check.sh
+    - .scripts/project-schema.json
+    - .scripts/format-bazel.sh
+    - .scripts/run-in-devcontainer.sh
+    - .scripts/bazel.sh
     - .scripts/sync-ignore-files.sh
     - .scripts/sync-tailwind.sh
     - .scripts/merge-graphql-schemas.sh

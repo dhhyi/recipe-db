@@ -35,6 +35,51 @@ EOF
   run -1 grep -E '^(devcontainer up|docker (stop|rm))' "$MOCK_LOG"
 }
 
+@test "format check and apply receive identical sorted globs including additions and removals" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  check: printf '%s\n' $argv
+  apply: printf '%s\n' $argv
+  files: ["**/*.txt", "nested/*.txt"]
+EOF
+  mkdir -p example/nested
+  touch "example/a file.txt" example/nested/b.txt example/ignored.txt example/other.md
+  printf '%s\n' ignored.txt > example/.gitignore
+
+  for change in initial added removed; do
+    case "$change" in
+      added) touch example/nested/new.txt ;;
+      removed) rm example/nested/b.txt ;;
+    esac
+    for operation in format format-check; do
+      : > "$MOCK_LOG"
+      run sh .scripts/run-in-devcontainer.sh example "$operation"
+      [ "$status" -eq 0 ]
+      sed -n 's/^.*set --local argv/set --local argv/p' "$MOCK_LOG" > "$operation-args"
+    done
+    cmp format-args format-check-args
+    grep -F "'a file.txt' 'nested/" format-args
+    run -1 grep -E "ignored.txt|other.md" format-args
+  done
+  grep -F "'nested/new.txt'" format-args
+  run -1 grep -F "'nested/b.txt'" format-args
+}
+
+@test "invalid format globs fail before container discovery" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  check: echo check
+  apply: echo apply
+  files: ["../outside.txt"]
+EOF
+
+  run sh .scripts/run-in-devcontainer.sh example format
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Invalid format.files"* ]]
+  [ ! -s "$MOCK_LOG" ]
+}
+
 @test "serializes overlapping invocations through container cleanup" {
   gate="$FIXTURE_ROOT/exec-gate"
   env EXEC_GATE="$gate" timeout 10 sh .scripts/run-in-devcontainer.sh example echo first > first.log 2>&1 &

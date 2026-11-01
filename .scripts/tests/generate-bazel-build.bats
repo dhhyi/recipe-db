@@ -219,3 +219,38 @@ EOF
   [ "$status" -eq 0 ]
   [ -z "$output" ]
 }
+
+@test "format checks model source config command tool and file membership independently of docs" {
+  mkdir other
+  cp example/.project.yaml other/.project.yaml
+  mkdir -p example/.devcontainer
+  printf '%s\n' '.devcontainer/' > example/.gitignore
+  touch example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile
+  touch other/main.txt example/Dockerfile example/formatter.conf
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > original-example
+  sed -n '/name = "other_format_check"/,/^)/p' BUILD.bazel > original-other
+  for input in example/main.txt example/.project.yaml example/Dockerfile example/formatter.conf \
+    example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile \
+    .scripts/format-files.sh .scripts/format-check.sh .scripts/run-in-devcontainer.sh mise.toml; do
+    grep -Fx "        \"$input\"," original-example
+  done
+  run -1 grep -E 'tar|:example_generate|:example_format"' original-example
+
+  touch README.md example/README.md other/README.md
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > current-example
+  cmp original-example current-example
+
+  touch example/new.txt
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > current-example
+  grep -Fx '        "example/new.txt",' current-example
+  sed -n '/name = "other_format_check"/,/^)/p' BUILD.bazel > current-other
+  cmp original-other current-other
+
+  rm example/new.txt
+  bash .scripts/generate-bazel-build.sh
+  sed -n '/name = "example_format_check"/,/^)/p' BUILD.bazel > current-example
+  cmp original-example current-example
+}
