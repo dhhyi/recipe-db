@@ -11,7 +11,22 @@ The production manifest renderer consumes the same project metadata and immutabl
 - Use a published `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 hex digits>` artifact, not a mutable tag or an individual application image. The driver validates the artifact shape, source, revision and complete image inventory.
 - No development Compose generation or development authentication fixture is needed. Do not copy fixture credentials into production.
 
-The local identity is deliberately narrow: target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. A different configured `httpPort` is supported only with its matching loopback origin; set `apiPort` independently when its default is occupied. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
+The default local identity is target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. Additional isolated local clusters may use names prefixed `recipe-db-rehearsal-` and matching `k3d-<cluster>` contexts, which allows source and fresh-target recovery rehearsals to remain distinct. A different configured `httpPort` is supported only with its matching loopback origin; set `apiPort` independently when its default is occupied. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
+
+### End-to-end backup and recovery rehearsal
+
+The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It checks populated-target refusal without changing a marker, validates recipe/rating/inspiration/tag and image-pair reads, confirms a post-restore change reaches fresh search consumers, and cleans up its own records through the backup lifecycle. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
+
+Use an immutable release artifact whose revision matches the checkout, after ensuring the host has the production-k3d prerequisites above:
+
+```sh
+mkdir -p "$PWD/.backups"
+RESULT="$PWD/.backups/backup-recovery-$(date -u +%Y%m%dT%H%M%SZ)"
+RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+mise run production-backup-recovery-k3d "$RELEASE" "$RESULT"
+```
+
+The runner preserves both clusters and private diagnostics on success and failure; generated credentials and values are under `$RESULT/secrets`. Inspect the result JSON and logs before removing the result directory. To remove either cluster, use its saved values file with `production-k3d delete` and the exact `DELETE-<cluster>-AND-ALL-DATA` confirmation. The other injected lifecycle, packaging, upload, and restore failure contracts are exercised by the `deploy` script regression group.
 
 ### Runtime mode
 
@@ -58,7 +73,7 @@ mkdir -p "$PWD/.backups"
 mise run production-k3d backup "$VALUES" "$RELEASE" "$SNAPSHOT"
 ```
 
-The operation stops and drains the normal GraphQL Pods first, then raises the `MODE=backup` barrier before touching data backends. GraphQL drains active connections for at most 20 seconds, within Kubernetes' 30-second default termination grace period. A resource-versioned Pod watch must observe normal termination; a missing termination record, failed drain, OOM or SIGKILL prohibits capture. It stops normal backend/projection workloads before bringing up any authoritative backup-mode backend. The rendered `backup-cleanup` Job runs once: its existing worker retries each retryable operation once plus two retries, without repeating permanent failures or duplicating cleanup logic. Completed purges are not rolled back on failure.
+The operation stops and drains the normal GraphQL Pods first, then raises the `MODE=backup` barrier before touching data backends. GraphQL drains active connections for at most 20 seconds; backend and API Pods have a 120-second termination grace period for bounded shutdown. A resource-versioned Pod watch must observe normal termination; a missing termination record, failed drain, OOM or SIGKILL prohibits capture. It stops normal backend/projection workloads before bringing up any authoritative backup-mode backend. The rendered `backup-cleanup` Job runs once: its existing worker retries each retryable operation once plus two retries, without repeating permanent failures or duplicating cleanup logic. Completed purges are not rolled back on failure.
 
 After cleanup, all remaining data writers terminate before role-selected PVCs are exported with temporary read-only copy Pods. `.project.yaml` supplies both `backupRole` and `backupData` (SQLite, JSON or image-manifest layout). Capture rejects missing databases, undeclared files/directories, links, unsafe archive paths, and missing, corrupted or unselected image pairs. Recipes, ratings, inspirations, tags inventory/assignments, SQLite recovery sidecars and current image/thumbnail pairs are included. Derived/external caches, logs, container images, OS/k3s state and secrets are excluded. An empty image dataset still requires both owned storage directories. No archive is published if cleanup, termination or copy validation fails.
 

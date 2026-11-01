@@ -5,6 +5,7 @@ load test_helper
 setup() {
   setup_fixture lib/production-restore.sh
   export FIXTURE_ROOT
+  export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   use_mise_tools
   setup_mock_bin
   cp "$BATS_TEST_DIRNAME/../validate-backup-snapshot.py" .scripts/

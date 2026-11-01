@@ -42,7 +42,9 @@ production_config() {
     and (.timeoutSeconds | type == "number" and floor == . and . >= 1 and . <= 3600)
     and (.origin | type == "string" and test("^https?://[a-zA-Z0-9.-]+(:[0-9]+)?$"))
     and (if .target == "local" then
-      .cluster == "recipe-db-rehearsal" and .context == "k3d-recipe-db-rehearsal"
+      (.cluster == "recipe-db-rehearsal" or
+        (.cluster | test("^recipe-db-rehearsal-[a-z0-9][a-z0-9-]*$")))
+      and .context == ("k3d-" + .cluster)
       and .origin == ("http://127.0.0.1:" + (.httpPort | tostring))
       and .storageClass == "local-path"
     else .context != "k3d-recipe-db-rehearsal" and .storageClass == "recipe-db-retained" end)

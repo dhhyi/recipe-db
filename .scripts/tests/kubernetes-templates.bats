@@ -242,6 +242,16 @@ render() {
   ' manifests.json
 }
 
+@test "backend and API workloads allow bounded backup termination" {
+  render values.json
+  jq -e --slurpfile projects projects.jsonl '
+    .items as $items |
+    all($projects[] | select(.category == "backend" or .category == "api"); . as $project |
+      any($items[]; .kind == "Deployment" and .metadata.name == $project.name
+        and .spec.template.spec.terminationGracePeriodSeconds == 120))
+  ' manifests.json
+}
+
 @test "tags workload has durable storage and production reset protection" {
   render values.json
   jq -e '

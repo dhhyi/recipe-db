@@ -722,6 +722,26 @@ set_value() {
   run ! grep -q 'oras' "$MOCK_LOG"
 }
 
+@test "local rehearsal accepts distinct guarded cluster identities and rejects unrelated names" {
+  set_value '.cluster="recipe-db-rehearsal-source" |
+    .context="k3d-recipe-db-rehearsal-source" |
+    .httpPort=8081 | .apiPort=6446 | .origin="http://127.0.0.1:8081"'
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+
+  set_value '.cluster="unrelated-cluster" | .context="k3d-unrelated-cluster"'
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
+
+  set_value '.cluster="recipe-db-rehearsal-target" | .context="k3d-other-cluster"'
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"invalid or incomplete production values"* ]]
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+}
+
 @test "HTTPS staging rejects unsafe hostname and unknown CA environment before connection" {
   token_only_values
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan"'
