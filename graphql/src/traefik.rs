@@ -98,11 +98,7 @@ impl TraefikQuery {
         ctx.data::<TraefikApi>()?.get_online_services().await
     }
 
-    async fn is_service_online(
-        &self,
-        ctx: &Context<'_>,
-        name: String,
-    ) -> Result<bool, Error> {
+    async fn is_service_online(&self, ctx: &Context<'_>, name: String) -> Result<bool, Error> {
         let request = match ctx.data::<crate::auth::RequestContext>() {
             Ok(request) => request,
             Err(error) => return Err(error),
