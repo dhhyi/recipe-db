@@ -93,7 +93,10 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: api
 backupRole: derived-stateless
-format: cargo fmt
+format:
+  check: format-check-copy $format_apply $argv
+  apply: rustfmt --edition 2021 --config skip_children=true $argv
+  files: ["**/*.rs"]
 check: |
   cargo --version
   cargo clippy --all-targets -- -D warnings

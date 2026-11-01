@@ -102,7 +102,24 @@
       }
     },
     "format": {
-      "type": "string"
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["check", "apply", "files"],
+      "properties": {
+        "check": { "type": "string", "minLength": 1 },
+        "apply": { "type": "string", "minLength": 1 },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$",
+            "description": "Project-relative Git glob; ** matches zero or more directories. Resolved paths are passed as fish $argv."
+          }
+        }
+      }
     },
     "check": {
       "type": "string"

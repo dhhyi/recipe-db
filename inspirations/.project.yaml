@@ -75,9 +75,12 @@ prettier:
   ignore:
     - "*.lua"
     - "*.rockspec"
-format: |
-  lua-format *.lua -i
-  lua-format *.rockspec -i --column-table-limit=1
+format:
+  check: format-check-copy $format_apply $argv
+  apply: |
+    set sources (string match '*.lua' $argv); if test (count $sources) -gt 0; lua-format $sources -i; or exit $status; end
+    set specs (string match '*.rockspec' $argv); if test (count $specs) -gt 0; lua-format $specs -i --column-table-limit=1; end
+  files: ["*.lua", "*.rockspec"]
 check: |
   lua -v
   luacheck *.lua tests/*.lua

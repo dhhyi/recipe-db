@@ -59,7 +59,10 @@ graphqlSchema: "."
 generate:
   - command: python3 generate_operations.py
     output: src/operations.zig
-format: zig fmt build.zig src
+format:
+  check: format-check-copy $format_apply $argv
+  apply: zig fmt $argv
+  files: ["build.zig", "src/**/*.zig"]
 check: python3 -m unittest -v && zig version && zig fmt --check build.zig src && zig build test && zig build -Doptimize=ReleaseSafe
 prettier:
   ignore:

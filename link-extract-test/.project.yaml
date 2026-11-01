@@ -29,7 +29,10 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-format: robotidy .
+format:
+  check: format-check-copy $format_apply $argv
+  apply: robotidy $argv
+  files: ["**/*.robot", "**/*.resource"]
 check: |
   python3 --version
   robot --dryrun --outputdir target .

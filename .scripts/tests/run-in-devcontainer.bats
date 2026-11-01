@@ -5,9 +5,11 @@ load test_helper
 setup() {
   unset DEVCONTAINER_KEEP_RUNNING
   setup_fixture run-in-devcontainer.sh
+  cp "$BATS_TEST_DIRNAME/../format-files.sh" "$BATS_TEST_DIRNAME/../format-check.sh" .scripts/
   setup_mock_bin
   install_mock devcontainer-docker.sh docker
   install_mock devcontainer-cli.sh devcontainer
+  git init -q
   mkdir example
   cat > example/.project.yaml << 'EOF'
 name: example

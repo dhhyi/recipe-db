@@ -59,9 +59,15 @@ if [ ! -f "$project_file" ]; then
   exit 1
 fi
 
-if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
+format_arguments=
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = format-check ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
   if [ "$1" = generate ]; then
     script=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[].command' "$project_file")
+  elif [ "$1" = format ] || [ "$1" = format-check ]; then
+    operation=apply
+    [ "$1" != format-check ] || operation=check
+    script=$(yq eval-all -r "select(documentIndex == 1) | .format.$operation // \"\"" "$project_file")
+    format_arguments=$(bash "$project_root/.scripts/format-files.sh" "$project" --shell)
   else
     script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
   fi
@@ -76,6 +82,27 @@ if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ] 
       seen = 1
     }
   ')
+  if [ "$1" = format ] || [ "$1" = format-check ]; then
+    run_command="set --local argv $format_arguments; if test (count \$argv) -gt 0; $run_command; end"
+    if [ "$1" = format-check ]; then
+      format_inputs=$(bash "$project_root/.scripts/format-files.sh" "$project" --inputs)
+      format_check_script=$(jq -Rrs '@sh' < "$project_root/.scripts/format-check.sh")
+      format_apply=$(yq eval-all -r 'select(documentIndex == 1) | .format.apply' "$project_file")
+      format_apply=$(printf '%s\n' "$format_apply" | awk '
+        NF && $0 !~ /^#/ {
+          if (seen) printf " && "
+          printf "%s", $0
+          seen = 1
+        }
+      ' | jq -Rrs '@sh')
+      run_command="function format-check-copy
+sh -c $format_check_script format-check-copy \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] \$format_inputs
+end
+set --local format_inputs $format_inputs
+set --local format_apply $format_apply
+$run_command"
+    fi
+  fi
 else
   run_command=$*
 fi

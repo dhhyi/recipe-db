@@ -73,7 +73,10 @@ prettier:
   ignore:
     - "*.nim"
     - "*.nimble"
-format: nimpretty server.nim
+format:
+  check: format-check-copy $format_apply $argv
+  apply: for file in $argv; nimpretty "$file"; or exit $status; end
+  files: ["server.nim"]
 check: |
   nim --version
   nimble build -d:release -y --threads:off

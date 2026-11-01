@@ -62,12 +62,12 @@ jobs:
           restore-keys: |
             bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-
 
-      - name: format project files
+      - name: check project formatting
         run: |
-          pnpm exec prettier --log-level warn --write .
+          pnpm exec prettier --log-level warn --check .
           echo "::group::generate format targets"
           mise run --raw generate-bazel-build
-          targets=$(mise run --raw bazel query 'attr(name, "_format$", //:all)')
+          targets=$(mise run --raw bazel query 'attr(name, "_format_check$", //:all)')
           mapfile -t format_targets <<< "$targets"
           echo "::endgroup::"
           mise run --raw bazel build \
@@ -79,13 +79,6 @@ jobs:
             --action_env=COMPOSE_PARALLEL_LIMIT \
             --action_env=DEVCONTAINER_KEEP_RUNNING \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
-          echo "::group::extract formatted files and check diff"
-          for target in "${format_targets[@]}"; do
-            project=${target#//:}
-            tar -xf "bazel-bin/${project%_format}-format.tar"
-          done
-          git diff --exit-code
-          echo "::endgroup::"
 
       - name: Bazel precommit checks and unit tests
         run: |

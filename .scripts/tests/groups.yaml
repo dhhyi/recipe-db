@@ -88,6 +88,8 @@ devcontainer:
     - .scripts/tests/run-integration-tests.bats
   inputs:
     - .scripts/run-in-devcontainer.sh
+    - .scripts/format-files.sh
+    - .scripts/format-check.sh
     - .scripts/run-integration-tests.sh
     - .scripts/tests/mocks/devcontainer-*
     - .scripts/tests/mocks/integration-*
@@ -100,6 +102,7 @@ tooling:
     - .scripts/tests/check-forbidden-files.bats
   inputs:
     - .scripts/generate-bazel-build.sh
+    - .scripts/format-files.sh
     - .scripts/sync-ignore-files.sh
     - .scripts/sync-tailwind.sh
     - .scripts/merge-graphql-schemas.sh

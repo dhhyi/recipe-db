@@ -21,11 +21,11 @@ tasks.withType(Test).configureEach {
 
 spotless {
 	groovy {
-		target 'src/**/*.groovy'
+		target providers.gradleProperty('spotlessFiles').map { it.split(',').findAll { it.endsWith('.groovy') } }.getOrElse(['src/**/*.groovy'])
 		greclipse()
 	}
 	groovyGradle {
-		target '*.gradle'
+		target providers.gradleProperty('spotlessFiles').map { it.split(',').findAll { it.endsWith('.gradle') } }.getOrElse(['*.gradle'])
 		greclipse()
 	}
 }

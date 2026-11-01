@@ -47,30 +47,17 @@ pnpm exec prettier --log-level warn --write .
 
 format_targets=()
 check_targets=()
-format_archives=()
 check_archives=()
 for project in "${projects[@]}"; do
+  format=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .format.check // ""' "$project/.project.yaml")
+  if [[ -n "$format" ]]; then
+    format_targets+=("//:${project}_format_check")
+  fi
   check=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project/.project.yaml")
   if [[ -n "$check" ]]; then
-    format=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .format // ""' "$project/.project.yaml")
-    format_needed=false
-    for file in "${staged_files[@]}"; do
-      case "$file" in
-        "$project/.project.yaml" | "$project/.gitignore" | "$project/.dockerignore" | "$project/Dockerfile" | "$project/README.md") ;;
-        "$project"/*)
-          format_needed=true
-          break
-          ;;
-      esac
-    done
-    if [[ -n "$format" && "$format_needed" == true ]]; then
-      format_targets+=("//:${project}_format")
-      format_archives+=("bazel-bin/$project-format.tar")
-    else
-      generators=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project/.project.yaml")
-      if [[ "$generators" -gt 0 ]]; then
-        check_archives+=("bazel-bin/$project-generate.tar")
-      fi
+    generators=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project/.project.yaml")
+    if [[ "$generators" -gt 0 ]]; then
+      check_archives+=("bazel-bin/$project-generate.tar")
     fi
     check_targets+=("//:${project}_check")
   fi
@@ -78,12 +65,25 @@ done
 
 mise run --raw generate-bazel-build
 
-if ((${#format_targets[@]} > 0)); then
-  mise run --raw bazel build --action_env=PATH --jobs=1 "${format_targets[@]}"
-  for archive in "${format_archives[@]}"; do
-    tar -xf "$archive"
-  done
-fi
+format_log=$(mktemp)
+trap 'rm -f "$format_log"' EXIT
+for target in "${format_targets[@]}"; do
+  if mise run --raw bazel build --action_env=PATH --jobs=1 "$target" > "$format_log" 2>&1; then
+    cat "$format_log"
+    continue
+  else
+    status=$?
+  fi
+  cat "$format_log"
+  project=${target#//:}
+  project=${project%_format_check}
+  if ! grep -Fxq "PROJECT_FORMAT_UNFORMATTED:$project" "$format_log"; then
+    exit "$status"
+  fi
+  mise run --raw in-devcontainer "$project" format
+  mise run --raw generate-bazel-build
+  mise run --raw bazel build --action_env=PATH --jobs=1 "$target"
+done
 
 if ((${#check_targets[@]} > 0)); then
   mise run --raw bazel build --action_env=PATH --jobs=1 "${check_targets[@]}"

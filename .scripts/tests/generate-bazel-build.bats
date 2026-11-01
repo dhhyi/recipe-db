@@ -9,10 +9,14 @@ setup() {
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
-format: echo formatted
+format:
+  check: echo checked
+  apply: echo formatted
+  files: ["**/*.txt"]
 check: echo checked
 EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml
   cat > .scripts/tests/groups.yaml << 'EOF'
@@ -78,7 +82,7 @@ EOF
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
-  for target in example_generate example_format example_check example_precommit shellcheck test_scripts_compose test_scripts_tooling; do
+  for target in example_generate example_format_check example_check example_precommit shellcheck test_scripts_compose test_scripts_tooling; do
     sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel > target-rule
     grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
   done
@@ -188,13 +192,13 @@ EOF
   [ ! -s "$MOCK_LOG" ]
 }
 
-@test "generation is deterministic and chains project precommit checks after formatting" {
+@test "generation is deterministic and chains project precommit checks after read-only formatting" {
   run bash .scripts/generate-bazel-build.sh
 
   [ "$status" -eq 0 ]
   cp BUILD.bazel expected.BUILD
   sed -n '/name = "example_precommit"/,/^)/p' BUILD.bazel > precommit-rule
-  grep -Fx '        ":example_format",' precommit-rule
+  grep -Fx '        ":example_format_check",' precommit-rule
 
   run bash .scripts/generate-bazel-build.sh
 

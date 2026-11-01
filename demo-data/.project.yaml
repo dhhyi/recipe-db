@@ -54,7 +54,10 @@ graphqlSchema: "."
 generate:
   - command: ariadne-codegen
     output: graphql_client/**/*.py
-format: black ./*.py
+format:
+  check: format-check-copy $format_apply $argv
+  apply: black $argv
+  files: ["*.py"]
 check: |
   python3 --version
   cspell --locale de-de recipe*.{json,md}
