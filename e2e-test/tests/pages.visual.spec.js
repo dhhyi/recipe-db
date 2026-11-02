@@ -462,6 +462,56 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "recipe-editor.png");
     });
 
+    test("degraded editors", async ({ page, degradedRecipes }) => {
+      test.setTimeout(120_000);
+      const recipe = degradedRecipes[0];
+      await page.goto(`/edit/${recipe.id}`);
+      if (role === "owner") {
+        await expect(
+          page.getByRole("textbox", { name: "Name", exact: true }),
+        ).toHaveValue(recipe.name);
+        await expect(
+          page.getByRole("heading", { name: "Inspirationen", exact: true }),
+        ).toHaveCount(0);
+      } else {
+        await expectEditorDenied(page, role);
+      }
+      await assertNoHorizontalOverflow(page);
+      await screenshot(page, "degraded-recipe-editor.png");
+
+      await page.goto("/edit/new");
+      if (role === "owner") {
+        await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+          "Neues Rezept",
+        );
+        await expect(
+          page.getByRole("heading", { name: "Inspirationen", exact: true }),
+        ).toHaveCount(0);
+      } else {
+        await expectEditorDenied(page, role);
+      }
+      await assertNoHorizontalOverflow(page);
+      await screenshot(page, "degraded-new-recipe.png");
+
+      await page.goto(`/images-edit/${recipe.id}`);
+      if (role === "owner") {
+        await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+          "Bild bearbeiten",
+        );
+        await expect(page.getByRole("status")).toHaveText(
+          "Rezept konnte nicht geladen werden.",
+        );
+        await expect(
+          page.getByLabel("JPEG- oder PNG-Bild auswählen (maximal 10 MiB)"),
+        ).toBeVisible();
+        await expect(page.locator("main img")).toHaveCount(0);
+      } else {
+        await expectEditorDenied(page, role);
+      }
+      await assertNoHorizontalOverflow(page);
+      await screenshot(page, "degraded-image-editor.png");
+    });
+
     test("new recipe form", async ({ page }) => {
       await page.goto("/edit/new");
       if (role === "owner") {
