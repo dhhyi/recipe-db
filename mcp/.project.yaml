@@ -52,7 +52,7 @@ traefik:
 category: frontend
 graphqlSchema: "."
 format:
-  check: format-check-copy $format_apply $argv
+  check: dotnet format --verify-no-changes --include $argv
   apply: dotnet format --include $argv
   files: ["**/*.cs"]
 check: |
