@@ -252,14 +252,30 @@ render() {
   ' manifests.json
 }
 
-@test "search readiness sidecar exits cleanly on TERM" {
+@test "search readiness sidecar exits cleanly on TERM and nginx image stop signal QUIT" {
   render values.json
   command=$(jq -er '
     .items[] | select(.kind == "Deployment" and .metadata.name == "search")
       | .spec.template.spec.containers[] | select(.name == "index-readiness")
       | .command[2]
   ' manifests.json)
-  run timeout 3 sh -c "sh -ec \"\$1\" & child=\$!; sleep 0.1; kill -TERM \"\$child\"; wait \"\$child\"" sh "$command"
+  run python3 -c '
+import signal
+import subprocess
+import sys
+import time
+
+for stop_signal in (signal.SIGTERM, signal.SIGQUIT):
+    child = subprocess.Popen(["sh", "-ec", sys.argv[1]])
+    try:
+        time.sleep(0.1)
+        child.send_signal(stop_signal)
+        assert child.wait(timeout=3) == 0
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+' "$command"
   [ "$status" -eq 0 ]
 }
 
