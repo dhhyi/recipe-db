@@ -31,6 +31,10 @@ emit_rule() {
       printf '        %s,\n' "$(quote .scripts/bazel-artifacts.sh)"
     fi
     printf '        %s,\n' "$(quote .scripts/run-in-devcontainer.sh)"
+    if [[ "$script" == .scripts/format-bazel.sh ]]; then
+      printf '        %s,\n' "$(quote .scripts/format-files.sh)"
+      printf '        %s,\n' "$(quote .scripts/format-check.sh)"
+    fi
     printf '        %s,\n' "$(quote mise.toml)"
     printf '    ],\n'
     printf '    outs = ["%s"],\n' "$archive"
@@ -47,9 +51,9 @@ emit_rule() {
 for project_file in */.project.yaml; do
   project=${project_file%/.project.yaml}
   check=$(yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project_file")
-  format=$(yq eval-all -r 'select(documentIndex == 1) | .format // ""' "$project_file")
+  format_count=$(yq eval-all -r 'select(documentIndex == 1) | .format // [] | length' "$project_file")
   generators=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project_file")
-  [[ -n "$check" || -n "$format" || "$generators" -gt 0 ]] || continue
+  [[ -n "$check" || "$format_count" -gt 0 || "$generators" -gt 0 ]] || continue
 
   files=()
   format_files=()
@@ -107,17 +111,44 @@ for project_file in */.project.yaml; do
     emit_rule "$generation_dependency" "$project-generate.tar" .scripts/generate-bazel.sh "" "${format_files[@]}"
   fi
 
-  if [[ -n "$format" ]]; then
-    emit_rule "${project}_format" "$project-format.tar" .scripts/format-bazel.sh "$generation_dependency" "${format_files[@]}"
+  if [[ "$format_count" -gt 0 ]]; then
+    formatting_inputs=()
+    declare -A formatting_included=()
+    for file in "${format_files[@]}"; do
+      case "$file" in
+        *.md) continue ;;
+      esac
+      formatting_inputs+=("$file")
+      formatting_included["$file"]=1
+    done
+    for file in "$project/.devcontainer/devcontainer.json" "$project/.devcontainer/Dockerfile"; do
+      if [[ -f "$file" && -z ${formatting_included["$file"]+x} ]]; then
+        formatting_inputs+=("$file")
+        formatting_included["$file"]=1
+      fi
+    done
+    resolved=$(mktemp)
+    if ! bash .scripts/format-files.sh "$project" > "$resolved"; then
+      rm -f "$resolved"
+      exit 1
+    fi
+    while IFS= read -r -d '' file; do
+      file="$project/$file"
+      if [[ -z ${formatting_included["$file"]+x} ]]; then
+        formatting_inputs+=("$file")
+      fi
+    done < "$resolved"
+    rm -f "$resolved"
+    emit_rule "${project}_format_check" "$project-format-check.ok" .scripts/format-bazel.sh "" "${formatting_inputs[@]}"
   fi
 
   if [[ -n "$check" ]]; then
     emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-check.sh "$generation_dependency" "${files[@]}"
-    check_dependency=$generation_dependency
-    if [[ -n "$format" ]]; then
-      check_dependency="${project}_format"
+    precommit_files=("${files[@]}")
+    if [[ "$format_count" -gt 0 ]]; then
+      precommit_files+=(":${project}_format_check")
     fi
-    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$check_dependency" "${files[@]}"
+    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$generation_dependency" "${precommit_files[@]}"
   fi
 done
 
