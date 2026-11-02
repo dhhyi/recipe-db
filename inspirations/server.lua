@@ -180,8 +180,8 @@ end
 
 app.add_handler("GET", "/maintenance/status", maintenance_status)
 app.add_handler("GET", "/maintenance/status/", maintenance_status)
-app.add_handler("GET", "/maintenance/recipe-ids", maintenance_recipe_ids)
-app.add_handler("GET", "/maintenance/recipe-ids/", maintenance_recipe_ids)
+app.add_handler("GET", "/maintenance/recipe%-ids", maintenance_recipe_ids)
+app.add_handler("GET", "/maintenance/recipe%-ids/", maintenance_recipe_ids)
 app.add_handler("POST", "/maintenance/recipes/purge", purge_recipe)
 app.add_handler("POST", "/maintenance/recipes/purge/", purge_recipe)
 
