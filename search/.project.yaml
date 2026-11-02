@@ -63,7 +63,7 @@ format:
   - check: zig fmt --check $argv
     apply: zig fmt $argv
     files: ["build.zig", "src/**/*.zig"]
-check: python3 -m unittest -v && zig version && zig fmt --check build.zig src && zig build test && zig build -Doptimize=ReleaseSafe
+check: python3 -m unittest -v && zig version && zig build test && zig build -Doptimize=ReleaseSafe
 prettier:
   ignore:
     - "*.zig"

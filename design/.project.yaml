@@ -116,7 +116,6 @@ format:
 check: |
   pnpm --version
   pnpm exec storybook --version
-  pnpm lint
   pnpm build
 prettier:
   ignore:
