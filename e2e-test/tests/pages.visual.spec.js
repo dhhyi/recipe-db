@@ -108,7 +108,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await page.evaluate(() =>
         customElements.whenDefined("recipe-tile-component"),
       );
-      const placeholders = page.locator("recipe-tile-component .fallback-image");
+      const placeholders = page.locator(
+        "recipe-tile-component .fallback-image",
+      );
       await expect(placeholders).toHaveCount(degradedRecipes.length);
       for (const placeholder of await placeholders.all()) {
         await expect(placeholder).toBeVisible();
@@ -129,7 +131,9 @@ for (const role of ["anonymous", "member", "owner"]) {
         "Salz",
         "(optional) Zimt",
       ]);
-      await expect(page.locator('[itemprop="recipeInstructions"] p')).toHaveText([
+      await expect(
+        page.locator('[itemprop="recipeInstructions"] p'),
+      ).toHaveText([
         "Milchreis und Milch langsam aufkochen.",
         "Unter Rühren garen und mit Salz abschmecken.",
       ]);

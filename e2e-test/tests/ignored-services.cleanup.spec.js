@@ -8,7 +8,8 @@ function requestStub(update) {
       return {
         ok: () => true,
         status: () => 200,
-        text: async () => JSON.stringify({ data: { setIgnoredServices: names } }),
+        text: async () =>
+          JSON.stringify({ data: { setIgnoredServices: names } }),
       };
     },
   };
@@ -20,7 +21,8 @@ for (const failure of ["setup", "test", "cleanup", null]) {
     const request = requestStub(async (names) => {
       calls.push(names);
       if (failure === "setup" && names.length) throw new Error("setup failed");
-      if (failure === "cleanup" && !names.length) throw new Error("cleanup failed");
+      if (failure === "cleanup" && !names.length)
+        throw new Error("cleanup failed");
       return names;
     });
     const attempt = withIgnoredServices(request, ["search"], async () => {
