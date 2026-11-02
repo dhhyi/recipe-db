@@ -76,7 +76,9 @@ prettier:
     - "*.lua"
     - "*.rockspec"
 format:
-  check: format-check-copy $format_apply $argv
+  check: |
+    set sources (string match '*.lua' $argv); if test (count $sources) -gt 0; lua-format --check $sources; or exit $status; end
+    set specs (string match '*.rockspec' $argv); if test (count $specs) -gt 0; lua-format --check --column-table-limit=1 $specs; end
   apply: |
     set sources (string match '*.lua' $argv); if test (count $sources) -gt 0; lua-format $sources -i; or exit $status; end
     set specs (string match '*.rockspec' $argv); if test (count $specs) -gt 0; lua-format $specs -i --column-table-limit=1; end
