@@ -35,3 +35,25 @@ setup() {
   [ "$status" -ne 0 ]
   [ ! -e "$FIXTURE_ROOT/outside" ]
 }
+
+@test "GraphQL reads retry transient routing failures but mutations never retry" {
+  use_mise_tools
+  sed -n '/^graphql_at() {/,/^}/p' .scripts/backup-recovery-k3d.sh > graphql-function.sh
+  # shellcheck source=/dev/null
+  source ./graphql-function.sh
+  export request="$FIXTURE_ROOT/request.json"
+  response="$FIXTURE_ROOT/response.json"
+  printf '{"origin":"http://127.0.0.1"}\n' > values.json
+  export curl_config="$FIXTURE_ROOT/curl.conf"
+  curl() {
+    printf '%s\n' "$@" > "$FIXTURE_ROOT/curl-arguments"
+    printf '{"data":{}}\n' > "$response"
+    printf '200'
+  }
+  graphql_at values.json 'query { tags { id } }'
+  grep -Fxq -- '--retry' "$FIXTURE_ROOT/curl-arguments"
+  grep -Fxq -- '--retry-max-time' "$FIXTURE_ROOT/curl-arguments"
+  graphql_at values.json 'mutation { deleteRecipe(id: "test") }'
+  run grep -Fx -- '--retry' "$FIXTURE_ROOT/curl-arguments"
+  [ "$status" -eq 1 ]
+}

@@ -209,10 +209,15 @@ mark
 
 graphql_at() {
   local values=$1 query=$2 variables=${3:-'{}'} origin status
+  local retry=()
+  if [[ $query == query* ]]; then
+    retry=(--retry 5 --retry-delay 2 --retry-max-time 30 --retry-connrefused)
+  fi
   origin=$(yq -r '.origin' "$values")
   jq -n --arg query "$query" --argjson variables "$variables" \
     '{query:$query,variables:$variables}' > "$request"
   status=$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
+    "${retry[@]}" \
     --config "$curl_config" --header 'Content-Type: application/json' \
     --data-binary "@$request" --output "$response" --write-out '%{http_code}' "$origin/graphql")
   [[ $status == 200 ]] && jq -e '(.errors // [] | length) == 0 and .data != null' \
