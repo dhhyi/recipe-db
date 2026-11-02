@@ -30,7 +30,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 format:
-  check: format-check-copy $format_apply $argv
+  check: robotidy --check $argv
   apply: robotidy $argv
   files: ["**/*.robot", "**/*.resource"]
 check: |
