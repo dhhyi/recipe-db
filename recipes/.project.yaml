@@ -62,7 +62,7 @@ category: backend
 backupRole: authoritative-read-only
 backupData: { kind: sqlite, file: recipes.sqlite3 }
 format:
-  check: format-check-copy $format_apply $argv
+  check: mix format --check-formatted $argv
   apply: mix format $argv
   files:
     [
