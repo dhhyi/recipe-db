@@ -55,7 +55,7 @@ generate:
   - command: ariadne-codegen
     output: graphql_client/**/*.py
 format:
-  check: format-check-copy $format_apply $argv
+  check: black --check $argv
   apply: black $argv
   files: ["*.py"]
 check: |
