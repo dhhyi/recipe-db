@@ -94,7 +94,7 @@ traefik:
 category: api
 backupRole: derived-stateless
 format:
-  check: format-check-copy $format_apply $argv
+  check: rustfmt --check --edition 2021 --config skip_children=true $argv
   apply: rustfmt --edition 2021 --config skip_children=true $argv
   files: ["**/*.rs"]
 check: |
