@@ -252,6 +252,17 @@ render() {
   ' manifests.json
 }
 
+@test "search readiness sidecar exits cleanly on TERM" {
+  render values.json
+  command=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "search")
+      | .spec.template.spec.containers[] | select(.name == "index-readiness")
+      | .command[2]
+  ' manifests.json)
+  run timeout 3 sh -c "sh -ec \"\$1\" & child=\$!; sleep 0.1; kill -TERM \"\$child\"; wait \"\$child\"" sh "$command"
+  [ "$status" -eq 0 ]
+}
+
 @test "tags workload has durable storage and production reset protection" {
   render values.json
   jq -e '
