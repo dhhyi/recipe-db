@@ -82,25 +82,15 @@ EOF
   [ "$(cat "a file.txt")" = unformatted ]
 }
 
-@test "Bazel formatter checks map the configured native unformatted status" {
+@test "Bazel formatter checks treat any nonzero status as needing formatting" {
   setup_fixture format-bazel.sh
   setup_mock_bin
   mkdir -p example bazel-out
-  cat > example/.project.yaml << 'EOF'
-name: example
----
-format:
-  unformattedExitCode: 1
-EOF
-  cat > bin/yq << 'EOF'
-#!/bin/sh
-printf '1\n'
-EOF
   cat > bin/mise << 'EOF'
 #!/bin/sh
 exit "${FORMAT_STATUS:-0}"
 EOF
-  chmod +x bin/yq bin/mise
+  chmod +x bin/mise
 
   run sh .scripts/format-bazel.sh example bazel-out/example.ok
 
@@ -108,12 +98,14 @@ EOF
   [ -f bazel-out/example.ok ]
 
   rm bazel-out/example.ok
-  export FORMAT_STATUS=1
-  run sh .scripts/format-bazel.sh example bazel-out/example.ok
+  for FORMAT_STATUS in 1 2 17; do
+    export FORMAT_STATUS
+    run sh .scripts/format-bazel.sh example bazel-out/example.ok
 
-  [ "$status" -eq 3 ]
-  [[ "$output" == *"PROJECT_FORMAT_UNFORMATTED:example"* ]]
-  [ ! -e bazel-out/example.ok ]
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"PROJECT_FORMAT_UNFORMATTED:example"* ]]
+    [ ! -e bazel-out/example.ok ]
+  done
 }
 
 setup_bazel_fixture() {
