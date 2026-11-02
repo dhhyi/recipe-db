@@ -98,6 +98,32 @@ for _, mode in ipairs({"", "invalid"}) do
 end
 
 local populated = '{"recipe":["https://example.com"]}'
+for _, mode in ipairs({"production", "testing", "backup"}) do
+    write_data(populated)
+    local loaded, handlers = start(mode)
+    assert(loaded)
+    for _, path in ipairs({
+        "/maintenance/recipe-ids", "/maintenance/recipe-ids/"
+    }) do
+        local matched = false
+        for route, handler in pairs(handlers) do
+            local method, pattern = route:match("^(%S+) (.+)$")
+            pattern = "^" .. pattern:gsub("[.][.][.]", "([^/?]+)") .. "$"
+            if method == "GET" and path:match(pattern) then
+                matched = true
+                local body, headers = handler()
+                assert((headers[":status"] or "200") ==
+                           (mode == "backup" and "200" or "404"))
+                if mode == "backup" then
+                    local ids = assert(json.decode(body)).recipeIds
+                    assert(#ids == 1 and ids[1] == "recipe")
+                end
+            end
+        end
+        assert(matched, path)
+    end
+    assert(read_data() == populated)
+end
 for _, document in ipairs({"{}", "[]", populated}) do
     for _, mode in ipairs({"production", "testing", "backup"}) do
         write_data(document)
