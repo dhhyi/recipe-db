@@ -32,7 +32,10 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-format: hurlfmt --in-place *.hurl
+format:
+  - check: hurlfmt --check $argv
+    apply: hurlfmt --in-place $argv
+    files: ["*.hurl"]
 check: hurl --version
 test: sh hurl-run
 prettier:

@@ -99,7 +99,7 @@ Services with utility character.
 ## Dev Support
 
 - VSCode devcontainers for easy setup
-- custom precommit
+- Bazel-cached custom precommit checks
 - prettier as formatter for general
 - testing with integration test projects
 - [demo-data project](demo-data/README.md)

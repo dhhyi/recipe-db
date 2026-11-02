@@ -59,23 +59,76 @@ if [ ! -f "$project_file" ]; then
   exit 1
 fi
 
-if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
+format_arguments=
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = format-check ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
   if [ "$1" = generate ]; then
     script=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[].command' "$project_file")
+  elif [ "$1" = format ] || [ "$1" = format-check ]; then
+    operation=apply
+    [ "$1" != format-check ] || operation=check
+    format_count=$(yq eval-all -r 'select(documentIndex == 1) | .format // [] | length' "$project_file")
+    if [ "$format_count" -eq 0 ]; then
+      echo "Project does not have $1 command" >&2
+      exit 1
+    fi
+    format_inputs=$(bash "$project_root/.scripts/format-files.sh" "$project" --inputs)
+    format_check_script=$(jq -Rrs '@sh' < "$project_root/.scripts/format-check.sh")
+    run_command=
+    index=0
+    while [ "$index" -lt "$format_count" ]; do
+      script=$(yq eval-all -r "select(documentIndex == 1) | .format[$index].$operation" "$project_file")
+      apply_script=$(yq eval-all -r "select(documentIndex == 1) | .format[$index].apply" "$project_file")
+      if [ -z "$script" ] || [ -z "$apply_script" ]; then
+        echo "Formatter $((index + 1)) in $project_file is missing $operation or apply command" >&2
+        exit 1
+      fi
+      script=$(printf '%s\n' "$script" | awk '
+        NF && $0 !~ /^#/ {
+          if (seen) printf " && "
+          printf "%s", $0
+          seen = 1
+        }
+      ')
+      apply_script=$(printf '%s\n' "$apply_script" | awk '
+        NF && $0 !~ /^#/ {
+          if (seen) printf " && "
+          printf "%s", $0
+          seen = 1
+        }
+      ' | jq -Rrs '@sh')
+      format_arguments=$(bash "$project_root/.scripts/format-files.sh" "$project" "$index" --shell)
+      entry="set --local argv $format_arguments; set --local format_apply $apply_script; if test (count \$argv) -gt 0; $script; end"
+      if [ -n "$run_command" ]; then
+        run_command="$run_command && $entry"
+      else
+        run_command=$entry
+      fi
+      index=$((index + 1))
+    done
   else
     script=$(yq eval-all -r "select(documentIndex == 1) | .$1 // \"\"" "$project_file")
   fi
-  if [ -z "$script" ]; then
-    echo "Project does not have $1 command" >&2
-    exit 1
+  if [ "$1" = format ] || [ "$1" = format-check ]; then
+    run_command="function format-check-copy
+sh -c $format_check_script format-check-copy \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] $format_inputs
+end
+function format-apply-copy
+sh -c $format_check_script format-apply-copy --apply \"\$argv[1]\" (count \$argv[2..-1]) \$argv[2..-1] $format_inputs
+end
+$run_command"
+  else
+    if [ -z "$script" ]; then
+      echo "Project does not have $1 command" >&2
+      exit 1
+    fi
+    run_command=$(printf '%s\n' "$script" | awk '
+      NF && $0 !~ /^#/ {
+        if (seen) printf " && "
+        printf "%s", $0
+        seen = 1
+      }
+    ')
   fi
-  run_command=$(printf '%s\n' "$script" | awk '
-    NF && $0 !~ /^#/ {
-      if (seen) printf " && "
-      printf "%s", $0
-      seen = 1
-    }
-  ')
 else
   run_command=$*
 fi

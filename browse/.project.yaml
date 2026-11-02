@@ -88,7 +88,10 @@ generate:
     output: src/generated/graphql.go
   - command: templ generate
     output: src/**/*_templ.go
-format: go fmt ./...
+format:
+  - check: set unformatted (gofmt -l $argv); test (count $unformatted) -eq 0
+    apply: gofmt -w $argv
+    files: ["**/*.go"]
 check: |
   go version
   go vet ./...
