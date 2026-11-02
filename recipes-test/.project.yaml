@@ -31,7 +31,7 @@ traefik:
 category: test
 test: mvn --batch-mode --no-transfer-progress test
 format:
-  check: format-check-copy $format_apply $argv
+  check: mvn --batch-mode --no-transfer-progress "-DspotlessFiles="(string join , $argv) spotless:check
   apply: mvn --batch-mode --no-transfer-progress "-DspotlessFiles="(string join , $argv) spotless:apply
   files: ["src/**/*.java"]
 check: |
