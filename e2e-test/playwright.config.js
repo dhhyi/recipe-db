@@ -1,5 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
+console.warn(
+  "WARNING: E2E tests reset shared test data and must run sequentially. Do not run another suite or use the same stack concurrently; unexpected behaviour is expected otherwise.",
+);
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,

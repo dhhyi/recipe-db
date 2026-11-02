@@ -81,9 +81,9 @@ pub struct TagsApi {
 }
 
 impl TagsApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("tags"),
+            client: RestClient::new("tags").with_ignored_services(ignored),
         }
     }
 

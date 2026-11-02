@@ -15,6 +15,7 @@ use subtle::ConstantTimeEq;
 pub mod auth;
 mod backup_cleanup;
 mod events;
+mod ignored_services;
 mod image_inline;
 mod images;
 mod inspirations;

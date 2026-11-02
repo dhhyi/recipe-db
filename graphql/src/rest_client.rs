@@ -10,6 +10,7 @@ pub struct RestClient {
     client: Client,
     base_path: String,
     service: String,
+    ignored: crate::ignored_services::IgnoredServices,
 }
 
 /// RFC 9457 Problem Details body, the error shape every backend is expected to send on non-2xx
@@ -29,6 +30,7 @@ pub struct RestError {
     service: String,
     unavailable: bool,
     unknown_outcome: bool,
+    not_dispatched: bool,
 }
 
 impl std::fmt::Display for RestError {
@@ -49,6 +51,7 @@ impl RestError {
             service: service.to_owned(),
             unavailable,
             unknown_outcome: is_write && status.is_server_error(),
+            not_dispatched: false,
         }
     }
 
@@ -75,6 +78,7 @@ impl RestError {
             service: service.to_owned(),
             unavailable,
             unknown_outcome,
+            not_dispatched: false,
         }
     }
 
@@ -97,8 +101,13 @@ impl RestError {
                     extensions.set("code", "service-unavailable");
                     extensions.set("status", 503);
                     extensions.set("service", self.service);
+                    if self.not_dispatched {
+                        extensions.set("dispatched", false);
+                    }
                     if self.unknown_outcome {
                         extensions.set("outcome", "unknown");
+                    } else if self.not_dispatched {
+                        extensions.set("outcome", "not-dispatched");
                     }
                 },
             );
@@ -183,6 +192,30 @@ impl RestClient {
             } else {
                 base_path.to_string()
             },
+            ignored: Default::default(),
+        }
+    }
+
+    pub fn with_ignored_services(
+        mut self,
+        ignored: crate::ignored_services::IgnoredServices,
+    ) -> Self {
+        self.ignored = ignored;
+        self
+    }
+
+    fn check_dispatch(&self, is_write: bool) -> Result<(), RestError> {
+        if self.ignored.contains(&self.service) {
+            Err(RestError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                body: "Service ignored for testing".to_owned(),
+                service: self.service.clone(),
+                unavailable: true,
+                unknown_outcome: false,
+                not_dispatched: is_write,
+            })
+        } else {
+            Ok(())
         }
     }
 }
@@ -223,6 +256,7 @@ impl RestClient {
                 service: service.to_owned(),
                 unavailable: false,
                 unknown_outcome: is_write,
+                not_dispatched: false,
             });
         }
         serde_json::from_str(&body).map_err(|err| RestError {
@@ -231,6 +265,7 @@ impl RestClient {
             service: service.to_owned(),
             unavailable: false,
             unknown_outcome: is_write,
+            not_dispatched: false,
         })
     }
 
@@ -244,6 +279,7 @@ impl RestClient {
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<T, RestError> {
+        self.check_dispatch(false)?;
         let url = self.url(path);
         let response = self
             .client
@@ -260,6 +296,7 @@ impl RestClient {
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<String, RestError> {
+        self.check_dispatch(false)?;
         let url = self.url(path);
         let response = self
             .client
@@ -304,6 +341,7 @@ impl RestClient {
         body: Vec<u8>,
         query: Option<&impl Serialize>,
     ) -> Result<T, RestError> {
+        self.check_dispatch(true)?;
         let url = self.url(path);
         let mut request = self
             .client
@@ -325,6 +363,7 @@ impl RestClient {
         path: &str,
         body: &B,
     ) -> Result<T, RestError> {
+        self.check_dispatch(true)?;
         let url = self.url(path);
         let response = self
             .client
@@ -355,6 +394,7 @@ impl RestClient {
         path: &str,
         body: &B,
     ) -> Result<T, RestError> {
+        self.check_dispatch(true)?;
         let url = self.url(path);
         let response = self
             .client
@@ -371,6 +411,7 @@ impl RestClient {
         path: &str,
         fields: &[(&str, &str)],
     ) -> Result<T, RestError> {
+        self.check_dispatch(true)?;
         let url = self.url(path);
         let response = self
             .client
@@ -388,6 +429,7 @@ impl RestClient {
 
     async fn send_no_body(&self, method: Method, path: &str) -> Result<(), RestError> {
         let is_write = method != Method::GET;
+        self.check_dispatch(is_write)?;
         let url = self.url(path);
         let response = self
             .client
@@ -427,6 +469,7 @@ impl RestClient {
         query: Option<&[(&str, &str)]>,
         is_write: bool,
     ) -> Result<T, RestError> {
+        self.check_dispatch(is_write)?;
         let url = self.url(path);
         let mut request = self.client.request(method, url);
         if let Some(body) = body {
@@ -566,6 +609,7 @@ mod tests {
             service: "tags".into(),
             unavailable: false,
             unknown_outcome: true,
+            not_dispatched: false,
         }
         .into_error();
         assert_eq!(
@@ -602,6 +646,7 @@ mod tests {
                 .unwrap(),
             base_path: "search".to_string(),
             service: "search".to_string(),
+            ignored: Default::default(),
         };
         let result = client
             .post::<_, serde_json::Value>("", &json!({"query": "pasta"}))
@@ -638,6 +683,7 @@ mod tests {
             client: Client::new(),
             base_path: "search".to_string(),
             service: "search".to_string(),
+            ignored: Default::default(),
         };
         let result = client
             .post_read_only::<_, serde_json::Value>("", &json!({"query": "pasta"}))
