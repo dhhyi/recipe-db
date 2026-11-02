@@ -1,10 +1,6 @@
 import { test as base, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { createAuthIdentity } from "./auth-contexts.js";
-import {
-  ignoredAuxiliaryServices,
-  ignoredServicesLifecycle,
-} from "./ignored-services.helpers.js";
 
 export { expect };
 
@@ -27,16 +23,22 @@ export async function graphql(
   return result.data;
 }
 
-export function serviceLifecycle(request) {
-  return ignoredServicesLifecycle(async (names) => {
-    const { setIgnoredServices } = await graphql(
+export async function withIgnoredServices(request, names, use) {
+  const set = async (names) => {
+    const data = await graphql(
       request,
       "mutation($names: [String!]!) { setIgnoredServices(names: $names) }",
       { names },
       "Set ignored services",
     );
-    return setIgnoredServices;
-  });
+    expect(data.setIgnoredServices).toEqual([...new Set(names)]);
+  };
+  try {
+    await set(names);
+    await use();
+  } finally {
+    await set([]);
+  }
 }
 
 async function resetRestService(request, service) {
@@ -404,10 +406,10 @@ export const test = base.extend({
   },
   resetApplicationData: [
     async ({ request }, use) => {
-      await serviceLifecycle(request).resetAndUse(
-        () => resetApplicationData(request),
-        use,
-      );
+      await withIgnoredServices(request, [], async () => {
+        await resetApplicationData(request);
+        await use();
+      });
     },
     { auto: true },
   ],
@@ -444,8 +446,17 @@ export const test = base.extend({
     await use(recipes);
   },
   degradedRecipes: async ({ request, overviewRecipes }, use) => {
-    await serviceLifecycle(request).ignoreAndUse(
-      ignoredAuxiliaryServices,
+    await withIgnoredServices(
+      request,
+      [
+        "search",
+        "ratings",
+        "inspirations",
+        "images",
+        "tags",
+        "image-inline",
+        "link-extract",
+      ],
       () => use(overviewRecipes),
     );
   },
