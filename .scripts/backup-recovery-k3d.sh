@@ -323,8 +323,8 @@ jq -e '.status == "verified-upload"' "$result_directory/state/status.json" > /de
 backup_id=$(jq -er .backupId "$result_directory/state/baseline.json")
 archive_name=$(jq -er .archive "$result_directory/state/baseline.json")
 manifest_name=$(jq -er .manifest "$result_directory/state/baseline.json")
-cp "$FAKE_RCLONE_ROOT/recipe-db-backups/$archive_name" "$result_directory/packages/$archive_name"
-cp "$FAKE_RCLONE_ROOT/recipe-db-backups/$manifest_name" "$result_directory/packages/$manifest_name"
+cp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$archive_name" "$result_directory/packages/$archive_name"
+cp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$manifest_name" "$result_directory/packages/$manifest_name"
 archive="$result_directory/packages/$archive_name"
 package_manifest="$result_directory/packages/$manifest_name"
 jq -e --arg release "$release" --arg revision "$revision" \

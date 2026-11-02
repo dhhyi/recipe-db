@@ -4,6 +4,7 @@ load test_helper
 
 setup() {
   setup_fixture backup-recovery-k3d.sh
+  export FAKE_RCLONE_ROOT="$FIXTURE_ROOT/fake-remote"
 }
 
 @test "k3d rehearsal rejects mutable artifacts before creating result files or invoking tools" {
@@ -18,7 +19,6 @@ setup() {
   mkdir -p bin remote-source
   cp "$BATS_TEST_DIRNAME/fixtures/rclone-local" bin/rclone
   chmod +x bin/rclone
-  export FAKE_RCLONE_ROOT="$FIXTURE_ROOT/fake-remote"
   printf 'package bytes\n' > remote-source/package.tar
 
   run bin/rclone mkdir fake-e2e:recipe-db-backups
@@ -56,4 +56,18 @@ setup() {
   graphql_at values.json 'mutation { deleteRecipe(id: "test") }'
   run grep -Fx -- '--retry' "$FIXTURE_ROOT/curl-arguments"
   [ "$status" -eq 1 ]
+}
+
+@test "rehearsal retrieves uploaded packages from the deployment remote directory" {
+  export result_directory="$FIXTURE_ROOT/results"
+  export archive_name=backup.tar.gz manifest_name=backup.manifest.json
+  mkdir -p "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e" "$result_directory/packages"
+  printf 'archive\n' > "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$archive_name"
+  printf '{}\n' > "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$manifest_name"
+  # shellcheck disable=SC2016
+  sed -n '/^cp "\$FAKE_RCLONE_ROOT/p' .scripts/backup-recovery-k3d.sh > retrieve.sh
+  run bash retrieve.sh
+  [ "$status" -eq 0 ]
+  cmp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$archive_name" "$result_directory/packages/$archive_name"
+  cmp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$manifest_name" "$result_directory/packages/$manifest_name"
 }
