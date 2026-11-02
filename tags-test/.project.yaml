@@ -36,7 +36,7 @@ traefik:
 category: test
 test: GRADLE_USER_HOME=target/gradle-cache gradle --no-daemon --project-cache-dir target/gradle-project-cache test
 format:
-  check: format-check-copy $format_apply $argv
+  check: gradle --no-daemon "-PspotlessFiles="(string join , $argv) spotlessCheck
   apply: gradle --no-daemon "-PspotlessFiles="(string join , $argv) spotlessApply
   files: ["src/**/*.groovy", "*.gradle"]
 check: |
