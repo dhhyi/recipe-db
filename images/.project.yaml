@@ -74,9 +74,9 @@ prettier:
     - "*.nim"
     - "*.nimble"
 format:
-  check: for file in $argv; nimpretty --out:/dev/stdout "$file" | diff -u "$file" -; or exit $status; end
-  apply: for file in $argv; nimpretty "$file"; or exit $status; end
-  files: ["server.nim"]
+  - check: for file in $argv; nimpretty --out:/dev/stdout "$file" | diff -u "$file" -; or exit $status; end
+    apply: for file in $argv; nimpretty "$file"; or exit $status; end
+    files: ["server.nim"]
 check: |
   nim --version
   nimble build -d:release -y --threads:off

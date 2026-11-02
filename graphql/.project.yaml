@@ -94,9 +94,9 @@ traefik:
 category: api
 backupRole: derived-stateless
 format:
-  check: rustfmt --check --edition 2021 --config skip_children=true $argv
-  apply: rustfmt --edition 2021 --config skip_children=true $argv
-  files: ["**/*.rs"]
+  - check: rustfmt --check --edition 2021 --config skip_children=true $argv
+    apply: rustfmt --edition 2021 --config skip_children=true $argv
+    files: ["**/*.rs"]
 check: |
   cargo --version
   cargo clippy --all-targets -- -D warnings

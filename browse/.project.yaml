@@ -89,9 +89,9 @@ generate:
   - command: templ generate
     output: src/**/*_templ.go
 format:
-  check: set unformatted (gofmt -l $argv); test (count $unformatted) -eq 0
-  apply: gofmt -w $argv
-  files: ["**/*.go"]
+  - check: set unformatted (gofmt -l $argv); test (count $unformatted) -eq 0
+    apply: gofmt -w $argv
+    files: ["**/*.go"]
 check: |
   go version
   go vet ./...

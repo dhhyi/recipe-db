@@ -101,12 +101,12 @@ generate:
   - command: pnpm codegen
     output: src/Api/**/*.elm
 format:
-  check: |
-    set configs (string match '*.conf' $argv); if test (count $configs) -gt 0; format-check-copy 'for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end' $configs; or exit $status; end; set sources (string match '*.elm' $argv); if test (count $sources) -gt 0; pnpm exec elm-format --validate $sources; end
-  apply: |
-    for file in (string match '*.conf' $argv); nginx-formatter -indent=4 -input "$file"; or exit $status; end
-    set sources (string match '*.elm' $argv); if test (count $sources) -gt 0; pnpm exec elm-format --yes $sources; end
-  files: ["nginx.conf", "**/*.elm"]
+  - check: format-check-copy 'for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end' $argv
+    apply: for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end
+    files: ["nginx.conf"]
+  - check: pnpm exec elm-format --validate $argv
+    apply: pnpm exec elm-format --yes $argv
+    files: ["**/*.elm"]
 check: |
   pnpm exec elm --version
   pnpm build

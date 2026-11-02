@@ -51,9 +51,9 @@ emit_rule() {
 for project_file in */.project.yaml; do
   project=${project_file%/.project.yaml}
   check=$(yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project_file")
-  format=$(yq eval-all -r 'select(documentIndex == 1) | .format.check // ""' "$project_file")
+  format_count=$(yq eval-all -r 'select(documentIndex == 1) | .format // [] | length' "$project_file")
   generators=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project_file")
-  [[ -n "$check" || -n "$format" || "$generators" -gt 0 ]] || continue
+  [[ -n "$check" || "$format_count" -gt 0 || "$generators" -gt 0 ]] || continue
 
   files=()
   format_files=()
@@ -111,7 +111,7 @@ for project_file in */.project.yaml; do
     emit_rule "$generation_dependency" "$project-generate.tar" .scripts/generate-bazel.sh "" "${format_files[@]}"
   fi
 
-  if [[ -n "$format" ]]; then
+  if [[ "$format_count" -gt 0 ]]; then
     formatting_inputs=()
     declare -A formatting_included=()
     for file in "${format_files[@]}"; do
@@ -145,7 +145,7 @@ for project_file in */.project.yaml; do
   if [[ -n "$check" ]]; then
     emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-check.sh "$generation_dependency" "${files[@]}"
     precommit_files=("${files[@]}")
-    if [[ -n "$format" ]]; then
+    if [[ "$format_count" -gt 0 ]]; then
       precommit_files+=(":${project}_format_check")
     fi
     emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$generation_dependency" "${precommit_files[@]}"

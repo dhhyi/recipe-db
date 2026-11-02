@@ -128,9 +128,9 @@ EOF
 name: example
 ---
 format:
-  check: format-check-copy $format_apply $argv
-  apply: format
-  files: ["**/*.txt"]
+  - check: format-check-copy $format_apply $argv
+    apply: format
+    files: ["**/*.txt"]
 EOF
     printf '%s\n' formatted > "$project/main.txt"
     printf '%s\n' configuration > "$project/formatter.conf"

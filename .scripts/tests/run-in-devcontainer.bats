@@ -38,9 +38,9 @@ EOF
 @test "format check and apply receive identical sorted globs including additions and removals" {
   cat >> example/.project.yaml << 'EOF'
 format:
-  check: printf '%s\n' $argv
-  apply: printf '%s\n' $argv
-  files: ["**/*.txt", "nested/*.txt"]
+  - check: printf '%s\n' $argv
+    apply: printf '%s\n' $argv
+    files: ["**/*.txt", "nested/*.txt"]
 EOF
   mkdir -p example/nested
   touch "example/a file.txt" example/nested/b.txt example/ignored.txt example/other.md
@@ -70,9 +70,9 @@ EOF
 @test "invalid format globs fail before container discovery" {
   cat >> example/.project.yaml << 'EOF'
 format:
-  check: echo check
-  apply: echo apply
-  files: ["../outside.txt"]
+  - check: echo check
+    apply: echo apply
+    files: ["../outside.txt"]
 EOF
 
   run sh .scripts/run-in-devcontainer.sh example format
@@ -85,9 +85,9 @@ EOF
 @test "format file discovery failures are not mistaken for an empty successful check" {
   cat >> example/.project.yaml << 'EOF'
 format:
-  check: echo check
-  apply: echo apply
-  files: ["**/*.txt"]
+  - check: echo check
+    apply: echo apply
+    files: ["**/*.txt"]
 EOF
   cat > bin/git << 'EOF'
 #!/bin/sh
@@ -101,6 +101,39 @@ EOF
   [ "$status" -eq 19 ]
   [[ "$output" == *"Unable to list project files"* ]]
   [ ! -s "$MOCK_LOG" ]
+}
+
+@test "formatters run sequentially with independent file selections" {
+  cat >> example/.project.yaml << 'EOF'
+format:
+  - check: echo check-first $argv
+    apply: echo apply-first $argv
+    files: ["**/*.txt"]
+  - check: echo check-second $argv
+    apply: echo apply-second $argv
+    files: ["**/*.md"]
+EOF
+  mkdir -p example/nested
+  touch example/a.txt example/b.md
+
+  run sh .scripts/run-in-devcontainer.sh example format-check
+
+  [ "$status" -eq 0 ]
+  line=$(cat "$MOCK_LOG")
+  first=${line%%check-first*}
+  second=${line%%check-second*}
+  [ "${#first}" -lt "${#second}" ]
+  grep -F "set --local argv 'a.txt'" "$MOCK_LOG"
+  grep -F "set --local argv 'b.md'" "$MOCK_LOG"
+
+  : > "$MOCK_LOG"
+  run sh .scripts/run-in-devcontainer.sh example format
+
+  [ "$status" -eq 0 ]
+  line=$(cat "$MOCK_LOG")
+  first=${line%%apply-first*}
+  second=${line%%apply-second*}
+  [ "${#first}" -lt "${#second}" ]
 }
 
 @test "serializes overlapping invocations through container cleanup" {

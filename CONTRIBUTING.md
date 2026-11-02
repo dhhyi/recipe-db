@@ -6,14 +6,16 @@ Declare formatting in the second document of `.project.yaml`:
 
 ```yaml
 format:
-  check: format-check-copy $format_apply $argv
-  apply: gofmt -w $argv
-  files: ["**/*.go"]
+  - check: zig fmt --check $argv
+    apply: zig fmt $argv
+    files: ["**/*.zig"]
 ```
 
 `mise run --raw in-devcontainer <project> format-check` checks formatting; `format` applies it. Both commands receive the same sorted, project-relative files as fish `$argv`. Globs use Git's `:(glob)` semantics, include tracked and non-ignored untracked files, and exclude deleted files.
 
-Checks must not modify checkout files. `format-check-copy` runs `$format_apply` (the configured apply command) on temporary source/configuration copies inside the devcontainer and compares the selected files. It returns 3 for unformatted files and 2 for formatter errors. Native check commands may use any nonzero status when files need formatting; Bazel-backed precommit treats any check failure as a signal to apply the formatter, then rechecks. Formatter and recheck failures remain fatal. CI only checks. Precommit uses cacheable Bazel checks, applies only when formatting is needed, then rechecks to cache the formatted state. Keep formatter configuration and tool/version declarations in the project so their changes invalidate its check; root documentation does not. For tools that only accept a whole project, use `format-apply-copy 'formatter command' $argv` to copy back only selected files, paired with `format-check-copy 'formatter command' $argv`.
+Declare `format` as an ordered list of formatter entries. Each entry has its own `check`, `apply`, and `files`, so mixed-language projects can run the appropriate tool only on its selected files. Format checks and applies run sequentially in list order, both directly and through the single project-level Bazel format target.
+
+Checks must not modify checkout files. Prefer a formatter's native non-mutating verification mode for each entry's `check`. When a formatter has no verification mode, declare `check: format-check-copy $format_apply $argv`: it runs that entry's `apply` command on temporary source/configuration copies inside the devcontainer and compares the selected files. It returns 3 for formatting differences and 2 for formatter errors. Bazel-backed precommit treats any nonzero check status as a signal to apply all formatter entries in order, then rechecks; formatter and recheck failures remain fatal. CI only checks. Precommit uses cacheable Bazel checks, applies only when formatting is needed, then rechecks to cache the formatted state. Keep formatter configuration and tool/version declarations in the project so their changes invalidate its check; root documentation does not. For formatters that only accept a whole project, use `format-apply-copy 'formatter command' $argv` to copy back only selected files, paired with `format-check-copy 'formatter command' $argv`.
 
 ## Issue planning and refinement
 

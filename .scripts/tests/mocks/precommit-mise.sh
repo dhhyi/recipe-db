@@ -7,8 +7,8 @@ case "$*" in
   'exec -- yq eval-all -r '*)
     if [[ "$*" == *'.check // ""'* ]]; then
       printf '%s\n' 'echo checked'
-    elif [[ "$*" == *'.format.check // ""'* ]]; then
-      printf '%s\n' 'echo formatted'
+    elif [[ "$*" == *'.format // [] | length'* ]]; then
+      printf '%s\n' 1
     elif [[ "$*" == *'.generate // [] | length'* ]]; then
       printf '%s\n' 0
     else

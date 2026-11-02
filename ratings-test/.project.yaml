@@ -45,9 +45,9 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 format:
-  check: for file in $argv; ghokin fmt stdout "$file" | diff -u "$file" -; or exit $status; end
-  apply: ghokin fmt replace $argv
-  files: ["**/*.feature"]
+  - check: for file in $argv; ghokin fmt stdout "$file" | diff -u "$file" -; or exit $status; end
+    apply: ghokin fmt replace $argv
+    files: ["**/*.feature"]
 check: |
   ghokin version
   sh karate -h

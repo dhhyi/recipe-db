@@ -10,7 +10,7 @@ setup() {
   install_mock precommit-pnpm.sh pnpm
   git init -q
   mkdir example
-  printf '%s\n' 'name: example' '---' 'format: {check: echo checked, apply: echo formatted, files: ["**/*.txt"]}' 'check: echo checked' > example/.project.yaml
+  printf '%s\n' 'name: example' '---' 'format:' '  - check: echo checked' '    apply: echo formatted' '    files: ["**/*.txt"]' 'check: echo checked' > example/.project.yaml
 }
 
 @test "precommit explicitly skips all checks in cloud-agent checkpoint mode" {

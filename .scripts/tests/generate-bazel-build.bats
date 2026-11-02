@@ -10,9 +10,9 @@ setup() {
 name: example
 ---
 format:
-  check: echo checked
-  apply: echo formatted
-  files: ["**/*.txt"]
+  - check: echo checked
+    apply: echo formatted
+    files: ["**/*.txt"]
 check: echo checked
 EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/

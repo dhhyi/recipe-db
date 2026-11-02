@@ -49,8 +49,8 @@ format_targets=()
 check_targets=()
 check_archives=()
 for project in "${projects[@]}"; do
-  format=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .format.check // ""' "$project/.project.yaml")
-  if [[ -n "$format" ]]; then
+  format_count=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .format // [] | length' "$project/.project.yaml")
+  if [[ "$format_count" -gt 0 ]]; then
     format_targets+=("//:${project}_format_check")
   fi
   check=$(mise exec -- yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project/.project.yaml")
