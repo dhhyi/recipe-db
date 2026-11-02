@@ -23,6 +23,24 @@ export async function graphql(
   return result.data;
 }
 
+export async function withIgnoredServices(request, names, use) {
+  const set = async (names) => {
+    const data = await graphql(
+      request,
+      "mutation($names: [String!]!) { setIgnoredServices(names: $names) }",
+      { names },
+      "Set ignored services",
+    );
+    expect(data.setIgnoredServices).toEqual([...new Set(names)]);
+  };
+  try {
+    await set(names);
+    await use();
+  } finally {
+    await set([]);
+  }
+}
+
 async function resetRestService(request, service) {
   const response = await request.delete(`${process.env.REST_API}/${service}`);
   const body = await response.text();
@@ -388,8 +406,10 @@ export const test = base.extend({
   },
   resetApplicationData: [
     async ({ request }, use) => {
-      await resetApplicationData(request);
-      await use();
+      await withIgnoredServices(request, [], async () => {
+        await resetApplicationData(request);
+        await use();
+      });
     },
     { auto: true },
   ],
@@ -424,6 +444,21 @@ export const test = base.extend({
       await waitForRecipeIndexed(request, recipe.id);
     }
     await use(recipes);
+  },
+  degradedRecipes: async ({ request, overviewRecipes }, use) => {
+    await withIgnoredServices(
+      request,
+      [
+        "search",
+        "ratings",
+        "inspirations",
+        "images",
+        "tags",
+        "image-inline",
+        "link-extract",
+      ],
+      () => use(overviewRecipes),
+    );
   },
   taggedDemoRecipe: async ({ request, demoRecipe }, use) => {
     await seedRandomRecipeTags(request, [demoRecipe]);

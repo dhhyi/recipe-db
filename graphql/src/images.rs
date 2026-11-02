@@ -36,9 +36,9 @@ pub struct ImagesApi {
 }
 
 impl ImagesApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("images"),
+            client: RestClient::new("images").with_ignored_services(ignored),
         }
     }
 

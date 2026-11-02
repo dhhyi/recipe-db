@@ -85,9 +85,9 @@ fn similar_options(recipe_id: &str, tag_ids: &[&str]) -> Result<Value, Error> {
 }
 
 impl SearchApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("search"),
+            client: RestClient::new("search").with_ignored_services(ignored),
         }
     }
 

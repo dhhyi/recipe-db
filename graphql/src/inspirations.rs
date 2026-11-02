@@ -7,9 +7,9 @@ pub struct InspirationsApi {
 }
 
 impl InspirationsApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
-            client: RestClient::new("inspirations"),
+            client: RestClient::new("inspirations").with_ignored_services(ignored),
         }
     }
 

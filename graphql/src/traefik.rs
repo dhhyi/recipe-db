@@ -27,12 +27,14 @@ fn trimmed_name(name: &str, provider: &str) -> String {
 pub struct TraefikApi {
     client: RestClient,
     entry_points: Vec<String>,
+    ignored: crate::ignored_services::IgnoredServices,
 }
 
 impl TraefikApi {
-    pub fn new() -> Self {
+    pub fn new(ignored: crate::ignored_services::IgnoredServices) -> Self {
         Self {
             client: RestClient::new("api/http"),
+            ignored,
             entry_points: std::env::var("TRAEFIK_ENTRYPOINTS")
                 .unwrap_or_default()
                 .split(',')
@@ -78,6 +80,7 @@ impl TraefikApi {
                 online_services.contains(&trimmed_name(&router.service, &router.provider))
             })
             .map(|router| trimmed_name(&router.name, &router.provider))
+            .filter(|name| !self.ignored.contains(name))
             .collect())
     }
 }
