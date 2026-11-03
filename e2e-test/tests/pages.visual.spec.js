@@ -361,7 +361,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await expect(page).toHaveTitle("Seite nicht gefunden | RezeptDB");
       await expect(page.locator("header-component")).toHaveCount(1);
       await expect(page.locator("main")).toHaveCount(1);
-      await expect(page.locator("main > p")).toHaveText("Seite nicht gefunden.");
+      await expect(page.locator("main > p")).toHaveText(
+        "Seite nicht gefunden.",
+      );
       await expect(page.locator("main")).toBeInViewport();
       await screenshot(page, "browse-error.png");
     });

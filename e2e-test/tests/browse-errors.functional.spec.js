@@ -205,16 +205,19 @@ test("inspirations recover from a network failure", async ({
   const retryRequestStarted = new Promise((resolve) => {
     retryStarted = resolve;
   });
-  await page.route((url) => new URL(url).pathname === path, async (route) => {
-    if (failed) {
-      failed = false;
-      await route.abort("failed");
-      return;
-    }
-    retryStarted();
-    await retryGate;
-    await route.fallback();
-  });
+  await page.route(
+    (url) => new URL(url).pathname === path,
+    async (route) => {
+      if (failed) {
+        failed = false;
+        await route.abort("failed");
+        return;
+      }
+      retryStarted();
+      await retryGate;
+      await route.fallback();
+    },
+  );
   await page.goto(`/recipe/${basicRecipe.id}`);
   const placeholder = page.locator("#recipe-inspirations");
   await placeholder.scrollIntoViewIfNeeded();
@@ -236,7 +239,7 @@ test("inspirations recover from a network failure", async ({
   await expect(retry).toHaveAttribute("aria-busy", "true");
   releaseRetry();
   await response;
-  await expect(page.locator("#recipe-inspirations .feedback.error")).toHaveCount(
-    0,
-  );
+  await expect(
+    page.locator("#recipe-inspirations .feedback.error"),
+  ).toHaveCount(0);
 });
