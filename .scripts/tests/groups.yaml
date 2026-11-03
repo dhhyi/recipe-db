@@ -62,6 +62,7 @@ deploy:
 tasks:
   tests:
     - .scripts/tests/bazel.bats
+    - .scripts/tests/bazel-cache-artifacts.bats
     - .scripts/tests/mise-tasks.bats
     - .scripts/tests/mise-freshness.bats
     - .scripts/tests/precommit.bats
@@ -69,6 +70,7 @@ tasks:
     - .scripts/tests/update-docker-image-digests.bats
   inputs:
     - ":(glob).scripts/*.sh"
+    - .scripts/bazel-cache-artifacts.py
     - .scripts/lib/project-metadata.sh
     - .scripts/docker-base-images.awk
     - .scripts/external-image-references.awk
@@ -78,6 +80,7 @@ tasks:
     - .github/workflows/publish.yaml
     - .scripts/tests/mocks/precommit-*
     - .scripts/tests/mocks/devcontainer-*
+    - .scripts/tests/bazel-cache-artifacts.py
     - .scripts/templates/**
     - mise.toml
     - package.json

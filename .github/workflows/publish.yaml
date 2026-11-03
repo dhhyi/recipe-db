@@ -28,6 +28,7 @@ jobs:
       (github.event.action != 'edited' ||
        contains(github.event.changes.title.from, '[WIP]'))
     permissions:
+      actions: read
       contents: read
     runs-on: ubuntu-24.04
     env:
@@ -36,6 +37,8 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: setup mise tools
         uses: jdx/mise-action@v5
@@ -54,13 +57,20 @@ jobs:
           docker --version
           docker compose version
 
-      - name: restore Bazel disk cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/bazel-disk
-          key: bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion') }}-
+      - name: restore Bazel disk cache artifact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py restore \
+            --cache "$HOME/.cache/bazel-disk" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --commit "$GITHUB_SHA" \
+            --pr-number "$PR_NUMBER"
 
       - name: check project formatting
         run: |
@@ -78,6 +88,7 @@ jobs:
             --action_env=COMPOSE_PROGRESS \
             --action_env=COMPOSE_PARALLEL_LIMIT \
             --action_env=DEVCONTAINER_KEEP_RUNNING \
+            --execution_log_json_file="$RUNNER_TEMP/bazel-format-execution.json" \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
 
       - name: Bazel precommit checks and unit tests
@@ -91,7 +102,40 @@ jobs:
             --action_env=COMPOSE_PROGRESS \
             --action_env=COMPOSE_PARALLEL_LIMIT \
             --action_env=DEVCONTAINER_KEEP_RUNNING \
+            --execution_log_json_file="$RUNNER_TEMP/bazel-check-execution.json" \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
+
+      - name: prepare Bazel cache snapshot
+        id: prepare-bazel-cache
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py prepare-upload \
+            --cache "$HOME/.cache/bazel-disk" \
+            --archive "$RUNNER_TEMP/bazel-cache/snapshot.tar" \
+            --manifest "$RUNNER_TEMP/bazel-cache/manifest.json" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --commit "$GITHUB_SHA" \
+            --pr-number "$PR_NUMBER" \
+            --execution-log "format=$RUNNER_TEMP/bazel-format-execution.json" \
+            --execution-log "checks=$RUNNER_TEMP/bazel-check-execution.json" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: upload Bazel cache snapshot
+        if: success() && steps.prepare-bazel-cache.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: ${{ steps.prepare-bazel-cache.outputs.name }}
+          path: |
+            ${{ runner.temp }}/bazel-cache/snapshot.tar
+            ${{ runner.temp }}/bazel-cache/manifest.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}
 
       - name: validate message bus integration and recovery
         run: mise run test-message-bus
