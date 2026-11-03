@@ -42,14 +42,14 @@ test("direct full-page errors keep their status, shared layout, and message", as
     {
       path: "/recipe/missing-recipe",
       status: 404,
-      title: "recipe not found | RezeptDB",
-      message: "recipe not found",
+      title: "Rezept nicht gefunden | RezeptDB",
+      message: "Rezept nicht gefunden.",
     },
     {
       path: "/does-not-exist",
       status: 404,
-      title: "page not found | RezeptDB",
-      message: "page not found",
+      title: "Seite nicht gefunden | RezeptDB",
+      message: "Seite nicht gefunden.",
     },
     {
       path: "/?sort=invalid",
@@ -77,8 +77,8 @@ test("boosted recipe errors replace the previous page", async ({
 
   const serverError = {
     status: 500,
-    title: "failed to fetch recipe | RezeptDB",
-    message: "failed to fetch recipe",
+    title: "Rezept konnte nicht geladen werden | RezeptDB",
+    message: "Rezept konnte nicht geladen werden.",
   };
   await page.route(`**/recipe/${recipe.id}`, (route) =>
     fulfillErrorPage(route, serverError),
@@ -109,8 +109,8 @@ test("boosted recipe errors replace the previous page", async ({
   });
   const missingError = {
     status: 404,
-    title: "recipe not found | RezeptDB",
-    message: "recipe not found",
+    title: "Rezept nicht gefunden | RezeptDB",
+    message: "Rezept nicht gefunden.",
   };
   responsePromise = page.waitForResponse(
     (result) =>
@@ -188,4 +188,55 @@ test("the shared header remains usable through browse failure and recovery", asy
   ).toBeVisible();
   await expect(page.locator("header-component")).toHaveCount(1);
   await expect(page.locator("main")).toHaveCount(1);
+});
+
+test("inspirations recover from a network failure", async ({
+  page,
+  basicRecipe,
+}) => {
+  await allowDesignAssets(page);
+  const path = `/recipe/${basicRecipe.id}/inspirations`;
+  let failed = true;
+  let releaseRetry;
+  let retryStarted;
+  const retryGate = new Promise((resolve) => {
+    releaseRetry = resolve;
+  });
+  const retryRequestStarted = new Promise((resolve) => {
+    retryStarted = resolve;
+  });
+  await page.route((url) => new URL(url).pathname === path, async (route) => {
+    if (failed) {
+      failed = false;
+      await route.abort("failed");
+      return;
+    }
+    retryStarted();
+    await retryGate;
+    await route.fallback();
+  });
+  await page.goto(`/recipe/${basicRecipe.id}`);
+  const placeholder = page.locator("#recipe-inspirations");
+  await placeholder.scrollIntoViewIfNeeded();
+  await expect(placeholder.locator(".feedback.error")).toHaveText(
+    "Inspirationen konnten nicht geladen werden.",
+  );
+  const retry = placeholder.getByRole("button", {
+    name: "Erneut versuchen",
+    exact: true,
+  });
+  await expect(retry).toBeVisible();
+  await expect(retry).toHaveClass(/outline/);
+  const response = page.waitForResponse(
+    (result) => new URL(result.url()).pathname === path,
+  );
+  await retry.click();
+  await retryRequestStarted;
+  await expect(retry).toBeDisabled();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  releaseRetry();
+  await response;
+  await expect(page.locator("#recipe-inspirations .feedback.error")).toHaveCount(
+    0,
+  );
 });

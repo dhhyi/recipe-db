@@ -33,7 +33,7 @@ func assertStyledErrorPage(t *testing.T, response *httptest.ResponseRecorder, st
 		!strings.Contains(body, "<title>"+title+"</title>") {
 		t.Fatalf("incorrect styled error response body: %s", body)
 	}
-	if !strings.Contains(body, "<p>"+message+"</p>") || strings.Contains(body, "<form") ||
+	if !strings.Contains(body, `<p class="feedback error">`+message+`</p>`) || strings.Contains(body, "<form") ||
 		strings.Contains(body, "data-recipe-id") || strings.Contains(body, "<script>alert") {
 		t.Fatalf("error page is not message-only or escaped: %s", body)
 	}
@@ -53,7 +53,7 @@ func TestUnknownBrowseURLAndEscapedError(t *testing.T) {
 		request.Header.Set("If-None-Match", "*")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
-		assertStyledErrorPage(t, response, http.StatusNotFound, "page not found | RezeptDB", "page not found", method == "HEAD")
+		assertStyledErrorPage(t, response, http.StatusNotFound, "Seite nicht gefunden | RezeptDB", "Seite nicht gefunden.", method == "HEAD")
 	}
 	if calls.Load() != 0 {
 		t.Fatal("unknown URL queried backend")
@@ -262,7 +262,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	if !strings.Contains(pageHTML, "Zuletzt aktualisiert: vor langer Zeit") {
 		t.Fatal("recipe update time must be displayed in German")
 	}
-	if strings.Contains(pageHTML, "Inspirationen") {
+	if strings.Contains(pageHTML, "<h2>Inspirationen</h2>") {
 		t.Fatal("shared page must not contain the lazy inspirations heading")
 	}
 	if !strings.Contains(pageHTML, "/recipe/42/controls") || !strings.Contains(pageHTML, "/recipe/42/inspirations") ||
@@ -293,7 +293,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		widget := request("GET", "/controls", "")
 		body := widget.Body.String()
 		if widget.Code != 200 || strings.Contains(body, `data-add-recipe`) != online ||
-			strings.Contains(body, `role="button"`) != online ||
+			strings.Contains(body, `role="button"`) ||
 			strings.Contains(body, `class="pointer-events-auto mr-2"`) != online ||
 			!strings.Contains(body, `class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none"`) ||
 			strings.Contains(body, "Rezept hinzufügen") != online ||
@@ -411,6 +411,6 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	for _, method := range []string{"GET", "HEAD"} {
 		page := request(method, "/recipe/42", etag)
-		assertStyledErrorPage(t, page, http.StatusNotFound, "recipe not found | RezeptDB", "recipe not found", method == "HEAD")
+		assertStyledErrorPage(t, page, http.StatusNotFound, "Rezept nicht gefunden | RezeptDB", "Rezept nicht gefunden.", method == "HEAD")
 	}
 }

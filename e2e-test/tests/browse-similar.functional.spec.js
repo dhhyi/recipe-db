@@ -309,10 +309,12 @@ test("pending double-click and failed append retain cards and the exact retry qu
     },
   );
   const button = section(page).locator('form button[type="submit"]');
+  await expect(button).toHaveClass(/outline/);
   await button.scrollIntoViewIfNeeded();
   await button.dblclick();
   await expect.poll(() => requests.length).toBe(1);
   await expect(button).toBeDisabled();
+  await expect(button).toHaveAttribute("aria-busy", "true");
   expect(requests[0].method()).toBe("POST");
   expect(requests[0].headers()["hx-request"]).toBe("true");
   expect(
@@ -322,6 +324,7 @@ test("pending double-click and failed append retain cards and the exact retry qu
   expect(await remainingIds(page)).toEqual(queue);
   release();
   await expect(button).toBeEnabled();
+  await expect(button).not.toHaveAttribute("aria-busy", "true");
   await expect(
     section(page).getByText("Ähnliche Rezepte konnten nicht geladen werden", {
       exact: false,
@@ -339,6 +342,7 @@ test("pending double-click and failed append retain cards and the exact retry qu
   await button.click();
   await failedResponse;
   await expect(button).toBeEnabled();
+  await expect(button).not.toHaveAttribute("aria-busy", "true");
   expect(await cardIds(page)).toEqual(previous);
   expect(await remainingIds(page)).toEqual(queue);
   await expect(

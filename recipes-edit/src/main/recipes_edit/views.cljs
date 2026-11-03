@@ -34,15 +34,17 @@
     {:type "text"
      :id (str "ingredient-amount-unit-" index)
      :placeholder "Menge/Einheit"
+     :aria-label "Menge/Einheit"
      :value (model/format-amount-unit ingredient)
      :on-change #(rf/dispatch [::events/set-ingredient-amount-unit index (.. % -target -value)])}]
    [:input.min-w-0
     {:type "text"
      :id (str "ingredient-name-" index)
      :placeholder "Zutat"
+     :aria-label "Zutat"
      :value (:name ingredient)
      :on-change #(rf/dispatch [::events/set-ingredient-name index (.. % -target -value)])}]
-   [:button
+   [:button.outline
     {:type "button"
      :aria-label "Zutat entfernen"
      :title "Zutat entfernen"
@@ -50,7 +52,7 @@
     "-"]])
 
 (defn- return-action [{:keys [route status]}]
-  [:a.secondary
+  [:a
    {:href (if (= :edit (:page route)) (str "/recipe/" (:id route)) "/")
     :role "button"
     :aria-disabled (= :saving status)
@@ -65,25 +67,24 @@
                    (.preventDefault event)
                    (rf/dispatch [::events/save]))}
      [:fieldset {:disabled saving?}
-      [:fieldset
-       [:label
-        [:span#name-label "Name"]
-        [:input.min-w-0
-         (cond-> {:type "text"
-                  :id "name"
-                  :name "name"
-                  :aria-labelledby "name-label"
-                  :value (:name form)
-                  :on-change #(rf/dispatch [::events/set-name (.. % -target -value)])}
-           name-error? (assoc :aria-invalid "true" :aria-describedby "name-helper"))]
-        (when name-error?
-          [:small#name-helper {:role "alert"} "Name darf nicht leer sein."])]]
+      [:input.min-w-0
+       (cond-> {:type "text"
+                :id "name"
+                :name "name"
+                :placeholder "Name"
+                :aria-label "Name"
+                :value (:name form)
+                :on-change #(rf/dispatch [::events/set-name (.. % -target -value)])}
+         name-error? (assoc :aria-invalid "true" :aria-describedby "name-helper"))]
+      (when name-error?
+        [:small#name-helper {:role "alert"} "Name darf nicht leer sein."])
       [:h2 "Zutaten"]
       (doall (map-indexed ingredient-row (:ingredients form)))
       [:h2 "Zubereitung"]
       [auto-sizing-textarea
        {:id "method"
         :name "method"
+        :aria-label "Zubereitung"
         :rows 4
         :value (:method form)
         :style {:scrollbar-width "none"}
@@ -101,23 +102,25 @@
                {:type "url"
                 :id (str "inspiration-" index)
                 :placeholder "Link"
+                :aria-label "Link"
                 :value inspiration
                 :on-change #(rf/dispatch [::events/set-inspiration index (.. % -target -value)])}]])
            (:inspirations form)))])]
      (when (= :error (:kind feedback))
        [:p.feedback.error {:role "alert"} (:message feedback)])
-     [:p {:role "status" :aria-live "polite"}
-      (cond
-        saving? "Änderungen werden gespeichert. Bitte warten …"
-        dirty? "Ungespeicherte Änderungen."
-        (= :success (:kind feedback)) (:message feedback)
-        :else "Keine ungespeicherten Änderungen.")]
+     (when dirty?
+       [:p.feedback.warning {:role "status" :aria-live "polite"}
+        "Ungespeicherte Änderungen."])
+     (when (= :success (:kind feedback))
+       [:p.feedback.success {:role "status" :aria-live "polite"}
+        (:message feedback)])
      [:div.editor-actions {:class "grid! gap-2 my-3"}
       [:div.editor-buttons.flex.flex-wrap.gap-2
        [:button.w-auto!.max-w-full
-        {:type "submit" :disabled (or saving? (not dirty?)) :aria-busy saving?}
-        (cond saving? "Speichert …" save-failed? "Erneut speichern" :else "Speichern")]
-       [:button.secondary.w-auto!.max-w-full
+        (cond-> {:type "submit" :disabled (or saving? (not dirty?))}
+          saving? (assoc :aria-busy "true"))
+        (if save-failed? "Erneut speichern" "Speichern")]
+       [:button.outline.w-auto!.max-w-full
         {:type "button"
          :disabled (or saving? (not dirty?))
          :on-click #(rf/dispatch [::events/discard])}
@@ -127,14 +130,12 @@
 (defn app []
   (let [{:keys [route status feedback] :as state} @(rf/subscribe [::subs/state])]
     (case (:authorization state)
-      :loading [:<> [:h1 "Zugriff wird geprüft"] [:p {:role "status"} "Bitte warten …"] [return-action state]]
+      :loading [:<> [:div {:aria-busy "true" :aria-label "Zugriff wird geprüft"}] [return-action state]]
       :authentication-required
       [:<>
        [:h1 "Anmeldung erforderlich"]
        [:p.feedback.error {:role "alert"} "Zum Bearbeiten von Rezepten ist eine Anmeldung erforderlich."]
-       [:div.grid.gap-2
-        [:a {:href "/oauth2/start?rd=%2F"} "Mit Google anmelden"]
-        [return-action state]]]
+       [return-action state]]
       :forbidden
       [:<>
        [:h1 "Keine Berechtigung"]
@@ -144,9 +145,7 @@
       [:<>
        [:h1 "Zugriff nicht verfügbar"]
        [:p.feedback.error {:role "alert"} (:authorization-message state)]
-       [:div.grid.gap-2
-        [:a {:href "/oauth2/start?rd=%2F"} "Anmelden"]
-        [return-action state]]]
+       [return-action state]]
       :allowed
       (case (:page route)
         :new (if (= :outcome-unknown status)
@@ -158,8 +157,8 @@
         :edit [:<>
                [:h1 "Rezept bearbeiten"]
                (case status
-                 :loading [:<> [:p {:role "status"} "Lädt…"] [return-action state]]
-                 :not-found [:<> [:p "Rezept nicht gefunden."] [return-action state]]
+                 :loading [:<> [:div {:aria-busy "true" :aria-label "Rezept wird geladen"}] [return-action state]]
+                 :not-found [:<> [:p.feedback.error {:role "alert"} "Rezept nicht gefunden."] [return-action state]]
                  :error [:<> [:p.feedback.error {:role "alert"} (:message feedback)] [return-action state]]
                  [recipe-form state])]
         "Page not found.")

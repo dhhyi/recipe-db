@@ -310,10 +310,10 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			}
 			log.Printf("failed to fetch recipe: %v", err)
 			if errors.Is(err, errRecipeNotFound) {
-				writeErrorPage(w, r, http.StatusNotFound, "recipe not found | RezeptDB", "recipe not found")
+				writeErrorPage(w, r, http.StatusNotFound, "Rezept nicht gefunden | RezeptDB", "Rezept nicht gefunden.")
 				return
 			}
-			writeErrorPage(w, r, http.StatusInternalServerError, "failed to fetch recipe | RezeptDB", "failed to fetch recipe")
+			writeErrorPage(w, r, http.StatusInternalServerError, "Rezept konnte nicht geladen werden | RezeptDB", "Rezept konnte nicht geladen werden.")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -352,7 +352,7 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			http.NotFound(w, r)
 			return
 		}
-		writeErrorPage(w, r, http.StatusNotFound, "page not found | RezeptDB", "page not found")
+		writeErrorPage(w, r, http.StatusNotFound, "Seite nicht gefunden | RezeptDB", "Seite nicht gefunden.")
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

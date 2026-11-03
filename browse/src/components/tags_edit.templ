@@ -27,11 +27,12 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 		id="recipe-tags"
 		class="contents"
 		hx-sync="this:replace"
-		hx-on::before-request="if (event.detail.requestConfig.verb !== 'get') { if (this.dataset.pending === 'true') { event.preventDefault(); return; } this.dataset.pending = 'true'; this.setAttribute('aria-busy', 'true'); this.querySelectorAll('button, input').forEach(control => control.disabled = true); const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Tag-Zuordnung wird gespeichert…'; status.className = 'feedback'; } }"
-		hx-on::after-request="if (event.detail.requestConfig.verb !== 'get') { delete this.dataset.pending; this.removeAttribute('aria-busy'); this.querySelectorAll('button, input').forEach(control => control.disabled = false); }"
+		hx-on::before-request="if (event.detail.requestConfig.verb !== 'get') { if (this.dataset.pending === 'true') { event.preventDefault(); return; } this.dataset.pending = 'true'; const control = event.detail.triggeringEvent?.submitter || event.detail.triggeringEvent?.target?.closest('button') || event.detail.elt; control?.setAttribute('aria-busy', 'true'); this.querySelectorAll('button, input').forEach(control => control.disabled = true); }"
+		hx-on::after-request="if (event.detail.requestConfig.verb !== 'get') { delete this.dataset.pending; this.querySelectorAll('button, input').forEach(control => { control.disabled = false; control.removeAttribute('aria-busy'); }); }"
 		hx-on::before-swap="if (event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true' || event.detail.target?.id === 'recipe-tag-options'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
 		hx-on::response-error="if (event.detail.target?.id === 'recipe-tag-options') { event.detail.target.innerHTML = '<p role=&quot;alert&quot; class=&quot;feedback error&quot;>Tag-Auswahl konnte nicht geladen werden.</p>'; const retry = this.querySelector('[data-options-retry]'); if (retry) retry.hidden = false; } else { const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } }"
-		hx-on::send-error="delete this.dataset.pending; this.removeAttribute('aria-busy'); this.querySelectorAll('button, input').forEach(control => control.disabled = false); const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Die Änderung konnte nicht bestätigt werden. Bitte erneut laden oder versuchen.'; status.className = 'feedback error'; } const options = this.querySelector('#recipe-tag-options'); const retry = this.querySelector('[data-options-retry]'); if (options) options.textContent = 'Tag-Auswahl konnte nicht geladen werden.'; if (retry) retry.hidden = false;"
+		hx-on::send-error="if (event.detail.target?.id === 'recipe-tag-options') { event.detail.target.innerHTML = '<p role=&quot;alert&quot; class=&quot;feedback error&quot;>Tag-Auswahl konnte nicht geladen werden.</p>'; const retry = this.querySelector('[data-options-retry]'); if (retry) retry.hidden = false; } else { const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Die Änderung konnte nicht bestätigt werden. Bitte erneut laden oder versuchen.'; status.className = 'feedback error'; } }"
+		hx-on::timeout="htmx.trigger(this, 'htmx:sendError', event.detail)"
 		hx-on:recipe-tags-added="this.querySelector('#recipe-tag-search')?.focus()"
 		hx-on:recipe-tag-removed="const control = this.querySelector('[data-tag-remove]') || this.querySelector('#recipe-tag-search'); control?.focus()"
 	>
@@ -41,11 +42,12 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 		if owner {
 			if edit {
 				<section aria-label="Tag hinzufügen" class="flex flex-col gap-2">
-					<label for="recipe-tag-search">Tag suchen</label>
 					<input
 						id="recipe-tag-search"
 						type="search"
 						name="q"
+						placeholder="Tag suchen"
+						aria-label="Tag suchen"
 						autocomplete="off"
 						hx-get={ recipeTagsPath(id) + "/options" }
 						hx-trigger="input[!event.isComposing] changed delay:300ms, compositionend delay:300ms, search"
@@ -65,17 +67,21 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 							hx-swap="innerHTML"
 							hx-sync="#recipe-tags:drop"
 						>
-							<p>Verfügbare Tags werden geladen…</p>
+							<div aria-busy="true" aria-label="Verfügbare Tags werden geladen"></div>
 						</div>
 					</div>
 					<button
 						type="button"
+						class="outline"
 						data-options-retry
 						hidden
 						hx-get={ recipeTagsPath(id) + "/options" }
 						hx-target="#recipe-tag-options"
 						hx-swap="innerHTML"
 						hx-sync="#recipe-tags:drop"
+						hx-disabled-elt="this"
+						hx-on::before-request="this.setAttribute('aria-busy', 'true')"
+						hx-on::after-request="this.removeAttribute('aria-busy')"
 					>Tag-Auswahl erneut laden</button>
 					<form
 						action={ recipeTagsPath(id) }
@@ -84,6 +90,9 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 						hx-target="#recipe-tags"
 						hx-swap="outerHTML"
 						hx-sync="#recipe-tags:drop"
+						hx-disabled-elt="find button"
+						hx-on::before-request="this.querySelector('button')?.setAttribute('aria-busy', 'true')"
+						hx-on::after-request="this.querySelector('button')?.removeAttribute('aria-busy')"
 					>
 						<button type="submit">Fertig</button>
 					</form>
@@ -91,10 +100,14 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 			} else {
 				<button
 					type="button"
+					class="outline"
 					hx-get={ recipeTagsPath(id) + "?edit=1" }
 					hx-target="#recipe-tags"
 					hx-swap="outerHTML"
 					hx-sync="#recipe-tags:drop"
+					hx-disabled-elt="this"
+					hx-on::before-request="this.setAttribute('aria-busy', 'true')"
+					hx-on::after-request="this.removeAttribute('aria-busy')"
 				>Tags bearbeiten</button>
 			}
 		}
@@ -104,14 +117,18 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 				if owner && edit {
 					<button
 						type="button"
+						class="outline"
 						hx-get={ recipeTagsPath(id) + "?edit=1" }
 						hx-target="#recipe-tags"
 						hx-swap="outerHTML"
 						hx-sync="#recipe-tags:drop"
+						hx-disabled-elt="this"
+						hx-on::before-request="this.setAttribute('aria-busy', 'true')"
+						hx-on::after-request="this.removeAttribute('aria-busy')"
 					>Tags neu laden</button>
 				}
 			} else {
-				<p data-tag-feedback role="status" class="feedback" aria-live="polite">{ feedback }</p>
+				<p data-tag-feedback role="status" class="feedback success" aria-live="polite">{ feedback }</p>
 			}
 		} else {
 			<p data-tag-feedback role="status" aria-live="polite" hidden></p>
@@ -181,8 +198,12 @@ templ TagOptionsError(retryURL, message string) {
 	<p role="alert" class="feedback error">{ message }</p>
 	<button
 		type="button"
+		class="outline"
 		hx-get={ retryURL }
 		hx-target="#recipe-tag-options"
 		hx-swap="innerHTML"
+		hx-disabled-elt="this"
+		hx-on::before-request="this.setAttribute('aria-busy', 'true')"
+		hx-on::after-request="this.removeAttribute('aria-busy')"
 	>Erneut versuchen</button>
 }

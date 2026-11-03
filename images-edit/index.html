@@ -89,15 +89,31 @@
       .image-editor .crop-dimensions {
         overflow-wrap: anywhere;
       }
-      .image-editor .warning {
-        border-left: 4px solid #946400;
-        padding-left: 12px;
-      }
     </style>
   </head>
 
   <body class="container">
     <header-component></header-component>
+    <script>
+      fetch("/identity", { cache: "no-store" })
+        .then((response) => (response.ok ? response.text() : ""))
+        .then((markup) => {
+          if (!markup) return;
+          const identity = new DOMParser()
+            .parseFromString(markup, "text/html")
+            .querySelector("header-component");
+          const header = document.querySelector("header-component");
+          if (!identity || !header) return;
+          for (const attribute of ["auth-role", "auth-name"]) {
+            if (identity.hasAttribute(attribute)) {
+              header.setAttribute(attribute, identity.getAttribute(attribute));
+            } else {
+              header.removeAttribute(attribute);
+            }
+          }
+        })
+        .catch(() => {});
+    </script>
     <script src="/images-edit/elm.js"></script>
     <main></main>
     <footer-component></footer-component>
