@@ -1063,7 +1063,12 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
     ]
     head = pull_requests[0].get("head") if len(pull_requests) == 1 else None
     head_repo = head.get("repo") if isinstance(head, dict) else None
-    if not isinstance(head_repo, dict) or head_repo.get("full_name") != repository:
+    producer_repo = detail.get("repository")
+    if not isinstance(head_repo, dict) or not isinstance(producer_repo, dict) \
+            or producer_repo.get("full_name") != repository \
+            or type(producer_repo.get("id")) is not int or producer_repo["id"] <= 0 \
+            or type(head_repo.get("id")) is not int \
+            or head_repo["id"] != producer_repo["id"]:
         print(f"cache: trust-rejected pr={pr_number}: producer PR head is not from this repository")
         return False
     encoded_login = urllib.parse.quote(login, safe="")
