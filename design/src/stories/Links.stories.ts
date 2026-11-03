@@ -14,11 +14,9 @@ type Story = StoryObj;
 export const Variants: Story = {
   render: () => html`
     <main class="container">
-      <article aria-label="Link variants">
-        <p><a href="#">Primary link</a></p>
-        <p><a href="#" class="secondary">Secondary link</a></p>
-        <p><a href="#" class="contrast">Contrast link</a></p>
-      </article>
+      <p><a href="#">Primary link</a></p>
+      <p><a href="#" class="secondary">Secondary link</a></p>
+      <p><a href="#" class="contrast">Contrast link</a></p>
     </main>
   `,
 };
@@ -26,11 +24,9 @@ export const Variants: Story = {
 export const Current: Story = {
   render: () => html`
     <main class="container">
-      <article aria-label="Current link state">
-        <p><a href="#">All recipes</a></p>
-        <p><a href="#" aria-current="page">Favorites</a></p>
-        <p><a href="#">Shopping list</a></p>
-      </article>
+      <p><a href="#">All recipes</a></p>
+      <p><a href="#" aria-current="page">Favorites</a></p>
+      <p><a href="#">Shopping list</a></p>
     </main>
   `,
 };
@@ -38,11 +34,9 @@ export const Current: Story = {
 export const AsButtons: Story = {
   render: () => html`
     <main class="container">
-      <article aria-label="Links rendered as buttons">
-        <a href="#" role="button">Primary action</a>
-        <a href="#" role="button" class="secondary">Secondary action</a>
-        <a href="#" role="button" class="outline contrast">Quiet action</a>
-      </article>
+      <a href="#" role="button">Primary action</a>
+      <a href="#" role="button" class="secondary">Secondary action</a>
+      <a href="#" role="button" class="outline contrast">Quiet action</a>
     </main>
   `,
 };

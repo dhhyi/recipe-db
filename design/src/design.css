@@ -7,11 +7,6 @@
   --pico-primary-background: #0a750f !important;
   --pico-primary-hover-background: #12c01b !important;
   --pico-primary-focus: #12d21ca9 !important;
-  --pico-card-border-color: color-mix(
-    in srgb,
-    currentColor 50%,
-    white
-  ) !important;
 }
 
 h1,
