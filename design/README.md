@@ -35,6 +35,15 @@ Use Storybook's theme switch to review every story in light and dark mode. Do no
 - Footer links use the Blades `secondary` link class. Do not use `secondary` links elsewhere, and do not use `contrast` links.
 - Footer links are low-priority meta links, so their reduced light-theme contrast (about 2.7:1 against white, below WCAG AA) is accepted. Do not use the `secondary` link color for content or navigation that users need.
 
+## Feedback
+
+- Messages about the outcome of an action or the state of loaded content use the `feedback` classes defined in `design.css`, combined with `role="status"` or `role="alert"`:
+  - `feedback success` (Pico `--pico-ins-color`): an action succeeded, for example "Gespeichert".
+  - `feedback warning` (`--feedback-warning-color`, our own color because Blades has none): the action works, but the result has a drawback.
+  - `feedback error` (Pico `--pico-del-color`): an action, loading, or access failed.
+- Neutral progress and state messages ("Lädt…", "Ungespeicherte Änderungen.") stay plain text.
+- Form field validation uses the Blades `aria-invalid` styling with a helper `<small>`, not `feedback`.
+
 ## Tailwind CSS
 
 The shared `design` project builds the Tailwind stylesheet used by frontend projects. A frontend that loads `/design/styles.css` declares the files or directories containing its utility classes with `tailwindSources` in the second document of its `.project.yaml`.

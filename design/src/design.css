@@ -108,9 +108,27 @@ footer-component {
   display: contents;
 }
 
+:root {
+  --feedback-warning-color: #9a6700;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --feedback-warning-color: #c89b3c;
+  }
+}
+
+[data-theme="dark"] {
+  --feedback-warning-color: #c89b3c;
+}
+
 .feedback {
   &.success {
     color: var(--pico-ins-color);
+  }
+
+  &.warning {
+    color: var(--feedback-warning-color);
   }
 
   &.error {
