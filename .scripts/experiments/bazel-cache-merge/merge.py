@@ -141,6 +141,8 @@ def snapshot(root):
     for key, data in entries["ac"].items():
         try:
             for hashed, size in references(data):
+                if size == 0 and hashed == hashlib.sha256(b"").hexdigest():
+                    continue
                 blob = entries["cas"].get(hashed)
                 if blob is None or len(blob) != size:
                     raise Invalid(f"missing/wrong-size referenced blob {hashed}")

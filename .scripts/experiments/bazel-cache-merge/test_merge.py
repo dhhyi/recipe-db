@@ -91,6 +91,12 @@ class MergeTests(unittest.TestCase):
         put(self.main, "ac", self.key, self.data.replace(b"\x10\x04", b"\x10\x05"))
         self.rejected("wrong-size")
 
+    def test_canonical_empty_blob_needs_no_cas_file(self):
+        _, empty = result(self.pr, "b" * 64, b"")
+        (self.pr / "cas" / empty[:2] / empty).unlink()
+        merge(self.main, self.pr, self.dest)
+        snapshot(self.dest)
+
     def test_incomplete_snapshot_without_action_result_is_safe(self):
         (self.main / "ac" / self.key[:2] / self.key).unlink()
         merge(self.main, self.pr, self.dest)

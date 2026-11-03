@@ -54,9 +54,10 @@ def run():
         assert not base.exists()
         command = [
             "bash", str(launcher), "--batch", "--ignore_all_rc_files",
+            "--host_jvm_args=-Dbazel.DigestFunction=SHA256",
             f"--output_base={base}", "build", "--enable_bzlmod=false",
             "--enable_workspace=true", "--incompatible_autoload_externally=",
-            "--action_env=PATH", "--digest_function=SHA256",
+            "--action_env=PATH",
             "--remote_verify_downloads=true", f"--disk_cache={cache}",
             f"--execution_log_json_file={work / (name + '-execution.json')}",
         ] + targets
@@ -75,11 +76,11 @@ def run():
                 text = text.lstrip()[end:]
         executed = sorted(
             r["targetLabel"] for r in records
-            if r.get("mnemonic") == "Genrule" and not r.get("cacheHit", False)
+            if r.get("mnemonic") in ("Genrule", "CacheUnion") and not r.get("cacheHit", False)
         )
         hits = sorted(
             r["targetLabel"] for r in records
-            if r.get("mnemonic") == "Genrule" and r.get("cacheHit", False)
+            if r.get("mnemonic") in ("Genrule", "CacheUnion") and r.get("cacheHit", False)
         )
         evidence[name] = {
             "returncode": result.returncode, "executed": executed,
@@ -111,6 +112,9 @@ def run():
     build("clean", work / "clean", ["//:combined"],
           ["//:combined", "//:main", "//:pr", "//:shared"])
     assert evidence["combined"]["outputs"] == evidence["clean"]["outputs"]
+    assert evidence["combined"]["outputs"]["main.out"]["executable"]
+    assert not evidence["combined"]["outputs"]["pr.out"]["executable"]
+    assert not evidence["combined"]["outputs"]["shared.out"]["executable"]
     (workspace / "pr.txt").write_text("pr changed\n")
     build("changed", copied("changed"), ["//:combined"], ["//:combined", "//:pr"])
     assert evidence["changed"]["hits"] == ["//:main", "//:shared"]
