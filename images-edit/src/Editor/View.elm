@@ -85,7 +85,12 @@ editorView model =
                 loadingPlaceholder "Rezept wird geladen"
 
             ( Loading, _ ) ->
-                loadingPlaceholder "Bild wird geladen"
+                case model.session of
+                    Just session ->
+                        sourceView model session
+
+                    Nothing ->
+                        loadingPlaceholder "Bild wird geladen"
 
             _ ->
                 case model.session of

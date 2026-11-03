@@ -54,7 +54,6 @@
 (defn- return-action [{:keys [route status]}]
   [:a
    {:href (if (= :edit (:page route)) (str "/recipe/" (:id route)) "/")
-    :role "button"
     :aria-disabled (= :saving status)
     :tab-index (when (= :saving status) -1)}
    (if (= :edit (:page route)) "Zurück zum Rezept" "Zurück zur Übersicht")])

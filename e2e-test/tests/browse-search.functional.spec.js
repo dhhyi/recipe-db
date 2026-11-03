@@ -52,7 +52,7 @@ function resultsFragment({
     )
     .join("");
   const pagination = next
-    ? `<div id="browse-pagination" class="contents" hx-get="${nextURL}" hx-vals='${values}' hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort"><nav aria-label="Weitere Rezepte" class="justify-center col-span-full order-1"><div aria-busy="true" aria-label="Weitere Rezepte werden geladen"></div><p hidden role="alert" class="feedback error">Weitere Rezepte konnten nicht geladen werden.</p><button type="button" class="outline" data-load-more hidden hx-get="${nextURL}" hx-vals='${values}' hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" hx-disabled-elt="this" hx-on::before-request="this.setAttribute('aria-busy', 'true')" hx-on::after-request="this.removeAttribute('aria-busy')">Erneut versuchen</button></nav></div>`
+    ? `<div id="browse-pagination" class="contents" hx-get="${nextURL}" hx-vals='${values}' hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort"><nav aria-label="Weitere Rezepte" class="justify-center col-span-full order-1"><div data-pagination-spinner aria-busy="true" aria-label="Weitere Rezepte werden geladen"></div><p data-pagination-error hidden role="alert" class="feedback error">Weitere Rezepte konnten nicht geladen werden.</p><button type="button" class="outline" data-load-more hidden hx-get="${nextURL}" hx-vals='${values}' hx-target="#browse-pagination" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort" hx-disabled-elt="this" hx-on::before-request="this.setAttribute('aria-busy', 'true')" hx-on::after-request="this.removeAttribute('aria-busy')">Erneut versuchen</button></nav></div>`
     : "";
   if (append) return metadata + cards + pagination;
   return `<section id="browse-results">
@@ -538,7 +538,9 @@ test("sentinel loading serializes requests, deduplicates and stops at the end", 
   await expect(page.getByRole("status")).toHaveText(
     "73 Rezepte gefunden. Alle Rezepte geladen.",
   );
-  await expect(page.getByRole("button", { name: "Erneut versuchen" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Erneut versuchen" }),
+  ).toHaveCount(0);
   await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
   expect(requested).toEqual([1, 2, 3, 4]);
 });
@@ -613,11 +615,12 @@ for (const kind of ["error", "fallback"]) {
         {
           page: pageNumber,
           found: 48,
-          ids: pageNumber === 1
-            ? ["filtered"]
-            : kind === "fallback"
-              ? ["unfiltered"]
-              : ["filtered", "recovered"],
+          ids:
+            pageNumber === 1
+              ? ["filtered"]
+              : kind === "fallback"
+                ? ["unfiltered"]
+                : ["filtered", "recovered"],
           kind: pageNumber === 1 || kind === "error" ? "search" : kind,
         },
         authContexts.authorizationHeader("owner"),
@@ -629,12 +632,14 @@ for (const kind of ["error", "fallback"]) {
     await expect(page.locator("[data-recipe-id=filtered]")).toBeVisible();
     await triggerSentinel(page);
     await expect(
-      page.getByText(
-        kind === "error"
-          ? "Weitere Rezepte konnten nicht geladen werden."
-          : "Suche nicht verfügbar. Alle Rezepte werden angezeigt.",
-        { exact: true },
-      ),
+      kind === "error"
+        ? page.locator("#browse-pagination [role=alert]")
+        : page.getByText(
+            "Suche nicht verfügbar. Alle Rezepte werden angezeigt.",
+            {
+              exact: true,
+            },
+          ),
     ).toBeVisible();
     await expect(page.locator("[data-recipe-id=filtered]")).toHaveCount(
       kind === "error" ? 1 : 0,
@@ -1053,7 +1058,7 @@ for (const failure of ["network", "502"]) {
     await page.getByRole("searchbox").press("Enter");
     await expect(page.locator("[data-recipe-id=filtered]")).toBeVisible();
     await triggerSentinel(page);
-    await expect(page.getByRole("status")).toHaveText(
+    await expect(page.locator("#browse-pagination [role=alert]")).toHaveText(
       "Weitere Rezepte konnten nicht geladen werden.",
     );
     await expect(page.locator("[data-recipe-id=filtered]")).toHaveCount(1);
@@ -1061,7 +1066,7 @@ for (const failure of ["network", "502"]) {
     await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
     await triggerSentinel(page);
     expect(requested).toEqual([1, 2]);
-    await page.getByRole("link", { name: "Erneut versuchen" }).click();
+    await page.getByRole("button", { name: "Erneut versuchen" }).click();
     await expect(page.locator("#browse-metadata")).toHaveAttribute(
       "data-page",
       "2",
@@ -1127,11 +1132,12 @@ test.describe("pagination", () => {
         `/?q=${encodeURIComponent("E2E Suchrezept")}&sort=newest`,
       );
       await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
-      await expect(page.locator("#browse-pagination [aria-busy='true']")).toHaveAttribute(
-        "aria-label",
-        "Weitere Rezepte werden geladen",
+      await expect(
+        page.locator("#browse-pagination [aria-busy='true']"),
+      ).toHaveAttribute("aria-label", "Weitere Rezepte werden geladen");
+      await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(
+        0,
       );
-      await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(0);
     } finally {
       await identity.close();
     }
