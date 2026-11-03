@@ -1,19 +1,23 @@
-load(":action.bzl", "cache_action")
-
-cache_action(
+genrule(
     name = "shared",
-    src = "shared.txt",
+    srcs = ["shared.txt"],
+    outs = ["shared.out"],
+    cmd = "cat $(SRCS) > $@",
 )
 
-cache_action(
+genrule(
     name = "main",
-    src = "main.txt",
+    srcs = ["main.txt"],
+    outs = ["main.out"],
+    cmd = "cat $(SRCS) > $@",
     executable = True,
 )
 
-cache_action(
+genrule(
     name = "pr",
-    src = "pr.txt",
+    srcs = ["pr.txt"],
+    outs = ["pr.out"],
+    cmd = "cat $(SRCS) > $@",
 )
 
 genrule(

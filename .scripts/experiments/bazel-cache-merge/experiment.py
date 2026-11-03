@@ -76,11 +76,11 @@ def run():
                 text = text.lstrip()[end:]
         executed = sorted(
             r["targetLabel"] for r in records
-            if r.get("mnemonic") in ("Genrule", "CacheUnion") and not r.get("cacheHit", False)
+            if r.get("mnemonic") == "Genrule" and not r.get("cacheHit", False)
         )
         hits = sorted(
             r["targetLabel"] for r in records
-            if r.get("mnemonic") in ("Genrule", "CacheUnion") and r.get("cacheHit", False)
+            if r.get("mnemonic") == "Genrule" and r.get("cacheHit", False)
         )
         evidence[name] = {
             "returncode": result.returncode, "executed": executed,
@@ -113,8 +113,6 @@ def run():
           ["//:combined", "//:main", "//:pr", "//:shared"])
     assert evidence["combined"]["outputs"] == evidence["clean"]["outputs"]
     assert evidence["combined"]["outputs"]["main.out"]["executable"]
-    assert not evidence["combined"]["outputs"]["pr.out"]["executable"]
-    assert not evidence["combined"]["outputs"]["shared.out"]["executable"]
     (workspace / "pr.txt").write_text("pr changed\n")
     build("changed", copied("changed"), ["//:combined"], ["//:combined", "//:pr"])
     assert evidence["changed"]["hits"] == ["//:main", "//:shared"]
@@ -129,6 +127,12 @@ def run():
         key for key, data in entries["ac"].items() if b"main.out" in data
     )
     blob_key, _ = references(entries["ac"][main_key])[0]
+    incomplete = copied("incomplete")
+    entry(incomplete, "ac", main_key).unlink()
+    partial_union = work / "partial-union"
+    evidence["incomplete-merge"] = merge(incomplete, pr, partial_union)
+    build("incomplete", partial_union, ["//:combined"], ["//:combined", "//:main"])
+    assert evidence["incomplete"]["outputs"] == evidence["clean"]["outputs"]
     for name in ("missing", "corrupt", "malformed"):
         cache = copied(name)
         if name == "missing":
@@ -149,15 +153,23 @@ def run():
             assert "//:main" in evidence[name]["executed"], evidence[name]
             assert evidence[name]["outputs"] == evidence["clean"]["outputs"]
 
-    # Same action key, different valid metadata; main's result is retained.
+    # Same action key, different output digest; main's result is retained.
     altered = work / "altered"
     shutil.copytree(main, altered)
     ac = entry(altered, "ac", main_key)
-    ac.write_bytes(ac.read_bytes() + b"\x2a\x09alternate")  # stdout_raw, field 5
+    alternate = b"other"
+    alternate_key = hashlib.sha256(alternate).hexdigest()
+    alternate_path = entry(altered, "cas", alternate_key)
+    alternate_path.parent.mkdir(parents=True, exist_ok=True)
+    alternate_path.write_bytes(alternate)
+    ac.write_bytes(ac.read_bytes().replace(blob_key.encode(), alternate_key.encode()))
     conflict = work / "conflict"
-    evidence["conflict"] = merge(main, altered, conflict)
+    evidence["conflict-merge"] = merge(main, altered, conflict)
     assert entry(conflict, "ac", main_key).read_bytes() == entries["ac"][main_key]
+    assert entry(conflict, "cas", blob_key).exists()
+    assert entry(conflict, "cas", alternate_key).exists()
     build("conflict", conflict, ["//:main"], [])
+    assert evidence["conflict"]["outputs"] == {"main.out": evidence["main"]["outputs"]["main.out"]}
     (work / "evidence.json").write_text(json.dumps(evidence, indent=2))
     print("PASS; evidence retained at", work, flush=True)
     return work
