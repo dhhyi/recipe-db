@@ -57,7 +57,7 @@ jobs:
           docker --version
           docker compose version
 
-      - name: restore Bazel disk cache artifact
+      - name: restore and union Bazel disk cache artifacts
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || '' }}

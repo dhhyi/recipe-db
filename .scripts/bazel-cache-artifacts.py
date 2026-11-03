@@ -861,7 +861,7 @@ def jobs_for_attempt(base, token, run_id, attempt):
 
 
 def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number,
-                    repository, commit=None):
+                    repository, commit=None, expected_head=None):
     expected_scope = "main" if scope == "main" else f"pr-{pr_number}"
     expected_prefix = f"{ARTIFACT_PREFIX}-{expected_scope}-r{run['id']}-a{detail['run_attempt']}"
     if artifact_name != expected_prefix:
@@ -902,6 +902,8 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
                 or pull_request.get("head") != detail.get("head_sha") \
                 or pull_request.get("base") != matches[0].get("base", {}).get("sha"):
             raise Invalid("PR artifact identity does not match GitHub metadata")
+        if expected_head is not None and pull_request.get("head") != expected_head:
+            raise Invalid("PR artifact is not for the final PR head")
         parents = commit.get("parents", []) if isinstance(commit, dict) else []
         if commit is None or commit.get("sha") != manifest.get("builtCommit") \
                 or [parent.get("sha") for parent in parents] != [
@@ -961,7 +963,8 @@ def validate_manifest(manifest):
 
 
 def download_candidate(base, token, artifact, cache_path, repository,
-                      run, scope, pr_number):
+                      run, scope, pr_number, expected_head=None,
+                      require_trusted_writer=False):
     with tempfile.TemporaryDirectory(prefix="bazel-artifact-") as directory:
         root = Path(directory)
         zipped = root / "artifact.zip"
@@ -1018,18 +1021,247 @@ def download_candidate(base, token, artifact, cache_path, repository,
         if scope == "pr":
             built_commit = urllib.parse.quote(actual_manifest["builtCommit"], safe="")
             commit = request_json(f"{base}/git/commits/{built_commit}", token)
+            if expected_head is not None \
+                    and actual_manifest.get("pullRequest", {}).get("head") != expected_head:
+                raise Invalid("PR artifact is not for the final PR head")
         verify_producer(run, detail, jobs, actual_manifest, artifact["name"], scope,
-                        pr_number, repository, commit)
+                        pr_number, repository, commit, expected_head)
+        if require_trusted_writer and not trusted_pr_writer(
+            base, token, run, detail, repository, pr_number
+        ):
+            raise Invalid("PR artifact producer is not an eligible same-repository writer")
         if cache_path.exists():
             raise Invalid("cache destination already exists")
         restore_started = time.monotonic()
         stats = unpack_snapshot(snapshot_file, cache_path)
         stats["restoreSeconds"] = round(time.monotonic() - restore_started, 3)
         stats["peakRssBytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        stats["artifactBytes"] = received
+        stats["snapshotBytes"] = snapshot_info.file_size
+        identity = ""
+        if scope == "pr":
+            pr_identity = actual_manifest["pullRequest"]
+            identity = f" head={pr_identity['head']} base={pr_identity['base']}"
         print(f"cache: restored scope={scope} pr={pr_number or 'none'} "
               f"producer run={run['id']} attempt={attempt} "
-              f"revision={actual_manifest['builtCommit']} stats={json.dumps(stats)}")
+              f"revision={actual_manifest['builtCommit']}{identity} stats={json.dumps(stats)}")
         return None
+
+
+def trusted_pr_writer(base, token, run, detail, repository, pr_number):
+    actor = run.get("actor")
+    detail_actor = detail.get("actor")
+    login = actor.get("login") if isinstance(actor, dict) else None
+    if not login or not isinstance(detail_actor, dict) \
+            or detail_actor.get("login") != login \
+            or (actor.get("id") is not None and detail_actor.get("id") != actor["id"]):
+        print(f"cache: trust-rejected pr={pr_number}: producer actor identity is missing or inconsistent")
+        return False
+    pull_requests = [
+        item for item in detail.get("pull_requests", [])
+        if int(item.get("number", -1)) == pr_number
+    ]
+    head = pull_requests[0].get("head") if len(pull_requests) == 1 else None
+    head_repo = head.get("repo") if isinstance(head, dict) else None
+    if not isinstance(head_repo, dict) or head_repo.get("full_name") != repository:
+        print(f"cache: trust-rejected pr={pr_number}: producer PR head is not from this repository")
+        return False
+    encoded_login = urllib.parse.quote(login, safe="")
+    permission = request_json(
+        f"{base}/collaborators/{encoded_login}/permission", token
+    )
+    identity = permission.get("user", {}) if isinstance(permission, dict) else {}
+    if not isinstance(permission, dict) \
+            or identity.get("login") not in (None, login) \
+            or permission.get("permission") not in ("admin", "maintain", "write"):
+        print(f"cache: trust-rejected pr={pr_number}: actor {login} lacks verified write permission")
+        return False
+    print(f"cache: trust-accepted pr={pr_number} producer={login} "
+          f"permission={permission['permission']}")
+    return True
+
+
+def squash_pull_request(base, token, repository, commit_sha):
+    encoded_sha = urllib.parse.quote(commit_sha, safe="")
+    pulls = request_json(f"{base}/commits/{encoded_sha}/pulls", token)
+    if not isinstance(pulls, list):
+        print(f"cache: squash-fallback revision={commit_sha}: malformed associated-PR metadata")
+        return None
+    matches = [
+        pull for pull in pulls
+        if isinstance(pull, dict)
+        and pull.get("state") == "closed"
+        and pull.get("merged_at")
+        and pull.get("merge_commit_sha") == commit_sha
+        and pull.get("base", {}).get("ref") == "main"
+        and pull.get("base", {}).get("repo", {}).get("full_name") == repository
+    ]
+    if not matches:
+        print(f"cache: squash-not-found revision={commit_sha}: no merged PR association")
+        return None
+    if len(matches) != 1:
+        reason = "ambiguous merged PR association"
+        print(f"cache: squash-fallback revision={commit_sha}: {reason}")
+        return False
+    pull = matches[0]
+    head = pull.get("head")
+    if not isinstance(head, dict) or not re.fullmatch(
+        r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head.get("sha", ""))
+    ):
+        print(f"cache: squash-fallback revision={commit_sha}: malformed final PR head")
+        return False
+    if not isinstance(head.get("repo"), dict) \
+            or head["repo"].get("full_name") != repository:
+        print(f"cache: squash-fallback revision={commit_sha}: fork-produced PR cache is never imported")
+        return False
+    print(f"cache: squash-associated revision={commit_sha} pr={pull['number']} "
+          f"final-head={head['sha']} synthetic-merge=distinct")
+    return pull
+
+
+def restore_scope(args, base, token, scope, pr_number, history, destination,
+                  expected_head=None, require_trusted_writer=False):
+    query = {"event": "pull_request"} if scope == "pr" \
+        else {"event": "push", "branch": "main"}
+    runs_url = f"{base}/actions/runs?" + urllib.parse.urlencode(query)
+    try:
+        runs = list(paginated(runs_url, token, "workflow_runs"))
+        candidates = rank_runs(
+            runs, scope, pr_number, history,
+            int(args.run_number) if scope == "pr" else None,
+        )
+    except ApiFailure as error:
+        print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
+        return False
+    for run in candidates:
+        try:
+            artifacts = artifacts_for_run(base, token, run)
+        except ApiFailure as error:
+            print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
+                  file=sys.stderr)
+            continue
+        for artifact in artifacts:
+            artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
+            match = re.fullmatch(
+                rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
+                artifact.get("name", ""),
+            )
+            if match is None or int(match.group(1)) != int(run["id"]):
+                continue
+            if artifact.get("expired"):
+                print(f"cache: artifact-miss run={run['id']} attempt={match.group(2)}: expired")
+                continue
+            attempt = int(match.group(2))
+            if scope == "pr" and not pr_attempt_is_eligible(
+                run, attempt, int(args.run_id), int(args.run_number), int(args.run_attempt)
+            ):
+                continue
+            if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
+                continue
+            try:
+                extra = {}
+                if expected_head is not None:
+                    extra["expected_head"] = expected_head
+                if require_trusted_writer:
+                    extra["require_trusted_writer"] = True
+                downloaded = download_candidate(
+                    base, token, artifact, destination, args.repository, run, scope,
+                    pr_number, **extra,
+                )
+                if downloaded is None:
+                    return True
+                print(f"cache: artifact-miss source={scope} run={run['id']}: {downloaded}")
+            except ApiFailure as error:
+                print(f"cache: API-error source={scope} run={run['id']}: {error}", file=sys.stderr)
+            except Exception as error:
+                print(f"cache: rejected run={run['id']} source={scope} "
+                      f"artifact={artifact.get('name')}: {error}")
+    print(f"cache: fallback scope={scope}: no acceptable snapshot")
+    return False
+
+
+def identical_files(left, right):
+    if left.stat().st_size != right.stat().st_size:
+        return False
+    with left.open("rb") as left_stream, right.open("rb") as right_stream:
+        while True:
+            left_block = left_stream.read(1024 * 1024)
+            right_block = right_stream.read(1024 * 1024)
+            if left_block != right_block:
+                return False
+            if not left_block:
+                return True
+
+
+def union_caches(main_cache, pr_cache, destination):
+    started = time.monotonic()
+    main_files = cache_files(Path(main_cache))
+    pr_files = cache_files(Path(pr_cache))
+    if destination.exists() or destination.is_symlink():
+        raise Invalid("cache destination already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".bazel-cache-union-", dir=destination.parent))
+    counts = {"ac": 0, "cas": 0}
+    expanded = 0
+    try:
+        for category in ("ac", "cas"):
+            merged = dict(main_files[category])
+            for digest, source in pr_files[category].items():
+                existing = merged.get(digest)
+                if existing is None:
+                    merged[digest] = source
+                elif not identical_files(existing[0], source[0]):
+                    if category == "cas":
+                        raise Invalid(f"conflicting CAS bytes for digest {digest}")
+                    print(f"cache: union-conflict action-key={digest} winner=main")
+                elif category == "cas" and source[0].stat().st_mtime_ns \
+                        > existing[0].stat().st_mtime_ns:
+                    merged[digest] = source
+                    print(f"cache: union-duplicate cas={digest}")
+                elif category == "cas":
+                    print(f"cache: union-duplicate cas={digest}")
+            for digest, (source, size) in merged.items():
+                counts[category] += 1
+                expanded += size
+                if counts["ac"] + counts["cas"] > MAX_FILES \
+                        or expanded > MAX_EXPANDED_BYTES:
+                    raise Invalid("cache union exceeds file or expansion limits")
+                target = stage / category / digest[:2] / digest
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if category == "ac" and digest in main_files[category]:
+                    source = main_files[category][digest][0]
+                shutil.copy2(source, target)
+        validated = cache_files(stage)
+        stage.rename(destination)
+        stats = {
+            "files": sum(counts.values()),
+            "expandedBytes": expanded,
+            "seconds": round(time.monotonic() - started, 3),
+            "peakRssBytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+        }
+        print(f"cache: union=accepted main-actions={len(main_files['ac'])} "
+              f"pr-actions={len(pr_files['ac'])} merged-actions={len(validated['ac'])} "
+              f"stats={json.dumps(stats)}")
+        return stats
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+
+
+def copy_cache(source, destination):
+    source = Path(source)
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise Invalid("cache destination already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".bazel-cache-restore-", dir=destination.parent))
+    try:
+        shutil.copytree(source, stage, dirs_exist_ok=True, copy_function=shutil.copy2)
+        cache_files(stage)
+        stage.rename(destination)
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
 
 
 def discover_and_restore(args):
@@ -1046,53 +1278,54 @@ def discover_and_restore(args):
         target_sha = current_event["pull_request"]["base"]["sha"] if scope == "pr" \
             else args.commit
         history = run_history(target_sha)
-        for search_scope in (("pr", "main") if scope == "pr" else ("main",)):
-            query = {"event": "pull_request"} if search_scope == "pr" \
-                else {"event": "push", "branch": "main"}
-            runs_url = f"{base}/actions/runs?" + urllib.parse.urlencode(query)
-            runs = list(paginated(runs_url, token, "workflow_runs"))
-            candidates = rank_runs(
-                runs, search_scope, pr_number, history,
-                int(args.run_number) if search_scope == "pr" else None,
+        if scope == "pr":
+            restored = restore_scope(
+                args, base, token, "pr", pr_number, history, Path(args.cache)
             )
-            for run in candidates:
-                for artifact in artifacts_for_run(base, token, run):
-                    match_scope = "main" if search_scope == "main" else f"pr-{pr_number}"
-                    match = re.fullmatch(
-                        rf"{ARTIFACT_PREFIX}-{match_scope}-r(\d+)-a(\d+)",
-                        artifact.get("name", ""),
+            if not restored:
+                main_history = run_history(current_event["pull_request"]["base"]["sha"])
+                restore_scope(args, base, token, "main", None, main_history, Path(args.cache))
+        else:
+            pull = None
+            try:
+                pull = squash_pull_request(base, token, args.repository, args.commit)
+            except ApiFailure as error:
+                print(f"cache: API-error squash-association: {error}; using main-only path",
+                      file=sys.stderr)
+                pull = False
+            if pull is None:
+                restore_scope(args, base, token, "main", None, history, Path(args.cache))
+            else:
+                squash_history = dict(history)
+                squash_history.pop(args.commit, None)
+                if pull is False:
+                    print(f"cache: squash-fallback revision={args.commit}: using main-only snapshot")
+                    restore_scope(
+                        args, base, token, "main", None, squash_history, Path(args.cache)
                     )
-                    if match is None:
-                        continue
-                    if artifact.get("expired"):
-                        print(f"cache: artifact-miss run={run['id']} attempt={match.group(2)}: expired")
-                        continue
-                    if int(match.group(1)) != int(run["id"]):
-                        continue
-                    attempt = int(match.group(2))
-                    if search_scope == "pr" and not pr_attempt_is_eligible(
-                        run, attempt, current_run, int(args.run_number), current_attempt
-                    ):
-                        continue
-                    if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
-                        continue
-                    if search_scope == "main":
-                        if run.get("head_sha") not in history:
-                            continue
-                    try:
-                        downloaded = download_candidate(
-                            base, token, artifact, Path(args.cache),
-                            args.repository, run, search_scope, pr_number,
-                        )
-                        if downloaded is None:
-                            return
-                        print(f"cache: artifact-miss run={run['id']}: {downloaded}")
-                    except Exception as error:
-                        if isinstance(error, ApiFailure):
-                            raise
-                        print(f"cache: rejected run={run['id']} artifact={artifact.get('name')}: {error}")
-            print(f"cache: fallback scope={search_scope}: no acceptable snapshot")
-        print("cache: cold build; no compatible snapshot is available")
+                    return
+                with tempfile.TemporaryDirectory(prefix="bazel-cache-union-") as directory:
+                    main_cache = Path(directory) / "main"
+                    pr_cache = Path(directory) / "pr"
+                    main_restored = restore_scope(
+                        args, base, token, "main", None, squash_history, main_cache
+                    )
+                    pull_number = int(pull["number"])
+                    final_head = pull["head"]["sha"]
+                    pr_restored = restore_scope(
+                        args, base, token, "pr", pull_number, {}, pr_cache,
+                        final_head, True,
+                    )
+                    if main_restored and pr_restored:
+                        union_caches(main_cache, pr_cache, Path(args.cache))
+                    elif main_restored:
+                        print(f"cache: squash-fallback pr={pull_number}: using main-only snapshot")
+                        copy_cache(main_cache, Path(args.cache))
+                    elif pr_restored:
+                        print(f"cache: squash-fallback pr={pull_number}: using PR-only snapshot")
+                        copy_cache(pr_cache, Path(args.cache))
+                    else:
+                        print("cache: cold build; neither squash source has a compatible snapshot")
     except ApiFailure as error:
         print(f"cache: API-error {error}; continuing uncached", file=sys.stderr)
     except Exception as error:

@@ -64,14 +64,14 @@ def put_tree_cache(root, tree, root_directory, action_digest="a" * 64, output_pa
     put_cache_file(root, "ac", action_digest, result)
 
 
-def make_cache(root, output=b"built", output_path="result.txt", executable=True):
+def make_cache(root, output=b"built", output_path="result.txt", executable=True,
+               action_digest="a" * 64):
     output_digest = hashlib.sha256(output).hexdigest()
     put_cache_file(root, "cas", output_digest, output)
     output_file = message(1, output_path.encode()) + message(2, digest(output))
     if executable:
         output_file += integer(4, 1)
     action_result = message(2, output_file)
-    action_digest = "a" * 64
     put_cache_file(root, "ac", action_digest, action_result)
 
 
@@ -103,6 +103,82 @@ class CacheArtifactTests(unittest.TestCase):
         )
         self.assertEqual((destination / "cas" / hashlib.sha256(b"built").hexdigest()[:2]
                           / hashlib.sha256(b"built").hexdigest()).read_bytes(), b"built")
+
+    def test_union_keeps_both_sources_and_main_wins_valid_action_conflicts(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main, b"main output", executable=True)
+        make_cache(pr, b"PR output", executable=False, action_digest="b" * 64)
+        destination = self.root / "union"
+
+        CACHE.union_caches(main, pr, destination)
+
+        merged = CACHE.cache_files(destination)
+        self.assertEqual(set(merged["ac"]), {"a" * 64, "b" * 64})
+        self.assertEqual(
+            (destination / "cas" / hashlib.sha256(b"main output").hexdigest()[:2]
+             / hashlib.sha256(b"main output").hexdigest()).read_bytes(),
+            b"main output",
+        )
+        self.assertEqual(
+            (destination / "cas" / hashlib.sha256(b"PR output").hexdigest()[:2]
+             / hashlib.sha256(b"PR output").hexdigest()).read_bytes(),
+            b"PR output",
+        )
+
+        conflict_main = self.root / "conflict-main"
+        conflict_pr = self.root / "conflict-pr"
+        conflict_main.mkdir()
+        conflict_pr.mkdir()
+        make_cache(conflict_main, b"winner", executable=True)
+        make_cache(conflict_pr, b"loser", executable=False)
+        conflict_union = self.root / "conflict-union"
+        output = io.StringIO()
+        with redirect_stdout(output):
+            CACHE.union_caches(conflict_main, conflict_pr, conflict_union)
+        merged = CACHE.cache_files(conflict_union)
+        self.assertEqual(set(merged["ac"]), {"a" * 64})
+        self.assertEqual(
+            (conflict_union / "ac" / "aa" / ("a" * 64)).read_bytes(),
+            (conflict_main / "ac" / "aa" / ("a" * 64)).read_bytes(),
+        )
+        self.assertIn("union-conflict action-key=", output.getvalue())
+        self.assertTrue(
+            (conflict_union / "cas" / hashlib.sha256(b"loser").hexdigest()[:2]
+             / hashlib.sha256(b"loser").hexdigest()).is_file()
+        )
+
+    def test_union_rejects_invalid_source_without_publishing(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main)
+        make_cache(pr, b"invalid")
+        digest = hashlib.sha256(b"invalid").hexdigest()
+        (pr / "cas" / digest[:2] / digest).write_bytes(b"corrupt")
+        destination = self.root / "union"
+
+        with self.assertRaisesRegex(CACHE.Invalid, "CAS digest mismatch"):
+            CACHE.union_caches(main, pr, destination)
+
+        self.assertFalse(destination.exists())
+
+    def test_union_deduplicates_identical_content_addressed_entries(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main, b"shared", action_digest="a" * 64)
+        make_cache(pr, b"shared", action_digest="b" * 64)
+        destination = self.root / "union"
+
+        stats = CACHE.union_caches(main, pr, destination)
+
+        self.assertEqual(stats["files"], 3)
+        self.assertEqual(len(CACHE.cache_files(destination)["cas"]), 1)
 
     def test_rejects_malformed_action_result_and_missing_or_wrong_size_blob(self):
         source = self.root / "source"
@@ -463,6 +539,77 @@ class CacheArtifactTests(unittest.TestCase):
         selected = CACHE.rank_runs([previous, same_revision, future, current], "main", None, history)
         self.assertEqual([run["id"] for run in selected], [11, 10, 12])
 
+    def test_squash_association_is_unique_and_uses_the_final_pr_head(self):
+        commit = "a" * 40
+        final_head = "b" * 40
+        pull = {
+            "number": 17, "state": "closed", "merged_at": "2026-11-03T00:00:00Z",
+            "merge_commit_sha": commit,
+            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "head": {"sha": final_head, "repo": {"full_name": "owner/repo"}},
+        }
+        with patch.object(CACHE, "request_json", return_value=[pull]):
+            selected = CACHE.squash_pull_request(
+                "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+            )
+        self.assertEqual(selected["head"]["sha"], final_head)
+
+        with patch.object(CACHE, "request_json", return_value=[]):
+            self.assertIsNone(CACHE.squash_pull_request(
+                "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+            ))
+        with patch.object(CACHE, "request_json", return_value=[pull, pull]):
+            self.assertIs(
+                CACHE.squash_pull_request(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+                ),
+                False,
+            )
+        fork_pull = json.loads(json.dumps(pull))
+        fork_pull["head"]["repo"]["full_name"] = "contributor/repo"
+        with patch.object(CACHE, "request_json", return_value=[fork_pull]):
+            self.assertIs(
+                CACHE.squash_pull_request(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+                ),
+                False,
+            )
+
+    def test_trusted_writer_requires_matching_github_identity_and_write_permission(self):
+        run = {"actor": {"login": "trusted-writer", "id": 13}}
+        detail = {
+            "actor": {"login": "trusted-writer", "id": 13},
+            "pull_requests": [{
+                "number": 17,
+                "head": {"repo": {"full_name": "owner/repo"}},
+            }],
+        }
+        permission = {"user": {"login": "trusted-writer"}, "permission": "write"}
+        with patch.object(CACHE, "request_json", return_value=permission):
+            self.assertTrue(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token", run, detail,
+                "owner/repo", 17,
+            ))
+        with patch.object(
+            CACHE, "request_json",
+            return_value={"user": {"login": "trusted-writer"}, "permission": "triage"},
+        ):
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token", run, detail,
+                "owner/repo", 17,
+            ))
+        forged = {**detail, "actor": {"login": "other-user", "id": 13}}
+        self.assertFalse(CACHE.trusted_pr_writer(
+            "https://api.github.com/repos/owner/repo", "token", run, forged,
+            "owner/repo", 17,
+        ))
+        fork = json.loads(json.dumps(detail))
+        fork["pull_requests"][0]["head"]["repo"]["full_name"] = "contributor/repo"
+        self.assertFalse(CACHE.trusted_pr_writer(
+            "https://api.github.com/repos/owner/repo", "token", run, fork,
+            "owner/repo", 17,
+        ))
+
     def test_pr_selection_falls_back_to_an_older_same_pr_artifact(self):
         event_path = self.root / "event.json"
         event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}}}))
@@ -581,6 +728,11 @@ class CacheArtifactTests(unittest.TestCase):
             CACHE.verify_producer(
                 run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
                 "pr", 3, "owner/repo", {"sha": "built", "parents": [{"sha": "other"}]},
+            )
+        with self.assertRaisesRegex(CACHE.Invalid, "final PR head"):
+            CACHE.verify_producer(
+                run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
+                "pr", 3, "owner/repo", commit, "different-final-head",
             )
 
     def test_main_identity_rejects_pr_producers(self):
