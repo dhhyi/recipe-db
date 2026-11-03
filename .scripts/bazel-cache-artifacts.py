@@ -35,6 +35,7 @@ MAX_EXPANDED_BYTES = 12 * 1024**3
 MAX_FILES = 500_000
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_METADATA_BYTES = 1024**2
+WORKFLOW_RUNS_PAGE_SIZE = 20
 MAX_ACTION_RESULT_BYTES = 64 * 1024**2
 MAX_TREE_EXPANDED_BYTES = 64 * 1024**2
 MAX_ACTION_LOG_RECORD_BYTES = 16 * 1024**2
@@ -773,16 +774,16 @@ def request_file(url, token, destination, maximum):
         raise ApiFailure("artifact download failed") from error
 
 
-def paginated(url, token, key):
+def paginated(url, token, key, page_size=100):
     page = 1
     while True:
         separator = "&" if "?" in url else "?"
-        result = request_json(f"{url}{separator}per_page=100&page={page}", token)
+        result = request_json(f"{url}{separator}per_page={page_size}&page={page}", token)
         if result is None:
             return
         entries = result.get(key, [])
         yield from entries
-        if len(entries) < 100:
+        if len(entries) < page_size:
             return
         page += 1
 
@@ -1134,7 +1135,9 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
         else {"event": "push", "branch": "main"}
     runs_url = f"{base}/actions/runs?" + urllib.parse.urlencode(query)
     try:
-        runs = list(paginated(runs_url, token, "workflow_runs"))
+        runs = list(paginated(
+            runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE
+        ))
         candidates = rank_runs(
             runs, scope, pr_number, history,
             int(args.run_number) if scope == "pr" else None,

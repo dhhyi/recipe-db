@@ -81,6 +81,52 @@ class CacheArtifactTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
+    def test_paginated_requests_honor_page_size_and_advance_pages(self):
+        requests = []
+        pages = [
+            {"workflow_runs": [{"id": number} for number in range(20)]},
+            {"workflow_runs": [{"id": 20}]},
+        ]
+
+        def fake_request(url, token):
+            requests.append(url)
+            return pages.pop(0)
+
+        with patch.object(CACHE, "request_json", side_effect=fake_request):
+            runs = list(CACHE.paginated(
+                "https://api.github.com/repos/owner/repo/actions/runs?event=push",
+                "token", "workflow_runs", page_size=20,
+            ))
+
+        self.assertEqual([run["id"] for run in runs], list(range(21)))
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/owner/repo/actions/runs?event=push&per_page=20&page=1",
+                "https://api.github.com/repos/owner/repo/actions/runs?event=push&per_page=20&page=2",
+            ],
+        )
+
+    def test_workflow_run_listing_uses_bounded_page_size(self):
+        requests = []
+
+        def fake_paginated(url, token, key, page_size=100):
+            requests.append((key, page_size))
+            return iter(())
+
+        with patch.object(CACHE, "paginated", side_effect=fake_paginated), \
+                redirect_stdout(io.StringIO()):
+            restored = CACHE.restore_scope(
+                SimpleNamespace(run_number=10),
+                "https://api.github.com/repos/owner/repo", "token", "pr", 17,
+                {}, self.root / "cache",
+            )
+
+        self.assertFalse(restored)
+        self.assertEqual(
+            requests, [("workflow_runs", CACHE.WORKFLOW_RUNS_PAGE_SIZE)]
+        )
+
     def test_round_trip_validates_action_references_and_excludes_temporary_files(self):
         source = self.root / "source"
         source.mkdir()
@@ -579,9 +625,10 @@ class CacheArtifactTests(unittest.TestCase):
         run = {"actor": {"login": "trusted-writer", "id": 13}}
         detail = {
             "actor": {"login": "trusted-writer", "id": 13},
+            "repository": {"id": 42, "full_name": "owner/repo"},
             "pull_requests": [{
                 "number": 17,
-                "head": {"repo": {"full_name": "owner/repo"}},
+                "head": {"repo": {"id": 42}},
             }],
         }
         permission = {"user": {"login": "trusted-writer"}, "permission": "write"}
@@ -611,7 +658,7 @@ class CacheArtifactTests(unittest.TestCase):
             "owner/repo", 17,
         ))
         fork = json.loads(json.dumps(detail))
-        fork["pull_requests"][0]["head"]["repo"]["full_name"] = "contributor/repo"
+        fork["pull_requests"][0]["head"]["repo"]["id"] = 43
         self.assertFalse(CACHE.trusted_pr_writer(
             "https://api.github.com/repos/owner/repo", "token", run, fork,
             "owner/repo", 17,
@@ -809,7 +856,7 @@ class CacheArtifactTests(unittest.TestCase):
         artifacts = {1: [], 2: [{"id": 22, "name": "bazel-cache-v1-main-r2-a1"}]}
         calls = []
 
-        def fake_paginated(url, token, key):
+        def fake_paginated(url, token, key, page_size=100):
             return [pr_run] if "event=pull_request" in url else [main_run]
 
         def fake_download(base, token, artifact, cache_path, repository, run, scope, pr_number):
