@@ -2,6 +2,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from merge import Invalid, merge, snapshot
 
@@ -117,6 +118,18 @@ class MergeTests(unittest.TestCase):
         (self.pr / "tmp").mkdir()
         (self.pr / "tmp/link").symlink_to(self.main)
         self.rejected("symlink forbidden")
+
+    def test_temporary_root_must_be_a_directory(self):
+        (self.pr / "tmp").write_bytes(b"partial")
+        self.rejected("unsupported temporary layout")
+
+    def test_enumeration_errors_are_not_silently_ignored(self):
+        def failed_walk(root, **kwargs):
+            kwargs["onerror"](PermissionError("unreadable directory"))
+            return iter(())
+
+        with patch("merge.os.walk", failed_walk):
+            self.rejected("cannot enumerate snapshot")
 
     def test_unsupported_outputs_failed_results_and_unsafe_paths(self):
         for data in (b"\x1a\x00", b"\x20\x01",

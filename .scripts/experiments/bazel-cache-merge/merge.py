@@ -113,13 +113,18 @@ def snapshot(root):
         raise Invalid(f"not a snapshot directory: {root}")
     entries = {"ac": {}, "cas": {}}
     temporary = 0
-    for directory, dirs, files in os.walk(root, followlinks=False):
+    def read_error(error):
+        raise Invalid(f"cannot enumerate snapshot: {error}")
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=read_error):
         for name in dirs + files:
             path = Path(directory) / name
             rel = path.relative_to(root).parts
             if path.is_symlink():
                 raise Invalid(f"symlink forbidden: {path}")
             if rel[0] == "tmp":
+                if len(rel) == 1 and not path.is_dir():
+                    raise Invalid(f"unsupported temporary layout: {path}")
                 if not (path.is_dir() or path.is_file()):
                     raise Invalid(f"unsupported temporary entry: {path}")
                 if path.is_file():

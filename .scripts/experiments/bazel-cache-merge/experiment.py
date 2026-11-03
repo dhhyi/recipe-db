@@ -21,13 +21,14 @@ def entry(cache, kind, key):
 
 
 def outputs(output_base):
-    directory = output_base / "execroot/cache_union/bazel-out/k8-fastbuild/bin"
+    directory = output_base / "execroot/cache_union/bazel-out"
     return {
         path.name: {
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "executable": bool(path.stat().st_mode & 0o111),
+            "executable_bits": oct(path.stat().st_mode & 0o111),
         }
-        for path in directory.glob("*.out")
+        for path in directory.glob("*/bin/*.out")
     }
 
 

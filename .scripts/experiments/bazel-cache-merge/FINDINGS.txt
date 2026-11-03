@@ -1,0 +1,232 @@
+Bazel 8.5.0 disk-cache union PoC -- issue #144, prerequisite for #133
+=================================================================
+
+Conclusion
+----------
+A useful union is established for completed, trusted SHA-256 snapshots with
+regular-file outputs: a fresh build reused shared, main-only and PR-only
+results, preserved output bytes/executable modes, and invalidated changed
+declared inputs normally. This is a bounded positive result, NOT approval to
+deploy the proposed CI mechanism. The importer deliberately rejects tree
+outputs, symlinks, other hash/layout variants, and invalid/incomplete results.
+It is not a production artifact importer and does not prove PR artifact trust.
+No Publish workflow, cache transport, credentials or production targets changed.
+
+Reproduce
+---------
+Prerequisites: Linux host, Python 3 (standard library only), repository Mise
+tools installed, and access to the pinned Bazel binary on first invocation.
+From the checkout root:
+
+  cd /home/runner/work/recipe-db/recipe-db
+  mise exec -- bats --print-output-on-failure .scripts/tests/bazel-cache-merge.bats
+  python3 -B /home/runner/work/recipe-db/recipe-db/.scripts/experiments/bazel-cache-merge/experiment.py
+
+The program always creates a NEW /tmp/bazel-cache-merge-* directory and prints
+its path. A prior run, normal workspace Bazel state, and ~/.cache/bazel-disk
+cannot provide hits. All evidence remains in that temporary directory until
+the operator deletes it. Failure stops with a nonzero exit; partial evidence
+is retained. Do not run Python with -O: the experiment uses assertions.
+
+The fixture copies the repository's unmodified .scripts/bazel.sh host launcher,
+mise.toml and .bazelversion into its isolated workspace. No project containers,
+external rules or module downloads are needed. WORKSPACE mode and disabled
+autoload keep this native-genrule fixture self-contained on the pinned version;
+this does not change the repository's own Bzlmod configuration. Version output
+is checked against .bazelversion, currently 8.5.0.
+
+Each build uses these arguments through that launcher (actual full argv is
+saved separately for every build in NAME-command.json):
+
+  bash "$WORK/workspace/.scripts/bazel.sh" --batch --ignore_all_rc_files \
+    --host_jvm_args=-Dbazel.DigestFunction=SHA256 \
+    --output_base="$WORK/output-NAME" build \
+    --enable_bzlmod=false --enable_workspace=true \
+    --incompatible_autoload_externally= --action_env=PATH \
+    --remote_verify_downloads=true --disk_cache="$WORK/CACHE" \
+    --execution_log_json_file="$WORK/NAME-execution.json" TARGETS
+
+Fresh output bases are checked not to exist. Batch Bazel exits before snapshots
+are read or combined. main builds //:shared //:main into main/; pr builds
+//:shared //:pr into pr/. No output bases, workspace-local state or tmp entries
+are unioned. union/ is combined BEFORE any consuming Bazel process starts;
+consumers use copies so source snapshots remain unchanged.
+
+The merger can also be invoked separately, with a nonexistent destination:
+
+  python3 -B /home/runner/work/recipe-db/recipe-db/.scripts/experiments/bazel-cache-merge/merge.py \
+    "$WORK/main" "$WORK/pr" "$WORK/new-union"
+
+There is no archive extraction implementation. union.tar.gz is an observation
+of the completed union before consumption, not an artifact transport contract.
+
+Layout and tested merge policy
+------------------------------
+Observed files: ac/HH/HASH and cas/HH/HASH; HH is the first two lowercase hex
+characters of a full 64-character SHA-256 digest. AC files are binary REAPI
+ActionResult protobufs, keyed by action digest, not hashes of their own bytes.
+CAS contains output bytes AND serialized command/action blobs. For example:
+
+  main/ac/22/22bdea552370fede4fefe3760243b2c567d74c5bc73a984f07ce7b67d84398ed
+  main/cas/64/6403203dd5a0867eb14d104ee8a73730bd72dd9ad92e78d996a6dba0a5dcfc01
+
+ActionResult output_files is field 2; exit_code 4; stdout_raw/digest 5/6;
+stderr_raw/digest 7/8; execution_metadata 9. OutputFile carries path, digest,
+and is_executable (fields 1, 2, 4). Metadata bytes are preserved, not rewritten.
+The parser handles just the fixture's regular-file/stream subset, validates
+wire encoding and supported fields, and rejects unsupported result types.
+Timing metadata has different bytes for repeated successful shared actions;
+therefore even deterministic output actions can have differing AC entries.
+
+1. Validate BOTH frozen source snapshots completely before publication.
+   Each CAS file's SHA-256 must match its filename. Identical entries deduplicate.
+   Any bad bytes under a hash are rejected with "CAS digest mismatch /
+   conflicting bytes under hash", even if the other source has good bytes.
+2. Preserve the AC key union. Identical bytes deduplicate; different valid
+   results under one key keep MAIN's bytes. Retain both sets of CAS blobs,
+   including the losing result's blobs. Main's references must exist with
+   matching lengths in main itself; an invalid losing PR result is also rejected.
+3. Reject missing/wrong-size output or stream references. A canonical empty
+   SHA-256 digest (e3b0c442...b855, size 0) needs no CAS file: Bazel elides empty
+   blobs. No other missing blob is exempt. A snapshot missing an AC entry but
+   containing only valid remaining entries is acceptable: that action rebuilds.
+4. Exclude regular temporary files below tmp/. Reject symlinks/special files
+   even there. Reject unknown paths, bad hash prefixes, malformed protobufs,
+   unsuccessful results, directory/symlink outputs, unsafe/duplicate output
+   paths and filesystem enumeration errors. gc/ and digest-specific roots
+   are deliberately unsupported, not silently merged.
+5. Write into a private staging directory, then rename to a new destination.
+   On validation failure no successful destination appears; existing
+   destinations are not overwritten. Sources must not be modified concurrently.
+6. Write AC before CAS so referenced blobs are at least as new as AC entries.
+   Bazel's disk-cache GC/read policy uses mtimes; timestamps are not preserved.
+   No active GC is tested or permitted during snapshot combination.
+
+Recorded evidence (2026-11-03, Linux x86_64)
+------------------------------------------
+Successful run: /tmp/bazel-cache-merge-fx5g22j9, Build label: 8.5.0.
+Every line below comes from expanded execution-log Genrule records. cacheHit
+is true with runner "disk cache hit", not inferred from elapsed time:
+
+  Build           Executed actions             Disk hits
+  main            main, shared                 none
+  pr              pr, shared                   none
+  combined        combined                     main, pr, shared
+  clean           combined, main, pr, shared   none
+  changed         combined, pr                 main, shared
+  changed-clean   combined, main, pr, shared   none
+  incomplete      combined, main               pr, shared
+  missing         combined, main               pr, shared
+  corrupt         combined, main               pr, shared (after retry)
+  malformed       combined, main               pr, shared
+  conflict        none                         main
+
+combined.log: "5 processes: 3 disk cache hit, 1 internal,
+1 processwrapper-sandbox." Source snapshots each have only their own unique
+action: neither one alone provides this set of three successful hits.
+Changing pr.txt to "pr changed\n" changes its declared input and combined
+output; shared/main remain cache hits. Fresh clean builds of BOTH input
+versions match the corresponding union builds.
+
+Output SHA-256 (same for combined and clean):
+  shared.out   cf99975aa7995fad86fae7f3b0905143f30a52501944dff26002afc99c3b8419
+  main.out     6403203dd5a0867eb14d104ee8a73730bd72dd9ad92e78d996a6dba0a5dcfc01
+  pr.out       68e297410d37954f8b35e667ab1587062b12eca8daaf34f2d7b739f72d4384c7
+  combined.out dc5804e48610bcb822872f799bd61639149aaea8efbeba382782b4c646f376d3
+Changed:
+  pr.out       04ad4e52378d85ca05cb83fc3db77df6f305419109253331beb42fa74def12cc
+  combined.out f00451fe0bed230a1a1003136d73c245452bf3e6c5ca2016bddcf9b91fa76fa5
+
+All ordinary genrule artifacts were mode 0555 in both clean and consuming
+builds, and their AC is_executable was true. Bazel normalizes these artifacts;
+even a separate run_shell fixture using chmod 644 yielded 0555. We do not claim
+preservation of arbitrary POSIX permission bits. The runner compares output
+hashes AND executable bits; synthetic tests also preserve false/true
+is_executable metadata bytes without modification.
+
+Observed pre-consumption union: 3 AC entries, 9 CAS entries, 3 identical
+duplicates, 1 main-wins AC conflict (shared timing metadata), 0 temporary
+files; merge time 0.005424 seconds; gzip tar archive 2098 bytes.
+The different-output conflict union retained 2 AC entries, 7 CAS entries,
+7 identical duplicates and 1 main-wins conflict; merge time 0.004684 seconds.
+These tiny-fixture observations have NO performance threshold and do not
+predict CI-scale memory, merge, network or archive costs. Archive bytes and
+timing metadata/timestamps can vary between runs.
+
+Regression outcomes and diagnostics
+-----------------------------------
+test_merge.py is run by bazel-cache-merge.bats, assigned to the existing tasks
+group with explicit experiment inputs; generated Bazel targets discover it.
+Focused tests cover duplicates, mode metadata, main-wins with both output
+blobs retained, empty blobs, corruption, protobuf truncation, missing/wrong-
+size blobs, missing AC entries, unsafe paths/results/layouts, temporary
+exclusion, symlinks, enumeration errors and destination preservation.
+
+The real experiment also runs damaged cache copies directly through Bazel:
+  Missing main output CAS: merger rejects "missing/wrong-size referenced blob".
+    Bazel treats the result as a miss and rebuilds main and combined.
+  Corrupt main output CAS: merger rejects "CAS digest mismatch / conflicting
+    bytes under hash". Bazel initially logs "lost inputs with digests:
+    6403203d...fc01/5" and "Build did NOT complete successfully", then
+    "Found transient remote cache error, retrying the build..." and completes
+    after rebuilding main/combined. Final exit status is 0 and bytes match.
+  Truncated main AC: merger rejects "truncated protobuf varint". Bazel logs
+    "Remote Cache: While parsing a protocol message, the input ended
+    unexpectedly in the middle of a field" and rebuilds main/combined.
+  Missing main AC: a valid incomplete union succeeds, but main/combined must
+    execute; matching pr/shared results still hit.
+  Conflicting valid main AC: altered source points to different five-byte
+    output "other" with its VALID digest under the same action key. Main wins;
+    both original/alternative CAS blobs remain present. A fresh consuming
+    //:main build hits and produces MAIN's original bytes/executable mode.
+
+No damaged case can pass the experiment on output equality alone: on successful
+Bazel exit, the damaged main action must also be recorded as executed. A fatal
+Bazel error is safe but recorded as failure, not described as a successful hit.
+The expected merger policy is stricter than Bazel fallback: reject the whole
+invalid snapshot visibly, never silently repair it using the other source.
+
+Limitations / decision input for #133
+------------------------------------
+Cryptographic integrity proves that CAS bytes match a digest, NOT that an
+ActionResult honestly describes execution of its action. AC contents have no
+self-authenticating relationship to their action-key filename. The tested
+different-output conflict constructs a valid digest/size result under the
+original key: blindly trusting the alternative could return arbitrary bytes.
+Main-wins protects only overlapping keys, not malicious PR-only keys.
+No Git commit hash, archive checksum or compatibility prefix fixes this.
+
+Suitable next step: review this bounded positive result, then settle which
+producers main may trust and extend/verify validation for the actual quality
+graph's output types/layouts. Keep #133 an idea until those decisions and the
+remaining selection/transport/permissions/retention requirements are settled.
+Do not let main consume arbitrary untrusted/fork PR artifacts or give them
+write credentials. Compatibility still requires the same Bazel/hash/platform
+and action environment/tool/input identity; normal action keys are unchanged.
+The fixture shares an identical stable PATH and workspace identity; it does
+not prove reuse across arbitrary machines, tool paths or undeclared inputs.
+
+This in-memory validator is bounded to small local snapshots, lacks resource
+limits, and is not hardened for hostile archive intake. Trees, symlinks,
+alternate hash formats, GC layout, archive extraction, interrupted/concurrent
+writers, cache servers, real quality-graph workloads and CI-scale performance
+are NOT established by this PoC. Those are blocking conditions for adopting
+this exact importer, not reasons to weaken integrity checks.
+
+Publication / issue state
+-------------------------
+Implementation was checkpointed on the agent-assigned branch:
+  https://github.com/dhhyi/recipe-db/tree/copilot/prove-safe-merging-bazel-caches
+Requested delivery branch was poc/144-bazel-cache-merge. This session cannot
+publish to a different branch or mutate issue bodies with its available tools.
+Operator follow-up: publish this PoC to that requested branch; record its
+branch link and bounded-positive/trust-limited conclusion in #144 and #133.
+Leave #144 open until acceptance criteria and requested publication are
+reviewed/verified; do not merge the PoC into main automatically.
+
+Sources (implementation context, not substitutes for measured evidence)
+---------------------------------------------------------------------
+https://bazel.build/remote/caching
+https://github.com/bazelbuild/bazel/blob/8.5.0/src/main/java/com/google/devtools/build/lib/remote/disk/DiskCacheClient.java
+https://github.com/bazelbuild/bazel/blob/8.5.0/src/main/java/com/google/devtools/build/lib/remote/disk/DiskCacheGarbageCollector.java
+https://github.com/bazelbuild/bazel/blob/8.5.0/src/test/java/com/google/devtools/build/lib/remote/disk/DiskCacheClientTest.java
