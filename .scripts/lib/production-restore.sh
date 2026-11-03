@@ -360,6 +360,17 @@ restore_verify_reads() {
     > "$work/restore-browse.html" 2> "$work/restore-request-error" || return 1
 }
 
+restore_wait_reads() {
+  local deadline=$((SECONDS + timeout))
+  until restore_verify_reads; do
+    if ((SECONDS >= deadline)); then
+      printf 'production: restored data, images, search or browse did not pass read verification\n' >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 restore_stream_sequence() {
   kube exec deployment/nats -- wget -qO- \
     'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true&config=true' \
@@ -390,6 +401,14 @@ restore_wait_consumers() {
 restore_verify_propagation() {
   local id encoded deadline probe before
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
+  deadline=$((SECONDS + timeout))
+  until restore_graphql 'query { __typename }'; do
+    if ((SECONDS >= deadline)); then
+      printf 'production: GraphQL route did not become ready for restore propagation checks\n' >&2
+      return 1
+    fi
+    sleep 2
+  done
   before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($name:String!) { createRecipe(value:{name:$name}) { id } }' \
     "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
@@ -615,7 +634,7 @@ restore_run() {
   restore_graphql_port=$(cat "$work/restore-port")
   restore_forward service/browse 3000 "$work/restore-browse-forward.log" > "$work/restore-browse-port"
   restore_browse_port=$(cat "$work/restore-browse-port")
-  restore_verify_reads
+  restore_wait_reads
   restore_current_phase=verifying-propagation
   restore_phase "$restore_current_phase"
   backup_projection_route 4000
@@ -623,7 +642,7 @@ restore_run() {
   kube rollout status deployment/graphql --timeout="${timeout}s"
   restore_verify_propagation
   backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")"
-  restore_verify_reads
+  restore_wait_reads
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
   kube --namespace kube-system patch service recipe-db-internal --type=strategic \

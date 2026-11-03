@@ -209,10 +209,15 @@ mark
 
 graphql_at() {
   local values=$1 query=$2 variables=${3:-'{}'} origin status
+  local retry=()
+  if [[ $query == query* ]]; then
+    retry=(--retry 5 --retry-delay 2 --retry-max-time 30 --retry-connrefused)
+  fi
   origin=$(yq -r '.origin' "$values")
   jq -n --arg query "$query" --argjson variables "$variables" \
     '{query:$query,variables:$variables}' > "$request"
   status=$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
+    "${retry[@]}" \
     --config "$curl_config" --header 'Content-Type: application/json' \
     --data-binary "@$request" --output "$response" --write-out '%{http_code}' "$origin/graphql")
   [[ $status == 200 ]] && jq -e '(.errors // [] | length) == 0 and .data != null' \
@@ -318,8 +323,8 @@ jq -e '.status == "verified-upload"' "$result_directory/state/status.json" > /de
 backup_id=$(jq -er .backupId "$result_directory/state/baseline.json")
 archive_name=$(jq -er .archive "$result_directory/state/baseline.json")
 manifest_name=$(jq -er .manifest "$result_directory/state/baseline.json")
-cp "$FAKE_RCLONE_ROOT/recipe-db-backups/$archive_name" "$result_directory/packages/$archive_name"
-cp "$FAKE_RCLONE_ROOT/recipe-db-backups/$manifest_name" "$result_directory/packages/$manifest_name"
+cp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$archive_name" "$result_directory/packages/$archive_name"
+cp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$manifest_name" "$result_directory/packages/$manifest_name"
 archive="$result_directory/packages/$archive_name"
 package_manifest="$result_directory/packages/$manifest_name"
 jq -e --arg release "$release" --arg revision "$revision" \
@@ -329,9 +334,9 @@ backup_id=$(jq -er .backupId "$package_manifest")
 # shellcheck source=.scripts/lib/project-metadata.sh
 . "$root/.scripts/lib/project-metadata.sh"
 application_project_metadata_to_jsonl "$root" "$result_directory/projects.jsonl"
-run_logged "$result_directory/logs/package-validation.log" \
-  python3 "$root/.scripts/validate-backup-package.py" "$package_manifest" "$archive" \
-  "$result_directory/validated-package" "$result_directory/projects.jsonl" "$backup_id"
+python3 "$root/.scripts/validate-backup-package.py" "$package_manifest" "$archive" \
+  "$result_directory/validated-package" "$result_directory/projects.jsonl" "$backup_id" \
+  > "$result_directory/validated-package.json" 2> "$result_directory/logs/package-validation.log"
 mark
 
 phase=nonempty-target-refusal

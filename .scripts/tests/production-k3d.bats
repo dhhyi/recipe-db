@@ -2095,6 +2095,7 @@ PY
 
 @test "restore failed representative reads never reopen public ingress" {
   restore_fixture
+  set_value '.timeoutSeconds=3'
   export MOCK_RESTORE_HTTP_FAIL=true
   run_restore
   [ "$status" -ne 0 ]
