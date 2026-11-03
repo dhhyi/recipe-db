@@ -55,6 +55,19 @@ button {
   --pico-font-weight: bold;
 }
 
+[type="file"]::file-selector-button {
+  --pico-background-color: transparent;
+  --pico-border-color: var(--pico-secondary);
+  --pico-color: var(--pico-secondary);
+}
+
+[type="file"]:is(:hover, :active, :focus)::file-selector-button,
+[type="file"]::file-selector-button:is(:hover, :active, :focus) {
+  --pico-background-color: transparent;
+  --pico-border-color: var(--pico-secondary-hover);
+  --pico-color: var(--pico-secondary-hover);
+}
+
 article {
   border-width: 2px;
   border-style: solid;
