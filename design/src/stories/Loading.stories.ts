@@ -11,10 +11,21 @@ const meta = {
 export default meta;
 type Story = StoryObj;
 
-export const Inline: Story = {
+export const Placeholder: Story = {
   render: () => html`
     <main class="container">
-      <span aria-busy="true">Generating shopping list...</span>
+      <div aria-busy="true" aria-label="Rezept wird geladen"></div>
+    </main>
+  `,
+};
+
+export const PlaceholderError: Story = {
+  render: () => html`
+    <main class="container">
+      <p class="feedback error" role="alert">
+        Ähnliche Rezepte konnten nicht geladen werden.
+      </p>
+      <button type="button" class="outline">Erneut versuchen</button>
     </main>
   `,
 };
@@ -22,12 +33,9 @@ export const Inline: Story = {
 export const Buttons: Story = {
   render: () => html`
     <main class="container">
-      <button aria-busy="true" type="button">Please wait</button>
-      <button aria-busy="true" type="button" class="secondary">
-        Please wait
-      </button>
-      <button aria-busy="true" type="button" class="outline contrast">
-        Please wait
+      <button aria-busy="true" type="button" disabled>Speichern</button>
+      <button aria-busy="true" type="button" class="outline" disabled>
+        Erneut versuchen
       </button>
     </main>
   `,

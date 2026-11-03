@@ -39,10 +39,19 @@ Use Storybook's theme switch to review every story in light and dark mode. Do no
 
 - Messages about the outcome of an action or the state of loaded content use the `feedback` classes defined in `design.css`, combined with `role="status"` or `role="alert"`:
   - `feedback success` (Pico `--pico-ins-color`): an action succeeded, for example "Gespeichert".
-  - `feedback warning` (`--feedback-warning-color`, our own color because Blades has none): the action works, but the result has a drawback.
-  - `feedback error` (Pico `--pico-del-color`): an action, loading, or access failed.
-- Neutral progress and state messages ("Lädt…", "Ungespeicherte Änderungen.") stay plain text.
+  - `feedback warning` (`--feedback-warning-color`, our own color because Blades has none): the action works, but the result has a drawback, or there are unsaved changes.
+  - `feedback error` (Pico `--pico-del-color`): an action, loading, or access failed, or content was not found. Include what is preserved for a retry in the same message.
+- Do not show neutral state messages such as "Keine ungespeicherten Änderungen."
 - Form field validation uses the Blades `aria-invalid` styling with a helper `<small>`, not `feedback`.
+
+## Loading
+
+- The Blades spinner (`aria-busy="true"`) is the only loading indicator. Do not show loading status texts.
+- An action triggered by a button sets `aria-busy` on that button only and disables it. Other controls that could start a conflicting request are disabled too, without a spinner.
+- Button labels do not change while loading. The only allowed label change is to a retry wording ("Erneut speichern", "Erneut versuchen") after a failure.
+- Content that is loading, or that loads when scrolled into view, is an empty spinner placeholder in its place, with an `aria-label` describing what is loading (for example `aria-label="Rezept wird geladen"`), without an ellipsis.
+- A placeholder must handle errors: on failure, it is replaced by a `feedback error` message and an `Erneut versuchen` button, which follows the button rule above.
+- Spinner placeholders have no no-JavaScript fallback; see #150.
 
 ## App-specific styles
 
