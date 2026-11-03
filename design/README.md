@@ -44,6 +44,10 @@ Use Storybook's theme switch to review every story in light and dark mode. Do no
 - Neutral progress and state messages ("Lädt…", "Ungespeicherte Änderungen.") stay plain text.
 - Form field validation uses the Blades `aria-invalid` styling with a helper `<small>`, not `feedback`.
 
+## App-specific styles
+
+Shared look and feel (colors, buttons, links, feedback, typography) lives in `design.css`. Apps may keep CSS for components that only they use, such as the image editor's crop area, but must not restyle or extend shared elements locally.
+
 ## Tailwind CSS
 
 The shared `design` project builds the Tailwind stylesheet used by frontend projects. A frontend that loads `/design/styles.css` declares the files or directories containing its utility classes with `tailwindSources` in the second document of its `.project.yaml`.
