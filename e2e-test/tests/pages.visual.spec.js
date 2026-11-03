@@ -580,15 +580,18 @@ for (const role of ["anonymous", "member", "owner"]) {
 async function expectHeader(page, role) {
   const header = page.locator("header-component");
   await expect(header).toHaveAttribute("auth-role", role);
-  await expect(
-    header.getByRole("link", { name: /Anmelden|Abmelden/ }),
-  ).toHaveCount(1);
-  await expect(
-    header.getByRole("link", {
-      name: role === "anonymous" ? "Anmelden" : /Abmelden/,
-      exact: role === "anonymous",
-    }),
-  ).toBeVisible();
+  if (role === "anonymous") {
+    await expect(
+      header.getByRole("link", { name: "Anmelden", exact: true }),
+    ).toBeVisible();
+    await expect(header.locator("details.dropdown")).toHaveCount(0);
+  } else {
+    await expect(header.locator("details.dropdown > summary")).toHaveText(role);
+    await expect(
+      header.locator("details.dropdown a[href^='/oauth2/sign_out']"),
+    ).toHaveText("Abmelden");
+    await expect(header.locator("a[href^='/oauth2/start']")).toHaveCount(0);
+  }
 }
 
 async function expectEditorDenied(page, role) {

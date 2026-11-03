@@ -3,74 +3,19 @@ import { html } from "lit";
 
 import "../design.css";
 
-interface ButtonProps {
-  class?: string;
-  label: string;
-}
-
-const Button = ({ class: classes, label }: ButtonProps) => {
-  return html` <button type="button" class=${classes}>${label}</button> `;
-};
-
 const meta = {
   title: "Blades/Button",
   tags: ["autodocs"],
-  render: (args) => Button(args),
-  argTypes: {
-    class: {
-      control: { type: "select" },
-      options: [
-        undefined,
-        "secondary",
-        "contrast",
-        "outline",
-        "outline secondary",
-        "outline contrast",
-      ],
-    },
-  },
-} satisfies Meta<ButtonProps>;
+} satisfies Meta;
 
 export default meta;
-type Story = StoryObj<ButtonProps>;
+type Story = StoryObj;
 
-export const Primary: Story = {
-  args: {
-    label: "Button",
-  },
-};
-
-export const Secondary: Story = {
-  args: {
-    label: "Button",
-    class: "secondary",
-  },
-};
-
-export const Contrast: Story = {
-  args: {
-    class: "contrast",
-    label: "Button",
-  },
-};
-
-export const Outline: Story = {
-  args: {
-    class: "outline",
-    label: "Button",
-  },
-};
-
-export const OutlineSecondary: Story = {
-  args: {
-    class: "outline secondary",
-    label: "Button",
-  },
-};
-
-export const OutlineContrast: Story = {
-  args: {
-    class: "outline contrast",
-    label: "Button",
-  },
+export const Buttons: Story = {
+  render: () => html`
+    <main class="container">
+      <button type="button">Primary</button>
+      <button type="button" class="outline">Secondary</button>
+    </main>
+  `,
 };

@@ -11,14 +11,14 @@ const meta = {
   tags: ["autodocs"],
   args: {
     authRole: "",
-    authUnavailable: false,
+    authName: "",
   },
   argTypes: {
     authRole: {
       control: "select",
       options: ["", "anonymous", "member", "owner"],
     },
-    authUnavailable: { control: "boolean" },
+    authName: { control: "text" },
   },
 } satisfies Meta;
 
@@ -31,30 +31,24 @@ export const Sticky: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
     await waitFor(() => {
-      const links = canvas
-        .queryAllByRole("link")
-        .filter((link) => link.getAttribute("href")?.startsWith("/oauth2/"));
-      expect(links).toHaveLength(
-        args.authRole && !args.authUnavailable ? 1 : 0,
-      );
-      if (args.authUnavailable) {
-        expect(canvas.getByRole("status")).toHaveTextContent(
-          "Anmeldung derzeit nicht verfügbar.",
+      const login = canvas.queryByRole("link", { name: "Anmelden" });
+      const dropdown = canvasElement.querySelector("details.dropdown");
+      expect(!!login).toBe(args.authRole === "anonymous");
+      expect(!!dropdown).toBe(!!args.authRole && args.authRole !== "anonymous");
+      if (dropdown) {
+        expect(dropdown.querySelector("summary")).toHaveTextContent(
+          args.authName || args.authRole,
         );
-      }
-      if (links.length) {
-        const login = args.authRole === "anonymous";
-        expect(links[0]).toHaveTextContent(login ? "Anmelden" : "Abmelden");
-        if (!login) {
-          expect(links[0]).toHaveAttribute("data-tooltip", args.authRole);
-        }
+        expect(
+          dropdown.querySelector('a[href="/oauth2/sign_out?rd=%2F"]'),
+        ).toHaveTextContent("Abmelden");
       }
     });
   },
-  render: ({ authRole, authUnavailable }) => html`
+  render: ({ authRole, authName }) => html`
     <header-component
       auth-role=${authRole}
-      ?auth-unavailable=${authUnavailable}
+      auth-name=${authName}
     ></header-component>
     <main style="padding: 0.5rem 0;">
       <h1>${lorem.generateWords(3)}</h1>
@@ -66,17 +60,12 @@ export const Sticky: Story = {
   `,
 };
 
-export const Login: Story = {
+export const LoggedOut: Story = {
   ...Sticky,
   args: { authRole: "anonymous" },
 };
 
-export const Logout: Story = {
+export const LoggedIn: Story = {
   ...Sticky,
-  args: { authRole: "owner" },
-};
-
-export const Unavailable: Story = {
-  ...Sticky,
-  args: { authUnavailable: true },
+  args: { authRole: "owner", authName: "Max Mustermann" },
 };

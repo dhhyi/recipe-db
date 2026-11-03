@@ -79,16 +79,3 @@ export const LongNames: Story = {
     </section>
   `,
 };
-
-export const DarkTheme: Story = {
-  render: () => html`
-    <div
-      data-theme="dark"
-      style="background: #1f2937; color: white; padding: 1rem"
-    >
-      <section class="recipe-tags-detail flex flex-col gap-2">
-        ${pills()} ${legend()}
-      </section>
-    </div>
-  `,
-};

@@ -7,11 +7,6 @@
   --pico-primary-background: #0a750f !important;
   --pico-primary-hover-background: #12c01b !important;
   --pico-primary-focus: #12d21ca9 !important;
-  --pico-card-border-color: color-mix(
-    in srgb,
-    currentColor 50%,
-    white
-  ) !important;
 }
 
 h1,
@@ -56,8 +51,21 @@ ol:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
   list-style-type: decimal;
 }
 
-button {
-  --pico-font-weight: bold;
+a:not([role="button"]):not(:hover, :active, :focus) {
+  text-decoration-line: none;
+}
+
+[type="file"]::file-selector-button {
+  --pico-background-color: transparent;
+  --pico-border-color: var(--pico-secondary);
+  --pico-color: var(--pico-secondary);
+}
+
+[type="file"]:is(:hover, :active, :focus)::file-selector-button,
+[type="file"]::file-selector-button:is(:hover, :active, :focus) {
+  --pico-background-color: transparent;
+  --pico-border-color: var(--pico-secondary-hover);
+  --pico-color: var(--pico-secondary-hover);
 }
 
 article {
@@ -100,9 +108,27 @@ footer-component {
   display: contents;
 }
 
+:root {
+  --feedback-warning-color: #9a6700;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --feedback-warning-color: #c89b3c;
+  }
+}
+
+[data-theme="dark"] {
+  --feedback-warning-color: #c89b3c;
+}
+
 .feedback {
   &.success {
     color: var(--pico-ins-color);
+  }
+
+  &.warning {
+    color: var(--feedback-warning-color);
   }
 
   &.error {

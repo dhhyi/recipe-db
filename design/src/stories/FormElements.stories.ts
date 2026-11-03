@@ -11,215 +11,110 @@ const meta = {
 export default meta;
 type Story = StoryObj;
 
-export const Form: Story = {
-  render: () => html`
-    <main class="container">
-      <form>
-        <fieldset>
-          <label>
-            Recipe name
-            <input
-              name="recipe_name"
-              placeholder="Recipe name"
-              autocomplete="off"
-            />
-          </label>
-          <label>
-            Email
-            <input
-              type="email"
-              name="email"
-              placeholder="Email"
-              autocomplete="email"
-            />
-          </label>
-        </fieldset>
-        <input type="submit" value="Save recipe" />
-      </form>
-    </main>
-  `,
-};
-
 export const Inputs: Story = {
   render: () => html`
     <main class="container">
       <form>
-        <input type="text" name="text" placeholder="Text" aria-label="Text" />
         <input
-          type="email"
-          name="email"
-          placeholder="Email"
-          aria-label="Email"
-          autocomplete="email"
+          type="text"
+          name="ingredient"
+          placeholder="Ingredient"
+          aria-label="Ingredient"
+        />
+        <input
+          type="url"
+          name="inspiration"
+          placeholder="Link"
+          aria-label="Link"
         />
         <input
           type="search"
-          name="search"
-          placeholder="Search"
-          aria-label="Search"
+          name="q"
+          placeholder="Search recipes"
+          aria-label="Search recipes"
         />
-        <input
-          type="number"
-          name="servings"
-          placeholder="Servings"
-          aria-label="Servings"
-        />
-        <input type="date" name="date" aria-label="Date" />
-        <input type="color" value="#0a750f" aria-label="Color picker" />
-        <input type="file" aria-label="Recipe photo" />
+        <textarea name="method" rows="4" aria-label="Method"></textarea>
+        <label for="upload-image">Choose a JPEG or PNG image</label>
+        <input id="upload-image" type="file" accept="image/jpeg,image/png" />
       </form>
     </main>
   `,
 };
 
-export const TextareaAndSelect: Story = {
-  render: () => html`
-    <main class="container">
-      <form>
-        <label>
-          Notes
-          <textarea name="notes" placeholder="Prep notes"></textarea>
-        </label>
-        <label>
-          Cuisine
-          <select name="cuisine" required>
-            <option value="" selected disabled>Select cuisine</option>
-            <option>Italian</option>
-            <option>Japanese</option>
-            <option>Indian</option>
-            <option>Thai</option>
-          </select>
-        </label>
-      </form>
-    </main>
-  `,
-};
-
-export const ChecksRadiosAndSwitches: Story = {
-  render: () => html`
-    <main class="container">
-      <form>
-        <fieldset>
-          <legend>Dietary tags</legend>
-          <label><input type="checkbox" name="vegetarian" />Vegetarian</label>
-          <label
-            ><input type="checkbox" name="gluten_free" checked />Gluten
-            free</label
-          >
-        </fieldset>
-        <fieldset>
-          <legend>Difficulty</legend>
-          <label
-            ><input
-              type="radio"
-              name="difficulty"
-              value="easy"
-              checked
-            />Easy</label
-          >
-          <label
-            ><input
-              type="radio"
-              name="difficulty"
-              value="medium"
-            />Medium</label
-          >
-          <label
-            ><input type="radio" name="difficulty" value="hard" />Hard</label
-          >
-        </fieldset>
-        <fieldset>
-          <label
-            ><input
-              type="checkbox"
-              role="switch"
-              name="published"
-              checked
-            />Published</label
-          >
-          <label
-            ><input
-              type="checkbox"
-              role="switch"
-              name="featured"
-            />Featured</label
-          >
-        </fieldset>
-      </form>
-    </main>
-  `,
-};
-
-export const ValidationAndHelperText: Story = {
+export const Validation: Story = {
   render: () => html`
     <main class="container">
       <form>
         <input
           type="text"
-          name="valid"
-          value="Roasted squash pasta"
-          aria-invalid="false"
-          aria-describedby="valid-helper"
-        />
-        <small id="valid-helper">Looks good.</small>
-        <input
-          type="text"
-          name="invalid"
-          value="Untitled"
+          name="name"
+          placeholder="Name"
+          aria-label="Name"
           aria-invalid="true"
-          aria-describedby="invalid-helper"
+          aria-describedby="name-helper"
         />
-        <small id="invalid-helper"
-          >Please provide a more descriptive title.</small
-        >
+        <small id="name-helper" role="alert">Name must not be empty.</small>
       </form>
     </main>
   `,
 };
 
-export const Grouped: Story = {
+export const Search: Story = {
   render: () => html`
     <main class="container">
       <form>
-        <fieldset role="group">
+        <fieldset role="search">
           <input
             type="search"
-            name="query"
+            name="q"
             placeholder="Search recipes"
             aria-label="Search recipes"
           />
-          <input type="submit" value="Search" />
+          <button type="submit" aria-label="Search">
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              class="h-3 w-3"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="11" cy="11" r="8"></circle>
+              <path d="m21 21-4.35-4.35"></path>
+            </svg>
+          </button>
         </fieldset>
       </form>
     </main>
   `,
 };
 
-export const FloatLabels: Story = {
+export const Dropdown: Story = {
   render: () => html`
     <main class="container">
-      <form>
-        <fieldset>
-          <label>
-            <span>Name</span>
-            <input name="name" placeholder="First Last" />
-          </label>
-          <label>
-            <span>Bio</span>
-            <textarea name="bio" placeholder="Tell your story"></textarea>
-          </label>
-          <label>
-            <span>Cuisine</span>
-            <select name="cuisine">
-              <option selected disabled>Select</option>
-              <option>Italian</option>
-              <option>Japanese</option>
-              <option>Indian</option>
-              <option>Thai</option>
-            </select>
-          </label>
-        </fieldset>
-      </form>
+      <details class="dropdown">
+        <summary role="button" class="outline">Edit</summary>
+        <ul class="markerless">
+          <li><a href="#">Edit recipe</a></li>
+          <li><a href="#">Edit images</a></li>
+        </ul>
+      </details>
+    </main>
+  `,
+};
+
+export const Select: Story = {
+  render: () => html`
+    <main class="container">
+      <select name="sort" aria-label="Sort by">
+        <option selected>Relevance</option>
+        <option>Name</option>
+        <option>Newest</option>
+        <option>Rating</option>
+      </select>
     </main>
   `,
 };
