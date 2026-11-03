@@ -26,7 +26,7 @@ RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
 mise run production-backup-recovery-k3d "$RELEASE" "$RESULT"
 ```
 
-The runner preserves both clusters and private diagnostics on success and failure; generated credentials and values are under `$RESULT/secrets`. Inspect the result JSON and logs before removing the result directory. To remove either cluster, use its saved values file with `production-k3d delete` and the exact `DELETE-<cluster>-AND-ALL-DATA` confirmation. The other injected lifecycle, packaging, upload, and restore failure contracts are exercised by the `deploy` script regression group.
+The runner preserves both clusters and private diagnostics on success and failure; generated credentials and values are under `$RESULT/secrets`. Inspect the result JSON and logs before removing the result directory. To remove either cluster, use its saved values file with `production-k3d delete` and the exact `DELETE-<cluster>-AND-ALL-DATA` confirmation. Read-only checks wait through bounded route convergence; mutations are never automatically replayed. Restore waits for verified reads and a ready GraphQL route before its propagation probe, retaining blocked ingress and its recovery Lease if readiness fails. The other injected lifecycle, packaging, upload, and restore failure contracts are exercised by the `deploy` script regression group.
 
 ### Runtime mode
 
