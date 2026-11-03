@@ -11,13 +11,15 @@ export class FooterComponent extends LitElement {
     return html`
       <hr />
       <footer class="mb-3 text-center text-sm">
-        <a href="https://github.com/dhhyi/recipe-db/blob/main/README.md"
+        <a
+          href="https://github.com/dhhyi/recipe-db/blob/main/README.md"
+          class="secondary"
           >GitHub</a
         >
         <span class="px-2" style="color: var(--pico-muted-border-color);"
           >|</span
         >
-        <a href="/design/">Design</a>
+        <a href="/design/" class="secondary">Design</a>
       </footer>
     `;
   }

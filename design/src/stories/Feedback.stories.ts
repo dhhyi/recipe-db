@@ -19,6 +19,16 @@ export const Success: Story = {
   `,
 };
 
+export const Warning: Story = {
+  render: () => html`
+    <main class="container">
+      <p class="feedback warning" role="status">
+        Dieser Zuschnitt ist kleiner als 648 × 486 Pixel und wird vergrößert.
+      </p>
+    </main>
+  `,
+};
+
 export const Error: Story = {
   render: () => html`
     <main class="container">

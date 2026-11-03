@@ -1,4 +1,4 @@
-import { LitElement, html, nothing } from "lit";
+import { LitElement, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import bannerSvg from "../assets/banner.svg?raw";
@@ -8,13 +8,32 @@ export class HeaderComponent extends LitElement {
   @property({ attribute: "auth-role" })
   authRole = "";
 
-  @property({ type: Boolean, attribute: "auth-unavailable" })
-  authUnavailable = false;
+  @property({ attribute: "auth-name" })
+  authName = "";
 
   protected createRenderRoot() {
     // drop stale render output restored e.g. from htmx history cache
     this.replaceChildren();
     return this;
+  }
+
+  private renderAuth() {
+    if (!this.authRole) return null;
+    if (this.authRole === "anonymous") {
+      return html`<ul class="unlist">
+        <li><a href="/oauth2/start?rd=%2F">Anmelden</a></li>
+      </ul>`;
+    }
+    return html`<ul class="unlist">
+      <li>
+        <details class="dropdown">
+          <summary>${this.authName || this.authRole}</summary>
+          <ul dir="rtl">
+            <li><a href="/oauth2/sign_out?rd=%2F">Abmelden</a></li>
+          </ul>
+        </details>
+      </li>
+    </ul>`;
   }
 
   render() {
@@ -23,35 +42,17 @@ export class HeaderComponent extends LitElement {
         style="background-color: var(--pico-background-color);"
         class="px-2 py-1 sticky top-0 z-10"
       >
-        <nav class="flex items-center justify-between gap-2">
-          <a href="/" hx-boost="true">
-            <span style="color: var(--pico-h1-color)" class="contents *:h-8"
-              >${unsafeSVG(bannerSvg)}</span
-            >
-          </a>
-          ${
-            this.authUnavailable
-              ? html`<span role="status"
-                  >Anmeldung derzeit nicht verfügbar.</span
-                >`
-              : this.authRole
-                ? html`<a
-                    class="secondary"
-                    href=${
-                      this.authRole === "anonymous"
-                        ? "/oauth2/start?rd=%2F"
-                        : "/oauth2/sign_out?rd=%2F"
-                    }
-                    data-tooltip=${
-                      this.authRole === "anonymous" ? nothing : this.authRole
-                    }
-                    data-placement="bottom"
-                    >${
-                      this.authRole === "anonymous" ? "Anmelden" : "Abmelden"
-                    }</a
-                  >`
-                : null
-          }
+        <nav class="[--pico-nav-element-spacing-vertical:0]">
+          <ul class="unlist">
+            <li>
+              <a href="/" hx-boost="true" class="align-top">
+                <span style="color: var(--pico-h1-color)" class="contents *:h-8"
+                  >${unsafeSVG(bannerSvg)}</span
+                >
+              </a>
+            </li>
+          </ul>
+          ${this.renderAuth()}
         </nav>
         <div
           aria-hidden="true"
