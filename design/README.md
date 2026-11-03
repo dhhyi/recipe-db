@@ -26,6 +26,7 @@ Use Storybook's theme switch to review every story in light and dark mode. Do no
 - Primary actions use the default Blades button (solid fill in the primary color).
 - Secondary actions use the Blades `outline` button (primary color for text and border, no fill).
 - Do not use the Blades `secondary` or `contrast` button classes. The only exception is the file input's button, which `design.css` styles as a secondary outline button.
+- All buttons, including link and dropdown buttons (`role="button"`), use the default Blades font weight. Do not make button text bold.
 
 ## Links
 

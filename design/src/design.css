@@ -51,10 +51,6 @@ ol:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
   list-style-type: decimal;
 }
 
-button {
-  --pico-font-weight: bold;
-}
-
 a:not([role="button"]):not(:hover, :active, :focus) {
   text-decoration-line: none;
 }
