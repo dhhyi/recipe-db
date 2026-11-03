@@ -1143,6 +1143,8 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
         print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
         return False
     for run in candidates:
+        if expected_head is not None and run.get("head_sha") != expected_head:
+            continue
         try:
             artifacts = artifacts_for_run(base, token, run)
         except ApiFailure as error:
