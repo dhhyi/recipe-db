@@ -16,8 +16,13 @@ Compatibility requires the same cache format, `.bazelversion`, OS, architecture,
 Restore uses one snapshot at a time and completes before Bazel starts:
 
 - PR builds prefer the newest earlier compatible artifact for that same PR, ordered by run number and attempt, without requiring ancestry after a force push. If none is usable, they try trusted main snapshots.
-- Main builds consider only main push artifacts whose revisions occur on the built revision's first-parent history. The closest revision wins, with run number and attempt breaking ties. Artifacts from PR runs are never imported into main by this implementation.
+- Main builds consider only main push artifacts whose revisions occur on the built revision's first-parent history. The closest revision wins, with run number and attempt breaking ties.
+- A main revision associated by GitHub commit/PR metadata with exactly one squash-merged PR on `main` attempts a two-source restore. The PR snapshot must be for the PR's final head, not its synthetic CI merge revision or the resulting squash commit. Its paired main snapshot must precede the squash commit on first-parent history. Other main revisions use the incremental-main path.
 - An artifact from the current in-progress attempt is excluded. A prior attempt of the same run can be considered.
+
+For a squash restore, both artifacts are staged and validated independently before union and before Bazel starts. Main imports a PR artifact only when the merged PR's head repository is this repository and GitHub run/attempt metadata identifies the producer as a repository writer with `write`, `maintain`, or `admin` permission. Fork-produced artifacts are never imported into main. Missing or ambiguous association, an ineligible producer, or an unavailable final-head artifact falls back to main-only; an eligible PR artifact can seed the build by itself if no preceding main snapshot is available. If neither source is usable, the build starts cold. API errors, ordinary misses, trust rejections, and invalid snapshots have distinct diagnostics.
+
+The union deduplicates identical CAS entries, rejects different bytes under the same CAS digest, combines action-result keys, and keeps main's valid result for conflicting action keys while retaining both sources' CAS blobs. Both sources must pass the normal complete snapshot validation; an invalid source is rejected as a whole and is not repaired from the other. The workflow never imports output bases or active cache directories.
 
 The artifact is uploaded once after both Bazel stages succeed and before integration or image validation. Therefore a later job failure does not make the completed snapshot ineligible. Main artifacts retain for 90 days; PR artifacts retain for seven days. No nightly deletion is implemented here.
 
@@ -29,8 +34,10 @@ The v1 limits are an 8 GiB downloaded workflow ZIP and snapshot tar, 12 GiB expa
 
 Missing, expired, or concurrently deleted artifacts are ordinary misses: the selector tries another eligible candidate and ultimately runs Bazel cold if needed. API authorization, service, and download errors are logged separately from misses. Cache lookup and snapshot-preparation errors do not skip quality checks or convert their result to success; an upload-action failure is non-blocking.
 
-The workflow log reports the selected producer and revision, fallback/rejection reason, cache action hits and executions from Bazel execution logs, snapshot preparation and restore times, archive size, and helper peak resident memory. The upload-artifact step's duration and transfer diagnostics are available in the Actions job log.
+The workflow log reports each selected producer run/attempt and built revision, PR head/base and squash revision, compatibility and writer-trust decisions, action-key conflicts, fallback/rejection reason, cache action hits and executions from Bazel execution logs, snapshot preparation/restore/union times, archive and expanded sizes, and helper peak resident memory. The upload-artifact step's duration and transfer diagnostics are available in the Actions job log.
 
-## Current boundary
+## Trust and evidence boundary
 
-This is the single-snapshot foundation only. It does not merge PR and main caches for squash merges, run nightly cleanup, or establish the full three-path CI performance comparison. Those remain the responsibility of the dependent union and cleanup/validation work. CI-scale cache size, action-hit behavior, and resource use should be recorded from representative hosted runs rather than inferred from the bounded fixture tests.
+Trusted repository writers can supply action-result metadata. CAS digest validation and main-wins conflict resolution do not authenticate PR-only action results; this is an explicit trust choice, not proof that those actions were honestly executed. Read-only build permissions remain unchanged, and the workflow does not grant PR code artifact-deletion or repository-write credentials.
+
+The automated fixtures cover selection, trust decisions, union conflicts, retained blobs, output metadata, and whole-snapshot rejection. They do not establish representative hosted squash-merge hit attribution or CI-scale transfer/merge overhead. Record those from an available real squash merge; do not infer them from fixture tests. Nightly cleanup and the complete cross-path comparison remain the dependent validation work.

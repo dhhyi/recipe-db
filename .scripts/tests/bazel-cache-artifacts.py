@@ -64,14 +64,14 @@ def put_tree_cache(root, tree, root_directory, action_digest="a" * 64, output_pa
     put_cache_file(root, "ac", action_digest, result)
 
 
-def make_cache(root, output=b"built", output_path="result.txt", executable=True):
+def make_cache(root, output=b"built", output_path="result.txt", executable=True,
+               action_digest="a" * 64):
     output_digest = hashlib.sha256(output).hexdigest()
     put_cache_file(root, "cas", output_digest, output)
     output_file = message(1, output_path.encode()) + message(2, digest(output))
     if executable:
         output_file += integer(4, 1)
     action_result = message(2, output_file)
-    action_digest = "a" * 64
     put_cache_file(root, "ac", action_digest, action_result)
 
 
@@ -80,6 +80,52 @@ class CacheArtifactTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+
+    def test_paginated_requests_honor_page_size_and_advance_pages(self):
+        requests = []
+        pages = [
+            {"workflow_runs": [{"id": number} for number in range(20)]},
+            {"workflow_runs": [{"id": 20}]},
+        ]
+
+        def fake_request(url, token):
+            requests.append(url)
+            return pages.pop(0)
+
+        with patch.object(CACHE, "request_json", side_effect=fake_request):
+            runs = list(CACHE.paginated(
+                "https://api.github.com/repos/owner/repo/actions/runs?event=push",
+                "token", "workflow_runs", page_size=20,
+            ))
+
+        self.assertEqual([run["id"] for run in runs], list(range(21)))
+        self.assertEqual(
+            requests,
+            [
+                "https://api.github.com/repos/owner/repo/actions/runs?event=push&per_page=20&page=1",
+                "https://api.github.com/repos/owner/repo/actions/runs?event=push&per_page=20&page=2",
+            ],
+        )
+
+    def test_workflow_run_listing_uses_bounded_page_size(self):
+        requests = []
+
+        def fake_paginated(url, token, key, page_size=100):
+            requests.append((key, page_size))
+            return iter(())
+
+        with patch.object(CACHE, "paginated", side_effect=fake_paginated), \
+                redirect_stdout(io.StringIO()):
+            restored = CACHE.restore_scope(
+                SimpleNamespace(run_number=10),
+                "https://api.github.com/repos/owner/repo", "token", "pr", 17,
+                {}, self.root / "cache",
+            )
+
+        self.assertFalse(restored)
+        self.assertEqual(
+            requests, [("workflow_runs", CACHE.WORKFLOW_RUNS_PAGE_SIZE)]
+        )
 
     def test_round_trip_validates_action_references_and_excludes_temporary_files(self):
         source = self.root / "source"
@@ -103,6 +149,82 @@ class CacheArtifactTests(unittest.TestCase):
         )
         self.assertEqual((destination / "cas" / hashlib.sha256(b"built").hexdigest()[:2]
                           / hashlib.sha256(b"built").hexdigest()).read_bytes(), b"built")
+
+    def test_union_keeps_both_sources_and_main_wins_valid_action_conflicts(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main, b"main output", executable=True)
+        make_cache(pr, b"PR output", executable=False, action_digest="b" * 64)
+        destination = self.root / "union"
+
+        CACHE.union_caches(main, pr, destination)
+
+        merged = CACHE.cache_files(destination)
+        self.assertEqual(set(merged["ac"]), {"a" * 64, "b" * 64})
+        self.assertEqual(
+            (destination / "cas" / hashlib.sha256(b"main output").hexdigest()[:2]
+             / hashlib.sha256(b"main output").hexdigest()).read_bytes(),
+            b"main output",
+        )
+        self.assertEqual(
+            (destination / "cas" / hashlib.sha256(b"PR output").hexdigest()[:2]
+             / hashlib.sha256(b"PR output").hexdigest()).read_bytes(),
+            b"PR output",
+        )
+
+        conflict_main = self.root / "conflict-main"
+        conflict_pr = self.root / "conflict-pr"
+        conflict_main.mkdir()
+        conflict_pr.mkdir()
+        make_cache(conflict_main, b"winner", executable=True)
+        make_cache(conflict_pr, b"loser", executable=False)
+        conflict_union = self.root / "conflict-union"
+        output = io.StringIO()
+        with redirect_stdout(output):
+            CACHE.union_caches(conflict_main, conflict_pr, conflict_union)
+        merged = CACHE.cache_files(conflict_union)
+        self.assertEqual(set(merged["ac"]), {"a" * 64})
+        self.assertEqual(
+            (conflict_union / "ac" / "aa" / ("a" * 64)).read_bytes(),
+            (conflict_main / "ac" / "aa" / ("a" * 64)).read_bytes(),
+        )
+        self.assertIn("union-conflict action-key=", output.getvalue())
+        self.assertTrue(
+            (conflict_union / "cas" / hashlib.sha256(b"loser").hexdigest()[:2]
+             / hashlib.sha256(b"loser").hexdigest()).is_file()
+        )
+
+    def test_union_rejects_invalid_source_without_publishing(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main)
+        make_cache(pr, b"invalid")
+        digest = hashlib.sha256(b"invalid").hexdigest()
+        (pr / "cas" / digest[:2] / digest).write_bytes(b"corrupt")
+        destination = self.root / "union"
+
+        with self.assertRaisesRegex(CACHE.Invalid, "CAS digest mismatch"):
+            CACHE.union_caches(main, pr, destination)
+
+        self.assertFalse(destination.exists())
+
+    def test_union_deduplicates_identical_content_addressed_entries(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main, b"shared", action_digest="a" * 64)
+        make_cache(pr, b"shared", action_digest="b" * 64)
+        destination = self.root / "union"
+
+        stats = CACHE.union_caches(main, pr, destination)
+
+        self.assertEqual(stats["files"], 3)
+        self.assertEqual(len(CACHE.cache_files(destination)["cas"]), 1)
 
     def test_rejects_malformed_action_result_and_missing_or_wrong_size_blob(self):
         source = self.root / "source"
@@ -463,6 +585,229 @@ class CacheArtifactTests(unittest.TestCase):
         selected = CACHE.rank_runs([previous, same_revision, future, current], "main", None, history)
         self.assertEqual([run["id"] for run in selected], [11, 10, 12])
 
+    def test_squash_association_is_unique_and_uses_the_final_pr_head(self):
+        commit = "a" * 40
+        final_head = "b" * 40
+        pull = {
+            "number": 17, "state": "closed", "merged_at": "2026-11-03T00:00:00Z",
+            "merge_commit_sha": commit,
+            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "head": {"sha": final_head, "repo": {"full_name": "owner/repo"}},
+        }
+        with patch.object(CACHE, "request_json", return_value=[pull]):
+            selected = CACHE.squash_pull_request(
+                "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+            )
+        self.assertEqual(selected["head"]["sha"], final_head)
+
+        with patch.object(CACHE, "request_json", return_value=[]):
+            self.assertIsNone(CACHE.squash_pull_request(
+                "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+            ))
+        with patch.object(CACHE, "request_json", return_value=[pull, pull]):
+            self.assertIs(
+                CACHE.squash_pull_request(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+                ),
+                False,
+            )
+        fork_pull = json.loads(json.dumps(pull))
+        fork_pull["head"]["repo"]["full_name"] = "contributor/repo"
+        with patch.object(CACHE, "request_json", return_value=[fork_pull]):
+            self.assertIs(
+                CACHE.squash_pull_request(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo", commit
+                ),
+                False,
+            )
+
+    def test_trusted_writer_requires_matching_github_identity_and_write_permission(self):
+        run = {"actor": {"login": "trusted-writer", "id": 13}}
+        detail = {
+            "actor": {"login": "trusted-writer", "id": 13},
+            "repository": {"id": 42, "full_name": "owner/repo"},
+            "pull_requests": [{
+                "number": 17,
+                "head": {"repo": {"id": 42}},
+            }],
+        }
+        permission = {"user": {"login": "trusted-writer"}, "permission": "write"}
+        with patch.object(CACHE, "request_json", return_value=permission):
+            self.assertTrue(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token", run, detail,
+                "owner/repo", 17,
+            ))
+        with patch.object(
+            CACHE, "request_json",
+            return_value={"user": {"login": "trusted-writer"}, "permission": "triage"},
+        ):
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token", run, detail,
+                "owner/repo", 17,
+            ))
+        with patch.object(
+            CACHE, "request_json", return_value={"permission": "write"},
+        ):
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token", run, detail,
+                "owner/repo", 17,
+            ))
+        forged = {**detail, "actor": {"login": "other-user", "id": 13}}
+        self.assertFalse(CACHE.trusted_pr_writer(
+            "https://api.github.com/repos/owner/repo", "token", run, forged,
+            "owner/repo", 17,
+        ))
+        fork = json.loads(json.dumps(detail))
+        fork["pull_requests"][0]["head"]["repo"]["id"] = 43
+        self.assertFalse(CACHE.trusted_pr_writer(
+            "https://api.github.com/repos/owner/repo", "token", run, fork,
+            "owner/repo", 17,
+        ))
+
+    def test_squash_restore_uses_preceding_main_and_final_head_pr_snapshot(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        final_head = "b" * 40
+        pull = {"number": 17, "head": {"sha": final_head}}
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+        history = {squash_sha: 0, "previous-main": 1}
+        restored = []
+        results = {"main": True, "pr": True}
+
+        def fake_restore(args, base, token, scope, pr_number, revisions, destination,
+                         expected_head=None, require_trusted_writer=False):
+            restored.append((scope, pr_number, dict(revisions), expected_head, require_trusted_writer))
+            if results[scope]:
+                Path(destination).mkdir(parents=True)
+            return results[scope]
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value=history), \
+                patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                patch.object(CACHE, "union_caches") as union, \
+                redirect_stdout(output):
+            CACHE.discover_and_restore(args)
+
+        self.assertEqual(restored, [
+            ("main", None, {"previous-main": 1}, None, False),
+            ("pr", 17, {}, final_head, True),
+        ])
+        union.assert_called_once()
+        self.assertNotIn(squash_sha, dict(restored[0][2]))
+
+    def test_squash_fallbacks_preserve_an_independently_available_source(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        pull = {"number": 17, "head": {"sha": "b" * 40}}
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+        outcomes = [
+            ({"main": True, "pr": False}, "main", "main"),
+            ({"main": False, "pr": True}, "pr", "PR"),
+        ]
+        for index, (results, selected, display) in enumerate(outcomes):
+            with self.subTest(selected=selected):
+                args.cache = str(self.root / f"cache-{index}")
+                restored = []
+
+                def fake_restore(args, base, token, scope, pr_number, history, destination,
+                                 expected_head=None, require_trusted_writer=False):
+                    restored.append(scope)
+                    if results[scope]:
+                        Path(destination).mkdir(parents=True)
+                    return results[scope]
+
+                output = io.StringIO()
+                with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                        patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
+                        patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                        patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                        patch.object(CACHE, "copy_cache") as copy, \
+                        patch.object(CACHE, "union_caches") as union, \
+                        redirect_stdout(output):
+                    CACHE.discover_and_restore(args)
+
+                self.assertEqual(restored, ["main", "pr"])
+                copy.assert_called_once()
+                self.assertEqual(Path(copy.call_args.args[0]).name, selected)
+                self.assertEqual(Path(copy.call_args.args[1]), Path(args.cache))
+                self.assertIn(f"using {display}-only snapshot", output.getvalue())
+                union.assert_not_called()
+
+    def test_union_failure_falls_back_to_the_independently_valid_main_cache(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+
+        def fake_restore(args, base, token, scope, pr_number, history, destination,
+                         expected_head=None, require_trusted_writer=False):
+            Path(destination).mkdir(parents=True)
+            return True
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
+                patch.object(CACHE, "squash_pull_request", return_value={
+                    "number": 17, "head": {"sha": "b" * 40},
+                }), \
+                patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                patch.object(CACHE, "union_caches", side_effect=CACHE.Invalid("union limit")), \
+                patch.object(CACHE, "copy_cache") as copy, \
+                redirect_stdout(output):
+            CACHE.discover_and_restore(args)
+
+        copy.assert_called_once()
+        self.assertEqual(Path(copy.call_args.args[0]).name, "main")
+        self.assertIn("union-rejected pr=17", output.getvalue())
+
+    def test_squash_with_no_sources_runs_cold_and_ambiguous_metadata_uses_main_only(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+        for pull, expected_scopes, expected_log in (
+            ({"number": 17, "head": {"sha": "b" * 40}}, ["main", "pr"], "cold build"),
+            (False, ["main"], "using main-only snapshot"),
+        ):
+            restored = []
+
+            def fake_restore(args, base, token, scope, pr_number, history, destination,
+                             expected_head=None, require_trusted_writer=False):
+                restored.append((scope, dict(history)))
+                return False
+
+            output = io.StringIO()
+            with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                    patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
+                    patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                    patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                    redirect_stdout(output):
+                CACHE.discover_and_restore(args)
+
+            self.assertEqual([scope for scope, _ in restored], expected_scopes)
+            self.assertTrue(all(squash_sha not in revisions for _, revisions in restored))
+            self.assertIn(expected_log, output.getvalue())
+
     def test_pr_selection_falls_back_to_an_older_same_pr_artifact(self):
         event_path = self.root / "event.json"
         event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}}}))
@@ -511,7 +856,7 @@ class CacheArtifactTests(unittest.TestCase):
         artifacts = {1: [], 2: [{"id": 22, "name": "bazel-cache-v1-main-r2-a1"}]}
         calls = []
 
-        def fake_paginated(url, token, key):
+        def fake_paginated(url, token, key, page_size=100):
             return [pr_run] if "event=pull_request" in url else [main_run]
 
         def fake_download(base, token, artifact, cache_path, repository, run, scope, pr_number):
@@ -581,6 +926,11 @@ class CacheArtifactTests(unittest.TestCase):
             CACHE.verify_producer(
                 run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
                 "pr", 3, "owner/repo", {"sha": "built", "parents": [{"sha": "other"}]},
+            )
+        with self.assertRaisesRegex(CACHE.Invalid, "final PR head"):
+            CACHE.verify_producer(
+                run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
+                "pr", 3, "owner/repo", commit, "different-final-head",
             )
 
     def test_main_identity_rejects_pr_producers(self):
