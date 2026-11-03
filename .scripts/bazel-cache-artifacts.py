@@ -36,6 +36,9 @@ MAX_FILES = 500_000
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_METADATA_BYTES = 1024**2
 MAX_ACTION_RESULT_BYTES = 64 * 1024**2
+MAX_TREE_EXPANDED_BYTES = 64 * 1024**2
+MAX_ACTION_LOG_RECORD_BYTES = 16 * 1024**2
+MAX_ACTION_LOG_CHUNK_BYTES = 64 * 1024
 EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
 
 
@@ -136,6 +139,41 @@ def safe_symlink_target(path, target):
             parts.append(part)
 
 
+def validate_symlink_graph(symlinks):
+    resolved = {}
+
+    def follow(parts, active):
+        current = []
+        for part in parts:
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if not current:
+                    raise Invalid("escaping output symlink graph")
+                current.pop()
+                continue
+            current.append(part)
+            candidate = "/".join(current)
+            if candidate in symlinks:
+                current = list(resolve(candidate, active))
+        return tuple(current)
+
+    def resolve(path, active):
+        if path in active:
+            raise Invalid("cyclic output symlink")
+        if path in resolved:
+            return resolved[path]
+        if len(active) >= 256:
+            raise Invalid("output symlink graph exceeds depth limit")
+        active = active | {path}
+        parent = PurePosixPath(path).parent.parts
+        resolved[path] = follow((*parent, *symlinks[path].split("/")), active)
+        return resolved[path]
+
+    for path in symlinks:
+        resolve(path, frozenset())
+
+
 def read_digest(data):
     message = fields(data)
     if set(message) - {1, 2}:
@@ -215,7 +253,7 @@ def referenced_blob(files, digest, size):
         raise Invalid(f"missing or wrong-size referenced blob {digest}")
 
 
-def validate_tree(files, digest, size, output_path, seen, depth=0):
+def validate_tree(files, digest, size, output_path, seen, symlinks, budget, depth=0):
     if depth > 256:
         raise Invalid("cache output tree exceeds depth limit")
     referenced_blob(files, digest, size)
@@ -224,6 +262,9 @@ def validate_tree(files, digest, size, output_path, seen, depth=0):
         raise Invalid("empty tree blob is not valid")
     if blob[1] > MAX_ACTION_RESULT_BYTES:
         raise Invalid("Tree exceeds metadata limit")
+    budget["bytes"] += blob[1]
+    if budget["bytes"] > MAX_TREE_EXPANDED_BYTES:
+        raise Invalid("cache output tree exceeds expanded-byte limit")
     tree = fields(blob[0].read_bytes())
     if set(tree) - {1, 2}:
         raise Invalid("unsupported Tree fields")
@@ -243,15 +284,23 @@ def validate_tree(files, digest, size, output_path, seen, depth=0):
     root_digest = hashlib.sha256(root).hexdigest()
     visited = set()
     validate_directory(files, fields(root), output_path, seen, depth, directory_map,
-                       visited, {root_digest})
+                       visited, {root_digest}, symlinks, budget, len(root))
     if visited != set(directory_map):
         raise Invalid("Tree contains an unreferenced child directory")
 
 
 def validate_directory(files, directory, output_path, seen, depth, directory_map,
-                       visited=None, active=None):
+                       visited=None, active=None, symlinks=None, budget=None,
+                       directory_size=0):
+    if depth > 256:
+        raise Invalid("cache output tree exceeds depth limit")
     visited = visited if visited is not None else set()
     active = active if active is not None else set()
+    symlinks = symlinks if symlinks is not None else {}
+    budget = budget if budget is not None else {"nodes": 0, "bytes": 0}
+    budget["bytes"] += directory_size
+    if budget["bytes"] > MAX_TREE_EXPANDED_BYTES:
+        raise Invalid("cache output tree exceeds expanded-byte limit")
     if set(directory) - {1, 2, 3, 5}:
         raise Invalid("unsupported Directory fields")
     if 5 in directory:
@@ -268,6 +317,12 @@ def validate_directory(files, directory, output_path, seen, depth, directory_map
             key = str(path)
             if key in seen:
                 raise Invalid("duplicate output tree path")
+            budget["nodes"] += 1
+            budget["bytes"] += len(key.encode("utf-8"))
+            if budget["nodes"] > MAX_FILES:
+                raise Invalid("cache output tree exceeds expanded-node limit")
+            if budget["bytes"] > MAX_TREE_EXPANDED_BYTES:
+                raise Invalid("cache output tree exceeds expanded-byte limit")
             seen.add(key)
             if kind == "file":
                 if set(item) - {1, 2, 4, 6}:
@@ -299,11 +354,13 @@ def validate_directory(files, directory, output_path, seen, depth, directory_map
                     raise Invalid("cyclic output directory tree")
                 visited.add(digest)
                 validate_directory(files, fields(raw), key, seen, depth + 1, directory_map,
-                                   visited, active | {digest})
+                                   visited, active | {digest}, symlinks, budget, len(raw))
             else:
                 if set(item) - {1, 2, 4}:
                     raise Invalid("unsupported output symlink fields")
-                safe_symlink_target(path, text(one(item, 2, 2, b"")))
+                target = text(one(item, 2, 2, b""))
+                safe_symlink_target(path, target)
+                symlinks[key] = target
                 if 4 in item:
                     fields(one(item, 4, 2))
 
@@ -315,6 +372,8 @@ def validate_action_result(files, data):
     if one(result, 4, 0, 0) != 0:
         raise Invalid("unsuccessful ActionResult")
     seen = set()
+    symlinks = {}
+    tree_budget = {"nodes": 0, "bytes": 0}
     for wire, output in result.get(2, []):
         if wire != 2:
             raise Invalid("malformed OutputFile")
@@ -362,7 +421,10 @@ def validate_action_result(files, data):
         if digest_data is None:
             raise Invalid("OutputDirectory lacks a digest")
         digest, size = read_digest(digest_data)
-        validate_tree(files, digest, size, str(path) if path is not None else "", seen)
+        validate_tree(
+            files, digest, size, str(path) if path is not None else "", seen,
+            symlinks, tree_budget,
+        )
         if 4 in item and one(item, 4, 0) not in (0, 1):
             raise Invalid("malformed OutputDirectory sorted flag")
         if 5 in item:
@@ -385,7 +447,9 @@ def validate_action_result(files, data):
             if "" in seen or str(path) in seen:
                 raise Invalid("duplicate ActionResult output")
             seen.add(str(path))
-            safe_symlink_target(path, text(one(item, 2, 2, b"")))
+            target = text(one(item, 2, 2, b""))
+            safe_symlink_target(path, target)
+            symlinks[str(path)] = target
             if 4 in item:
                 fields(one(item, 4, 2))
     for raw, hashed in ((5, 6), (7, 8)):
@@ -397,6 +461,7 @@ def validate_action_result(files, data):
             referenced_blob(files, *read_digest(digest_data))
     if 9 in result:
         fields(one(result, 9, 2))
+    validate_symlink_graph(symlinks)
 
 
 def validate_action_results(files):
@@ -497,9 +562,38 @@ def snapshot(source, archive):
             "seconds": round(time.monotonic() - started, 3)}
 
 
+def reject_tar_extensions(archive):
+    archive_size = archive.stat().st_size
+    offset = 0
+    members = 0
+    with archive.open("rb") as stream:
+        while offset < archive_size:
+            header = stream.read(512)
+            if len(header) != 512:
+                raise Invalid("truncated snapshot archive header")
+            if header == b"\0" * 512:
+                return
+            typeflag = header[156:157]
+            if typeflag not in (b"\0", b"0"):
+                raise Invalid("snapshot archive contains an extension or unsupported record")
+            size_field = header[124:136].strip(b"\0 ")
+            if any(byte < ord("0") or byte > ord("7") for byte in size_field):
+                raise Invalid("snapshot archive has an invalid member size")
+            member_size = int(size_field or b"0", 8)
+            padded_size = ((member_size + 511) // 512) * 512
+            offset += 512 + padded_size
+            if offset > archive_size:
+                raise Invalid("truncated snapshot archive member")
+            members += 1
+            if members > MAX_FILES:
+                raise Invalid("snapshot archive exceeds member-count limit")
+            stream.seek(offset)
+
+
 def unpack_snapshot(archive, destination):
     if archive.stat().st_size > MAX_ARCHIVE_BYTES:
         raise Invalid("snapshot archive exceeds archive-size limit")
+    reject_tar_extensions(archive)
     if destination.exists() or destination.is_symlink():
         raise Invalid("cache destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -715,12 +809,11 @@ def run_matches_scope(run, scope, pr_number):
     )
 
 
-def rank_runs(runs, scope, pr_number, history):
+def rank_runs(runs, scope, pr_number, history, max_run_number=None):
     candidates = []
     for run in runs:
         if not run_matches_scope(run, scope, pr_number):
             continue
-        run_id = int(run["id"])
         if scope == "main":
             sha = run.get("head_sha")
             if sha not in history:
@@ -728,12 +821,22 @@ def rank_runs(runs, scope, pr_number, history):
             distance = history[sha]
             candidates.append((distance, int(run["run_number"]), int(run.get("run_attempt", 1)), run))
         else:
-            candidates.append((0, int(run["run_number"]), int(run.get("run_attempt", 1)), run))
+            run_number = int(run["run_number"])
+            attempt = int(run.get("run_attempt", 1))
+            if max_run_number is not None and run_number > max_run_number:
+                continue
+            candidates.append((0, run_number, attempt, run))
     if scope == "main":
         candidates.sort(key=lambda item: (item[0], -item[1], -item[2]))
     else:
         candidates.sort(key=lambda item: (-item[1], -item[2]))
     return [entry[3] for entry in candidates]
+
+
+def pr_attempt_is_eligible(run, attempt, current_run, current_run_number, current_attempt):
+    if int(run["id"]) == current_run:
+        return attempt < current_attempt
+    return int(run["run_number"]) < current_run_number
 
 
 def artifacts_for_run(base, token, run):
@@ -758,7 +861,7 @@ def jobs_for_attempt(base, token, run_id, attempt):
 
 
 def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number,
-                    repository):
+                    repository, commit=None):
     expected_scope = "main" if scope == "main" else f"pr-{pr_number}"
     expected_prefix = f"{ARTIFACT_PREFIX}-{expected_scope}-r{run['id']}-a{detail['run_attempt']}"
     if artifact_name != expected_prefix:
@@ -768,7 +871,6 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
             or detail.get("event") != run.get("event") \
             or detail.get("workflow_id") != run.get("workflow_id") \
             or detail.get("run_number") != run.get("run_number") \
-            or detail.get("head_sha") != manifest.get("builtCommit") \
             or detail.get("head_sha") != run.get("head_sha") \
             or int(detail.get("id", -1)) != int(run["id"]) \
             or int(detail.get("run_attempt", -1)) < 1:
@@ -785,7 +887,9 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
     ):
         raise Invalid("producer did not complete the cache upload step")
     if scope == "main":
-        if manifest.get("pullRequest") is not None or detail.get("event") != "push" \
+        if manifest.get("pullRequest") is not None \
+                or manifest.get("builtCommit") != detail.get("head_sha") \
+                or detail.get("event") != "push" \
                 or detail.get("head_branch") != "main":
             raise Invalid("main artifact has an invalid producer scope")
     else:
@@ -795,8 +899,15 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
         if not isinstance(pull_request, dict) or len(matches) != 1 \
                 or pull_request.get("number") != pr_number \
                 or pull_request.get("head") != matches[0].get("head", {}).get("sha") \
+                or pull_request.get("head") != detail.get("head_sha") \
                 or pull_request.get("base") != matches[0].get("base", {}).get("sha"):
             raise Invalid("PR artifact identity does not match GitHub metadata")
+        parents = commit.get("parents", []) if isinstance(commit, dict) else []
+        if commit is None or commit.get("sha") != manifest.get("builtCommit") \
+                or [parent.get("sha") for parent in parents] != [
+                    pull_request["base"], pull_request["head"]
+                ]:
+            raise Invalid("PR merge commit does not match producer-time head and base")
 
 
 def validate_compatibility(manifest):
@@ -903,8 +1014,12 @@ def download_candidate(base, token, artifact, cache_path, repository,
         if detail is None:
             return "producer attempt metadata disappeared"
         jobs = jobs_for_attempt(base, token, run["id"], attempt)
+        commit = None
+        if scope == "pr":
+            built_commit = urllib.parse.quote(actual_manifest["builtCommit"], safe="")
+            commit = request_json(f"{base}/git/commits/{built_commit}", token)
         verify_producer(run, detail, jobs, actual_manifest, artifact["name"], scope,
-                        pr_number, repository)
+                        pr_number, repository, commit)
         if cache_path.exists():
             raise Invalid("cache destination already exists")
         restore_started = time.monotonic()
@@ -937,7 +1052,8 @@ def discover_and_restore(args):
             runs_url = f"{base}/actions/runs?" + urllib.parse.urlencode(query)
             runs = list(paginated(runs_url, token, "workflow_runs"))
             candidates = rank_runs(
-                runs, search_scope, pr_number, history
+                runs, search_scope, pr_number, history,
+                int(args.run_number) if search_scope == "pr" else None,
             )
             for run in candidates:
                 for artifact in artifacts_for_run(base, token, run):
@@ -954,7 +1070,9 @@ def discover_and_restore(args):
                     if int(match.group(1)) != int(run["id"]):
                         continue
                     attempt = int(match.group(2))
-                    if int(run["id"]) == current_run and attempt == current_attempt:
+                    if search_scope == "pr" and not pr_attempt_is_eligible(
+                        run, attempt, current_run, int(args.run_number), current_attempt
+                    ):
                         continue
                     if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
                         continue
@@ -1008,6 +1126,48 @@ def upload(args):
 
 
 def report_action_logs(specifications):
+    decoder = json.JSONDecoder()
+
+    def iter_records(stream):
+        buffer = ""
+        buffered_bytes = 0
+        eof = False
+        while True:
+            stripped = buffer.lstrip()
+            removed = len(buffer) - len(stripped)
+            if removed:
+                buffered_bytes -= len(buffer[:removed].encode("utf-8"))
+                buffer = stripped
+            if not buffer:
+                if eof:
+                    return
+                chunk = stream.read(MAX_ACTION_LOG_CHUNK_BYTES)
+                if not chunk:
+                    return
+                buffer = chunk
+                buffered_bytes = len(chunk.encode("utf-8"))
+                continue
+            try:
+                value, end = decoder.raw_decode(buffer)
+            except json.JSONDecodeError as error:
+                if buffered_bytes > MAX_ACTION_LOG_RECORD_BYTES:
+                    raise Invalid("action log record exceeds size limit") from error
+                if eof:
+                    raise Invalid("malformed action execution log") from error
+                chunk = stream.read(MAX_ACTION_LOG_CHUNK_BYTES)
+                if not chunk:
+                    eof = True
+                else:
+                    buffer += chunk
+                    buffered_bytes += len(chunk.encode("utf-8"))
+                continue
+            record_bytes = len(buffer[:end].encode("utf-8"))
+            if record_bytes > MAX_ACTION_LOG_RECORD_BYTES:
+                raise Invalid("action log record exceeds size limit")
+            yield value
+            buffer = buffer[end:]
+            buffered_bytes -= record_bytes
+
     for specification in specifications:
         label, separator, filename = specification.partition("=")
         try:
@@ -1016,36 +1176,33 @@ def report_action_logs(specifications):
                 raise Invalid("action log is unavailable")
             hits = 0
             executions = 0
-            records = 0
-            with path.open() as stream:
-                while True:
-                    line = stream.readline(16 * 1024 * 1024 + 1)
-                    if not line:
-                        break
-                    if len(line) > 16 * 1024 * 1024:
-                        while line and not line.endswith("\n"):
-                            line = stream.readline(16 * 1024 * 1024 + 1)
-                        continue
-                    try:
-                        value = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+            record_count = 0
+            visited_nodes = 0
+            with path.open(encoding="utf-8") as stream:
+                for value in iter_records(stream):
                     pending = [value]
                     while pending:
                         item = pending.pop()
+                        visited_nodes += 1
+                        if visited_nodes > MAX_FILES:
+                            raise Invalid("action execution log exceeds node-count limit")
                         if isinstance(item, dict):
                             if isinstance(item.get("cacheHit"), bool):
-                                records += 1
+                                record_count += 1
                                 hits += int(item["cacheHit"])
                                 executions += int(not item["cacheHit"])
-                            if records > MAX_FILES:
-                                break
+                            if record_count > MAX_FILES:
+                                raise Invalid("action execution log exceeds record-count limit")
+                            if len(pending) + len(item) > MAX_FILES:
+                                raise Invalid("action execution log exceeds node-count limit")
                             pending.extend(item.values())
                         elif isinstance(item, list):
+                            if len(pending) + len(item) > MAX_FILES:
+                                raise Invalid("action execution log exceeds node-count limit")
                             pending.extend(item)
             print(f"cache: actions stage={label} hits={hits} executions={executions} "
-                  f"records={records}")
-        except (Invalid, OSError):
+                  f"records={record_count}")
+        except (Invalid, OSError, UnicodeError, RecursionError):
             print(f"cache: actions stage={label or specification} unavailable")
 
 
@@ -1071,6 +1228,7 @@ def main():
     restore.add_argument("--event-name", required=True)
     restore.add_argument("--repository", required=True)
     restore.add_argument("--run-id", required=True)
+    restore.add_argument("--run-number", required=True, type=int)
     restore.add_argument("--run-attempt", required=True)
     restore.add_argument("--commit", required=True)
     restore.add_argument("--pr-number", default="")

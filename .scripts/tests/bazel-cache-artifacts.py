@@ -54,6 +54,16 @@ def put_cache_file(root, category, key, content):
     return path
 
 
+def put_tree_cache(root, tree, root_directory, action_digest="a" * 64, output_path=b"tree"):
+    tree_digest = hashlib.sha256(tree).hexdigest()
+    put_cache_file(root, "cas", tree_digest, tree)
+    result = message(
+        3, message(1, output_path) + message(3, digest(tree))
+        + message(5, digest(root_directory))
+    )
+    put_cache_file(root, "ac", action_digest, result)
+
+
 def make_cache(root, output=b"built", output_path="result.txt", executable=True):
     output_digest = hashlib.sha256(output).hexdigest()
     put_cache_file(root, "cas", output_digest, output)
@@ -181,6 +191,67 @@ class CacheArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(CACHE.Invalid, "escaping"):
             CACHE.cache_files(bad)
 
+    def test_bounds_tree_depth_and_expanded_nodes_and_bytes(self):
+        source = self.root / "too-deep"
+        source.mkdir()
+        directory = b""
+        children = []
+        for index in range(257):
+            children.append(directory)
+            node = message(1, f"level-{index}".encode()) + message(2, digest(directory))
+            directory = message(2, node)
+        tree = message(1, directory) + b"".join(message(2, item) for item in children)
+        put_tree_cache(source, tree, directory)
+        with self.assertRaisesRegex(CACHE.Invalid, "depth limit"):
+            CACHE.cache_files(source)
+
+        source = self.root / "too-many-nodes"
+        source.mkdir()
+        directory = b""
+        children = []
+        for index in range(5):
+            children.append(directory)
+            child = message(1, b"a") + message(2, digest(directory))
+            sibling = message(1, b"b") + message(2, digest(directory))
+            directory = message(2, child) + message(2, sibling)
+        tree = message(1, directory) + b"".join(message(2, item) for item in children)
+        put_tree_cache(source, tree, directory)
+        with patch.object(CACHE, "MAX_FILES", 10):
+            with self.assertRaisesRegex(CACHE.Invalid, "expanded-node limit"):
+                CACHE.cache_files(source)
+
+        source = self.root / "expanded-bytes"
+        source.mkdir()
+        directory = b""
+        children = []
+        for index in range(7):
+            children.append(directory)
+            child = message(1, b"a") + message(2, digest(directory))
+            sibling = message(1, b"b") + message(2, digest(directory))
+            directory = message(2, child) + message(2, sibling)
+        tree = message(1, directory) + b"".join(message(2, item) for item in children)
+        put_tree_cache(source, tree, directory)
+        with patch.object(CACHE, "MAX_TREE_EXPANDED_BYTES", 512):
+            with self.assertRaisesRegex(CACHE.Invalid, "expanded-byte limit"):
+                CACHE.cache_files(source)
+
+    def test_validates_symlinks_against_the_complete_output_graph(self):
+        for links, expected_error in (
+            ((("a", "."), ("b", "a/../outside")), "escaping"),
+            ((("a", "b"), ("b", "a")), "cyclic"),
+        ):
+            with self.subTest(links=links):
+                source = self.root / f"symlinks-{len(list(self.root.iterdir()))}"
+                source.mkdir()
+                root_directory = b"".join(
+                    message(3, message(1, path.encode()) + message(2, target.encode()))
+                    for path, target in links
+                )
+                tree = message(1, root_directory)
+                put_tree_cache(source, tree, root_directory, output_path=b"")
+                with self.assertRaisesRegex(CACHE.Invalid, expected_error):
+                    CACHE.cache_files(source)
+
     def test_rejects_unknown_layouts_and_symlinks(self):
         source = self.root / "source"
         source.mkdir()
@@ -211,6 +282,19 @@ class CacheArtifactTests(unittest.TestCase):
                 CACHE.unpack_snapshot(archive, destination)
             self.assertFalse(destination.exists())
         self.assertFalse((self.root / "outside").exists())
+
+    def test_rejects_tar_extensions_before_tarfile_parses_their_payloads(self):
+        for extension in (b"x", b"g", b"L", b"K"):
+            archive = self.root / f"extension-{extension.decode()}.tar"
+            header = bytearray(512)
+            header[124:136] = b"77777777777\0"
+            header[156:157] = extension
+            archive.write_bytes(header)
+            with self.subTest(extension=extension):
+                with patch.object(CACHE.tarfile, "open") as tar_open:
+                    with self.assertRaisesRegex(CACHE.Invalid, "extension"):
+                        CACHE.unpack_snapshot(archive, self.root / f"out-{extension.decode()}")
+                    tar_open.assert_not_called()
 
     def test_zip_preflight_requires_the_two_contract_members(self):
         good = self.root / "good.zip"
@@ -345,6 +429,27 @@ class CacheArtifactTests(unittest.TestCase):
             "https://api.github.com/repos/owner/repo/actions/runs/4/artifacts"
         ])
 
+    def test_pr_selection_excludes_newer_runs_and_keeps_prior_attempts(self):
+        runs = [
+            {"id": 1, "run_number": 19, "run_attempt": 5,
+             "event": "pull_request", "pull_requests": [{"number": 17}]},
+            {"id": 2, "run_number": 20, "run_attempt": 1,
+             "event": "pull_request", "pull_requests": [{"number": 17}]},
+            {"id": 3, "run_number": 20, "run_attempt": 2,
+             "event": "pull_request", "pull_requests": [{"number": 17}]},
+            {"id": 4, "run_number": 20, "run_attempt": 3,
+             "event": "pull_request", "pull_requests": [{"number": 17}]},
+            {"id": 5, "run_number": 21, "run_attempt": 1,
+             "event": "pull_request", "pull_requests": [{"number": 17}]},
+        ]
+        selected = CACHE.rank_runs(runs, "pr", 17, {}, 20)
+        self.assertEqual([run["id"] for run in selected], [4, 3, 2, 1])
+        current = runs[2]
+        self.assertTrue(CACHE.pr_attempt_is_eligible(current, 1, 3, 20, 2))
+        self.assertFalse(CACHE.pr_attempt_is_eligible(current, 2, 3, 20, 2))
+        self.assertFalse(CACHE.pr_attempt_is_eligible(current, 3, 3, 20, 2))
+        self.assertFalse(CACHE.pr_attempt_is_eligible(runs[4], 1, 3, 20, 2))
+
     def test_main_prefers_nearest_ancestor_then_run_and_attempt_order(self):
         current = {"id": 10, "run_number": 100, "run_attempt": 1,
                    "head_sha": "main-3", "event": "push", "head_branch": "main"}
@@ -381,7 +486,7 @@ class CacheArtifactTests(unittest.TestCase):
 
         args = SimpleNamespace(
             repository="owner/repo", event_path=str(event_path), event_name="pull_request",
-            pr_number="17", run_id="99", run_attempt="1", commit="c" * 40,
+            pr_number="17", run_id="99", run_number=99, run_attempt="1", commit="c" * 40,
             cache=str(self.root / "cache"),
         )
         output = io.StringIO()
@@ -415,7 +520,7 @@ class CacheArtifactTests(unittest.TestCase):
 
         args = SimpleNamespace(
             repository="owner/repo", event_path=str(event_path), event_name="pull_request",
-            pr_number="17", run_id="99", run_attempt="1", commit="c" * 40,
+            pr_number="17", run_id="99", run_number=99, run_attempt="1", commit="c" * 40,
             cache=str(self.root / "cache"),
         )
         output = io.StringIO()
@@ -432,7 +537,7 @@ class CacheArtifactTests(unittest.TestCase):
 
     def test_identity_validation_rejects_wrong_repository_workflow_or_pr(self):
         run = {
-            "id": 25, "run_number": 4, "workflow_id": 9, "head_sha": "built",
+            "id": 25, "run_number": 4, "workflow_id": 9, "head_sha": "pr-head",
             "event": "pull_request", "head_branch": "feature",
         }
         detail = {
@@ -450,23 +555,32 @@ class CacheArtifactTests(unittest.TestCase):
             "event": "pull_request", "builtCommit": "built",
             "pullRequest": {"number": 3, "head": "pr-head", "base": "main-base"},
         }
+        commit = {"sha": "built", "parents": [
+            {"sha": "main-base"}, {"sha": "pr-head"},
+        ]}
         CACHE.verify_producer(
-            run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo"
+            run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2", "pr", 3,
+            "owner/repo", commit,
         )
         with self.assertRaisesRegex(CACHE.Invalid, "identity"):
             CACHE.verify_producer(
                 run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
-                "pr", 4, "owner/repo",
+                "pr", 4, "owner/repo", commit,
             )
         with self.assertRaisesRegex(CACHE.Invalid, "metadata mismatch"):
             CACHE.verify_producer(
                 run, {**detail, "path": "other.yml"}, jobs, manifest,
-                "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo",
+                "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo", commit,
             )
         with self.assertRaisesRegex(CACHE.Invalid, "metadata mismatch"):
             CACHE.verify_producer(
                 run, {**detail, "repository": {"full_name": "fork/repo"}}, jobs,
-                manifest, "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo",
+                manifest, "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo", commit,
+            )
+        with self.assertRaisesRegex(CACHE.Invalid, "head and base"):
+            CACHE.verify_producer(
+                run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
+                "pr", 3, "owner/repo", {"sha": "built", "parents": [{"sha": "other"}]},
             )
 
     def test_main_identity_rejects_pr_producers(self):
@@ -531,14 +645,13 @@ class CacheArtifactTests(unittest.TestCase):
 
     def test_action_execution_diagnostics_count_hits_and_executions(self):
         logfile = self.root / "execution.json"
-        logfile.write_text(
-            '{"action":{"cacheHit":true}}\n'
-            '{"action":{"cacheHit":false}}\n'
-        )
+        sample_path = ROOT / ".scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json"
+        sample = sample_path.read_text()
+        logfile.write_text(sample + sample)
         output = io.StringIO()
         with redirect_stdout(output):
             CACHE.report_action_logs([f"checks={logfile}"])
-        self.assertIn("stage=checks hits=1 executions=1 records=2", output.getvalue())
+        self.assertIn("stage=checks hits=0 executions=2 records=2", output.getvalue())
 
 
 if __name__ == "__main__":

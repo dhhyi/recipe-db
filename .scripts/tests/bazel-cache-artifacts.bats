@@ -25,8 +25,10 @@ load test_helper
   [ "$upload" -lt "$integration" ]
   grep -F 'actions: read' "$workflow"
   grep -F 'fetch-depth: 0' "$workflow"
+  grep -F -- "--run-number \"\$GITHUB_RUN_NUMBER\"" "$workflow"
   grep -F "retention-days: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}" "$workflow"
-  ! grep -F 'uses: actions/cache@' "$workflow"
+  run grep -F 'uses: actions/cache@' "$workflow"
+  [ "$status" -eq 1 ]
   grep -F 'continue-on-error: true' "$workflow"
 }
 
@@ -35,8 +37,8 @@ load test_helper
   slice="$BATS_TEST_TMPDIR/workflow-slice"
   sed -n '/- name: check project formatting/,/- name: validate message bus integration/p' "$workflow" > "$slice"
 
-  grep -F -- '--execution_log_json_file="$RUNNER_TEMP/bazel-format-execution.json"' "$slice"
-  grep -F -- '--execution_log_json_file="$RUNNER_TEMP/bazel-check-execution.json"' "$slice"
+  grep -F -- "--execution_log_json_file=\"\$RUNNER_TEMP/bazel-format-execution.json\"" "$slice"
+  grep -F -- "--execution_log_json_file=\"\$RUNNER_TEMP/bazel-check-execution.json\"" "$slice"
   grep -F 'steps.prepare-bazel-cache.outputs.name' "$slice"
   grep -F 'if: success()' "$slice"
 }

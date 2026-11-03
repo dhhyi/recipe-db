@@ -80,6 +80,7 @@ tasks:
     - .github/workflows/publish.yaml
     - .scripts/tests/mocks/precommit-*
     - .scripts/tests/mocks/devcontainer-*
+    - .scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json
     - .scripts/tests/bazel-cache-artifacts.py
     - .scripts/templates/**
     - mise.toml

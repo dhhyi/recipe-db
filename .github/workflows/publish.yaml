@@ -68,6 +68,7 @@ jobs:
             --event-name "$GITHUB_EVENT_NAME" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID" \
+            --run-number "$GITHUB_RUN_NUMBER" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --commit "$GITHUB_SHA" \
             --pr-number "$PR_NUMBER"
