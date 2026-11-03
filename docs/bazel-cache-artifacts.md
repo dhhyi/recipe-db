@@ -24,7 +24,15 @@ For a squash restore, both artifacts are staged and validated independently befo
 
 The union deduplicates identical CAS entries, rejects different bytes under the same CAS digest, combines action-result keys, and keeps main's valid result for conflicting action keys while retaining both sources' CAS blobs. Both sources must pass the normal complete snapshot validation; an invalid source is rejected as a whole and is not repaired from the other. The workflow never imports output bases or active cache directories.
 
-The artifact is uploaded once after both Bazel stages succeed and before integration or image validation. Therefore a later job failure does not make the completed snapshot ineligible. Main artifacts retain for 90 days; PR artifacts retain for seven days. No nightly deletion is implemented here.
+The artifact is uploaded once after both Bazel stages succeed and before integration or image validation. Therefore a later job failure does not make the completed snapshot ineligible. Main artifacts retain for 90 days; PR artifacts retain for seven days.
+
+## Nightly cleanup
+
+The Publish workflow runs cleanup daily at 03:17 UTC from trusted default-branch code. Only `cleanup-bazel-cache` receives `actions: write`; quality and PR jobs retain read-only artifact permissions. The scheduled job does not run the quality, integration, or image-validation jobs.
+
+Cleanup paginates the repository artifact listing and considers only exact `bazel-cache-v1-main-r<RUN_ID>-a<ATTEMPT>` and `bazel-cache-v1-pr-<PR_NUMBER>-r<RUN_ID>-a<ATTEMPT>` names. Before deletion it checks the artifact ID and run ID/attempt against the producing run, repository, workflow path/name, event and branch/PR identity, and successful cache-upload step. Main artifacts are ranked by producer run number and attempt, retaining the newest five; upload completion order is not used. PR artifacts are deleted only after the repository PR API confirms that PR is merged. Open and closed-but-unmerged PR artifacts are left for their seven-day expiry.
+
+An artifact that disappears between listing and deletion is treated as already gone, so rerunning cleanup is safe. Unverifiable artifacts are not deleted. API authorization, service, identity, and deletion errors are reported and make the job fail as incomplete; a partial cleanup is never reported as complete. Cleanup does not coordinate with builds or delete artifacts at merge time, so a concurrent restore can observe a cache miss and fall back.
 
 ## Safety limits and fallback
 
@@ -40,4 +48,4 @@ The workflow log reports each selected producer run/attempt and built revision, 
 
 Trusted repository writers can supply action-result metadata. CAS digest validation and main-wins conflict resolution do not authenticate PR-only action results; this is an explicit trust choice, not proof that those actions were honestly executed. Read-only build permissions remain unchanged, and the workflow does not grant PR code artifact-deletion or repository-write credentials.
 
-The automated fixtures cover selection, trust decisions, union conflicts, retained blobs, output metadata, and whole-snapshot rejection. They do not establish representative hosted squash-merge hit attribution or CI-scale transfer/merge overhead. Record those from an available real squash merge; do not infer them from fixture tests. Nightly cleanup and the complete cross-path comparison remain the dependent validation work.
+The automated fixtures cover selection, trust decisions, union conflicts, retained blobs, output metadata, whole-snapshot rejection, and cleanup ranking/identity/failure behavior. They do not establish representative hosted squash-merge hit attribution or CI-scale transfer/merge overhead. Record those from an available real squash merge; do not infer them from fixture tests. The complete cross-path comparison remains the dependent validation work.
