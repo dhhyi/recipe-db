@@ -598,6 +598,13 @@ class CacheArtifactTests(unittest.TestCase):
                 "https://api.github.com/repos/owner/repo", "token", run, detail,
                 "owner/repo", 17,
             ))
+        with patch.object(
+            CACHE, "request_json", return_value={"permission": "write"},
+        ):
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token", run, detail,
+                "owner/repo", 17,
+            ))
         forged = {**detail, "actor": {"login": "other-user", "id": 13}}
         self.assertFalse(CACHE.trusted_pr_writer(
             "https://api.github.com/repos/owner/repo", "token", run, forged,
@@ -690,6 +697,37 @@ class CacheArtifactTests(unittest.TestCase):
                 self.assertEqual(Path(copy.call_args.args[1]), Path(args.cache))
                 self.assertIn(f"using {display}-only snapshot", output.getvalue())
                 union.assert_not_called()
+
+    def test_union_failure_falls_back_to_the_independently_valid_main_cache(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+
+        def fake_restore(args, base, token, scope, pr_number, history, destination,
+                         expected_head=None, require_trusted_writer=False):
+            Path(destination).mkdir(parents=True)
+            return True
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
+                patch.object(CACHE, "squash_pull_request", return_value={
+                    "number": 17, "head": {"sha": "b" * 40},
+                }), \
+                patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                patch.object(CACHE, "union_caches", side_effect=CACHE.Invalid("union limit")), \
+                patch.object(CACHE, "copy_cache") as copy, \
+                redirect_stdout(output):
+            CACHE.discover_and_restore(args)
+
+        copy.assert_called_once()
+        self.assertEqual(Path(copy.call_args.args[0]).name, "main")
+        self.assertIn("union-rejected pr=17", output.getvalue())
 
     def test_squash_with_no_sources_runs_cold_and_ambiguous_metadata_uses_main_only(self):
         event_path = self.root / "event.json"

@@ -1072,7 +1072,7 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
     )
     identity = permission.get("user", {}) if isinstance(permission, dict) else {}
     if not isinstance(permission, dict) \
-            or identity.get("login") not in (None, login) \
+            or identity.get("login") != login \
             or permission.get("permission") not in ("admin", "maintain", "write"):
         print(f"cache: trust-rejected pr={pr_number}: actor {login} lacks verified write permission")
         return False
@@ -1321,7 +1321,12 @@ def discover_and_restore(args):
                         final_head, True,
                     )
                     if main_restored and pr_restored:
-                        union_caches(main_cache, pr_cache, Path(args.cache))
+                        try:
+                            union_caches(main_cache, pr_cache, Path(args.cache))
+                        except Exception as error:
+                            print(f"cache: union-rejected pr={pull_number}: {error}; "
+                                  "using main-only snapshot")
+                            copy_cache(main_cache, Path(args.cache))
                     elif main_restored:
                         print(f"cache: squash-fallback pr={pull_number}: using main-only snapshot")
                         copy_cache(main_cache, Path(args.cache))
