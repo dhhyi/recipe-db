@@ -26,7 +26,7 @@ RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
 mise run production-backup-recovery-k3d "$RELEASE" "$RESULT"
 ```
 
-The runner preserves both clusters and private diagnostics on success and failure; generated credentials and values are under `$RESULT/secrets`. Inspect the result JSON and logs before removing the result directory. To remove either cluster, use its saved values file with `production-k3d delete` and the exact `DELETE-<cluster>-AND-ALL-DATA` confirmation. The other injected lifecycle, packaging, upload, and restore failure contracts are exercised by the `deploy` script regression group.
+The runner preserves both clusters and private diagnostics on success and failure; generated credentials and values are under `$RESULT/secrets`. Inspect the result JSON and logs before removing the result directory. To remove either cluster, use its saved values file with `production-k3d delete` and the exact `DELETE-<cluster>-AND-ALL-DATA` confirmation. Read-only checks wait through bounded route convergence; mutations are never automatically replayed. Restore waits for verified reads and a ready GraphQL route before its propagation probe, retaining blocked ingress and its recovery Lease if readiness fails. The other injected lifecycle, packaging, upload, and restore failure contracts are exercised by the `deploy` script regression group.
 
 ### Runtime mode
 
@@ -57,6 +57,16 @@ The maintenance API is private and available only in backup mode:
 | images | `POST /maintenance/images/compact` | Keep only the manifest-selected current image and thumbnail |
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
+
+#### Backup-participant development checklist
+
+- Declare `backupRole` and, for captured storage, the complete `backupData` layout; keep caches and secrets outside authoritative data.
+- Test exact maintenance routes through the real router, including supported trailing slashes and opaque IDs. Inventories must be complete, distinct and ordered; purge/compaction must tolerate retries.
+- Keep maintenance private and backup-only, test resets testing-only, and denied operations non-mutating. Health probes remain available in every mode.
+- Quiesce background writers and flush durable state before clean exit. Test every built container as PID 1 with SIGTERM and its image `STOPSIGNAL`, including wrappers and sidecars.
+- Verify authoritative data survives same-release restart/restore. Derived services must rebuild from empty storage and fresh consumers, remain not-ready after failed rebuilding, and process subsequent changes.
+- Keep credentials and application records out of diagnostic logs; store data-bearing manifests privately.
+- Verify reads through actual routes, not rollout status alone. Bound readiness/convergence waits; never blindly replay mutations or reopen clients after failed recovery.
 
 #### Snapshot capture
 
