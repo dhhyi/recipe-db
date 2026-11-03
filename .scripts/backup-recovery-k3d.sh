@@ -334,9 +334,9 @@ backup_id=$(jq -er .backupId "$package_manifest")
 # shellcheck source=.scripts/lib/project-metadata.sh
 . "$root/.scripts/lib/project-metadata.sh"
 application_project_metadata_to_jsonl "$root" "$result_directory/projects.jsonl"
-run_logged "$result_directory/logs/package-validation.log" \
-  python3 "$root/.scripts/validate-backup-package.py" "$package_manifest" "$archive" \
-  "$result_directory/validated-package" "$result_directory/projects.jsonl" "$backup_id"
+python3 "$root/.scripts/validate-backup-package.py" "$package_manifest" "$archive" \
+  "$result_directory/validated-package" "$result_directory/projects.jsonl" "$backup_id" \
+  > "$result_directory/validated-package.json" 2> "$result_directory/logs/package-validation.log"
 mark
 
 phase=nonempty-target-refusal

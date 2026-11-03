@@ -5,6 +5,7 @@ load test_helper
 setup() {
   setup_fixture backup-recovery-k3d.sh
   export FAKE_RCLONE_ROOT="$FIXTURE_ROOT/fake-remote"
+  export result_directory="$FIXTURE_ROOT/results"
 }
 
 @test "k3d rehearsal rejects mutable artifacts before creating result files or invoking tools" {
@@ -59,7 +60,6 @@ setup() {
 }
 
 @test "rehearsal retrieves uploaded packages from the deployment remote directory" {
-  export result_directory="$FIXTURE_ROOT/results"
   export archive_name=backup.tar.gz manifest_name=backup.manifest.json
   mkdir -p "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e" "$result_directory/packages"
   printf 'archive\n' > "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$archive_name"
@@ -70,4 +70,21 @@ setup() {
   [ "$status" -eq 0 ]
   cmp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$archive_name" "$result_directory/packages/$archive_name"
   cmp "$FAKE_RCLONE_ROOT/recipe-db-backups/k3d-e2e/$manifest_name" "$result_directory/packages/$manifest_name"
+}
+
+@test "package validation stores data privately rather than in diagnostic logs" {
+  export root="$FIXTURE_ROOT"
+  export package_manifest=manifest.json archive=backup.tar.gz backup_id=test-backup
+  mkdir -p "$result_directory/logs"
+  # shellcheck disable=SC2016
+  sed -n '/^python3 "\$root\/.scripts\/validate-backup-package.py"/,/package-validation.log/p' \
+    .scripts/backup-recovery-k3d.sh > validate-step.sh
+  python3() {
+    printf '{"recipeId":"synthetic-recipe-id"}\n'
+    printf 'safe validator diagnostic\n' >&2
+  }
+  # shellcheck source=/dev/null
+  source ./validate-step.sh
+  grep -q 'synthetic-recipe-id' "$result_directory/validated-package.json"
+  [ "$(cat "$result_directory/logs/package-validation.log")" = 'safe validator diagnostic' ]
 }
