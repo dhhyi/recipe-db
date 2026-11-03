@@ -2,6 +2,10 @@
 
 Shared UI component library, implemented using [Lit](https://lit.dev/) web components with [Blades CSS](https://blades.ninja/) and spacing/layout tools from [Tailwind CSS](https://tailwindcss.com/), documented in [Storybook](https://storybook.js.org/).
 
+## Storybook
+
+Use Storybook's theme switch to review every story in light and dark mode. Do not create dedicated light/dark stories or hard-code a theme in a story; stories should describe distinct component states and follow the selected theme.
+
 ## Tailwind CSS
 
 The shared `design` project builds the Tailwind stylesheet used by frontend projects. A frontend that loads `/design/styles.css` declares the files or directories containing its utility classes with `tailwindSources` in the second document of its `.project.yaml`.

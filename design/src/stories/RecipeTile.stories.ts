@@ -128,29 +128,7 @@ export const LongNameTags: Story = {
   `,
 };
 
-export const DarkThemeTags: Story = {
-  render: ({ title }) => html`
-    <div
-      data-theme="dark"
-      style="background: #1f2937; color: white; padding: 1rem"
-    >
-      <a>
-        <recipe-tile-component>
-          <img slot="image" src=${carbonaraThumb} alt="Spaghetti carbonara" />
-          <h2 slot="title">${title}</h2>
-          ${tags([
-            ["cuisine", "Italienisch"],
-            ["dietary-style", "Vegetarisch"],
-            ["course", "Hauptgericht"],
-          ])}
-          ${overflow}
-        </recipe-tile-component>
-      </a>
-    </div>
-  `,
-};
-
-export const Light: Story = {
+export const ImageAndTitle: Story = {
   render: ({ title }) => html`
     <a>
       <recipe-tile-component>

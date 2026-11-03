@@ -109,25 +109,3 @@ export const Borderless: Story = {
     </main>
   `,
 };
-
-export const ThemedHeader: Story = {
-  render: () => html`
-    <main class="container">
-      <div class="overflow-auto">
-        <table>
-          <thead data-theme="dark">
-            <tr>
-              <th scope="col">Item</th>
-              <th scope="col">Amount</th>
-              <th scope="col">Storage</th>
-              <th scope="col">Priority</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pantryRows}
-          </tbody>
-        </table>
-      </div>
-    </main>
-  `,
-};
