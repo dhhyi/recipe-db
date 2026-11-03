@@ -11,7 +11,7 @@ load test_helper
 
 @test "Publish restores, validates and uploads Bazel snapshots before integration" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  restore=$(grep -n '^      - name: restore Bazel disk cache artifact$' "$workflow" | cut -d: -f1)
+  restore=$(grep -n '^      - name: restore and union Bazel disk cache artifacts$' "$workflow" | cut -d: -f1)
   format=$(grep -n '^      - name: check project formatting$' "$workflow" | cut -d: -f1)
   checks=$(grep -n '^      - name: Bazel precommit checks and unit tests$' "$workflow" | cut -d: -f1)
   prepare=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
@@ -30,6 +30,9 @@ load test_helper
   run grep -F 'uses: actions/cache@' "$workflow"
   [ "$status" -eq 1 ]
   grep -F 'continue-on-error: true' "$workflow"
+  grep -F 'def squash_pull_request(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
+  grep -F 'def trusted_pr_writer(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
+  grep -F 'def union_caches(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
 }
 
 @test "Bazel snapshot upload depends on both completed Bazel stages" {
