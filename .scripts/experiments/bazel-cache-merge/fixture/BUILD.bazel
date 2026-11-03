@@ -1,0 +1,28 @@
+genrule(
+    name = "shared",
+    srcs = ["shared.txt"],
+    outs = ["shared.out"],
+    cmd = "cat $(SRCS) > $@",
+)
+
+genrule(
+    name = "main",
+    srcs = ["main.txt"],
+    outs = ["main.out"],
+    cmd = "cat $(SRCS) > $@",
+    executable = True,
+)
+
+genrule(
+    name = "pr",
+    srcs = ["pr.txt"],
+    outs = ["pr.out"],
+    cmd = "cat $(SRCS) > $@",
+)
+
+genrule(
+    name = "combined",
+    srcs = [":shared", ":main", ":pr"],
+    outs = ["combined.out"],
+    cmd = "cat $(SRCS) > $@",
+)

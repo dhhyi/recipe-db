@@ -61,6 +61,7 @@ deploy:
     - package.json
 tasks:
   tests:
+    - .scripts/tests/bazel-cache-merge.bats
     - .scripts/tests/bazel.bats
     - .scripts/tests/mise-tasks.bats
     - .scripts/tests/mise-freshness.bats
@@ -68,6 +69,7 @@ tasks:
     - .scripts/tests/seed-demodata.bats
     - .scripts/tests/update-docker-image-digests.bats
   inputs:
+    - .scripts/experiments/bazel-cache-merge/**
     - ":(glob).scripts/*.sh"
     - .scripts/lib/project-metadata.sh
     - .scripts/docker-base-images.awk
