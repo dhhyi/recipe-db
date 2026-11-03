@@ -610,6 +610,119 @@ class CacheArtifactTests(unittest.TestCase):
             "owner/repo", 17,
         ))
 
+    def test_squash_restore_uses_preceding_main_and_final_head_pr_snapshot(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        final_head = "b" * 40
+        pull = {"number": 17, "head": {"sha": final_head}}
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+        history = {squash_sha: 0, "previous-main": 1}
+        restored = []
+        results = {"main": True, "pr": True}
+
+        def fake_restore(args, base, token, scope, pr_number, revisions, destination,
+                         expected_head=None, require_trusted_writer=False):
+            restored.append((scope, pr_number, dict(revisions), expected_head, require_trusted_writer))
+            if results[scope]:
+                Path(destination).mkdir(parents=True)
+            return results[scope]
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value=history), \
+                patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                patch.object(CACHE, "union_caches") as union, \
+                redirect_stdout(output):
+            CACHE.discover_and_restore(args)
+
+        self.assertEqual(restored, [
+            ("main", None, {"previous-main": 1}, None, False),
+            ("pr", 17, {}, final_head, True),
+        ])
+        union.assert_called_once()
+        self.assertNotIn(squash_sha, dict(restored[0][2]))
+
+    def test_squash_fallbacks_preserve_an_independently_available_source(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        pull = {"number": 17, "head": {"sha": "b" * 40}}
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+        outcomes = [
+            ({"main": True, "pr": False}, "main", "main"),
+            ({"main": False, "pr": True}, "pr", "PR"),
+        ]
+        for index, (results, selected, display) in enumerate(outcomes):
+            with self.subTest(selected=selected):
+                args.cache = str(self.root / f"cache-{index}")
+                restored = []
+
+                def fake_restore(args, base, token, scope, pr_number, history, destination,
+                                 expected_head=None, require_trusted_writer=False):
+                    restored.append(scope)
+                    if results[scope]:
+                        Path(destination).mkdir(parents=True)
+                    return results[scope]
+
+                output = io.StringIO()
+                with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                        patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
+                        patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                        patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                        patch.object(CACHE, "copy_cache") as copy, \
+                        patch.object(CACHE, "union_caches") as union, \
+                        redirect_stdout(output):
+                    CACHE.discover_and_restore(args)
+
+                self.assertEqual(restored, ["main", "pr"])
+                copy.assert_called_once()
+                self.assertEqual(Path(copy.call_args.args[0]).name, selected)
+                self.assertEqual(Path(copy.call_args.args[1]), Path(args.cache))
+                self.assertIn(f"using {display}-only snapshot", output.getvalue())
+                union.assert_not_called()
+
+    def test_squash_with_no_sources_runs_cold_and_ambiguous_metadata_uses_main_only(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="99", run_number=50, run_attempt="1",
+            commit=squash_sha, cache=str(self.root / "cache"),
+        )
+        for pull, expected_scopes, expected_log in (
+            ({"number": 17, "head": {"sha": "b" * 40}}, ["main", "pr"], "cold build"),
+            (False, ["main"], "using main-only snapshot"),
+        ):
+            restored = []
+
+            def fake_restore(args, base, token, scope, pr_number, history, destination,
+                             expected_head=None, require_trusted_writer=False):
+                restored.append((scope, dict(history)))
+                return False
+
+            output = io.StringIO()
+            with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                    patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
+                    patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                    patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
+                    redirect_stdout(output):
+                CACHE.discover_and_restore(args)
+
+            self.assertEqual([scope for scope, _ in restored], expected_scopes)
+            self.assertTrue(all(squash_sha not in revisions for _, revisions in restored))
+            self.assertIn(expected_log, output.getvalue())
+
     def test_pr_selection_falls_back_to_an_older_same_pr_artifact(self):
         event_path = self.root / "event.json"
         event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}}}))

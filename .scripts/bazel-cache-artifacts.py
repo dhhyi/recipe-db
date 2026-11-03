@@ -1059,7 +1059,7 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
         return False
     pull_requests = [
         item for item in detail.get("pull_requests", [])
-        if int(item.get("number", -1)) == pr_number
+        if isinstance(item, dict) and int(item.get("number", -1)) == pr_number
     ]
     head = pull_requests[0].get("head") if len(pull_requests) == 1 else None
     head_repo = head.get("repo") if isinstance(head, dict) else None
@@ -1087,15 +1087,18 @@ def squash_pull_request(base, token, repository, commit_sha):
     if not isinstance(pulls, list):
         print(f"cache: squash-fallback revision={commit_sha}: malformed associated-PR metadata")
         return None
-    matches = [
-        pull for pull in pulls
-        if isinstance(pull, dict)
-        and pull.get("state") == "closed"
-        and pull.get("merged_at")
-        and pull.get("merge_commit_sha") == commit_sha
-        and pull.get("base", {}).get("ref") == "main"
-        and pull.get("base", {}).get("repo", {}).get("full_name") == repository
-    ]
+    matches = []
+    for pull in pulls:
+        if not isinstance(pull, dict):
+            continue
+        base_metadata = pull.get("base")
+        base_repository = base_metadata.get("repo") if isinstance(base_metadata, dict) else None
+        if pull.get("state") == "closed" and pull.get("merged_at") \
+                and pull.get("merge_commit_sha") == commit_sha \
+                and isinstance(base_repository, dict) \
+                and base_metadata.get("ref") == "main" \
+                and base_repository.get("full_name") == repository:
+            matches.append(pull)
     if not matches:
         print(f"cache: squash-not-found revision={commit_sha}: no merged PR association")
         return None
@@ -1105,13 +1108,14 @@ def squash_pull_request(base, token, repository, commit_sha):
         return False
     pull = matches[0]
     head = pull.get("head")
-    if not isinstance(head, dict) or not re.fullmatch(
+    if not isinstance(head, dict) or type(pull.get("number")) is not int \
+            or pull["number"] <= 0 or not re.fullmatch(
         r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head.get("sha", ""))
     ):
         print(f"cache: squash-fallback revision={commit_sha}: malformed final PR head")
         return False
-    if not isinstance(head.get("repo"), dict) \
-            or head["repo"].get("full_name") != repository:
+    head_repository = head.get("repo")
+    if not isinstance(head_repository, dict) or head_repository.get("full_name") != repository:
         print(f"cache: squash-fallback revision={commit_sha}: fork-produced PR cache is never imported")
         return False
     print(f"cache: squash-associated revision={commit_sha} pr={pull['number']} "
