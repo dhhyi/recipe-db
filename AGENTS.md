@@ -10,6 +10,8 @@ All normal client data operations go through GraphQL via trusted ingress. Do not
 
 Every API/backend project must declare a `backupRole` in its `.project.yaml`. Services classified as an authoritative source or cleanup participant must implement the versioned private maintenance API described in [the production Kubernetes operations guide](docs/production-kubernetes.md). Do not expose maintenance or test-reset routes through ingress, GraphQL, or MCP.
 
+When developing or changing a service, follow the [backup-participant checklist](docs/production-kubernetes.md#backup-participant-development-checklist).
+
 ## GitHub issue planning
 
 Follow [CONTRIBUTING.md](CONTRIBUTING.md) for the canonical issue refinement process. Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
@@ -147,7 +149,7 @@ Every REST API that owns stored data must provide a private delete-all-data API 
 
 ## Service shutdown
 
-Every service container (including shell wrappers and sidecars) must exit 0 within seconds of SIGTERM. Containers run the service as PID 1, where the kernel ignores signals without an installed handler, so install one explicitly (or `trap` TERM in shell commands). Backup capture refuses Pods that were SIGKILLed (exit 137); the 120-second termination grace is only an upper bound, not a substitute for clean exit.
+Every service container (including shell wrappers and sidecars) must exit 0 within seconds of SIGTERM and any image `STOPSIGNAL` override (for example, nginx's SIGQUIT). Containers run the service as PID 1, where the kernel ignores signals without an installed handler, so install one explicitly (or `trap` the required signals in shell commands). Test shutdown in the built container, not only a host subprocess. Backup capture refuses Pods that were SIGKILLed (exit 137); the 120-second termination grace is only an upper bound, not a substitute for clean exit.
 
 ## REST API health endpoints
 

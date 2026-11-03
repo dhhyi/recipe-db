@@ -58,6 +58,16 @@ The maintenance API is private and available only in backup mode:
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
+#### Backup-participant development checklist
+
+- Declare `backupRole` and, for captured storage, the complete `backupData` layout; keep caches and secrets outside authoritative data.
+- Test exact maintenance routes through the real router, including supported trailing slashes and opaque IDs. Inventories must be complete, distinct and ordered; purge/compaction must tolerate retries.
+- Keep maintenance private and backup-only, test resets testing-only, and denied operations non-mutating. Health probes remain available in every mode.
+- Quiesce background writers and flush durable state before clean exit. Test every built container as PID 1 with SIGTERM and its image `STOPSIGNAL`, including wrappers and sidecars.
+- Verify authoritative data survives same-release restart/restore. Derived services must rebuild from empty storage and fresh consumers, remain not-ready after failed rebuilding, and process subsequent changes.
+- Keep credentials and application records out of diagnostic logs; store data-bearing manifests privately.
+- Verify reads through actual routes, not rollout status alone. Bound readiness/convergence waits; never blindly replay mutations or reopen clients after failed recovery.
+
 #### Snapshot capture
 
 The `backup`, `backup-enter`, `backup-exit`, `restore`, `deploy`, and `storage-reattach` operations coordinate through the same `recipe-db-deploy` Lease in `kube-system`, outside the replaceable application namespace. They do not expire or automatically steal a Lease. Backup validates the explicit target/context, immutable release digest/revision, actual project container images, deployed runtime Secret, selected PVC identities, ownership and destination capacity. Backup and recovery require the release commit locally and unchanged metadata/template inputs relative to it; untracked inputs are refused, while unrelated checkout changes are allowed. This binds the authoritative inventory and cleanup definition to the release without fetching or executing another checkout. Preflight requires selected PVC requests plus 64 MiB staging headroom; because local-path requests do not enforce a quota, capture also measures each stopped PVC's exact tar byte count before copying and requires actual free space plus the same headroom. This includes sparse-file expansion and previously copied archives. It does not read the configured application secret files. The snapshot validator requires Python 3 with its standard library.
