@@ -2,6 +2,36 @@
 
 load test_helper
 
+@test "restore waits for GraphQL reads before starting propagation mutations" {
+  cat > route-gate.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+timeout=${GATE_TIMEOUT:-3}
+attempts=0
+restore_graphql() {
+  printf '%s\n' "$1" >> "$MOCK_LOG"
+  attempts=$((attempts + 1))
+  [[ $attempts -gt 1 ]]
+}
+restore_stream_sequence() {
+  printf 'sequence\n' >> "$MOCK_LOG"
+  return 1
+}
+sleep() { :; }
+restore_verify_propagation
+EOF
+  run bash route-gate.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = $'query { __typename }\nquery { __typename }\nsequence' ]
+  : > "$MOCK_LOG"
+  export GATE_TIMEOUT=0
+  run bash route-gate.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"GraphQL route did not become ready"* ]]
+  [ "$(cat "$MOCK_LOG")" = 'query { __typename }' ]
+}
+
 setup() {
   setup_fixture lib/production-restore.sh
   export FIXTURE_ROOT

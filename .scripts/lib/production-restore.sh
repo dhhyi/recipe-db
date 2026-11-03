@@ -390,6 +390,14 @@ restore_wait_consumers() {
 restore_verify_propagation() {
   local id encoded deadline probe before
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
+  deadline=$((SECONDS + timeout))
+  until restore_graphql 'query { __typename }'; do
+    if ((SECONDS >= deadline)); then
+      printf 'production: GraphQL route did not become ready for restore propagation checks\n' >&2
+      return 1
+    fi
+    sleep 2
+  done
   before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($name:String!) { createRecipe(value:{name:$name}) { id } }' \
     "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
