@@ -57,7 +57,6 @@ type Msg
     | Save
     | Uploaded Int Crop RecipeDB.UploadModel
     | Close
-    | Back
     | Focused
 
 

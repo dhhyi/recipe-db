@@ -171,18 +171,6 @@ step msg model =
                     ]
                 )
 
-        Back ->
-            if model.phase == Saving then
-                ( model, Cmd.none )
-
-            else
-                ( model
-                , command "navigate"
-                    [ ( "url", E.string ("/recipe/" ++ model.recipeId) )
-                    , ( "dirty", E.bool (dirty model) )
-                    ]
-                )
-
         Focused ->
             ( model, Cmd.none )
 
