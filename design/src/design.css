@@ -55,6 +55,10 @@ button {
   --pico-font-weight: bold;
 }
 
+a:not([role="button"]):not(:hover, :active, :focus) {
+  text-decoration-line: none;
+}
+
 [type="file"]::file-selector-button {
   --pico-background-color: transparent;
   --pico-border-color: var(--pico-secondary);

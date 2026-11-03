@@ -27,6 +27,13 @@ Use Storybook's theme switch to review every story in light and dark mode. Do no
 - Secondary actions use the Blades `outline` button (primary color for text and border, no fill).
 - Do not use the Blades `secondary` or `contrast` button classes. The only exception is the file input's button, which `design.css` styles as a secondary outline button.
 
+## Links
+
+- Links use the default Blades link (primary color).
+- Links are not underlined at rest; the underline appears only on hover, active, and focus (set globally in `design.css`).
+- Footer links use the Blades `secondary` link class. Do not use `secondary` links elsewhere, and do not use `contrast` links.
+- Footer links are low-priority meta links, so their reduced light-theme contrast (about 2.7:1 against white, below WCAG AA) is accepted. Do not use the `secondary` link color for content or navigation that users need.
+
 ## Tailwind CSS
 
 The shared `design` project builds the Tailwind stylesheet used by frontend projects. A frontend that loads `/design/styles.css` declares the files or directories containing its utility classes with `tailwindSources` in the second document of its `.project.yaml`.

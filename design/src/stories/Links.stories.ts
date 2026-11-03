@@ -4,39 +4,18 @@ import { html } from "lit";
 import "../design.css";
 
 const meta = {
-  title: "Blades/Links",
+  title: "Blades/Link",
   tags: ["autodocs"],
 } satisfies Meta;
 
 export default meta;
 type Story = StoryObj;
 
-export const Variants: Story = {
+export const Links: Story = {
   render: () => html`
     <main class="container">
       <p><a href="#">Primary link</a></p>
-      <p><a href="#" class="secondary">Secondary link</a></p>
-      <p><a href="#" class="contrast">Contrast link</a></p>
-    </main>
-  `,
-};
-
-export const Current: Story = {
-  render: () => html`
-    <main class="container">
-      <p><a href="#">All recipes</a></p>
-      <p><a href="#" aria-current="page">Favorites</a></p>
-      <p><a href="#">Shopping list</a></p>
-    </main>
-  `,
-};
-
-export const AsButtons: Story = {
-  render: () => html`
-    <main class="container">
-      <a href="#" role="button">Primary action</a>
-      <a href="#" role="button" class="secondary">Secondary action</a>
-      <a href="#" role="button" class="outline contrast">Quiet action</a>
+      <p><a href="#" class="secondary">Secondary link (footer only)</a></p>
     </main>
   `,
 };
