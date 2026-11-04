@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 import urllib.error
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,6 +75,41 @@ def make_cache(root, output=b"built", output_path="result.txt", executable=True,
     put_cache_file(root, "ac", action_digest, action_result)
 
 
+def cleanup_fixture(run_id, run_number, attempt=1, pr_number=None, artifact_id=None):
+    if pr_number is None:
+        scope = "main"
+        branch = "main"
+        event = "push"
+        pull_requests = []
+    else:
+        scope = f"pr-{pr_number}"
+        branch = f"feature-{pr_number}"
+        event = "pull_request"
+        pull_requests = [{"number": pr_number}]
+    sha = f"{run_id:040x}"
+    name = f"bazel-cache-v1-{scope}-r{run_id}-a{attempt}"
+    return {
+        "artifact": {
+            "id": artifact_id or run_id,
+            "name": name,
+            "workflow_run": {
+                "id": run_id, "head_sha": sha, "head_branch": branch, "event": event,
+            },
+        },
+        "run": {
+            "id": run_id, "run_number": run_number, "run_attempt": attempt,
+            "head_sha": sha, "head_branch": branch, "event": event,
+            "path": CACHE.WORKFLOW, "name": "Publish",
+            "repository": {"id": 9, "full_name": "owner/repo"},
+            "head_repository": {"full_name": "owner/repo"},
+            "pull_requests": pull_requests,
+        },
+        "jobs": [{"name": CACHE.JOB, "steps": [
+            {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
+        ]}],
+    }
+
+
 class CacheArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -106,6 +141,195 @@ class CacheArtifactTests(unittest.TestCase):
                 "https://api.github.com/repos/owner/repo/actions/runs?event=push&per_page=20&page=2",
             ],
         )
+
+    def test_cleanup_paginates_and_ranks_main_by_run_and_attempt_not_upload_order(self):
+        fixtures = [
+            cleanup_fixture(201, 1),
+            cleanup_fixture(202, 2),
+            cleanup_fixture(203, 3),
+            cleanup_fixture(204, 4),
+            cleanup_fixture(205, 5),
+            cleanup_fixture(206, 5, attempt=2),
+            cleanup_fixture(207, 6),
+        ]
+        fixtures.reverse()
+        artifacts = [fixture["artifact"] for fixture in fixtures]
+        artifacts.extend({"id": 900 + i, "name": f"unrelated-report-{i}"} for i in range(94))
+        page_requests = []
+        deleted = []
+
+        def fake_json(url, token):
+            if url == "https://api.github.com/repos/owner/repo":
+                return {"id": 9, "full_name": "owner/repo"}
+            page_requests.append(url)
+            page = int(url.rsplit("page=", 1)[1])
+            return {"artifacts": artifacts[(page - 1) * 100:page * 100]}
+
+        by_attempt = {
+            (fixture["run"]["id"], fixture["run"]["run_attempt"]): fixture
+            for fixture in fixtures
+        }
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt",
+                             side_effect=lambda base, token, run, attempt:
+                             by_attempt[(run["id"], attempt)]["run"]), \
+                patch.object(CACHE, "jobs_for_attempt",
+                             side_effect=lambda base, token, run_id, attempt:
+                             by_attempt[(run_id, attempt)]["jobs"]), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=lambda url, token: deleted.append(url) or True):
+            with redirect_stdout(io.StringIO()) as output:
+                status = CACHE.cleanup_artifacts(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo"
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(page_requests), 2)
+        self.assertEqual([url.rsplit("/", 1)[1] for url in deleted], ["202", "201"])
+        self.assertIn("cleanup: complete retained-main=5 deleted=2", output.getvalue())
+
+    def test_cleanup_deletes_only_merged_pr_artifacts(self):
+        fixtures = [
+            cleanup_fixture(301, 1, pr_number=11),
+            cleanup_fixture(302, 2, pr_number=12),
+            cleanup_fixture(303, 3, pr_number=13),
+        ]
+        by_attempt = {
+            (fixture["run"]["id"], fixture["run"]["run_attempt"]): fixture
+            for fixture in fixtures
+        }
+        deleted = []
+        pull_states = {
+            11: {"state": "closed", "merged_at": "2026-01-01T00:00:00Z"},
+            12: {"state": "open", "merged_at": None},
+            13: {"state": "closed", "merged_at": None},
+        }
+
+        def fake_json(url, token):
+            if url == "https://api.github.com/repos/owner/repo":
+                return {"id": 9, "full_name": "owner/repo"}
+            if "/pulls/" in url:
+                number = int(url.rsplit("/", 1)[1])
+                return {
+                    "number": number, **pull_states[number],
+                    "base": {"repo": {"full_name": "owner/repo"}},
+                }
+            return {"artifacts": [fixture["artifact"] for fixture in fixtures]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt",
+                             side_effect=lambda base, token, run, attempt:
+                             by_attempt[(run["id"], attempt)]["run"]), \
+                patch.object(CACHE, "jobs_for_attempt",
+                             side_effect=lambda base, token, run_id, attempt:
+                             by_attempt[(run_id, attempt)]["jobs"]), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=lambda url, token: deleted.append(url) or True):
+            self.assertEqual(CACHE.cleanup_artifacts(
+                "https://api.github.com/repos/owner/repo", "token", "owner/repo"
+            ), 0)
+
+        self.assertEqual(deleted, [
+            "https://api.github.com/repos/owner/repo/actions/artifacts/301",
+        ])
+
+    def test_cleanup_identity_and_service_errors_are_incomplete(self):
+        fixture = cleanup_fixture(401, 1)
+        invalid_run = {**fixture["run"], "path": ".github/workflows/unrelated.yaml"}
+        by_attempt = {(401, 1): {**fixture, "run": invalid_run}}
+        api_base = "https://api.github.com/repos/owner/repo"
+
+        with patch.object(CACHE, "request_json", side_effect=lambda url, token: (
+            {"id": 9, "full_name": "owner/repo"} if url == api_base
+            else {"artifacts": [fixture["artifact"]]}
+        )), patch.object(CACHE, "producer_attempt",
+                         return_value=invalid_run), patch.object(CACHE, "jobs_for_attempt",
+                                                                 return_value=fixture["jobs"]):
+            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
+                status = CACHE.cleanup_artifacts(api_base, "token", "owner/repo")
+
+        self.assertEqual(status, 1)
+        self.assertIn("identity-error", errors.getvalue())
+        self.assertIn("cleanup: incomplete", errors.getvalue())
+        self.assertNotIn("cleanup: complete", output.getvalue())
+
+        with patch.object(CACHE, "request_json", side_effect=CACHE.ApiFailure("HTTP 403")):
+            with redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(CACHE.cleanup_artifacts(api_base, "token", "owner/repo"), 1)
+        self.assertIn("HTTP 403", errors.getvalue())
+
+    def test_cleanup_reports_partial_deletion_failure_without_claiming_completion(self):
+        fixtures = [cleanup_fixture(600 + i, i + 1) for i in range(6)]
+        by_attempt = {
+            (fixture["run"]["id"], fixture["run"]["run_attempt"]): fixture
+            for fixture in fixtures
+        }
+        api_base = "https://api.github.com/repos/owner/repo"
+
+        def fake_json(url, token):
+            if url == api_base:
+                return {"id": 9, "full_name": "owner/repo"}
+            return {"artifacts": [fixture["artifact"] for fixture in fixtures]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt",
+                             side_effect=lambda base, token, run, attempt:
+                             by_attempt[(run["id"], attempt)]["run"]), \
+                patch.object(CACHE, "jobs_for_attempt",
+                             side_effect=lambda base, token, run_id, attempt:
+                             by_attempt[(run_id, attempt)]["jobs"]), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=CACHE.ApiFailure("HTTP 500")):
+            with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()) as errors:
+                status = CACHE.cleanup_artifacts(api_base, "token", "owner/repo")
+
+        self.assertEqual(status, 1)
+        self.assertIn("HTTP 500", errors.getvalue())
+        self.assertIn("cleanup: incomplete", errors.getvalue())
+        self.assertNotIn("cleanup: complete", output.getvalue())
+
+    def test_cleanup_is_idempotent_when_artifact_disappears_before_delete(self):
+        fixtures = [cleanup_fixture(500 + i, i + 1) for i in range(6)]
+        by_attempt = {
+            (fixture["run"]["id"], fixture["run"]["run_attempt"]): fixture
+            for fixture in fixtures
+        }
+        api_base = "https://api.github.com/repos/owner/repo"
+
+        def fake_json(url, token):
+            if url == api_base:
+                return {"id": 9, "full_name": "owner/repo"}
+            return {"artifacts": [fixture["artifact"] for fixture in fixtures]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt",
+                             side_effect=lambda base, token, run, attempt:
+                             by_attempt[(run["id"], attempt)]["run"]), \
+                patch.object(CACHE, "jobs_for_attempt",
+                             side_effect=lambda base, token, run_id, attempt:
+                             by_attempt[(run_id, attempt)]["jobs"]), \
+                patch.object(CACHE, "request_delete", return_value=False):
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(CACHE.cleanup_artifacts(api_base, "token", "owner/repo"), 0)
+        self.assertIn("already-gone", output.getvalue())
+
+    def test_delete_404_is_idempotent_but_authorization_errors_are_distinct(self):
+        def gone(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 404, "gone", {}, None)
+
+        with patch.object(CACHE, "opener", return_value=gone):
+            self.assertFalse(CACHE.request_delete(
+                "https://api.github.com/repos/owner/repo/actions/artifacts/1", "token"
+            ))
+
+        def denied(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 403, "denied", {}, None)
+
+        with patch.object(CACHE, "opener", return_value=denied):
+            with self.assertRaisesRegex(CACHE.ApiFailure, "HTTP 403"):
+                CACHE.request_delete(
+                    "https://api.github.com/repos/owner/repo/actions/artifacts/1", "token"
+                )
 
     def test_workflow_run_listing_uses_bounded_page_size(self):
         requests = []

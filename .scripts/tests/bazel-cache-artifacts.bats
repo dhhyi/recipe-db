@@ -45,3 +45,20 @@ load test_helper
   grep -F 'steps.prepare-bazel-cache.outputs.name' "$slice"
   grep -F 'if: success()' "$slice"
 }
+
+@test "nightly cleanup is scheduled on trusted main with isolated deletion permissions" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/bazel-cache-cleanup.yaml"
+  publish="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  cleanup="$BATS_TEST_TMPDIR/cleanup-job"
+  sed -n '/^  cleanup-bazel-cache:/,$p' "$workflow" > "$cleanup"
+
+  grep -E "cron: ['\"]17 3 \\* \\* \\*['\"]" "$workflow"
+  grep -F "if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'" "$cleanup"
+  grep -F 'actions: write' "$cleanup"
+  grep -F 'pull-requests: read' "$cleanup"
+  grep -F 'python3 .scripts/bazel-cache-artifacts.py cleanup' "$cleanup"
+  run grep -F 'schedule:' "$publish"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c 'actions: write' "$publish")" -eq 0 ]
+  grep -F "retention-days: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}" "$publish"
+}
