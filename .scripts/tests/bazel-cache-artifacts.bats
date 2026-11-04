@@ -47,7 +47,8 @@ load test_helper
 }
 
 @test "nightly cleanup is scheduled on trusted main with isolated deletion permissions" {
-  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/bazel-cache-cleanup.yaml"
+  publish="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   cleanup="$BATS_TEST_TMPDIR/cleanup-job"
   sed -n '/^  cleanup-bazel-cache:/,$p' "$workflow" > "$cleanup"
 
@@ -56,7 +57,8 @@ load test_helper
   grep -F 'actions: write' "$cleanup"
   grep -F 'pull-requests: read' "$cleanup"
   grep -F 'python3 .scripts/bazel-cache-artifacts.py cleanup' "$cleanup"
-  grep -F "github.event_name != 'schedule'" "$workflow"
-  [ "$(grep -c 'actions: write' "$workflow")" -eq 1 ]
-  grep -F "retention-days: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}" "$workflow"
+  run grep -F 'schedule:' "$publish"
+  [ "$status" -eq 1 ]
+  [ "$(grep -c 'actions: write' "$publish")" -eq 0 ]
+  grep -F "retention-days: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}" "$publish"
 }

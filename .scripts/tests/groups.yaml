@@ -83,6 +83,7 @@ tasks:
     - .scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json
     - .scripts/tests/bazel-cache-artifacts.py
     - .scripts/templates/**
+    - .github/workflows/bazel-cache-cleanup.yaml
     - mise.toml
     - package.json
     - ":(glob)*/.project.yaml"

@@ -1,0 +1,25 @@
+name: Bazel cache cleanup
+on:
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: read
+
+jobs:
+  cleanup-bazel-cache:
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout trusted default-branch code
+        uses: actions/checkout@v7
+
+      - name: clean up Bazel cache artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py cleanup \
+            --repository "$GITHUB_REPOSITORY"
