@@ -5,7 +5,7 @@ import gql "frontend/src/generated"
 templ BrowseControls(resp *gql.BrowseControlsResponse) {
 	<div id="browse-controls" class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none">
 		if resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline {
-			<a href="/edit/new" data-add-recipe role="button" class="pointer-events-auto mr-2">Rezept hinzufügen</a>
+			<a href="/edit/new" data-add-recipe class="pointer-events-auto mr-2">Rezept hinzufügen</a>
 		}
 	</div>
 }
@@ -30,7 +30,7 @@ templ RecipeRatingWidget(id string, rating *gql.Rating, canRate bool, myRating *
 
 templ RecipeRatingUnavailable() {
 	<div id="recipe-rating" role="status">
-		<p>Bewertung derzeit nicht verfügbar. <a href="/">Zurück zur Rezeptübersicht</a></p>
+		<p class="feedback error">Bewertung derzeit nicht verfügbar.</p>
 	</div>
 }
 
@@ -40,14 +40,10 @@ templ BrowseIdentityUnavailable() {
 
 templ RatingDeniedPage(status int) {
 	if status == 401 {
-		<p role="alert">Zum Bewerten ist eine Anmeldung erforderlich oder die Anmeldung ist abgelaufen.</p>
-		<div class="grid gap-2">
-			<a href="/oauth2/start?rd=%2F">Anmelden</a>
-			<a href="/oauth2/sign_out?rd=%2F">Abmelden</a>
-			<a href="/">Zurück zur Übersicht</a>
-		</div>
+		<p role="alert" class="feedback error">Zum Bewerten ist eine Anmeldung erforderlich oder die Anmeldung ist abgelaufen.</p>
+		<a href="/">Zurück zur Übersicht</a>
 	} else {
-		<p role="alert">Dein Konto darf keine Bewertungen abgeben.</p>
+		<p role="alert" class="feedback error">Dein Konto darf keine Bewertungen abgeben.</p>
 		<a href="/">Zurück zur Übersicht</a>
 	}
 }

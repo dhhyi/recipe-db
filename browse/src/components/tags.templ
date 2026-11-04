@@ -102,12 +102,14 @@ templ recipeCardTags(tags []gql.RecipeTag) {
 templ recipeDetailTags(id string, tags []gql.RecipeTag) {
 	<div
 		id="recipe-tags"
-		class="contents"
+		class="flex flex-col"
 		hx-get={ recipeTagsPath(id) }
 		hx-trigger="load"
 		hx-swap="outerHTML"
 		hx-on::before-swap="if (event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
 		hx-on::response-error="const status = this.querySelector('[data-tag-feedback]'); if (status) { status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false"
+		hx-on::send-error="const status = this.querySelector('[data-tag-feedback]'); if (status) { status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false"
+		hx-on::timeout="htmx.trigger(this, 'htmx:sendError', event.detail)"
 	>
 		if len(tags) > 0 {
 			@recipeDetailTagList(orderedTags(tags), false, id)
@@ -115,12 +117,16 @@ templ recipeDetailTags(id string, tags []gql.RecipeTag) {
 		<p data-tag-feedback role="status" aria-live="polite"></p>
 		<button
 			type="button"
+			class="outline"
 			data-tag-retry
 			hidden
 			hx-get={ recipeTagsPath(id) }
 			hx-target="#recipe-tags"
 			hx-swap="outerHTML"
 			hx-sync="#recipe-tags:drop"
+			hx-disabled-elt="this"
+			hx-on::before-request="this.setAttribute('aria-busy', 'true')"
+			hx-on::after-request="this.removeAttribute('aria-busy')"
 		>Erneut laden</button>
 	</div>
 }

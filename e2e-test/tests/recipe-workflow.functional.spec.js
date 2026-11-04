@@ -64,14 +64,14 @@ const ingredientNameField = (page, index) =>
   page.locator(`#ingredient-name-${index}`);
 const saveButton = (page) =>
   page.getByRole("button", {
-    name: /^(Speichern|Speichert …|Erneut speichern)$/,
+    name: /^(Speichern|Erneut speichern)$/,
   });
 const discardButton = (page) =>
   page.getByRole("button", { name: "Änderungen verwerfen", exact: true });
 const returnButtonExisting = (page) =>
-  page.getByRole("button", { name: "Zurück zum Rezept", exact: true });
+  page.getByRole("link", { name: "Zurück zum Rezept", exact: true });
 const returnButtonNew = (page) =>
-  page.getByRole("button", { name: "Zurück zur Übersicht", exact: true });
+  page.getByRole("link", { name: "Zurück zur Übersicht", exact: true });
 const headerHomeLink = (page) => page.locator("header-component a[href='/']");
 const statusLine = (page) => page.getByRole("status").first();
 const dirtyStatus = (page) =>
@@ -153,7 +153,7 @@ test("exact undo restores clean state for null ingredient amount/unit", async ({
 
   const originalAmountUnit = await amountUnitField(page, 2).inputValue();
   expect(originalAmountUnit).toBe("");
-  await expect(cleanStatus(page)).toBeVisible();
+  await expect(cleanStatus(page)).toHaveCount(0);
   await expect(saveButton(page)).toBeDisabled();
 
   await amountUnitField(page, 2).fill("optional");
@@ -161,7 +161,7 @@ test("exact undo restores clean state for null ingredient amount/unit", async ({
   await expect(saveButton(page)).toBeEnabled();
 
   await amountUnitField(page, 2).fill("");
-  await expect(cleanStatus(page)).toBeVisible();
+  await expect(cleanStatus(page)).toHaveCount(0);
   await expect(saveButton(page)).toBeDisabled();
 });
 
@@ -238,7 +238,7 @@ test("save stays open and discard restores latest persisted fields", async ({
     );
     await expect(ingredientNameField(page, index)).toHaveValue(ingredient.name);
   }
-  await expect(cleanStatus(page)).toBeVisible();
+  await expect(cleanStatus(page)).toHaveCount(0);
 });
 
 test("HTTP 200 GraphQL error shows retry and clears after successful retry", async ({
@@ -362,7 +362,7 @@ test("pending save freezes form controls, blocks duplicate submits and navigatio
 
     await expect(page.locator("main[aria-busy]")).toHaveCount(0);
     await expect(saveButton(page)).toBeDisabled();
-    await expect(saveButton(page)).toHaveText("Speichert …");
+    await expect(saveButton(page)).toHaveText("Speichern");
     await expect(saveButton(page)).toHaveAttribute("aria-busy", "true");
     await expect(page.locator("button[aria-busy='true']")).toHaveCount(1);
 
@@ -379,10 +379,9 @@ test("pending save freezes form controls, blocks duplicate submits and navigatio
     await expect(discardButton(page)).toBeDisabled();
 
     await expect(returnButtonExisting(page)).toHaveAttribute(
-      "aria-disabled",
-      "true",
+      "href",
+      `/recipe/${demoRecipe.id}`,
     );
-    await expect(returnButtonExisting(page)).toHaveAttribute("tabindex", "-1");
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -392,16 +391,16 @@ test("pending save freezes form controls, blocks duplicate submits and navigatio
       .toBe(true);
 
     await page.keyboard.press("Enter");
-    await page.evaluate(() => {
+    await page.evaluate((recipeId) => {
       const form = document.querySelector("form");
       form?.requestSubmit();
       form?.requestSubmit();
       form?.dispatchEvent(
         new SubmitEvent("submit", { bubbles: true, cancelable: true }),
       );
-      document.querySelector("a.secondary[role='button']")?.click();
+      document.querySelector(`a[href='/recipe/${recipeId}']`)?.click();
       document.querySelector("header-component a[href='/']")?.click();
-    });
+    }, demoRecipe.id);
 
     expect(updateCount).toBe(1);
     await expect(page).toHaveURL(`/edit/${demoRecipe.id}`);
@@ -513,7 +512,10 @@ test("beforeunload prompts when dirty and is removed after returning to clean", 
   await expect(dirtyStatus(page)).toBeVisible();
 
   await discardButton(page).click();
-  await expect(cleanStatus(page)).toBeVisible();
+  await expect(cleanStatus(page)).toHaveCount(0);
+  await expect(dirtyStatus(page)).toHaveCount(0);
+  await expect(nameField(page)).toHaveValue(demoRecipe.name);
+  await expect(saveButton(page)).toBeDisabled();
 
   let dialogCount = 0;
   const listener = async (dialog) => {
@@ -682,7 +684,9 @@ test("loading state renders no saveable form and supports safe back", async ({
 
   try {
     await page.goto(`/edit/${demoRecipe.id}`);
-    await expect(page.getByText("Lädt…", { exact: true })).toBeVisible();
+    await expect(
+      page.locator("[aria-busy='true'][aria-label='Rezept wird geladen']"),
+    ).toBeVisible();
     await expect(nameField(page)).toHaveCount(0);
     await expect(saveButton(page)).toHaveCount(0);
 

@@ -354,6 +354,8 @@ func TestBrowseHTTP(t *testing.T) {
 				}
 				if pageError {
 					if recorder.Header().Get("HX-Retarget") != "#browse-pagination" ||
+						!strings.Contains(body, `class="feedback error"`) ||
+						!strings.Contains(body, `<button type="button" class="outline"`) ||
 						!strings.Contains(body, "Erneut versuchen") || strings.Contains(body, "intersect") ||
 						strings.Contains(body, "data-recipe-id") || strings.Contains(body, "<title>") ||
 						recorder.Header().Get("HX-Replace-Url") != "" {
@@ -435,11 +437,12 @@ func TestBrowseHTTP(t *testing.T) {
 					t.Fatal("fallback must warn and disable controls")
 				}
 				more := tc.kind == "search" && tc.page*24 < tc.hits
-				if strings.Contains(body, " data-load-more") != more || strings.Contains(body, " data-sentinel") != more {
+				if strings.Contains(body, `id="browse-pagination"`) != more ||
+					strings.Contains(body, `aria-label="Weitere Rezepte werden geladen"`) != more {
 					t.Fatal("pagination used card count instead of API metadata")
 				}
-				if more && !strings.Contains(body, `href="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort=rating"`) {
-					t.Fatalf("missing ordinary GET pagination: %s", body)
+				if more && !strings.Contains(body, `hx-get="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort=rating"`) {
+					t.Fatalf("missing automatic pagination request: %s", body)
 				}
 				if strings.Contains(body, "data-add-recipe") {
 					t.Fatal("privileged add affordance must remain in the dynamic controls fragment")

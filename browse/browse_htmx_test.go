@@ -179,9 +179,10 @@ func TestBrowseHTMXContract(t *testing.T) {
 		`delay:300ms`, `compositionend`, `event.isComposing`, `htmx:abort`,
 		`hx-on::config-request=`,
 		`hx-on::send-error=`, `hx-on::response-error=`, `hx-on:browse-error=`,
+		`hx-on::timeout=`,
 		`hx-sync="this:replace"`, `hx-sync="#browse-form:abort"`,
-		`hx-trigger="intersect once, click"`, `href="/?page=2"`,
-		`hx-target="#browse-pagination"`,
+		`hx-trigger="intersect once"`, `hx-get="/?page=2"`,
+		`hx-target="this"`, `aria-label="Weitere Rezepte werden geladen"`,
 		`col-span-full order-1`,
 	} {
 		if !strings.Contains(html.UnescapeString(body.String()), attribute) {
@@ -190,6 +191,9 @@ func TestBrowseHTMXContract(t *testing.T) {
 	}
 	if strings.Contains(body.String(), "<script") {
 		t.Fatal("listing must not load a custom client controller")
+	}
+	if strings.Contains(body.String(), "Mehr laden") || strings.Contains(body.String(), "href=\"/?page=2\"") {
+		t.Fatal("pagination must use a spinner placeholder instead of a loading link")
 	}
 	for _, path := range []string{"/browse/search.js", "/browse/results"} {
 		response := httptest.NewRecorder()
