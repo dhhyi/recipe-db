@@ -102,7 +102,7 @@ templ recipeCardTags(tags []gql.RecipeTag) {
 templ recipeDetailTags(id string, tags []gql.RecipeTag) {
 	<div
 		id="recipe-tags"
-		class="contents"
+		class="flex flex-col"
 		hx-get={ recipeTagsPath(id) }
 		hx-trigger="load"
 		hx-swap="outerHTML"
