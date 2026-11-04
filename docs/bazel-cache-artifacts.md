@@ -51,7 +51,7 @@ Trusted repository writers can supply action-result metadata. CAS digest validat
 The automated fixtures cover selection, trust decisions, union conflicts, retained blobs, output metadata, whole-snapshot rejection, and cleanup ranking/identity/failure behavior. Available hosted runs provide these observations:
 
 | Workflow run | Path and result | Bazel/action observations | Snapshot upload |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | [#41725642521](https://github.com/dhhyi/recipe-db/actions/runs/41725642521) | Main push `f0471cd`; quality checks succeeded | 66 total actions; 0 format and 0 check-cache hits; 19 format and 65 check actions executed | 1,679,360-byte snapshot; 197,521-byte artifact; 28,491,776-byte helper peak RSS |
 | [#41732074594](https://github.com/dhhyi/recipe-db/actions/runs/41732074594) | PR #152; quality checks succeeded | 66 total actions; 19 format hits; 62 check hits and 3 check executions | 1,679,360-byte snapshot; 198,358-byte artifact; 29,351,936-byte helper peak RSS |
 | [#41739534628](https://github.com/dhhyi/recipe-db/actions/runs/41739534628) | Main push `7cfca9c`, the squash merge of PR #152; quality checks succeeded | 66 total actions; 19 format hits; 62 check hits and 3 check executions | 1,679,360-byte snapshot; 198,299-byte artifact; 29,253,632-byte helper peak RSS |
