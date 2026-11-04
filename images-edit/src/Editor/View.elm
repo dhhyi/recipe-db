@@ -56,12 +56,7 @@ editorView model =
 
         canSelect : Bool
         canSelect =
-            case model.recipe of
-                RemoteData.Loading ->
-                    False
-
-                _ ->
-                    model.phase == Viewing || model.phase == SavedOpen
+            model.phase == Viewing || model.phase == SavedOpen
 
         busy : Bool
         busy =
@@ -80,24 +75,19 @@ editorView model =
             Nothing ->
                 text ""
         , p [ attribute "role" "status", attribute "aria-live" "polite", class (statusClass model) ] [ text (status model) ]
-        , case ( model.phase, model.recipe ) of
-            ( _, RemoteData.Loading ) ->
-                loadingPlaceholder "Rezept wird geladen"
+        , case model.session of
+            Just session ->
+                sourceView model session
 
-            ( Loading, _ ) ->
-                case model.session of
-                    Just session ->
-                        sourceView model session
-
-                    Nothing ->
+            Nothing ->
+                case ( model.phase, model.recipe ) of
+                    ( Loading, _ ) ->
                         loadingPlaceholder "Bild wird geladen"
 
-            _ ->
-                case model.session of
-                    Just session ->
-                        sourceView model session
+                    ( _, RemoteData.Loading ) ->
+                        loadingPlaceholder "Rezept wird geladen"
 
-                    Nothing ->
+                    _ ->
                         savedView model
         , div [ class "editor-actions grid! gap-2 my-3" ]
             [ label [ for "upload-image" ] [ text "JPEG- oder PNG-Bild auswählen (maximal 10 MiB)" ]
