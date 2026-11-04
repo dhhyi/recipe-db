@@ -30,6 +30,9 @@ WORKFLOW = ".github/workflows/publish.yaml"
 JOB = "quality-checks"
 UPLOAD_STEP = "upload Bazel cache snapshot"
 ARTIFACT_PREFIX = "bazel-cache-v1"
+MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-main-r([1-9]\d*)-a([1-9]\d*)")
+PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
+MAIN_ARTIFACT_RETENTION = 5
 MAX_ARCHIVE_BYTES = 8 * 1024**3
 MAX_EXPANDED_BYTES = 12 * 1024**3
 MAX_FILES = 500_000
@@ -774,6 +777,20 @@ def request_file(url, token, destination, maximum):
         raise ApiFailure("artifact download failed") from error
 
 
+def request_delete(url, token):
+    request = api_request(url, token)
+    request.method = "DELETE"
+    try:
+        with opener(token)(request, timeout=30):
+            return True
+    except urllib.error.HTTPError as error:
+        if error.code in (404, 410):
+            return False
+        raise ApiFailure(f"artifact deletion returned HTTP {error.code}") from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        raise ApiFailure("artifact deletion failed") from error
+
+
 def paginated(url, token, key, page_size=100):
     page = 1
     while True:
@@ -859,6 +876,167 @@ def jobs_for_attempt(base, token, run_id, attempt):
     return list(paginated(
         f"{base}/actions/runs/{run_id}/attempts/{attempt}/jobs", token, "jobs"
     ))
+
+
+def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id):
+    if not isinstance(detail, dict):
+        raise Invalid("artifact producer metadata is missing")
+    name = artifact.get("name", "")
+    main_match = MAIN_ARTIFACT_PATTERN.fullmatch(name)
+    pr_match = PR_ARTIFACT_PATTERN.fullmatch(name)
+    if main_match:
+        scope, run_id, attempt = "main", int(main_match.group(1)), int(main_match.group(2))
+        pr_number = None
+    elif pr_match:
+        scope, pr_number, run_id, attempt = (
+            "pr", int(pr_match.group(1)), int(pr_match.group(2)), int(pr_match.group(3))
+        )
+    else:
+        raise Invalid("unrecognized Bazel cache artifact identity")
+
+    workflow_run = artifact.get("workflow_run")
+    run_repository = detail.get("repository")
+    if type(artifact.get("id")) is not int or artifact["id"] <= 0 \
+            or not isinstance(workflow_run, dict) \
+            or type(workflow_run.get("id")) is not int \
+            or workflow_run["id"] != run_id \
+            or workflow_run.get("repository_id", repository_id) != repository_id \
+            or not isinstance(run_repository, dict) \
+            or run_repository.get("full_name") != repository \
+            or run_repository.get("id") != repository_id \
+            or detail.get("path") != WORKFLOW or detail.get("name") != "Publish" \
+            or int(detail.get("id", -1)) != run_id \
+            or int(detail.get("run_attempt", -1)) != attempt \
+            or int(detail.get("run_number", 0)) <= 0 \
+            or detail.get("head_sha") != workflow_run.get("head_sha") \
+            or detail.get("head_branch") != workflow_run.get("head_branch"):
+        raise Invalid("artifact producer metadata mismatch")
+    if scope == "main":
+        head_repository = detail.get("head_repository")
+        if detail.get("event") != "push" or detail.get("head_branch") != "main" \
+                or not isinstance(head_repository, dict) \
+                or head_repository.get("full_name") != repository:
+            raise Invalid("main artifact has an invalid producer scope")
+    else:
+        matching_prs = [
+            item for item in detail.get("pull_requests", [])
+            if int(item.get("number", -1)) == pr_number
+        ]
+        if detail.get("event") != "pull_request" or len(matching_prs) != 1:
+            raise Invalid("PR artifact identity does not match GitHub metadata")
+    matching_job = next((job for job in jobs if job.get("name") == JOB), None)
+    if matching_job is None or not any(
+        step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
+        for step in matching_job.get("steps", [])
+    ):
+        raise Invalid("producer did not complete the cache upload step")
+    return {
+        "artifact": artifact,
+        "id": artifact["id"],
+        "scope": scope,
+        "pr": pr_number,
+        "runNumber": int(detail["run_number"]),
+        "attempt": attempt,
+        "runId": run_id,
+    }
+
+
+def cleanup_artifacts(base, token, repository):
+    failures = []
+    identities = []
+    unresolved_main = False
+    try:
+        repository_data = request_json(base, token)
+        if not isinstance(repository_data, dict) \
+                or repository_data.get("full_name") != repository \
+                or type(repository_data.get("id")) is not int \
+                or repository_data["id"] <= 0:
+            raise Invalid("repository identity could not be verified")
+        artifacts = paginated(f"{base}/actions/artifacts", token, "artifacts")
+        for artifact in artifacts:
+            name = artifact.get("name", "") if isinstance(artifact, dict) else ""
+            if not name.startswith(f"{ARTIFACT_PREFIX}-"):
+                continue
+            main_candidate = name.startswith(f"{ARTIFACT_PREFIX}-main-")
+            if artifact.get("expired"):
+                continue
+            try:
+                match = MAIN_ARTIFACT_PATTERN.fullmatch(name) or PR_ARTIFACT_PATTERN.fullmatch(name)
+                if not match:
+                    raise Invalid("unrecognized Bazel cache artifact identity")
+                run_id = int(match.group(1)) if main_candidate else int(match.group(2))
+                attempt = int(match.group(2)) if main_candidate else int(match.group(3))
+                run = producer_attempt(base, token, {"id": run_id}, attempt)
+                jobs = jobs_for_attempt(base, token, run_id, attempt)
+                identities.append(cleanup_artifact_identity(
+                    artifact, run, jobs, repository, repository_data["id"]
+                ))
+            except (ApiFailure, Invalid, TypeError, ValueError) as error:
+                if main_candidate:
+                    unresolved_main = True
+                failures.append(f"artifact={name}: {error}")
+                print(f"cleanup: identity-error artifact={name}: {error}", file=sys.stderr)
+
+        merged_prs = {}
+        for identity in identities:
+            if identity["scope"] != "pr" or identity["pr"] in merged_prs:
+                continue
+            pr_number = identity["pr"]
+            try:
+                pull = request_json(f"{base}/pulls/{pr_number}", token)
+                if not isinstance(pull, dict) or int(pull.get("number", -1)) != pr_number \
+                        or pull.get("base", {}).get("repo", {}).get("full_name") != repository:
+                    raise Invalid("pull request repository identity could not be verified")
+                merged_prs[pr_number] = (
+                    pull.get("state") == "closed" and bool(pull.get("merged_at"))
+                )
+            except (ApiFailure, Invalid, TypeError, ValueError) as error:
+                failures.append(f"pull-request={pr_number}: {error}")
+                print(f"cleanup: pull-request-error pr={pr_number}: {error}", file=sys.stderr)
+
+        main_artifacts = sorted(
+            (item for item in identities if item["scope"] == "main"),
+            key=lambda item: (item["runNumber"], item["attempt"], item["runId"]),
+            reverse=True,
+        )
+        delete = []
+        if unresolved_main:
+            print("cleanup: main-retention skipped; an artifact identity could not be verified")
+        else:
+            delete.extend(main_artifacts[MAIN_ARTIFACT_RETENTION:])
+        delete.extend(
+            item for item in identities
+            if item["scope"] == "pr" and merged_prs.get(item["pr"]) is True
+        )
+
+        deleted = 0
+        already_gone = 0
+        for identity in delete:
+            try:
+                removed = request_delete(
+                    f"{base}/actions/artifacts/{identity['id']}", token
+                )
+                if removed:
+                    deleted += 1
+                    print(f"cleanup: deleted artifact={identity['artifact']['name']}")
+                else:
+                    already_gone += 1
+                    print(f"cleanup: already-gone artifact={identity['artifact']['name']}")
+            except ApiFailure as error:
+                failures.append(f"artifact={identity['artifact']['name']}: {error}")
+                print(f"cleanup: deletion-error artifact={identity['artifact']['name']}: {error}",
+                      file=sys.stderr)
+
+        if failures:
+            print(f"cleanup: incomplete; {len(failures)} identity or service errors",
+                  file=sys.stderr)
+            return 1
+        print(f"cleanup: complete retained-main={min(len(main_artifacts), MAIN_ARTIFACT_RETENTION)} "
+              f"deleted={deleted} already-gone={already_gone}")
+        return 0
+    except (ApiFailure, Invalid) as error:
+        print(f"cleanup: API-error {error}; cleanup incomplete", file=sys.stderr)
+        return 1
 
 
 def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number,
@@ -1484,12 +1662,20 @@ def main():
     restore.add_argument("--run-attempt", required=True)
     restore.add_argument("--commit", required=True)
     restore.add_argument("--pr-number", default="")
+    cleanup = commands.add_parser("cleanup")
+    cleanup.add_argument("--repository", required=True)
     args = parser.parse_args()
     if args.command == "prepare-upload":
         upload(args)
-    else:
+    elif args.command == "restore":
         discover_and_restore(args)
+    else:
+        token = os.environ.get("GITHUB_TOKEN")
+        if not token:
+            print("cleanup: API-error missing GITHUB_TOKEN; cleanup incomplete", file=sys.stderr)
+            return 1
+        return cleanup_artifacts(api_base(args.repository), token, args.repository)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
