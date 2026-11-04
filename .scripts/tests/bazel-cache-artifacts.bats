@@ -52,7 +52,7 @@ load test_helper
   cleanup="$BATS_TEST_TMPDIR/cleanup-job"
   sed -n '/^  cleanup-bazel-cache:/,$p' "$workflow" > "$cleanup"
 
-  grep -F "cron: '17 3 * * *'" "$workflow"
+  grep -E "cron: ['\"]17 3 \\* \\* \\*['\"]" "$workflow"
   grep -F "if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'" "$cleanup"
   grep -F 'actions: write' "$cleanup"
   grep -F 'pull-requests: read' "$cleanup"
