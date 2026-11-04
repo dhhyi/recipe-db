@@ -80,7 +80,7 @@ test("browse seeded recipes, open a recipe and return home", async ({
     page.getByRole("heading", { name: "Zubereitung", exact: true }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Zur Startseite" }).click();
+  await page.getByRole("link", { name: "Zur Startseite" }).click();
   await expect(page).toHaveURL("/");
   await expect(recipeLink).toBeVisible();
 });
@@ -281,7 +281,7 @@ test("create a recipe in the editor and find it in the overview", async ({
     page.getByText("Milch erwärmen und mit Zimt servieren.", { exact: true }),
   ).toBeVisible();
   await waitForRecipeIndexed(request, id);
-  await page.getByRole("button", { name: "Zur Startseite" }).click();
+  await page.getByRole("link", { name: "Zur Startseite" }).click();
   await expect(
     page.getByRole("link", {
       name: "Rezept E2E Zimtmilch",
@@ -483,7 +483,7 @@ test.describe("first image", () => {
 
     await waitForPublishedImage(page, demoRecipe.id, urls.B, thumbUrls.B);
     await page
-      .getByRole("button", { name: "Zurück zum Rezept", exact: true })
+      .getByRole("link", { name: "Zurück zum Rezept", exact: true })
       .click();
     await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
     const detailImage = page.getByRole("img", {
@@ -493,7 +493,7 @@ test.describe("first image", () => {
     await expectPixels(detailImage, patterns.B, { width: 648, height: 486 });
     await expect(detailImage).toHaveAttribute("src", urls.B);
 
-    await page.getByRole("button", { name: "Zur Startseite" }).click();
+    await page.getByRole("link", { name: "Zur Startseite" }).click();
     const tile = page.getByRole("link", {
       name: `Rezept ${demoRecipe.name}`,
       exact: true,
@@ -622,7 +622,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
     repeated.thumbUrl,
   );
   await page
-    .getByRole("button", { name: "Zurück zum Rezept", exact: true })
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
   const detailImage = page.getByRole("img", {
     name: demoRecipe.name,
@@ -630,7 +630,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
   });
   await expectPixels(detailImage, uploadedImage, { width: 648, height: 486 });
   await expect(detailImage).toHaveAttribute("src", repeated.url);
-  await page.getByRole("button", { name: "Zur Startseite" }).click();
+  await page.getByRole("link", { name: "Zur Startseite" }).click();
   const thumbnail = page
     .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
     .getByRole("img", { name: demoRecipe.name, exact: true });
@@ -801,10 +801,12 @@ test("the image editor disables file selection while an upload is pending", asyn
       page.getByRole("button", { name: "Abbrechen", exact: true }),
     ).toBeDisabled();
     await expect(
-      page.getByRole("button", { name: "Zurück zum Rezept", exact: true }),
-    ).toBeDisabled();
-    await expect(page.locator("main")).toHaveAttribute("aria-busy", "true");
+      page.getByRole("link", { name: "Zurück zum Rezept", exact: true }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await expect(page.locator("main[aria-busy]")).toHaveCount(0);
     await expect(saveButton(page)).toBeDisabled();
+    await expect(saveButton(page)).toHaveText("Speichern");
+    await expect(saveButton(page)).toHaveAttribute("aria-busy", "true");
     await saveButton(page).dispatchEvent("click");
     expect(uploadRequests).toBe(1);
 

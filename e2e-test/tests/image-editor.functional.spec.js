@@ -224,13 +224,13 @@ test("repeated saves send the original and crop; Close shows the latest immutabl
   const oldResponse = await page.request.get(first.metadata.url);
   expect(oldResponse.ok()).toBe(true);
   await page
-    .getByRole("button", { name: "Zurück zum Rezept", exact: true })
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
   await expect(
     page.getByRole("img", { name: demoRecipe.name, exact: true }),
   ).toHaveAttribute("src", second.metadata.url);
-  await page.getByRole("button", { name: "Zur Startseite" }).click();
+  await page.getByRole("link", { name: "Zur Startseite" }).click();
   const thumbnail = page
     .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
     .getByRole("img", { name: demoRecipe.name, exact: true });
@@ -368,13 +368,13 @@ test("dirty comparison is exact, leave confirmation is cancellable, and minimum 
   await expect(saveButton(page)).toBeEnabled();
   page.once("dialog", (dialog) => dialog.dismiss());
   await page
-    .getByRole("button", { name: "Zurück zum Rezept", exact: true })
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
   await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
   expect(await crop(page)).toEqual(minimum);
   page.once("dialog", (dialog) => dialog.accept());
   await page
-    .getByRole("button", { name: "Zurück zum Rezept", exact: true })
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
 });

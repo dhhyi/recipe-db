@@ -159,18 +159,21 @@ export class RecipeTile extends LitElement {
   private markImageLoading(image: HTMLImageElement) {
     image.hidden = true;
     this.setAttribute("aria-busy", "true");
+    this.setAttribute("aria-label", "Bild wird geladen");
     this.toggleImageFallback(false);
   }
 
   private markImageLoaded(image: HTMLImageElement) {
     image.hidden = false;
     this.removeAttribute("aria-busy");
+    this.removeAttribute("aria-label");
     this.toggleImageFallback(false);
   }
 
   private markImageFailed(image: HTMLImageElement) {
     image.hidden = true;
     this.removeAttribute("aria-busy");
+    this.removeAttribute("aria-label");
     this.toggleImageFallback(true);
   }
 
@@ -202,6 +205,7 @@ export class RecipeTile extends LitElement {
 
     if (!image) {
       this.removeAttribute("aria-busy");
+      this.removeAttribute("aria-label");
       this.toggleImageFallback(true);
       return;
     }

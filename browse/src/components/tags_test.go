@@ -65,8 +65,8 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 			name:   "owner edit mode",
 			owner:  true,
 			edit:   true,
-			want:   []string{`<section aria-label="Tag hinzufügen"`, `for="recipe-tag-search"`, `type="search"`, `name="q"`, `delay:300ms`, `compositionstart`, `class="recipe-tag-remove"`, `Vegan entfernen`, "×", "Fertig", "Tag-Zuordnung wird gespeichert", "aria-live"},
-			unwant: []string{"recipe-editor", "Save", "Discard", `name="edit"`, "<details", "<summary", "data-tag-summary"},
+			want:   []string{`<section aria-label="Tag hinzufügen"`, `id="recipe-tag-search"`, `type="search"`, `name="q"`, `placeholder="Tag suchen"`, `aria-label="Tag suchen"`, `delay:300ms`, `compositionstart`, `aria-label="Verfügbare Tags werden geladen"`, `class="outline"`, `class="recipe-tag-remove"`, `Vegan entfernen`, "×", "Fertig", "aria-live"},
+			unwant: []string{"recipe-editor", "Save", "Discard", `name="edit"`, "<details", "<summary", "data-tag-summary", "Tag-Zuordnung wird gespeichert", `<label for="recipe-tag-search">`, `id="recipe-tags" class="contents" hx-sync="this:replace" aria-busy`},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -86,6 +86,23 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRecipeTagFeedbackUsesSemanticFeedbackClasses(t *testing.T) {
+	success := renderTagComponent(t, RecipeTagsWidget("42", nil, false, false, "Tags gespeichert.", false))
+	if !strings.Contains(success, `class="feedback success"`) {
+		t.Fatalf("successful tag feedback must use the success style: %s", success)
+	}
+
+	failure := renderTagComponent(t, RecipeTagsWidget("42", nil, false, false, "Tags konnten nicht gespeichert werden.", true))
+	if !strings.Contains(failure, `class="feedback error"`) {
+		t.Fatalf("failed tag feedback must use the error style: %s", failure)
+	}
+
+	retry := renderTagComponent(t, TagOptionsError("/recipe/42/tags/options", "Tag-Auswahl konnte nicht geladen werden."))
+	if !strings.Contains(retry, `class="outline"`) || !strings.Contains(retry, `aria-busy`) {
+		t.Fatalf("tag option retries must be outline buttons with a busy state: %s", retry)
 	}
 }
 

@@ -4,7 +4,9 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const html = fs.readFileSync("index.html", "utf8");
-const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];
+const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map((match) => match[1])
+  .find((source) => source.includes("Elm.Main.init"));
 
 function jpeg(width, height, orientation = 1, little = true) {
   const bytes = Buffer.alloc(50);

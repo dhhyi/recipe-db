@@ -176,7 +176,7 @@ export const handle = (page, name) =>
   page.locator(`.crop-handle[data-handle="${name}"]`);
 export const saveButton = (page) =>
   page.getByRole("button", {
-    name: /^(Speichern|Erneut speichern|Speichert …)$/,
+    name: /^(Speichern|Erneut speichern)$/,
   });
 
 export async function crop(page) {

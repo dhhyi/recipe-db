@@ -152,8 +152,8 @@ for (const role of ["anonymous", "member", "owner"]) {
       ).toBeVisible();
       const similar = page.locator("#similar-recipes");
       await similar.scrollIntoViewIfNeeded();
-      await expect(similar.getByRole("status")).toHaveText(
-        "Ähnliche Rezepte konnten nicht geladen werden",
+      await expect(similar.getByRole("alert")).toHaveText(
+        "Ähnliche Rezepte konnten nicht geladen werden.",
       );
       await expect(
         similar.getByRole("button", { name: "Erneut versuchen", exact: true }),
@@ -214,7 +214,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         page.getByRole("img", { name: demoRecipe.name, exact: true }),
       );
       await page
-        .getByRole("button", { name: "Zur Startseite" })
+        .getByRole("link", { name: "Zur Startseite" })
         .scrollIntoViewIfNeeded();
       await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
       await updatedAt.evaluate((element) => {
@@ -285,7 +285,7 @@ for (const role of ["anonymous", "member", "owner"]) {
           }),
         );
         await page
-          .getByRole("button", { name: "Zur Startseite" })
+          .getByRole("link", { name: "Zur Startseite" })
           .scrollIntoViewIfNeeded();
         await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
@@ -358,10 +358,12 @@ for (const role of ["anonymous", "member", "owner"]) {
       const response = await page.goto("/does-not-exist");
       expect(response.status()).toBe(404);
       await expectHeader(page, role);
-      await expect(page).toHaveTitle("page not found | RezeptDB");
+      await expect(page).toHaveTitle("Seite nicht gefunden | RezeptDB");
       await expect(page.locator("header-component")).toHaveCount(1);
       await expect(page.locator("main")).toHaveCount(1);
-      await expect(page.locator("main > p")).toHaveText("page not found");
+      await expect(page.locator("main > p")).toHaveText(
+        "Seite nicht gefunden.",
+      );
       await expect(page.locator("main")).toBeInViewport();
       await screenshot(page, "browse-error.png");
     });
@@ -448,6 +450,7 @@ for (const role of ["anonymous", "member", "owner"]) {
 
     test("recipe editor", async ({ page, demoRecipe }) => {
       await page.goto(`/edit/${demoRecipe.id}`);
+      await expectHeader(page, role);
       if (role === "owner") {
         await expect(
           page.getByRole("textbox", { name: "Name", exact: true }),
@@ -466,6 +469,7 @@ for (const role of ["anonymous", "member", "owner"]) {
       test.setTimeout(120_000);
       const recipe = degradedRecipes[0];
       await page.goto(`/edit/${recipe.id}`);
+      await expectHeader(page, role);
       if (role === "owner") {
         await expect(
           page.getByRole("textbox", { name: "Name", exact: true }),
@@ -480,6 +484,7 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "degraded-recipe-editor.png");
 
       await page.goto("/edit/new");
+      await expectHeader(page, role);
       if (role === "owner") {
         await expect(page.getByRole("heading", { level: 1 })).toHaveText(
           "Neues Rezept",
@@ -494,6 +499,7 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "degraded-new-recipe.png");
 
       await page.goto(`/images-edit/${recipe.id}`);
+      await expectHeader(page, role);
       if (role === "owner") {
         await expect(page.getByRole("heading", { level: 1 })).toHaveText(
           "Bild bearbeiten",
@@ -514,6 +520,7 @@ for (const role of ["anonymous", "member", "owner"]) {
 
     test("new recipe form", async ({ page }) => {
       await page.goto("/edit/new");
+      await expectHeader(page, role);
       if (role === "owner") {
         await expect(
           page.getByRole("heading", { name: "Inspirationen", exact: true }),
@@ -530,6 +537,7 @@ for (const role of ["anonymous", "member", "owner"]) {
 
     test("image editor", async ({ page, demoRecipe }) => {
       await page.goto(`/images-edit/${demoRecipe.id}`);
+      await expectHeader(page, role);
       if (role === "owner") {
         await expect(page.getByRole("heading", { level: 1 })).toHaveText(
           `Bild für ${demoRecipe.name} bearbeiten`,
@@ -595,12 +603,14 @@ async function expectHeader(page, role) {
 }
 
 async function expectEditorDenied(page, role) {
+  await expectHeader(page, role);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     role === "anonymous" ? "Anmeldung erforderlich" : "Keine Berechtigung",
   );
   await expect(
     page.locator("input, textarea, button[type='submit']"),
   ).toHaveCount(0);
+  await expect(page.locator("main a[href^='/oauth2/']")).toHaveCount(0);
 }
 
 async function assertNoHorizontalOverflow(page) {

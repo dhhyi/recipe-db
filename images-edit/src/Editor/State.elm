@@ -151,7 +151,7 @@ step msg model =
                                 )
 
                             RemoteData.Failure error ->
-                                ( { model | phase = SaveFailed, error = Just (error ++ " Das bisherige Bild bleibt erhalten.") }, Cmd.none )
+                                ( { model | phase = SaveFailed, error = Just (error ++ " Das bisherige Bild bleibt erhalten. Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten.") }, Cmd.none )
 
                             _ ->
                                 ( model, Cmd.none )
@@ -168,18 +168,6 @@ step msg model =
                 , Cmd.batch
                     [ model.session |> Maybe.map (.token >> release) |> Maybe.withDefault Cmd.none
                     , Browser.Dom.focus "upload-image" |> Task.attempt (\_ -> Focused)
-                    ]
-                )
-
-        Back ->
-            if model.phase == Saving then
-                ( model, Cmd.none )
-
-            else
-                ( model
-                , command "navigate"
-                    [ ( "url", E.string ("/recipe/" ++ model.recipeId) )
-                    , ( "dirty", E.bool (dirty model) )
                     ]
                 )
 

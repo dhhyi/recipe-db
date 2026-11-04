@@ -52,9 +52,28 @@ templ inspirationsList(in []gql.InspirationsLink) {
 
 templ InspirationsStub(recipeId string) {
 	<div
-		aria-busy="true"
+		id="recipe-inspirations"
 		hx-get={ "/recipe/" + recipeId + "/inspirations" }
 		hx-trigger="intersect"
+		hx-target="this"
 		hx-swap="outerHTML"
-	></div>
+		hx-on::send-error="htmx.trigger(this, 'inspirations-error')"
+		hx-on::response-error="htmx.trigger(this, 'inspirations-error')"
+		hx-on::timeout="htmx.trigger(this, 'inspirations-error')"
+		hx-on:inspirations-error="this.querySelector('[data-inspirations-spinner]').hidden = true; this.querySelector('[data-inspirations-spinner]').removeAttribute('aria-busy'); this.querySelector('[data-inspirations-error]').hidden = false; this.querySelector('button').hidden = false"
+	>
+		<div data-inspirations-spinner aria-busy="true" aria-label="Inspirationen werden geladen"></div>
+		<p data-inspirations-error hidden role="alert" class="feedback error">Inspirationen konnten nicht geladen werden.</p>
+		<button
+			type="button"
+			class="outline"
+			hidden
+			hx-get={ "/recipe/" + recipeId + "/inspirations" }
+			hx-target="#recipe-inspirations"
+			hx-swap="outerHTML"
+			hx-disabled-elt="this"
+			hx-on::before-request="this.setAttribute('aria-busy', 'true')"
+			hx-on::after-request="this.removeAttribute('aria-busy')"
+		>Erneut versuchen</button>
+	</div>
 }
