@@ -909,8 +909,7 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id)
             or int(detail.get("run_attempt", -1)) != attempt \
             or int(detail.get("run_number", 0)) <= 0 \
             or detail.get("head_sha") != workflow_run.get("head_sha") \
-            or detail.get("head_branch") != workflow_run.get("head_branch") \
-            or detail.get("event") != workflow_run.get("event"):
+            or detail.get("head_branch") != workflow_run.get("head_branch"):
         raise Invalid("artifact producer metadata mismatch")
     if scope == "main":
         head_repository = detail.get("head_repository")
