@@ -1122,6 +1122,7 @@ test.describe("pagination", () => {
   test("a loading placeholder does not add a no-JavaScript pagination link", async ({
     authContexts,
     baseURL,
+    searchRecipes,
   }) => {
     const identity = await authContexts.owner(baseURL, {
       javaScriptEnabled: false,

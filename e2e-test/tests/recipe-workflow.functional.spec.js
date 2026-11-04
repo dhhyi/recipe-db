@@ -391,16 +391,16 @@ test("pending save freezes form controls, blocks duplicate submits and navigatio
       .toBe(true);
 
     await page.keyboard.press("Enter");
-    await page.evaluate(() => {
+    await page.evaluate((recipeId) => {
       const form = document.querySelector("form");
       form?.requestSubmit();
       form?.requestSubmit();
       form?.dispatchEvent(
         new SubmitEvent("submit", { bubbles: true, cancelable: true }),
       );
-      document.querySelector(`a[href='/recipe/${demoRecipe.id}']`)?.click();
+      document.querySelector(`a[href='/recipe/${recipeId}']`)?.click();
       document.querySelector("header-component a[href='/']")?.click();
-    });
+    }, demoRecipe.id);
 
     expect(updateCount).toBe(1);
     await expect(page).toHaveURL(`/edit/${demoRecipe.id}`);
@@ -512,7 +512,10 @@ test("beforeunload prompts when dirty and is removed after returning to clean", 
   await expect(dirtyStatus(page)).toBeVisible();
 
   await discardButton(page).click();
-  await expect(cleanStatus(page)).toBeVisible();
+  await expect(cleanStatus(page)).toHaveCount(0);
+  await expect(dirtyStatus(page)).toHaveCount(0);
+  await expect(nameField(page)).toHaveValue(demoRecipe.name);
+  await expect(saveButton(page)).toBeDisabled();
 
   let dialogCount = 0;
   const listener = async (dialog) => {
@@ -681,7 +684,9 @@ test("loading state renders no saveable form and supports safe back", async ({
 
   try {
     await page.goto(`/edit/${demoRecipe.id}`);
-    await expect(page.getByText("Lädt…", { exact: true })).toBeVisible();
+    await expect(
+      page.locator("[aria-busy='true'][aria-label='Rezept wird geladen']"),
+    ).toBeVisible();
     await expect(nameField(page)).toHaveCount(0);
     await expect(saveButton(page)).toHaveCount(0);
 
