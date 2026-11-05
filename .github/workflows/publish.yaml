@@ -38,7 +38,23 @@ jobs:
       - name: checkout
         uses: actions/checkout@v7
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+
+      - name: verify exact source revision
+        id: source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          if [[ $source_sha != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "Checked out $source_sha, expected event source $EXPECTED_SOURCE_SHA." >&2
+            exit 1
+          fi
+          echo "Building exact source revision $source_sha"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
 
       - name: setup mise tools
         uses: jdx/mise-action@v5
@@ -70,7 +86,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-number "$GITHUB_RUN_NUMBER" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --commit "$GITHUB_SHA" \
+            --commit "${{ steps.source.outputs.sha }}" \
             --pr-number "$PR_NUMBER"
 
       - name: check project formatting
@@ -134,7 +150,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --commit "$GITHUB_SHA" \
+            --commit "${{ steps.source.outputs.sha }}" \
             --pr-number "$PR_NUMBER" \
             --execution-log "format=$RUNNER_TEMP/bazel-format-execution.json" \
             --execution-log "checks=$RUNNER_TEMP/bazel-check-execution.json" \
@@ -165,7 +181,7 @@ jobs:
           esac
           metadata="$RUNNER_TEMP/production-build-amd64.json"
           sh .scripts/generate-production-build-metadata.sh \
-            "$GITHUB_SHA" linux/amd64 "$metadata" false
+            "${{ steps.source.outputs.sha }}" linux/amd64 "$metadata" false
           docker buildx create --use
           docker buildx inspect --bootstrap
           docker buildx bake --file "$metadata" --load
@@ -201,6 +217,23 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: verify exact source revision
+        id: source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          if [[ $source_sha != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "Checked out $source_sha, expected event source $EXPECTED_SOURCE_SHA." >&2
+            exit 1
+          fi
+          echo "Building exact source revision $source_sha"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
 
       - name: setup mise
         uses: jdx/mise-action@v5
@@ -298,7 +331,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          result=$(sh .scripts/check-production-release.sh "$GITHUB_SHA")
+          result=$(sh .scripts/check-production-release.sh "${{ steps.source.outputs.sha }}")
           if [[ $result == found:* ]]; then
             echo "status=found" >> "$GITHUB_OUTPUT"
             echo "digest=${result#found:}" >> "$GITHUB_OUTPUT"
@@ -321,7 +354,7 @@ jobs:
             write_cache=true
           fi
           sh .scripts/generate-production-build-metadata.sh \
-            "$GITHUB_SHA" linux/arm64 "$metadata" "$write_cache"
+            "${{ steps.source.outputs.sha }}" linux/arm64 "$metadata" "$write_cache"
           if [[ $is_main == true ]]; then
             docker buildx bake --file "$metadata" --push
           else
@@ -369,6 +402,22 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: verify exact source revision
+        id: source
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          if [[ $source_sha != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "Checked out $source_sha, expected event source $EXPECTED_SOURCE_SHA." >&2
+            exit 1
+          fi
+          echo "Building exact source revision $source_sha"
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
 
       - name: setup mise tools
         uses: jdx/mise-action@v5
@@ -398,12 +447,12 @@ jobs:
             digest='${{ needs.arm64-validation.outputs.release_digest }}'
             oras pull "ghcr.io/dhhyi/recipe-db-releases@$digest" --output "$RUNNER_TEMP/existing-release"
             inventory="$RUNNER_TEMP/existing-release/release.json"
-            sh .scripts/validate-production-release.sh "$inventory" "$GITHUB_SHA"
+            sh .scripts/validate-production-release.sh "$inventory" "${{ steps.source.outputs.sha }}"
             echo "Reusing complete release inventory: ghcr.io/dhhyi/recipe-db-releases@$digest"
           else
             metadata="$RUNNER_TEMP/production-build-amd64.json"
             sh .scripts/generate-production-build-metadata.sh \
-              "$GITHUB_SHA" linux/amd64 "$metadata" true
+              "${{ steps.source.outputs.sha }}" linux/amd64 "$metadata" true
             docker buildx bake --file "$metadata" --push
             smoke_image=$(jq -r '.target.design.tags[0]' "$metadata")
             docker pull --platform linux/amd64 "$smoke_image"
@@ -412,13 +461,13 @@ jobs:
             while IFS= read -r project; do
               image="ghcr.io/dhhyi/recipe-db-$project"
               docker buildx imagetools create \
-                --tag "$image:sha-$GITHUB_SHA" \
-                "$image:sha-$GITHUB_SHA-amd64" \
-                "$image:sha-$GITHUB_SHA-arm64"
+                --tag "$image:sha-${{ steps.source.outputs.sha }}" \
+                "$image:sha-${{ steps.source.outputs.sha }}-amd64" \
+                "$image:sha-${{ steps.source.outputs.sha }}-arm64"
             done < <(jq -r '.target | keys[]' "$metadata")
 
-            sh .scripts/create-production-release-inventory.sh "$GITHUB_SHA" "$inventory"
-            sh .scripts/publish-production-release.sh "$inventory" "$GITHUB_SHA"
+            sh .scripts/create-production-release-inventory.sh "${{ steps.source.outputs.sha }}" "$inventory"
+            sh .scripts/publish-production-release.sh "$inventory" "${{ steps.source.outputs.sha }}"
           fi
           echo "inventory=$inventory" >> "$GITHUB_OUTPUT"
 
@@ -427,8 +476,8 @@ jobs:
         run: |
           set -euo pipefail
           current_revision=$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')
-          if [[ $current_revision != "$GITHUB_SHA" ]]; then
-            echo "Skipping latest tags because $GITHUB_SHA is no longer the main-branch head."
+          if [[ $current_revision != "${{ steps.source.outputs.sha }}" ]]; then
+            echo "Skipping latest tags because ${{ steps.source.outputs.sha }} is no longer the main-branch head."
             exit 0
           fi
           inventory='${{ steps.production-release.outputs.inventory }}'
