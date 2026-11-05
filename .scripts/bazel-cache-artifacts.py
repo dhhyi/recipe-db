@@ -1361,19 +1361,16 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
         return False
     if actor_type == "Bot":
         if actor_identity != TRUSTED_COPILOT_ACTOR:
-            print(f"cache: trust-rejected pr={pr_number}: unsupported or mismatched bot identity "
-                  f"id={actor_id} login={login} type={actor_type}")
+            print(f"cache: trust-rejected pr={pr_number}: unsupported or mismatched bot identity")
             return False
-        print(f"cache: trust-accepted pr={pr_number} producer={login} "
-              "authorization=pinned Copilot identity")
+        print(f"cache: trust-accepted pr={pr_number} authorization=pinned Copilot identity")
         return True
     if actor_id == TRUSTED_COPILOT_ACTOR[0] or login == TRUSTED_COPILOT_ACTOR[1]:
         print(f"cache: trust-rejected pr={pr_number}: producer identity does not match "
               "the pinned Copilot identity")
         return False
     if actor_type != "User":
-        print(f"cache: trust-rejected pr={pr_number}: unsupported producer actor type "
-              f"id={actor_id} login={login} type={actor_type}")
+        print(f"cache: trust-rejected pr={pr_number}: unsupported producer actor type")
         return False
     encoded_login = urllib.parse.quote(login, safe="")
     permission = request_json(
@@ -1384,11 +1381,10 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
             or identity.get("login") != login \
             or permission.get("permission") not in ("admin", "maintain", "write"):
         reason = "collaborator permission metadata is unavailable" if permission is None \
-            else f"actor {login} lacks verified write permission"
+            else "producer lacks verified write permission"
         print(f"cache: trust-rejected pr={pr_number}: {reason}")
         return False
-    print(f"cache: trust-accepted pr={pr_number} producer={login} "
-          f"permission={permission['permission']}")
+    print(f"cache: trust-accepted pr={pr_number} authorization=verified human collaborator permission")
     return True
 
 
