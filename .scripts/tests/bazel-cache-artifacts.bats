@@ -38,6 +38,7 @@ load test_helper
 
 @test "each build job checks out and verifies the event source commit" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  # shellcheck disable=SC2016
   expected='${{ github.event.pull_request.head.sha || github.sha }}'
 
   for job in quality-checks arm64-validation; do
@@ -54,9 +55,12 @@ load test_helper
 
   run yq -r '.jobs.publish.steps[] | select(.name == "checkout") | .with.ref' "$workflow"
   [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
   [ "$output" = '${{ github.sha }}' ]
+  # shellcheck disable=SC2016
   run grep -F -- '--commit "${{ steps.source.outputs.sha }}"' "$workflow"
   [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
   run grep -F '"$GITHUB_SHA"' "$workflow"
   [ "$status" -eq 1 ]
 }
