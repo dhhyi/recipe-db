@@ -10,8 +10,12 @@ templ BrowseControls(resp *gql.BrowseControlsResponse) {
 	</div>
 }
 
-templ BrowseIdentity(resp *gql.BrowseIdentityResponse) {
-	<header-component auth-role={ resp.MyCapabilities.Role }></header-component>
+templ BrowseIdentity(resp *gql.BrowseIdentityResponse, googleOAuthEnabled bool) {
+	if googleOAuthEnabled {
+		<header-component auth-role={ resp.MyCapabilities.Role } auth-enabled></header-component>
+	} else {
+		<header-component auth-role={ resp.MyCapabilities.Role }></header-component>
+	}
 }
 
 templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {

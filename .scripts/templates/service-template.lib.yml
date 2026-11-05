@@ -9,6 +9,8 @@
 #@       result.extend(flatten_labels(struct.encode(child), full_key))
 #@     elif type(child) == "dict":
 #@       result.extend(flatten_labels(child, full_key))
+#@     elif type(child) == "list":
+#@       result.append([full_key, ",".join([str(item) for item in child])])
 #@     else:
 #@       result.append([full_key, str(child)])
 #@     end

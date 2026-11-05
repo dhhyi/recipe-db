@@ -54,9 +54,16 @@ case "${1:-compose}" in
     # shellcheck disable=SC2016
     compose_inputs=$(mise exec -- jq -cn \
       --arg registryCacheSuffix "${REGISTRY_CACHE_SUFFIX:-}" \
-      --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-replace-with-google-oauth-client-id}" \
+      --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-}" \
       --arg developmentUser "$(id -u):$(id -g)" \
       '{registryCacheSuffix:$registryCacheSuffix,googleOAuthClientId:$googleOAuthClientId,developmentUser:$developmentUser}')
+    if ! mise exec -- jq -e '
+      .googleOAuthClientId == "" or
+      (.googleOAuthClientId | test("^[a-zA-Z0-9._-]+[.]apps[.]googleusercontent[.]com$"))
+    ' <<< "$compose_inputs" > /dev/null; then
+      printf 'Invalid GOOGLE_OAUTH_CLIENT_ID\n' >&2
+      exit 1
+    fi
     write_if_changed "$generated_directory/compose-inputs.json" "$compose_inputs"
     compose_fingerprint=$(source_fingerprint generate-docker-compose)
     write_if_changed "$generated_directory/compose-source-fingerprint" "$compose_fingerprint"

@@ -11,6 +11,9 @@ export class HeaderComponent extends LitElement {
   @property({ attribute: "auth-name" })
   authName = "";
 
+  @property({ type: Boolean, attribute: "auth-enabled" })
+  authEnabled = false;
+
   protected createRenderRoot() {
     // drop stale render output restored e.g. from htmx history cache
     this.replaceChildren();
@@ -18,7 +21,7 @@ export class HeaderComponent extends LitElement {
   }
 
   private renderAuth() {
-    if (!this.authRole) return null;
+    if (!this.authRole || !this.authEnabled) return null;
     if (this.authRole === "anonymous") {
       return html`<ul class="unlist">
         <li><a href="/oauth2/start?rd=%2F">Anmelden</a></li>

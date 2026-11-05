@@ -233,8 +233,12 @@ assert_compose() {
   # shellcheck disable=SC2016
   assert_compose '
     . as $root |
-    all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","oauth2-proxy","redis","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
+    all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
       . as $service | $root.services | has($service))
+    and (.services.browse.environment | has("GOOGLE_OAUTH_CLIENT_ID") | not)
+    and (.services.graphql.labels | all(.[]; startswith("traefik.http.routers.graphql-cookie.") | not))
+    and (.services | has("oauth2-proxy") | not)
+    and (.services | has("redis") | not)
     and .services.traefik.ports == ["8080:80", "3000:3000"]
     and .services.job.profiles == ["development"]
     and .services.test.profiles == ["test"]
@@ -245,7 +249,7 @@ assert_compose() {
       | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $project + "-cache"]
       and (.value.build | has("cache_to") | not))
     and .volumes["nats-data"].name == "recipe-db-nats-data"
-    and .volumes["oauth2-sessions-data"].name == "recipe-db-oauth2-sessions-data"
+    and (.volumes | has("oauth2-sessions-data") | not)
     and .volumes["tags-data"].name == "recipe-db-tags-data"
     and .services.tags.environment.MODE == "testing"
     and (.services.tags.environment | has("PRODUCTION") | not)
@@ -299,8 +303,8 @@ assert_compose() {
   '
 }
 
-@test "OAuth2 routing and GraphQL identity boundaries remain in the development stack" {
-  run env GOOGLE_OAUTH_CLIENT_ID=test-client sh .scripts/generate-docker-compose.sh
+@test "complete Google configuration enables OAuth2 routing and GraphQL identity boundaries" {
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com sh .scripts/generate-docker-compose.sh
 
   [ "$status" -eq 0 ]
   # jq variables in the expression must remain literal for jq.
@@ -309,6 +313,7 @@ assert_compose() {
     .services.graphql.networks == ["auth-ingress"]
     and .services.graphql.secrets == ["auth-accounts.json"]
     and .services.graphql.environment.NATS_URL == "nats://nats:4222"
+    and .services.browse.environment.GOOGLE_OAUTH_CLIENT_ID == "test.apps.googleusercontent.com"
     and .services["oauth2-proxy"].user == $expected_uid
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "${OAUTH2_COOKIE_SECURE:-false}"
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_REDIRECT_URL == "${GOOGLE_OAUTH_REDIRECT_URL:-http://localhost:8080/oauth2/callback}"
@@ -322,14 +327,21 @@ assert_compose() {
     and (.services.traefik.labels | index("traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Internal-Ingress-Token=") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.priority=200") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.priority=300") != null)
+    and (.services.graphql.labels | index("traefik.http.middlewares.oauth2-forward-auth.forwardAuth.authRequestHeaders=Cookie,Authorization") != null)
+    and (.services.graphql.labels | index("traefik.http.middlewares.oauth2-forward-auth.forwardAuth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Issuer,X-Auth-Request-Email,X-Auth-Request-Email-Verified") != null)
+    and (.services.graphql.labels | index("traefik.http.middlewares.oauth2-forward-auth.forwardAuth.addAuthCookiesToResponse=_oauth2_proxy") != null)
     and (.secrets["google-oauth-client-secret"].file | contains("./.secrets/google-oauth-client-secret"))
   ' "$(id -u):$(id -g)"
   run yq -o=json '.' oauth2-proxy-alpha.yml
   [ "$status" -eq 0 ]
   jq -e '
-    .providers[0].clientID == "test-client"
+    .providers[0].clientID == "test.apps.googleusercontent.com"
     and .providers[0].oidcConfig.skipDiscovery == true
     and .providers[0].loginURL == "https://accounts.google.com/o/oauth2/v2/auth"
+    and .providers[0].loginURLParameters == [
+      {"name":"access_type","default":["offline"]},
+      {"name":"prompt","default":["consent"]}
+    ]
   ' <<< "$output"
 }
 
@@ -383,7 +395,8 @@ assert_compose() {
 @test "production route template retains production authentication and administrative protections" {
   . .scripts/lib/project-metadata.sh
   project_metadata_to_jsonl "$PWD" projects.jsonl
-  jq -n --slurpfile projects projects.jsonl '{projects:$projects}' > route-values.json
+  jq -n --arg id "test.apps.googleusercontent.com" --slurpfile projects projects.jsonl \
+    '{projects:$projects,googleOAuthClientId:$id}' > route-values.json
 
   run mise exec -- ytt \
     -f .scripts/templates/traefik-template.yml \

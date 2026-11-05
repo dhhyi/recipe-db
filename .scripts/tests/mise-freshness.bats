@@ -110,18 +110,21 @@ EOF
   [[ "$output" == *"Rendering"* ]]
   mise -C "$FIXTURE_ROOT" exec -- yq -e '.services.graphql.build.cache_from[0] | contains("-cache-arm64")' docker-compose.yml
 
-  run env GOOGLE_OAUTH_CLIENT_ID=fixture-client mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  mkdir -p .secrets
+  printf '%s' realistic-google-client-secret-for-tests > .secrets/google-oauth-client-secret
+  chmod 600 .secrets/google-oauth-client-secret
+  run env GOOGLE_OAUTH_CLIENT_ID=fixture.apps.googleusercontent.com mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
-  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == "fixture-client"' oauth2-proxy-alpha.yml
+  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == "fixture.apps.googleusercontent.com"' oauth2-proxy-alpha.yml
   run env GOOGLE_OAUTH_CLIENT_ID= mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
-  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == "replace-with-google-oauth-client-id"' oauth2-proxy-alpha.yml
+  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == ""' oauth2-proxy-alpha.yml
 
-  run env FAKE_UID=1111 FAKE_GID=2222 mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  run env GOOGLE_OAUTH_CLIENT_ID=fixture.apps.googleusercontent.com FAKE_UID=1111 FAKE_GID=2222 mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
   mise -C "$FIXTURE_ROOT" exec -- yq -e '.services["oauth2-proxy"].user == "1111:2222"' docker-compose.yml
 
-  run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  run env GOOGLE_OAUTH_CLIENT_ID=fixture.apps.googleusercontent.com mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
   [[ "$output" == *"Rendering"* ]]
   mise -C "$FIXTURE_ROOT" exec -- yq -e '.services["oauth2-proxy"].user == "'"$(command id -u):$(command id -g)"'"' docker-compose.yml
@@ -187,7 +190,10 @@ EOF
 }
 
 @test "Mise repairs equal-size Compose and SDL output edits with the exact original mtime" {
-  run mise -C "$FIXTURE_ROOT" run --raw --force generate-docker-compose
+  mkdir -p .secrets
+  printf '%s' realistic-google-client-secret-for-tests > .secrets/google-oauth-client-secret
+  chmod 600 .secrets/google-oauth-client-secret
+  run env GOOGLE_OAUTH_CLIENT_ID=fixture.apps.googleusercontent.com mise -C "$FIXTURE_ROOT" run --raw --force generate-docker-compose
   [ "$status" -eq 0 ]
 
   cp -p docker-compose.yml original-compose
@@ -205,14 +211,14 @@ EOF
   cp -p oauth2-proxy-alpha.yml original-oauth
   original_size=$(stat -c %s oauth2-proxy-alpha.yml)
   original_mtime=$(stat -c %y oauth2-proxy-alpha.yml)
-  sed -i 's/replace-with-google-oauth-client-id/replace-with-google-oauth-client-zz/' oauth2-proxy-alpha.yml
+  sed -i 's/fixture.apps.googleusercontent.com/fixture.apps.googleusercontent.zz/' oauth2-proxy-alpha.yml
   [ "$(stat -c %s oauth2-proxy-alpha.yml)" -eq "$original_size" ]
   touch -r original-oauth oauth2-proxy-alpha.yml
   [ "$(stat -c %y oauth2-proxy-alpha.yml)" = "$original_mtime" ]
-  run mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  run env GOOGLE_OAUTH_CLIENT_ID=fixture.apps.googleusercontent.com mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
   [ "$status" -eq 0 ]
   [[ "$output" == *"Rendering"* ]]
-  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == "replace-with-google-oauth-client-id"' oauth2-proxy-alpha.yml
+  mise -C "$FIXTURE_ROOT" exec -- yq -e '.providers[0].clientID == "fixture.apps.googleusercontent.com"' oauth2-proxy-alpha.yml
 
   run mise -C "$FIXTURE_ROOT" run --raw --force merge-graphql-schemas
   [ "$status" -eq 0 ]

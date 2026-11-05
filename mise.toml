@@ -205,7 +205,7 @@ file = ".scripts/create-auth-test-fixture.sh"
 depends = ["create-auth-accounts"]
 
 [tasks.create-oauth-secrets]
-description = "Create private development OAuth placeholders, cookie and ingress secrets without replacing existing files"
+description = "Create private development cookie and ingress secrets and validate configured Google credentials"
 file = ".scripts/create-oauth-secrets.sh"
 
 [tasks.seed-demodata]

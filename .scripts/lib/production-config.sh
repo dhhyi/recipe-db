@@ -13,7 +13,28 @@ production_config() {
   jq -e 'if length == 1 then .[0] else error("expected one values document") end' \
     "$work/config-documents.json" > "$work/config.json" \
     || production_fail "values must contain exactly one document"
-  jq -e --arg action "$2" '
+  if jq -e '(.runtime | type == "object" and has("authMode"))' "$work/config.json" > /dev/null 2>&1; then
+    production_fail "runtime.authMode is obsolete; omit it and configure Google OAuth with a client ID and both OAuth secret paths"
+  fi
+  local google_fields
+  google_fields=$(jq -r '
+    ((.runtime | type == "object" and has("googleOAuthClientId")) or
+     (.secrets | type == "object" and
+       (has("google-oauth-client-secret") or has("oauth2-cookie-secret"))))
+  ' "$work/config.json")
+  google_enabled=false
+  if [[ $google_fields = true ]]; then
+    jq -e '
+      (.runtime | type == "object" and has("googleOAuthClientId") and
+        (.googleOAuthClientId | type == "string" and
+          test("^[a-zA-Z0-9._-]+[.]apps[.]googleusercontent[.]com$"))) and
+      (.secrets | type == "object" and has("google-oauth-client-secret") and
+        has("oauth2-cookie-secret"))
+    ' "$work/config.json" > /dev/null \
+      || production_fail "incomplete or invalid Google OAuth configuration; provide a valid client ID and both OAuth secret paths, or omit all three"
+    google_enabled=true
+  fi
+  jq -e --arg action "$2" --argjson googleEnabled "$google_enabled" '
     def objectkeys($expected): type == "object" and (keys == ($expected | sort));
     def nonempty: type == "string" and length > 0;
     def name: type == "string" and test("^[a-z][a-z0-9-]{0,61}[a-z0-9]$");
@@ -63,36 +84,36 @@ production_config() {
       else true end)
     and (if $action == "storage-reattach" then .target == "pi" else true end)
     and (.volumes | objectkeys(["recipes","images","ratings","inspirations","image-inline","link-extract",
-      "nats","typesense","search","redis","tags"])
+      "nats","typesense","search","tags"] + (if $googleEnabled then ["redis"] else [] end))
       and all(.[]; quantity))
     and (.resources | objectkeys(["requests","limits"])
       and (.requests | objectkeys(["cpu","memory"])
         and (.cpu | type == "string" and test("^[1-9][0-9]*m$"))
         and (.memory | quantity))
       and (.limits | objectkeys(["memory"]) and (.memory | quantity)))
-    and (.infrastructure | objectkeys(["traefik","nats","typesense","maintenance","oauth2Proxy","redis"])
+    and (.infrastructure | objectkeys(["traefik","nats","typesense","maintenance"] +
+      (if $googleEnabled then ["oauth2Proxy","redis"] else [] end))
       and all(.[]; image)
       and (.traefik | test("^traefik:v3([.]([7-9]|[1-9][0-9])([.][0-9]+)?)?@sha256:[0-9a-f]{64}$")))
-    and (.runtime | (del(.authMode,.ingressMode) | objectkeys(["googleOAuthClientId","trustedIssuer"]))
-      and ((.authMode // "google") == "google" or .authMode == "token-only")
+    and (.runtime | objectkeys(["trustedIssuer"] +
+      (if has("ingressMode") then ["ingressMode"] else [] end) +
+      (if $googleEnabled then ["googleOAuthClientId"] else [] end))
       and ((.ingressMode // "loopback") == "loopback" or .ingressMode == "private-lan")
-      and (.googleOAuthClientId | type == "string")
-      and (if .authMode == "token-only" then .googleOAuthClientId == "" else
-        (.googleOAuthClientId | nonempty and
-        (if $action == "render" or $action == "deploy" or $action == "restore" then
-          test("^[a-zA-Z0-9._-]+[.]apps[.]googleusercontent[.]com$")
-        else true end)) end)
       and .trustedIssuer == "https://accounts.google.com")
-    and (if .runtime.authMode == "token-only" then
-      .target == "pi" and
-      (if .runtime.ingressMode == "private-lan" then (.origin | private_lan_origin)
-       else .origin == ("http://127.0.0.1:" + (.httpPort | tostring)) end)
-      else true end)
     and (if .runtime.ingressMode == "private-lan" then
-      .target == "pi" and .runtime.authMode == "token-only"
+      .target == "pi" and
+      (if has("httpsStaging") then
+        ((.origin | private_lan_origin) or .origin == ("https://" + .httpsStaging.hostname))
+       else (.origin | private_lan_origin) end)
+      else true end)
+    and (if $googleEnabled and .target == "pi" then
+      has("httpsStaging") and .runtime.ingressMode == "private-lan"
+      and .origin == ("https://" + .httpsStaging.hostname)
+      and .httpsStaging.acmeEnvironment == "production"
+      and .httpsStaging.exposeApplication == true
       else true end)
     and (if has("httpsStaging") then
-      .target == "pi" and .runtime.authMode == "token-only"
+      .target == "pi"
       and .runtime.ingressMode == "private-lan" and has("piStorage")
       and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"] +
         (if has("exposeApplication") then ["exposeApplication"] else [] end) +
@@ -112,13 +133,13 @@ production_config() {
           else true end))
       else true end)
     and (if has("httpsStaging") then .secrets | has("acme-account-email") else true end)
-    and (.runtime.authMode == "token-only" as $tokenOnly | .secrets |
-      objectkeys((if $tokenOnly then ["auth-accounts.json","graphql-ingress-secret","typesense-api-key"]
-        else ["auth-accounts.json","graphql-ingress-secret","typesense-api-key",
-        "google-oauth-client-secret","oauth2-cookie-secret"] end) +
+    and (.secrets |
+      objectkeys(["auth-accounts.json","graphql-ingress-secret","typesense-api-key"] +
+        (if $googleEnabled then ["google-oauth-client-secret","oauth2-cookie-secret"] else [] end) +
         (if has("acme-account-email") then ["acme-account-email"] else [] end))
       and all(.[]; type == "string" and startswith("/") and (test("[\\r\\n]") | not)))
-  ' "$work/config.json" > /dev/null || production_fail "invalid or incomplete production values"
+  ' "$work/config.json" > /dev/null \
+    || production_fail "invalid or incomplete production values"
   target=$(jq -r .target "$work/config.json")
   cluster=$(jq -r .cluster "$work/config.json")
   context=$(jq -r .context "$work/config.json")
@@ -130,11 +151,10 @@ production_config() {
   storage_node=$(jq -r '.piStorage.node // empty' "$work/config.json")
   storage_root_uuid=$(jq -r '.piStorage.expectedRootUuid // empty' "$work/config.json" | tr '[:upper:]' '[:lower:]')
   storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
-  auth_mode=$(jq -r '.runtime.authMode // "google"' "$work/config.json")
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
   acme_email_path=$(jq -r '.secrets["acme-account-email"] // empty' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
-  if [[ $auth_mode = google ]]; then
+  if $google_enabled; then
     secret_keys+=(google-oauth-client-secret oauth2-cookie-secret)
   fi
 }
@@ -169,7 +189,7 @@ production_secrets() {
     jq -eRs 'length >= 16 and (test("^[!-~]+\\n?\\z"))' "$work/$key" > /dev/null \
       || production_fail "invalid secret format: $key"
   done
-  [[ $auth_mode = google ]] || return 0
+  $google_enabled || return 0
   jq -eRs 'test("^[A-Za-z0-9+/_-]+={0,2}\\n?\\z")' "$work/oauth2-cookie-secret" > /dev/null \
     || production_fail "invalid oauth2 cookie secret"
   cookie=$(< "$work/oauth2-cookie-secret")
