@@ -116,6 +116,26 @@ EOF
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   [[ $* != *"--resource-version="* ]] || { echo 'unknown flag: --resource-version' >&2; exit 1; }
+  case "$*" in
+    *" get job backup-cleanup --ignore-not-found -o json"*)
+      if [[ -f $MOCK_LOG.cleanup-job ]]; then
+        jq -n --arg foreign "${MOCK_FOREIGN_CLEANUP:-false}" '
+          {metadata:{labels:{"app.kubernetes.io/part-of":
+            (if $foreign == "true" then "foreign" else "recipe-db" end)}}}'
+      fi
+      exit ;;
+    *" delete job backup-cleanup "*)
+      [[ ${MOCK_CLEANUP_DELETE_FAIL:-false} != true ]] || exit 1
+      rm -f "$MOCK_LOG.cleanup-job"
+      exit ;;
+    *" get pods -l job-name=backup-cleanup -o json"*)
+      if [[ -f $MOCK_LOG.cleanup-job || ${MOCK_CLEANUP_PODS_REMAIN:-false} == true ]]; then
+        echo '{"items":[{"metadata":{"name":"cleanup-worker"}}]}'
+      else
+        echo '{"items":[]}'
+      fi
+      exit ;;
+  esac
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
@@ -293,13 +313,6 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           }'
         fi
         handled=true ;;
-      *" get pods -l job-name=backup-cleanup -o json"*)
-        if [[ -f $MOCK_LOG.cleanup-job ]]; then
-          echo '{"items":[{"metadata":{"name":"cleanup-worker"}}]}'
-        else
-          echo '{"items":[]}'
-        fi
-        handled=true ;;
       *" get pods "*"-o json"*)
         jq --arg args "$*" '{
           metadata:{resourceVersion:"1"},
@@ -314,17 +327,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         }' "$MOCK_LOG.deployments"
         handled=true ;;
       *" get pod "*"--ignore-not-found -o json"*) handled=true ;;
-      *" get job backup-cleanup --ignore-not-found -o json"*)
-        if [[ -f $MOCK_LOG.cleanup-job ]]; then
-          echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'
-        fi
-        handled=true ;;
       *" apply -f "*backup-cleanup-job.yml)
         touch "$MOCK_LOG.cleanup-job"
-        handled=true ;;
-      *" delete job backup-cleanup "*)
-        [[ ${MOCK_CLEANUP_DELETE_FAIL:-false} != true ]] || exit 1
-        rm -f "$MOCK_LOG.cleanup-job"
         handled=true ;;
       *" get job backup-cleanup -o json"*)
         if [[ $MOCK_CLEANUP_FAIL = true ]]; then
@@ -554,6 +558,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     cat "$MOCK_LOG.route-checksum" >> "$MOCK_LOG.route-checksums"
     [[ $* == *"--namespace kube-system apply"* ]] ;;
   *"apply -f "*application.yml)
+    if [[ -f $MOCK_LOG.cleanup-job ]]; then
+      echo 'backup-cleanup Job template is immutable' >&2
+      exit 1
+    fi
     last="${*: -1}"
     if yq -e 'select(.metadata.namespace == "kube-system")' "$last" > /dev/null; then exit 1; fi
     yq -r 'select(.kind == "Deployment").spec.template.metadata.annotations."recipe-db/secrets-checksum"' \
@@ -1248,6 +1256,46 @@ legacy_pi_claims() {
   grep -q 'delete --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-deploy' "$MOCK_LOG"
   grep -q -- '--namespace kube-system create -f .*recipe-db-deploy-lease.json' "$MOCK_LOG"
   grep -q -- '--namespace kube-system get lease recipe-db-deploy -o json' "$MOCK_LOG"
+}
+
+@test "deploy removes the owned cleanup Job and waits for workers before applying a new release" {
+  touch "$MOCK_LOG.cleanup-job"
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.cleanup-job" ]
+  deleted=$(awk '/delete job backup-cleanup / {print NR; exit}' "$MOCK_LOG")
+  stopped=$(awk '/get pods -l job-name=backup-cleanup / {print NR; exit}' "$MOCK_LOG")
+  applied=$(awk '/apply -f .*application.yml/ {print NR; exit}' "$MOCK_LOG")
+  [ "$deleted" -lt "$stopped" ]
+  [ "$stopped" -lt "$applied" ]
+  run ! grep -q 'patch job backup-cleanup' "$MOCK_LOG"
+}
+
+@test "deploy refuses an unowned cleanup Job before applying secrets or workloads" {
+  touch "$MOCK_LOG.cleanup-job"
+  export MOCK_FOREIGN_CLEANUP=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"refusing to delete an unowned backup-cleanup Job"* ]]
+  [ -e "$MOCK_LOG.cleanup-job" ]
+  run ! grep -Eq 'delete job backup-cleanup|create secret|apply -f .*application.yml' "$MOCK_LOG"
+  grep -q 'delete --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-deploy' "$MOCK_LOG"
+}
+
+@test "deploy stops when cleanup Job deletion fails or workers remain" {
+  set_value '.timeoutSeconds=1'
+  touch "$MOCK_LOG.cleanup-job"
+  export MOCK_CLEANUP_DELETE_FAIL=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.cleanup-job" ]
+  run ! grep -Eq 'create secret|apply -f .*application.yml' "$MOCK_LOG"
+
+  export MOCK_CLEANUP_DELETE_FAIL=false MOCK_CLEANUP_PODS_REMAIN=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"cleanup worker Pods remain"* ]]
+  run ! grep -Eq 'create secret|apply -f .*application.yml' "$MOCK_LOG"
 }
 
 @test "application checksums are stable across identical deploys and change for rotated staged secrets" {

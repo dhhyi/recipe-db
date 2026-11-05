@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Privacy policy for the personal Recipe DB Backup Google Drive integration."
+    />
+    <title>Privacy policy | Recipe DB Backup</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <p><a href="./">Recipe DB Backup</a></p>
+      <h1>Privacy policy</h1>
+      <p>Effective 5 November 2026</p>
+    </header>
+    <main>
+      <section aria-labelledby="operator">
+        <h2 id="operator">Purpose and operator</h2>
+        <p>
+          Recipe DB Backup is operated by the owner of this Recipe DB
+          installation for personal backup and recovery. It is not offered as a
+          service for other Google account holders. The operator controls the
+          backup account, deployment, and recovery copies.
+        </p>
+      </section>
+      <section aria-labelledby="data">
+        <h2 id="data">Data processed</h2>
+        <p>
+          Backups contain authoritative recipe records and associated stored
+          information, including ingredients, preparation instructions, tags,
+          ratings and comments, inspiration links, and current recipe images and
+          thumbnails. Records can include identifiers linking contributions to
+          application users. Backup manifests contain release information,
+          timestamps, file inventories, sizes, and integrity hashes.
+        </p>
+        <p>
+          Google authorization supplies OAuth credentials for the operator's
+          Drive connection. These are stored privately and separately from
+          backup archives. Application secrets, kubeconfigs, and deployment
+          credentials are also excluded from the archives.
+        </p>
+      </section>
+      <section aria-labelledby="permissions">
+        <h2 id="permissions">Google Drive permissions and use</h2>
+        <p>
+          The integration requests
+          <code>https://www.googleapis.com/auth/drive.file</code>. It uses this
+          permission to create backup folders and files, read them back to
+          verify integrity, download recovery copies, and delete eligible old
+          backup files. It does not request full access to the operator's Drive.
+        </p>
+        <p>
+          Google user data is used only for backup, integrity verification,
+          retention, and recovery. It is not sold, used for advertising,
+          supplied to AI training, or shared with unrelated third parties.
+          Google processes files stored in Drive under its own
+          <a href="https://policies.google.com/privacy">privacy policy</a>.
+        </p>
+      </section>
+      <section aria-labelledby="storage">
+        <h2 id="storage">Storage, security, and retention</h2>
+        <p>
+          Backup folders remain private in the operator's Google Drive.
+          Temporary capture and packaging files and operational status are
+          stored privately on the backup host; recovery downloads may also be
+          held on the operator's workstation. Backups have no additional
+          client-side encryption, so access to the Drive account or downloaded
+          archives can expose their contents.
+        </p>
+        <p>
+          The configured retention policy keeps the newest 30 verified backup
+          points. Unchanged data may skip a new upload, so this is not a promise
+          of deletion after 30 days. Pruning follows a verified upload; failures
+          can leave older points retained. Local recovery and diagnostic copies
+          must be removed separately by the operator.
+        </p>
+      </section>
+      <section aria-labelledby="control">
+        <h2 id="control">Revoking access and deleting data</h2>
+        <p>
+          The operator can revoke the backup client's access in
+          <a href="https://myaccount.google.com/connections"
+            >Google Account connections</a
+          >. Revocation prevents further authorized access but does not itself
+          delete existing backups. To remove those, stop the backup schedule,
+          delete the backup files in Drive and empty its trash, then remove
+          local capture, recovery, and credential copies as appropriate.
+          Deleting a recipe in the application does not immediately remove it
+          from existing backups.
+        </p>
+      </section>
+      <section aria-labelledby="website">
+        <h2 id="website">These informational pages</h2>
+        <p>
+          These static pages add no analytics, tracking scripts, or cookies and
+          do not read backup data or initiate Google authorization. The hosting
+          infrastructure may record ordinary HTTP access information, such as IP
+          addresses and requested paths, in operational logs.
+        </p>
+      </section>
+      <section aria-labelledby="contact">
+        <h2 id="contact">Questions and changes</h2>
+        <p>
+          For technical questions, contact the maintainer through the
+          <a href="https://github.com/dhhyi/recipe-db">Recipe DB repository</a>.
+          Public issues must not contain personal data, backup contents, or
+          credentials. The support email shown on the Google consent screen is
+          the private contact channel for this OAuth integration.
+        </p>
+        <p>
+          Changes to this policy will be published here with an updated
+          effective date.
+        </p>
+      </section>
+    </main>
+    <footer><a href="./">Recipe DB Backup home</a></footer>
+  </body>
+</html>

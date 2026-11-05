@@ -595,7 +595,7 @@ backup_remove_cleanup_job() {
     if jq -e '.items | length == 0' "$work/cleanup-pods.json" > /dev/null; then return 0; fi
     sleep 1
   done
-  printf 'production: cleanup worker Pods remain; refusing production recovery or another cleanup\n' >&2
+  printf 'production: cleanup worker Pods remain; refusing to proceed\n' >&2
   return 1
 }
 
@@ -1245,6 +1245,8 @@ case "$command" in
       production_storage_preflight
       production_storage_prepare_claims "$work/rendered.yml"
     fi
+    backup_remove_cleanup_job \
+      || production_fail "existing cleanup Job could not be safely removed before deployment"
     yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
     yq 'select(.metadata.namespace != "kube-system")' "$work/rendered.yml" > "$work/application.yml"
     secret_args=()

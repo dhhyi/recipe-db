@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Recipe DB Backup is a personal tool for backing up and recovering a privately operated recipe database."
+    />
+    <title>Recipe DB Backup</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <p>Recipe DB</p>
+      <h1>Recipe DB Backup</h1>
+      <p>Private backups for a personally operated recipe database.</p>
+    </header>
+    <main>
+      <section aria-labelledby="purpose">
+        <h2 id="purpose">What this tool does</h2>
+        <p>
+          Recipe DB Backup uses rclone to store recipe database backups in the
+          operator's Google Drive and retrieve them for recovery. It is a
+          personal administration tool, not a public backup service. Visitors to
+          this page are not asked to sign in or grant access to Google Drive.
+        </p>
+      </section>
+      <section aria-labelledby="access">
+        <h2 id="access">Limited Google Drive access</h2>
+        <p>
+          The operator authorizes a dedicated desktop OAuth client using the
+          <code>drive.file</code> permission. This allows the tool to create and
+          manage its own backup files and folders, rather than request access to
+          all files in the account. Backup folders are kept private and are not
+          served by this website.
+        </p>
+      </section>
+      <section aria-labelledby="privacy">
+        <h2 id="privacy">Privacy and support</h2>
+        <p>
+          Read the <a href="./privacy.html">privacy policy</a> for data
+          handling, retention, and revocation details.
+        </p>
+        <p>
+          Source code and technical support are available in the
+          <a href="https://github.com/dhhyi/recipe-db">Recipe DB repository</a>.
+          Never post backup contents, account details, or credentials in public
+          issues.
+        </p>
+      </section>
+    </main>
+    <footer><a href="/">Recipe DB home</a></footer>
+  </body>
+</html>
