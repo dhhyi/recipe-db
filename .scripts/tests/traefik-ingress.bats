@@ -77,7 +77,7 @@ teardown() {
   . .scripts/lib/project-metadata.sh
   printf '%s\n' '{"repository":"github:example/fixture"}' > package.json
   project_metadata_to_jsonl "$PWD" projects.jsonl
-  jq -n --slurpfile projects projects.jsonl '{projects:$projects}' > route-values.json
+  jq -n --slurpfile projects projects.jsonl '{projects:$projects,googleOAuthClientId:"test.apps.googleusercontent.com"}' > route-values.json
   run sh -c 'mise exec -- ytt \
     -f .scripts/templates/traefik-template.yml \
     -f .scripts/templates/service-template.lib.yml \
