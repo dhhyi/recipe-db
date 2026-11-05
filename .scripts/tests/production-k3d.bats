@@ -629,7 +629,10 @@ if jq -e 'has("config")' "$2" > /dev/null; then
   elif [[ $MOCK_BACKUP = true ]]; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'
   else
-    printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: release\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: recipes\nspec:\n  template:\n    metadata:\n      annotations: {}\n'
+    jq -n --arg config "${MOCK_RENDERED_CONFIG:-original}" \
+      '{apiVersion:"v1",kind:"ConfigMap",metadata:{name:"release"},data:{config:$config}}' | yq -P
+    printf '%s\n' '---'
+    printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: recipes\nspec:\n  template:\n    metadata:\n      annotations: {}\n'
   fi
   if [[ ${MOCK_PI:-false} = true ]]; then
     while IFS= read -r name; do
@@ -1472,6 +1475,20 @@ legacy_pi_claims() {
   [ "$(sed -n '1p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
   [ "$(sed -n '3p' "$MOCK_LOG.checksums")" != "$(sed -n '4p' "$MOCK_LOG.checksums")" ]
   [ "$(sed -n '4p' "$MOCK_LOG.checksums")" != "$(sed -n '5p' "$MOCK_LOG.checksums")" ]
+}
+
+@test "application checksums change when template output changes without input or secret changes" {
+  export MOCK_RENDERED_CONFIG=original
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  export MOCK_RENDERED_CONFIG=updated
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$MOCK_LOG.checksums")" -eq 3 ]
+  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" = "$(sed -n '2p' "$MOCK_LOG.checksums")" ]
+  [ "$(sed -n '2p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
 }
 
 @test "existing deployment lease fails closed without deleting another owners lock" {

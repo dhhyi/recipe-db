@@ -200,7 +200,7 @@ annotate_credentials() {
   local route_inputs=(routes.yml config.json)
   checksum=$(
     cd "$work"
-    sha256sum "${secret_keys[@]}" template-values.json | sha256sum
+    sha256sum "${secret_keys[@]}" template-values.json rendered-base.yml | sha256sum
   )
   checksum=${checksum%% *}
   if [[ -f $work/acme-account-email ]]; then
