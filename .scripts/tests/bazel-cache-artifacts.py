@@ -1271,6 +1271,7 @@ class CacheArtifactTests(unittest.TestCase):
         for response in (
             {"user": {"login": "trusted-writer"}, "permission": "read"},
             {"user": {"login": "trusted-writer"}, "permission": "triage"},
+            {"user": {"login": "trusted-writer"}, "permission": "unknown"},
             {"permission": "write"},
             {"user": [], "permission": "write"},
         ):
@@ -1281,6 +1282,24 @@ class CacheArtifactTests(unittest.TestCase):
                     "https://api.github.com/repos/owner/repo", "token", run, detail,
                     "owner/repo", 17,
                 ))
+
+        for malformed_actor in (
+            {"login": "trusted-writer", "id": "13", "type": "User"},
+            {"login": "trusted-writer", "id": True, "type": "User"},
+            {"login": "trusted-writer", "type": "User"},
+            {"login": "trusted-writer", "id": 13},
+        ):
+            with self.subTest(actor=malformed_actor), patch.object(
+                CACHE, "request_json",
+            ) as request:
+                self.assertFalse(CACHE.trusted_pr_writer(
+                    "https://api.github.com/repos/owner/repo", "token",
+                    {"actor": malformed_actor},
+                    {**detail, "actor": malformed_actor},
+                    "owner/repo", 17,
+                ))
+                request.assert_not_called()
+
         with patch.object(CACHE, "request_json", return_value=None), \
                 redirect_stdout(io.StringIO()) as output:
             self.assertFalse(CACHE.trusted_pr_writer(
