@@ -27,7 +27,14 @@ The startup-loaded, read-only `/run/secrets/auth-accounts.json` is the sole serv
 | [HTTPS/network and credential evidence](https://github.com/dhhyi/recipe-db/issues/44) | Existing trusted HTTPS/isolation and rotation evidence includes rejection of both old bearer secrets, retained-principal vote continuity and subsequent removal of revoked credential copies. These are historical verified checks, not new probes. |
 | [Real Google verification](https://github.com/dhhyi/recipe-db/issues/68) | Operator-guided local HTTP and Pi HTTPS browser checks on 2026-11-05, with Chrome 156.0.8078.80 (Official Build), 64-bit. Provider refresh/revocation remain incomplete as detailed below. |
 
-The documentation branch includes `063117a` (offline consent) and `408cf9d` (rendered-configuration rollout). Both passed normal pre-commit validation. Pi application images remain the existing immutable release `ghcr.io/dhhyi/recipe-db-releases@sha256:72e8b262a6308b35f0fb3df0125caf0027468c6b14436871a2db5e29c74f125f`, revision `dd5f3a4172b6b7639d6d9ad8e55b5c0e293c7a7f`, deployed with the branch's newer configuration/templates. Do not describe the whole branch as deployed application images. Local Compose and Pi Kubernetes are distinct topologies.
+The configuration and evidence changes were merged in [#170: Support Google sign-in on Pi deployments](https://github.com/dhhyi/recipe-db/pull/170), merge revision `a1ecd5071a74683a9ea0518995d1939b96f4b1d4`. They include `063117a` (offline consent), `408cf9d` (rendered-configuration rollout), and `3716b23` (approved lifecycle evidence); their normal pre-commit validation passed. This merge is source provenance, not a new deployment or test run.
+
+The tested Pi application images remain the existing immutable release `ghcr.io/dhhyi/recipe-db-releases@sha256:72e8b262a6308b35f0fb3df0125caf0027468c6b14436871a2db5e29c74f125f`, revision `dd5f3a4172b6b7639d6d9ad8e55b5c0e293c7a7f`, deployed with the newer configuration/templates. Do not describe the merged source revision as deployed application images. Local Compose and Pi Kubernetes are distinct topologies.
+
+| Platform | Actual evidence |
+| --- | --- |
+| Local amd64 | The running Docker engine reports `linux/x86_64`; local Compose real-Google browser/session checks below ran against this engine. This is not a new full integration-suite run or a claim that every image architecture was independently inspected. |
+| Physical Pi ARM64 | Physical deployment/runtime evidence is owned by the closed [#45: Set up the physical Raspberry Pi and validate deployment operations](https://github.com/dhhyi/recipe-db/issues/45). Real Google HTTPS browser/session and proxy-log checks below were performed against that Pi, not inferred from a multi-platform manifest. No duplicate hardware test was run for reconciliation. |
 
 ## Coverage map
 
@@ -63,6 +70,27 @@ The following observations are recorded in the real-provider issue:
 - Actual session cookies: HttpOnly and SameSite=Lax on both; Secure on Pi HTTPS, not local HTTP.
 - One isolated local Redis session was given a 30-second TTL. After expiry, owner/editor access was denied; re-login restored it. First reload displayed a blank header, second reload the login button. Existing sessions, recipe data and configured lifetimes were unchanged. This is not natural seven-day expiry.
 
+## Access-model checklist reconciliation
+
+The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. This changes its top-level checklist from 15 complete / 18 incomplete to 19 complete / 14 incomplete. No criterion was removed, split to inflate completion, or waived.
+
+| Remaining criterion | Supported evidence and unresolved portion |
+| --- | --- |
+| All callers through trusted ingress | Real-Traefik/GraphQL checks exist; reconcile exact editor, browse, MCP and search topology/bypass coverage. |
+| Complete public/private route boundary | Live selected-route probes and deployment evidence exist; reconcile the complete listed backend/index/event/admin boundary for each claimed topology. |
+| Request-scoped forwarding, cookie relay and concurrent identity isolation | Transport regressions and successful browser refresh exist; reconcile combined browser/token/MCP concurrency and clearing/renewal coverage. |
+| Public-only search indexing | Existing search tests exist; establish exact evidence that indexing never uses owner access or includes private data. |
+| Entire client/role matrix and side-effect denials | Component and Google browser checks cover substantial behavior; reconcile all GraphQL/HTMX/editor/MCP operations and runtime reset restrictions. |
+| Independent/repeated/concurrent votes and aggregates | Two-member and attribution/rotation results exist; recover exact concurrent-update and aggregate assertions/results. |
+| Partial GraphQL responses and absent-vote null | Absent-vote behavior has evidence; reconcile mixed allowed/denied field shapes and structured errors. |
+| Complete denied/expired/unapproved UX and recovery | Browser denials, expiry/re-login and revocation passed; reconcile public recovery/no-auto-replay evidence. First-reload blank header is explicitly accepted/deferred, not an unacknowledged failure. |
+| Public shared HTML, no-store personal fragments and history isolation | Contract and component tests exist; reconcile sequential-user and ordinary/HTMX history isolation evidence. |
+| Anonymous JavaScript-free recipe/schema.org markup | Preserve the stated markup-only requirement; establish exact evidence. No external Bring! experiment is required. |
+| Full browser-write protection matrix | Existing origin/CSRF tests exist; reconcile cross-origin rating/GraphQL/multipart, privileged credential-free, same-origin and non-browser bearer coverage/results. |
+| Complete integrated session lifecycle | Real Google login/logout, refresh, controlled expiry, revocation/recovery are approved; integrated mock-OIDC lifecycle and auth-service/Redis outage coverage remain unresolved. No natural seven-day test is claimed. |
+| Real VS Code/Copilot MCP client setup | HTTP regressions do not establish actual client configuration or authorized/denied tool operation. Human client verification remains open. |
+| Final failed-check resolution and integrated acceptance | Resolve or explicitly agree treatment of the remaining gaps, then obtain this issue's separate operator acceptance. Approval of the Google record does not close this gate. |
+
 ## Remaining acceptance and known limitations
 
 1. **Real provider lifecycle remains open.** Initial refresh failed on both origins because sessions lacked refresh tokens. Offline access and consent are now fixed in active login redirects, including rejection of weaker parameter overrides. This is not yet a successful full-duration refresh. Google connection removal was operator-confirmed around 18:41 CET; both sessions still had access around 18:43. Enforcement on subsequent refresh/expiry and reauthorization recovery remain pending. Do not reauthorize during that observation. Successful-refresh testing is last.
@@ -74,6 +102,16 @@ The following observations are recorded in the real-provider issue:
 ## Operating and recovery instructions
 
 Use the existing [browser authentication guide](browser-authentication.md) for policy format, local fixtures, portable MCP environment-variable setup, strict client configuration formats, origin protection and cookie/session behavior. Use [production Kubernetes operations](production-kubernetes.md) for private secret delivery, guarded deployment, configuration-triggered rollouts and private route boundaries. No new README setup path or alternate policy source is introduced.
+
+### Verified Google setup and evidence method
+
+- The operator registered an External Google application in Testing, with separate Web clients for `http://localhost:8080/oauth2/callback` and `https://rezept-db.freeddns.org/oauth2/callback`. Google basic `openid email` sign-in uses the documented test-user-list exception; no broader consent/production approval or indefinite refresh-token validity is claimed.
+- Local client/cookie secrets were delivered through private files and complete Google generation inputs; Pi inputs used private values and the Kubernetes secret mechanism. No secrets, account email, cookie, OAuth state/code or raw identity values belong in this record.
+- Effective login requests used Google issuer `https://accounts.google.com`, `openid email`, PKCE S256 and fixed offline access/consent. Issuer/nonce and verified-email checks remained enabled. Anonymous browsing and bearer-first routing were unchanged.
+- Read-only redirect checks inspected only HTTP status and allowlisted parameters, including attempted weaker overrides. Home/identity returned 200; checked private auth/admin paths returned 404. Actual session-cookie attributes are recorded above.
+- The guarded deployment command shape was `KUBECONFIG=<private-file> mise run production-k3d deploy <private-values-file> <immutable-release-reference>`. Its release identity is recorded above; newer configuration is not a new app-image deployment.
+- Proxy evidence was retrieved with `docker logs --since <window> oauth2-proxy` and `kubectl --kubeconfig=<private-file> --context=recipe-db-pi -n recipe-db logs deployment/oauth2-proxy --since=<window>`. Raw output was captured privately and reduced to fixed marker counts/timestamps. Do not paste unrestricted logs: they may contain identity/session data. A refused Pi connection required restoring the private API tunnel, not changing public ingress.
+- Final browser checks preserved existing sessions beyond initial token lifetime, without logout, cookie clearing or new consent. A refresh-attempt log alone was insufficient: browser permission continuity, no-refresh/error/save markers and pinned proxy control flow were checked together.
 
 - Role changes, token removal and rotation require GraphQL restart/replica rollout; editing the policy file alone is insufficient. Preserve token IDs when rotating secrets to preserve votes. Empty token/Google maps are valid.
 - Keep secrets in private files/client process environments as documented, never in issue evidence, committed configuration or tool arguments. Browser Google identity is not an MCP credential; omit Authorization entirely for public MCP reads rather than send an empty token.
