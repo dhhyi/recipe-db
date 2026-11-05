@@ -1,0 +1,4 @@
+[tools]
+{% for tool, version in backup_capture_tools.items() %}
+"{{ tool }}" = "{{ version }}"
+{% endfor %}
