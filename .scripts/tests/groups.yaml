@@ -2,124 +2,285 @@ compose:
   tests:
     - .scripts/tests/generate-docker-compose.bats
     - .scripts/tests/traefik-ingress.bats
-  inputs:
-    - .scripts/generate-docker-compose.sh
-    - .scripts/refresh-render-inputs.sh
-    - .scripts/generate-production-build-metadata.sh
-    - .scripts/lib/project-metadata.sh
-    - .scripts/templates/**
-    - .scripts/traefik-ingress-entrypoint.sh
-    - .scripts/tests/fixtures/**
-    - graphql/.project.yaml
-    - search/.project.yaml
-    - package.json
+  suite_inputs:
+    .scripts/tests/generate-docker-compose.bats:
+      - .scripts/generate-docker-compose.sh
+      - .scripts/refresh-render-inputs.sh
+      - .scripts/generate-production-build-metadata.sh
+      - .scripts/lib/project-metadata.sh
+      - .scripts/templates/**
+      - .scripts/tests/fixtures/**
+      - graphql/.project.yaml
+      - search/.project.yaml
+      - package.json
+    .scripts/tests/traefik-ingress.bats:
+      - .scripts/traefik-ingress-entrypoint.sh
+      - .scripts/templates/traefik-template.yml
+      - .scripts/templates/service-template.lib.yml
+      - .scripts/templates/browse-maintenance-template.lib.yml
+      - .scripts/lib/project-metadata.sh
+      - graphql/.project.yaml
+      - package.json
 release:
   tests:
     - .scripts/tests/production-release.bats
-  inputs:
-    - .scripts/lib/project-metadata.sh
-    - .scripts/lib/release-validation.sh
-    - .scripts/validate-production-release.sh
-    - .scripts/validate-production-image-index.sh
-    - .scripts/check-production-release.sh
-    - .scripts/publish-production-release.sh
-    - .scripts/smoke-production-image.sh
-    - .scripts/generate-production-build-metadata.sh
-    - package.json
+  suite_inputs:
+    .scripts/tests/production-release.bats:
+      - .scripts/lib/project-metadata.sh
+      - .scripts/lib/release-validation.sh
+      - .scripts/validate-production-release.sh
+      - .scripts/validate-production-image-index.sh
+      - .scripts/check-production-release.sh
+      - .scripts/publish-production-release.sh
+      - .scripts/smoke-production-image.sh
+      - .scripts/generate-production-build-metadata.sh
+      - package.json
 deploy:
   tests:
     - .scripts/tests/kubernetes-templates.bats
-    - .scripts/tests/production-k3d.bats
+    - .scripts/tests/production-k3d-deploy.bats
     - .scripts/tests/production-smoke.bats
-    - .scripts/tests/backup-snapshot.bats
-    - .scripts/tests/backup-package.bats
-    - .scripts/tests/backup-recovery-k3d.bats
-    - .scripts/tests/production-restore.bats
     - .scripts/tests/production-storage.bats
     - .scripts/tests/public-https.bats
-  inputs:
-    - .scripts/production-k3d.sh
-    - .scripts/backup-recovery-k3d.sh
-    - .scripts/tests/fixtures/rclone-local
-    - .scripts/smoke-production-k3d.sh
-    - .scripts/check-public-https.sh
-    - .scripts/generate-production-build-metadata.sh
-    - .scripts/lib/production-config.sh
-    - .scripts/lib/cluster-operation-lock.sh
-    - .scripts/lib/production-storage.sh
-    - .scripts/lib/production-restore.sh
-    - .scripts/validate-backup-snapshot.py
-    - .scripts/validate-backup-package.py
-    - provisioning/files/backup-upload.py
-    - .scripts/lib/project-metadata.sh
-    - .scripts/templates/kubernetes*.yml
-    - .scripts/validate-production-image-index.sh
-    - deploy/**
-    - ":(glob)*/.project.yaml"
-    - browse-maintenance/unavailable.html
-    - design/nginx.conf
-    - package.json
+  suite_inputs:
+    .scripts/tests/kubernetes-templates.bats:
+      - .scripts/templates/kubernetes*.yml
+      - .scripts/lib/project-metadata.sh
+      - ":(glob)*/.project.yaml"
+      - deploy/**
+      - browse-maintenance/unavailable.html
+      - design/nginx.conf
+    .scripts/tests/production-k3d-deploy.bats: &production-k3d-inputs
+      - .scripts/production-k3d.sh
+      - .scripts/tests/production-k3d-setup.bash
+      - .scripts/lib/production-config.sh
+      - .scripts/lib/cluster-operation-lock.sh
+      - .scripts/lib/production-storage.sh
+      - .scripts/lib/production-restore.sh
+      - .scripts/validate-production-image-index.sh
+      - .scripts/validate-production-release.sh
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/validate-backup-package.py
+      - .scripts/templates/**
+      - .scripts/lib/project-metadata.sh
+      - ":(glob)*/.project.yaml"
+      - deploy/**
+      - browse-maintenance/unavailable.html
+      - design/nginx.conf
+      - package.json
+    .scripts/tests/production-smoke.bats:
+      - .scripts/smoke-production-k3d.sh
+      - .scripts/production-k3d.sh
+      - .scripts/lib/production-config.sh
+      - .scripts/lib/cluster-operation-lock.sh
+      - .scripts/lib/production-storage.sh
+      - .scripts/lib/production-restore.sh
+      - .scripts/validate-production-image-index.sh
+      - .scripts/validate-production-release.sh
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/validate-backup-package.py
+      - .scripts/templates/**
+      - .scripts/generate-production-build-metadata.sh
+      - .scripts/lib/project-metadata.sh
+      - deploy/**
+      - ":(glob)*/.project.yaml"
+      - package.json
+    .scripts/tests/production-storage.bats:
+      - .scripts/lib/production-config.sh
+      - .scripts/lib/production-storage.sh
+      - deploy/pi.yaml
+    .scripts/tests/public-https.bats:
+      - .scripts/check-public-https.sh
+      - deploy/pi.yaml
+      - deploy/local.yaml
+backup:
+  tests:
+    - .scripts/tests/backup-package.bats
+    - .scripts/tests/backup-recovery-k3d.bats
+    - .scripts/tests/backup-snapshot.bats
+    - .scripts/tests/production-k3d-backup.bats
+  suite_inputs:
+    .scripts/tests/backup-package.bats:
+      - .scripts/validate-backup-package.py
+      - .scripts/validate-backup-snapshot.py
+      - provisioning/files/backup-upload.py
+    .scripts/tests/backup-recovery-k3d.bats:
+      - .scripts/backup-recovery-k3d.sh
+      - .scripts/tests/fixtures/rclone-local
+    .scripts/tests/backup-snapshot.bats:
+      - .scripts/validate-backup-snapshot.py
+    .scripts/tests/production-k3d-backup.bats: *production-k3d-inputs
+restore:
+  tests:
+    - .scripts/tests/production-k3d-restore.bats
+    - .scripts/tests/production-restore.bats
+  suite_inputs:
+    .scripts/tests/production-k3d-restore.bats:
+      - .scripts/tests/production-k3d-restore-setup.bash
+      - .scripts/production-k3d.sh
+      - .scripts/tests/production-k3d-setup.bash
+      - .scripts/lib/production-config.sh
+      - .scripts/lib/cluster-operation-lock.sh
+      - .scripts/lib/production-storage.sh
+      - .scripts/lib/production-restore.sh
+      - .scripts/validate-production-image-index.sh
+      - .scripts/validate-production-release.sh
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/validate-backup-package.py
+      - provisioning/files/backup-upload.py
+      - .scripts/templates/**
+      - .scripts/lib/project-metadata.sh
+      - ":(glob)*/.project.yaml"
+      - deploy/**
+      - browse-maintenance/unavailable.html
+      - design/nginx.conf
+      - package.json
+    .scripts/tests/production-restore.bats:
+      - .scripts/lib/production-restore.sh
+      - .scripts/lib/production-config.sh
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/validate-backup-package.py
 tasks:
   tests:
     - .scripts/tests/bazel.bats
-    - .scripts/tests/bazel-cache-artifacts.bats
     - .scripts/tests/mise-tasks.bats
-    - .scripts/tests/mise-freshness.bats
-    - .scripts/tests/precommit.bats
     - .scripts/tests/seed-demodata.bats
     - .scripts/tests/update-docker-image-digests.bats
-  inputs:
-    - ":(glob).scripts/*.sh"
-    - .scripts/bazel-cache-artifacts.py
-    - .scripts/lib/project-metadata.sh
-    - .scripts/docker-base-images.awk
-    - .scripts/external-image-references.awk
-    - .scripts/update-image-references.awk
-    - deploy/local.yaml
-    - deploy/pi.yaml
-    - .github/workflows/publish.yaml
-    - .scripts/tests/mocks/precommit-*
-    - .scripts/tests/mocks/devcontainer-*
-    - .scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json
-    - .scripts/tests/bazel-cache-artifacts.py
-    - .scripts/templates/**
-    - .github/workflows/bazel-cache-cleanup.yaml
-    - mise.toml
-    - package.json
-    - ":(glob)*/.project.yaml"
+  suite_inputs:
+    .scripts/tests/bazel.bats:
+      - .scripts/bazel.sh
+      - .scripts/bazel-cache-artifacts.py
+      - .bazelversion
+    .scripts/tests/mise-tasks.bats:
+      - ":(glob).scripts/*.sh"
+      - .scripts/lib/project-metadata.sh
+      - .scripts/docker-base-images.awk
+      - .scripts/external-image-references.awk
+      - .scripts/update-image-references.awk
+      - .scripts/templates/**
+      - .scripts/tests/mocks/precommit-*
+      - .scripts/tests/mocks/devcontainer-*
+      - .scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json
+      - .scripts/tests/bazel-cache-artifacts.py
+      - deploy/local.yaml
+      - deploy/pi.yaml
+      - mise.toml
+      - package.json
+      - ":(glob)*/.project.yaml"
+    .scripts/tests/seed-demodata.bats:
+      - .scripts/seed-demodata.sh
+      - .scripts/lib/project-metadata.sh
+      - ":(glob)*/.project.yaml"
+      - mise.toml
+    .scripts/tests/update-docker-image-digests.bats:
+      - .scripts/update-docker-image-digests.sh
+      - .scripts/docker-base-images.awk
+      - .scripts/update-image-references.awk
+      - .scripts/templates/**
+      - deploy/local.yaml
+      - deploy/pi.yaml
+workflows:
+  tests:
+    - .scripts/tests/bazel-cache-artifacts.bats
+    - .scripts/tests/mise-workflows.bats
+  suite_inputs:
+    .scripts/tests/bazel-cache-artifacts.bats:
+      - .scripts/bazel-cache-artifacts.py
+      - .github/workflows/publish.yaml
+      - .github/workflows/bazel-cache-cleanup.yaml
+    .scripts/tests/mise-workflows.bats:
+      - .github/workflows/publish.yaml
+      - mise.toml
+      - .scripts/create-auth-accounts.sh
+      - .scripts/create-auth-test-fixture.sh
+      - .scripts/create-oauth-secrets.sh
+      - .scripts/create-search-key.sh
+precommit:
+  tests:
+    - .scripts/tests/precommit.bats
+  suite_inputs:
+    .scripts/tests/precommit.bats:
+      - .scripts/precommit.sh
+      - .scripts/bazel.sh
+      - .scripts/format-check.sh
+      - .scripts/format-files.sh
+      - .scripts/generate-bazel-build.sh
+      - .scripts/tests/groups.yaml
+      - .scripts/tests/mocks/precommit-*
+      - .scripts/templates/**
+      - mise.toml
+      - ":(glob)*/.project.yaml"
+freshness:
+  tests:
+    - .scripts/tests/mise-freshness.bats
+  suite_inputs:
+    .scripts/tests/mise-freshness.bats:
+      - ":(glob).scripts/*.sh"
+      - .scripts/templates/**
+      - .scripts/lib/project-metadata.sh
+      - .scripts/refresh-render-inputs.sh
+      - .scripts/generate-docker-compose.sh
+      - mise.toml
+      - package.json
+      - ":(glob)*/.project.yaml"
 devcontainer:
   tests:
     - .scripts/tests/run-in-devcontainer.bats
     - .scripts/tests/run-integration-tests.bats
-  inputs:
-    - .scripts/run-in-devcontainer.sh
-    - .scripts/format-files.sh
-    - .scripts/format-check.sh
-    - .scripts/run-integration-tests.sh
-    - .scripts/tests/mocks/devcontainer-*
-    - .scripts/tests/mocks/integration-*
+  suite_inputs:
+    .scripts/tests/run-in-devcontainer.bats:
+      - .scripts/run-in-devcontainer.sh
+      - .scripts/tests/mocks/devcontainer-*
+    .scripts/tests/run-integration-tests.bats:
+      - .scripts/run-integration-tests.sh
+      - .scripts/tests/mocks/integration-*
+formatting:
+  tests:
+    - .scripts/tests/format-check.bats
+  suite_inputs:
+    .scripts/tests/format-check.bats:
+      - .scripts/format-bazel.sh
+      - .scripts/format-check.sh
+      - .scripts/format-check.sh
+      - .scripts/format-files.sh
+      - .scripts/generate-bazel-build.sh
+      - .scripts/tests/groups.yaml
+      - mise.toml
+      - ":(glob)*/.project.yaml"
 tooling:
   tests:
+    - .scripts/tests/check-forbidden-files.bats
     - .scripts/tests/generate-bazel-build.bats
-    - .scripts/tests/format-check.bats
+    - .scripts/tests/merge-graphql-schemas.bats
     - .scripts/tests/sync-ignore-files.bats
     - .scripts/tests/sync-tailwind.bats
-    - .scripts/tests/merge-graphql-schemas.bats
-    - .scripts/tests/check-forbidden-files.bats
-  inputs:
-    - .scripts/generate-bazel-build.sh
-    - .scripts/format-files.sh
-    - .scripts/format-check.sh
-    - .scripts/project-schema.json
-    - .scripts/format-bazel.sh
-    - .scripts/run-in-devcontainer.sh
-    - .scripts/bazel.sh
-    - .scripts/sync-ignore-files.sh
-    - .scripts/sync-tailwind.sh
-    - .scripts/merge-graphql-schemas.sh
-    - .scripts/export-graphql-schema.sh
-    - .scripts/refresh-render-inputs.sh
-    - .scripts/check-forbidden-files.sh
-    - .scripts/tests/groups.yaml
-    - .scripts/templates/**
-    - .github/workflows/publish.yaml
+  suite_inputs:
+    .scripts/tests/check-forbidden-files.bats:
+      - .scripts/check-forbidden-files.sh
+    .scripts/tests/generate-bazel-build.bats:
+      - .scripts/generate-bazel-build.sh
+      - .scripts/format-bazel.sh
+      - .scripts/format-files.sh
+      - .scripts/format-check.sh
+      - .scripts/bazel-check.sh
+      - .scripts/generate-bazel.sh
+      - .scripts/tests/groups.yaml
+      - .scripts/tests/mocks/precommit-*
+      - .scripts/templates/**
+      - ":(glob)*/.project.yaml"
+      - deploy/local.yaml
+      - deploy/pi.yaml
+      - mise.toml
+    .scripts/tests/merge-graphql-schemas.bats:
+      - .scripts/merge-graphql-schemas.sh
+      - .scripts/lib/project-metadata.sh
+      - ":(glob)*/.project.yaml"
+    .scripts/tests/sync-ignore-files.bats:
+      - .scripts/sync-ignore-files.sh
+      - .scripts/format-files.sh
+      - .scripts/tests/mocks/devcontainer-*
+      - ":(glob)*/.project.yaml"
+      - ":(glob)*/.gitignore"
+    .scripts/tests/sync-tailwind.bats:
+      - .scripts/sync-tailwind.sh
+      - ":(glob)*/.project.yaml"
