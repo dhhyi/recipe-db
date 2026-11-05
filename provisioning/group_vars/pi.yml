@@ -3,6 +3,22 @@ k3s_version: v1.35.5+k3s1
 k3s_sha256: aced90bea6a4e025abef4cf6db7d8cc316a7d20a2b963f809852a37f2b9dbc03
 rclone_version: 1.75.2
 rclone_sha256: b8ba161d5c837206fad79ff1aabf0a81aa02a5fb164cdbc0ff5db4160aecd278
+backup_mise_version: 2026.10.21
+backup_mise_sha256: a7c96627e56c075543fe1c1aafeb289d2588d6ddfd4d705fce4ae140c57e190c
+backup_capture_tools:
+  jq: 1.8.2
+  yq: 4.54.1
+  ytt: 0.55.4
+  aqua:oras-project/oras: 1.3.6
+  aqua:kubernetes/kubernetes/kubectl: 1.35.5
+# Explicitly select the deployed release commit in the private inventory.
+backup_capture_revision: ""
+backup_toolchain_environment:
+  MISE_CONFIG_DIR: /etc/recipe-db/backup-toolchain
+  MISE_DATA_DIR: /var/lib/recipe-db-backup/tooling/data
+  MISE_STATE_DIR: /var/lib/recipe-db-backup/tooling/state
+  MISE_CACHE_DIR: /var/lib/recipe-db-backup/tooling/cache
+  MISE_IGNORED_CONFIG_PATHS: /opt/recipe-db/mise.toml
 # Changing a pinned version/checksum requires explicit operator approval.
 allow_k3s_upgrade: false
 journal_max_use: 128M

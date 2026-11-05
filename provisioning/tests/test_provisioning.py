@@ -1,5 +1,8 @@
 import importlib.util
 from pathlib import Path
+import shlex
+import subprocess
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -84,6 +87,7 @@ class ContractTests(unittest.TestCase):
         self.environment = Environment(
             loader=FileSystemLoader(ROOT / "templates"), undefined=StrictUndefined,
         )
+        self.environment.filters["quote"] = shlex.quote
         self.values = dict(
             self.defaults, expected_root_uuid=UUID, inventory_hostname="recipe-db-pi",
             ansible_facts={"default_ipv4": {"address": "192.168.1.218"}},
@@ -147,6 +151,76 @@ class ContractTests(unittest.TestCase):
         self.assertIn("Requires=recipe-db-firewall.service", unit)
         self.assertNotIn(".mount", unit)
         self.assertNotIn("k3s-killall", unit)
+
+    def test_backup_toolchain_is_pinned_and_has_no_development_hooks(self):
+        config = tomllib.loads(self.render("backup-toolchain.toml.j2"))
+        self.assertEqual(config, {"tools": {
+            "jq": "1.8.2", "yq": "4.54.1", "ytt": "0.55.4",
+            "aqua:oras-project/oras": "1.3.6",
+            "aqua:kubernetes/kubernetes/kubectl": "1.35.5",
+        }})
+        self.assertEqual(self.defaults["backup_mise_version"], "2026.10.21")
+        self.assertEqual(self.defaults["backup_mise_sha256"],
+                         "a7c96627e56c075543fe1c1aafeb289d2588d6ddfd4d705fce4ae140c57e190c")
+        self.assertEqual(self.defaults["backup_capture_revision"], "")
+        self.assertEqual(self.defaults["backup_toolchain_environment"], {
+            "MISE_CONFIG_DIR": "/etc/recipe-db/backup-toolchain",
+            "MISE_DATA_DIR": "/var/lib/recipe-db-backup/tooling/data",
+            "MISE_STATE_DIR": "/var/lib/recipe-db-backup/tooling/state",
+            "MISE_CACHE_DIR": "/var/lib/recipe-db-backup/tooling/cache",
+            "MISE_IGNORED_CONFIG_PATHS": "/opt/recipe-db/mise.toml",
+        })
+
+    def test_backup_toolchain_adopts_existing_installation_and_refuses_dirty_checkout(self):
+        tasks = yaml.safe_load((ROOT / "backup-toolchain.yml").read_text())
+        by_name = {task["name"]: task for task in tasks}
+        download = by_name["Download checksum-pinned ARM64 Mise binary"]["ansible.builtin.get_url"]
+        self.assertEqual(download["checksum"], "sha256:{{ backup_mise_sha256 }}")
+        self.assertTrue(download["url"].endswith("-linux-arm64"))
+        install = by_name["Install checksum-pinned Mise"]["ansible.builtin.copy"]
+        self.assertTrue(install["remote_src"])
+        self.assertEqual(install["dest"], "/usr/local/bin/mise")
+        probe = by_name["Inspect missing backup capture tools"]
+        self.assertEqual(probe["ansible.builtin.command"]["argv"][-3:], ["ls", "--missing", "--json"])
+        self.assertFalse(probe["changed_when"])
+        install = by_name["Install missing pinned backup capture tools"]
+        self.assertEqual(install["when"], "backup_missing_tools.stdout | from_json | length > 0")
+        self.assertEqual(install["environment"], "{{ backup_toolchain_environment }}")
+        checkout = by_name["Check out the explicitly selected immutable backup capture release"]
+        self.assertEqual(checkout["when"], "backup_capture_revision != ''")
+        self.assertEqual(checkout["ansible.builtin.git"]["version"], "{{ backup_capture_revision }}")
+        self.assertFalse(checkout["ansible.builtin.git"]["force"])
+        self.assertFalse(checkout["ansible.builtin.git"]["recursive"])
+        self.assertFalse(any("ansible.builtin.shell" in task for task in tasks))
+        contents = (ROOT / "backup-toolchain.yml").read_text()
+        self.assertNotIn("mise run", contents)
+        self.assertNotIn("rclone.conf", contents)
+        self.assertNotIn("backup.json", contents)
+
+    def test_backup_toolchain_maintenance_excludes_scheduled_and_active_capture(self):
+        host_tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
+        maintenance = next(task for task in host_tasks
+                           if task["name"] == "Provision the backup capture toolchain and selected release checkout")
+        self.assertEqual(maintenance["block"][1]["ansible.builtin.systemd_service"]["state"], "stopped")
+        self.assertEqual(maintenance["always"][0]["ansible.builtin.systemd_service"]["state"], "started")
+        self.assertIn("backup_timer_active.rc", maintenance["always"][0]["when"])
+        tasks = yaml.safe_load((ROOT / "backup-toolchain.yml").read_text())
+        self.assertEqual(tasks[0]["ansible.builtin.command"],
+                         "systemctl show --property=ActiveState --value recipe-db-backup.service")
+        self.assertIn("backup_service_active.stdout not in ['inactive', 'failed']", tasks[0]["failed_when"])
+
+    def test_capture_wrapper_uses_private_inputs_and_isolated_toolchain(self):
+        command = self.render("recipe-db-backup-capture.j2")
+        subprocess.run(["bash", "-n"], input=command, text=True, check=True)
+        self.assertIn('! -e $1 && ! -L $1', command)
+        for key, value in self.defaults["backup_toolchain_environment"].items():
+            self.assertIn(f"export {key}={shlex.quote(value)}", command)
+        self.assertIn("export HOME=/root", command)
+        self.assertIn('KUBECONFIG="${KUBECONFIG:-/etc/recipe-db/backup-kubeconfig.yaml}"', command)
+        self.assertIn("exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh", command)
+        self.assertIn('backup /etc/recipe-db/backup-values.yaml "$release" "$1"', command)
+        self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
+        self.assertNotIn("mise run", command)
 
     def test_firewall_does_not_flush_cluster_rules_or_expose_admin(self):
         rules = self.render("firewall.nft.j2")

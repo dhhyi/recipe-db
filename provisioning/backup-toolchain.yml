@@ -1,0 +1,83 @@
+- name: Require an idle backup service before changing capture tools
+  ansible.builtin.command: systemctl show --property=ActiveState --value recipe-db-backup.service
+  register: backup_service_active
+  changed_when: false
+  failed_when: >-
+    backup_service_active.rc != 0 or backup_service_active.stdout not in ['inactive', 'failed']
+
+- name: Create the private backup toolchain configuration directory
+  ansible.builtin.file:
+    path: /etc/recipe-db/backup-toolchain
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Download checksum-pinned ARM64 Mise binary
+  ansible.builtin.get_url:
+    url: "https://github.com/jdx/mise/releases/download/v{{ backup_mise_version }}/mise-v{{ backup_mise_version }}-linux-arm64"
+    dest: "/var/cache/recipe-db/mise-v{{ backup_mise_version }}-linux-arm64"
+    checksum: "sha256:{{ backup_mise_sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Install checksum-pinned Mise
+  ansible.builtin.copy:
+    src: "/var/cache/recipe-db/mise-v{{ backup_mise_version }}-linux-arm64"
+    remote_src: true
+    dest: /usr/local/bin/mise
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure only pinned backup capture tools without development hooks
+  ansible.builtin.template:
+    src: backup-toolchain.toml.j2
+    dest: /etc/recipe-db/backup-toolchain/config.toml
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Inspect missing backup capture tools
+  ansible.builtin.command:
+    argv: [/usr/local/bin/mise, ls, --missing, --json]
+    chdir: /var/lib/recipe-db-backup
+  environment: "{{ backup_toolchain_environment }}"
+  register: backup_missing_tools
+  changed_when: false
+
+- name: Install missing pinned backup capture tools
+  ansible.builtin.command:
+    argv: [/usr/local/bin/mise, install]
+    chdir: /var/lib/recipe-db-backup
+  environment: "{{ backup_toolchain_environment }}"
+  when: backup_missing_tools.stdout | from_json | length > 0
+  changed_when: true
+
+- name: Verify the pinned backup capture toolchain is complete
+  ansible.builtin.command:
+    argv: [/usr/local/bin/mise, ls, --missing, --json]
+    chdir: /var/lib/recipe-db-backup
+  environment: "{{ backup_toolchain_environment }}"
+  register: backup_missing_tools_after
+  changed_when: false
+  failed_when: >-
+    backup_missing_tools_after.rc != 0 or backup_missing_tools_after.stdout | from_json | length > 0
+
+- name: Check out the explicitly selected immutable backup capture release
+  ansible.builtin.git:
+    repo: https://github.com/dhhyi/recipe-db.git
+    dest: /opt/recipe-db
+    version: "{{ backup_capture_revision }}"
+    force: false
+    recursive: false
+  when: backup_capture_revision != ''
+
+- name: Install the private capture command
+  ansible.builtin.template:
+    src: recipe-db-backup-capture.j2
+    dest: /usr/local/sbin/recipe-db-backup-capture
+    owner: root
+    group: root
+    mode: "0700"

@@ -10,6 +10,7 @@ Imaging and working public-key SSH are prerequisites; start with the [bootstrap 
 - Controller: Python 3.13.9 and ansible-core 2.20.1 in the generated `provisioning` devcontainer. The `tooling` project category keeps this administrative environment out of application releases and Compose services.
 - k3s `v1.35.5+k3s1`, matching the local rehearsal's version. The ARM64 binary SHA-256 is pinned in `provisioning/group_vars/pi.yml`, from the [versioned release checksums](https://github.com/k3s-io/k3s/releases/download/v1.35.5%2Bk3s1/sha256sum-arm64.txt). No floating installation script is executed.
 - rclone `1.75.2`; the versioned official ARM64 `.deb` and its SHA-256 are pinned in `provisioning/group_vars/pi.yml`. Use the `.deb` entry in the [versioned release checksums](https://downloads.rclone.org/v1.75.2/SHA256SUMS), not the separate `.zip` checksum.
+- Backup capture uses Mise `2026.10.21`, checksum-pinned to its official ARM64 binary, with jq `1.8.2`, yq `4.54.1`, ytt `0.55.4`, ORAS `1.3.6` and kubectl `1.35.5`. Provisioning manages these separately from the repository's development tools/hooks; no Node, package install, build or application deployment is needed.
 
 The initial physical Pi reported Debian 13.7; its exact flashed image date was not recorded. Do not reimage it merely to recover that metadata. Preflight checks the actual OS, Pi model, architecture and root identity. Syntax/unit tests do not establish that this OS/k3s combination passes physical acceptance.
 
@@ -19,6 +20,7 @@ Review these before authorizing a live run:
 
 - Install host prerequisites, nftables and unattended-upgrades.
 - Install rclone 1.75.2 from the checksum-pinned ARM64 package and enable the nightly backup systemd timer. The timer does not run until an operator supplies the private capture and rclone configuration; its enabled state does not establish backup health. See the [backup packaging and operations contract](production-kubernetes.md#verified-remote-packaging).
+- Install Git, the pinned capture toolchain and `/usr/local/sbin/recipe-db-backup-capture`. Set `backup_capture_revision` in the private inventory to the deployed release's full 40-character commit to manage its detached checkout at `/opt/recipe-db`; the empty default leaves any checkout untouched. Never select a newer commit as an implicit application upgrade. Existing matching manual installations are adopted; dirty checkout changes are refused, not discarded. An active backup service blocks toolchain changes; a previously active timer is paused during maintenance and restored afterwards.
 - Verify UUID/ext4/USB identity before mutation; install the same storage check as k3s `ExecStartPre`. Missing directories, symlink redirection and unexpected filesystems fail startup.
 - Store k3s/SQLite/containerd state under `/srv/recipe-db/k3s`, kubelet state under `/srv/recipe-db/kubelet`, and local-path volumes under `/srv/recipe-db/storage`. These are directories, not separate mounts. Their parent directories are root-owned mode 0700; individual PVC contents retain the provisioner/workload's own permissions.
 - New Pi application volumes use the owned `recipe-db-retained` StorageClass, pinned to `/srv/recipe-db/storage` and the configured Pi node, with `Retain` from creation. The stock `local-path` StorageClass remains untouched. Preflight upgrades only identity-verified existing application PVs to `Retain` before namespace replacement.
@@ -32,6 +34,14 @@ Review these before authorizing a live run:
 - Bound each container's CRI logs to three 10 MiB files. Pinned k3s also rotates containerd's own log at 50 MB with three compressed backups and 28-day retention. These are log bounds, not a bound on images, data or total disk use.
 
 No disk partitioning, formatting, reset, deletion, automatic reboot, application deployment or public router forwarding occurs. Existing unmanaged k3s/state, active UFW/firewalld or unexpected nftables tables fail preflight instead of being adopted or removed.
+
+## Private backup capture inputs
+
+The managed capture command uses only `/etc/recipe-db/backup-toolchain/config.toml` and pinned tools under `/var/lib/recipe-db-backup/tooling`; it ignores `/opt/recipe-db/mise.toml`, including its development setup hooks. The same isolated environment is used during provisioning and root's systemd capture.
+
+The operator must separately install root-owned mode `0600` files: `/etc/recipe-db/backup-values.yaml` with explicit Pi target values and private secret paths, `/etc/recipe-db/backup-release-ref` with the deployed immutable artifact reference, `/etc/recipe-db/rclone.conf`, the referenced application secret inputs, and `/etc/recipe-db/backup.json`. Set its `captureCommand` to `/usr/local/sbin/recipe-db-backup-capture` and `remote` to `gdrive:RecipeDB Backups` for the selected visible My Drive destination. Transfer credentials over authenticated SSH, never through chat, source control or backups. Ansible does not populate these private inputs or trigger a backup.
+
+After an approved application release update, set the corresponding `backup_capture_revision`, rerun provisioning while capture is idle, update the private release reference/values, and verify a real service run. An out-of-date checkout or release reference must fail the lifecycle's release checks, not silently capture a different release. Follow the [backup operations guide](production-kubernetes.md#verified-remote-packaging) for verified upload/status and credential recovery.
 
 ## Opt-in dedicated IPv4 HTTPS listeners
 

@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+[[ $# == 1 && $1 == /* && ! -e $1 && ! -L $1 ]] || {
+  printf 'backup capture requires one new absolute snapshot directory\n' >&2
+  exit 1
+}
+export HOME=/root
+{% for key, value in backup_toolchain_environment.items() %}
+export {{ key }}={{ value | quote }}
+{% endfor %}
+export KUBECONFIG="${KUBECONFIG:-/etc/recipe-db/backup-kubeconfig.yaml}"
+cd /opt/recipe-db
+[[ -f /etc/recipe-db/backup-values.yaml && -f /etc/recipe-db/backup-release-ref ]] || {
+  printf 'backup capture requires private target values and an immutable release reference\n' >&2
+  exit 1
+}
+release=$(cat /etc/recipe-db/backup-release-ref)
+exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+  backup /etc/recipe-db/backup-values.yaml "$release" "$1"
