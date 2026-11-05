@@ -853,6 +853,153 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertTrue((destination / "ac" / "aa" / ("a" * 64)).is_file())
 
+    def test_pinned_copilot_candidate_still_requires_final_head_upload_and_valid_cache(self):
+        head = "a" * 40
+        base_commit = "b" * 40
+        actor = {"login": "Copilot", "id": 198982749, "type": "Bot"}
+        repository = {"id": 9, "full_name": "owner/repo"}
+        run = {
+            "id": 42, "run_number": 8, "run_attempt": 1, "workflow_id": 9,
+            "head_sha": head, "event": "pull_request", "head_branch": "feature",
+            "repository": repository, "actor": actor,
+        }
+        detail = {
+            **run, "path": CACHE.WORKFLOW, "name": "Publish", "conclusion": "failure",
+            "head_repository": repository,
+        }
+        pull = {
+            "number": 17, "head": {"sha": head},
+            "base": {"sha": base_commit, "repo": repository},
+        }
+        association = f"https://api.github.com/repos/owner/repo/commits/{head}/pulls"
+        accepted_upload = [{"name": CACHE.JOB, "steps": [
+            {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
+        ]}]
+        rejected_cases = (
+            ("wrong final head", "final PR head", "f" * 40, [pull], accepted_upload, None),
+            ("ambiguous PR association", "ambiguous", head,
+             [pull, {**pull, "number": 18}], accepted_upload, None),
+            ("missing upload job", "did not complete", head, [pull], [], None),
+            ("failed upload step", "did not complete", head, [pull], [{
+                "name": CACHE.JOB, "steps": [
+                    {"name": CACHE.UPLOAD_STEP, "conclusion": "failure"},
+                ],
+            }], None),
+            ("unsupported bot", "not an eligible same-repository writer", head,
+             [pull], accepted_upload, None),
+            ("incompatible manifest", "compatibility mismatch", head, [pull],
+             accepted_upload, {"compatibility": {"bazelVersion": "wrong"}}),
+            ("invalid cache contents", "invalid ActionResult", head, [pull], accepted_upload,
+             {"invalid_cache": True}),
+        )
+
+        def artifact_fixture(label, manifest_changes=None):
+            root = self.root / label
+            root.mkdir()
+            snapshot = root / "snapshot.tar"
+            if manifest_changes == {"invalid_cache": True}:
+                with tarfile.open(snapshot, "w:") as archive:
+                    content = b"\xff"
+                    entry = tarfile.TarInfo(f"ac/aa/{'a' * 64}")
+                    entry.size = len(content)
+                    archive.addfile(entry, io.BytesIO(content))
+                manifest_changes = None
+            else:
+                source = root / "source"
+                source.mkdir()
+                make_cache(source)
+                CACHE.snapshot(source, snapshot)
+            archive_digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+            manifest = {
+                "format": CACHE.FORMAT, "formatVersion": CACHE.FORMAT_VERSION,
+                "repository": "owner/repo", "workflow": CACHE.WORKFLOW, "job": CACHE.JOB,
+                "runId": 42, "runAttempt": 1, "event": "pull_request",
+                "builtCommit": head, "sourceCommit": head, "producerHeadSha": head,
+                "baseCommit": base_commit,
+                "pullRequest": {"number": 17, "head": head, "base": base_commit},
+                "compatibility": {
+                    "bazelVersion": (ROOT / ".bazelversion").read_text().strip(),
+                    "os": platform.system().lower(),
+                    "architecture": CACHE.normalize_arch(platform.machine()),
+                    "digest": "sha256",
+                },
+                "archive": {
+                    "file": "snapshot.tar", "sizeBytes": snapshot.stat().st_size,
+                    "sha256": archive_digest,
+                },
+            }
+            if manifest_changes:
+                manifest.update(manifest_changes)
+            zipped = root / "artifact.zip"
+            with zipfile.ZipFile(zipped, "w") as archive:
+                archive.writestr("manifest.json", json.dumps(manifest))
+                archive.write(snapshot, "snapshot.tar")
+            return {
+                "id": 88, "name": "bazel-cache-v2-pr-17-r42-a1",
+                "size_in_bytes": zipped.stat().st_size,
+                "workflow_run": {"id": 42},
+            }, zipped
+
+        artifact, zipped = artifact_fixture("accepted-pr-candidate")
+        destination = self.root / "accepted-pr-candidate-cache"
+        api_calls = []
+
+        def copy_artifact(url, token, path, maximum):
+            shutil.copyfile(zipped, path)
+            return path.stat().st_size
+
+        def fake_json(url, token):
+            api_calls.append(url)
+            return [pull] if url == association else None
+
+        with patch.object(CACHE, "request_file", side_effect=copy_artifact), \
+                patch.object(CACHE, "producer_attempt", return_value=detail), \
+                patch.object(CACHE, "jobs_for_attempt", return_value=accepted_upload), \
+                patch.object(CACHE, "request_json", side_effect=fake_json), \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(CACHE.download_candidate(
+                "https://api.github.com/repos/owner/repo", "token", artifact,
+                destination, "owner/repo", run, "pr", 17,
+                expected_head=head, require_trusted_writer=True,
+            ))
+        self.assertIn("authorization=pinned Copilot identity", output.getvalue())
+        self.assertTrue(destination.is_dir())
+        self.assertTrue(all("/collaborators/" not in url for url in api_calls))
+
+        for index, (label, error, expected_head, pulls, jobs, changes) in enumerate(rejected_cases):
+            with self.subTest(case=label):
+                artifact, zipped = artifact_fixture(f"pr-candidate-{index}", changes)
+                destination = self.root / f"rejected-candidate-{index}"
+                api_calls = []
+                candidate_run = run
+                candidate_detail = detail
+                if label == "unsupported bot":
+                    unknown_bot = {"login": "OtherBot", "id": 123, "type": "Bot"}
+                    candidate_run = {**run, "actor": unknown_bot}
+                    candidate_detail = {**detail, "actor": unknown_bot}
+
+                def copy_artifact(url, token, path, maximum):
+                    shutil.copyfile(zipped, path)
+                    return path.stat().st_size
+
+                def fake_json(url, token):
+                    api_calls.append(url)
+                    return pulls if url == association else None
+
+                with patch.object(CACHE, "request_file", side_effect=copy_artifact), \
+                        patch.object(CACHE, "producer_attempt", return_value=candidate_detail), \
+                        patch.object(CACHE, "jobs_for_attempt", return_value=jobs), \
+                        patch.object(CACHE, "request_json", side_effect=fake_json), \
+                        redirect_stdout(io.StringIO()):
+                    with self.assertRaisesRegex(CACHE.Invalid, error):
+                        CACHE.download_candidate(
+                            "https://api.github.com/repos/owner/repo", "token", artifact,
+                            destination, "owner/repo", candidate_run, "pr", 17,
+                            expected_head=expected_head, require_trusted_writer=True,
+                        )
+                self.assertFalse(destination.exists())
+                self.assertTrue(all("/collaborators/" not in url for url in api_calls))
+
     def test_rejects_unsafe_zip_member_paths_and_links(self):
         for kind in ("traversal", "symlink"):
             archive_path = self.root / f"{kind}.zip"
@@ -1034,35 +1181,144 @@ class CacheArtifactTests(unittest.TestCase):
                 False,
             )
 
-    def test_trusted_writer_requires_matching_github_identity_and_write_permission(self):
-        run = {"actor": {"login": "trusted-writer", "id": 13}}
+    def test_pinned_copilot_identity_is_authorized_without_collaborator_lookup(self):
+        actor = {"login": "Copilot", "id": 198982749, "type": "Bot"}
+        run = {"actor": actor}
         detail = {
-            "actor": {"login": "trusted-writer", "id": 13},
+            "actor": actor,
             "repository": {"id": 42, "full_name": "owner/repo"},
             "head_repository": {"id": 42, "full_name": "owner/repo"},
         }
-        permission = {"user": {"login": "trusted-writer"}, "permission": "write"}
-        with patch.object(CACHE, "request_json", return_value=permission):
-            self.assertTrue(CACHE.trusted_pr_writer(
-                "https://api.github.com/repos/owner/repo", "token", run, detail,
+        with patch.object(CACHE, "request_json") as request:
+            with redirect_stdout(io.StringIO()) as output:
+                self.assertTrue(CACHE.trusted_pr_writer(
+                    "https://api.github.com/repos/owner/repo", "token", run, detail,
+                    "owner/repo", 17,
+                ))
+            request.assert_not_called()
+        self.assertIn("authorization=pinned Copilot identity", output.getvalue())
+
+    def test_pinned_copilot_rejects_mismatched_malformed_and_unsupported_identities(self):
+        copilot = {"login": "Copilot", "id": 198982749, "type": "Bot"}
+        invalid_identities = [
+            {"login": "Copilot", "id": 198982748, "type": "Bot"},
+            {"login": "other-bot", "id": 198982749, "type": "Bot"},
+            {"login": "Copilot", "id": 198982749, "type": "User"},
+            {"login": "other-bot", "id": 14, "type": "Bot"},
+            {"login": "Copilot", "id": "198982749", "type": "Bot"},
+            {"login": "Copilot", "id": True, "type": "Bot"},
+            {"login": "Copilot", "type": "Bot"},
+            {"login": "Copilot", "id": None, "type": "Bot"},
+            {"id": 198982749, "type": "Bot"},
+            {"login": "Copilot", "id": 198982749},
+        ]
+        detail_base = {
+            "repository": {"id": 42, "full_name": "owner/repo"},
+            "head_repository": {"id": 42, "full_name": "owner/repo"},
+        }
+        with patch.object(CACHE, "request_json") as request:
+            for identity in invalid_identities:
+                with self.subTest(identity=identity):
+                    self.assertFalse(CACHE.trusted_pr_writer(
+                        "https://api.github.com/repos/owner/repo", "token",
+                        {"actor": identity},
+                        {**detail_base, "actor": identity},
+                        "owner/repo", 17,
+                    ))
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token",
+                {"actor": copilot},
+                {**detail_base, "actor": {"login": "Copilot", "id": 8, "type": "Bot"}},
                 "owner/repo", 17,
             ))
-        with patch.object(
-            CACHE, "request_json",
-            return_value={"user": {"login": "trusted-writer"}, "permission": "triage"},
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token",
+                {
+                    "actor": {"login": "unknown", "id": 9, "type": "Bot"},
+                    "triggering_actor": copilot,
+                },
+                {**detail_base, "actor": {"login": "unknown", "id": 9, "type": "Bot"}},
+                "owner/repo", 17,
+            ))
+            fork = {
+                **detail_base,
+                "actor": copilot,
+                "head_repository": {"id": 43, "full_name": "fork/repo"},
+            }
+            self.assertFalse(CACHE.trusted_pr_writer(
+                "https://api.github.com/repos/owner/repo", "token",
+                {"actor": copilot}, fork, "owner/repo", 17,
+            ))
+            request.assert_not_called()
+
+    def test_human_writer_still_requires_matching_identity_and_verified_write_permission(self):
+        actor = {"login": "trusted-writer", "id": 13, "type": "User"}
+        run = {"actor": actor}
+        detail = {
+            "actor": actor,
+            "repository": {"id": 42, "full_name": "owner/repo"},
+            "head_repository": {"id": 42, "full_name": "owner/repo"},
+        }
+        for permission_name in ("admin", "maintain", "write"):
+            with self.subTest(permission=permission_name), patch.object(
+                CACHE, "request_json",
+                return_value={"user": {"login": "trusted-writer"}, "permission": permission_name},
+            ):
+                self.assertTrue(CACHE.trusted_pr_writer(
+                    "https://api.github.com/repos/owner/repo", "token", run, detail,
+                    "owner/repo", 17,
+                ))
+        for response in (
+            {"user": {"login": "trusted-writer"}, "permission": "read"},
+            {"user": {"login": "trusted-writer"}, "permission": "triage"},
+            {"user": {"login": "trusted-writer"}, "permission": "unknown"},
+            {"permission": "write"},
+            {"user": [], "permission": "write"},
         ):
+            with self.subTest(response=response), patch.object(
+                CACHE, "request_json", return_value=response,
+            ):
+                self.assertFalse(CACHE.trusted_pr_writer(
+                    "https://api.github.com/repos/owner/repo", "token", run, detail,
+                    "owner/repo", 17,
+                ))
+
+        for malformed_actor in (
+            {"login": "trusted-writer", "id": "13", "type": "User"},
+            {"login": "trusted-writer", "id": True, "type": "User"},
+            {"login": "trusted-writer", "type": "User"},
+            {"login": "trusted-writer", "id": 13},
+        ):
+            with self.subTest(actor=malformed_actor), patch.object(
+                CACHE, "request_json",
+            ) as request:
+                self.assertFalse(CACHE.trusted_pr_writer(
+                    "https://api.github.com/repos/owner/repo", "token",
+                    {"actor": malformed_actor},
+                    {**detail, "actor": malformed_actor},
+                    "owner/repo", 17,
+                ))
+                request.assert_not_called()
+
+        with patch.object(CACHE, "request_json", return_value=None), \
+                redirect_stdout(io.StringIO()) as output:
             self.assertFalse(CACHE.trusted_pr_writer(
                 "https://api.github.com/repos/owner/repo", "token", run, detail,
                 "owner/repo", 17,
             ))
-        with patch.object(
-            CACHE, "request_json", return_value={"permission": "write"},
-        ):
-            self.assertFalse(CACHE.trusted_pr_writer(
-                "https://api.github.com/repos/owner/repo", "token", run, detail,
-                "owner/repo", 17,
-            ))
-        forged = {**detail, "actor": {"login": "other-user", "id": 13}}
+        self.assertIn("permission metadata is unavailable", output.getvalue())
+        for error in (CACHE.ApiFailure("GitHub API returned HTTP 403"),
+                      CACHE.ApiFailure("GitHub API request failed after bounded retries")):
+            with self.subTest(error=error), patch.object(
+                CACHE, "request_json", side_effect=error,
+            ):
+                with self.assertRaises(CACHE.ApiFailure):
+                    CACHE.trusted_pr_writer(
+                        "https://api.github.com/repos/owner/repo", "token", run, detail,
+                        "owner/repo", 17,
+                    )
+
+        forged = {**detail, "actor": {"login": "other-user", "id": 13, "type": "User"}}
         self.assertFalse(CACHE.trusted_pr_writer(
             "https://api.github.com/repos/owner/repo", "token", run, forged,
             "owner/repo", 17,
