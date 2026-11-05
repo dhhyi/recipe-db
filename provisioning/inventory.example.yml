@@ -7,6 +7,8 @@ all:
           ansible_user: piadmin
           ansible_ssh_private_key_file: .private/recipe-db-pi
           expected_root_uuid: REPLACE-WITH-VERIFIED-ROOT-UUID
+          # Set to the deployed 40-character release commit to manage /opt/recipe-db.
+          # backup_capture_revision: REPLACE-WITH-DEPLOYED-RELEASE-COMMIT
           # Include the workstation's source subnet, not a public/all-address range.
           admin_networks:
             - 192.168.1.0/24
