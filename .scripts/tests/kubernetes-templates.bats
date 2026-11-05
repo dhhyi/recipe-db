@@ -74,14 +74,18 @@ render() {
   ' manifests.json
 }
 
-@test "token-only Pi rehearsal omits OAuth and restricts ingress to ClusterIP" {
+@test "Google-disabled Pi deployment omits OAuth and uses ClusterIP by default" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
-    .config.runtime.authMode="token-only" | .config.runtime.googleOAuthClientId=""' values.json > token-values.json
-  render token-values.json
+    .config.storageClass="recipe-db-retained"' values.json > no-google-values.json
+  render no-google-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '.ports["rest-internal"].observability == {}'
   jq -e '
     all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
+    and all(.items[]; .metadata.name != "redis")
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "browse" and
+      all(.spec.template.spec.containers[0].env[];
+        .name != "GOOGLE_OAUTH_CLIENT_ID"))
     and any(.items[]; .kind == "HelmChartConfig" and
       (.spec.valuesContent | contains("ClusterIP")))
     and any(.items[]; .kind == "Deployment" and .metadata.name == "graphql" and
@@ -91,8 +95,9 @@ render() {
 
 @test "explicit private LAN rehearsal exposes only HTTP without NodePorts" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
-    .config.origin="http://recipe-pi.home" | .config.runtime.authMode="token-only" |
-    .config.runtime.ingressMode="private-lan" | .config.runtime.googleOAuthClientId=""' values.json > lan-values.json
+    .config.storageClass="recipe-db-retained" |
+    .config.origin="http://recipe-pi.home" |
+    .config.runtime.ingressMode="private-lan"' values.json > lan-values.json
   render lan-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '
@@ -106,8 +111,8 @@ render() {
     jq --arg environment "$environment" '
       .config.target="pi" | .config.context="recipe-db-pi" |
       .config.storageClass="recipe-db-retained" |
-      .config.origin="http://recipe-pi.home" | .config.runtime.authMode="token-only" |
-      .config.runtime.ingressMode="private-lan" | .config.runtime.googleOAuthClientId="" |
+      .config.origin="http://recipe-pi.home" |
+      .config.runtime.ingressMode="private-lan" |
       .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:$environment}
     ' values.json > https-values.json
     render https-values.json
@@ -145,10 +150,17 @@ render() {
   done
 }
 
-@test "Google HTTPS deploys OAuth with secure sessions and keeps backend listeners private" {
+@test "complete Google HTTPS config deploys OAuth with secure sessions and keeps backend listeners private" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
-    .config.origin="https://recipes.example.org" | .config.runtime.authMode="google" |
+    .config.storageClass="recipe-db-retained" |
+    .config.origin="https://recipes.example.org" |
     .config.runtime.ingressMode="private-lan" |
+    .config.runtime.googleOAuthClientId="explicit.apps.googleusercontent.com" |
+    .config.volumes.redis="256Mi" |
+    .config.infrastructure.oauth2Proxy="quay.io/oauth2-proxy/oauth2-proxy:v7.15.5" |
+    .config.infrastructure.redis="redis:8-alpine" |
+    .config.secrets["google-oauth-client-secret"]="/private/google-client-secret" |
+    .config.secrets["oauth2-cookie-secret"]="/private/oauth-cookie-secret" |
     .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}
   ' values.json > google-https-values.json
   render google-https-values.json
@@ -166,6 +178,9 @@ render() {
     and any(.items[]; .kind == "Service" and .metadata.name == "oauth2-proxy"
       and .spec.type == "ClusterIP" and .spec.ports[0].port == 4180)
     and any(.items[]; .kind == "ConfigMap" and .metadata.name == "oauth-config")
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "browse" and
+      any(.spec.template.spec.containers[0].env[];
+        .name == "GOOGLE_OAUTH_CLIENT_ID" and .value == "explicit.apps.googleusercontent.com"))
     and any(.items[]; .kind == "Deployment" and .metadata.name == "https-staging")
     and any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "redis")
     and any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme")
@@ -197,7 +212,7 @@ render() {
 }
 
 @test "renewal rehearsal enlarges only the test CA renewal window and retains normal production settings" {
-  jq '.config.target="pi" | .config.runtime.authMode="token-only" |
+  jq '.config.target="pi" |
     .config.runtime.ingressMode="private-lan" |
     .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:true}
   ' values.json > renewal-values.json
@@ -327,7 +342,14 @@ for stop_signal in (signal.SIGTERM, signal.SIGQUIT):
 }
 
 @test "Kubernetes OAuth alpha config requires PKCE, verified issuer, email, and nonce" {
-  render values.json
+  jq '.config.runtime.googleOAuthClientId="test.apps.googleusercontent.com" |
+    .config.infrastructure.oauth2Proxy="quay.io/oauth2-proxy/oauth2-proxy:v7.15.5" |
+    .config.infrastructure.redis="redis:8-alpine" |
+    .config.volumes.redis="256Mi" |
+    .config.secrets["google-oauth-client-secret"]="/private/google-client-secret" |
+    .config.secrets["oauth2-cookie-secret"]="/private/oauth-cookie-secret"
+  ' values.json > oauth-values.json
+  render oauth-values.json
   jq -er '
     .items[] | select(.kind == "ConfigMap" and .metadata.name == "oauth-config") |
     .data["alpha.yaml"]

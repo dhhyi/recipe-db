@@ -12,6 +12,7 @@ const meta = {
   args: {
     authRole: "",
     authName: "",
+    authEnabled: false,
   },
   argTypes: {
     authRole: {
@@ -19,6 +20,7 @@ const meta = {
       options: ["", "anonymous", "member", "owner"],
     },
     authName: { control: "text" },
+    authEnabled: { control: "boolean" },
   },
 } satisfies Meta;
 
@@ -33,8 +35,10 @@ export const Sticky: Story = {
     await waitFor(() => {
       const login = canvas.queryByRole("link", { name: "Anmelden" });
       const dropdown = canvasElement.querySelector("details.dropdown");
-      expect(!!login).toBe(args.authRole === "anonymous");
-      expect(!!dropdown).toBe(!!args.authRole && args.authRole !== "anonymous");
+      expect(!!login).toBe(args.authRole === "anonymous" && args.authEnabled);
+      expect(!!dropdown).toBe(
+        args.authEnabled && !!args.authRole && args.authRole !== "anonymous",
+      );
       if (dropdown) {
         expect(dropdown.querySelector("summary")).toHaveTextContent(
           args.authName || args.authRole,
@@ -45,10 +49,11 @@ export const Sticky: Story = {
       }
     });
   },
-  render: ({ authRole, authName }) => html`
+  render: ({ authRole, authName, authEnabled }) => html`
     <header-component
       auth-role=${authRole}
       auth-name=${authName}
+      ?auth-enabled=${authEnabled}
     ></header-component>
     <main style="padding: 0.5rem 0;">
       <h1>${lorem.generateWords(3)}</h1>
@@ -62,10 +67,15 @@ export const Sticky: Story = {
 
 export const LoggedOut: Story = {
   ...Sticky,
-  args: { authRole: "anonymous" },
+  args: { authRole: "anonymous", authEnabled: true },
+};
+
+export const AnonymousWithoutGoogle: Story = {
+  ...Sticky,
+  args: { authRole: "anonymous", authEnabled: false },
 };
 
 export const LoggedIn: Story = {
   ...Sticky,
-  args: { authRole: "owner", authName: "Max Mustermann" },
+  args: { authRole: "owner", authName: "Max Mustermann", authEnabled: true },
 };

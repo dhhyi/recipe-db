@@ -5,6 +5,7 @@
 #@   return [project for project in data.values.projects if project.category in ["backend", "api", "frontend"]]
 #@ end
 #@ def traefik_config():
+#@   google_enabled = data.values.googleOAuthClientId != ""
 #@   routers = {"traefik": {"rule": "PathPrefix(`/api`)", "entrypoints": ["rest-internal"], "service": "api@internal"}}
 #@   middlewares = {}
 #@   services = {}
@@ -88,14 +89,19 @@
 #@         },
 #@       },
 #@     }
-#@   routers["oauth2-public"] = {
+#@   if google_enabled:
+#@     routers["oauth2-public"] = {
 #@       "rule": "PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)",
 #@       "entrypoints": ["web"],
 #@       "priority": 400,
 #@       "middlewares": ["identity-strip"],
 #@       "service": "oauth2-proxy",
 #@     }
-#@   services["oauth2-proxy"] = {"loadBalancer": {"servers": [{"url": "http://oauth2-proxy:4180"}]}}
+#@     services["oauth2-proxy"] = {"loadBalancer": {"servers": [{"url": "http://oauth2-proxy:4180"}]}}
+#@   else:
+#@     routers.pop("graphql-cookie", None)
+#@     middlewares.pop("oauth2-forward-auth", None)
+#@   end
 #@   return {"http": {"routers": routers, "middlewares": middlewares, "services": services}}
 #@ end
 http: #@ traefik_config()["http"]

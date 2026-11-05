@@ -128,9 +128,11 @@ EOF
   mock_task_body .scripts/generate-docker-compose.sh << 'EOF'
 set -eu
   test -s .generated/compose-inputs.json
-  for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
+  for file in auth-accounts.json typesense-api-key graphql-ingress-secret; do
   test -s ".secrets/$file"
 done
+test ! -e .secrets/google-oauth-client-secret
+test ! -e .secrets/oauth2-cookie-secret
 test -s e2e-test/.secrets/auth-tokens.json
 test "$(jq -r '.tokens | length' .secrets/auth-accounts.json)" -eq 3
 grep -Fx 'network create intranet' "$MOCK_LOG"
@@ -243,9 +245,27 @@ EOF
   [ "$(cat up-arguments)" = $'<compose>\n<up>\n<-d>\n<--wait>\n<--wait-timeout>\n<120>\n<two words>' ]
 }
 
-@test "development auth secrets are private and stable and repair empty Docker directories" {
-  mkdir -p .secrets/google-oauth-client-secret .secrets/oauth2-cookie-secret .secrets/graphql-ingress-secret
+@test "development without Google creates only the private ingress secret" {
+  mkdir -p .secrets/graphql-ingress-secret
   run mise run --raw create-oauth-secrets
+  [ "$status" -eq 0 ]
+  [ ! -e .secrets/google-oauth-client-secret ]
+  [ ! -e .secrets/oauth2-cookie-secret ]
+  [ -f .secrets/graphql-ingress-secret ]
+  [ "$(stat -c %a .secrets/graphql-ingress-secret)" = 600 ]
+  ingress=$(cat .secrets/graphql-ingress-secret)
+  grep -Eq '^[A-Za-z0-9_-]{43}$' .secrets/graphql-ingress-secret
+  [ "$(wc -c < .secrets/graphql-ingress-secret)" -eq 43 ]
+  run mise run --raw create-oauth-secrets
+  [ "$status" -eq 0 ]
+  [ "$(cat .secrets/graphql-ingress-secret)" = "$ingress" ]
+}
+
+@test "development Google secrets are private and stable when explicitly configured" {
+  umask 077
+  mkdir -p .secrets
+  printf '%s' 'realistic-google-client-secret-for-tests' > .secrets/google-oauth-client-secret
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com mise run --raw create-oauth-secrets
   [ "$status" -eq 0 ]
   for file in google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
     [ -f ".secrets/$file" ]
@@ -262,10 +282,10 @@ EOF
   grep -Eq '^[A-Za-z0-9_-]{43}$' .secrets/graphql-ingress-secret
   [ "$(wc -c < .secrets/graphql-ingress-secret)" -eq 43 ]
   [ "$ingress" != "$cookie" ]
-  printf '%s' custom > .secrets/google-oauth-client-secret
-  run mise run --raw create-oauth-secrets
+  printf '%s' 'replacement-google-client-secret-for-tests' > .secrets/google-oauth-client-secret
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com mise run --raw create-oauth-secrets
   [ "$status" -eq 0 ]
-  [ "$(cat .secrets/google-oauth-client-secret)" = custom ]
+  [ "$(cat .secrets/google-oauth-client-secret)" = replacement-google-client-secret-for-tests ]
   [ "$(cat .secrets/oauth2-cookie-secret)" = "$cookie" ]
   [ "$(cat .secrets/graphql-ingress-secret)" = "$ingress" ]
 }
@@ -273,13 +293,13 @@ EOF
 @test "development OAuth secret provisioning refuses empty files and nonempty directories" {
   mkdir -p .secrets
   touch .secrets/google-oauth-client-secret
-  run mise run --raw create-oauth-secrets
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com mise run --raw create-oauth-secrets
   [ "$status" -ne 0 ]
   [[ "$output" == *"readable, nonempty file"* ]]
   rm .secrets/google-oauth-client-secret
   mkdir .secrets/google-oauth-client-secret
   touch .secrets/google-oauth-client-secret/keep
-  run mise run --raw create-oauth-secrets
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com mise run --raw create-oauth-secrets
   [ "$status" -ne 0 ]
   [ -f .secrets/google-oauth-client-secret/keep ]
 }
@@ -292,8 +312,12 @@ EOF
   done < <(yq -p toml -r '.tasks.sync.depends[] | select(test("^create-"))' mise.toml)
 
   for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
-    [ -s ".secrets/$file" ]
-    [ "$(stat -c %a ".secrets/$file")" = 600 ]
+    if [[ $file == google-oauth-client-secret || $file == oauth2-cookie-secret ]]; then
+      [ ! -e ".secrets/$file" ]
+    else
+      [ -s ".secrets/$file" ]
+      [ "$(stat -c %a ".secrets/$file")" = 600 ]
+    fi
   done
   for variable in TYPESENSE_API_KEY_FILE GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE; do
     [ "$(yq "[.env, .jobs[].env] | map(select(has(\"$variable\"))) | length" "$workflow")" -eq 0 ]
@@ -307,24 +331,24 @@ EOF
 }
 
 @test "development OAuth secret overrides must exist and are never replaced" {
-  printf '%s' client > custom-client
-  printf '%s' cookie > custom-cookie
-  printf '%s' ingress > custom-ingress
-  run env GOOGLE_OAUTH_CLIENT_SECRET_FILE=custom-client OAUTH2_COOKIE_SECRET_FILE=custom-cookie GRAPHQL_INGRESS_SECRET_FILE=custom-ingress \
+  printf '%s' realistic-google-client-secret-for-tests > custom-client
+  printf '%s' MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY > custom-cookie
+  printf '%s' abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO > custom-ingress
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com GOOGLE_OAUTH_CLIENT_SECRET_FILE=custom-client OAUTH2_COOKIE_SECRET_FILE=custom-cookie GRAPHQL_INGRESS_SECRET_FILE=custom-ingress \
     mise run --raw create-oauth-secrets
   [ "$status" -eq 0 ]
-  [ "$(cat custom-client)" = client ]
-  [ "$(cat custom-cookie)" = cookie ]
-  [ "$(cat custom-ingress)" = ingress ]
+  [ "$(cat custom-client)" = realistic-google-client-secret-for-tests ]
+  [ "$(cat custom-cookie)" = MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY ]
+  [ "$(cat custom-ingress)" = abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO ]
   [ ! -e .secrets/google-oauth-client-secret ]
   [ ! -e .secrets/oauth2-cookie-secret ]
   [ ! -e .secrets/graphql-ingress-secret ]
-  run env GOOGLE_OAUTH_CLIENT_SECRET_FILE=missing mise run --raw create-oauth-secrets
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com GOOGLE_OAUTH_CLIENT_SECRET_FILE=missing mise run --raw create-oauth-secrets
   [ "$status" -ne 0 ]
   [[ "$output" == *"Configured auth secret"* ]]
   [ ! -e missing ]
   mkdir custom-directory
-  run env OAUTH2_COOKIE_SECRET_FILE=custom-directory mise run --raw create-oauth-secrets
+  run env GOOGLE_OAUTH_CLIENT_ID=test.apps.googleusercontent.com GOOGLE_OAUTH_CLIENT_SECRET_FILE=custom-client OAUTH2_COOKIE_SECRET_FILE=custom-directory mise run --raw create-oauth-secrets
   [ "$status" -ne 0 ]
   [ -d custom-directory ]
   run env GRAPHQL_INGRESS_SECRET_FILE=missing mise run --raw create-oauth-secrets

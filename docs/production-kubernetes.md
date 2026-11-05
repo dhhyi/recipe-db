@@ -234,7 +234,7 @@ The account ID is stable and explicit; the token is not the ID. Revoke or rotate
 
 ### Certificate-only HTTPS staging on the Pi
 
-After rehearsal credential replacement, an operator may add this optional block to the private Pi values file. Keep `runtime.authMode: token-only`, `runtime.ingressMode: private-lan`, and the existing private LAN `origin`:
+After rehearsal credential replacement, an operator may add this optional block to the private Pi values file. Keep `runtime.ingressMode: private-lan` and the existing private LAN `origin`; Google OAuth settings remain absent:
 
 ```yaml
 httpsStaging:
@@ -258,7 +258,7 @@ To disable external staging, remove the two router forwards and their host firew
 
 #### Explicit anonymous-only public preview
 
-The public preview under [#44](https://github.com/dhhyi/recipe-db/issues/44) is separate from full authenticated launch [#123](https://github.com/dhhyi/recipe-db/issues/123). After private checks and explicit operator approval, set `authMode: token-only` and `httpsStaging.exposeApplication: true` with `acmeEnvironment: production`. Omission or `false` of the exposure flag keeps certificate-only staging; application exposure still requires the production CA for trusted HTTPS. This setting controls routing only: it neither grants permissions nor restricts roles or token definitions. GraphQL validates and enforces the accounts policy.
+The public preview under [#44](https://github.com/dhhyi/recipe-db/issues/44) is separate from full authenticated launch [#123](https://github.com/dhhyi/recipe-db/issues/123). After private checks and explicit operator approval, set `httpsStaging.exposeApplication: true` with `acmeEnvironment: production`; leave the optional Google OAuth configuration absent for an anonymous-only preview. Omission or `false` of the exposure flag keeps certificate-only staging; application exposure still requires the production CA for trusted HTTPS. This setting controls routing only: it neither grants permissions nor restricts roles or token definitions. GraphQL validates and enforces the accounts policy.
 
 For the approved anonymous-only preview, keep `anonymous.role: anonymous`, `tokens: []` and `googleAccounts: {}` in the accounts policy. Removing accepted tokens also revokes their private-LAN use. Deployment no longer enforces this preview policy: verify the effective capabilities and denied writes before public exposure, and obtain separate launch approval before granting privileges. Keep the required GraphQL ingress and Typesense secrets: they authenticate internal services, not public users.
 
@@ -274,28 +274,35 @@ OAuth, backend REST, maintenance/reset and dashboard services remain excluded fr
 
 For operator-approved Google verification under [#68 — Set up and verify real Google authentication before public go-live](https://github.com/dhhyi/recipe-db/issues/68), reuse the existing HTTPS application exposure and trusted certificate. No separate outer login gate is required: anonymous reads remain public and GraphQL alone enforces member/owner permissions.
 
-Set the private Pi values to:
+With Google settings absent, anonymous reads and configured bearer tokens continue to work; the sign-in link is omitted. To enable Google login, add the complete optional configuration to the private Pi values:
 
 ```yaml
 origin: https://your-hostname.example.org
 runtime:
-  authMode: google
   ingressMode: private-lan
   googleOAuthClientId: YOUR-CLIENT-ID.apps.googleusercontent.com
   trustedIssuer: https://accounts.google.com
+infrastructure:
+  oauth2Proxy: quay.io/oauth2-proxy/oauth2-proxy:<reviewed-tag>@sha256:<reviewed-digest>
+  redis: redis:<reviewed-tag>@sha256:<reviewed-digest>
+volumes:
+  redis: 256Mi
+secrets:
+  google-oauth-client-secret: /absolute/private/path/google-oauth-client-secret
+  oauth2-cookie-secret: /absolute/private/path/oauth2-cookie-secret
 httpsStaging:
   hostname: your-hostname.example.org
   acmeEnvironment: production
   exposeApplication: true
 ```
 
-The origin must exactly match `https://` plus the configured hostname, without a port suffix. Google mode with these listeners requires application exposure and the production CA; mismatched origins, test-CA certificates and certificate-only combinations are rejected before cluster access. Register this origin's `/oauth2/callback` in the Google web client. Add the private absolute file references `secrets.google-oauth-client-secret` and `secrets.oauth2-cookie-secret` alongside the existing secrets, using a fresh cookie key and the actual Google client secret. Never put the downloaded credential JSON, secret values or session cookies into reports or Git.
+The origin must exactly match `https://` plus the configured hostname, without a port suffix. A Pi deployment with Google OAuth requires application exposure and the production CA; mismatched origins, test-CA certificates and certificate-only combinations are rejected before cluster access. Register this origin's `/oauth2/callback` in the Google web client. Use a fresh cookie key and the actual Google client secret. The client ID and both secret paths must be present together; partial or invalid configuration fails explicitly. Never put the downloaded credential JSON, secret values or session cookies into reports or Git.
 
-This deploys OAuth2 Proxy alongside Redis and retains the existing ACME claim and listener layout. HTTPS reuses the existing optional-authentication GraphQL routers, preserving bearer-first priority without cookie fallback. It also exposes only `/oauth2/start`, `/oauth2/callback`, `/oauth2/sign_in` and `/oauth2/sign_out`, not `/oauth2/auth` or other proxy endpoints. Untrusted identity headers are stripped before authentication and trusted ingress injection. Backend REST, maintenance/reset and administrative routes remain private, with no new public ports or NodePorts.
+This deploys OAuth2 Proxy alongside Redis and retains the existing ACME claim and listener layout. HTTPS reuses the existing optional-authentication GraphQL routers, preserving bearer-first priority without cookie fallback. It also exposes only `/oauth2/start`, `/oauth2/callback`, `/oauth2/sign_in` and `/oauth2/sign_out`, not `/oauth2/auth` or other proxy endpoints. Untrusted identity headers are stripped before authentication and trusted ingress injection. Backend REST, maintenance/reset and administrative routes remain private, with no new public ports or NodePorts. To disable Google login, remove the client ID, both OAuth secret paths, optional OAuth/Redis images, and `volumes.redis`, then redeploy; the deployment removes its owned OAuth workloads and routes without changing application exposure or GraphQL authorization.
 
 Keep `anonymous.role: anonymous` and existing accounts intact. Google registration does not grant application privileges: configure only operator-approved normalized emails as `member` or `owner` in the private `googleAccounts` map. An empty map grants no Google account elevated access. Do not assign roles or enable bearer credentials merely to make a deployment check pass.
 
-After deployment, verify real-browser login, callback and logout on the HTTPS hostname, Secure/HttpOnly/SameSite=Lax cookies, member/owner boundaries, denied accounts, bearer precedence and refresh/revocation behavior. Private LAN HTTP remains available but does not receive Secure login cookies; use HTTPS for authenticated browser verification. Automated rendering/routing tests are not evidence of real Google consent or refresh. To stop external access immediately, disable the existing router forwards and their firewall exceptions; this does not delete application data, Redis or ACME state. Switching an existing Google deployment to token-only still requires an explicit transition and is not an implicit rollback.
+After deployment, verify real-browser login, callback and logout on the HTTPS hostname, Secure/HttpOnly/SameSite=Lax cookies, member/owner boundaries, denied accounts, bearer precedence and refresh/revocation behavior. Private LAN HTTP remains available but does not receive Secure login cookies; use HTTPS for authenticated browser verification. Automated rendering/routing tests are not evidence of real Google consent or refresh. To stop external access immediately, disable the existing router forwards and their firewall exceptions; this does not delete application data, Redis or ACME state.
 
 #### Controlled test-CA renewal rehearsal
 
@@ -311,9 +318,9 @@ For private ACME recovery, copy both environment files from the owned PVC into a
 
 ### Workstation-only token rehearsal on the Pi
 
-For an initial private rehearsal without Google login, set `runtime.authMode: token-only`, `runtime.googleOAuthClientId: ""`, and `origin: http://127.0.0.1:8080` (matching `httpPort`). Omit the `google-oauth-client-secret` and `oauth2-cookie-secret` keys from `secrets`; the other three secret files remain required. The default auth mode remains `google`, with its existing credential requirements unchanged.
+For an initial private rehearsal without Google login, omit `runtime.googleOAuthClientId`, OAuth secret paths, OAuth/Redis images, and `volumes.redis`; set `origin: http://127.0.0.1:8080` (matching `httpPort`). The three application secret files remain required. This is the default configuration.
 
-This explicit Pi-only option omits OAuth2 Proxy and Google callback/cookie routing. GraphQL still runs in production mode behind trusted ingress, strips untrusted identity headers and validates the accounts policy and configured bearer tokens. Deployment imposes no role or token-count requirements: define tokens only for the operations being rehearsed. Keep `anonymous.role: anonymous` and `googleAccounts: {}` for the approved rehearsal; never elevate the credential-free role for testing. For authenticated write rehearsals, generate separate strong, temporary owner tokens for operator/MCP clients in private files; revoke them afterward. Restore verification separately requires an owner token for its write probe.
+This configuration omits OAuth2 Proxy, Redis and Google callback/cookie routing. GraphQL still runs in production mode behind trusted ingress, strips untrusted identity headers and validates the accounts policy and configured bearer tokens. Deployment imposes no role or token-count requirements: define tokens only for the operations being rehearsed. Keep `anonymous.role: anonymous` and `googleAccounts: {}` for the approved rehearsal; never elevate the credential-free role for testing. For authenticated write rehearsals, generate separate strong, temporary owner tokens for operator/MCP clients in private files; revoke them afterward. Restore verification separately requires an owner token for its write probe.
 
 Traefik becomes a ClusterIP service, not a LAN load balancer. Access the application with a loopback-only Kubernetes port-forward carried through the existing private API SSH tunnel:
 
@@ -322,17 +329,15 @@ mise exec -- kubectl --kubeconfig "$PWD/provisioning/.private/pi-kubeconfig.yaml
   --context recipe-db-pi -n kube-system port-forward --address 127.0.0.1 service/traefik 8080:80
 ```
 
-Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubeconfig and the `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Switching an existing Google deployment to token-only or activating public exposure is not part of this procedure.
+Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubeconfig and the `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Enabling Google login or public exposure is not part of this procedure.
 
 ### Home-LAN HTTP token rehearsal on the Pi
 
-Accepted decision [#103](https://github.com/dhhyi/recipe-db/issues/103) makes private phone browsing part of [#45](https://github.com/dhhyi/recipe-db/issues/45). Keep the token-only account/secret requirements above, but explicitly set:
+Accepted decision [#103](https://github.com/dhhyi/recipe-db/issues/103) makes private phone browsing part of [#45](https://github.com/dhhyi/recipe-db/issues/45). Keep the account/secret requirements above, leave Google OAuth settings absent, and explicitly set:
 
 ```yaml
 runtime:
-  authMode: token-only
   ingressMode: private-lan
-  googleOAuthClientId: ""
   trustedIssuer: https://accounts.google.com
 origin: http://recipe-pi.home
 ```
@@ -343,7 +348,7 @@ Deploy using the same private API tunnel and immutable release. Traefik becomes 
 
 Anonymous browsing remains read-only. Bearer GraphQL/MCP writes are temporarily allowed on trusted-LAN HTTP at the operator's explicit request; HTTP does not protect tokens or recipe data against observers or intermediaries. Do not share these credentials, add an anonymous-owner bypass or assume browser Google login works.
 
-Before any external staging/public access, replace **every rehearsal application secret**: operator/MCP/other bearer credentials, GraphQL ingress secret and Typesense API key; generate fresh Google client/cookie secrets when enabling OAuth. Update private recovery sources and roll dependent workloads consistently. Verify old bearer tokens fail, new credentials work and temporary HTTP/token-only exposure is removed. Preserve stable principal IDs where vote continuity is required. [#44](https://github.com/dhhyi/recipe-db/issues/44) owns HTTPS/external checks and this transition, [#68](https://github.com/dhhyi/recipe-db/issues/68) owns Google, [#52](https://github.com/dhhyi/recipe-db/issues/52) retains full access verification, [#43](https://github.com/dhhyi/recipe-db/issues/43) owns backup/recovery and [#104](https://github.com/dhhyi/recipe-db/issues/104) tracks measured operating limits. Private phone acceptance does not waive those requirements or complete [#17](https://github.com/dhhyi/recipe-db/issues/17).
+Before any external staging/public access, replace **every rehearsal application secret**: operator/MCP/other bearer credentials, GraphQL ingress secret and Typesense API key; generate fresh Google client/cookie secrets when enabling OAuth. Update private recovery sources and roll dependent workloads consistently. Verify old bearer tokens fail, new credentials work and temporary private-LAN exposure is removed. Preserve stable principal IDs where vote continuity is required. [#44](https://github.com/dhhyi/recipe-db/issues/44) owns HTTPS/external checks and this transition, [#68](https://github.com/dhhyi/recipe-db/issues/68) owns Google, [#52](https://github.com/dhhyi/recipe-db/issues/52) retains full access verification, [#43](https://github.com/dhhyi/recipe-db/issues/43) owns backup/recovery and [#104](https://github.com/dhhyi/recipe-db/issues/104) tracks measured operating limits. Private phone acceptance does not waive those requirements or complete [#17](https://github.com/dhhyi/recipe-db/issues/17).
 
 Physical LAN execution on 2026-10-30 passed at the operator's private IPv4 origin without an application port-forward. The deployment completed with all 18 workloads Ready; Traefik exposed only LoadBalancer port 80, `allocateLoadBalancerNodePorts: false`, and no NodePorts. Direct LAN requests verified the five original demo recipe IDs/search results, ten image/thumbnail hashes, owner create/update/delete, denied anonymous/spoofed/invalid writes with unchanged state, private-route 404s and separate-token MCP initialization/listing. The temporary authorization-test recipe was removed without deleting demo records. LAN TCP probes found SSH/80 reachable and 443/6443/10250/30080 not reachable; this is selected workstation evidence, not all-interface/internet acceptance. Actual phone confirmation remains pending in #45. No secrets were rotated yet; replacement remains mandatory before external exposure.
 
@@ -351,7 +356,7 @@ Physical LAN execution on 2026-10-30 passed at the operator's private IPv4 origi
 
 The operator subsequently confirmed on 2026-10-30 that the private page was visible and working on their phone after being directed to the Pi's private IPv4 origin on home Wi-Fi. This supersedes the pending-phone status above; detailed search/image checks remain the separately recorded direct-LAN tests. #45 remains open pending #42/PR review.
 
-The first physical Pi token-only attempt on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
+The first physical Pi deployment without Google OAuth on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
 
 The subsequent bounded physical Pi smoke passed through that same loopback ingress:
 

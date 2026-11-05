@@ -224,7 +224,7 @@ routes() {
     -f "$root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
-  jq --arg ns "$namespace" --arg authMode "$auth_mode" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
+  jq --arg ns "$namespace" --argjson googleEnabled "$google_enabled" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
     walk(if type == "string" then
       gsub("http://(?<host>[a-z][a-z0-9-]*)(?=[:/?#]|$)";
         "http://\(.host).\($ns).svc.cluster.local")
@@ -236,10 +236,10 @@ routes() {
         loadBalancer:{servers:[{url:("http://graphql-projection." + $ns + ".svc.cluster.local:4000")}]}}
     | .http.middlewares["graphql-ingress"] = {
         headers:{customRequestHeaders:{"X-Internal-Ingress-Token":($secret | rtrimstr("\n"))}}}
-    | if $authMode == "token-only" then
+    | if $googleEnabled then . else
         del(.http.routers["oauth2-public"], .http.routers["graphql-cookie"],
           .http.middlewares["oauth2-forward-auth"], .http.services["oauth2-proxy"])
-      else . end
+      end
     | if $config[0].httpsStaging then
         if all(.http.routers[]; all(.entrypoints[]; . == "web" or . == "rest-internal")) then .
         else error("existing routes must not use certificate-only staging entrypoints") end
@@ -263,11 +263,11 @@ routes() {
             | preview("recipes-edit")
             | preview("images-edit")
             | preview("mcp")
-            | if $authMode == "google" then
+            | if $googleEnabled then
                 preview("graphql-cookie")
                 | preview("graphql-bearer")
                 | preview("oauth2-public")
-              else . end
+              else preview("graphql-bearer") end
           else
             .http.routers["https-staging"] = {
               rule:($host + " && Path(`/`)"), entrypoints:["websecure"],
@@ -277,6 +277,19 @@ routes() {
           end
       else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
+}
+
+remove_google_auth_workloads() {
+  local resource path
+  for resource in deployment/oauth2-proxy service/oauth2-proxy configmap/oauth-config deployment/redis service/redis; do
+    path="$work/optional-resource.json"
+    kube get "$resource" --ignore-not-found -o json > "$path"
+    if jq -e '.metadata != null' "$path" > /dev/null 2>&1; then
+      jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' "$path" > /dev/null \
+        || production_fail "refusing to remove unowned Google authentication resource: $resource"
+      kube delete "$resource" --wait=true --timeout="${timeout}s" > /dev/null
+    fi
+  done
 }
 
 diagnostics() {
@@ -1234,11 +1247,6 @@ case "$command" in
     routes
     annotate_credentials
     connect
-    if [[ $auth_mode = token-only ]]; then
-      kube get deployment oauth2-proxy --ignore-not-found -o name > "$work/existing-oauth"
-      [[ ! -s $work/existing-oauth ]] \
-        || production_fail "token-only rehearsal requires no existing Google deployment; transition explicitly before retrying"
-    fi
     guard_helm_config
     guard_acme_claim
     lock_holder="$cluster-deploy-$$"
@@ -1287,6 +1295,7 @@ case "$command" in
       kube delete job nats-init --ignore-not-found --wait=true --timeout="${timeout}s" > /dev/null \
         && kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null \
         && kube apply -f "$work/application.yml" > /dev/null \
+        && { $google_enabled || remove_google_auth_workloads; } \
         && kube rollout status deployment/nats --timeout="${timeout}s" \
         && kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" \
         && wait_traefik \
@@ -1295,7 +1304,7 @@ case "$command" in
       diagnostics
       production_fail "deployment failed (secret-safe diagnostics above)"
     fi
-    if [[ $auth_mode = token-only || $ingress_mode = private-lan ]]; then
+    if [[ $ingress_mode = loopback || $ingress_mode = private-lan ]]; then
       kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
       jq -e --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
         (if $ingress == "private-lan" then

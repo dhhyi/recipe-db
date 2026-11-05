@@ -177,7 +177,6 @@ prepare_reattach_state() {
 @test "Pi lifecycle config requires a verified UUID while render and status can omit it" {
   local valid="$work/valid-pi.yaml" placeholder="$work/placeholder-pi.yaml" no_storage="$work/no-storage.yaml"
   mise exec -- yq '
-    .runtime.googleOAuthClientId = "test.apps.googleusercontent.com" |
     .context = "explicit-pi" |
     .piStorage.expectedRootUuid = "02f61d5e-92cb-4f9c-a781-099d97795020"
   ' "$ROOT/deploy/pi.yaml" > "$valid"

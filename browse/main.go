@@ -159,6 +159,7 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 }
 
 func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint string) http.Handler {
+	googleOAuthEnabled := os.Getenv("GOOGLE_OAUTH_CLIENT_ID") != ""
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", browseHandler(client))
 	mux.HandleFunc("GET /recipe/{id}/tags", recipeTagsHandler(endpoint))
@@ -284,7 +285,7 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			templ.Handler(components.BrowseIdentityUnavailable()).ServeHTTP(w, r)
 			return
 		}
-		templ.Handler(components.BrowseIdentity(resp)).ServeHTTP(w, r)
+		templ.Handler(components.BrowseIdentity(resp, googleOAuthEnabled)).ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("GET /recipe/{id}", func(w http.ResponseWriter, r *http.Request) {

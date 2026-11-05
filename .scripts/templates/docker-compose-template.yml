@@ -21,8 +21,10 @@
 #@ )
 #@ options = struct.make(
 #@   registryCacheSuffix=data.values.registryCacheSuffix,
+#@   googleOAuthClientId=data.values.googleOAuthClientId,
 #@   developmentUser=data.values.developmentUser
 #@ )
+#@ google_enabled = options.googleOAuthClientId != ""
 #@
 #@ deploy_projects = projects.backend + projects.api + projects.frontend + projects.job + projects.test
 #@
@@ -85,21 +87,30 @@
 #@   end
 #@   graphql = services["graphql"]
 #@   graphql.setdefault("labels", []).append("traefik.http.services.recipe-db-graphql.loadbalancer.server.port=4000")
+#@   if not google_enabled:
+#@     graphql["labels"] = [label for label in graphql["labels"]
+#@       if not label.startswith("traefik.http.routers.graphql-cookie.")
+#@       and not label.startswith("traefik.http.middlewares.oauth2-forward-auth.")]
+#@   end
 #@   graphql["networks"] = ["auth-ingress"]
 #@   graphql.setdefault("environment", {}).update({
 #@     "NATS_URL": "nats://nats:4222",
 #@     "AUTH_TRUSTED_ISSUER": "https://accounts.google.com",
 #@   })
+#@   if "browse" in services and google_enabled:
+#@     services["browse"].setdefault("environment", {})["GOOGLE_OAUTH_CLIENT_ID"] = options.googleOAuthClientId
+#@   end
 #@   graphql["secrets"] = ["auth-accounts.json"]
 #@   graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@   services["traefik"]["networks"] = {
 #@     "intranet": {},
 #@     "auth-ingress": {},
-#@     "oauth2-ingress": {},
 #@   }
 #@   services["nats"]["networks"].append("auth-ingress")
 #@   services["nats-init"]["networks"].append("auth-ingress")
-#@   services["oauth2-proxy"] = {
+#@   if google_enabled:
+#@     services["traefik"]["networks"]["oauth2-ingress"] = {}
+#@     services["oauth2-proxy"] = {
 #@     "image": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
 #@     "container_name": "oauth2-proxy",
 #@     "command": ["--config=/etc/oauth2-proxy/oauth2-proxy.cfg", "--alpha-config=/etc/oauth2-proxy/alpha.yaml"],
@@ -131,8 +142,8 @@
 #@       "traefik.http.services.oauth2-public.loadbalancer.server.port=4180",
 #@     ],
 #@     "user": data.values.developmentUser,
-#@   }
-#@   services["redis"] = {
+#@     }
+#@     services["redis"] = {
 #@     "image": "redis:8-alpine@sha256:21090af93f8324db2f0f0f4f38a7c60369d47d917e000c3423d89d2ae2883537",
 #@     "container_name": "oauth2-redis",
 #@     "command": ["redis-server", "--appendonly", "yes", "--appendfsync", "always"],
@@ -145,7 +156,8 @@
 #@       "timeout": "2s",
 #@       "retries": 12,
 #@     },
-#@   }
+#@     }
+#@   end
 #@   if "browse" in services:
 #@     services.update(browse_maintenance_service(False))
 #@     services["browse"].setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
@@ -169,17 +181,21 @@ volumes:
   tags-data:
     name: recipe-db-tags-data
   #@ end
+  #@ if google_enabled:
   oauth2-sessions-data:
     name: recipe-db-oauth2-sessions-data
+  #@ end
   nats-data:
     name: recipe-db-nats-data
 secrets:
   auth-accounts.json:
     file: ./.secrets/auth-accounts.json
+  #@ if google_enabled:
   google-oauth-client-secret:
     file: ${GOOGLE_OAUTH_CLIENT_SECRET_FILE:-./.secrets/google-oauth-client-secret}
   oauth2-cookie-secret:
     file: ${OAUTH2_COOKIE_SECRET_FILE:-./.secrets/oauth2-cookie-secret}
+  #@ end
   #@ if len([p for p in deploy_projects if p.name == "search"]) > 0:
   typesense-api-key:
     file: ${TYPESENSE_API_KEY_FILE:-./.secrets/typesense-api-key}
@@ -191,6 +207,7 @@ networks:
   auth-ingress:
     name: recipe-db-auth-ingress
     internal: true
+  #@ if google_enabled:
   oauth2-ingress:
     name: recipe-db-oauth2-ingress
     internal: true
@@ -199,3 +216,4 @@ networks:
     internal: true
   oauth2-egress:
     name: recipe-db-oauth2-egress
+  #@ end
