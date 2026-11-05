@@ -254,7 +254,7 @@ ACME account keys and certificates persist in the private `recipe-db-acme` PVC i
 
 Traefik automatically renews certificates while DNS and inbound challenge access remain usable. Before acceptance, verify the trusted hostname/chain, root response, 404s for `/graphql`, `/mcp`, `/oauth2/callback`, `/design`, `/images`, and `/api`, HTTP redirects, private LAN browsing, retained state across redeployment, and actual renewal evidence. Inspect certificate expiry and ACME failure diagnostics locally without publishing credentials; successful initial issuance alone does not prove renewal. Certificate hostnames are public in certificate transparency logs.
 
-To disable external staging, remove the two router forwards and their host firewall exceptions. Removing `httpsStaging` and redeploying also removes the staging listeners/routes; it deliberately retains the ACME PVC and the unexposed staging workload. This milestone is not Google-provider verification or full authenticated go-live. Those remain gated by the agreed protected route boundary and the deployment/authentication acceptance issues.
+To disable external staging, remove the two router forwards and their host firewall exceptions. Removing `httpsStaging` and redeploying also removes the staging listeners/routes; it deliberately retains the ACME PVC and the unexposed staging workload. This milestone is not Google-provider verification or full authenticated go-live. Those remain gated by the deployment/authentication acceptance issues.
 
 #### Explicit anonymous-only public preview
 
@@ -269,6 +269,33 @@ The dedicated HTTPS listener reuses the existing browse, design, public-image, G
 Production mounts the reviewed `design/nginx.conf` as a ConfigMap. Its CSS/JS aliases and directory redirects are origin-relative, preserving HTTPS when nginx is behind Traefik's TLS termination and HTTP on the private origin. Check alias `Location` headers and actual browser asset loading: following an accidental HTTP redirect in a command-line client is not proof that an HTTPS browser will load the asset.
 
 OAuth, backend REST, maintenance/reset and dashboard services remain excluded from public routing. Browse retains its existing fallback route; unknown URLs do not acquire a backend/admin router. Browser and MCP URLs use the public HTTPS hostname; private application HTTP remains for anonymous LAN browsing, not privileged token rehearsal. Verify forbidden GraphQL/MCP/editor writes and excluded interfaces leave data unchanged before enabling router forwarding. This preview is public exposure, **not** completion of Google verification, application backup/recovery, or the full launch checklist.
+
+#### Google sign-in on the existing HTTPS application
+
+For operator-approved Google verification under [#68 — Set up and verify real Google authentication before public go-live](https://github.com/dhhyi/recipe-db/issues/68), reuse the existing HTTPS application exposure and trusted certificate. No separate outer login gate is required: anonymous reads remain public and GraphQL alone enforces member/owner permissions.
+
+Set the private Pi values to:
+
+```yaml
+origin: https://your-hostname.example.org
+runtime:
+  authMode: google
+  ingressMode: private-lan
+  googleOAuthClientId: YOUR-CLIENT-ID.apps.googleusercontent.com
+  trustedIssuer: https://accounts.google.com
+httpsStaging:
+  hostname: your-hostname.example.org
+  acmeEnvironment: production
+  exposeApplication: true
+```
+
+The origin must exactly match `https://` plus the configured hostname, without a port suffix. Google mode with these listeners requires application exposure and the production CA; mismatched origins, test-CA certificates and certificate-only combinations are rejected before cluster access. Register this origin's `/oauth2/callback` in the Google web client. Add the private absolute file references `secrets.google-oauth-client-secret` and `secrets.oauth2-cookie-secret` alongside the existing secrets, using a fresh cookie key and the actual Google client secret. Never put the downloaded credential JSON, secret values or session cookies into reports or Git.
+
+This deploys OAuth2 Proxy alongside Redis and retains the existing ACME claim and listener layout. HTTPS reuses the existing optional-authentication GraphQL routers, preserving bearer-first priority without cookie fallback. It also exposes only `/oauth2/start`, `/oauth2/callback`, `/oauth2/sign_in` and `/oauth2/sign_out`, not `/oauth2/auth` or other proxy endpoints. Untrusted identity headers are stripped before authentication and trusted ingress injection. Backend REST, maintenance/reset and administrative routes remain private, with no new public ports or NodePorts.
+
+Keep `anonymous.role: anonymous` and existing accounts intact. Google registration does not grant application privileges: configure only operator-approved normalized emails as `member` or `owner` in the private `googleAccounts` map. An empty map grants no Google account elevated access. Do not assign roles or enable bearer credentials merely to make a deployment check pass.
+
+After deployment, verify real-browser login, callback and logout on the HTTPS hostname, Secure/HttpOnly/SameSite=Lax cookies, member/owner boundaries, denied accounts, bearer precedence and refresh/revocation behavior. Private LAN HTTP remains available but does not receive Secure login cookies; use HTTPS for authenticated browser verification. Automated rendering/routing tests are not evidence of real Google consent or refresh. To stop external access immediately, disable the existing router forwards and their firewall exceptions; this does not delete application data, Redis or ACME state. Switching an existing Google deployment to token-only still requires an explicit transition and is not an implicit rollback.
 
 #### Controlled test-CA renewal rehearsal
 

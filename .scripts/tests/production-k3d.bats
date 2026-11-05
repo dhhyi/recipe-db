@@ -651,8 +651,27 @@ http:
     graphql:
       rule: PathPrefix(`/graphql`)
       entrypoints: [web]
+      priority: 100
       service: recipe-db-graphql
       middlewares: [graphql-ingress]
+    graphql-cookie:
+      rule: PathPrefix(`/graphql`) && HeaderRegexp(`Cookie`, `(^|;\s*)_oauth2_proxy(_[^=;\s]*)?(=|;|\s|$)`)
+      entrypoints: [web]
+      priority: 200
+      service: recipe-db-graphql
+      middlewares: [oauth2-forward-auth, graphql-ingress]
+    graphql-bearer:
+      rule: PathPrefix(`/graphql`) && HeaderRegexp(`Authorization`, `.*`)
+      entrypoints: [web]
+      priority: 300
+      service: recipe-db-graphql
+      middlewares: [graphql-ingress]
+    oauth2-public:
+      rule: PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`)
+      entrypoints: [web]
+      priority: 400
+      service: oauth2-proxy
+      middlewares: [identity-strip]
     frontend:
       rule: PathPrefix(`/`)
       entrypoints: [web]
@@ -684,6 +703,10 @@ http:
       forwardAuth:
         address: http://oauth2-proxy/oauth2/auth
   services:
+    oauth2-proxy:
+      loadBalancer:
+        servers:
+          - url: http://oauth2-proxy:4180
     recipes:
       loadBalancer:
         servers:
@@ -800,7 +823,7 @@ set_value() {
   export MOCK_HTTPS=false
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  [[ $output == *"requested private exposure"* ]]
+  [[ $output == *"requested exposure without NodePorts"* ]]
 }
 
 token_only_values() {
@@ -812,6 +835,91 @@ token_only_values() {
     .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email")) |
     del(.secrets."google-oauth-client-secret", .secrets."oauth2-cookie-secret")'
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"rehearsal","secret":"private-owner-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+google_https_values() {
+  token_only_values
+  set_value '.origin="https://recipes.example.org" | .runtime.authMode="google" |
+    .runtime.ingressMode="private-lan" |
+    .runtime.googleOAuthClientId="explicit.apps.googleusercontent.com" |
+    .secrets."google-oauth-client-secret"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "google-oauth-client-secret")) |
+    .secrets."oauth2-cookie-secret"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "oauth2-cookie-secret")) |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
+}
+
+@test "Google HTTPS preserves optional authentication priorities and private ingress" {
+  google_https_values
+  export MOCK_LAN=true MOCK_HTTPS=true
+  for mode in '.runtime.authMode="google"' 'del(.runtime.authMode)'; do
+    set_value "$mode"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -eq 0 ]
+    jq -e '
+      . as $routers |
+      [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
+      ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql",
+        "preview-graphql-bearer","preview-graphql-cookie","preview-images-edit",
+        "preview-images-public","preview-mcp","preview-oauth2-public","preview-recipes-edit"]
+      and all($secure[]; .value.middlewares[0] == "identity-strip"
+        and .value.tls.certResolver == "letsencrypt")
+      and all($secure[]; .key as $name |
+        .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
+      and .["preview-graphql"].priority == 100
+      and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
+      and .["preview-graphql-cookie"].priority == 200
+      and .["preview-graphql-cookie"].middlewares == ["identity-strip","oauth2-forward-auth","graphql-ingress"]
+      and .["preview-graphql-bearer"].priority == 300
+      and .["preview-graphql-bearer"].middlewares == ["identity-strip","graphql-ingress"]
+      and .["preview-oauth2-public"].priority == 400
+      and .["preview-oauth2-public"].middlewares == ["identity-strip"]
+      and .["preview-oauth2-public"].rule ==
+        "Host(`recipes.example.org`) && (PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`))"
+      and .["graphql-internal"].entrypoints == ["rest-internal"]
+      and all(.[]; (.entrypoints | index("staging-http")) == null)
+    ' "$MOCK_LOG.routers"
+  done
+  [[ $output != *"private-oauth-client-value-for-tests"* ]]
+  [[ $output != *"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="* ]]
+}
+
+@test "Google HTTPS rejects mismatched origins, untrusted or disabled application exposure before connection" {
+  google_https_values
+  cp "$VALUES" valid-google-values.json
+  for change in \
+    '.origin="http://recipe-pi.home"' \
+    '.origin="https://different.example.org"' \
+    '.origin="https://recipes.example.org:8443"' \
+    '.httpsStaging.acmeEnvironment="staging"' \
+    '.httpsStaging.exposeApplication=false' \
+    'del(.httpsStaging.exposeApplication)' \
+    'del(.httpsStaging)' \
+    '.runtime.ingressMode="loopback"' \
+    'del(.secrets."google-oauth-client-secret")' \
+    'del(.secrets."oauth2-cookie-secret")'; do
+    cp valid-google-values.json "$VALUES"
+    set_value "$change"
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"invalid or incomplete production values"* ]]
+  done
+  run ! grep -q 'kubectl' "$MOCK_LOG"
+  run ! grep -q 'oras' "$MOCK_LOG"
+}
+
+@test "Google HTTPS rejects NodePorts and missing HTTPS ports on the actual LoadBalancer" {
+  google_https_values
+  export MOCK_LAN=true
+  for combination in nodeport missing-https; do
+    if [[ $combination = nodeport ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=true
+    else
+      export MOCK_HTTPS=false MOCK_NODEPORT=false
+    fi
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  done
 }
 
 @test "application exposure is independent of authorization policy" {

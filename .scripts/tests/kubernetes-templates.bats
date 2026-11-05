@@ -145,6 +145,42 @@ render() {
   done
 }
 
+@test "Google HTTPS deploys OAuth with secure sessions and keeps backend listeners private" {
+  jq '.config.target="pi" | .config.context="recipe-db-pi" |
+    .config.origin="https://recipes.example.org" | .config.runtime.authMode="google" |
+    .config.runtime.ingressMode="private-lan" |
+    .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}
+  ' values.json > google-https-values.json
+  render google-https-values.json
+  jq -e '
+    any(.items[]; .kind == "Deployment" and .metadata.name == "oauth2-proxy"
+      and (.spec.template.spec.containers[0] |
+        (.env | map({key:.name,value:.value}) | from_entries) == {
+          OAUTH2_PROXY_REDIRECT_URL:"https://recipes.example.org/oauth2/callback",
+          OAUTH2_PROXY_WHITELIST_DOMAINS:"recipes.example.org",
+          OAUTH2_PROXY_COOKIE_SECURE:"true",OAUTH2_PROXY_COOKIE_EXPIRE:"168h",
+          OAUTH2_PROXY_COOKIE_REFRESH:"50m",OAUTH2_PROXY_COOKIE_HTTPONLY:"true",
+          OAUTH2_PROXY_COOKIE_SAMESITE:"lax"})
+      and any(.spec.template.spec.volumes[]; .secret.secretName == "recipe-db-runtime"
+        and (.secret.items | map(.key)) == ["google-oauth-client-secret","oauth2-cookie-secret"]))
+    and any(.items[]; .kind == "Service" and .metadata.name == "oauth2-proxy"
+      and .spec.type == "ClusterIP" and .spec.ports[0].port == 4180)
+    and any(.items[]; .kind == "ConfigMap" and .metadata.name == "oauth-config")
+    and any(.items[]; .kind == "Deployment" and .metadata.name == "https-staging")
+    and any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "redis")
+    and any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme")
+  ' manifests.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
+    | yq -o=json '.' | jq -e '
+      .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
+      and .ports["rest-internal"].expose.default == false
+      and .ports["staging-http"].exposedPort == 8081
+      and .ports.websecure.exposedPort == 8443
+      and .persistence.existingClaim == "recipe-db-acme"
+      and (.additionalArguments | index("--entrypoints.websecure.http.middlewares=identity-strip@file") != null)
+      and (.additionalArguments | index("--entrypoints.websecure.http.aliasHeadersStrategy=delete") != null)'
+}
+
 @test "Kubernetes templates select every application project including design" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '

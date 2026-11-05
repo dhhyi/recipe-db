@@ -89,11 +89,16 @@ production_config() {
        else .origin == ("http://127.0.0.1:" + (.httpPort | tostring)) end)
       else true end)
     and (if .runtime.ingressMode == "private-lan" then
-      .target == "pi" and .runtime.authMode == "token-only"
+      .target == "pi" and (.runtime.authMode == "token-only" or has("httpsStaging"))
       else true end)
     and (if has("httpsStaging") then
-      .target == "pi" and .runtime.authMode == "token-only"
+      .target == "pi"
       and .runtime.ingressMode == "private-lan" and has("piStorage")
+      and (if (.runtime.authMode // "google") == "google" then
+        .origin == ("https://" + .httpsStaging.hostname)
+        and .httpsStaging.acmeEnvironment == "production"
+        and .httpsStaging.exposeApplication == true
+        else true end)
       and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"] +
         (if has("exposeApplication") then ["exposeApplication"] else [] end) +
         (if has("renewalRehearsal") then ["renewalRehearsal"] else [] end))

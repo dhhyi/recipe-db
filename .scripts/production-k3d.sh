@@ -254,7 +254,7 @@ routes() {
                 .http.routers["preview-" + $name] = ($router + {
                   rule:($host + " && (" + $router.rule + ")"),
                   entrypoints:["websecure"], tls:$tls,
-                  middlewares:(["identity-strip"] + ($router.middlewares // []))})
+                  middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
               end;
             preview("frontend")
             | preview("design")
@@ -263,6 +263,11 @@ routes() {
             | preview("recipes-edit")
             | preview("images-edit")
             | preview("mcp")
+            | if $authMode == "google" then
+                preview("graphql-cookie")
+                | preview("graphql-bearer")
+                | preview("oauth2-public")
+              else . end
           else
             .http.routers["https-staging"] = {
               rule:($host + " && Path(`/`)"), entrypoints:["websecure"],
@@ -1290,7 +1295,7 @@ case "$command" in
       diagnostics
       production_fail "deployment failed (secret-safe diagnostics above)"
     fi
-    if [[ $auth_mode = token-only ]]; then
+    if [[ $auth_mode = token-only || $ingress_mode = private-lan ]]; then
       kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
       jq -e --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
         (if $ingress == "private-lan" then
@@ -1300,7 +1305,7 @@ case "$command" in
          else .spec.type == "ClusterIP" end) and
         ((.spec.externalIPs // []) | length == 0) and
         all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
-        || production_fail "token-only ingress does not match the requested private exposure without NodePorts"
+        || production_fail "ingress does not match the requested exposure without NodePorts"
     fi
     ;;
   backup | backup-enter)
