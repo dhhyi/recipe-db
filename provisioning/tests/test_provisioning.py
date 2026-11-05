@@ -120,7 +120,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn("Persistent=false", timer)
         self.assertIn("RandomizedDelaySec=15min", timer)
         self.assertEqual(self.defaults["rclone_version"], "1.75.2")
-        self.assertRegex(self.defaults["rclone_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(self.defaults["rclone_sha256"],
+                         "b8ba161d5c837206fad79ff1aabf0a81aa02a5fb164cdbc0ff5db4160aecd278")
         tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
         private_dirs = next(task for task in tasks if task.get("name") == "Create private backup configuration and state directories")
         self.assertEqual(private_dirs["ansible.builtin.file"]["mode"], "0700")
@@ -137,7 +138,8 @@ class ContractTests(unittest.TestCase):
                          "/etc/recipe-db/backup-kubeconfig.yaml")
         rclone_task = next(task for task in tasks if task.get("name") == "Download checksum-pinned ARM64 rclone package")
         self.assertIn("{{ rclone_sha256 }}", rclone_task["ansible.builtin.get_url"]["checksum"])
-        self.assertIn("{{ rclone_version }}", rclone_task["ansible.builtin.get_url"]["url"])
+        self.assertEqual(rclone_task["ansible.builtin.get_url"]["url"],
+                         "https://downloads.rclone.org/v{{ rclone_version }}/rclone-v{{ rclone_version }}-linux-arm64.deb")
 
     def test_startup_guard_has_no_separate_mount(self):
         unit = self.render("k3s.service.j2")
