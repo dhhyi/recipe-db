@@ -46,6 +46,16 @@ load test_helper
   grep -F 'if: success()' "$slice"
 }
 
+@test "Publish retains rebuild explanations even when Bazel fails" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  slice="$BATS_TEST_TMPDIR/diagnostics-step"
+  grep -F "BAZEL_DIAGNOSTICS_DIR: \${{ runner.temp }}/bazel-diagnostics" "$workflow"
+  sed -n '/- name: upload Bazel rebuild explanations/,/- name: prepare Bazel cache snapshot/p' "$workflow" > "$slice"
+  grep -F 'if: always()' "$slice"
+  grep -F 'uses: actions/upload-artifact@v7' "$slice"
+  grep -F "path: \${{ runner.temp }}/bazel-diagnostics/*.log" "$slice"
+}
+
 @test "nightly cleanup is scheduled on trusted main with isolated deletion permissions" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/bazel-cache-cleanup.yaml"
   publish="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"

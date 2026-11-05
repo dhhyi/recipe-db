@@ -34,6 +34,7 @@ jobs:
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       DEVCONTAINER_KEEP_RUNNING: "true"
+      BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -105,6 +106,16 @@ jobs:
             --action_env=DEVCONTAINER_KEEP_RUNNING \
             --execution_log_json_file="$RUNNER_TEMP/bazel-check-execution.json" \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" //:all
+
+      - name: upload Bazel rebuild explanations
+        if: always()
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: bazel-rebuild-explanations
+          path: ${{ runner.temp }}/bazel-diagnostics/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: prepare Bazel cache snapshot
         id: prepare-bazel-cache
