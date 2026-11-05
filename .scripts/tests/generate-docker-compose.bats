@@ -338,6 +338,10 @@ assert_compose() {
     .providers[0].clientID == "test.apps.googleusercontent.com"
     and .providers[0].oidcConfig.skipDiscovery == true
     and .providers[0].loginURL == "https://accounts.google.com/o/oauth2/v2/auth"
+    and .providers[0].loginURLParameters == [
+      {"name":"access_type","default":["offline"]},
+      {"name":"prompt","default":["consent"]}
+    ]
   ' <<< "$output"
 }
 

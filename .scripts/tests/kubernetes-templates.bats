@@ -360,6 +360,10 @@ for stop_signal in (signal.SIGTERM, signal.SIGQUIT):
       and .provider == "oidc"
       and .scope == "openid email"
       and .code_challenge_method == "S256"
+      and .loginURLParameters == [
+        {"name":"access_type","default":["offline"]},
+        {"name":"prompt","default":["consent"]}
+      ]
       and .additionalClaims == ["iss", "email_verified"]
       and .oidcConfig.issuerURL == "https://accounts.google.com"
       and .oidcConfig.insecureAllowUnverifiedEmail == false
