@@ -34,7 +34,6 @@ jobs:
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       DEVCONTAINER_KEEP_RUNNING: "true"
-      BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -75,6 +74,8 @@ jobs:
             --pr-number "$PR_NUMBER"
 
       - name: check project formatting
+        env:
+          BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
         run: |
           pnpm exec prettier --log-level warn --check .
           echo "::group::generate format targets"
@@ -94,6 +95,8 @@ jobs:
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
 
       - name: Bazel precommit checks and unit tests
+        env:
+          BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
         run: |
           mise run --raw generate-bazel-build
           mise run --raw bazel build \
