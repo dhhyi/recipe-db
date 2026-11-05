@@ -45,6 +45,8 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n=' > .secrets/oauth2-cookie-se
 
 Regenerate the development Compose and alpha configuration whenever the development OAuth client ID changes. Do not edit generated `docker-compose.yml` or `oauth2-proxy-alpha.yml` directly; production routes are rendered from the deployment template. The development stack has no public Redis, OAuth2 Proxy admin, or `/oauth2/auth` route. Only the explicit `/oauth2/start`, `/oauth2/callback`, `/oauth2/sign_in`, and `/oauth2/sign_out` paths are routed to OAuth2 Proxy; sign-in is navigation initiated by the UI, never a blanket redirect for data requests.
 
+Traefik Docker labels encode list values as comma-separated strings, not JSON arrays. This includes ForwardAuth request/response headers and refreshed cookies; incorrect encoding can allow the Google callback to succeed while subsequent session authentication fails.
+
 ## Request and identity contract
 
 When Google OAuth is enabled, requests use one GraphQL endpoint and are classified in this order:

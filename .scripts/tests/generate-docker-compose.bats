@@ -327,6 +327,9 @@ assert_compose() {
     and (.services.traefik.labels | index("traefik.http.middlewares.identity-strip.headers.customrequestheaders.X-Internal-Ingress-Token=") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-cookie.priority=200") != null)
     and (.services.graphql.labels | index("traefik.http.routers.graphql-bearer.priority=300") != null)
+    and (.services.graphql.labels | index("traefik.http.middlewares.oauth2-forward-auth.forwardAuth.authRequestHeaders=Cookie,Authorization") != null)
+    and (.services.graphql.labels | index("traefik.http.middlewares.oauth2-forward-auth.forwardAuth.authResponseHeaders=X-Auth-Request-User,X-Auth-Request-Issuer,X-Auth-Request-Email,X-Auth-Request-Email-Verified") != null)
+    and (.services.graphql.labels | index("traefik.http.middlewares.oauth2-forward-auth.forwardAuth.addAuthCookiesToResponse=_oauth2_proxy") != null)
     and (.secrets["google-oauth-client-secret"].file | contains("./.secrets/google-oauth-client-secret"))
   ' "$(id -u):$(id -g)"
   run yq -o=json '.' oauth2-proxy-alpha.yml
