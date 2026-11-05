@@ -1,5 +1,9 @@
 # Contributing
 
+## Commit and pull request titles
+
+Use plain, short descriptions that start with a capital letter. Do not add prefix labels or groups such as `backend:`, `chore:`, or `fix:`. For pull request titles, include the related issue number in parentheses.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:
