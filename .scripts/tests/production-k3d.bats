@@ -645,6 +645,10 @@ if jq -e 'has("config")' "$2" > /dev/null; then
   fi
   printf '%s\n' '---' 'apiVersion: helm.cattle.io/v1' 'kind: HelmChartConfig' 'metadata:' '  name: traefik' '  namespace: kube-system' 'spec:' '  valuesContent: "deployment: {}"'
 else
+  jq -e --slurpfile config "$VALUES" '
+    has("googleOAuthClientId") and
+    .googleOAuthClientId == ($config[0].runtime.googleOAuthClientId // "")
+  ' "$2" > /dev/null || exit 1
   cat << 'YAML'
 http:
   routers:

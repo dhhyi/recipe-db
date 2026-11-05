@@ -217,8 +217,8 @@ annotate_credentials() {
 }
 
 routes() {
-  jq -n --slurpfile projects "$work/projects.jsonl" \
-    '{projects:$projects}' > "$work/route-values.json"
+  jq -n --slurpfile projects "$work/projects.jsonl" --slurpfile config "$work/config.json" \
+    '{projects:$projects,googleOAuthClientId:($config[0].runtime.googleOAuthClientId // "")}' > "$work/route-values.json"
   ytt -f "$root/.scripts/templates/traefik-template.yml" \
     -f "$root/.scripts/templates/browse-maintenance-template.lib.yml" \
     -f "$root/.scripts/templates/service-template.lib.yml" \
