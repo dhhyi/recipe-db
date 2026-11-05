@@ -31,6 +31,7 @@ WORKFLOW = ".github/workflows/publish.yaml"
 JOB = "quality-checks"
 UPLOAD_STEP = "upload Bazel cache snapshot"
 ARTIFACT_PREFIX = "bazel-cache-v2"
+TRUSTED_COPILOT_ACTOR = (198982749, "Copilot", "Bot")
 MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-main-r([1-9]\d*)-a([1-9]\d*)")
 PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
 LEGACY_MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-main-r([1-9]\d*)-a([1-9]\d*)")
@@ -1339,11 +1340,14 @@ def download_candidate(base, token, artifact, cache_path, repository,
 def trusted_pr_writer(base, token, run, detail, repository, pr_number):
     actor = run.get("actor")
     detail_actor = detail.get("actor")
-    login = actor.get("login") if isinstance(actor, dict) else None
-    if not login or not isinstance(detail_actor, dict) \
-            or detail_actor.get("login") != login \
-            or (actor.get("id") is not None and detail_actor.get("id") != actor["id"]):
-        print(f"cache: trust-rejected pr={pr_number}: producer actor identity is missing or inconsistent")
+    actor_identity = trusted_actor_identity(actor)
+    detail_identity = trusted_actor_identity(detail_actor)
+    if actor_identity is None or detail_identity is None:
+        print(f"cache: trust-rejected pr={pr_number}: producer actor identity metadata is missing or malformed")
+        return False
+    actor_id, login, actor_type = actor_identity
+    if actor_identity != detail_identity:
+        print(f"cache: trust-rejected pr={pr_number}: producer actor identity is inconsistent")
         return False
     head_repo = detail.get("head_repository")
     producer_repo = detail.get("repository")
@@ -1355,19 +1359,50 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
             or head_repo["id"] != producer_repo["id"]:
         print(f"cache: trust-rejected pr={pr_number}: recorded producer head repository is not this repository")
         return False
+    if actor_type == "Bot":
+        if actor_identity != TRUSTED_COPILOT_ACTOR:
+            print(f"cache: trust-rejected pr={pr_number}: unsupported or mismatched bot identity "
+                  f"id={actor_id} login={login} type={actor_type}")
+            return False
+        print(f"cache: trust-accepted pr={pr_number} producer={login} "
+              "authorization=pinned Copilot identity")
+        return True
+    if actor_id == TRUSTED_COPILOT_ACTOR[0] or login == TRUSTED_COPILOT_ACTOR[1]:
+        print(f"cache: trust-rejected pr={pr_number}: producer identity does not match "
+              "the pinned Copilot identity")
+        return False
+    if actor_type != "User":
+        print(f"cache: trust-rejected pr={pr_number}: unsupported producer actor type "
+              f"id={actor_id} login={login} type={actor_type}")
+        return False
     encoded_login = urllib.parse.quote(login, safe="")
     permission = request_json(
         f"{base}/collaborators/{encoded_login}/permission", token
     )
     identity = permission.get("user", {}) if isinstance(permission, dict) else {}
-    if not isinstance(permission, dict) \
+    if not isinstance(permission, dict) or not isinstance(identity, dict) \
             or identity.get("login") != login \
             or permission.get("permission") not in ("admin", "maintain", "write"):
-        print(f"cache: trust-rejected pr={pr_number}: actor {login} lacks verified write permission")
+        reason = "collaborator permission metadata is unavailable" if permission is None \
+            else f"actor {login} lacks verified write permission"
+        print(f"cache: trust-rejected pr={pr_number}: {reason}")
         return False
     print(f"cache: trust-accepted pr={pr_number} producer={login} "
           f"permission={permission['permission']}")
     return True
+
+
+def trusted_actor_identity(actor):
+    if not isinstance(actor, dict):
+        return None
+    actor_id = actor.get("id")
+    login = actor.get("login")
+    actor_type = actor.get("type")
+    if type(actor_id) is not int or actor_id <= 0 \
+            or not isinstance(login, str) or not login \
+            or not isinstance(actor_type, str) or not actor_type:
+        return None
+    return actor_id, login, actor_type
 
 
 def squash_pull_request(base, token, repository, commit_sha):
