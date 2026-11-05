@@ -104,7 +104,7 @@
             .querySelector("header-component");
           const header = document.querySelector("header-component");
           if (!identity || !header) return;
-          for (const attribute of ["auth-role", "auth-name"]) {
+          for (const attribute of ["auth-role", "auth-name", "auth-enabled"]) {
             if (identity.hasAttribute(attribute)) {
               header.setAttribute(attribute, identity.getAttribute(attribute));
             } else {

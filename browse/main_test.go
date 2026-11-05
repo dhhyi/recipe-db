@@ -251,6 +251,13 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			t.Fatalf("identity must supply only the header auth state: %s", widget.Body.String())
 		}
 	}
+	t.Setenv("GOOGLE_OAUTH_CLIENT_ID", "test.apps.googleusercontent.com")
+	googleHandler := newHandlerWithEndpoint(client, c, upstream.URL)
+	identity := httptest.NewRecorder()
+	googleHandler.ServeHTTP(identity, httptest.NewRequest("GET", "/identity", nil))
+	if got := strings.TrimSpace(identity.Body.String()); got != `<header-component auth-role="owner" auth-enabled></header-component>` {
+		t.Fatalf("configured Google auth must be reflected in the identity header: %s", got)
+	}
 	first := request("GET", "/recipe/42?variant=1", "")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), "Original") {
 		t.Fatalf("detail failed: %d %s", first.Code, first.Body.String())
