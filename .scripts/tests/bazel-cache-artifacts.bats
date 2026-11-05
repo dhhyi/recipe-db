@@ -56,6 +56,19 @@ load test_helper
   grep -F "path: \${{ runner.temp }}/bazel-diagnostics/*.log" "$slice"
 }
 
+@test "Publish configures runner-dependent diagnostics only in build step environments" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  run yq '.jobs.quality-checks.env | has("BAZEL_DIAGNOSTICS_DIR")' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = false ]
+
+  for step in "check project formatting" "Bazel precommit checks and unit tests"; do
+    run env STEP="$step" yq -r '.jobs.quality-checks.steps[] | select(.name == strenv(STEP)) | .env.BAZEL_DIAGNOSTICS_DIR' "$workflow"
+    [ "$status" -eq 0 ]
+    [ "$output" = "\${{ runner.temp }}/bazel-diagnostics" ]
+  done
+}
+
 @test "nightly cleanup is scheduled on trusted main with isolated deletion permissions" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/bazel-cache-cleanup.yaml"
   publish="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
