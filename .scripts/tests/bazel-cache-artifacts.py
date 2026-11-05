@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import http.client
 import hashlib
 import importlib.util
 import io
@@ -85,15 +86,16 @@ def cleanup_fixture(run_id, run_number, attempt=1, pr_number=None, artifact_id=N
         scope = f"pr-{pr_number}"
         branch = f"feature-{pr_number}"
         event = "pull_request"
-        pull_requests = [{"number": pr_number}]
+        pull_requests = []
     sha = f"{run_id:040x}"
-    name = f"bazel-cache-v1-{scope}-r{run_id}-a{attempt}"
+    name = f"bazel-cache-v2-{scope}-r{run_id}-a{attempt}"
     return {
         "artifact": {
             "id": artifact_id or run_id,
             "name": name,
             "workflow_run": {
                 "id": run_id, "head_sha": sha, "head_branch": branch, "event": event,
+                "repository_id": 9,
             },
         },
         "run": {
@@ -101,7 +103,8 @@ def cleanup_fixture(run_id, run_number, attempt=1, pr_number=None, artifact_id=N
             "head_sha": sha, "head_branch": branch, "event": event,
             "path": CACHE.WORKFLOW, "name": "Publish",
             "repository": {"id": 9, "full_name": "owner/repo"},
-            "head_repository": {"full_name": "owner/repo"},
+            "head_repository": {"id": 9, "full_name": "owner/repo"},
+            "workflow_id": 9,
             "pull_requests": pull_requests,
         },
         "jobs": [{"name": CACHE.JOB, "steps": [
@@ -208,11 +211,20 @@ class CacheArtifactTests(unittest.TestCase):
         def fake_json(url, token):
             if url == "https://api.github.com/repos/owner/repo":
                 return {"id": 9, "full_name": "owner/repo"}
+            if "/commits/" in url and url.endswith("/pulls"):
+                sha = url.split("/commits/", 1)[1].rsplit("/pulls", 1)[0]
+                fixture = next(item for item in fixtures if item["run"]["head_sha"] == sha)
+                pr_number = fixture["artifact"]["name"].split("-")[4]
+                number = int(pr_number)
+                return [{
+                    "number": number,
+                    "base": {"repo": {"id": 9, "full_name": "owner/repo"}},
+                }]
             if "/pulls/" in url:
                 number = int(url.rsplit("/", 1)[1])
                 return {
                     "number": number, **pull_states[number],
-                    "base": {"repo": {"full_name": "owner/repo"}},
+                    "base": {"repo": {"id": 9, "full_name": "owner/repo"}},
                 }
             return {"artifacts": [fixture["artifact"] for fixture in fixtures]}
 
@@ -232,6 +244,38 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertEqual(deleted, [
             "https://api.github.com/repos/owner/repo/actions/artifacts/301",
         ])
+
+    def test_cleanup_authenticates_legacy_pr_head_before_deletion(self):
+        fixture = cleanup_fixture(350, 1, pr_number=15)
+        fixture["artifact"]["name"] = "bazel-cache-v1-pr-15-r350-a1"
+        api_base = "https://api.github.com/repos/owner/repo"
+        deleted = []
+
+        def fake_json(url, token):
+            if url == api_base:
+                return {"id": 9, "full_name": "owner/repo"}
+            if "/commits/" in url:
+                return [{
+                    "number": 15,
+                    "base": {"repo": {"id": 9, "full_name": "owner/repo"}},
+                }]
+            if "/pulls/15" in url:
+                return {
+                    "number": 15, "state": "closed", "merged_at": "2026-01-01",
+                    "base": {"repo": {"id": 9, "full_name": "owner/repo"}},
+                }
+            return {"artifacts": [fixture["artifact"]]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt", return_value=fixture["run"]), \
+                patch.object(CACHE, "jobs_for_attempt", return_value=fixture["jobs"]), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=lambda url, token: deleted.append(url) or True):
+            self.assertEqual(CACHE.cleanup_artifacts(api_base, "token", "owner/repo"), 0)
+
+        self.assertEqual(
+            deleted, [f"{api_base}/actions/artifacts/{fixture['artifact']['id']}"]
+        )
 
     def test_cleanup_identity_and_service_errors_are_incomplete(self):
         fixture = cleanup_fixture(401, 1)
@@ -330,6 +374,98 @@ class CacheArtifactTests(unittest.TestCase):
                 CACHE.request_delete(
                     "https://api.github.com/repos/owner/repo/actions/artifacts/1", "token"
                 )
+
+    def test_delete_disconnect_is_confirmed_by_rechecking_artifact(self):
+        def disconnected(request, timeout):
+            raise http.client.RemoteDisconnected("connection closed")
+
+        with patch.object(CACHE, "opener", return_value=disconnected), \
+                patch.object(CACHE, "request_json", return_value=None):
+            self.assertFalse(CACHE.request_delete(
+                "https://api.github.com/repos/owner/repo/actions/artifacts/1", "token"
+            ))
+
+        with patch.object(CACHE, "opener", return_value=disconnected), \
+                patch.object(CACHE, "request_json", return_value={"id": 1}):
+            with self.assertRaisesRegex(CACHE.ApiFailure, "outcome is unknown"):
+                CACHE.request_delete(
+                    "https://api.github.com/repos/owner/repo/actions/artifacts/1", "token"
+                )
+
+        def server_error(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 500, "server error", {}, None)
+
+        with patch.object(CACHE, "opener", return_value=server_error), \
+                patch.object(CACHE, "request_json", return_value=None):
+            self.assertFalse(CACHE.request_delete(
+                "https://api.github.com/repos/owner/repo/actions/artifacts/1", "token"
+            ))
+
+    def test_safe_json_reads_retry_remote_disconnect_with_bounded_attempts(self):
+        attempts = []
+
+        def disconnected_once(request, timeout):
+            attempts.append(request.full_url)
+            if len(attempts) == 1:
+                raise http.client.RemoteDisconnected("connection closed")
+            return io.BytesIO(b'{"ok":true}')
+
+        with patch.object(CACHE, "opener", return_value=disconnected_once), \
+                patch.object(CACHE.time, "sleep"):
+            self.assertEqual(CACHE.request_json("https://api.github.com/test", "token"), {"ok": True})
+        self.assertEqual(len(attempts), 2)
+
+        attempts.clear()
+
+        def always_disconnected(request, timeout):
+            attempts.append(request.full_url)
+            raise http.client.RemoteDisconnected("connection closed")
+
+        with patch.object(CACHE, "opener", return_value=always_disconnected), \
+                patch.object(CACHE.time, "sleep"):
+            with self.assertRaisesRegex(CACHE.ApiFailure, "bounded retries"):
+                CACHE.request_json("https://api.github.com/test", "token")
+        self.assertEqual(len(attempts), CACHE.API_READ_ATTEMPTS)
+
+    def test_artifact_download_retries_disconnect_without_leaving_partial_file(self):
+        destination = self.root / "download.zip"
+        attempts = []
+
+        class PartialResponse:
+            headers = {}
+
+            def __init__(self, fails):
+                self.fails = fails
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def read(self, _):
+                if self.fails:
+                    self.fails = False
+                    return b"partial"
+                raise http.client.RemoteDisconnected("connection closed")
+
+        class CompleteResponse(io.BytesIO):
+            headers = {}
+
+        def open_artifact(request, timeout):
+            attempts.append(request.full_url)
+            if len(attempts) == 1:
+                return PartialResponse(True)
+            return CompleteResponse(b"complete")
+
+        with patch.object(CACHE, "opener", return_value=open_artifact), \
+                patch.object(CACHE.time, "sleep"):
+            self.assertEqual(
+                CACHE.request_file("https://api.github.com/artifact", "token", destination, 100),
+                len(b"complete"),
+            )
+        self.assertEqual(destination.read_bytes(), b"complete")
+        self.assertEqual(len(attempts), 2)
 
     def test_workflow_run_listing_uses_bounded_page_size(self):
         requests = []
@@ -666,12 +802,14 @@ class CacheArtifactTests(unittest.TestCase):
         run = {
             "id": 42, "run_number": 8, "run_attempt": 1, "workflow_id": 9,
             "head_sha": "b" * 40, "event": "push", "head_branch": "main",
+            "repository": {"id": 9, "full_name": "owner/repo"},
         }
         manifest = {
             "format": CACHE.FORMAT, "formatVersion": CACHE.FORMAT_VERSION,
             "repository": "owner/repo", "workflow": CACHE.WORKFLOW, "job": CACHE.JOB,
             "runId": 42, "runAttempt": 1, "event": "push", "builtCommit": "b" * 40,
-            "pullRequest": None,
+            "sourceCommit": "b" * 40, "producerHeadSha": "b" * 40,
+            "baseCommit": None, "pullRequest": None,
             "compatibility": {
                 "bazelVersion": (ROOT / ".bazelversion").read_text().strip(),
                 "os": platform.system().lower(),
@@ -688,11 +826,11 @@ class CacheArtifactTests(unittest.TestCase):
             archive.writestr("manifest.json", json.dumps(manifest))
             archive.write(snapshot, "snapshot.tar")
         artifact = {
-            "id": 88, "name": "bazel-cache-v1-main-r42-a1",
+            "id": 88, "name": "bazel-cache-v2-main-r42-a1",
             "size_in_bytes": artifact_zip.stat().st_size, "workflow_run": {"id": 42},
         }
         detail = {
-            **run, "repository": {"full_name": "owner/repo"},
+            **run, "repository": {"id": 9, "full_name": "owner/repo"},
             "path": CACHE.WORKFLOW, "name": "Publish", "conclusion": "failure",
         }
         jobs = [{"name": CACHE.JOB, "steps": [
@@ -752,19 +890,19 @@ class CacheArtifactTests(unittest.TestCase):
     def test_pr_reruns_and_force_pushes_rank_by_run_attempt_not_ancestry(self):
         runs = [
             {"id": 4, "run_number": 10, "run_attempt": 3, "head_sha": "old",
-             "event": "pull_request", "pull_requests": [{"number": 17}]},
+             "event": "pull_request", "pull_requests": []},
             {"id": 5, "run_number": 11, "run_attempt": 1, "head_sha": "new",
-             "event": "pull_request", "pull_requests": [{"number": 17}]},
+             "event": "pull_request"},
             {"id": 6, "run_number": 99, "run_attempt": 1, "head_sha": "other",
-             "event": "pull_request", "pull_requests": [{"number": 18}]},
+             "event": "pull_request", "pull_requests": []},
         ]
         selected = CACHE.rank_runs(runs, "pr", 17, {})
-        self.assertEqual([run["id"] for run in selected], [5, 4])
+        self.assertEqual([run["id"] for run in selected], [6, 5, 4])
         artifact_runs = []
         artifacts = [
-            {"name": "bazel-cache-v1-pr-17-r4-a1"},
-            {"name": "bazel-cache-v1-pr-17-r4-a3"},
-            {"name": "bazel-cache-v1-pr-17-r4-a2"},
+            {"name": "bazel-cache-v2-pr-17-r4-a1"},
+            {"name": "bazel-cache-v2-pr-17-r4-a3"},
+            {"name": "bazel-cache-v2-pr-17-r4-a2"},
         ]
         with patch.object(CACHE, "paginated", side_effect=lambda url, token, key: (
             artifact_runs.append(url) or artifacts
@@ -774,6 +912,37 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertEqual(artifact_runs, [
             "https://api.github.com/repos/owner/repo/actions/runs/4/artifacts"
         ])
+
+    def test_commit_to_pr_association_authenticates_historical_head_uniquely(self):
+        head = "a" * 40
+        advanced_pull = {
+            "number": 17,
+            "head": {"sha": "b" * 40},
+            "base": {"sha": "c" * 40, "repo": {"full_name": "owner/repo"}},
+        }
+        with patch.object(CACHE, "request_json", return_value=[advanced_pull]):
+            self.assertEqual(
+                CACHE.resolve_pr_association(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo",
+                    head, 17,
+                ),
+                advanced_pull,
+            )
+        with patch.object(CACHE, "request_json", return_value=[
+            advanced_pull,
+            {**advanced_pull, "number": 18},
+        ]):
+            with self.assertRaisesRegex(CACHE.Invalid, "ambiguous"):
+                CACHE.resolve_pr_association(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo",
+                    head, 17,
+                )
+        with patch.object(CACHE, "request_json", return_value=[]):
+            with self.assertRaisesRegex(CACHE.Invalid, "missing"):
+                CACHE.resolve_pr_association(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo",
+                    head, 17,
+                )
 
     def test_pr_selection_excludes_newer_runs_and_keeps_prior_attempts(self):
         runs = [
@@ -795,6 +964,26 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertFalse(CACHE.pr_attempt_is_eligible(current, 2, 3, 20, 2))
         self.assertFalse(CACHE.pr_attempt_is_eligible(current, 3, 3, 20, 2))
         self.assertFalse(CACHE.pr_attempt_is_eligible(runs[4], 1, 3, 20, 2))
+
+    def test_restore_logs_legacy_pr_migration_skip(self):
+        run = {
+            "id": 1, "run_number": 2, "run_attempt": 1, "head_sha": "a" * 40,
+            "event": "pull_request",
+        }
+        artifact = {"id": 2, "name": "bazel-cache-v1-pr-17-r1-a1"}
+        args = SimpleNamespace(run_number=10, run_id="99", run_attempt="1")
+        output = io.StringIO()
+        with patch.object(CACHE, "paginated", return_value=[run]), \
+                patch.object(CACHE, "artifacts_for_run", return_value=[artifact]), \
+                patch.object(CACHE, "download_candidate") as download, \
+                redirect_stdout(output):
+            restored = CACHE.restore_scope(
+                args, "https://api.github.com/repos/owner/repo", "token",
+                "pr", 17, {}, self.root / "cache",
+            )
+        self.assertFalse(restored)
+        download.assert_not_called()
+        self.assertIn("migration-skip", output.getvalue())
 
     def test_main_prefers_nearest_ancestor_then_run_and_attempt_order(self):
         current = {"id": 10, "run_number": 100, "run_attempt": 1,
@@ -850,10 +1039,7 @@ class CacheArtifactTests(unittest.TestCase):
         detail = {
             "actor": {"login": "trusted-writer", "id": 13},
             "repository": {"id": 42, "full_name": "owner/repo"},
-            "pull_requests": [{
-                "number": 17,
-                "head": {"repo": {"id": 42}},
-            }],
+            "head_repository": {"id": 42, "full_name": "owner/repo"},
         }
         permission = {"user": {"login": "trusted-writer"}, "permission": "write"}
         with patch.object(CACHE, "request_json", return_value=permission):
@@ -882,7 +1068,7 @@ class CacheArtifactTests(unittest.TestCase):
             "owner/repo", 17,
         ))
         fork = json.loads(json.dumps(detail))
-        fork["pull_requests"][0]["head"]["repo"]["id"] = 43
+        fork["head_repository"]["id"] = 43
         self.assertFalse(CACHE.trusted_pr_writer(
             "https://api.github.com/repos/owner/repo", "token", run, fork,
             "owner/repo", 17,
@@ -1042,8 +1228,8 @@ class CacheArtifactTests(unittest.TestCase):
              "event": "pull_request", "pull_requests": [{"number": 17}]},
         ]
         artifacts = {
-            2: [{"id": 22, "name": "bazel-cache-v1-pr-17-r2-a1"}],
-            1: [{"id": 11, "name": "bazel-cache-v1-pr-17-r1-a1"}],
+            2: [{"id": 22, "name": "bazel-cache-v2-pr-17-r2-a1"}],
+            1: [{"id": 11, "name": "bazel-cache-v2-pr-17-r1-a1"}],
         }
         calls = []
 
@@ -1077,7 +1263,7 @@ class CacheArtifactTests(unittest.TestCase):
                   "event": "pull_request", "pull_requests": [{"number": 17}]}
         main_run = {"id": 2, "run_number": 5, "run_attempt": 1, "head_sha": "base",
                     "event": "push", "head_branch": "main"}
-        artifacts = {1: [], 2: [{"id": 22, "name": "bazel-cache-v1-main-r2-a1"}]}
+        artifacts = {1: [], 2: [{"id": 22, "name": "bazel-cache-v2-main-r2-a1"}]}
         calls = []
 
         def fake_paginated(url, token, key, page_size=100):
@@ -1105,15 +1291,16 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertIn("fallback scope=pr", output.getvalue())
 
     def test_identity_validation_rejects_wrong_repository_workflow_or_pr(self):
+        head = "a" * 40
+        base = "b" * 40
         run = {
-            "id": 25, "run_number": 4, "workflow_id": 9, "head_sha": "pr-head",
-            "event": "pull_request", "head_branch": "feature",
+            "id": 25, "run_number": 4, "run_attempt": 2, "workflow_id": 9,
+            "head_sha": head, "event": "pull_request", "head_branch": "feature",
+            "repository": {"id": 9, "full_name": "owner/repo"},
         }
         detail = {
-            **run, "run_attempt": 2, "repository": {"full_name": "owner/repo"},
+            **run, "repository": {"id": 9, "full_name": "owner/repo"},
             "path": CACHE.WORKFLOW, "name": "Publish", "conclusion": "failure",
-            "pull_requests": [{"number": 3, "head": {"sha": "pr-head"},
-                               "base": {"sha": "main-base"}}],
         }
         jobs = [{"name": CACHE.JOB, "steps": [
             {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
@@ -1121,49 +1308,52 @@ class CacheArtifactTests(unittest.TestCase):
         manifest = {
             "repository": "owner/repo", "workflow": CACHE.WORKFLOW,
             "job": CACHE.JOB, "runId": 25, "runAttempt": 2,
-            "event": "pull_request", "builtCommit": "built",
-            "pullRequest": {"number": 3, "head": "pr-head", "base": "main-base"},
+            "event": "pull_request", "builtCommit": head,
+            "sourceCommit": head, "producerHeadSha": head, "baseCommit": base,
+            "pullRequest": {"number": 3, "head": head, "base": base},
         }
-        commit = {"sha": "built", "parents": [
-            {"sha": "main-base"}, {"sha": "pr-head"},
-        ]}
+        associated_pr = {
+            "number": 3, "head": {"sha": "c" * 40},
+            "base": {"sha": "d" * 40, "repo": {"id": 9, "full_name": "owner/repo"}},
+        }
         CACHE.verify_producer(
-            run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2", "pr", 3,
-            "owner/repo", commit,
+            run, detail, jobs, manifest, "bazel-cache-v2-pr-3-r25-a2", "pr", 3,
+            "owner/repo", associated_pr,
         )
         with self.assertRaisesRegex(CACHE.Invalid, "identity"):
             CACHE.verify_producer(
-                run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
-                "pr", 4, "owner/repo", commit,
+                run, detail, jobs, manifest, "bazel-cache-v2-pr-3-r25-a2",
+                "pr", 4, "owner/repo", associated_pr,
             )
         with self.assertRaisesRegex(CACHE.Invalid, "metadata mismatch"):
             CACHE.verify_producer(
                 run, {**detail, "path": "other.yml"}, jobs, manifest,
-                "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo", commit,
+                "bazel-cache-v2-pr-3-r25-a2", "pr", 3, "owner/repo", associated_pr,
             )
         with self.assertRaisesRegex(CACHE.Invalid, "metadata mismatch"):
             CACHE.verify_producer(
                 run, {**detail, "repository": {"full_name": "fork/repo"}}, jobs,
-                manifest, "bazel-cache-v1-pr-3-r25-a2", "pr", 3, "owner/repo", commit,
+                manifest, "bazel-cache-v2-pr-3-r25-a2", "pr", 3, "owner/repo", associated_pr,
             )
-        with self.assertRaisesRegex(CACHE.Invalid, "head and base"):
+        with self.assertRaisesRegex(CACHE.Invalid, "source or commit-to-PR"):
             CACHE.verify_producer(
-                run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
-                "pr", 3, "owner/repo", {"sha": "built", "parents": [{"sha": "other"}]},
+                run, detail, jobs, {**manifest, "sourceCommit": base},
+                "bazel-cache-v2-pr-3-r25-a2", "pr", 3, "owner/repo", associated_pr,
             )
         with self.assertRaisesRegex(CACHE.Invalid, "final PR head"):
             CACHE.verify_producer(
-                run, detail, jobs, manifest, "bazel-cache-v1-pr-3-r25-a2",
-                "pr", 3, "owner/repo", commit, "different-final-head",
+                run, detail, jobs, manifest, "bazel-cache-v2-pr-3-r25-a2",
+                "pr", 3, "owner/repo", associated_pr, "different-final-head",
             )
 
     def test_main_identity_rejects_pr_producers(self):
         run = {
             "id": 26, "run_number": 5, "workflow_id": 9, "head_sha": "b" * 40,
             "event": "push", "head_branch": "main",
+            "repository": {"id": 9, "full_name": "owner/repo"},
         }
         detail = {
-            **run, "run_attempt": 1, "repository": {"full_name": "owner/repo"},
+            **run, "run_attempt": 1, "repository": {"id": 9, "full_name": "owner/repo"},
             "path": CACHE.WORKFLOW, "name": "Publish",
         }
         job = [{"name": CACHE.JOB, "steps": [
@@ -1172,12 +1362,13 @@ class CacheArtifactTests(unittest.TestCase):
         manifest = {
             "repository": "owner/repo", "workflow": CACHE.WORKFLOW,
             "job": CACHE.JOB, "runId": 26, "runAttempt": 1, "event": "push",
-            "builtCommit": "b" * 40,
+            "builtCommit": "b" * 40, "sourceCommit": "b" * 40,
+            "producerHeadSha": "b" * 40, "baseCommit": None,
             "pullRequest": {"number": 7, "head": "c" * 40, "base": "d" * 40},
         }
         with self.assertRaisesRegex(CACHE.Invalid, "invalid producer scope"):
             CACHE.verify_producer(
-                run, detail, job, manifest, "bazel-cache-v1-main-r26-a1",
+                run, detail, job, manifest, "bazel-cache-v2-main-r26-a1",
                 "main", None, "owner/repo",
             )
 
@@ -1204,7 +1395,8 @@ class CacheArtifactTests(unittest.TestCase):
             "format": CACHE.FORMAT, "formatVersion": CACHE.FORMAT_VERSION,
             "repository": "owner/repo", "workflow": CACHE.WORKFLOW,
             "job": CACHE.JOB, "runId": 3, "runAttempt": 1, "event": "push",
-            "builtCommit": "a" * 40, "pullRequest": None,
+            "builtCommit": "a" * 40, "sourceCommit": "a" * 40,
+            "producerHeadSha": "a" * 40, "baseCommit": None, "pullRequest": None,
             "compatibility": {
                 "bazelVersion": (ROOT / ".bazelversion").read_text().strip(),
                 "os": platform.system().lower(),
@@ -1216,6 +1408,36 @@ class CacheArtifactTests(unittest.TestCase):
         CACHE.validate_manifest(manifest)
         with self.assertRaisesRegex(CACHE.Invalid, "malformed snapshot manifest"):
             CACHE.validate_manifest({**manifest, "futureField": True})
+
+    def test_pr_manifest_records_only_the_verified_direct_head_as_built_source(self):
+        source = "a" * 40
+        base = "b" * 40
+        event_path = self.root / "event.json"
+        event_path.write_text(json.dumps({
+            "pull_request": {
+                "number": 17,
+                "head": {"sha": source},
+                "base": {"sha": base},
+            },
+        }))
+        archive = self.root / "snapshot.tar"
+        archive.write_bytes(b"snapshot")
+        args = SimpleNamespace(
+            event_path=str(event_path), event_name="pull_request", repository="owner/repo",
+            run_id="1", run_attempt="1", commit=source, pr_number="17",
+        )
+
+        manifest = CACHE.make_manifest(args, archive)
+
+        self.assertEqual(manifest["builtCommit"], source)
+        self.assertEqual(manifest["sourceCommit"], source)
+        self.assertEqual(manifest["producerHeadSha"], source)
+        self.assertEqual(manifest["pullRequest"], {
+            "number": 17, "head": source, "base": base,
+        })
+        self.assertEqual(manifest["baseCommit"], base)
+        with self.assertRaisesRegex(CACHE.Invalid, "differs from the pull request head"):
+            CACHE.make_manifest(SimpleNamespace(**{**vars(args), "commit": "c" * 40}), archive)
 
     def test_action_execution_diagnostics_count_hits_and_executions(self):
         logfile = self.root / "execution.json"

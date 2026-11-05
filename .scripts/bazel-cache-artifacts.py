@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -25,13 +26,15 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 FORMAT = "recipe-db-bazel-disk-cache"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 WORKFLOW = ".github/workflows/publish.yaml"
 JOB = "quality-checks"
 UPLOAD_STEP = "upload Bazel cache snapshot"
-ARTIFACT_PREFIX = "bazel-cache-v1"
-MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-main-r([1-9]\d*)-a([1-9]\d*)")
-PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
+ARTIFACT_PREFIX = "bazel-cache-v2"
+MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-main-r([1-9]\d*)-a([1-9]\d*)")
+PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
+LEGACY_MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-main-r([1-9]\d*)-a([1-9]\d*)")
+LEGACY_PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
 MAIN_ARTIFACT_RETENTION = 5
 MAX_ARCHIVE_BYTES = 8 * 1024**3
 MAX_EXPANDED_BYTES = 12 * 1024**3
@@ -43,6 +46,7 @@ MAX_ACTION_RESULT_BYTES = 64 * 1024**2
 MAX_TREE_EXPANDED_BYTES = 64 * 1024**2
 MAX_ACTION_LOG_RECORD_BYTES = 16 * 1024**2
 MAX_ACTION_LOG_CHUNK_BYTES = 64 * 1024
+API_READ_ATTEMPTS = 3
 EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
 
 
@@ -485,6 +489,8 @@ def validate_action_results(files):
 def make_manifest(args, archive):
     event = parse_json(Path(args.event_path).read_bytes())
     pr = event.get("pull_request") if args.event_name == "pull_request" else None
+    if pr is not None and pr.get("head", {}).get("sha") != args.commit:
+        raise Invalid("verified source revision differs from the pull request head")
     identity = {
         "format": FORMAT,
         "formatVersion": FORMAT_VERSION,
@@ -495,6 +501,9 @@ def make_manifest(args, archive):
         "runAttempt": int(args.run_attempt),
         "event": args.event_name,
         "builtCommit": args.commit,
+        "sourceCommit": args.commit,
+        "producerHeadSha": args.commit,
+        "baseCommit": pr.get("base", {}).get("sha") if pr is not None else None,
         "pullRequest": None,
         "compatibility": {
             "bazelVersion": (ROOT / ".bazelversion").read_text().strip(),
@@ -513,7 +522,7 @@ def make_manifest(args, archive):
             raise Invalid("PR number does not match the workflow event")
         identity["pullRequest"] = {
             "number": int(args.pr_number),
-            "head": pr["head"]["sha"],
+            "head": args.commit,
             "base": pr["base"]["sha"],
         }
     return identity
@@ -740,41 +749,55 @@ def validate_zip_members(archive):
 
 
 def request_json(url, token):
-    try:
-        with opener(token)(api_request(url, token), timeout=30) as response:
-            data = response.read(MAX_METADATA_BYTES + 1)
-            if len(data) > MAX_METADATA_BYTES:
-                raise ApiFailure("GitHub API response exceeds metadata limit")
-            return parse_json(data)
-    except urllib.error.HTTPError as error:
-        raise ApiFailure(f"GitHub API returned HTTP {error.code}") from error
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise ApiFailure("GitHub API request failed") from error
+    for attempt in range(API_READ_ATTEMPTS):
+        try:
+            with opener(token)(api_request(url, token), timeout=30) as response:
+                data = response.read(MAX_METADATA_BYTES + 1)
+                if len(data) > MAX_METADATA_BYTES:
+                    raise ApiFailure("GitHub API response exceeds metadata limit")
+                return parse_json(data)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            if error.code not in (429, 500, 502, 503, 504) or attempt + 1 == API_READ_ATTEMPTS:
+                raise ApiFailure(f"GitHub API returned HTTP {error.code}") from error
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+                ConnectionError) as error:
+            if attempt + 1 == API_READ_ATTEMPTS:
+                raise ApiFailure("GitHub API request failed after bounded retries") from error
+        time.sleep(0.2 * (2 ** attempt))
 
 
 def request_file(url, token, destination, maximum):
-    try:
-        with opener(token)(api_request(url, token), timeout=90) as response:
-            content_length = response.headers.get("Content-Length")
-            if content_length and int(content_length) > maximum:
-                raise Invalid("download exceeds archive-size limit")
-            received = 0
-            with destination.open("xb") as output:
-                while True:
-                    block = response.read(1024 * 1024)
-                    if not block:
-                        break
-                    received += len(block)
-                    if received > maximum:
-                        raise Invalid("download exceeds archive-size limit")
-                    output.write(block)
-            return received
-    except urllib.error.HTTPError as error:
-        if error.code == 404 or error.code == 410:
-            return None
-        raise ApiFailure(f"artifact download returned HTTP {error.code}") from error
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise ApiFailure("artifact download failed") from error
+    for attempt in range(API_READ_ATTEMPTS):
+        try:
+            with opener(token)(api_request(url, token), timeout=90) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length and int(content_length) > maximum:
+                    raise Invalid("download exceeds archive-size limit")
+                received = 0
+                with destination.open("xb") as output:
+                    while True:
+                        block = response.read(1024 * 1024)
+                        if not block:
+                            break
+                        received += len(block)
+                        if received > maximum:
+                            raise Invalid("download exceeds archive-size limit")
+                        output.write(block)
+                return received
+        except urllib.error.HTTPError as error:
+            if error.code in (404, 410):
+                return None
+            if error.code not in (429, 500, 502, 503, 504) or attempt + 1 == API_READ_ATTEMPTS:
+                raise ApiFailure(f"artifact download returned HTTP {error.code}") from error
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+                ConnectionError) as error:
+            if attempt + 1 == API_READ_ATTEMPTS:
+                raise ApiFailure("artifact download failed after bounded retries") from error
+        if destination.exists():
+            destination.unlink()
+        time.sleep(0.2 * (2 ** attempt))
 
 
 def request_delete(url, token):
@@ -786,9 +809,30 @@ def request_delete(url, token):
     except urllib.error.HTTPError as error:
         if error.code in (404, 410):
             return False
+        if error.code in (500, 502, 503, 504):
+            artifact_url = url.rsplit("/", 1)[0] + "/" + urllib.parse.quote(
+                url.rsplit("/", 1)[1], safe=""
+            )
+            try:
+                if request_json(artifact_url, token) is None:
+                    return False
+            except ApiFailure as check_error:
+                raise ApiFailure("artifact deletion outcome is unknown; existence check failed") \
+                    from check_error
+            raise ApiFailure("artifact deletion outcome is unknown; artifact still exists") from error
         raise ApiFailure(f"artifact deletion returned HTTP {error.code}") from error
-    except (urllib.error.URLError, TimeoutError) as error:
-        raise ApiFailure("artifact deletion failed") from error
+    except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+            ConnectionError) as error:
+        artifact_url = url.rsplit("/", 1)[0] + "/" + urllib.parse.quote(
+            url.rsplit("/", 1)[1], safe=""
+        )
+        try:
+            if request_json(artifact_url, token) is None:
+                return False
+        except ApiFailure as check_error:
+            raise ApiFailure("artifact deletion outcome is unknown; existence check failed") \
+                from check_error
+        raise ApiFailure("artifact deletion outcome is unknown; artifact still exists") from error
 
 
 def paginated(url, token, key, page_size=100):
@@ -822,9 +866,7 @@ def run_history(base_sha):
 def run_matches_scope(run, scope, pr_number):
     if scope == "main":
         return run.get("event") == "push" and run.get("head_branch") == "main"
-    return run.get("event") == "pull_request" and any(
-        int(item.get("number", -1)) == pr_number for item in run.get("pull_requests", [])
-    )
+    return run.get("event") == "pull_request"
 
 
 def rank_runs(runs, scope, pr_number, history, max_run_number=None):
@@ -878,12 +920,39 @@ def jobs_for_attempt(base, token, run_id, attempt):
     ))
 
 
-def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id):
+def resolve_pr_association(base, token, repository, head_sha, requested_pr, repository_id=None):
+    encoded_sha = urllib.parse.quote(head_sha, safe="")
+    pulls = request_json(f"{base}/commits/{encoded_sha}/pulls", token)
+    if not isinstance(pulls, list):
+        raise Invalid("commit-to-PR association metadata is unavailable")
+    eligible = {}
+    for pull in pulls:
+        if not isinstance(pull, dict) or type(pull.get("number")) is not int:
+            continue
+        base_metadata = pull.get("base")
+        base_repository = base_metadata.get("repo") if isinstance(base_metadata, dict) else None
+        if isinstance(base_repository, dict) \
+                and base_repository.get("full_name") == repository \
+                and (repository_id is None or base_repository.get("id") == repository_id):
+            eligible[pull["number"]] = pull
+    if not eligible:
+        raise Invalid(f"commit-to-PR association is missing for PR #{requested_pr}")
+    if len(eligible) != 1:
+        raise Invalid(f"commit-to-PR association is ambiguous for PR #{requested_pr}")
+    if requested_pr not in eligible:
+        raise Invalid(f"commit-to-PR association identifies another PR, not PR #{requested_pr}")
+    return eligible[requested_pr]
+
+
+def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
+                              base=None, token=None):
     if not isinstance(detail, dict):
         raise Invalid("artifact producer metadata is missing")
     name = artifact.get("name", "")
-    main_match = MAIN_ARTIFACT_PATTERN.fullmatch(name)
-    pr_match = PR_ARTIFACT_PATTERN.fullmatch(name)
+    main_match = MAIN_ARTIFACT_PATTERN.fullmatch(name) \
+        or LEGACY_MAIN_ARTIFACT_PATTERN.fullmatch(name)
+    pr_match = PR_ARTIFACT_PATTERN.fullmatch(name) \
+        or LEGACY_PR_ARTIFACT_PATTERN.fullmatch(name)
     if main_match:
         scope, run_id, attempt = "main", int(main_match.group(1)), int(main_match.group(2))
         pr_number = None
@@ -900,14 +969,22 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id)
             or not isinstance(workflow_run, dict) \
             or type(workflow_run.get("id")) is not int \
             or workflow_run["id"] != run_id \
-            or workflow_run.get("repository_id", repository_id) != repository_id \
+            or type(workflow_run.get("repository_id")) is not int \
+            or workflow_run["repository_id"] != repository_id \
             or not isinstance(run_repository, dict) \
             or run_repository.get("full_name") != repository \
             or run_repository.get("id") != repository_id \
+            or type(detail.get("workflow_id")) is not int \
+            or detail["workflow_id"] <= 0 \
             or detail.get("path") != WORKFLOW or detail.get("name") != "Publish" \
             or int(detail.get("id", -1)) != run_id \
             or int(detail.get("run_attempt", -1)) != attempt \
             or int(detail.get("run_number", 0)) <= 0 \
+            or not isinstance(detail.get("head_sha"), str) \
+            or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", detail["head_sha"]) \
+            or workflow_run.get("event") != detail.get("event") \
+            or workflow_run.get("head_sha") != detail.get("head_sha") \
+            or workflow_run.get("head_branch") != detail.get("head_branch") \
             or detail.get("head_sha") != workflow_run.get("head_sha") \
             or detail.get("head_branch") != workflow_run.get("head_branch"):
         raise Invalid("artifact producer metadata mismatch")
@@ -915,15 +992,17 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id)
         head_repository = detail.get("head_repository")
         if detail.get("event") != "push" or detail.get("head_branch") != "main" \
                 or not isinstance(head_repository, dict) \
-                or head_repository.get("full_name") != repository:
+                or head_repository.get("full_name") != repository \
+                or head_repository.get("id") != repository_id:
             raise Invalid("main artifact has an invalid producer scope")
     else:
-        matching_prs = [
-            item for item in detail.get("pull_requests", [])
-            if int(item.get("number", -1)) == pr_number
-        ]
-        if detail.get("event") != "pull_request" or len(matching_prs) != 1:
-            raise Invalid("PR artifact identity does not match GitHub metadata")
+        if detail.get("event") != "pull_request":
+            raise Invalid("PR artifact has an invalid producer event")
+        if base is None or token is None:
+            raise Invalid("commit-to-PR identity verifier is unavailable")
+        resolve_pr_association(
+            base, token, repository, detail.get("head_sha", ""), pr_number, repository_id
+        )
     matching_job = next((job for job in jobs if job.get("name") == JOB), None)
     if matching_job is None or not any(
         step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
@@ -955,13 +1034,16 @@ def cleanup_artifacts(base, token, repository):
         artifacts = paginated(f"{base}/actions/artifacts", token, "artifacts")
         for artifact in artifacts:
             name = artifact.get("name", "") if isinstance(artifact, dict) else ""
-            if not name.startswith(f"{ARTIFACT_PREFIX}-"):
+            if not name.startswith(("bazel-cache-v1-", f"{ARTIFACT_PREFIX}-")):
                 continue
-            main_candidate = name.startswith(f"{ARTIFACT_PREFIX}-main-")
+            main_candidate = name.startswith(("bazel-cache-v1-main-", f"{ARTIFACT_PREFIX}-main-"))
             if artifact.get("expired"):
                 continue
             try:
-                match = MAIN_ARTIFACT_PATTERN.fullmatch(name) or PR_ARTIFACT_PATTERN.fullmatch(name)
+                match = MAIN_ARTIFACT_PATTERN.fullmatch(name) \
+                    or PR_ARTIFACT_PATTERN.fullmatch(name) \
+                    or LEGACY_MAIN_ARTIFACT_PATTERN.fullmatch(name) \
+                    or LEGACY_PR_ARTIFACT_PATTERN.fullmatch(name)
                 if not match:
                     raise Invalid("unrecognized Bazel cache artifact identity")
                 run_id = int(match.group(1)) if main_candidate else int(match.group(2))
@@ -969,7 +1051,7 @@ def cleanup_artifacts(base, token, repository):
                 run = producer_attempt(base, token, {"id": run_id}, attempt)
                 jobs = jobs_for_attempt(base, token, run_id, attempt)
                 identities.append(cleanup_artifact_identity(
-                    artifact, run, jobs, repository, repository_data["id"]
+                    artifact, run, jobs, repository, repository_data["id"], base, token
                 ))
             except (ApiFailure, Invalid, TypeError, ValueError) as error:
                 if main_candidate:
@@ -984,8 +1066,12 @@ def cleanup_artifacts(base, token, repository):
             pr_number = identity["pr"]
             try:
                 pull = request_json(f"{base}/pulls/{pr_number}", token)
+                pull_base = pull.get("base") if isinstance(pull, dict) else None
+                pull_repository = pull_base.get("repo") if isinstance(pull_base, dict) else None
                 if not isinstance(pull, dict) or int(pull.get("number", -1)) != pr_number \
-                        or pull.get("base", {}).get("repo", {}).get("full_name") != repository:
+                        or not isinstance(pull_repository, dict) \
+                        or pull_repository.get("full_name") != repository \
+                        or pull_repository.get("id") != repository_data["id"]:
                     raise Invalid("pull request repository identity could not be verified")
                 merged_prs[pr_number] = (
                     pull.get("state") == "closed" and bool(pull.get("merged_at"))
@@ -1040,19 +1126,28 @@ def cleanup_artifacts(base, token, repository):
 
 
 def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number,
-                    repository, commit=None, expected_head=None):
+                    repository, associated_pr=None, expected_head=None):
     expected_scope = "main" if scope == "main" else f"pr-{pr_number}"
     expected_prefix = f"{ARTIFACT_PREFIX}-{expected_scope}-r{run['id']}-a{detail['run_attempt']}"
     if artifact_name != expected_prefix:
         raise Invalid("artifact name does not match producer identity")
-    if detail.get("repository", {}).get("full_name") != repository \
+    run_repository = run.get("repository")
+    detail_repository = detail.get("repository")
+    if not isinstance(run_repository, dict) or not isinstance(detail_repository, dict) \
+            or run_repository.get("full_name") != repository \
+            or detail_repository.get("full_name") != repository \
+            or type(run_repository.get("id")) is not int \
+            or run_repository.get("id") <= 0 \
+            or detail_repository.get("id") != run_repository.get("id") \
+            or type(run.get("workflow_id")) is not int \
+            or run.get("workflow_id") <= 0 \
+            or detail.get("workflow_id") != run.get("workflow_id") \
             or detail.get("path") != WORKFLOW or detail.get("name") != "Publish" \
             or detail.get("event") != run.get("event") \
-            or detail.get("workflow_id") != run.get("workflow_id") \
             or detail.get("run_number") != run.get("run_number") \
             or detail.get("head_sha") != run.get("head_sha") \
             or int(detail.get("id", -1)) != int(run["id"]) \
-            or int(detail.get("run_attempt", -1)) < 1:
+            or int(detail.get("run_attempt", -1)) != int(artifact_name.rsplit("-a", 1)[1]):
         raise Invalid("artifact producer metadata mismatch")
     if manifest.get("repository") != repository or manifest.get("workflow") != WORKFLOW \
             or manifest.get("job") != JOB or manifest.get("runId") != int(run["id"]) \
@@ -1068,27 +1163,30 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
     if scope == "main":
         if manifest.get("pullRequest") is not None \
                 or manifest.get("builtCommit") != detail.get("head_sha") \
+                or manifest.get("sourceCommit") != detail.get("head_sha") \
+                or manifest.get("producerHeadSha") != detail.get("head_sha") \
+                or manifest.get("baseCommit") is not None \
                 or detail.get("event") != "push" \
                 or detail.get("head_branch") != "main":
             raise Invalid("main artifact has an invalid producer scope")
     else:
         pull_request = manifest.get("pullRequest")
-        matches = [item for item in detail.get("pull_requests", [])
-                   if int(item.get("number", -1)) == pr_number]
-        if not isinstance(pull_request, dict) or len(matches) != 1 \
+        associated_base = associated_pr.get("base") if isinstance(associated_pr, dict) else None
+        associated_repository = associated_base.get("repo") if isinstance(associated_base, dict) else None
+        if not isinstance(pull_request, dict) or not isinstance(associated_pr, dict) \
                 or pull_request.get("number") != pr_number \
-                or pull_request.get("head") != matches[0].get("head", {}).get("sha") \
                 or pull_request.get("head") != detail.get("head_sha") \
-                or pull_request.get("base") != matches[0].get("base", {}).get("sha"):
-            raise Invalid("PR artifact identity does not match GitHub metadata")
+                or manifest.get("builtCommit") != detail.get("head_sha") \
+                or manifest.get("sourceCommit") != detail.get("head_sha") \
+                or manifest.get("producerHeadSha") != detail.get("head_sha") \
+                or pull_request.get("base") != manifest.get("baseCommit") \
+                or int(associated_pr.get("number", -1)) != pr_number \
+                or not isinstance(associated_repository, dict) \
+                or associated_repository.get("full_name") != repository \
+                or associated_repository.get("id") != run_repository["id"]:
+            raise Invalid("PR artifact source or commit-to-PR identity mismatch")
         if expected_head is not None and pull_request.get("head") != expected_head:
             raise Invalid("PR artifact is not for the final PR head")
-        parents = commit.get("parents", []) if isinstance(commit, dict) else []
-        if commit is None or commit.get("sha") != manifest.get("builtCommit") \
-                or [parent.get("sha") for parent in parents] != [
-                    pull_request["base"], pull_request["head"]
-                ]:
-            raise Invalid("PR merge commit does not match producer-time head and base")
 
 
 def validate_compatibility(manifest):
@@ -1107,7 +1205,8 @@ def validate_compatibility(manifest):
 def validate_manifest(manifest):
     expected_keys = {
         "format", "formatVersion", "repository", "workflow", "job", "runId",
-        "runAttempt", "event", "builtCommit", "pullRequest", "compatibility", "archive",
+        "runAttempt", "event", "builtCommit", "sourceCommit", "producerHeadSha",
+        "baseCommit", "pullRequest", "compatibility", "archive",
     }
     if not isinstance(manifest, dict) or set(manifest) != expected_keys \
             or type(manifest.get("formatVersion")) is not int \
@@ -1118,6 +1217,10 @@ def validate_manifest(manifest):
             or not isinstance(manifest.get("builtCommit"), str) \
             or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest["builtCommit"]):
         raise Invalid("malformed snapshot manifest")
+    if any(not isinstance(manifest.get(key), str)
+           or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", manifest[key])
+           for key in ("sourceCommit", "producerHeadSha")):
+        raise Invalid("malformed snapshot source identity")
     archive = manifest.get("archive")
     if not isinstance(archive, dict) or set(archive) != {"file", "sizeBytes", "sha256"} \
             or archive.get("file") != "snapshot.tar" \
@@ -1134,10 +1237,14 @@ def validate_manifest(manifest):
                 or pull_request["number"] <= 0 \
                 or any(not isinstance(pull_request.get(key), str)
                        or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", pull_request[key])
-                       for key in ("head", "base")):
+                       for key in ("head", "base")) \
+                or manifest.get("baseCommit") != pull_request.get("base"):
             raise Invalid("malformed PR snapshot identity")
-    elif manifest.get("pullRequest") is not None:
+    elif manifest.get("pullRequest") is not None or manifest.get("baseCommit") is not None:
         raise Invalid("non-PR snapshot has a PR identity")
+    if manifest.get("builtCommit") != manifest.get("sourceCommit") \
+            or manifest.get("builtCommit") != manifest.get("producerHeadSha"):
+        raise Invalid("snapshot source and producer head revisions differ")
     validate_compatibility(manifest)
 
 
@@ -1196,15 +1303,17 @@ def download_candidate(base, token, artifact, cache_path, repository,
         if detail is None:
             return "producer attempt metadata disappeared"
         jobs = jobs_for_attempt(base, token, run["id"], attempt)
-        commit = None
+        associated_pr = None
         if scope == "pr":
-            built_commit = urllib.parse.quote(actual_manifest["builtCommit"], safe="")
-            commit = request_json(f"{base}/git/commits/{built_commit}", token)
             if expected_head is not None \
                     and actual_manifest.get("pullRequest", {}).get("head") != expected_head:
                 raise Invalid("PR artifact is not for the final PR head")
+            associated_pr = resolve_pr_association(
+                base, token, repository, detail.get("head_sha", ""), pr_number,
+                run.get("repository", {}).get("id"),
+            )
         verify_producer(run, detail, jobs, actual_manifest, artifact["name"], scope,
-                        pr_number, repository, commit, expected_head)
+                        pr_number, repository, associated_pr, expected_head)
         if require_trusted_writer and not trusted_pr_writer(
             base, token, run, detail, repository, pr_number
         ):
@@ -1220,10 +1329,10 @@ def download_candidate(base, token, artifact, cache_path, repository,
         identity = ""
         if scope == "pr":
             pr_identity = actual_manifest["pullRequest"]
-            identity = f" head={pr_identity['head']} base={pr_identity['base']}"
+            identity = f" head={pr_identity['head']} base-context={pr_identity['base']}"
         print(f"cache: restored scope={scope} pr={pr_number or 'none'} "
               f"producer run={run['id']} attempt={attempt} "
-              f"revision={actual_manifest['builtCommit']}{identity} stats={json.dumps(stats)}")
+              f"source={actual_manifest['sourceCommit']}{identity} stats={json.dumps(stats)}")
         return None
 
 
@@ -1236,19 +1345,15 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
             or (actor.get("id") is not None and detail_actor.get("id") != actor["id"]):
         print(f"cache: trust-rejected pr={pr_number}: producer actor identity is missing or inconsistent")
         return False
-    pull_requests = [
-        item for item in detail.get("pull_requests", [])
-        if isinstance(item, dict) and int(item.get("number", -1)) == pr_number
-    ]
-    head = pull_requests[0].get("head") if len(pull_requests) == 1 else None
-    head_repo = head.get("repo") if isinstance(head, dict) else None
+    head_repo = detail.get("head_repository")
     producer_repo = detail.get("repository")
     if not isinstance(head_repo, dict) or not isinstance(producer_repo, dict) \
             or producer_repo.get("full_name") != repository \
             or type(producer_repo.get("id")) is not int or producer_repo["id"] <= 0 \
             or type(head_repo.get("id")) is not int \
+            or head_repo.get("full_name") != repository \
             or head_repo["id"] != producer_repo["id"]:
-        print(f"cache: trust-rejected pr={pr_number}: producer PR head is not from this repository")
+        print(f"cache: trust-rejected pr={pr_number}: recorded producer head repository is not this repository")
         return False
     encoded_login = urllib.parse.quote(login, safe="")
     permission = request_json(
@@ -1334,6 +1439,12 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
             continue
         for artifact in artifacts:
             artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
+            legacy_pattern = LEGACY_MAIN_ARTIFACT_PATTERN if scope == "main" \
+                else LEGACY_PR_ARTIFACT_PATTERN
+            if legacy_pattern.fullmatch(artifact.get("name", "")):
+                print(f"cache: migration-skip source={scope} artifact={artifact['name']}: "
+                      "legacy synthetic-build format is not consumable")
+                continue
             match = re.fullmatch(
                 rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
                 artifact.get("name", ""),
@@ -1546,7 +1657,7 @@ def upload(args):
         name = f"{ARTIFACT_PREFIX}-{identity}-r{args.run_id}-a{args.run_attempt}"
         if args.output:
             Path(args.output).write_text(f"name={name}\n")
-        print(f"cache: snapshot ready name={name} revision={args.commit} "
+        print(f"cache: snapshot ready name={name} source={args.commit} "
               f"stats={json.dumps(stats)} totalSeconds={round(time.monotonic() - started, 3)} "
               f"peakRssBytes={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024}")
     except Exception as error:

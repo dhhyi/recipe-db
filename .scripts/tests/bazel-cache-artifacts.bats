@@ -32,7 +32,37 @@ load test_helper
   grep -F 'continue-on-error: true' "$workflow"
   grep -F 'def squash_pull_request(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
   grep -F 'def trusted_pr_writer(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
+  grep -F 'def resolve_pr_association(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
   grep -F 'def union_caches(' "$BATS_TEST_DIRNAME/../bazel-cache-artifacts.py"
+}
+
+@test "each build job checks out and verifies the event source commit" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  # shellcheck disable=SC2016
+  expected='${{ github.event.pull_request.head.sha || github.sha }}'
+
+  for job in quality-checks arm64-validation; do
+    run env JOB="$job" yq -r '.jobs[strenv(JOB)].steps[] | select(.name == "checkout") | .with.ref' "$workflow"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$expected" ]
+    run env JOB="$job" yq -r '.jobs[strenv(JOB)].steps[] | select(.name == "verify exact source revision") | .env.EXPECTED_SOURCE_SHA' "$workflow"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$expected" ]
+    run env JOB="$job" yq -r '[.jobs[strenv(JOB)].steps[] | select(.name == "verify exact source revision") | .run | contains("git rev-parse HEAD")] | any' "$workflow"
+    [ "$status" -eq 0 ]
+    [ "$output" = true ]
+  done
+
+  run yq -r '.jobs.publish.steps[] | select(.name == "checkout") | .with.ref' "$workflow"
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  [ "$output" = '${{ github.sha }}' ]
+  # shellcheck disable=SC2016
+  run grep -F -- '--commit "${{ steps.source.outputs.sha }}"' "$workflow"
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  run grep -F '"$GITHUB_SHA"' "$workflow"
+  [ "$status" -eq 1 ]
 }
 
 @test "Bazel snapshot upload depends on both completed Bazel stages" {
