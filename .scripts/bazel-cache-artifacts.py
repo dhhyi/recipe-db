@@ -1066,8 +1066,12 @@ def cleanup_artifacts(base, token, repository):
             pr_number = identity["pr"]
             try:
                 pull = request_json(f"{base}/pulls/{pr_number}", token)
+                pull_base = pull.get("base") if isinstance(pull, dict) else None
+                pull_repository = pull_base.get("repo") if isinstance(pull_base, dict) else None
                 if not isinstance(pull, dict) or int(pull.get("number", -1)) != pr_number \
-                        or pull.get("base", {}).get("repo", {}).get("full_name") != repository:
+                        or not isinstance(pull_repository, dict) \
+                        or pull_repository.get("full_name") != repository \
+                        or pull_repository.get("id") != repository_data["id"]:
                     raise Invalid("pull request repository identity could not be verified")
                 merged_prs[pr_number] = (
                     pull.get("state") == "closed" and bool(pull.get("merged_at"))
@@ -1140,7 +1144,6 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
             or detail.get("workflow_id") != run.get("workflow_id") \
             or detail.get("path") != WORKFLOW or detail.get("name") != "Publish" \
             or detail.get("event") != run.get("event") \
-            or detail.get("workflow_id") != run.get("workflow_id") \
             or detail.get("run_number") != run.get("run_number") \
             or detail.get("head_sha") != run.get("head_sha") \
             or int(detail.get("id", -1)) != int(run["id"]) \
