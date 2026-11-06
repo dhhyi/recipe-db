@@ -136,6 +136,7 @@ defmodule Recipes.RouterTest do
     for request <- [
           conn(:post, "/recipes", Jason.encode!(%{"name" => "New Recipe"})),
           conn(:delete, "/recipes"),
+          conn(:delete, "/recipes/"),
           conn(:patch, "/recipes/#{recipe["id"]}", Jason.encode!(%{"name" => "Changed"}))
         ] do
       response = Router.call(request, @options)

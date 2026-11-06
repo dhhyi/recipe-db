@@ -106,6 +106,8 @@ class GenerateOperationsTests(unittest.TestCase):
             self.assertIn(f"pub const {name} =", generated)
         for field in ("createdAt", "updatedAt", "nameSortKey"):
             self.assertIn(field, generated)
+        for private_field in ("myRating", "myCapabilities", "displayName", "author"):
+            self.assertNotIn(private_field, generated)
 
 
 if __name__ == "__main__":

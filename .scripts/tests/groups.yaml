@@ -2,6 +2,7 @@ compose:
   tests:
     - .scripts/tests/generate-docker-compose.bats
     - .scripts/tests/traefik-ingress.bats
+    - .scripts/tests/auth-lifecycle.bats
   suite_inputs:
     .scripts/tests/generate-docker-compose.bats:
       - .scripts/generate-docker-compose.sh
@@ -20,6 +21,17 @@ compose:
       - .scripts/templates/browse-maintenance-template.lib.yml
       - .scripts/lib/project-metadata.sh
       - graphql/.project.yaml
+      - package.json
+    .scripts/tests/auth-lifecycle.bats:
+      - .scripts/traefik-ingress-entrypoint.sh
+      - .scripts/tests/fixtures/auth-lifecycle/**
+      - .scripts/templates/traefik-template.yml
+      - .scripts/templates/service-template.lib.yml
+      - .scripts/templates/browse-maintenance-template.lib.yml
+      - .scripts/templates/oauth2-proxy-alpha-template.yml
+      - .scripts/lib/project-metadata.sh
+      - graphql/.project.yaml
+      - browse/.project.yaml
       - package.json
 release:
   tests:

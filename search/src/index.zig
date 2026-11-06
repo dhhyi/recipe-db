@@ -530,6 +530,12 @@ test "reload uses one GraphQL request and writes a mixed-success document" {
                     0 => {
                         try std.testing.expectEqualStrings("/graphql", request.head.target);
                         try std.testing.expectEqual(.POST, request.head.method);
+                        var headers = request.iterateHeaders();
+                        while (headers.next()) |header| {
+                            for ([_][]const u8{ "Authorization", "Cookie", "X-TYPESENSE-API-KEY", "X-Internal-Ingress-Token", "X-Auth-Request-Email" }) |name| {
+                                try std.testing.expect(!std.ascii.eqlIgnoreCase(header.name, name));
+                            }
+                        }
                         const payload = try parse(a, body);
                         try std.testing.expectEqualStrings(operations.IndexRecipe, try text(try get(payload, "query")));
                         try std.testing.expectEqualStrings("r1", try text(try get(try get(payload, "variables"), "id")));

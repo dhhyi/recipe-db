@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -104,6 +106,63 @@ func TestRequestTransportForwardsOnlyTrustedIdentityAndRelaysCookies(t *testing.
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func TestConcurrentRequestTransportsIsolateCookiesAndCredentials(t *testing.T) {
+	var workers sync.WaitGroup
+	for index := range 32 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			value := fmt.Sprintf("fixture-%d", index)
+			headers := http.Header{
+				"Cookie":                   []string{"unrelated=private; _oauth2_proxy=" + value},
+				"X-Auth-Request-Email":     []string{"spoof@example.test"},
+				"X-Internal-Ingress-Token": []string{"spoof"},
+			}
+			wantAuth, wantCookie := "", "_oauth2_proxy="+value
+			if index%3 == 0 {
+				wantAuth, wantCookie = "Bearer "+value, ""
+				headers.Set("Authorization", wantAuth)
+			} else if index%3 == 2 {
+				headers.Del("Cookie")
+				wantCookie = ""
+			}
+			writer := httptest.NewRecorder()
+			renewal := "_oauth2_proxy=" + value + "-renewed; Path=/; HttpOnly"
+			clearing := "_oauth2_proxy_0=; Max-Age=0; Path=/"
+			transport := requestTransport{
+				headers: headers,
+				writer:  writer,
+				next: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+					if request.Header.Get("Authorization") != wantAuth || request.Header.Get("Cookie") != wantCookie {
+						t.Errorf("request %d received another identity's credentials", index)
+					}
+					for _, header := range []string{"X-Auth-Request-Email", "X-Internal-Ingress-Token"} {
+						if request.Header.Get(header) != "" {
+							t.Errorf("request forwarded untrusted %s", header)
+						}
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Set-Cookie": []string{renewal, clearing}},
+						Body:       io.NopCloser(strings.NewReader("ok")),
+					}, nil
+				}),
+			}
+			response, err := transport.RoundTrip(httptest.NewRequest("POST", "http://traefik/graphql", nil))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			response.Body.Close()
+			cookies := writer.Header().Values("Set-Cookie")
+			if len(cookies) != 2 || cookies[0] != renewal || cookies[1] != clearing {
+				t.Errorf("request %d did not relay its own renewal and clearing cookies", index)
+			}
+		}()
+	}
+	workers.Wait()
+}
 
 func (roundTrip roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return roundTrip(request)
