@@ -94,8 +94,8 @@ def cleanup_fixture(run_id, run_number, attempt=1, pr_number=None, artifact_id=N
             "id": artifact_id or run_id,
             "name": name,
             "workflow_run": {
-                "id": run_id, "head_sha": sha, "head_branch": branch, "event": event,
-                "repository_id": 9,
+                "id": run_id, "head_sha": sha, "head_branch": branch,
+                "repository_id": 9, "head_repository_id": 9,
             },
         },
         "run": {
@@ -118,6 +118,124 @@ class CacheArtifactTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+
+    def test_cleanup_identity_accepts_real_artifact_metadata_for_main_and_pr(self):
+        for version in ("v1", "v2"):
+            for pr_number in (None, 17):
+                with self.subTest(version=version, pr=pr_number):
+                    fixture = cleanup_fixture(201, 1, pr_number=pr_number)
+                    fixture["artifact"]["name"] = fixture["artifact"]["name"].replace(
+                        "v2", version
+                    )
+                    if pr_number is not None:
+                        fixture["artifact"]["workflow_run"]["head_repository_id"] = 10
+                        fixture["run"]["head_repository"] = {
+                            "id": 10, "full_name": "fork/repo",
+                        }
+                    self.assertNotIn("event", fixture["artifact"]["workflow_run"])
+                    with patch.object(CACHE, "resolve_pr_association") as association:
+                        identity = CACHE.cleanup_artifact_identity(
+                            fixture["artifact"], fixture["run"], fixture["jobs"],
+                            "owner/repo", 9, "https://api.github.com/repos/owner/repo", "token"
+                        )
+                    self.assertEqual(identity["scope"], "main" if pr_number is None else "pr")
+                    self.assertEqual(identity["pr"], pr_number)
+                    if pr_number is None:
+                        association.assert_not_called()
+                    else:
+                        association.assert_called_once_with(
+                            "https://api.github.com/repos/owner/repo", "token", "owner/repo",
+                            fixture["run"]["head_sha"], pr_number, 9
+                        )
+
+    def test_cleanup_rejects_spoofed_producer_metadata(self):
+        cases = [
+            ("artifact", "id", 0),
+            ("artifact", "name", "unrelated-report"),
+            ("workflow_run", "id", 202),
+            ("workflow_run", "repository_id", 10),
+            ("workflow_run", "head_repository_id", 10),
+            ("workflow_run", "head_repository_id", None),
+            ("workflow_run", "head_sha", "b" * 40),
+            ("workflow_run", "head_branch", "other"),
+            ("run", "id", 202),
+            ("run", "run_attempt", 2),
+            ("run", "run_number", 0),
+            ("run", "repository", {"id": 10, "full_name": "owner/repo"}),
+            ("run", "repository", {"id": 9, "full_name": "other/repo"}),
+            ("run", "head_repository", None),
+            ("run", "workflow_id", 0),
+            ("run", "path", ".github/workflows/other.yaml"),
+            ("run", "name", "Other"),
+            ("run", "head_sha", "invalid"),
+            ("job", "name", "other"),
+            ("step", "name", "other"),
+            ("step", "conclusion", "failure"),
+        ]
+        for pr_number in (None, 17):
+            for target, field, value in cases:
+                with self.subTest(pr=pr_number, target=target, field=field, value=value):
+                    fixture = cleanup_fixture(201, 1, pr_number=pr_number)
+                    targets = {
+                        "artifact": fixture["artifact"],
+                        "workflow_run": fixture["artifact"]["workflow_run"],
+                        "run": fixture["run"],
+                        "job": fixture["jobs"][0],
+                        "step": fixture["jobs"][0]["steps"][0],
+                    }
+                    targets[target][field] = value
+                    with patch.object(CACHE, "resolve_pr_association"), \
+                            self.assertRaises(CACHE.Invalid):
+                        CACHE.cleanup_artifact_identity(
+                            fixture["artifact"], fixture["run"], fixture["jobs"],
+                            "owner/repo", 9, "https://api.github.com/repos/owner/repo", "token"
+                        )
+
+    def test_cleanup_rejects_spoofed_pr_association(self):
+        fixture = cleanup_fixture(201, 1, pr_number=17)
+        for pulls in (
+            [],
+            [{"number": 18, "base": {"repo": {"id": 9, "full_name": "owner/repo"}}}],
+            [{"number": 17, "base": {"repo": {"id": 10, "full_name": "owner/repo"}}}],
+            [{"number": 17, "base": {"repo": {"id": 9, "full_name": "other/repo"}}}],
+        ):
+            with self.subTest(pulls=pulls), \
+                    patch.object(CACHE, "request_json", return_value=pulls), \
+                    self.assertRaisesRegex(CACHE.Invalid, "commit-to-PR association"):
+                CACHE.cleanup_artifact_identity(
+                    fixture["artifact"], fixture["run"], fixture["jobs"],
+                    "owner/repo", 9, "https://api.github.com/repos/owner/repo", "token"
+                )
+
+    def test_cleanup_scope_and_event_come_from_authenticated_run(self):
+        for pr_number in (None, 17):
+            for event in (None, "schedule", "push" if pr_number else "pull_request"):
+                with self.subTest(pr=pr_number, event=event):
+                    fixture = cleanup_fixture(201, 1, pr_number=pr_number)
+                    fixture["artifact"]["workflow_run"]["event"] = fixture["run"]["event"]
+                    fixture["run"]["event"] = event
+                    with patch.object(CACHE, "resolve_pr_association") as association, \
+                            self.assertRaisesRegex(CACHE.Invalid, "invalid producer"):
+                        CACHE.cleanup_artifact_identity(
+                            fixture["artifact"], fixture["run"], fixture["jobs"],
+                            "owner/repo", 9, "https://api.github.com/repos/owner/repo", "token"
+                        )
+                    association.assert_not_called()
+        for head_repository, branch in (
+            ({"id": 9, "full_name": "fork/repo"}, "main"),
+            ({"id": 10, "full_name": "fork/repo"}, "main"),
+            ({"id": 9, "full_name": "owner/repo"}, "feature"),
+        ):
+            with self.subTest(head_repository=head_repository, branch=branch):
+                fixture = cleanup_fixture(201, 1)
+                fixture["run"]["head_repository"] = head_repository
+                fixture["artifact"]["workflow_run"]["head_repository_id"] = head_repository["id"]
+                fixture["run"]["head_branch"] = branch
+                fixture["artifact"]["workflow_run"]["head_branch"] = branch
+                with self.assertRaisesRegex(CACHE.Invalid, "invalid producer scope"):
+                    CACHE.cleanup_artifact_identity(
+                        fixture["artifact"], fixture["run"], fixture["jobs"], "owner/repo", 9
+                    )
 
     def test_paginated_requests_honor_page_size_and_advance_pages(self):
         requests = []
