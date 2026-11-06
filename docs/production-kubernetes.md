@@ -2,8 +2,6 @@
 
 The production manifest renderer consumes the same project metadata and immutable multi-platform release inventory as production image publishing. It does not build images. A local, single-server k3d deployment is the first acceptance target; the Pi values file is a deployment contract, **not evidence of a validated Pi installation**. No real-cluster rehearsal or physical-device validation is implied by the presence of the scripts or their mocked regression tests.
 
-For the operator-led private-input inventory, see the [deployment configuration worksheet](deployment-configuration-inventory.md). It is preparation only; it does not configure a source of truth or authorize migration.
-
 ## Prerequisites and boundaries
 
 - For initial physical Pi setup, follow the [Windows/WSL USB bootstrap guide](raspberry-pi-bootstrap.md), then the [private host provisioning guide](raspberry-pi-provisioning.md). Bootstrap evidence and provisioning tooling are not completed Pi application acceptance.
