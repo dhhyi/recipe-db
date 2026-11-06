@@ -87,7 +87,7 @@
           - -o
           - StrictHostKeyChecking=yes
           - -o
-          - UserKnownHostsFile=.private/known_hosts
+          - UserKnownHostsFile=~/.config/recipe-db/ssh/known_hosts
           - -i
           - "{{ ansible_ssh_private_key_file }}"
           - "{{ ansible_user }}@{{ ansible_host }}"

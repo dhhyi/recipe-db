@@ -40,14 +40,10 @@ setup() {
       maintenance:"nginx:1.28",oauth2Proxy:"quay.io/oauth2-proxy/oauth2-proxy:v7.9.0",redis:"redis:8.0"},
     runtime:{googleOAuthClientId:"explicit.apps.googleusercontent.com",trustedIssuer:"https://accounts.google.com"},
     secrets:{"auth-accounts.json":($root+"/auth-accounts.json"),
-      "graphql-ingress-secret":($root+"/graphql-ingress-secret"),
-      "typesense-api-key":($root+"/typesense-api-key"),
       "google-oauth-client-secret":($root+"/google-oauth-client-secret"),
       "oauth2-cookie-secret":($root+"/oauth2-cookie-secret")}
   }' > "$VALUES"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
-  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > graphql-ingress-secret
-  printf 'private-typesense-value-for-tests' > typesense-api-key
   printf 'acme@example.org\n' > acme-account-email
   printf 'private-oauth-client-value-for-tests' > google-oauth-client-secret
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
@@ -533,6 +529,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   *"create secret generic recipe-db-runtime"*)
     for argument in "$@"; do
       case "$argument" in
+        --from-file=graphql-ingress-secret=*)
+          jq -eRs 'test("^[A-Za-z0-9_-]{43}\\z")' \
+            "${argument#--from-file=graphql-ingress-secret=}" > /dev/null || exit 1 ;;
+        --from-file=typesense-api-key=*)
+          path=${argument#--from-file=typesense-api-key=}
+          jq -eRs 'test("^[0-9a-f]{64}\\n?\\z")' "$path" > /dev/null || exit 1
+          sha256sum "$path" | cut -d ' ' -f1 >> "$MOCK_LOG.typesense-key-checksums"
+          sha256sum "${path%/*}/template-values.json" | cut -d ' ' -f1 >> "$MOCK_LOG.input-checksums"
+          sha256sum "${path%/*}/rendered-base.yml" | cut -d ' ' -f1 >> "$MOCK_LOG.render-checksums" ;;
         --from-file=oauth2-cookie-secret=*)
           jq -eRs 'test("^[A-Za-z0-9_-]+$")' \
             "${argument#--from-file=oauth2-cookie-secret=}" > /dev/null || exit 1 ;;

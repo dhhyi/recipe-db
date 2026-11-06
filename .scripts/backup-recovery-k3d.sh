@@ -136,8 +136,6 @@ source_values="$result_directory/secrets/source-values.yaml"
 target_values="$result_directory/secrets/target-values.yaml"
 owner_token_file="$result_directory/secrets/owner-token"
 accounts_file="$result_directory/secrets/auth-accounts.json"
-graphql_secret="$result_directory/secrets/graphql-ingress-secret"
-typesense_key="$result_directory/secrets/typesense-api-key"
 oauth_client_secret="$result_directory/secrets/google-oauth-client-secret"
 oauth_cookie_secret="$result_directory/secrets/oauth2-cookie-secret"
 curl_config="$result_directory/secrets/curl.conf"
@@ -146,8 +144,6 @@ request="$result_directory/request.json"
 
 phase=synthetic-fixtures
 openssl rand -base64 32 | tr -d '\n' > "$owner_token_file"
-openssl rand -base64 32 | tr -d '=\n' | tr '/+' '_-' > "$graphql_secret"
-openssl rand -hex 32 > "$typesense_key"
 printf 'synthetic-only-not-a-google-credential\n' > "$oauth_client_secret"
 openssl rand -base64 32 | tr -d '\n' > "$oauth_cookie_secret"
 jq -n --rawfile token "$owner_token_file" \
@@ -162,12 +158,11 @@ write_values() {
   yq -o=json '.' "$root/deploy/local.yaml" \
     | jq --arg cluster "$cluster" --arg context "$context" --arg origin "http://127.0.0.1:$http_port" \
       --argjson httpPort "$http_port" --argjson apiPort "$api_port" \
-      --arg accounts "$accounts_file" --arg graphql "$graphql_secret" --arg typesense "$typesense_key" \
+      --arg accounts "$accounts_file" \
       --arg oauthClient "$oauth_client_secret" --arg oauthCookie "$oauth_cookie_secret" '
       .cluster=$cluster | .context=$context | .origin=$origin | .httpPort=$httpPort | .apiPort=$apiPort |
       .runtime.googleOAuthClientId="recipe-db-e2e.apps.googleusercontent.com" |
-      .secrets={"auth-accounts.json":$accounts,"graphql-ingress-secret":$graphql,
-        "typesense-api-key":$typesense,"google-oauth-client-secret":$oauthClient,
+      .secrets={"auth-accounts.json":$accounts,"google-oauth-client-secret":$oauthClient,
         "oauth2-cookie-secret":$oauthCookie}' > "$result_directory/values.json"
   yq -P '.' "$result_directory/values.json" > "$output"
   rm "$result_directory/values.json"
@@ -431,8 +426,6 @@ needles = [
     (secrets_path / name).read_text().strip()
     for name in (
         "owner-token",
-        "graphql-ingress-secret",
-        "typesense-api-key",
         "google-oauth-client-secret",
         "oauth2-cookie-secret",
     )

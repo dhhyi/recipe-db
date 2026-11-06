@@ -40,7 +40,7 @@ load production-k3d-restore-setup
   run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
   [ ! -e "$RESTORE_STATE" ]
   export MOCK_RESTORE_PACKAGE_FAIL=false
-  rm graphql-ingress-secret
+  rm -f auth-accounts.json
   run_restore
   [ "$status" -ne 0 ]
   run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"

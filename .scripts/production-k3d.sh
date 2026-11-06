@@ -1244,8 +1244,6 @@ case "$command" in
     production_secrets
     pull_release "$1"
     render
-    routes
-    annotate_credentials
     connect
     guard_helm_config
     guard_acme_claim
@@ -1260,6 +1258,9 @@ case "$command" in
     fi
     backup_remove_cleanup_job \
       || production_fail "existing cleanup Job could not be safely removed before deployment"
+    production_ephemeral_secrets
+    routes
+    annotate_credentials
     yq 'select(.metadata.namespace == "kube-system")' "$work/rendered.yml" > "$work/infrastructure.yml"
     yq 'select(.metadata.namespace != "kube-system")' "$work/rendered.yml" > "$work/application.yml"
     secret_args=()

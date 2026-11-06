@@ -193,6 +193,16 @@ EOF
   [ "$(tail -n 1 "$MOCK_LOG")" = "docker stop started-container" ]
 }
 
+@test "provisioning commands bind mount operator configuration when it exists" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  printf 'name: provisioning\n---\ntest: echo private-config\n' > provisioning/.project.yaml
+
+  run env HOME="$FIXTURE_ROOT/home" sh .scripts/run-in-devcontainer.sh provisioning test
+
+  [ "$status" -eq 0 ]
+  grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/provisioning --mount type=bind,source=$FIXTURE_ROOT/home/.config/recipe-db,target=/home/vscode/.config/recipe-db" "$MOCK_LOG"
+}
+
 @test "new containers are stopped while command failures retain their exit status" {
   export EXEC_STATUS=17
 

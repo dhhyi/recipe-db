@@ -134,7 +134,7 @@ production_config() {
       else true end)
     and (if has("httpsStaging") then .secrets | has("acme-account-email") else true end)
     and (.secrets |
-      objectkeys(["auth-accounts.json","graphql-ingress-secret","typesense-api-key"] +
+      objectkeys(["auth-accounts.json"] +
         (if $googleEnabled then ["google-oauth-client-secret","oauth2-cookie-secret"] else [] end) +
         (if has("acme-account-email") then ["acme-account-email"] else [] end))
       and all(.[]; type == "string" and startswith("/") and (test("[\\r\\n]") | not)))
@@ -154,14 +154,16 @@ production_config() {
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
   acme_email_path=$(jq -r '.secrets["acme-account-email"] // empty' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
+  operator_secret_keys=(auth-accounts.json)
   if $google_enabled; then
     secret_keys+=(google-oauth-client-secret oauth2-cookie-secret)
+    operator_secret_keys+=(google-oauth-client-secret oauth2-cookie-secret)
   fi
 }
 
 production_secrets() {
   local key path decoded cookie
-  for key in "${secret_keys[@]}"; do
+  for key in "${operator_secret_keys[@]}"; do
     path=$(jq -r --arg key "$key" '.secrets[$key]' "$work/config.json")
     [[ -f $path && -r $path && -s $path ]] || production_fail "missing or unreadable secret file: $key"
     # Copy once: secret validation, route rendering and Secret creation use the same bytes.
@@ -182,9 +184,7 @@ production_secrets() {
   # GraphQL is the sole authorization-policy validator; deployment only checks the envelope.
   jq -se 'length == 1 and (.[0] | type == "object")' "$work/auth-accounts.json" > /dev/null 2>&1 \
     || production_fail "invalid auth-accounts.json (expected one JSON object)"
-  jq -eRs 'test("^[A-Za-z0-9_-]{43}\\n?\\z")' "$work/graphql-ingress-secret" > /dev/null \
-    || production_fail "invalid secret format: graphql-ingress-secret (expected 43 URL-safe base64 characters)"
-  for key in "${secret_keys[@]:2}"; do
+  for key in "${operator_secret_keys[@]:1}"; do
     [[ $key != oauth2-cookie-secret ]] || continue
     jq -eRs 'length >= 16 and (test("^[!-~]+\\n?\\z"))' "$work/$key" > /dev/null \
       || production_fail "invalid secret format: $key"
@@ -204,4 +204,15 @@ production_secrets() {
     || production_fail "oauth2 cookie secret must encode 16, 24 or 32 bytes"
   # OAuth2 Proxy decodes only URL-safe base64, with no trailing newline.
   printf '%s' "$cookie" | tr '/+' '_-' | tr -d '=' > "$work/oauth2-cookie-secret"
+}
+
+production_ephemeral_secrets() {
+  openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' > "$work/graphql-ingress-secret" \
+    || production_fail "could not generate the deployment ingress credential"
+  openssl rand -hex 32 > "$work/typesense-api-key" \
+    || production_fail "could not generate the deployment Typesense credential"
+  jq -eRs 'test("^[A-Za-z0-9_-]{43}\\z")' "$work/graphql-ingress-secret" > /dev/null \
+    || production_fail "generated deployment ingress credential is invalid"
+  jq -eRs 'test("^[0-9a-f]{64}\\n?\\z")' "$work/typesense-api-key" > /dev/null \
+    || production_fail "generated deployment Typesense credential is invalid"
 }

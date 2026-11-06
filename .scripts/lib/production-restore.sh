@@ -522,6 +522,22 @@ restore_run() {
     || production_fail "restore verification requires an explicit owner token in auth-accounts.json"
   printf 'header = "%s: %s %s"\n' Authorization Bearer "$(cat "$work/restore-owner-token")" > "$work/restore-curl.conf"
   render
+  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
+    '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
+    > "$work/prior-workloads.json"
+  jq -e 'any(.[]; .name == "graphql") and any(.[]; .name == "search")
+    and any(.[]; .name == "browse") and any(.[]; .name == "nats")
+    and any(.[]; .name == "typesense") and any(.[]; .name == "redis")' \
+    "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
+  jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
+    .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
+  connect
+  lock_holder="restore-$expected-$$"
+  cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
+  locked=true
+  guard_helm_config
+  restore_fresh_target
+  production_ephemeral_secrets
   routes
   cp "$work/routes.yml" "$work/restore-final-routes.json"
   image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
@@ -538,21 +554,6 @@ restore_run() {
     "$work/routes.yml" > "$work/restore-barrier-routes.json"
   cp "$work/restore-barrier-routes.json" "$work/routes.yml"
   annotate_credentials
-  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
-    '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
-    > "$work/prior-workloads.json"
-  jq -e 'any(.[]; .name == "graphql") and any(.[]; .name == "search")
-    and any(.[]; .name == "browse") and any(.[]; .name == "nats")
-    and any(.[]; .name == "typesense") and any(.[]; .name == "redis")' \
-    "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
-  jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
-    .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
-  connect
-  lock_holder="restore-$expected-$$"
-  cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
-  locked=true
-  guard_helm_config
-  restore_fresh_target
   mkdir -m 700 "$state"
   restore_state=$state
   jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
