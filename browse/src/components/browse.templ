@@ -84,11 +84,14 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 			<h2 class="font-bold recipe-tile-title" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 		</a>
 		if item.Image != nil {
-			<img slot="image" src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
+			<a href={ "/recipe/" + item.Id } slot="image" aria-label={ "Bild von Rezept " + item.Name } hx-boost="true">
+				<img src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
+			</a>
 		}
 		if ratingsOnline && item.Rating != nil {
-			{{ slot := "rating" }}
-			@Rating(item.Rating, false, &slot, nil)
+			<a href={ "/recipe/" + item.Id } slot="rating" aria-label={ "Bewertung von Rezept " + item.Name } hx-boost="true">
+				@Rating(item.Rating, false, nil, nil)
+			</a>
 		}
 		@recipeCardTags(item.Id, item.Tags)
 	</recipe-tile-component>

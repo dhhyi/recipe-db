@@ -166,6 +166,13 @@ footer-component {
   width: 100%;
 }
 
+recipe-tile-component a[slot="image"] > img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
 .recipe-tag--cuisine {
   --recipe-tag-background: #dbeafe;
   --recipe-tag-border: #93c5fd;

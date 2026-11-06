@@ -61,11 +61,22 @@ export class RecipeTile extends LitElement {
       display: none;
     }
 
-    ::slotted([slot="image"]) {
+    ::slotted(img[slot="image"]) {
       display: block;
       height: 100%;
       object-fit: cover;
       width: 100%;
+    }
+
+    ::slotted(a[slot="image"]) {
+      display: block;
+      height: 100%;
+      width: 100%;
+    }
+
+    ::slotted(a[slot="rating"]) {
+      color: inherit;
+      text-decoration: none;
     }
 
     .rating {
@@ -93,6 +104,7 @@ export class RecipeTile extends LitElement {
       display: flex;
       inset: 0;
       padding: 0 0.75rem;
+      pointer-events: none;
       position: absolute;
       z-index: 1;
     }
@@ -126,7 +138,7 @@ export class RecipeTile extends LitElement {
     ::slotted(a[slot="title"]) {
       align-items: end;
       display: flex;
-      height: 100%;
+      pointer-events: auto;
       text-decoration: none;
       width: 100%;
     }

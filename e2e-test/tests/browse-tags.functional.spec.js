@@ -1,4 +1,10 @@
-import { test as base, expect, graphql, withIgnoredServices } from "./fixtures.js";
+import {
+  test as base,
+  expect,
+  graphql,
+  uploadImage,
+  withIgnoredServices,
+} from "./fixtures.js";
 
 function tagFilter(id) {
   const literal = id.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
@@ -110,6 +116,12 @@ const test = base.extend({
     await page.close();
   },
   tagSearchRecipes: async ({ request, basicRecipe }, use) => {
+    await uploadImage(request, basicRecipe, "milchreis.png");
+    await graphql(
+      request,
+      "mutation($id: ID!, $rating: Int!) { rate(id: $id, rating: $rating) { average count } }",
+      { id: basicRecipe.id, rating: 5 },
+    );
     const name = "E2E Filter Identität";
     const tag = await findOrCreateTag(request, "COURSE", name);
     const sameNameOtherCategory = await findOrCreateTag(
@@ -214,6 +226,22 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   await expect(page).toHaveURL(/q=E2E\+Milchreis/);
   expect(new URL(page.url()).searchParams.has("filter_by")).toBe(false);
   await expect(page.locator(`[data-recipe-id="${unrelated.id}"]`)).toBeVisible();
+});
+
+test("recipe card title, image, and rating still navigate to detail", async ({
+  page,
+  tagSearchRecipes: { matches },
+}) => {
+  const recipe = matches[0];
+  for (const slot of ["title", "image", "rating"]) {
+    await page.goto(`/?q=${encodeURIComponent(recipe.name)}`);
+    const link = page.locator(
+      `[data-recipe-id="${recipe.id}"] a[slot="${slot}"]`,
+    );
+    await expect(link).toBeVisible();
+    await link.click();
+    await expect(page).toHaveURL(new RegExp(`/recipe/${recipe.id}$`));
+  }
 });
 
 test("detail view tags link to filtered search while edit mode remains non-navigating", async ({
