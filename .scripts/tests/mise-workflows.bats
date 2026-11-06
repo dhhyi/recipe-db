@@ -188,3 +188,20 @@ EOF
     [ "$(cat "$RUNNER_TEMP/compose.log")" = $'service log output\nCompose diagnostic' ]
   done
 }
+
+@test "ARM64 diagnostic artifacts use failure conditions and seven-day retention" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  steps=$(yq -o=json '.jobs.arm64-validation.steps' "$workflow")
+
+  for artifact in arm64-compose-logs arm64-e2e-reports; do
+    jq -e --arg artifact "$artifact" '
+      .[] | select(.with.name == $artifact) |
+      .if == "failure() && steps.integration-tests.outcome == '\''failure'\''" and
+      .with["retention-days"] == 7
+    ' <<< "$steps"
+  done
+  jq -e '
+    .[] | select(.with.name == "arm64-integration-reports") |
+    .if == "failure()" and .with["retention-days"] == 7
+  ' <<< "$steps"
+}
