@@ -109,6 +109,14 @@ for (const role of ["anonymous", "member", "owner"]) {
         tile.getByRole("img", { name: taggedDemoRecipe.name, exact: true }),
       );
       await expect(tile.locator(".fallback-image")).toBeHidden();
+      await expect(page.locator("[data-add-recipe]")).toHaveCount(
+        role === "owner" ? 1 : 0,
+      );
+      if (role === "owner") {
+        await expect(
+          page.getByRole("button", { name: "Rezept hinzufügen", exact: true }),
+        ).toBeVisible();
+      }
       await page.locator("#browse-heading").scrollIntoViewIfNeeded();
       await screenshot(page, "tag-search.png");
     });
