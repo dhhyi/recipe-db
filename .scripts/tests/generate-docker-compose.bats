@@ -316,6 +316,8 @@ assert_compose() {
     and .services.browse.environment.GOOGLE_OAUTH_CLIENT_ID == "test.apps.googleusercontent.com"
     and .services["oauth2-proxy"].user == $expected_uid
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_SECURE == "${OAUTH2_COOKIE_SECURE:-false}"
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_EXPIRE == "168h"
+    and .services["oauth2-proxy"].environment.OAUTH2_PROXY_COOKIE_REFRESH == "50m"
     and .services["oauth2-proxy"].environment.OAUTH2_PROXY_REDIRECT_URL == "${GOOGLE_OAUTH_REDIRECT_URL:-http://localhost:8080/oauth2/callback}"
     and .services["oauth2-proxy"].secrets == ["google-oauth-client-secret", "oauth2-cookie-secret"]
     and .services.redis.networks == ["oauth2-sessions"]

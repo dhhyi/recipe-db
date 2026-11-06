@@ -54,7 +54,7 @@ Existing automated coverage is located below. Presence of a regression is not, b
 | Backend/admin isolation and optional Google routing | [Kubernetes regressions](../.scripts/tests/kubernetes-templates.bats), [deployment regressions](../.scripts/tests/production-k3d.bats), live Pi private OAuth/admin 404 probes and trusted HTTPS 200 checks |
 | Runtime restrictions | Current service/runtime contracts and tests remain authoritative; access roles do not enable production reset routes |
 
-Mixed public/private GraphQL response shapes, browser history isolation, public-only search indexing and auth-service/Redis outage behavior remain requirements of the existing contract. Individually executed results are recorded below; the coverage map alone is not a new runtime-test claim. Integrated mock-OIDC and infrastructure-outage evidence remains unresolved.
+Mixed public/private GraphQL response shapes, browser history isolation, public-only search indexing and auth-service/Redis outage behavior remain requirements of the existing contract. Individually executed results are recorded below; the coverage map alone is not a new runtime-test claim.
 
 ## Operator-confirmed browser results
 
@@ -74,7 +74,7 @@ The following observations are recorded in the real-provider issue:
 
 ## Access-model checklist reconciliation
 
-The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); actual MCP client verification completed another (22 complete / 11 incomplete). Public-only indexing and anonymous recipe markup completed two more (24 complete / 9 incomplete); ratings and partial-response checks completed two more (26 complete / 7 incomplete). The access-matrix, transport, UX, history and browser-write checks below complete five more: **31 complete / 2 incomplete**. No criterion was removed, split to inflate completion, or waived.
+The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); actual MCP client verification completed another (22 complete / 11 incomplete). Public-only indexing and anonymous recipe markup completed two more (24 complete / 9 incomplete); ratings and partial-response checks completed two more (26 complete / 7 incomplete). The access-matrix, transport, UX, history and browser-write checks below complete five more (31 complete / 2 incomplete). Integrated mock-OIDC lifecycle/outage verification completes another: **32 complete / 1 incomplete**, final operator acceptance. No criterion was removed, split to inflate completion, or waived.
 
 ### Route and ingress verification (2026-11-06)
 
@@ -155,16 +155,34 @@ Validation:
 
 | Remaining criterion | Supported evidence and unresolved portion |
 | --- | --- |
-| Complete integrated session lifecycle | Real Google login/logout, refresh, controlled expiry, revocation/recovery are approved; integrated mock-OIDC lifecycle and auth-service/Redis outage coverage remain unresolved. No natural seven-day test is claimed. |
-| Final failed-check resolution and integrated acceptance | Resolve or explicitly agree treatment of the remaining gaps, then obtain this issue's separate operator acceptance. Approval of the Google record does not close this gate. |
+| Final failed-check resolution and integrated acceptance | The required technical evidence is recorded. Obtain this issue's separate operator acceptance, including its explicit evidence limits and accepted UX limitation. Approval of the Google record does not close this gate. |
+
+### Integrated mock-OIDC lifecycle and dependency outages (2026-11-06)
+
+`TEST_AUTH_LIFECYCLE=true mise run --raw test-scripts .scripts/tests/auth-lifecycle.bats` passed against real locally built GraphQL and browse images, real Traefik `3.7.16`, OAuth2 Proxy `7.15.5`, Redis `8.10.2` and an offline Node `24.22.1` issuer. The new [opt-in regression](../.scripts/tests/auth-lifecycle.bats) uses a uniquely named Compose project, an edge-only runner and a private application/auth network, no published ports, no connection to the existing application stack, and newly generated private secrets. It removes its own containers/networks/session volumes after success or failure.
+
+The final recorded local application image IDs were GraphQL `sha256:72cb50c63c5d95e837d35f26bf3c1066e04f88f576791efa02f95b9140f1e705` and browse `sha256:d4dc3a43642139696e41488ed9bdad3b8b1ffc2e05e24b1ee81706b3b64ecc2b`. These are local image identities, not newly published or Pi-deployed release digests. Runtime ingress and claim-validation configuration is rendered from the actual project metadata/templates. Only the isolated generated provider endpoints/type and its GraphQL trusted issuer are changed to the mock issuer; production Google settings are untouched. PKCE S256, nonce, issuer and verified-email validation remain enabled.
+
+| Check | Result |
+| --- | --- |
+| Real callback and effective roles | Signed owner/member sessions resolved owner/member in GraphQL and browse's `no-store` identity HTML. A verified but unmapped account resolved anonymous. The unverified-email callback failed without a session; presenting its remaining failed-login cookie context was explicitly denied, not silently downgraded. |
+| Invalid credentials and cookie relay | Invalid bearer plus valid Google-style session did not fall back. Malformed sessions failed explicitly; clearing cookies reached both direct GraphQL and browse callers, then credential-free reads recovered. |
+| Renewal and sliding lifetime | With a 60-second cookie, 20-second refresh and 30-second ID token, browse relayed a renewed cookie after 22 seconds. Repeated requests remained owner beyond the original 60-second lifetime; an idle session expired and was cleared. The test asserts the elapsed threshold, not merely a configured duration. |
+| Revocation, logout and recovery | Revoked refresh failed closed after the current token expired. Logout cleared the cookie and deleted the session: replaying the pre-logout ticket failed. Explicit login restored owner access; no mutation was replayed. |
+| Redis outage/restart | With only this fixture's Redis stopped, credential-free and bearer reads stayed available, session-cookie reads failed explicitly and browse did not retain owner identity. Restarting Redis with its own AOF volume restored the same session. |
+| Auth-proxy outage/restart | Stopping only this fixture's proxy left anonymous and bearer reads available, cookie requests failed closed and browse did not leak owner identity. Restart restored the same session. |
+| Redis session-data loss | Clearing only the isolated fixture's Redis invalidated its existing ticket; credential-free reads worked after clearing and explicit login restored owner access. No existing Redis or application data was touched. |
+| Managed duration policy | All 8 Compose generation regressions passed with new exact assertions for `OAUTH2_PROXY_COOKIE_EXPIRE=168h` and `OAUTH2_PROXY_COOKIE_REFRESH=50m`. Accelerated fixture results establish sliding/refresh behavior, not a real seven-day observation. The recorded Pi policy remains separately approved deployment evidence. |
+
+This replaces the inherited standalone-PoC evidence gap with actual application integration. Only identity/capability and browse identity requests are used here; data/event backends are deliberately absent, and CRUD/image/rating evidence belongs to the separate access-matrix runs above. The harness is opt-in because it requires already built local application images and takes over a minute; ordinary script checks do not claim to rerun it.
 
 ## Remaining acceptance and known limitations
 
 1. **Real provider lifecycle is approved.** Initial missing-refresh-token failures were corrected with offline access and consent. Upstream revocation, session removal, explicit reauthorization and successful refresh of both existing sessions subsequently passed, as approved in [#68: Set up and verify real Google authentication before public go-live](https://github.com/dhhyi/recipe-db/issues/68). No observation is still pending.
-2. **Configured policy is not elapsed-time evidence.** Cookie lifetime is seven days sliding, refresh interval fifty minutes. No real seven-day observation is claimed. The umbrella also retains an unresolved integrated mock-OIDC lifecycle evidence gap from the browser-authentication implementation; its transport tests and the separate PoC do not establish full callback/refresh/logout coverage. Failed unverified-email refresh may preserve the previously validated identity until the current token expires; application-policy revocation after GraphQL restart is a separate verified mechanism.
+2. **Configured policy is not elapsed-time evidence.** Cookie lifetime is seven days sliding, refresh interval fifty minutes. Exact managed policy and accelerated integrated callback/refresh/sliding/logout/outage behavior now pass; no real seven-day observation is claimed. Failed unverified-email refresh may preserve the previously validated identity until the current token expires; application-policy revocation after GraphQL restart is a separate verified mechanism.
 3. **Real MCP client verification is complete for the recorded setup.** Actual VS Code/Copilot user-profile reads, authorized writes, denials and member ratings passed as recorded above. This does not verify environment interpolation, password prompts or a separate standalone client, and does not replace the full integrated permission matrix or operator acceptance.
 4. **UX limitations are recorded, not hidden.** Expired-session first-load header fallback can be blank. An unapproved Google identity can still see the login button. Neither grants write permission. Browser recipe deletion is intentionally absent and is not an acceptance requirement.
-5. **Final acceptance is manual.** Incorporate completed provider evidence, resolve any remaining evidence gaps and obtain operator approval before closing the access-model issue. The separate public-launch task remains gated; this document neither enables exposure nor approves go-live.
+5. **Final acceptance is manual.** Technical verification and provider evidence are recorded; obtain operator approval before closing the access-model issue. The separate public-launch task remains gated; this document neither enables exposure nor approves go-live.
 
 ## Operating and recovery instructions
 

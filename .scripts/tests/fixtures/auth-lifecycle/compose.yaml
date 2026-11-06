@@ -1,0 +1,109 @@
+services:
+  traefik:
+    image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
+    entrypoint: [/bin/sh, /ingress-entrypoint.sh]
+    command:
+      - --providers.file.directory=/run/traefik
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.aliasHeadersStrategy=delete
+      - --entrypoints.web.http.middlewares=identity-strip@file
+      - --ping=true
+    volumes:
+      - ./.scripts/traefik-ingress-entrypoint.sh:/ingress-entrypoint.sh:ro
+      - ./routes.yml:/traefik_config.yml:ro
+      - ./secrets/ingress:/run/secrets/graphql-ingress-secret:ro
+    tmpfs:
+      - /run/traefik:mode=0700
+    networks:
+      edge:
+        aliases: [app.poc.test, idp.poc.test]
+      private:
+        aliases: [idp.poc.test]
+    healthcheck:
+      test: [CMD, traefik, healthcheck, --ping]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  graphql:
+    image: ${AUTH_LIFECYCLE_GRAPHQL_IMAGE:?}
+    environment:
+      MODE: testing
+      AUTH_TRUSTED_ISSUER: http://idp.poc.test
+      TRAEFIK_ENTRYPOINTS: web
+      NATS_URL: nats://127.0.0.1:1
+      REST_ENDPOINT: http://unavailable.invalid
+    volumes:
+      - ./secrets/accounts.json:/run/secrets/auth-accounts.json:ro
+      - ./secrets/ingress:/run/secrets/graphql-ingress-secret:ro
+    networks: [private]
+
+  browse:
+    image: ${AUTH_LIFECYCLE_BROWSE_IMAGE:?}
+    environment:
+      NATS_URL: nats://127.0.0.1:1
+      GOOGLE_OAUTH_CLIENT_ID: recipe-db-auth-lifecycle
+    networks: [private]
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916
+    command:
+      - --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+      - --alpha-config=/etc/oauth2-proxy/alpha.yaml
+    volumes:
+      - ./oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+      - ./alpha.yaml:/etc/oauth2-proxy/alpha.yaml:ro
+      - ./secrets/cookie:/run/secrets/cookie:ro
+      - ./secrets/client:/run/secrets/google-oauth-client-secret:ro
+    networks: [private]
+    depends_on:
+      traefik:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      issuer:
+        condition: service_healthy
+
+  redis:
+    image: redis:8.10.2-alpine@sha256:0bf6577d7774e592b29d093e3ac9390eb91e13d72c21e506afce736de5e0eeb0
+    command: [redis-server, --appendonly, "yes", --appendfsync, always]
+    volumes:
+      - redis-data:/data
+    networks: [private]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  issuer:
+    image: node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+    command: [node, /app/issuer.mjs]
+    volumes:
+      - ./issuer.mjs:/app/issuer.mjs:ro
+      - ./secrets/client:/run/secrets/client:ro
+    networks: [private]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  runner:
+    image: node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+    profiles: [runner]
+    entrypoint: [node, /app/runner.mjs]
+    volumes:
+      - ./runner.mjs:/app/runner.mjs:ro
+      - ./secrets/bearer:/run/secrets/bearer:ro
+      - state:/state
+    networks: [edge]
+
+networks:
+  edge: {}
+  private:
+    internal: true
+
+volumes:
+  redis-data: {}
+  state: {}
