@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/vektah/gqlparser/v2/ast"
@@ -10,6 +11,23 @@ import (
 
 func tagErrorsOnly(err error) bool {
 	return serviceUnavailableOnly(err, map[string]string{"tags": "tags"})
+}
+
+func invalidSearchOptions(err error) bool {
+	if err == nil {
+		return false
+	}
+	var list gqlerror.List
+	if !errors.As(err, &list) || len(list) == 0 {
+		return false
+	}
+	for _, gqlErr := range list {
+		if gqlErr == nil || gqlErr.Extensions["code"] != "invalid-search-options" ||
+			statusCode(gqlErr.Extensions["status"]) != http.StatusBadRequest {
+			return false
+		}
+	}
+	return true
 }
 
 func optionalServiceErrors(err error) bool {
@@ -89,8 +107,8 @@ func statusCode(value any) int {
 	case int64:
 		return int(value)
 	case float64:
-		if value == 503 {
-			return 503
+		if value >= 100 && value <= 599 && value == float64(int(value)) {
+			return int(value)
 		}
 		return 0
 	default:

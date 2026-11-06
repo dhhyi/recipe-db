@@ -155,7 +155,12 @@ templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
 						</span>
 					</form>
 				} else {
-					<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>{ tag.Name }</span>
+					<a
+						class={ tagClass(tag.Category) }
+						href={ templ.SafeURL(tagSearchURL(tag.Id)) }
+						data-recipe-tag
+						aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }
+					>{ tag.Name }</a>
 				}
 			}
 		</div>

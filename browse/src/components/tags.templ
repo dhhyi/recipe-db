@@ -74,28 +74,31 @@ func recipeAccessibleLabel(recipe gql.RecipeStub) string {
 	return strings.Join(labels, ". ")
 }
 
-templ recipeCardTags(tags []gql.RecipeTag) {
+templ recipeCardTags(id string, tags []gql.RecipeTag) {
 	if len(tags) > 0 {
 		{{ ordered := orderedTags(tags); overflowCount := len(ordered) - 3 }}
 		if overflowCount < 0 {
 			{{ overflowCount = 0 }}
 		}
 		for index, tag := range ordered {
-			<span
+			<a
 				slot="tags"
 				class={ tagClass(tag.Category) }
+				href={ templ.SafeURL(tagSearchURL(tag.Id)) }
 				data-recipe-tag
 				aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }
 				hidden?={ index >= 3 }
-			>{ tag.Name }</span>
+			>{ tag.Name }</a>
 		}
-		<span
+		<a
 			slot="tags"
 			class="recipe-tag"
+			href={ "/recipe/" + id }
+			hx-boost="true"
 			data-tag-overflow
 			aria-label={ "Weitere Tags: " + strconv.Itoa(overflowCount) }
 			hidden?={ overflowCount == 0 }
-		>{ "+" + strconv.Itoa(overflowCount) }</span>
+		>{ "+" + strconv.Itoa(overflowCount) }</a>
 	}
 }
 

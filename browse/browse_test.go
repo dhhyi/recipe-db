@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,11 +60,13 @@ func TestRecipeCardTagsAreOrderedAndCappedInServerHTML(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := html.UnescapeString(body.String())
-	if !strings.Contains(rendered, `href="/recipe/recipe"`) ||
+	if !strings.Contains(rendered, `<a href="/recipe/recipe" slot="title"`) ||
 		!strings.Contains(rendered, `aria-label="Rezept Eintopf. Küche: Deutsch. Ernährungsweise: Vegan. Gang: Dessert. Gang: Hauptgericht"`) ||
 		strings.Count(rendered, `data-recipe-tag`) != 4 ||
+		!strings.Contains(rendered, `href="/?filter_by=tag_ids%3A%3D%22cuisine%22"`) ||
 		!strings.Contains(rendered, `aria-label="Weitere Tags: 1"`) ||
-		!strings.Contains(rendered, `>+1</span>`) {
+		!strings.Contains(rendered, `>+1</a>`) ||
+		strings.Contains(rendered, `<a href="/recipe/recipe" aria-label=`) {
 		t.Fatalf("server-rendered tag pills or card link are incorrect: %s", rendered)
 	}
 }
@@ -94,22 +97,26 @@ func TestRecipeCardOmitsEmptyAndUnavailableTags(t *testing.T) {
 
 func TestBrowseOptions(t *testing.T) {
 	for _, tc := range []struct {
-		name, raw, query, token, sort string
-		page                          int
+		name, raw, query, token, sort, filterBy string
+		filterByPresent                         bool
+		page                                    int
 	}{
-		{"all", "", "*", "", "created_at:desc,recipe_id_sort:asc", 1},
-		{"text", "q=++Kartoffelsuppe++", "Kartoffelsuppe", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", 1},
-		{"whitespace", "q=+++", "*", "", "created_at:desc,recipe_id_sort:asc", 1},
-		{"explicit relevance all", "sort=relevance", "*", "relevance", "created_at:desc,recipe_id_sort:asc", 1},
-		{"explicit relevance text", "q=Apfel&sort=relevance", "Apfel", "relevance", "_text_match:desc,created_at:desc,recipe_id_sort:asc", 1},
-		{"rating", "q=Apfel&sort=rating", "Apfel", "rating", "rating_average:desc,rating_count:desc,recipe_id_sort:asc", 1},
-		{"rating count", "sort=rating-count", "*", "rating-count", "rating_count:desc,rating_average:desc,recipe_id_sort:asc", 1},
-		{"name ascending", "sort=name-asc", "*", "name-asc", "name_sort:asc,recipe_id_sort:asc", 1},
-		{"name descending", "sort=name-desc", "*", "name-desc", "name_sort:desc,recipe_id_sort:asc", 1},
-		{"newest", "sort=newest", "*", "newest", "created_at:desc,recipe_id_sort:asc", 1},
-		{"updated page", "sort=updated&page=3", "*", "updated", "updated_at:desc,recipe_id_sort:asc", 3},
-		{"automatic form", "q=Apfel&sort=", "Apfel", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", 1},
-		{"ignore raw options", "sort_by=bad&per_page=999&query_by=secret", "*", "", "created_at:desc,recipe_id_sort:asc", 1},
+		{"all", "", "*", "", "created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"text", "q=++Kartoffelsuppe++", "Kartoffelsuppe", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"whitespace", "q=+++", "*", "", "created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"explicit relevance all", "sort=relevance", "*", "relevance", "created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"explicit relevance text", "q=Apfel&sort=relevance", "Apfel", "relevance", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"rating", "q=Apfel&sort=rating", "Apfel", "rating", "rating_average:desc,rating_count:desc,recipe_id_sort:asc", "", false, 1},
+		{"rating count", "sort=rating-count", "*", "rating-count", "rating_count:desc,rating_average:desc,recipe_id_sort:asc", "", false, 1},
+		{"name ascending", "sort=name-asc", "*", "name-asc", "name_sort:asc,recipe_id_sort:asc", "", false, 1},
+		{"name descending", "sort=name-desc", "*", "name-desc", "name_sort:desc,recipe_id_sort:asc", "", false, 1},
+		{"newest", "sort=newest", "*", "newest", "created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"updated page", "sort=updated&page=3", "*", "updated", "updated_at:desc,recipe_id_sort:asc", "", false, 3},
+		{"automatic form", "q=Apfel&sort=", "Apfel", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"tag filter", "filter_by=tag_ids%3A%3D%22tag%2F%2B%26%3F%22", "*", "", "created_at:desc,recipe_id_sort:asc", `tag_ids:="tag/+&?"`, true, 1},
+		{"combined filter", "filter_by=category%3A%3D%22main%20course%22%20%26%26%20tag_ids%3A%3D%22tag%22&q=Apfel", "Apfel", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", `category:="main course" && tag_ids:="tag"`, true, 1},
+		{"empty filter", "filter_by=", "*", "", "created_at:desc,recipe_id_sort:asc", "", true, 1},
+		{"ignore raw options", "sort_by=bad&per_page=999&query_by=secret", "*", "", "created_at:desc,recipe_id_sort:asc", "", false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values, err := url.ParseQuery(tc.raw)
@@ -129,13 +136,52 @@ func TestBrowseOptions(t *testing.T) {
 				request.sort != tc.token {
 				t.Fatalf("unexpected options/request: %s %+v", raw, request)
 			}
+			if tc.filterByPresent != (options.FilterBy != nil) ||
+				options.FilterBy != nil && *options.FilterBy != tc.filterBy ||
+				request.filterBy != tc.filterBy || request.filterByPresent != tc.filterByPresent {
+				t.Fatalf("filter_by was not preserved: %s %+v", raw, request)
+			}
 			next, err := url.Parse(request.pageURL(tc.page + 1))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if next.Path != "/" || next.Query().Get("sort") != tc.token || (tc.token == "" && next.Query().Has("sort")) ||
-				next.Query().Get("q") == "*" {
+				next.Query().Get("q") == "*" || next.Query().Get("filter_by") != tc.filterBy ||
+				next.Query().Has("filter_by") != tc.filterByPresent {
 				t.Fatalf("incorrect native pagination URL: %s", next)
+			}
+		})
+	}
+}
+
+func TestBrowseFilterHeadingsAndControls(t *testing.T) {
+	for _, testCase := range []struct {
+		name, query, filterBy, tagName, heading string
+	}{
+		{"single tag", "", `tag_ids:="tag-id"`, "Vegan", "Suchergebnisse für Tag „Vegan“"},
+		{"generic filter", "", `category:="main course"`, "", "Gefilterte Suchergebnisse"},
+		{"combined query", "Apfel", `tag_ids:="tag-id"`, "", "1 Rezept für 'Apfel'"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			state := components.BrowseState{
+				Kind: "search", Query: testCase.query, FilterBy: testCase.filterBy,
+				FilterByPresent: true, TagName: testCase.tagName, Found: 1,
+			}
+			if got := state.Heading(); got != testCase.heading {
+				t.Fatalf("unexpected heading: %q", got)
+			}
+			var body bytes.Buffer
+			if err := components.Browse(state).Render(context.Background(), &body); err != nil {
+				t.Fatal(err)
+			}
+			rendered := html.UnescapeString(body.String())
+			if !strings.Contains(rendered, `name="filter_by" value="`+testCase.filterBy+`"`) ||
+				!strings.Contains(rendered, `hx-on:input="this.form.elements.namedItem('filter_by')?.remove()"`) {
+				t.Fatalf("filtered controls were not rendered: %s", rendered)
+			}
+			if !strings.Contains(rendered, `name="q"`) ||
+				!strings.Contains(rendered, `value="`+testCase.query+`"`) {
+				t.Fatalf("search query was not restored: %s", rendered)
 			}
 		})
 	}
@@ -145,6 +191,7 @@ func TestBrowseValidation(t *testing.T) {
 	for _, query := range []string{
 		"sort=bogus", "sort=created_at:asc", "page=0", "page=-1", "page=nope", "page=", "page=1.5",
 		"page=2147483648", "page=1&page=2", "sort=rating&sort=newest", "q=one&q=two",
+		"filter_by=tag_ids%3A%3Dtag&filter_by=tag_ids%3A%3Dother",
 	} {
 		t.Run(query, func(t *testing.T) {
 			calls := 0
@@ -233,6 +280,133 @@ func TestBrowseCanonicalFormURL(t *testing.T) {
 			if recorder.Code != wantStatus || recorder.Header().Get("Location") != tc.location ||
 				recorder.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("incorrect canonical response: %d %v", recorder.Code, recorder.Header())
+			}
+		})
+	}
+}
+
+func TestBrowseTagFilterReachesSearchAndSurvivesPageRestoration(t *testing.T) {
+	const tagID = `tag/"?&+`
+	filter := components.TagSearchFilter(tagID)
+	var pages []int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			OperationName string
+			Variables     map[string]json.RawMessage
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		data := map[string]any{"searchOnline": true, "ratingsOnline": false}
+		switch request.OperationName {
+		case "BrowseServices":
+		case "TagInventory":
+			data = map[string]any{"tags": []any{
+				map[string]any{"id": tagID, "category": "COURSE", "name": "E2E Tag"},
+			}}
+		case "BrowseSearch":
+			var options browseOptions
+			if err := json.Unmarshal(request.Variables["options"], &options); err != nil {
+				t.Error(err)
+			}
+			if options.Query != "*" || options.FilterBy == nil || *options.FilterBy != filter ||
+				options.PerPage != browsePageSize {
+				t.Errorf("tag filter was not forwarded verbatim: %+v", options)
+			}
+			pages = append(pages, options.Page)
+			ids := []string{"first"}
+			if options.Page == 2 {
+				ids = []string{"first", "second"}
+			}
+			recipes := make([]any, 0, len(ids))
+			for _, id := range ids {
+				recipes = append(recipes, map[string]any{"id": id, "name": id, "tags": []any{}})
+			}
+			data = map[string]any{"searchRecipes": map[string]any{
+				"recipes": recipes, "found": 25, "page": options.Page, "perPage": browsePageSize,
+			}}
+		default:
+			t.Errorf("unexpected operation: %s", request.OperationName)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer upstream.Close()
+	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+
+	for _, page := range []int{1, 2} {
+		pages = nil
+		values := url.Values{"filter_by": {filter}}
+		if page > 1 {
+			values.Set("page", strconv.Itoa(page))
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", "/?"+values.Encode(), nil))
+		body := html.UnescapeString(response.Body.String())
+		wantPages := []int{1}
+		if page == 2 {
+			wantPages = []int{1, 2}
+		}
+		if response.Code != http.StatusOK || !reflect.DeepEqual(pages, wantPages) ||
+			!strings.Contains(body, `<h1 id="browse-heading">Suchergebnisse für Tag „E2E Tag“</h1>`) ||
+			!strings.Contains(body, `name="q"`) || !strings.Contains(body, `value=""`) ||
+			!strings.Contains(body, `name="filter_by" value="`+filter+`"`) {
+			t.Fatalf("tag filter state was not rendered or restored: %d pages=%v %s", response.Code, pages, body)
+		}
+		wantCards := 1
+		if page == 2 {
+			wantCards = 2
+		}
+		if strings.Count(body, `data-recipe-id=`) != wantCards {
+			t.Fatalf("page restoration did not deduplicate recipe cards: %s", body)
+		}
+		if page == 1 {
+			if !strings.Contains(body, `hx-get="/?filter_by=`) || !strings.Contains(body, `&page=2"`) {
+				t.Fatalf("pagination URL lost the active filter: %s", body)
+			}
+		}
+	}
+}
+
+func TestBrowseFilterFailureNeverFallsBackToUnfilteredRecipes(t *testing.T) {
+	for _, searchOnline := range []bool{false, true} {
+		t.Run(strconv.FormatBool(searchOnline), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct{ OperationName string }
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if request.OperationName != "BrowseServices" && request.OperationName != "BrowseSearch" {
+					t.Errorf("filtered search unexpectedly called %s", request.OperationName)
+				}
+				if request.OperationName == "BrowseServices" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+						"searchOnline": searchOnline, "ratingsOnline": false,
+					}})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []any{
+					map[string]any{"message": "invalid Typesense filter", "extensions": map[string]any{
+						"code": "invalid-search-options", "status": http.StatusBadRequest,
+					}},
+				}})
+			}))
+			defer upstream.Close()
+			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+			query := url.Values{"filter_by": {`unknown_field:="value"`}}.Encode()
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest("GET", "/?"+query, nil))
+			body := response.Body.String()
+			wantStatus := http.StatusBadRequest
+			if !searchOnline {
+				wantStatus = http.StatusFailedDependency
+			}
+			if response.Code != wantStatus ||
+				!strings.Contains(body, "Suchfilter konnten nicht angewendet werden.") ||
+				strings.Contains(body, "data-recipe-id") ||
+				strings.Contains(body, "Suche nicht verfügbar. Alle Rezepte werden angezeigt.") {
+				t.Fatalf("filter failure was not explicit and isolated: %d %s", response.Code, body)
 			}
 		})
 	}
