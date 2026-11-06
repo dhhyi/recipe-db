@@ -277,17 +277,19 @@ suite "backend HTTP publication contract":
     client.close()
     server.stopServer()
     server = startServer(mode = some("production"))
-    let explicitProduction = client.request(base & "/images", httpMethod = HttpDelete)
-    check explicitProduction.code == Http404
-    discard explicitProduction.body
-    check fileExists(store.manifestPath(specialId))
+    for path in ["/images", "/images/"]:
+      let explicitProduction = client.request(base & path, httpMethod = HttpDelete)
+      check explicitProduction.code == Http404
+      discard explicitProduction.body
+      check fileExists(store.manifestPath(specialId))
     client.close()
     server.stopServer()
     server = startServer(mode = none(string))
-    let guarded = client.request(base & "/images", httpMethod = HttpDelete)
-    check guarded.code == Http404
-    discard guarded.body
-    check fileExists(store.manifestPath(specialId))
+    for path in ["/images", "/images/"]:
+      let guarded = client.request(base & path, httpMethod = HttpDelete)
+      check guarded.code == Http404
+      discard guarded.body
+      check fileExists(store.manifestPath(specialId))
     client.close()
     server.stopServer()
     server = startServer(mode = some("testing"))

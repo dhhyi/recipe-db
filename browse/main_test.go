@@ -133,7 +133,9 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 					name = "Updated"
 				}
 				recipe = map[string]any{
-					"id": "42", "name": name, "method": "Cook", "ingredients": []any{},
+					"id": "42", "name": name, "method": "Cook", "ingredients": []any{
+						map[string]any{"name": "Rice", "amount": "200", "unit": "g"},
+					},
 					"tags":      []any{},
 					"createdAt": "2020-01-01T00:00:00.123456Z", "updatedAt": "2020-01-01T00:00:00.123456Z",
 					"rating": rating, "image": image,
@@ -263,6 +265,22 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatalf("detail failed: %d %s", first.Code, first.Body.String())
 	}
 	pageHTML := first.Body.String()
+	for _, markup := range []string{
+		`itemscope itemtype="https://schema.org/Recipe"`,
+		`<h1 itemprop="name">Original</h1>`,
+		`itemprop="recipeIngredient"`,
+		`Rice`,
+		`itemprop="recipeInstructions"`,
+		`Cook`,
+		`itemprop="image"`,
+		`itemtype="https://schema.org/AggregateRating"`,
+		`itemprop="ratingValue" content="4"`,
+		`itemprop="ratingCount" content="2"`,
+	} {
+		if !strings.Contains(pageHTML, markup) {
+			t.Fatalf("anonymous server-rendered detail lacks recipe markup: %s", markup)
+		}
+	}
 	if !strings.Contains(html.UnescapeString(pageHTML), `src="`+imageURL+`"`) {
 		t.Fatal("detail did not preserve opaque backend image URL")
 	}
