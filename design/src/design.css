@@ -55,6 +55,17 @@ a:not([role="button"]):not(:hover, :active, :focus) {
   text-decoration-line: none;
 }
 
+#browse-controls {
+  --add-recipe-background-color: var(--pico-background-color);
+}
+
+#browse-controls [data-add-recipe] {
+  --pico-background-color: var(--add-recipe-background-color);
+  --pico-button-box-shadow: 0 0.25rem 0.75rem
+    color-mix(in srgb, currentColor 35%, transparent);
+  --pico-button-hover-box-shadow: var(--pico-button-box-shadow);
+}
+
 [type="file"]::file-selector-button {
   --pico-background-color: transparent;
   --pico-border-color: var(--pico-secondary);
