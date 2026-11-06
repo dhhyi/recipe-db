@@ -151,7 +151,19 @@ step msg model =
                                 )
 
                             RemoteData.Failure error ->
-                                ( { model | phase = SaveFailed, error = Just (error ++ " Das bisherige Bild bleibt erhalten. Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten.") }, Cmd.none )
+                                ( { model
+                                    | phase = SaveFailed
+                                    , error =
+                                        Just
+                                            (if error == "authentication-required" || error == "forbidden" then
+                                                error
+
+                                             else
+                                                error ++ " Das bisherige Bild bleibt erhalten. Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten."
+                                            )
+                                  }
+                                , Cmd.none
+                                )
 
                             _ ->
                                 ( model, Cmd.none )

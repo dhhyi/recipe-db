@@ -516,6 +516,108 @@ mod ingress_tests {
     }
 
     #[tokio::test]
+    async fn privileged_credential_free_writes_still_require_same_origin() {
+        use serde_json::json;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend_calls = calls.clone();
+        let app = Router::new().route(
+            "/recipes",
+            axum::routing::post(move || {
+                backend_calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    axum::Json(json!({
+                        "id":"origin-check", "name":"Allowed", "nameSortKey":"allowed",
+                        "createdAt":"2026-11-06T10:00:00Z", "updatedAt":"2026-11-06T10:00:00Z"
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let previous = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var(
+            "REST_ENDPOINT",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let backend = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let previous_nats = std::env::var_os("NATS_URL");
+        std::env::set_var("NATS_URL", "nats://127.0.0.1:1");
+        let publisher = crate::events::EventPublisher::from_env().unwrap();
+        match previous_nats {
+            Some(value) => std::env::set_var("NATS_URL", value),
+            None => std::env::remove_var("NATS_URL"),
+        }
+        let state = super::GraphQLState {
+            schema: crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher)),
+            auth_policy: crate::auth::AuthPolicy::from_json(
+                r#"{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}"#,
+                "https://accounts.example.test",
+            )
+            .unwrap(),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("recipes.example"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        for origin in [None, Some("https://attacker.example"), Some("null")] {
+            headers.remove("origin");
+            if let Some(origin) = origin {
+                headers.insert("origin", HeaderValue::from_str(origin).unwrap());
+            }
+            let response = super::execute_graphql(
+                state.clone(),
+                headers.clone(),
+                Method::POST,
+                async_graphql::Request::new(
+                    r#"mutation { createRecipe(value:{name:"Allowed"}) { id } }"#,
+                ),
+            )
+            .await;
+            let body = axum::body::to_bytes(
+                axum::response::IntoResponse::into_response(response).into_body(),
+                4096,
+            )
+            .await
+            .unwrap();
+            let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(result["errors"][0]["extensions"]["code"], "csrf-forbidden");
+            assert_eq!(result["errors"][0]["extensions"]["status"], 403);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://recipes.example"),
+        );
+        let response = super::execute_graphql(
+            state,
+            headers,
+            Method::POST,
+            async_graphql::Request::new(
+                r#"mutation { createRecipe(value:{name:"Allowed"}) { id } }"#,
+            ),
+        )
+        .await;
+        let body = axum::body::to_bytes(
+            axum::response::IntoResponse::into_response(response).into_body(),
+            4096,
+        )
+        .await
+        .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(result.get("errors").is_none(), "{result}");
+        assert_eq!(result["data"]["createRecipe"]["id"], "origin-check");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        backend.abort();
+        match previous {
+            Some(value) => std::env::set_var("REST_ENDPOINT", value),
+            None => std::env::remove_var("REST_ENDPOINT"),
+        }
+    }
+
+    #[tokio::test]
     async fn ingress_guards_graphql_but_not_health_and_consumes_the_token() {
         let app = Router::new()
             .route(

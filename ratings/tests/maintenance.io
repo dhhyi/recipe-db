@@ -17,6 +17,11 @@ requestFor := method(methodName, target,
 fakeDb := Map clone
 fakeDb atPut("ids", list("opaque/recipe id", "second"))
 fakeDb atPut("deleted", list())
+fakeDb atPut("resets", 0)
+fakeDb clear := method(
+    self atPut("resets", self at("resets") + 1)
+    nil
+)
 fakeDb getAllRecipeIds := method(self at("ids"))
 fakeDb deleteRecipeRatings := method(id,
     self at("deleted") append(id)
@@ -74,3 +79,19 @@ api runtimeMode := "production"
 unavailable := api get(requestFor("GET", "/maintenance/status"))
 assert(unavailable containsSeq("HTTP/1.1 404"), "maintenance is private to backup mode")
 assert(fakeDb at("deleted") size == 2, "denied operations do not purge data")
+
+list("production", "backup") foreach(mode,
+    api runtimeMode := mode
+    list("/ratings", "/ratings/") foreach(target,
+        response := api delete(requestFor("DELETE", target))
+        expected := if(mode == "backup", "HTTP/1.1 503", "HTTP/1.1 405")
+        assert(response containsSeq(expected), "reset is denied in " .. mode)
+        assert(fakeDb at("resets") == 0, "denied reset does not clear data")
+    )
+)
+api runtimeMode := "testing"
+list("/ratings", "/ratings/") foreach(target,
+    response := api delete(requestFor("DELETE", target))
+    assert(response containsSeq("HTTP/1.1 204"), "testing reset accepts collection variants")
+)
+assert(fakeDb at("resets") == 2, "both testing reset variants clear data")
