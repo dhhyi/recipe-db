@@ -64,6 +64,44 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "overview.png");
     });
 
+    test("single-tag search", async ({ page, request, taggedDemoRecipe }) => {
+      const { recipe } = await graphql(
+        request,
+        "query($id: ID!) { recipe(id: $id) { tags { id name } } }",
+        { id: taggedDemoRecipe.id },
+      );
+      const tag = recipe.tags[0];
+      const filterBy = `tag_ids:="${tag.id.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+      await expect
+        .poll(
+          async () => {
+            const { searchRecipes } = await graphql(
+              request,
+              "query($options: JSON!) { searchRecipes(options: $options) { recipes { id } } }",
+              { options: { q: "*", filter_by: filterBy, per_page: 24 } },
+            );
+            return searchRecipes.recipes.some(
+              (candidate) => candidate.id === taggedDemoRecipe.id,
+            );
+          },
+          { message: "The seeded tag is indexed before the visual capture" },
+        )
+        .toBe(true);
+      const searchURL = new URL("/", process.env.BASE_URL || "http://traefik");
+      searchURL.searchParams.set("filter_by", filterBy);
+      await page.goto(searchURL.pathname + searchURL.search);
+      await expectHeader(page, role);
+      await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+        `Suchergebnisse für Tag „${tag.name}“`,
+      );
+      await expect(page.locator("#browse-query")).toHaveValue("");
+      await expect(
+        page.locator(`[data-recipe-id="${taggedDemoRecipe.id}"]`),
+      ).toBeVisible();
+      await page.locator("#browse-heading").scrollIntoViewIfNeeded();
+      await screenshot(page, "tag-search.png");
+    });
+
     test("degraded overview and recipe detail", async ({
       page,
       degradedRecipes,

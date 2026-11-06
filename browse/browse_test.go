@@ -387,7 +387,9 @@ func TestBrowseFilterFailureNeverFallsBackToUnfilteredRecipes(t *testing.T) {
 					return
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []any{
-					map[string]any{"message": "invalid Typesense filter", "extensions": map[string]any{"code": "bad-request"}},
+					map[string]any{"message": "invalid Typesense filter", "extensions": map[string]any{
+						"code": "invalid-search-options", "status": http.StatusBadRequest,
+					}},
 				}})
 			}))
 			defer upstream.Close()
@@ -396,7 +398,11 @@ func TestBrowseFilterFailureNeverFallsBackToUnfilteredRecipes(t *testing.T) {
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest("GET", "/?"+query, nil))
 			body := response.Body.String()
-			if response.Code != http.StatusBadGateway ||
+			wantStatus := http.StatusBadRequest
+			if !searchOnline {
+				wantStatus = http.StatusFailedDependency
+			}
+			if response.Code != wantStatus ||
 				!strings.Contains(body, "Suchfilter konnten nicht angewendet werden.") ||
 				strings.Contains(body, "data-recipe-id") ||
 				strings.Contains(body, "Suche nicht verfügbar. Alle Rezepte werden angezeigt.") {

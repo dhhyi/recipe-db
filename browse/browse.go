@@ -134,6 +134,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			PerPage: browsePageSize, Kind: "error",
 		}
 		status := http.StatusOK
+		filterExecutionFailed := false
 		if err != nil {
 			log.Printf("invalid browse request: %v", err)
 			state.Message = "Ungültige Suchparameter."
@@ -143,11 +144,16 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			if serviceErr != nil {
 				log.Printf("failed to fetch browse service status: %v", serviceErr)
 				status = http.StatusBadGateway
+				if request.filterBy != "" {
+					status = http.StatusFailedDependency
+					filterExecutionFailed = true
+				}
 			} else {
 				state.RatingsOnline = services.RatingsOnline
 				if !services.SearchOnline {
 					if request.filterBy != "" {
-						status = http.StatusBadGateway
+						status = http.StatusFailedDependency
+						filterExecutionFailed = true
 					} else {
 						overview, overviewErr := gql.Overview(r.Context(), client)
 						optionalOnly := optionalServiceErrors(overviewErr)
@@ -166,7 +172,8 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						inventory, inventoryErr := gql.TagInventory(r.Context(), client)
 						if inventoryErr != nil {
 							log.Printf("failed to load tag label for filtered search: %v", inventoryErr)
-							status = http.StatusBadGateway
+							status = http.StatusFailedDependency
+							filterExecutionFailed = true
 						} else if inventory != nil {
 							for _, tag := range inventory.Tags {
 								if tag.Id == tagID {
@@ -194,7 +201,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						firstPage = request.page
 						state.Message = "Es wird nur die aktuelle Ergebnisseite angezeigt."
 					}
-					for page := firstPage; status < 500 && page <= request.page; page++ {
+					for page := firstPage; status < http.StatusBadRequest && page <= request.page; page++ {
 						pageRequest := request
 						pageRequest.page = page
 						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
@@ -202,6 +209,13 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						if searchErr != nil && !optionalOnly || response == nil || response.SearchRecipes == nil {
 							log.Printf("failed to search recipes: %v", searchErr)
 							status = http.StatusBadGateway
+							if request.filterBy != "" {
+								status = http.StatusFailedDependency
+								filterExecutionFailed = true
+								if invalidSearchOptions(searchErr) {
+									status = http.StatusBadRequest
+								}
+							}
 							break
 						}
 						if searchErr != nil {
@@ -236,7 +250,10 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 				}
 			}
 		}
-		if status >= 500 {
+		if filterExecutionFailed {
+			state.Message = "Suchfilter konnten nicht angewendet werden."
+			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
+		} else if status >= 500 {
 			if request.filterBy != "" {
 				state.Message = "Suchfilter konnten nicht angewendet werden."
 			} else {
@@ -246,10 +263,10 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 		}
 		if !fragment && status >= 400 {
 			title, message := "Rezepte konnten nicht geladen werden | RezeptDB", "Rezepte konnten nicht geladen werden."
-			if status == http.StatusBadRequest {
-				title, message = "Ungültige Suchparameter | RezeptDB", "Ungültige Suchparameter."
-			} else if request.filterBy != "" {
+			if filterExecutionFailed {
 				title, message = "Suchfilter konnten nicht angewendet werden | RezeptDB", "Suchfilter konnten nicht angewendet werden."
+			} else if status == http.StatusBadRequest {
+				title, message = "Ungültige Suchparameter | RezeptDB", "Ungültige Suchparameter."
 			}
 			writeErrorPage(w, r, status, title, message)
 			return
@@ -258,7 +275,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			state.Message = state.RecipeCount() + " gefunden. Alle Rezepte geladen."
 		}
 		var component templ.Component
-		if appendPage && status >= 500 {
+		if appendPage && (status >= 500 || filterExecutionFailed) {
 			// A failed load-more only replaces its trigger. Existing cards and the
 			// successful title/URL survive, and retries never auto-trigger.
 			component = components.BrowsePageError(state, request.pageURL(request.page))
