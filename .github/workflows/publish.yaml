@@ -301,14 +301,16 @@ jobs:
           name: arm64-compose-logs
           path: ${{ runner.temp }}/compose.log
           if-no-files-found: error
+          retention-days: 7
 
       - name: upload ARM64 end-to-end screenshots, ARIA snapshots and reports
-        if: always()
+        if: failure() && steps.integration-tests.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: arm64-e2e-reports
           path: e2e-test/target/
           if-no-files-found: ignore
+          retention-days: 7
 
       - name: verify development and test images are native ARM64
         run: |
@@ -384,6 +386,7 @@ jobs:
             **/target/surefire-reports/**
             **/target/junit.xml
           if-no-files-found: ignore
+          retention-days: 7
 
   publish:
     needs:
