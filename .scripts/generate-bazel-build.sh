@@ -174,7 +174,9 @@ if ! jq -e '
   type == "object" and length > 0 and all(to_entries[];
     (.key | test("^[a-z][a-z0-9_]*$")) and
     (.value.tests | type == "array" and length > 0 and all(.[]; type == "string")) and
-    (.value.inputs | type == "array" and all(.[]; type == "string" and length > 0)))
+    (.value.suite_inputs | type == "object") and
+    ((.value.tests | sort) == (.value.suite_inputs | keys | sort)) and
+    (.value.suite_inputs | all(.[]; type == "array" and all(.[]; type == "string" and length > 0))))
 ' <<< "$group_specs" > /dev/null; then
   printf 'Invalid script test group manifest: %s\n' "$manifest" >&2
   exit 1
@@ -204,37 +206,55 @@ while IFS= read -r -d '' test_file; do
 done < <(git ls-files --cached --others --exclude-standard -z -- '.scripts/tests/*.bats' | sort -zu)
 
 for group in $(jq -r 'keys[]' <<< "$group_specs"); do
-  declare -A group_files=()
-  group_files["$manifest"]=1
-  group_files[".scripts/tests/test_helper.bash"]=1
-  group_files[".scripts/test-scripts.sh"]=1
+  suite_targets=()
   while IFS= read -r test_file; do
-    group_files["$test_file"]=1
+    suite_id=${test_file#".scripts/tests/"}
+    suite_id=${suite_id%.bats}
+    suite_id=${suite_id//[^a-zA-Z0-9_-]/_}
+    suite_target="test_scripts_suite_$suite_id"
+    declare -A suite_files=()
+    suite_files["$manifest"]=1
+    suite_files[".scripts/tests/test_helper.bash"]=1
+    suite_files[".scripts/test-scripts.sh"]=1
+    suite_files["$test_file"]=1
+    while IFS= read -r pattern; do
+      matched=false
+      while IFS= read -r -d '' file; do
+        [[ -f "$file" ]] || continue
+        suite_files["$file"]=1
+        matched=true
+      done < <(git ls-files --cached --others --exclude-standard -z -- "$pattern" | sort -zu)
+      if [[ "$matched" == false ]]; then
+        printf 'Script test suite %s input pattern matches no files: %s\n' "$test_file" "$pattern" >&2
+        exit 1
+      fi
+    done < <(jq -r --arg group "$group" --arg test "$test_file" \
+      '.[$group].suite_inputs[$test][]' <<< "$group_specs")
+
+    {
+      printf '\ngenrule(\n'
+      printf '    name = "%s",\n' "$suite_target"
+      printf '    srcs = [\n'
+      while IFS= read -r file; do
+        printf '        %s,\n' "$(quote "$file")"
+      done < <(printf '%s\n' "${!suite_files[@]}" | sort)
+      printf '    ],\n'
+      printf '    tools = ["mise.toml", ".bazelversion"],\n'
+      printf '    outs = ["%s"],\n' "test-scripts-$suite_target.ok"
+      printf '    cmd = "mise run --raw test-scripts %s && touch %s",\n' "$test_file" "\$@"
+      printf '    tags = ["no-sandbox", "no-remote"],\n'
+      printf ')\n'
+    } >> "$output"
+    suite_targets+=("$suite_target")
   done < <(jq -r --arg group "$group" '.[$group].tests[]' <<< "$group_specs")
-  while IFS= read -r pattern; do
-    matched=false
-    while IFS= read -r -d '' file; do
-      [[ -f "$file" ]] || continue
-      group_files["$file"]=1
-      matched=true
-    done < <(git ls-files --cached --others --exclude-standard -z -- "$pattern" | sort -zu)
-    if [[ "$matched" == false ]]; then
-      printf 'Script test group %s input pattern matches no files: %s\n' "$group" "$pattern" >&2
-      exit 1
-    fi
-  done < <(jq -r --arg group "$group" '.[$group].inputs[]' <<< "$group_specs")
   {
-    printf '\ngenrule(\n'
+    printf '\nfilegroup(\n'
     printf '    name = "test_scripts_%s",\n' "$group"
     printf '    srcs = [\n'
-    while IFS= read -r file; do
-      printf '        %s,\n' "$(quote "$file")"
-    done < <(printf '%s\n' "${!group_files[@]}" | sort)
+    for suite_target in "${suite_targets[@]}"; do
+      printf '        %s,\n' "$(quote ":$suite_target")"
+    done
     printf '    ],\n'
-    printf '    tools = ["mise.toml", ".bazelversion"],\n'
-    printf '    outs = ["test-scripts-%s.ok"],\n' "$group"
-    printf '    cmd = "mise run --raw test-scripts %s && touch %s",\n' "$group" "\$@"
-    printf '    tags = ["no-sandbox", "no-remote"],\n'
     printf ')\n'
   } >> "$output"
 done

@@ -120,7 +120,8 @@ setup_bazel_fixture() {
   cat > .scripts/tests/groups.yaml << 'EOF'
 tooling:
   tests: [.scripts/tests/example.bats]
-  inputs: [.scripts/format-check.sh]
+  suite_inputs:
+    .scripts/tests/example.bats: [.scripts/format-check.sh]
 EOF
   printf '%s\n' '# formatter tool identity' > mise.toml
   for project in example other; do
