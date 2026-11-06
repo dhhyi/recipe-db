@@ -236,6 +236,7 @@ assert_compose() {
     all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
       . as $service | $root.services | has($service))
     and (.services.browse.environment | has("GOOGLE_OAUTH_CLIENT_ID") | not)
+    and .services.browse.environment.PUBLIC_ORIGIN == "${PUBLIC_ORIGIN:-http://localhost:8080}"
     and (.services.graphql.labels | all(.[]; startswith("traefik.http.routers.graphql-cookie.") | not))
     and (.services | has("oauth2-proxy") | not)
     and (.services | has("redis") | not)
