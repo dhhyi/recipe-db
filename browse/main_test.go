@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"html"
@@ -12,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/Khan/genqlient/graphql"
+
+	"frontend/src/components"
 )
 
 func assertStyledErrorPage(t *testing.T, response *httptest.ResponseRecorder, status int, title, message string, head bool) {
@@ -77,18 +80,52 @@ func TestUnknownBrowseURLAndEscapedError(t *testing.T) {
 	assertStyledErrorPage(t, response, http.StatusBadRequest, "error | RezeptDB", "&lt;script&gt;alert(1)&lt;/script&gt;", false)
 }
 
+func TestOpenGraphMetadataEscapesValues(t *testing.T) {
+	if got := absolutePublicURL("https://recipes.example.test", "/images/42"); got != "https://recipes.example.test/images/42" {
+		t.Fatalf("relative image URL was not made absolute: %s", got)
+	}
+	if got := absolutePublicURL("https://recipes.example.test", "javascript:alert(1)"); got != "https://recipes.example.test/design/og-image.svg" {
+		t.Fatalf("unsafe image URL did not use the fallback: %s", got)
+	}
+
+	var body bytes.Buffer
+	metadata := components.OpenGraphMetadata{
+		Title:       `<recipe> " &`,
+		Type:        "article",
+		Image:       "https://recipes.example.test/image.png?one=1&two=2",
+		URL:         "https://recipes.example.test/recipe/42",
+		Description: `<description> &`,
+	}
+	if err := components.Layout("Test", metadata).Render(context.Background(), &body); err != nil {
+		t.Fatal(err)
+	}
+	rendered := body.String()
+	for _, raw := range []string{"<recipe>", `<description>`, `?one=1&two=2`} {
+		if strings.Contains(rendered, raw) {
+			t.Errorf("Open Graph metadata was not escaped: %s", raw)
+		}
+	}
+	for _, escaped := range []string{"&lt;recipe&gt;", "&lt;description&gt;", "?one=1&amp;two=2"} {
+		if !strings.Contains(rendered, escaped) {
+			t.Errorf("escaped Open Graph value missing %q: %s", escaped, rendered)
+		}
+	}
+}
+
 func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	const imageURL = "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two"
 	const thumbURL = "/assets/unrelated/thumb-token.png?rev=opaque&size=small"
 	var recipeCalls atomic.Int32
 	var version atomic.Int32
 	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool
+	var hasImage atomic.Bool
 	var tagsOffline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
 	var identityRole atomic.Value
 	identityRole.Store("owner")
 	var canRate atomic.Bool
 	canRate.Store(true)
+	hasImage.Store(true)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct{ OperationName string }
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -124,7 +161,10 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				if ratingsOffline.Load() {
 					rating = nil
 				}
-				var image any = map[string]any{"url": imageURL, "thumbUrl": thumbURL}
+				var image any
+				if hasImage.Load() {
+					image = map[string]any{"url": imageURL, "thumbUrl": thumbURL}
+				}
 				if imagesOffline.Load() {
 					image = nil
 				}
@@ -214,6 +254,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}))
 	defer upstream.Close()
 	client := graphql.NewClient(upstream.URL, upstream.Client())
+	t.Setenv("PUBLIC_ORIGIN", "https://recipes.example.test")
 	c := testCache(t, func(ctx context.Context, id string) ([]byte, error) { return renderRecipe(ctx, client, id) })
 	handler := newHandlerWithEndpoint(client, c, upstream.URL)
 	request := func(method, path, etag string) *httptest.ResponseRecorder {
@@ -286,6 +327,17 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	if !strings.Contains(pageHTML, "Zuletzt aktualisiert: vor langer Zeit") {
 		t.Fatal("recipe update time must be displayed in German")
+	}
+	for _, markup := range []string{
+		`property="og:title" content="Original"`,
+		`property="og:type" content="article"`,
+		`property="og:image" content="https://cdn.example.test/opaque/full-token.png?signature=abc&amp;version=two"`,
+		`property="og:url" content="https://recipes.example.test/recipe/42"`,
+		`property="og:description" content="` + siteDescription + `"`,
+	} {
+		if !strings.Contains(pageHTML, markup) {
+			t.Errorf("recipe Open Graph metadata missing %q", markup)
+		}
 	}
 	if strings.Contains(pageHTML, "<h2>Inspirationen</h2>") {
 		t.Fatal("shared page must not contain the lazy inspirations heading")
@@ -430,6 +482,19 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		recovered.Header().Get("ETag") == "" || recipeCalls.Load() != callsBeforeDegraded+3 {
 		t.Fatal("tag display did not recover to cacheable HTML")
 	}
+	hasImage.Store(false)
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	imageMissing := request("GET", "/recipe/42", "")
+	if imageMissing.Code != http.StatusOK ||
+		!strings.Contains(imageMissing.Body.String(), `property="og:image" content="https://recipes.example.test/design/og-image.svg"`) {
+		t.Fatalf("missing recipe image did not use the site fallback: %s", imageMissing.Body.String())
+	}
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	hasImage.Store(true)
 	deleted.Store(true)
 	if err := c.invalidate("42"); err != nil {
 		t.Fatal(err)

@@ -1,12 +1,23 @@
 package components
 
-templ Layout(title string) {
+type OpenGraphMetadata struct {
+	Title, Type, Image, URL, Description string
+}
+
+templ Layout(title string, metadata OpenGraphMetadata) {
 	<!DOCTYPE html>
 	<html lang="de">
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ title }</title>
+			if metadata.Type != "" {
+				<meta property="og:title" content={ metadata.Title }/>
+				<meta property="og:type" content={ metadata.Type }/>
+				<meta property="og:image" content={ metadata.Image }/>
+				<meta property="og:url" content={ metadata.URL }/>
+				<meta property="og:description" content={ metadata.Description }/>
+			}
 			<link rel="stylesheet" href="/design/styles.css"/>
 			<script type="module" src="/design/components.js"></script>
 			<script src="/design/htmx.min.js"></script>
