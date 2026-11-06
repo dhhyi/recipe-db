@@ -72,7 +72,7 @@ The following observations are recorded in the real-provider issue:
 
 ## Access-model checklist reconciliation
 
-The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); actual MCP client verification completed another (22 complete / 11 incomplete). Public-only indexing and anonymous recipe markup verification bring the current count to 24 complete / 9 incomplete. No criterion was removed, split to inflate completion, or waived.
+The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); actual MCP client verification completed another (22 complete / 11 incomplete). Public-only indexing and anonymous recipe markup completed two more (24 complete / 9 incomplete); ratings and partial-response checks bring the current count to 26 complete / 7 incomplete. No criterion was removed, split to inflate completion, or waived.
 
 ### Route and ingress verification (2026-11-06)
 
@@ -120,12 +120,20 @@ Search's `RecipeIds` and `IndexRecipe` operations select only public recipe fiel
 
 `mise run --raw in-devcontainer browse go test ./... -run TestDetailHTTPAndLiveWidgets` passed with explicit raw-HTML assertions for Recipe scope, name, ingredient, instructions, image and AggregateRating value/count metadata. A plain anonymous HTTPS GET of `/recipe/0afc12a1-1b28-4879-9873-0934ec36827e` on the Pi preview was parsed without executing JavaScript or supplying cookies: all those properties were present, including six ingredient rows and rating 4.5/count 2. These results establish markup availability only, not an external parser or Bring! integration.
 
+### Ratings and GraphQL partial responses (2026-11-06)
+
+The existing local development Compose stack was started with `mise run dev-up`, using its generated isolated owner/two-member fixture and testing-mode services, not the Pi or Google sessions. New focused E2E tests create and delete their own recipes without resetting shared data or recording token-bearing traces.
+
+`mise run --raw in-devcontainer e2e-test pnpm test tests/access-model.functional.spec.js --project=desktop` passed both tests. One member's first/replacement votes changed 5 to 3 with count remaining 1 and the other member's vote still null. Eight concurrent requests (four per member, values 2 and 4) converged to exactly count 2/average 3, with each member seeing only its own value. Anonymous reads returned the aggregate without an individual vote. The existing real-browser test also passed using `pnpm test tests/recipes.functional.spec.js --grep 'members rate the same recipe' --project=desktop`: its HTMX rating fragment was `no-store`, replacements did not duplicate widgets/votes, and the two-member aggregate was exact.
+
+The second focused test selected an allowed recipe/name/aggregate and denied `myRating` using aliases. The response remained HTTP 200 with complete public data, only `own: null`, exactly one error at `["publicRecipe","aggregate","own"]`, and extensions `code: authentication-required`, `status: 401`. A member with no vote received null without an error. This distinguishes absent votes from authorization denial without erasing independently allowed fields.
+
+The existing GraphQL image/partial-response and denied-backend-side-effect tests passed individually; the non-broker test selection then passed 70 tests (`cargo test tests:: -- --skip bus_contract --skip bus_restart_recovery --skip bus_outage_preserves_mutation_results`). That selection also covers canonical backend error forwarding, stable auth codes, capability mapping and the existing mutation-origin guards. This is current-source local/component evidence, not a new Pi application release.
+
 | Remaining criterion | Supported evidence and unresolved portion |
 | --- | --- |
 | Request-scoped forwarding, cookie relay and concurrent identity isolation | Transport regressions and successful browser refresh exist; reconcile combined browser/token/MCP concurrency and clearing/renewal coverage. |
 | Entire client/role matrix and side-effect denials | Component and Google browser checks cover substantial behavior; reconcile all GraphQL/HTMX/editor/MCP operations and runtime reset restrictions. |
-| Independent/repeated/concurrent votes and aggregates | Two-member and attribution/rotation results exist; recover exact concurrent-update and aggregate assertions/results. |
-| Partial GraphQL responses and absent-vote null | Absent-vote behavior has evidence; reconcile mixed allowed/denied field shapes and structured errors. |
 | Complete denied/expired/unapproved UX and recovery | Browser denials, expiry/re-login and revocation passed; reconcile public recovery/no-auto-replay evidence. First-reload blank header is explicitly accepted/deferred, not an unacknowledged failure. |
 | Public shared HTML, no-store personal fragments and history isolation | Contract and component tests exist; reconcile sequential-user and ordinary/HTMX history isolation evidence. |
 | Full browser-write protection matrix | Existing origin/CSRF tests exist; reconcile cross-origin rating/GraphQL/multipart, privileged credential-free, same-origin and non-browser bearer coverage/results. |
