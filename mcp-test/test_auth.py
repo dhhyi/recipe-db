@@ -30,12 +30,12 @@ def accounts(fixture_server_ready):
 
 
 def payload(result):
-    assert result.isError is False
+    assert result.is_error is False
     return json.loads(result.content[0].text)
 
 
 def denied(result, code):
-    assert result.isError is True
+    assert result.is_error is True
     assert code in result.content[0].text
 
 
@@ -136,7 +136,7 @@ async def test_member_ratings_are_distinct_replaceable_and_cannot_impersonate(ac
     async with mcp_session(account="memberOne") as first:
         tools = await first.list_tools()
         rating_tool = next(tool for tool in tools.tools if tool.name == "add_rating")
-        assert "login" not in rating_tool.inputSchema.get("properties", {})
+        assert "login" not in rating_tool.input_schema.get("properties", {})
         for name, arguments in (
             ("add_recipe", {"recipeJson": '{"name":"Denied member recipe"}'}),
             ("change_recipe", {"recipeId": recipe_id, "recipeJson": '{"name":"Denied"}'}),
@@ -154,7 +154,7 @@ async def test_member_ratings_are_distinct_replaceable_and_cannot_impersonate(ac
         forged = await first.call_tool(
             "add_rating", {"recipeId": recipe_id, "rating": 3, "login": "e2e-member-two"}
         )
-        if forged.isError:
+        if forged.is_error:
             result = payload(await first.call_tool("get_recipe", {"recipeId": recipe_id}))["rating"]
             assert result["average"] == 4
         else:
@@ -305,7 +305,7 @@ async def test_owner_upload_follows_external_redirect_without_sending_bearer(acc
             "change_recipe",
             {"recipeId": recipe_id, "recipeJson": json.dumps({"imageUrl": f"{FIXTURE_API}/redirect.jpg"})},
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert "Image uploaded" in result.content[0].text
         recipe = payload(await owner.call_tool("get_recipe", {"recipeId": recipe_id}))
         assert recipe["image"] is not None

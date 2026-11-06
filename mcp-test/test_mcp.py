@@ -3,19 +3,19 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
 
 import anyio
 import httpx
+import httpx2
 import pytest
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
 MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
 AUTH_TOKENS = json.loads(os.environ.get("E2E_AUTH_TOKENS", "{}"))
-MCP_REQUEST_TIMEOUT = timedelta(seconds=30)
+MCP_REQUEST_TIMEOUT = 30
 MCP_SESSION_TIMEOUT_SECONDS = 60
 
 
@@ -68,45 +68,45 @@ async def mcp_session(authenticated=True, account="owner"):
             if not token:
                 pytest.fail("E2E_AUTH_TOKENS with owner/memberOne/memberTwo is required")
             headers["Authorization"] = "Bearer " + token
-        async with streamablehttp_client(
-            MCP_URL, headers=headers, timeout=10, sse_read_timeout=30
-        ) as (read_stream, write_stream, _):
-            async with ClientSession(
-                read_stream, write_stream, read_timeout_seconds=MCP_REQUEST_TIMEOUT
+        async with httpx2.AsyncClient(
+            headers=headers, timeout=httpx2.Timeout(10, read=MCP_REQUEST_TIMEOUT)
+        ) as http_client:
+            async with Client(
+                streamable_http_client(MCP_URL, http_client=http_client),
+                mode="2026-07-28",
+                read_timeout_seconds=MCP_REQUEST_TIMEOUT,
             ) as session:
-                await session.initialize()
                 yield session
 
 
 @pytest.mark.parametrize("stall", ["response", "cleanup"])
 async def test_mcp_session_deadline_bounds_response_and_cleanup(monkeypatch, stall):
     @asynccontextmanager
-    async def transport(*args, **kwargs):
-        incoming, read_stream = anyio.create_memory_object_stream(1)
-        write_stream, outgoing = anyio.create_memory_object_stream(1)
-        async with incoming, read_stream, write_stream, outgoing:
-            yield read_stream, write_stream, lambda: None
-            if stall == "cleanup":
-                await anyio.sleep_forever()
+    async def client(*args, **kwargs):
+        if stall == "response":
+            await anyio.sleep_forever()
+        yield object()
+        if stall == "cleanup":
+            await anyio.sleep_forever()
 
-    @asynccontextmanager
-    async def initialized_session(*args, **kwargs):
-        class Session:
-            async def initialize(self):
-                pass
-
-        yield Session()
-
-    monkeypatch.setitem(globals(), "streamablehttp_client", transport)
+    monkeypatch.setitem(globals(), "Client", client)
     monkeypatch.setitem(globals(), "MCP_SESSION_TIMEOUT_SECONDS", 0.05)
-    if stall == "cleanup":
-        monkeypatch.setitem(globals(), "ClientSession", initialized_session)
 
     started = time.monotonic()
     with pytest.raises(TimeoutError):
         async with mcp_session(authenticated=False):
             pass
     assert time.monotonic() - started < 2
+
+
+async def test_repeated_stateless_sessions_deliver_tool_responses():
+    for _ in range(200):
+        async with mcp_session(authenticated=False) as session:
+            schema = await session.call_tool("get_recipe_schema", {})
+            assert schema.is_error is False
+            assert "addRecipe" in json.loads(schema.content[0].text)
+            tools = await session.list_tools()
+            assert "list_recipes" in {tool.name for tool in tools.tools}
 
 
 async def create_recipe(session, name):
@@ -135,13 +135,13 @@ async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
 async def test_tag_tools_describe_categories_and_optional_bulk_lists():
     async with mcp_session() as session:
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
-        category_schema = tools["list_tags"].inputSchema["properties"]["category"]
+        category_schema = tools["list_tags"].input_schema["properties"]["category"]
         assert {value for value in category_schema["enum"] if value is not None} == {
             "CUISINE",
             "DIETARY_STYLE",
             "COURSE",
         }
-        change_schema = tools["change_recipe_tags"].inputSchema
+        change_schema = tools["change_recipe_tags"].input_schema
         assert "addTagIds" not in change_schema.get("required", [])
         assert "removeTagIds" not in change_schema.get("required", [])
         assert "collision" in tools["create_tag"].description.lower()
@@ -164,7 +164,7 @@ async def test_tag_inventory_create_collision_and_delete():
         collision = await session.call_tool(
             "create_tag", {"category": "CUISINE", "name": name}
         )
-        assert collision.isError is True
+        assert collision.is_error is True
         assert "tag-collision" in collision.content[0].text
 
         deleted = await session.call_tool("delete_tag", {"tagId": tag["id"]})
@@ -177,7 +177,7 @@ async def test_non_owner_cannot_create_tags():
         denied = await session.call_tool(
             "create_tag", {"category": "CUISINE", "name": name}
         )
-        assert denied.isError is True
+        assert denied.is_error is True
         assert "forbidden" in denied.content[0].text
 
     async with mcp_session() as session:
@@ -234,7 +234,7 @@ async def test_add_recipe_without_an_api_token_is_rejected():
         result = await session.call_tool(
             "add_recipe", {"recipeJson": json.dumps({"name": "Unauthenticated Recipe"})}
         )
-        assert result.isError is True
+        assert result.is_error is True
         assert "authentication-required" in result.content[0].text.lower()
 
 
