@@ -122,6 +122,14 @@ export class RecipeTile extends LitElement {
       white-space: nowrap !important;
       width: 100%;
     }
+
+    ::slotted(a[slot="title"]) {
+      align-items: end;
+      display: flex;
+      height: 100%;
+      text-decoration: none;
+      width: 100%;
+    }
   `;
 
   private handleRatingSlotChange(event: Event) {
