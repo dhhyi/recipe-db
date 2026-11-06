@@ -318,8 +318,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		widget := request("GET", "/controls", "")
 		body := widget.Body.String()
 		if widget.Code != 200 || strings.Contains(body, `data-add-recipe`) != online ||
-			strings.Contains(body, `role="button"`) ||
-			strings.Contains(body, `class="pointer-events-auto mr-2"`) != online ||
+			strings.Contains(body, `role="button"`) != online ||
+			strings.Contains(body, `class="outline pointer-events-auto mr-2"`) != online ||
 			!strings.Contains(body, `class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none"`) ||
 			strings.Contains(body, "Rezept hinzufügen") != online ||
 			widget.Header().Get("Cache-Control") != "no-store" {
