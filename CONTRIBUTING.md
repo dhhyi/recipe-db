@@ -29,9 +29,9 @@ Use issues to capture and refine future work. Every issue in this process has ex
 - **`umbrella` — Coordinate:** Refine a larger idea into an outcome with scope, completion criteria, and native sub-issues, initially labeled `idea`. Maintain current progress, a linked base contract of decisions, and a dependency diagram in the description.
 - **`spec` — Implement:** Define scope, expected behavior, constraints, dependencies, and verifiable acceptance criteria so an autonomous agent can implement without guessing material requirements. Settle significant decisions; allow minor implementation choices to be resolved by the agent and review.
 - **`manual` — Human action:** Track work that cannot be completed autonomously and requires the operator's direct action or approval. Record the required human involvement, prerequisites, completion evidence, safety boundaries, and any unresolved requirements. Agents may help refine the task, prepare checklists, and assist, but must not independently execute the human-only steps or claim completion. The label does not imply readiness or waive blockers; close only after verified completion.
-- **`decision` — Record:** Preserve an agreed, umbrella-scoped contract: context, chosen approach, alternatives, and consequences. Every decision belongs to exactly one umbrella, which references it as part of its base contract. Child specs must conform to that contract. Close decisions when accepted; record material changes in explicitly superseding decisions and review affected specs.
+- **`decision` — Record:** Preserve an agreed contract: context, chosen approach, alternatives, and consequences. Decisions may stand alone or belong to an umbrella. Relate standalone decisions to affected issues with native **Relates to** relationships and link the contract in their descriptions; do not create an umbrella solely to hold a decision. Umbrellas reference their decisions as part of their base contract. Affected specs must conform to the applicable contract. Close decisions when accepted; record material changes in explicitly superseding decisions and review affected specs.
 
-When refinement changes the issue type, replace the previous workflow label, preserving the issue and its discussion. Any idea may become manual when direct human involvement is required; existing specs may also become manual without losing their settled scope or acceptance criteria. Separate automatable specs from manual steps when work can be split, attaching them to an umbrella if a parent is needed. Standalone ideas become specs, umbrellas, or manual tasks, never decisions. Research, exploration, and unresolved requirements otherwise remain ideas.
+When refinement changes the issue type, replace the previous workflow label, preserving the issue and its discussion. Any idea may become manual when direct human involvement is required; existing specs may also become manual without losing their settled scope or acceptance criteria. Separate automatable specs from manual steps when work can be split, attaching them to an umbrella if a parent is needed. Standalone ideas become specs, umbrellas, manual tasks, or decisions when their purpose is to record an agreed contract rather than track implementation. Research, exploration, and unresolved requirements otherwise remain ideas.
 
 Refinement is not limited to ideas: revise existing specs and restructure umbrellas in place, retaining the workflow label when the issue type is unchanged. Preserve settled requirements, acceptance criteria, and implementation progress unless a change is explicitly agreed. Revisit accepted decisions through explicitly superseding decisions for material contract changes, not by rewriting the historical agreement.
 
@@ -42,13 +42,14 @@ flowchart TD
     Idea[Standalone idea] --> Spec[spec]
     Idea --> Umbrella[umbrella]
     Idea --> Manual[manual]
+    Idea --> Decision[decision]
     Spec -->|Requires direct human involvement| Manual
     Spec -->|Split, preserving settled scope| Umbrella
     Umbrella -.->|Create native sub-issues| Child[Scoped idea]
     Umbrella -.->|Preserve settled split-out scope| ChildSpec[spec]
     Child --> ChildSpec[spec]
     Child --> Manual
-    Child --> Decision[decision]
+    Child --> Decision
     Child --> Nested[umbrella]
     Decision -.->|Defines base contract| Umbrella
 ```
