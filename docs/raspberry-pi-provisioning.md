@@ -2,6 +2,8 @@
 
 Imaging and working public-key SSH are prerequisites; start with the [bootstrap guide](raspberry-pi-bootstrap.md). This implements [#42](https://github.com/dhhyi/recipe-db/issues/42), not application deployment or [#43 backup/recovery](https://github.com/dhhyi/recipe-db/issues/43). Physical acceptance is recorded separately in [#45](https://github.com/dhhyi/recipe-db/issues/45).
 
+For the operator-led inventory of private provisioning and deployment inputs, see the [deployment configuration worksheet](deployment-configuration-inventory.md). Do not move or replace existing inputs until the operator has reviewed and approved the migration.
+
 ## Supported baseline and pinned tools
 
 - Raspberry Pi 5, Raspberry Pi OS Lite 64-bit, Debian 13/Trixie, ext4 root on the explicitly identified single USB device.
