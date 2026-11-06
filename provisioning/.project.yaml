@@ -26,4 +26,6 @@ check: |
   python -m unittest discover -s tests -v
   ansible-playbook --syntax-check -i inventory.example.yml site.yml
   ansible-playbook --syntax-check -i inventory.example.yml access.yml
+  ansible-playbook --syntax-check -i inventory.example.yml backup-configure.yml
+  ansible-playbook --syntax-check -i inventory.example.yml backup-enable.yml
 test: python -m unittest discover -s tests -v

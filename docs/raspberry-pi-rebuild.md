@@ -160,6 +160,31 @@ If restore fails, keep the target isolated. Don't delete data or release a recov
 
 ## 8. Set up automated backups
 
-- Install the root-only backup configuration under `/etc/recipe-db/` over authenticated SSH: `backup.json`, backup values and release reference, `rclone.conf`, and referenced application inputs. Ansible doesn't create these files yet.
+- After restore and acceptance, prepare `backup.json`, `backup-values.yaml`, `backup-release-ref`, and `rclone.conf` under `~/.config/recipe-db/backup/`. Keep any private application files referenced by `backup-values.yaml` directly under `~/.config/recipe-db/deployment/`. The configuration guide documents the required values and paths.
+- In the provisioning devcontainer's SSH-agent shell, install the prepared inputs:
+
+  ```sh
+  ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    backup-configure.yml --ask-become-pass
+  ```
+
+  The playbook copies these inputs and the referenced application files to root-owned `/etc/recipe-db/` with mode `0600`, and rewrites the values file's private-input paths to its Pi locations. It does not mount or copy the operator's home directory onto the Pi, expose secret values in Ansible output, or enable scheduled capture.
+
 - If Drive authorization can't be restored, reauthorize it interactively; OAuth client JSON cannot recreate an rclone grant.
-- Run a backup capture and verify its remote result before relying on scheduled backups.
+- While the timer remains disabled, run an explicit capture on the Pi and confirm its result:
+
+  ```sh
+  sudo systemctl start recipe-db-backup.service
+  sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+  ```
+
+  Continue only when status is `verified-upload` or `verified-unchanged`; these statuses require remote readback verification. The configure playbook records a private completion timestamp, and the enable playbook also requires `lastCheck` to be later than that timestamp, so a capture from before or during reconfiguration cannot authorize scheduling. Investigate any other status before proceeding.
+
+- Only after verifying the capture, explicitly enable the timer from the provisioning devcontainer's SSH-agent shell:
+
+  ```sh
+  ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    backup-enable.yml --ask-become-pass
+  ```
+
+  This playbook refuses to enable the timer without a verified capture. Base host provisioning always leaves scheduled capture stopped and disabled.

@@ -28,6 +28,8 @@ Keep operator configuration outside the checkout in `~/.config/recipe-db/`. Rest
     └── rclone.conf
 ```
 
+The backup inputs are operator-prepared. `backup.json` must use `/etc/recipe-db/rclone.conf`, `/var/lib/recipe-db-backup`, `/var/lib/recipe-db-backup/work`, and `/usr/local/sbin/recipe-db-backup-capture` for its rclone config, state, staging, and capture command paths. In `backup-values.yaml`, private `secrets` entries must point to direct files under `~/.config/recipe-db/deployment/`. The explicit `backup-configure.yml` playbook copies the files and referenced application inputs into root-only `/etc/recipe-db/`, then rewrites those values paths to `/etc/recipe-db/application-inputs/`. The Pi never mounts operator home.
+
 `pi-values.yaml` begins as a private copy of [`deploy/pi.yaml`](../deploy/pi.yaml). It contains the Pi's immutable release/deployment settings and absolute paths to operator-held secret files. `auth-accounts.json` follows [`graphql/auth-accounts.schema.json`](../graphql/auth-accounts.schema.json). The Google client ID is public configuration in the values file; its client secret and OAuth cookie key are private inputs. The ACME email is needed only for the optional HTTPS configuration.
 
 `inventory.yml` is copied from [`provisioning/inventory.example.yml`](../provisioning/inventory.example.yml). Set its host, SSH-key path, measured root UUID, and narrowly scoped administrator/application networks. Keep `known_hosts` limited to the Pi host key verified during bootstrap. The kubeconfig is generated from the live Pi by `access.yml`; it is sensitive, disposable, and can be recreated after provisioning.
@@ -46,10 +48,14 @@ Keep operator configuration outside the checkout in `~/.config/recipe-db/`. Rest
 | GraphQL ingress token and Typesense API key | Generated during each production deploy/restore | Ephemeral cluster credentials. The operation creates and uses them, then deletes its private temporary copies. Do not configure, retain, or back them up. Each operation rotates them and rolls dependent workloads. |
 | Kubernetes Secrets and application PVC data | Live cluster | Runtime state; restore through the documented backup/recovery workflow |
 | ACME account and certificate files | Traefik's retained `recipe-db-acme` PVC | Runtime state, outside application backup capture. Protect separately or reissue after recovery. |
-| `backup.json`, backup values, release reference and rclone authorization | Pi under `/etc/recipe-db/` and operator recovery directory | Operator-managed recovery inputs; application backup archives do not include them |
+| `backup.json`, backup values, release reference, rclone authorization and referenced application inputs | Pi under `/etc/recipe-db/` and operator recovery directory | Operator-managed recovery inputs; installed explicitly after restore and acceptance; application backup archives do not include them |
 | `rclone.conf` | Google Drive authorization state | Not derivable from OAuth client JSON. Preserve it securely or reauthorize interactively; never assume client JSON alone restores Drive access. |
 
 Development `.secrets/` files are fixtures for local Compose and tests. They are not production inputs and must not be copied into this directory as production secrets.
+
+## Backup activation
+
+Base Ansible host provisioning installs the backup service and timer units but leaves the timer stopped and disabled. After restore acceptance, run `backup-configure.yml` from the provisioning devcontainer to install prepared files. It invalidates any prior configuration marker and records a private completion timestamp only after all inputs are installed. Then start `recipe-db-backup.service` explicitly and verify `verified-upload` or `verified-unchanged` via the publisher's status command. Only after that verification, run the separate `backup-enable.yml` playbook; it requires the verified status's `lastCheck` to be later than the latest configuration timestamp before enabling the timer. Neither setup nor routine provisioning activates scheduled capture.
 
 ## Clean rebuild boundary
 

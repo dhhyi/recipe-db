@@ -1,0 +1,175 @@
+- name: Install operator-prepared backup inputs on the Pi
+  hosts: pi
+  gather_facts: false
+  become: true
+  vars:
+    operator_config_directory: /home/vscode/.config/recipe-db
+    operator_backup_directory: "{{ operator_config_directory }}/backup"
+    operator_deployment_directory: "{{ operator_config_directory }}/deployment"
+    operator_backup_files:
+      - { name: backup.json, destination: /etc/recipe-db/backup.json }
+      - {
+          name: backup-release-ref,
+          destination: /etc/recipe-db/backup-release-ref,
+        }
+      - { name: rclone.conf, destination: /etc/recipe-db/rclone.conf }
+    operator_backup_source_names:
+      - backup.json
+      - backup-values.yaml
+      - backup-release-ref
+      - rclone.conf
+    allowed_application_inputs:
+      - auth-accounts.json
+      - google-oauth-client-secret
+      - oauth2-cookie-secret
+      - acme-account-email
+  tasks:
+    - name: Keep scheduled capture disabled while installing operator inputs
+      ansible.builtin.systemd_service:
+        name: recipe-db-backup.timer
+        enabled: false
+        state: stopped
+
+    - name: Invalidate the prior backup configuration generation
+      ansible.builtin.file:
+        path: /etc/recipe-db/backup-configured-at
+        state: absent
+
+    - name: Read prepared backup configuration without displaying it
+      ansible.builtin.set_fact:
+        backup_settings: >-
+          {{ lookup('ansible.builtin.file', operator_backup_directory ~ '/backup.json') | from_json }}
+        backup_values: >-
+          {{ lookup('ansible.builtin.file', operator_backup_directory ~ '/backup-values.yaml') | from_yaml }}
+        backup_release: >-
+          {{ lookup('ansible.builtin.file', operator_backup_directory ~ '/backup-release-ref') | trim }}
+      no_log: true
+
+    - name: Validate backup configuration and private input references
+      ansible.builtin.assert:
+        that:
+          - backup_settings is mapping
+          - backup_settings.rcloneConfig == '/etc/recipe-db/rclone.conf'
+          - backup_settings.captureCommand == '/usr/local/sbin/recipe-db-backup-capture'
+          - backup_settings.stateDirectory == '/var/lib/recipe-db-backup'
+          - backup_settings.stagingDirectory == '/var/lib/recipe-db-backup/work'
+          - backup_release is match('^[0-9a-f]{40}$')
+          - backup_values is mapping
+          - backup_values.secrets is mapping
+          - "'auth-accounts.json' in backup_values.secrets"
+          - backup_values.secrets | length > 0
+          - backup_values.secrets.keys() | list | difference(allowed_application_inputs) | length == 0
+        fail_msg: Backup inputs are incomplete or reference unsupported private files.
+      no_log: true
+
+    - name: Require each private application input to be a direct deployment file
+      ansible.builtin.assert:
+        that:
+          - item.value is string
+          - item.value.startswith(operator_deployment_directory ~ '/')
+          - item.value | dirname == operator_deployment_directory
+        fail_msg: Backup values reference an unsupported private input path.
+      loop: "{{ backup_values.secrets | dict2items }}"
+      no_log: true
+
+    - name: Inspect prepared backup files on the provisioning controller
+      ansible.builtin.stat:
+        path: "{{ operator_backup_directory }}/{{ item }}"
+      delegate_to: localhost
+      become: false
+      loop: "{{ operator_backup_source_names }}"
+      register: prepared_backup_files
+      no_log: true
+
+    - name: Require regular prepared backup files
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.size > 0
+        fail_msg: A required prepared backup file is unavailable.
+      loop: "{{ prepared_backup_files.results }}"
+      no_log: true
+
+    - name: Inspect referenced private application inputs on the controller
+      ansible.builtin.stat:
+        path: "{{ item.value }}"
+      delegate_to: localhost
+      become: false
+      loop: "{{ backup_values.secrets | dict2items }}"
+      register: prepared_application_inputs
+      no_log: true
+
+    - name: Require regular referenced application inputs
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.size > 0
+        fail_msg: A referenced private application input is unavailable.
+      loop: "{{ prepared_application_inputs.results }}"
+      no_log: true
+
+    - name: Create root-only backup configuration directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - /etc/recipe-db
+        - /etc/recipe-db/application-inputs
+
+    - name: Copy prepared backup configuration files
+      ansible.builtin.copy:
+        src: "{{ operator_backup_directory }}/{{ item.name }}"
+        dest: "{{ item.destination }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ operator_backup_files }}"
+      no_log: true
+
+    - name: Copy referenced private application inputs
+      ansible.builtin.copy:
+        src: "{{ item.value }}"
+        dest: "/etc/recipe-db/application-inputs/{{ item.key }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ backup_values.secrets | dict2items }}"
+      no_log: true
+
+    - name: Map private application inputs to their Pi paths
+      ansible.builtin.set_fact:
+        backup_pi_secret_paths: >-
+          {{ backup_pi_secret_paths | default({}) |
+             combine({item.key: '/etc/recipe-db/application-inputs/' ~ item.key}) }}
+      loop: "{{ backup_values.secrets | dict2items }}"
+      no_log: true
+
+    - name: Install backup values with private Pi input paths
+      ansible.builtin.copy:
+        content: >-
+          {{ backup_values | combine({'secrets': backup_pi_secret_paths}, recursive=True) | to_nice_yaml }}
+        dest: /etc/recipe-db/backup-values.yaml
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Record the completed backup configuration generation
+      ansible.builtin.command: date -u +%Y-%m-%dT%H:%M:%S+00:00
+      register: backup_configuration_timestamp
+      changed_when: false
+      no_log: true
+
+    - name: Save the private backup configuration generation marker
+      ansible.builtin.copy:
+        content: "{{ backup_configuration_timestamp.stdout }}\n"
+        dest: /etc/recipe-db/backup-configured-at
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
