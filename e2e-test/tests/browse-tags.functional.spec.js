@@ -288,7 +288,7 @@ test("invalid filters and unavailable search never show unfiltered recipes as re
     `/?filter_by=${encodeURIComponent('unknown_field:="value"')}`,
   );
   expect(invalid.status()).toBe(400);
-  await expect(page.getByRole("alert")).toHaveText(
+  await expect(page.locator("main .feedback.error")).toHaveText(
     "Suchfilter konnten nicht angewendet werden.",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
@@ -298,7 +298,7 @@ test("invalid filters and unavailable search never show unfiltered recipes as re
       `/?filter_by=${encodeURIComponent(tagFilter(tag.id))}`,
     );
     expect(unavailable.status()).toBe(424);
-    await expect(page.getByRole("alert")).toHaveText(
+    await expect(page.locator("main .feedback.error")).toHaveText(
       "Suchfilter konnten nicht angewendet werden.",
     );
     await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
