@@ -193,9 +193,20 @@ tasks:
       - deploy/pi.yaml
 workflows:
   tests:
+    - .scripts/tests/dependabot.bats
     - .scripts/tests/bazel-cache-artifacts.bats
     - .scripts/tests/mise-workflows.bats
   suite_inputs:
+    .scripts/tests/dependabot.bats:
+      - .github/dependabot.yml
+      - .github/workflows/publish.yaml
+      - package.json
+      - ":(glob)*/package.json"
+      - ":(glob)*/Cargo.toml"
+      - ":(glob)*/go.mod"
+      - ":(glob)*/requirements.txt"
+      - ":(glob)*/pom.xml"
+      - ":(glob)*/build.gradle"
     .scripts/tests/bazel-cache-artifacts.bats:
       - .scripts/bazel-cache-artifacts.py
       - .github/workflows/publish.yaml
