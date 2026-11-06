@@ -4,7 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const html = fs.readFileSync("index.html", "utf8");
-const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gi)]
   .map((match) => match[1])
   .find((source) => source.includes("Elm.Main.init"));
 
