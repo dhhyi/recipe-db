@@ -31,20 +31,26 @@ var browseSorts = map[string]string{
 }
 
 type browseRequest struct {
-	query, sort string
-	page        int
+	query, sort, filterBy string
+	filterByPresent       bool
+	page                  int
 }
 
 type browseOptions struct {
-	Query   string `json:"q"`
-	SortBy  string `json:"sort_by"`
-	Page    int    `json:"page"`
-	PerPage int    `json:"per_page"`
+	Query    string  `json:"q"`
+	SortBy   string  `json:"sort_by"`
+	FilterBy *string `json:"filter_by,omitempty"`
+	Page     int     `json:"page"`
+	PerPage  int     `json:"per_page"`
 }
 
 func parseBrowseRequest(values url.Values) (browseRequest, error) {
-	request := browseRequest{query: strings.TrimSpace(values.Get("q")), sort: values.Get("sort"), page: 1}
-	for _, key := range []string{"q", "sort", "page"} {
+	_, filterByPresent := values["filter_by"]
+	request := browseRequest{
+		query: strings.TrimSpace(values.Get("q")), sort: values.Get("sort"),
+		filterBy: values.Get("filter_by"), filterByPresent: filterByPresent, page: 1,
+	}
+	for _, key := range []string{"q", "sort", "page", "filter_by"} {
 		if len(values[key]) > 1 {
 			return request, fmt.Errorf("duplicate %s parameter", key)
 		}
@@ -79,7 +85,14 @@ func (request browseRequest) options() json.RawMessage {
 		}
 	}
 	// This fixed structure contains no browser-supplied Typesense options.
-	options, _ := json.Marshal(browseOptions{query, browseSorts[sort], request.page, browsePageSize})
+	var filterBy *string
+	if request.filterByPresent {
+		filterBy = &request.filterBy
+	}
+	options, _ := json.Marshal(browseOptions{
+		Query: query, SortBy: browseSorts[sort], FilterBy: filterBy,
+		Page: request.page, PerPage: browsePageSize,
+	})
 	return options
 }
 
@@ -87,6 +100,9 @@ func (request browseRequest) pageURL(page int) string {
 	values := url.Values{}
 	if request.query != "" {
 		values.Set("q", request.query)
+	}
+	if request.filterByPresent {
+		values.Set("filter_by", request.filterBy)
 	}
 	if request.sort != "" {
 		values.Set("sort", request.sort)
@@ -113,10 +129,12 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			return
 		}
 		state := components.BrowseState{
-			Query: request.query, Sort: request.sort, Page: request.page,
+			Query: request.query, Sort: request.sort, FilterBy: request.filterBy,
+			FilterByPresent: request.filterByPresent, Page: request.page,
 			PerPage: browsePageSize, Kind: "error",
 		}
 		status := http.StatusOK
+		filterExecutionFailed := false
 		if err != nil {
 			log.Printf("invalid browse request: %v", err)
 			state.Message = "Ungültige Suchparameter."
@@ -126,21 +144,45 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			if serviceErr != nil {
 				log.Printf("failed to fetch browse service status: %v", serviceErr)
 				status = http.StatusBadGateway
+				if request.filterBy != "" {
+					status = http.StatusFailedDependency
+					filterExecutionFailed = true
+				}
 			} else {
 				state.RatingsOnline = services.RatingsOnline
 				if !services.SearchOnline {
-					overview, overviewErr := gql.Overview(r.Context(), client)
-					optionalOnly := optionalServiceErrors(overviewErr)
-					if overviewErr != nil && !optionalOnly || overview == nil {
-						log.Printf("failed to fetch offline browse overview: %v", overviewErr)
-						status = http.StatusBadGateway
+					if request.filterBy != "" {
+						status = http.StatusFailedDependency
+						filterExecutionFailed = true
 					} else {
-						state.Kind, state.Recipes = "fallback", overview.Recipes
-						state.Found = len(overview.Recipes)
-						state.Page = 1
-						state.Message = "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
+						overview, overviewErr := gql.Overview(r.Context(), client)
+						optionalOnly := optionalServiceErrors(overviewErr)
+						if overviewErr != nil && !optionalOnly || overview == nil {
+							log.Printf("failed to fetch offline browse overview: %v", overviewErr)
+							status = http.StatusBadGateway
+						} else {
+							state.Kind, state.Recipes = "fallback", overview.Recipes
+							state.Found = len(overview.Recipes)
+							state.Page = 1
+							state.Message = "Suche nicht verfügbar. Alle Rezepte werden angezeigt."
+						}
 					}
 				} else {
+					if tagID, singleTag := components.TagSearchFilterID(request.filterBy); singleTag && request.query == "" {
+						inventory, inventoryErr := gql.TagInventory(r.Context(), client)
+						if inventoryErr != nil {
+							log.Printf("failed to load tag label for filtered search: %v", inventoryErr)
+							status = http.StatusFailedDependency
+							filterExecutionFailed = true
+						} else if inventory != nil {
+							for _, tag := range inventory.Tags {
+								if tag.Id == tagID {
+									state.TagName = tag.Name
+									break
+								}
+							}
+						}
+					}
 					// Load-more fetches only its next batch. Native navigation and history
 					// cache misses reconstruct the loaded depth without a client controller.
 					seen := make(map[string]bool)
@@ -159,7 +201,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						firstPage = request.page
 						state.Message = "Es wird nur die aktuelle Ergebnisseite angezeigt."
 					}
-					for page := firstPage; page <= request.page; page++ {
+					for page := firstPage; status < http.StatusBadRequest && page <= request.page; page++ {
 						pageRequest := request
 						pageRequest.page = page
 						response, searchErr := gql.BrowseSearch(r.Context(), client, pageRequest.options())
@@ -167,6 +209,13 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 						if searchErr != nil && !optionalOnly || response == nil || response.SearchRecipes == nil {
 							log.Printf("failed to search recipes: %v", searchErr)
 							status = http.StatusBadGateway
+							if request.filterBy != "" {
+								status = http.StatusFailedDependency
+								filterExecutionFailed = true
+								if invalidSearchOptions(searchErr) {
+									status = http.StatusBadRequest
+								}
+							}
 							break
 						}
 						if searchErr != nil {
@@ -201,13 +250,22 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 				}
 			}
 		}
-		if status >= 500 {
-			state.Message = "Rezepte konnten nicht geladen werden."
+		if filterExecutionFailed {
+			state.Message = "Suchfilter konnten nicht angewendet werden."
+			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
+		} else if status >= 500 {
+			if request.filterBy != "" {
+				state.Message = "Suchfilter konnten nicht angewendet werden."
+			} else {
+				state.Message = "Rezepte konnten nicht geladen werden."
+			}
 			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
 		}
 		if !fragment && status >= 400 {
 			title, message := "Rezepte konnten nicht geladen werden | RezeptDB", "Rezepte konnten nicht geladen werden."
-			if status == http.StatusBadRequest {
+			if filterExecutionFailed {
+				title, message = "Suchfilter konnten nicht angewendet werden | RezeptDB", "Suchfilter konnten nicht angewendet werden."
+			} else if status == http.StatusBadRequest {
 				title, message = "Ungültige Suchparameter | RezeptDB", "Ungültige Suchparameter."
 			}
 			writeErrorPage(w, r, status, title, message)
@@ -217,7 +275,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			state.Message = state.RecipeCount() + " gefunden. Alle Rezepte geladen."
 		}
 		var component templ.Component
-		if appendPage && status >= 500 {
+		if appendPage && (status >= 500 || filterExecutionFailed) {
 			// A failed load-more only replaces its trigger. Existing cards and the
 			// successful title/URL survive, and retries never auto-trigger.
 			component = components.BrowsePageError(state, request.pageURL(request.page))

@@ -183,7 +183,7 @@ func TestBrowseHTMXContract(t *testing.T) {
 		`hx-sync="this:replace"`, `hx-sync="#browse-form:abort"`,
 		`hx-trigger="intersect once"`, `hx-get="/?page=2"`,
 		`hx-target="this"`, `aria-label="Weitere Rezepte werden geladen"`,
-		`col-span-full order-1`,
+		`col-span-full order-1`, `namedItem('filter_by')?.remove()`,
 	} {
 		if !strings.Contains(html.UnescapeString(body.String()), attribute) {
 			t.Errorf("missing HTMX contract: %s", attribute)

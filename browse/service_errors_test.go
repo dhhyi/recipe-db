@@ -37,6 +37,38 @@ func TestTagErrorsOnlyRejectsCoreFieldErrors(t *testing.T) {
 	}
 }
 
+func TestInvalidSearchOptionsRequiresTypesenseBadRequest(t *testing.T) {
+	for _, gqlErr := range []*gqlerror.Error{
+		{
+			Message: "invalid filter",
+			Extensions: map[string]interface{}{
+				"code": "invalid-search-options", "status": 400,
+			},
+		},
+		{
+			Message: "unavailable",
+			Extensions: map[string]interface{}{
+				"code": "service-unavailable", "status": 503,
+			},
+		},
+		{
+			Message: "unstructured",
+			Extensions: map[string]interface{}{
+				"code": "invalid-search-options", "status": 500,
+			},
+		},
+	} {
+		got := invalidSearchOptions(gqlerror.List{gqlErr})
+		want := gqlErr.Extensions["status"] == 400 && gqlErr.Extensions["code"] == "invalid-search-options"
+		if got != want {
+			t.Fatalf("unexpected invalid-search-options classification for %#v: %t", gqlErr, got)
+		}
+	}
+	if invalidSearchOptions(nil) {
+		t.Fatal("nil error cannot be an invalid filter")
+	}
+}
+
 func TestOptionalServiceErrorsAcceptsIndependentRecipeEnrichmentOutages(t *testing.T) {
 	err := gqlerror.List{
 		{

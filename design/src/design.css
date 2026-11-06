@@ -166,6 +166,24 @@ footer-component {
   white-space: nowrap;
 }
 
+.recipe-tile-title {
+  color: var(--recipe-tile-title-color, var(--pico-h2-color));
+  overflow: hidden;
+  padding-block-end: 0.1em !important;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px var(--recipe-tile-title-background);
+  text-wrap: nowrap !important;
+  white-space: nowrap !important;
+  width: 100%;
+}
+
+recipe-tile-component a[slot="image"] > img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
 .recipe-tag--cuisine {
   --recipe-tag-background: #dbeafe;
   --recipe-tag-border: #93c5fd;
@@ -189,6 +207,19 @@ footer-component {
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.recipe-tag:is(a):is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+}
+
+.recipe-tag:is(a):focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.recipe-tag[data-tag-overflow] {
+  color: var(--pico-primary);
 }
 
 .recipe-tag .recipe-tag-remove {
@@ -264,11 +295,7 @@ rating-component[hx-post] {
   }
 }
 
-a:has(> recipe-tile-component) {
-  text-decoration: none;
-}
-
-a > recipe-tile-component {
+recipe-tile-component {
   transition: outline 0.3s ease-in-out;
   outline: 0px solid transparent;
 

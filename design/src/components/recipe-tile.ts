@@ -61,11 +61,22 @@ export class RecipeTile extends LitElement {
       display: none;
     }
 
-    ::slotted([slot="image"]) {
+    ::slotted(img[slot="image"]) {
       display: block;
       height: 100%;
       object-fit: cover;
       width: 100%;
+    }
+
+    ::slotted(a[slot="image"]) {
+      display: block;
+      height: 100%;
+      width: 100%;
+    }
+
+    ::slotted(a[slot="rating"]) {
+      color: inherit !important;
+      text-decoration: none;
     }
 
     .rating {
@@ -93,6 +104,7 @@ export class RecipeTile extends LitElement {
       display: flex;
       inset: 0;
       padding: 0 0.75rem;
+      pointer-events: none;
       position: absolute;
       z-index: 1;
     }
@@ -120,6 +132,14 @@ export class RecipeTile extends LitElement {
       text-shadow: 0 1px 2px var(--recipe-tile-title-background);
       text-wrap: nowrap !important;
       white-space: nowrap !important;
+      width: 100%;
+    }
+
+    ::slotted(a[slot="title"]) {
+      align-items: end;
+      display: flex;
+      pointer-events: auto;
+      text-decoration: none;
       width: 100%;
     }
   `;
@@ -190,6 +210,11 @@ export class RecipeTile extends LitElement {
   private updateImageFallback(slot: HTMLSlotElement) {
     const image = slot
       .assignedElements()
+      .flatMap((element) =>
+        element instanceof HTMLAnchorElement
+          ? Array.from(element.querySelectorAll("img"))
+          : [element],
+      )
       .find(
         (element): element is HTMLImageElement =>
           element instanceof HTMLImageElement,
