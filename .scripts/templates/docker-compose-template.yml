@@ -100,6 +100,9 @@
 #@   if "browse" in services and google_enabled:
 #@     services["browse"].setdefault("environment", {})["GOOGLE_OAUTH_CLIENT_ID"] = options.googleOAuthClientId
 #@   end
+#@   if "browse" in services:
+#@     services["browse"].setdefault("environment", {})["PUBLIC_ORIGIN"] = "${PUBLIC_ORIGIN:-http://localhost:8080}"
+#@   end
 #@   graphql["secrets"] = ["auth-accounts.json"]
 #@   graphql.setdefault("depends_on", {})["nats-init"] = {"condition": "service_completed_successfully"}
 #@   services["traefik"]["networks"] = {

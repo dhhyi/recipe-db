@@ -120,6 +120,7 @@
 #@   elif name in ["browse", "mcp"]:
 #@     env["GRAPHQL_URL"] = "http://traefik/graphql"
 #@     if name == "browse":
+#@       env["PUBLIC_ORIGIN"] = cfg["origin"]
 #@       if google_enabled:
 #@         env["GOOGLE_OAUTH_CLIENT_ID"] = cfg["runtime"]["googleOAuthClientId"]
 #@       end

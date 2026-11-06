@@ -167,6 +167,80 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 	}
 }
 
+func TestOpenGraphOverviewVariantsAndFragments(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			OperationName string
+			Variables     map[string]json.RawMessage
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		data := map[string]any{"searchOnline": true, "ratingsOnline": false}
+		if request.OperationName == "BrowseSearch" {
+			var options browseOptions
+			if err := json.Unmarshal(request.Variables["options"], &options); err != nil {
+				t.Error(err)
+			}
+			data = map[string]any{"searchRecipes": map[string]any{
+				"recipes": []any{}, "found": 0, "page": options.Page, "perPage": browsePageSize,
+			}}
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer upstream.Close()
+	t.Setenv("PUBLIC_ORIGIN", "https://recipes.example.test")
+	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+
+	var expectedMetadata string
+	for _, path := range []string{
+		"/",
+		"/?q=Apfel",
+		"/?sort=name-asc",
+		"/?page=2",
+		"/?page=2&q=Apfel&sort=rating",
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		body := response.Body.String()
+		head := strings.SplitN(body, "</head>", 2)[0]
+		start := strings.Index(head, `<meta property="og:title"`)
+		if response.Code != http.StatusOK || start == -1 {
+			t.Fatalf("full overview response lacks metadata: %s (%d)", path, response.Code)
+		}
+		metadata := head[start:]
+		if expectedMetadata == "" {
+			expectedMetadata = metadata
+		} else if metadata != expectedMetadata {
+			t.Fatalf("overview metadata changed for %s:\n%s\nwant:\n%s", path, metadata, expectedMetadata)
+		}
+		for _, value := range []string{
+			`property="og:title" content="Rezepte entdecken | RezeptDB"`,
+			`property="og:type" content="website"`,
+			`property="og:image" content="https://recipes.example.test/design/og-image.svg"`,
+			`property="og:url" content="https://recipes.example.test/"`,
+			`property="og:description" content="` + siteDescription + `"`,
+		} {
+			if !strings.Contains(metadata, value) {
+				t.Errorf("overview metadata missing %q: %s", value, metadata)
+			}
+		}
+		if strings.Contains(metadata, "Apfel") || strings.Contains(metadata, "page=2") {
+			t.Fatalf("overview query leaked into metadata: %s", metadata)
+		}
+	}
+
+	fragment := httptest.NewRequest(http.MethodGet, "/?q=Apfel", nil)
+	fragment.Header.Set("HX-Request", "true")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, fragment)
+	if strings.Contains(response.Body.String(), "<head") || strings.Contains(response.Body.String(), "og:") {
+		t.Fatalf("overview fragment must not contain document metadata: %s", response.Body.String())
+	}
+}
+
 func TestBrowseHTMXContract(t *testing.T) {
 	var body bytes.Buffer
 	if err := components.Browse(components.BrowseState{

@@ -85,7 +85,9 @@ render() {
     and all(.items[]; .metadata.name != "redis")
     and any(.items[]; .kind == "Deployment" and .metadata.name == "browse" and
       all(.spec.template.spec.containers[0].env[];
-        .name != "GOOGLE_OAUTH_CLIENT_ID"))
+        .name != "GOOGLE_OAUTH_CLIENT_ID")
+      and any(.spec.template.spec.containers[0].env[];
+        .name == "PUBLIC_ORIGIN" and .value == "http://127.0.0.1:8080"))
     and any(.items[]; .kind == "HelmChartConfig" and
       (.spec.valuesContent | contains("ClusterIP")))
     and any(.items[]; .kind == "Deployment" and .metadata.name == "graphql" and

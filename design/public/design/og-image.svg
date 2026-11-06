@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title">
+  <title id="title">RezeptDB – Rezepte entdecken</title>
+  <rect width="1200" height="630" fill="#e9f4e3"/>
+  <circle cx="600" cy="315" r="205" fill="#fff" stroke="#159032" stroke-width="18"/>
+  <path d="M470 295c36-76 87-115 130-115s94 39 130 115" fill="none" stroke="#159032" stroke-linecap="round" stroke-width="20"/>
+  <path d="M440 330h320l-35 95c-16 43-51 70-94 70h-62c-43 0-78-27-94-70z" fill="#61d967"/>
+  <circle cx="530" cy="320" r="20" fill="#159032"/>
+  <circle cx="600" cy="300" r="20" fill="#159032"/>
+  <circle cx="670" cy="320" r="20" fill="#159032"/>
+  <text x="600" y="555" fill="#0f6f25" font-family="sans-serif" font-size="54" font-weight="700" text-anchor="middle">RezeptDB</text>
+</svg>
