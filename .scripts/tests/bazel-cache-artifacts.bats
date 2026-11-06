@@ -99,14 +99,15 @@ load test_helper
   done
 }
 
-@test "nightly cleanup is scheduled on trusted main with isolated deletion permissions" {
+@test "cleanup supports scheduled and manual runs only on trusted main with isolated deletion permissions" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/bazel-cache-cleanup.yaml"
   publish="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   cleanup="$BATS_TEST_TMPDIR/cleanup-job"
   sed -n '/^  cleanup-bazel-cache:/,$p' "$workflow" > "$cleanup"
 
   grep -E "cron: ['\"]17 3 \\* \\* \\*['\"]" "$workflow"
-  grep -F "if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'" "$cleanup"
+  grep -F 'workflow_dispatch:' "$workflow"
+  grep -F "if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'" "$cleanup"
   grep -F 'actions: write' "$cleanup"
   grep -F 'pull-requests: read' "$cleanup"
   grep -F 'python3 .scripts/bazel-cache-artifacts.py cleanup' "$cleanup"
