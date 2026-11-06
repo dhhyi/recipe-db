@@ -966,12 +966,16 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
 
     workflow_run = artifact.get("workflow_run")
     run_repository = detail.get("repository")
+    head_repository = detail.get("head_repository")
     if type(artifact.get("id")) is not int or artifact["id"] <= 0 \
             or not isinstance(workflow_run, dict) \
             or type(workflow_run.get("id")) is not int \
             or workflow_run["id"] != run_id \
             or type(workflow_run.get("repository_id")) is not int \
             or workflow_run["repository_id"] != repository_id \
+            or not isinstance(head_repository, dict) \
+            or type(workflow_run.get("head_repository_id")) is not int \
+            or workflow_run["head_repository_id"] != head_repository.get("id") \
             or not isinstance(run_repository, dict) \
             or run_repository.get("full_name") != repository \
             or run_repository.get("id") != repository_id \
@@ -983,14 +987,12 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
             or int(detail.get("run_number", 0)) <= 0 \
             or not isinstance(detail.get("head_sha"), str) \
             or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", detail["head_sha"]) \
-            or workflow_run.get("event") != detail.get("event") \
             or workflow_run.get("head_sha") != detail.get("head_sha") \
             or workflow_run.get("head_branch") != detail.get("head_branch") \
             or detail.get("head_sha") != workflow_run.get("head_sha") \
             or detail.get("head_branch") != workflow_run.get("head_branch"):
         raise Invalid("artifact producer metadata mismatch")
     if scope == "main":
-        head_repository = detail.get("head_repository")
         if detail.get("event") != "push" or detail.get("head_branch") != "main" \
                 or not isinstance(head_repository, dict) \
                 or head_repository.get("full_name") != repository \
