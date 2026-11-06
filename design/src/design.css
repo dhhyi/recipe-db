@@ -207,6 +207,10 @@ recipe-tile-component a[slot="image"] > img {
   outline-offset: 2px;
 }
 
+.recipe-tag[data-tag-overflow] {
+  color: var(--pico-primary);
+}
+
 .recipe-tag .recipe-tag-remove {
   background: transparent;
   border: 0;

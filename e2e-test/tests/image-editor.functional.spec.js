@@ -232,7 +232,10 @@ test("repeated saves send the original and crop; Close shows the latest immutabl
   ).toHaveAttribute("src", second.metadata.url);
   await page.getByRole("link", { name: "Zur Startseite" }).click();
   const thumbnail = page
-    .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
+    .getByRole("link", {
+      name: `Bild von Rezept ${demoRecipe.name}`,
+      exact: true,
+    })
     .getByRole("img", { name: demoRecipe.name, exact: true });
   await expect(thumbnail).toHaveAttribute("src", second.metadata.thumbUrl);
   await expectCropPixels(thumbnail, pngFile(), secondCrop, 300, 225);

@@ -12,7 +12,10 @@ function tagFilter(id) {
 }
 
 async function findOrCreateTag(request, category, name) {
-  const { tags } = await graphql(request, "query { tags { id category name } }");
+  const { tags } = await graphql(
+    request,
+    "query { tags { id category name } }",
+  );
   let tag = tags.find(
     (candidate) => candidate.category === category && candidate.name === name,
   );
@@ -147,11 +150,10 @@ const test = base.extend({
       tagFilter(tag.id),
       matches.map((recipe) => recipe.id),
     );
-    await waitForFilteredRecipes(
-      request,
-      tagFilter(sameNameOtherCategory.id),
-      [matches[0].id, unrelated.id],
-    );
+    await waitForFilteredRecipes(request, tagFilter(sameNameOtherCategory.id), [
+      matches[0].id,
+      unrelated.id,
+    ]);
     await use({ tag, sameNameOtherCategory, matches, unrelated });
   },
 });
@@ -165,7 +167,9 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   await installManualSentinel(page);
   const clicked = matches.at(-1);
   await page.goto("/");
-  await page.locator(`[data-recipe-id="${clicked.id}"] [data-recipe-tag]`).click();
+  await page
+    .locator(`[data-recipe-id="${clicked.id}"] [data-recipe-tag]`)
+    .click();
 
   const filterBy = tagFilter(tag.id);
   const searchURL = new URL(page.url());
@@ -186,8 +190,9 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   const firstPageIDs = await page
     .locator("[data-recipe-id]")
     .evaluateAll((cards) => cards.map((card) => card.dataset.recipeId));
-  expect(firstPageIDs.every((id) => matches.some((recipe) => recipe.id === id)))
-    .toBe(true);
+  expect(
+    firstPageIDs.every((id) => matches.some((recipe) => recipe.id === id)),
+  ).toBe(true);
   expect(firstPageIDs).not.toContain(unrelated.id);
 
   await triggerSentinel(page);
@@ -199,7 +204,9 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   expect(new Set(allIDs).size).toBe(25);
   expect(allIDs.toSorted()).toEqual(matches.map((recipe) => recipe.id).sort());
 
-  await page.getByLabel("Sortieren nach", { exact: true }).selectOption("rating");
+  await page
+    .getByLabel("Sortieren nach", { exact: true })
+    .selectOption("rating");
   await expect(page).toHaveURL(new RegExp(`[?&]filter_by=.*[?&]sort=rating`));
   expect(new URL(page.url()).searchParams.get("filter_by")).toBe(filterBy);
   await expect(page.locator("#browse-query")).toHaveValue("");
@@ -225,7 +232,9 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   await search.fill("E2E Milchreis");
   await expect(page).toHaveURL(/q=E2E\+Milchreis/);
   expect(new URL(page.url()).searchParams.has("filter_by")).toBe(false);
-  await expect(page.locator(`[data-recipe-id="${unrelated.id}"]`)).toBeVisible();
+  await expect(
+    page.locator(`[data-recipe-id="${unrelated.id}"]`),
+  ).toBeVisible();
 });
 
 test("recipe card title, image, and rating still navigate to detail", async ({
@@ -277,7 +286,9 @@ test("native filters retain Typesense AND, OR, text query, and non-tag fields", 
     "Gefilterte Suchergebnisse",
   );
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
-  await expect(page.locator(`[data-recipe-id="${matches[0].id}"]`)).toBeVisible();
+  await expect(
+    page.locator(`[data-recipe-id="${matches[0].id}"]`),
+  ).toBeVisible();
 
   await page.goto(`/?filter_by=${encodeURIComponent(orFilter)}`);
   await expect(page.locator("#browse-metadata")).toHaveAttribute(
@@ -287,17 +298,20 @@ test("native filters retain Typesense AND, OR, text query, and non-tag fields", 
   const actual = await page
     .locator("[data-recipe-id]")
     .evaluateAll((cards) => cards.map((card) => card.dataset.recipeId));
-  expect(actual.every((id) => [...matches, unrelated].some((recipe) => recipe.id === id)))
-    .toBe(true);
+  expect(
+    actual.every((id) =>
+      [...matches, unrelated].some((recipe) => recipe.id === id),
+    ),
+  ).toBe(true);
 
   const text = "E2E Milchreis";
   const url = new URL("/", process.env.BASE_URL || "http://traefik");
   url.searchParams.set("q", text);
   url.searchParams.set("filter_by", `id:=${matches[0].id}`);
   await page.goto(url.pathname + url.search);
-  await expect(page.getByRole("searchbox", { name: "Rezepte suchen" })).toHaveValue(
-    text,
-  );
+  await expect(
+    page.getByRole("searchbox", { name: "Rezepte suchen" }),
+  ).toHaveValue(text);
   await expect(page.locator("[data-recipe-id]")).toHaveCount(1);
   await expect(
     page.locator(`[data-recipe-id="${matches[0].id}"]`),
@@ -330,6 +344,8 @@ test("invalid filters and unavailable search never show unfiltered recipes as re
       "Suchfilter konnten nicht angewendet werden.",
     );
     await expect(page.locator("[data-recipe-id]")).toHaveCount(0);
-    await expect(page.getByText("Suche nicht verfügbar. Alle Rezepte werden angezeigt.")).toHaveCount(0);
+    await expect(
+      page.getByText("Suche nicht verfügbar. Alle Rezepte werden angezeigt."),
+    ).toHaveCount(0);
   });
 });

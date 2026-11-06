@@ -48,8 +48,16 @@ test("browse seeded recipes, open a recipe and return home", async ({
   );
   await expect(recipeLink).toMatchAriaSnapshot(`
     - link "Rezept E2E Milchreis":
-      - img "E2E Milchreis"
       - heading "E2E Milchreis" [level=2]
+  `);
+  const imageLink = page.getByRole("link", {
+    name: `Bild von Rezept ${demoRecipe.name}`,
+    exact: true,
+  });
+  await expect(imageLink).toHaveAttribute("href", `/recipe/${demoRecipe.id}`);
+  await expect(imageLink).toMatchAriaSnapshot(`
+    - link "Bild von Rezept E2E Milchreis":
+      - img "E2E Milchreis"
   `);
 
   await recipeLink.click();
@@ -495,7 +503,7 @@ test.describe("first image", () => {
 
     await page.getByRole("link", { name: "Zur Startseite" }).click();
     const tile = page.getByRole("link", {
-      name: `Rezept ${demoRecipe.name}`,
+      name: `Bild von Rezept ${demoRecipe.name}`,
       exact: true,
     });
     const thumbnail = tile.getByRole("img", {
@@ -632,7 +640,10 @@ test("replace a recipe image in the image editor and view the uploaded image", a
   await expect(detailImage).toHaveAttribute("src", repeated.url);
   await page.getByRole("link", { name: "Zur Startseite" }).click();
   const thumbnail = page
-    .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
+    .getByRole("link", {
+      name: `Bild von Rezept ${demoRecipe.name}`,
+      exact: true,
+    })
     .getByRole("img", { name: demoRecipe.name, exact: true });
   await expect(thumbnail).toHaveAttribute("src", repeated.thumbUrl);
   const thumbnailResponse = await page.request.get(repeated.thumbUrl);

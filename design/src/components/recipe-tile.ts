@@ -75,7 +75,7 @@ export class RecipeTile extends LitElement {
     }
 
     ::slotted(a[slot="rating"]) {
-      color: inherit;
+      color: inherit !important;
       text-decoration: none;
     }
 
@@ -210,6 +210,11 @@ export class RecipeTile extends LitElement {
   private updateImageFallback(slot: HTMLSlotElement) {
     const image = slot
       .assignedElements()
+      .flatMap((element) =>
+        element instanceof HTMLAnchorElement
+          ? Array.from(element.querySelectorAll("img"))
+          : [element],
+      )
       .find(
         (element): element is HTMLImageElement =>
           element instanceof HTMLImageElement,

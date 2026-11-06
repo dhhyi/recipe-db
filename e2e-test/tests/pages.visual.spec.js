@@ -48,6 +48,11 @@ for (const role of ["anonymous", "member", "owner"]) {
         await waitForImageDecoded(
           tile.getByRole("img", { name: recipe.name, exact: true }),
         );
+        await expect(tile.locator(".fallback-image")).toBeHidden();
+        await expect(tile.locator("rating-component")).toHaveCSS(
+          "color",
+          "rgb(255, 255, 255)",
+        );
       }
       await expect(
         page.locator(
@@ -95,9 +100,15 @@ for (const role of ["anonymous", "member", "owner"]) {
         `Suchergebnisse für Tag „${tag.name}“`,
       );
       await expect(page.locator("#browse-query")).toHaveValue("");
-      await expect(
-        page.locator(`[data-recipe-id="${taggedDemoRecipe.id}"]`),
-      ).toBeVisible();
+      const tile = page.locator(`[data-recipe-id="${taggedDemoRecipe.id}"]`);
+      await expect(tile).toBeVisible();
+      await page.evaluate(() =>
+        customElements.whenDefined("recipe-tile-component"),
+      );
+      await waitForImageDecoded(
+        tile.getByRole("img", { name: taggedDemoRecipe.name, exact: true }),
+      );
+      await expect(tile.locator(".fallback-image")).toBeHidden();
       await page.locator("#browse-heading").scrollIntoViewIfNeeded();
       await screenshot(page, "tag-search.png");
     });
@@ -440,7 +451,7 @@ for (const role of ["anonymous", "member", "owner"]) {
       });
       const section = page.locator("#similar-recipes");
       await section.scrollIntoViewIfNeeded();
-      const cards = section.locator("a[data-recipe-id]");
+      const cards = section.locator("recipe-tile-component[data-recipe-id]");
       const button = section.getByRole("button", {
         name: "Mehr anzeigen",
         exact: true,

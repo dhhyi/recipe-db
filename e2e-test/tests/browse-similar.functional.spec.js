@@ -115,7 +115,7 @@ function section(page) {
 }
 
 function cards(page) {
-  return section(page).locator("a[data-recipe-id]");
+  return section(page).locator("recipe-tile-component[data-recipe-id]");
 }
 
 async function cardIds(page) {
@@ -260,7 +260,7 @@ test("lazy similarity captures exact-tag matches and appends every batch only on
   const selected = [...matches, newcomer].find(
     (recipe) => recipe.id === refreshed[0],
   );
-  await cards(page).first().click();
+  await cards(page).first().locator('a[slot="title"]').click();
   await expect(page).toHaveURL(`/recipe/${selected.id}`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     selected.name,
