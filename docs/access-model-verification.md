@@ -72,7 +72,7 @@ The following observations are recorded in the real-provider issue:
 
 ## Access-model checklist reconciliation
 
-The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); the actual MCP client verification completes another, bringing the current count to 22 complete / 11 incomplete. No criterion was removed, split to inflate completion, or waived.
+The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); actual MCP client verification completed another (22 complete / 11 incomplete). Public-only indexing and anonymous recipe markup verification bring the current count to 24 complete / 9 incomplete. No criterion was removed, split to inflate completion, or waived.
 
 ### Route and ingress verification (2026-11-06)
 
@@ -112,16 +112,22 @@ Cleanup deleted the disposable recipe through trusted GraphQL ingress (`deleteRe
 
 The [verified client setup instructions](browser-authentication.md#verified-vs-code-user-profile-setup-2026-11-06) document the exact user-profile format and secret handling. This completes the real client setup/authorized-denied operation criterion, not the entire permission matrix or final operator acceptance. Environment-reference interpolation, a separate standalone Copilot client and masked-input support were not tested.
 
+### Public-only indexing and anonymous markup (2026-11-06)
+
+Search's `RecipeIds` and `IndexRecipe` operations select only public recipe fields and aggregate ratings; they do not select `myRating`, capabilities, display names or authors. Its GraphQL HTTP call supplies no Typesense key, bearer, cookie or ingress token; only the private Typesense calls receive that service's key. The trusted ingress supplies its own transport token, not owner authority. The existing reload fixture now asserts absence of credential/identity headers on the actual GraphQL request, and operation-generation tests assert absence of individual/private fields.
+
+`mise run --raw in-devcontainer search 'python3 -m unittest -v test_generate_operations && zig build test'` passed all five generation tests and the Zig tests. The live anonymous query for every `IndexRecipe` field returned the existing Milchreis recipe, six ingredients, image presence, three tags and aggregate rating 4.5/count 2 without errors. The live policy remained credential-free anonymous with no bearer tokens after MCP cleanup. No private recipe publication state or personalized search feature is implied.
+
+`mise run --raw in-devcontainer browse go test ./... -run TestDetailHTTPAndLiveWidgets` passed with explicit raw-HTML assertions for Recipe scope, name, ingredient, instructions, image and AggregateRating value/count metadata. A plain anonymous HTTPS GET of `/recipe/0afc12a1-1b28-4879-9873-0934ec36827e` on the Pi preview was parsed without executing JavaScript or supplying cookies: all those properties were present, including six ingredient rows and rating 4.5/count 2. These results establish markup availability only, not an external parser or Bring! integration.
+
 | Remaining criterion | Supported evidence and unresolved portion |
 | --- | --- |
 | Request-scoped forwarding, cookie relay and concurrent identity isolation | Transport regressions and successful browser refresh exist; reconcile combined browser/token/MCP concurrency and clearing/renewal coverage. |
-| Public-only search indexing | Existing search tests exist; establish exact evidence that indexing never uses owner access or includes private data. |
 | Entire client/role matrix and side-effect denials | Component and Google browser checks cover substantial behavior; reconcile all GraphQL/HTMX/editor/MCP operations and runtime reset restrictions. |
 | Independent/repeated/concurrent votes and aggregates | Two-member and attribution/rotation results exist; recover exact concurrent-update and aggregate assertions/results. |
 | Partial GraphQL responses and absent-vote null | Absent-vote behavior has evidence; reconcile mixed allowed/denied field shapes and structured errors. |
 | Complete denied/expired/unapproved UX and recovery | Browser denials, expiry/re-login and revocation passed; reconcile public recovery/no-auto-replay evidence. First-reload blank header is explicitly accepted/deferred, not an unacknowledged failure. |
 | Public shared HTML, no-store personal fragments and history isolation | Contract and component tests exist; reconcile sequential-user and ordinary/HTMX history isolation evidence. |
-| Anonymous JavaScript-free recipe/schema.org markup | Preserve the stated markup-only requirement; establish exact evidence. No external Bring! experiment is required. |
 | Full browser-write protection matrix | Existing origin/CSRF tests exist; reconcile cross-origin rating/GraphQL/multipart, privileged credential-free, same-origin and non-browser bearer coverage/results. |
 | Complete integrated session lifecycle | Real Google login/logout, refresh, controlled expiry, revocation/recovery are approved; integrated mock-OIDC lifecycle and auth-service/Redis outage coverage remain unresolved. No natural seven-day test is claimed. |
 | Final failed-check resolution and integrated acceptance | Resolve or explicitly agree treatment of the remaining gaps, then obtain this issue's separate operator acceptance. Approval of the Google record does not close this gate. |
