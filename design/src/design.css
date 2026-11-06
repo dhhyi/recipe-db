@@ -55,6 +55,28 @@ a:not([role="button"]):not(:hover, :active, :focus) {
   text-decoration-line: none;
 }
 
+#browse-controls {
+  --add-recipe-background-color: var(--pico-background-color);
+}
+
+[data-add-recipe] {
+  display: inline-block;
+  padding: var(--pico-form-element-spacing-vertical)
+    var(--pico-form-element-spacing-horizontal);
+  border: var(--pico-border-width) solid currentColor;
+  border-radius: var(--pico-border-radius);
+  background-color: var(--add-recipe-background-color);
+  box-shadow: 0 0.25rem 0.75rem
+    color-mix(in srgb, currentColor 35%, transparent);
+  text-decoration: none;
+}
+
+[data-add-recipe]:focus-visible {
+  box-shadow:
+    0 0 0 var(--pico-outline-width) var(--pico-primary-focus),
+    0 0.25rem 0.75rem color-mix(in srgb, currentColor 35%, transparent);
+}
+
 [type="file"]::file-selector-button {
   --pico-background-color: transparent;
   --pico-border-color: var(--pico-secondary);
