@@ -72,7 +72,7 @@ The following observations are recorded in the real-provider issue:
 
 ## Access-model checklist reconciliation
 
-The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completes two more, bringing the current count to 21 complete / 12 incomplete. No criterion was removed, split to inflate completion, or waived.
+The operator approved four additional completed criteria in [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52): Google lifecycle/setup documentation, durable configuration/version/topology/method evidence, explicit platform verification status, and incorporation of the completed real-provider record. At that reconciliation, the top-level checklist moved from 15 complete / 18 incomplete to 19 complete / 14 incomplete. The route and ingress verification below completed two more (21 complete / 12 incomplete); the actual MCP client verification completes another, bringing the current count to 22 complete / 11 incomplete. No criterion was removed, split to inflate completion, or waived.
 
 ### Route and ingress verification (2026-11-06)
 
@@ -89,6 +89,29 @@ Validation: `mise run --raw test-auth-ingress` passed 3/3; `mise run --raw test-
 
 The tested deployment topology is the physical Pi Kubernetes preview, queried through its existing private workstation tunnel, plus HTTPS requests through its configured preview origin. These checks do not claim public-Internet reachability from every network or replace the separate operator/client acceptance in [#68 — Set up and verify real Google authentication before public go-live](https://github.com/dhhyi/recipe-db/issues/68) and [#52 — Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52). The observed Traefik Service was `LoadBalancer` with web port 80, staging HTTP 8081 and websecure 8443; `rest-internal` remains cluster-private. Router forwarding, firewall and provider setup remain deployment prerequisites owned by their existing issues.
 
+### VS Code/Copilot MCP client verification (2026-11-06)
+
+The operator started the real VS Code user-profile MCP servers against `https://rezept-db.freeddns.org/mcp`, confirmed successful anonymous reads, and disabled the conflicting localhost-bound server. The refreshed Copilot session then exposed the three profile servers and executed the checks below directly through their MCP tools. Installed client metadata reports VS Code `1.145.1`, build `6bab64e2d12b04d04c0d99c27ff166023efd1dda`, and bundled Copilot extension `0.73.0`. The server remained the existing Pi application release `dd5f3a4172b6b7639d6d9ad8e55b5c0e293c7a7f`; GraphQL's image was `ghcr.io/dhhyi/recipe-db-graphql@sha256:2b461ba9f88099f917506ea13a2187f7eac79a76c871aa708057c58b5b9e2636`.
+
+The live policy initially had `anonymous.role: anonymous`, no bearer tokens and one Google account. With explicit operator approval, two random temporary owner/member tokens were added to that policy and GraphQL restarted. At the operator's request, their client headers were configured privately in the Windows user-profile file, outside the workspace, rather than relying on a newly launched process environment. Existing Google configuration and unrelated MCP servers were preserved. No credential values are part of this record.
+
+| Actual client check | Result |
+| --- | --- |
+| Anonymous `get_recipe_schema` and `list_recipes` | Returned the live schema and six existing recipes. |
+| Owner `add_recipe` | Created disposable recipe `f665f96a-8e8c-4b42-976e-12af71229a46`, named `MCP client verification 2026-11-06`. |
+| Anonymous `add_recipe` | Failed explicitly with `authentication-required`, status 401. |
+| Member `add_recipe` | Failed explicitly with `forbidden`, status 403. |
+| Member `add_rating` | Arguments contained only `recipeId` and `rating: 4`; returned `average: 4`, `count: 1`. Member `get_recipe` confirmed that aggregate. |
+| Anonymous `add_rating` | Failed with `authentication-required`, status 401; a subsequent member read still reported `average: 4`, `count: 1`. |
+| Denied-create side effects | Anonymous listing showed only the original six recipes and the owner's disposable recipe, with neither denied-create name present. |
+| Token revocation | After removing both temporary tokens and restarting GraphQL, owner `list_recipes` and member `get_recipe` both failed with `invalid-credentials`, status 401; anonymous listing returned the original six recipes. |
+
+The client bridge surfaced the denied calls as tool errors. Supplementary raw Streamable HTTP `tools/call` probes confirmed `result.isError: true` for anonymous and member creates, with the same stable codes/statuses. These wire probes supplement, rather than replace, the actual client checks; their SSE `data:` frames were decoded before inspecting JSON.
+
+Cleanup deleted the disposable recipe through trusted GraphQL ingress (`deleteRecipe: true`), removed only the two temporary principals from the current live policy, restarted GraphQL and removed the credential-bearing owner/member profile entries. Anonymous and unrelated GitHub profile entries remain. Private workspace credential copies and temporary policy/transport files were removed; no data-reset or backend-direct API was used. Immediately after the revocation rollout, the first read attempts returned transient 503s; subsequent reads established the stated revoked/anonymous behavior. This is not a full outage-recovery test.
+
+The [verified client setup instructions](browser-authentication.md#verified-vs-code-user-profile-setup-2026-11-06) document the exact user-profile format and secret handling. This completes the real client setup/authorized-denied operation criterion, not the entire permission matrix or final operator acceptance. Environment-reference interpolation, a separate standalone Copilot client and masked-input support were not tested.
+
 | Remaining criterion | Supported evidence and unresolved portion |
 | --- | --- |
 | Request-scoped forwarding, cookie relay and concurrent identity isolation | Transport regressions and successful browser refresh exist; reconcile combined browser/token/MCP concurrency and clearing/renewal coverage. |
@@ -101,14 +124,13 @@ The tested deployment topology is the physical Pi Kubernetes preview, queried th
 | Anonymous JavaScript-free recipe/schema.org markup | Preserve the stated markup-only requirement; establish exact evidence. No external Bring! experiment is required. |
 | Full browser-write protection matrix | Existing origin/CSRF tests exist; reconcile cross-origin rating/GraphQL/multipart, privileged credential-free, same-origin and non-browser bearer coverage/results. |
 | Complete integrated session lifecycle | Real Google login/logout, refresh, controlled expiry, revocation/recovery are approved; integrated mock-OIDC lifecycle and auth-service/Redis outage coverage remain unresolved. No natural seven-day test is claimed. |
-| Real VS Code/Copilot MCP client setup | HTTP regressions do not establish actual client configuration or authorized/denied tool operation. Human client verification remains open. |
 | Final failed-check resolution and integrated acceptance | Resolve or explicitly agree treatment of the remaining gaps, then obtain this issue's separate operator acceptance. Approval of the Google record does not close this gate. |
 
 ## Remaining acceptance and known limitations
 
 1. **Real provider lifecycle remains open.** Initial refresh failed on both origins because sessions lacked refresh tokens. Offline access and consent are now fixed in active login redirects, including rejection of weaker parameter overrides. This is not yet a successful full-duration refresh. Google connection removal was operator-confirmed around 18:41 CET; both sessions still had access around 18:43. Enforcement on subsequent refresh/expiry and reauthorization recovery remain pending. Do not reauthorize during that observation. Successful-refresh testing is last.
 2. **Configured policy is not elapsed-time evidence.** Cookie lifetime is seven days sliding, refresh interval fifty minutes. No real seven-day observation is claimed. The umbrella also retains an unresolved integrated mock-OIDC lifecycle evidence gap from the browser-authentication implementation; its transport tests and the separate PoC do not establish full callback/refresh/logout coverage. Failed unverified-email refresh may preserve the previously validated identity until the current token expires; application-policy revocation after GraphQL restart is a separate verified mechanism.
-3. **Real MCP client acceptance remains distinct.** Automated HTTP permission checks do not prove a Copilot/VS Code user-level configuration. The existing guide explicitly leaves that verification open; password-prompt support is unverified, not promised. Do not silently waive this criterion because the implementation issue is closed.
+3. **Real MCP client verification is complete for the recorded setup.** Actual VS Code/Copilot user-profile reads, authorized writes, denials and member ratings passed as recorded above. This does not verify environment interpolation, password prompts or a separate standalone client, and does not replace the full integrated permission matrix or operator acceptance.
 4. **UX limitations are recorded, not hidden.** Expired-session first-load header fallback can be blank. An unapproved Google identity can still see the login button. Neither grants write permission. Browser recipe deletion is intentionally absent and is not an acceptance requirement.
 5. **Final acceptance is manual.** Incorporate completed provider evidence, resolve any remaining evidence gaps and obtain operator approval before closing the access-model issue. The separate public-launch task remains gated; this document neither enables exposure nor approves go-live.
 
