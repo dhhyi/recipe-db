@@ -6,17 +6,18 @@ Follow these steps in order to recreate the supported Pi host and restore its ap
 
 Do not begin an erase until an off-device backup and its package manifest have been verified, the matching immutable release artifact remains available, and required operator inputs are accessible under `~/.config/recipe-db/`. Confirm who authorizes erasing the selected USB stick. Rebuild is destructive: the boot device also holds all Pi application data.
 
-Required private inputs are listed in the [configuration inventory](production-configuration.md). In particular, verify the auth-account policy, OAuth client secret/cookie key if Google sign-in is used, Pi SSH key and known-host entry, backup release/value files, and `rclone.conf` or a plan for interactive Drive reauthorization. Ingress and Typesense credentials are not inputs; deployment regenerates them.
+Required private inputs are listed in the [configuration inventory](production-configuration.md). In particular, verify the auth-account policy, OAuth client secret/cookie key if Google sign-in is used, Pi SSH key and known-host entry, backup release/value files, and `rclone.conf` or a plan for interactive Drive reauthorization.
 
 ## 2. Verify hardware and flash the OS
 
 Supported baseline:
 
 - Raspberry Pi 5, 8 GB RAM; official 27 W USB-C supply, cooling case, Ethernet, and one 128 GB USB stick.
-- Raspberry Pi OS Lite 64-bit, Debian 13/Trixie, ext4 root, default Pi 5 16 KiB pages.
-- Image: [`2026-10-06-raspios-trixie-arm64-lite.img.xz`](https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-10-06/2026-10-06-raspios-trixie-arm64-lite.img.xz); compressed SHA-256 `483db18a48da399b5b7022ffae9a07bc6d99daab30e593aedac09b69ff422843`.
+- Raspberry Pi OS Lite 64-bit, ext4 root, default Pi 5 16 KiB pages. The currently tested OS baseline is Debian 13/Trixie; confirm the provisioning scripts support the selected release before rebuilding.
 
-The provisioning controller uses Python 3.13.9 and ansible-core 2.20.1. Host tools are pinned in [`provisioning/group_vars/pi.yml`](../provisioning/group_vars/pi.yml): k3s `v1.35.5+k3s1`, rclone `1.75.2`, Mise `2026.10.21`, jq `1.8.2`, yq `4.54.1`, ytt `0.55.4`, ORAS `1.3.6`, and kubectl `1.35.5`. The k3s/rclone/Mise checksums live beside their versions; don't replace them with floating installers.
+Use the current supported Raspberry Pi OS Lite 64-bit image for Pi 5 from the official downloads. Image names and checksums change over time, so verify the selected image against the SHA-256 published by Raspberry Pi rather than reusing a stale filename or checksum from a previous rebuild.
+
+The provisioning controller uses Python and ansible-core. Host tools are pinned in [`provisioning/group_vars/pi.yml`](../provisioning/group_vars/pi.yml). The k3s/rclone/Mise checksums live beside their versions; don't replace them with floating installers.
 
 Identify the exact USB target by model, interface and size, not disk number/capacity alone. In Windows PowerShell:
 
@@ -24,37 +25,11 @@ Identify the exact USB target by model, interface and size, not disk number/capa
 Get-Disk | Format-Table Number,FriendlyName,BusType,@{Name='GiB';Expression={[math]::Round($_.Size/1GB,1)}},IsBoot,IsSystem
 ```
 
-Verify the downloaded image in WSL:
+In Raspberry Pi Imager, choose the verified image, Raspberry Pi 5 and the explicitly identified USB stick. Configure a non-root administrator, strong local password, hostname, locale, and public-key-only SSH. Wi-Fi is optional; Ethernet is preferred. Confirm erasure of the selected device only after checking its identity. Do not format Linux partitions when Windows prompts after flashing.
 
-```sh
-sha256sum /path/to/2026-10-06-raspios-trixie-arm64-lite.img.xz
-```
+Use the existing dedicated SSH key if preserving the installation; otherwise create a new one, in the followinr referred to as `recipe-db-pi`.
 
-The output must match the checksum above. In Raspberry Pi Imager, choose the verified image, Raspberry Pi 5 and the explicitly identified USB stick. Configure a non-root administrator, strong local password, hostname, locale, and public-key-only SSH. Wi-Fi is optional; Ethernet is preferred. Confirm erasure of the selected device only after checking its identity. Do not format Linux partitions when Windows prompts after flashing.
-
-Use the existing dedicated SSH key if preserving the installation; otherwise create one without overwriting existing files:
-
-```powershell
-$key = "$env:USERPROFILE\.ssh\recipe-db-pi"
-if ((Test-Path $key) -or (Test-Path "$key.pub")) { throw "Key exists; stop rather than overwrite it." }
-ssh-keygen -t ed25519 -f $key -C "recipe-db-pi"
-Get-Content "$key.pub" | Set-Clipboard
-```
-
-In WSL, copy the private key into Linux home, apply private permissions, and compare the key fingerprints:
-
-```sh
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-cp -i /mnt/c/Users/YOUR_WINDOWS_USERNAME/.ssh/recipe-db-pi ~/.ssh/
-cp -i /mnt/c/Users/YOUR_WINDOWS_USERNAME/.ssh/recipe-db-pi.pub ~/.ssh/
-chmod 600 ~/.ssh/recipe-db-pi
-chmod 644 ~/.ssh/recipe-db-pi.pub
-ssh-keygen -y -f ~/.ssh/recipe-db-pi | ssh-keygen -lf -
-ssh-keygen -lf ~/.ssh/recipe-db-pi.pub
-```
-
-Both fingerprints must match. Boot from USB and connect to the Pi using its configured hostname:
+Boot from USB and connect to the Pi using its configured hostname:
 
 ```sh
 ssh -i ~/.ssh/recipe-db-pi -o IdentitiesOnly=yes piadmin@recipe-pi.home
@@ -96,13 +71,14 @@ umask 077
 mkdir -p ~/.config/recipe-db/{deployment,provisioning,ssh,kubeconfig,backup}
 cp provisioning/inventory.example.yml ~/.config/recipe-db/provisioning/inventory.yml
 cp deploy/pi.yaml ~/.config/recipe-db/deployment/pi-values.yaml
+chmod 700 ~/.config/recipe-db ~/.config/recipe-db/{deployment,provisioning,ssh,kubeconfig,backup}
 chmod 600 ~/.config/recipe-db/provisioning/inventory.yml \
   ~/.config/recipe-db/deployment/pi-values.yaml
 ```
 
 Edit the inventory: set the verified hostname, SSH user/key path, new root UUID, and explicit private administrator/application CIDRs. The key path is `~/.config/recipe-db/ssh/recipe-db-pi` inside the provisioning container. The verified host key must be at `~/.config/recipe-db/ssh/known_hosts`.
 
-Set the measured node/root UUID, `/srv/recipe-db` data root, actual HTTPS origin and absolute private input paths in the copied values. Preserve the repository's pinned images and resource defaults unless a reviewed deployment change requires otherwise. Prepare the account policy and enabled OAuth/ACME files as described by the configuration inventory. Do not create ingress or Typesense secret files.
+Set the measured node/root UUID, `/srv/recipe-db` data root, actual HTTPS origin and absolute private input paths in the copied values. Preserve the repository's pinned images and resource defaults unless a reviewed deployment change requires otherwise. Prepare the account policy and enabled OAuth/ACME files as described by the [configuration inventory](production-configuration.md). Do not create ingress or Typesense secret files; deployment and restore generate fresh credentials. Never print private files, Kubernetes Secret payloads, or unfiltered diagnostics.
 
 Create `~/.config/recipe-db` before using the provisioning devcontainer; the repository's devcontainer wrapper bind-mounts it at `/home/vscode/.config/recipe-db`. If an existing provisioning container predates this mount, replace it once with `mise run --raw in-devcontainer --rm provisioning true`. After changing `provisioning/.project.yaml`, run `mise run sync`.
 
@@ -131,7 +107,7 @@ ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml site.yml --as
 ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml access.yml --ask-become-pass
 ```
 
-The second provisioning run checks idempotence. The playbook installs a single k3s server, host firewall/security settings, storage guards, pinned backup tooling, and a disabled-until-configured backup timer. It does not install application workloads, supply backup credentials, repartition/format disks, reset existing state, or reboot automatically. If it explicitly requests a reboot, approve it separately and resume provisioning after reconnecting.
+The second provisioning run checks idempotence. The access playbook creates `kubeconfig/pi.yaml` with mode `0600`; it is tied to the live cluster and must be regenerated for a replacement cluster. The playbook installs a single k3s server, host firewall/security settings, storage guards, pinned backup tooling, and a disabled-until-configured backup timer. It does not install application workloads, supply backup credentials, repartition/format disks, reset existing state, or reboot automatically. If it explicitly requests a reboot, approve it separately and resume provisioning after reconnecting.
 
 ## 6. Verify cluster access and host safety
 
@@ -155,7 +131,7 @@ Verify the API/node, bundled Traefik and local-path provisioner are healthy, the
 
 ## 7. Restore the application
 
-Keep the Pi's provisioned version and the backup's release in agreement. Make sure the exact immutable release artifact and its source commit are available; do not substitute a tag, newer image or fresh build. Install the root-only backup configuration under `/etc/recipe-db/` over authenticated SSH. This includes `backup.json`, backup values and release reference, `rclone.conf`, and all referenced application inputs. If Drive authorization cannot be restored, complete interactive reauthorization; OAuth client JSON cannot recreate an rclone grant.
+Keep the Pi's provisioned version and the backup's release in agreement. Make sure the exact immutable release artifact and its source commit are available; do not substitute a tag, newer image or fresh build. Install the root-only backup configuration under `/etc/recipe-db/` over authenticated SSH. This includes `backup.json`, backup values and release reference, `rclone.conf`, and all referenced application inputs. Ansible installs backup tooling and a timer but does not create these inputs, authorize Drive, or run a backup. If Drive authorization cannot be restored, complete interactive reauthorization; OAuth client JSON cannot recreate an rclone grant. Validate a real capture and restore before relying on the backup.
 
 Use the recorded package/manifest pair and a new private restore-state path. The restore operation itself deploys the recorded immutable release and runtime secrets into the fresh cluster; do **not** run ordinary deployment first:
 

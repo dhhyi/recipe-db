@@ -51,24 +51,6 @@ Keep operator configuration outside the checkout in `~/.config/recipe-db/`. Rest
 
 Development `.secrets/` files are fixtures for local Compose and tests. They are not production inputs and must not be copied into this directory as production secrets.
 
-## Initial setup and secret handling
-
-Create the private structure and copy the deployment template:
-
-```sh
-umask 077
-mkdir -p ~/.config/recipe-db/{deployment,provisioning,ssh,kubeconfig,backup}
-cp deploy/pi.yaml ~/.config/recipe-db/deployment/pi-values.yaml
-chmod 700 ~/.config/recipe-db ~/.config/recipe-db/{deployment,provisioning,ssh,kubeconfig,backup}
-chmod 600 ~/.config/recipe-db/deployment/pi-values.yaml
-```
-
-Edit the copied values with the actual Pi target, explicit context, origin, storage identity and operator secret-file paths. Add the required account policy and any configured OAuth/ACME files. Do not add ingress or Typesense secret paths: deployment and restore generate fresh credentials. Never print private files, Kubernetes Secret payloads, or unfiltered diagnostics.
-
-To re-establish Pi access, rerun the `access.yml` playbook from the provisioning devcontainer; it writes `kubeconfig/pi.yaml` with mode `0600`. The configuration is tied to the live cluster and is not portable to a replacement cluster.
-
-The Pi stores backup-only configuration as root-owned files in `/etc/recipe-db/`. Ansible installs the capture tooling and timer but does not create these inputs, authorize Drive, or run a backup. Set `backup.json` to use `/usr/local/sbin/recipe-db-backup-capture` and the selected remote. Keep a private matching backup-values file, immutable release reference, and `rclone.conf`; install them on the Pi over authenticated SSH with root-only permissions. Validate a real capture and restore before relying on them.
-
 ## Clean rebuild boundary
 
 Before erasing or replacing the boot device, independently verify an off-device application backup, its matching immutable release, all required private files, and the ability to reauthorize Drive if needed. Reimage destroys both the OS and all on-device application data. Follow the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md), then restore into the new cluster using the recorded release and the [production recovery procedure](production-kubernetes.md).
