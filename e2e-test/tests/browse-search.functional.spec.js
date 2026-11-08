@@ -183,7 +183,9 @@ async function triggerSentinel(page) {
 test("banner resets search without losing the header or form", async ({
   page,
 }) => {
-  await page.goto(`/?q=banner-reset&sort_by=${encodeURIComponent(sortByValues.rating)}`);
+  await page.goto(
+    `/?q=banner-reset&sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
   const banner = page.locator("header-component a[href='/']");
   await expect(banner).toBeVisible();
   const response = page.waitForResponse(
@@ -224,7 +226,9 @@ test("search retains explicit sorting, focus and composition state", async ({
   await expect(search).toBeVisible();
   await expect(sort).toBeVisible();
   await sort.selectOption(sortByValues.rating);
-  await expect(page).toHaveURL(`/?sort_by=${encodeURIComponent(sortByValues.rating)}`);
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
 
   await search.fill(demoRecipe.name);
   await expect(page).toHaveURL(
@@ -267,7 +271,9 @@ test("search retains explicit sorting, focus and composition state", async ({
     ),
   );
   await search.press("Enter");
-  await expect(page).toHaveURL(`/?q=Unfertige+Eingabe&sort_by=${encodeURIComponent(sortByValues.rating)}`);
+  await expect(page).toHaveURL(
+    `/?q=Unfertige+Eingabe&sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
   await expect(
     page.getByText("Keine Rezepte gefunden.", { exact: true }),
   ).toBeVisible();
@@ -275,7 +281,9 @@ test("search retains explicit sorting, focus and composition state", async ({
   expect(sentQueries.slice(beforeComposition)).toEqual(["Unfertige Eingabe"]);
   await search.fill("");
   await search.press("Enter");
-  await expect(page).toHaveURL(`/?sort_by=${encodeURIComponent(sortByValues.rating)}`);
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
   await page.reload();
   await expect(sort).toHaveValue(sortByValues.rating);
   await expect(search).toHaveValue("");
@@ -290,9 +298,7 @@ test("automatic sorting, titles and headings follow the current query", async ({
   await page.goto("/");
   const sort = page.getByLabel("Sortieren nach", { exact: true });
   const search = page.getByRole("searchbox");
-  await expect(sort.locator("option:checked")).toHaveText(
-    "Automatisch",
-  );
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Alle Rezepte",
@@ -302,9 +308,7 @@ test("automatic sorting, titles and headings follow the current query", async ({
     "data-query",
     demoRecipe.name,
   );
-  await expect(sort.locator("option:checked")).toHaveText(
-    "Automatisch",
-  );
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
   await expect(page).toHaveTitle(
     `1 Rezept für '${demoRecipe.name}' | RezeptDB`,
   );
@@ -321,9 +325,7 @@ test("automatic sorting, titles and headings follow the current query", async ({
   await search.fill("");
   await search.press("Enter");
   await expect(page).toHaveURL("/");
-  await expect(sort.locator("option:checked")).toHaveText(
-    "Automatisch",
-  );
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Alle Rezepte",
@@ -358,7 +360,9 @@ test("German name keys preserve names and use IDs to break ties", async ({
     .filter((recipe) => ["Strasse", "Straße"].includes(recipe.name))
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((recipe) => recipe.name);
-  await page.goto(`/?q=${marker}&sort_by=${encodeURIComponent(sortByValues.nameAsc)}`);
+  await page.goto(
+    `/?q=${marker}&sort_by=${encodeURIComponent(sortByValues.nameAsc)}`,
+  );
   const titles = page.locator("main recipe-tile-component [slot=title]");
   await expect(titles).toHaveText([
     "Apfel",
@@ -436,10 +440,7 @@ test("custom native sort survives pagination, reload, history, and text edits", 
   await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
   await expect(sort).toHaveValue(sortBy);
 
-  await page
-    .locator("[data-recipe-id] a[slot=title]")
-    .first()
-    .click();
+  await page.locator("[data-recipe-id] a[slot=title]").first().click();
   await page.goBack();
   await expect(page).toHaveURL(/sort_by=/);
   expect(new URL(page.url()).searchParams.get("sort_by")).toBe(sortBy);
