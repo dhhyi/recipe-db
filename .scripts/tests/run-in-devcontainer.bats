@@ -200,7 +200,85 @@ EOF
   run env HOME="$FIXTURE_ROOT/home" sh .scripts/run-in-devcontainer.sh provisioning test
 
   [ "$status" -eq 0 ]
-  grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/provisioning --mount type=bind,source=$FIXTURE_ROOT/home/.config/recipe-db,target=/home/vscode/.config/recipe-db" "$MOCK_LOG"
+  grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/provisioning --id-label recipe-db.private-config-source=$FIXTURE_ROOT/home/.config/recipe-db --mount type=bind,source=$FIXTURE_ROOT/home/.config/recipe-db,target=/home/vscode/.config/recipe-db" "$MOCK_LOG"
+}
+
+@test "stale provisioning containers require explicit recreation for the private mount" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  cp example/.project.yaml provisioning/.project.yaml
+
+  run env HOME="$FIXTURE_ROOT/home" STOPPED_CONTAINER=stale-container \
+    sh .scripts/run-in-devcontainer.sh provisioning test
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"rerun with --rm to recreate it"* ]]
+  run -1 grep -E '^(devcontainer (up|exec)|docker rm)' "$MOCK_LOG"
+}
+
+@test "rm recreates stale provisioning containers with the private mount" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  cp example/.project.yaml provisioning/.project.yaml
+
+  run env HOME="$FIXTURE_ROOT/home" STOPPED_CONTAINER=stale-container \
+    sh .scripts/run-in-devcontainer.sh --rm provisioning test
+
+  [ "$status" -eq 0 ]
+  grep -Fx "docker rm -f stale-container" "$MOCK_LOG"
+  grep -Fx "devcontainer up --workspace-folder $FIXTURE_ROOT/provisioning --id-label recipe-db.private-config-source=$FIXTURE_ROOT/home/.config/recipe-db --mount type=bind,source=$FIXTURE_ROOT/home/.config/recipe-db,target=/home/vscode/.config/recipe-db" "$MOCK_LOG"
+  grep -Fx "docker rm -f started-container" "$MOCK_LOG"
+}
+
+@test "provisioning reuses containers with the matching private mount" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  cp example/.project.yaml provisioning/.project.yaml
+  mounts="[{\"Type\":\"bind\",\"Source\":\"$FIXTURE_ROOT/home/.config/recipe-db\",\"Destination\":\"/home/vscode/.config/recipe-db\"}]"
+
+  run env HOME="$FIXTURE_ROOT/home" RUNNING_CONTAINER=running-container CONTAINER_MOUNTS="$mounts" \
+    sh .scripts/run-in-devcontainer.sh provisioning test
+
+  [ "$status" -eq 0 ]
+  grep -F "devcontainer exec --container-id running-container" "$MOCK_LOG"
+  run -1 grep -E '^(devcontainer up|docker (rm|stop))' "$MOCK_LOG"
+}
+
+@test "provisioning recognizes Docker Desktop translated bind sources through its creation label" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  cp example/.project.yaml provisioning/.project.yaml
+  mounts='[{"Type":"bind","Source":"/run/desktop/mapped-source","Destination":"/home/vscode/.config/recipe-db"}]'
+  labels="{\"recipe-db.private-config-source\":\"$FIXTURE_ROOT/home/.config/recipe-db\"}"
+
+  run env HOME="$FIXTURE_ROOT/home" RUNNING_CONTAINER=running-container \
+    CONTAINER_MOUNTS="$mounts" CONTAINER_LABELS="$labels" \
+    sh .scripts/run-in-devcontainer.sh provisioning test
+
+  [ "$status" -eq 0 ]
+  run -1 grep -E '^(devcontainer up|docker (rm|stop))' "$MOCK_LOG"
+}
+
+@test "a creation label alone cannot substitute for a provisioning bind mount" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  cp example/.project.yaml provisioning/.project.yaml
+  labels="{\"recipe-db.private-config-source\":\"$FIXTURE_ROOT/home/.config/recipe-db\"}"
+
+  run env HOME="$FIXTURE_ROOT/home" RUNNING_CONTAINER=running-container CONTAINER_LABELS="$labels" \
+    sh .scripts/run-in-devcontainer.sh provisioning test
+
+  [ "$status" -eq 1 ]
+  run -1 grep -E '^(devcontainer (up|exec)|docker rm)' "$MOCK_LOG"
+}
+
+@test "provisioning rejects translated mounts from a different operator configuration" {
+  mkdir -p provisioning "$FIXTURE_ROOT/home/.config/recipe-db"
+  cp example/.project.yaml provisioning/.project.yaml
+  mounts='[{"Type":"bind","Source":"/run/desktop/mapped-source","Destination":"/home/vscode/.config/recipe-db"}]'
+  labels='{"recipe-db.private-config-source":"/another/operator/config"}'
+
+  run env HOME="$FIXTURE_ROOT/home" RUNNING_CONTAINER=running-container \
+    CONTAINER_MOUNTS="$mounts" CONTAINER_LABELS="$labels" \
+    sh .scripts/run-in-devcontainer.sh provisioning test
+
+  [ "$status" -eq 1 ]
+  run -1 grep -E '^(devcontainer (up|exec)|docker rm)' "$MOCK_LOG"
 }
 
 @test "new containers are stopped while command failures retain their exit status" {

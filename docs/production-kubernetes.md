@@ -139,6 +139,10 @@ Restore is recovery at the backup's recorded immutable application release, not 
 
 Select a complete package and its sibling manifest from a verified restore point. For remote backups, download both files with the private operator-owned rclone configuration into a private local directory before invoking restore; a failed download is not a restore candidate. Keep backup contents, credentials and private command output out of CI artifacts/logs. Listing or byte size alone does not verify a downloaded backup.
 
+Drive recovery can run entirely on the workstation, even if the Pi is unavailable. The provisioning devcontainer includes pinned rclone. Create `~/.config/recipe-db` before starting it; the wrapper mounts it at `/home/vscode/.config/recipe-db`. If an older container lacks the mount or tool, first preserve any container-only work, then run `mise run --raw in-devcontainer --rm provisioning true` to remove it; the next invocation builds the current configuration.
+
+Open the container with `mise run --raw in-devcontainer provisioning fish`. Use the workstation's `backup/rclone.conf` explicitly, not the Pi path in `backup.json`. The remote directory is `remote` from that JSON followed by `/deploymentId`. Use only read-only listing and remote-to-local `rclone copyto` operations to retrieve the matching archive and manifest into a new private directory. Never run the backup publisher, `sync`, upload, delete or prune for recovery. Rclone may refresh authorization during reads: use a protected working copy of its config if the original must remain unchanged. Do not print private configuration or remote listings in shared logs.
+
 ```sh
 umask 077
 VALUES="$PWD/.secrets/fresh-target-values.yaml"

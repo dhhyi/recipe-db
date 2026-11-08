@@ -88,12 +88,24 @@ class ContractTests(unittest.TestCase):
         self.environment = Environment(
             loader=FileSystemLoader(ROOT / "templates"), undefined=StrictUndefined,
         )
+
         self.environment.filters["quote"] = shlex.quote
         self.values = dict(
             self.defaults, expected_root_uuid=UUID, inventory_hostname="recipe-db-pi",
             ansible_facts={"default_ipv4": {"address": "192.168.1.218"}},
             admin_networks=["192.168.1.0/24"], application_networks=["192.168.1.0/24"],
         )
+
+    def test_workstation_recovery_has_pinned_rclone(self):
+        project = next(yaml.safe_load_all((ROOT / ".project.yaml").read_text()))
+        self.assertIn(
+            "RUN mise use -g rclone@1.75.2",
+            project["devcontainer"]["build"]["user"],
+        )
+        version = subprocess.run(
+            ["rclone", "version"], check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(version.stdout.splitlines()[0], "rclone v1.75.2")
 
     def render(self, name):
         return self.environment.get_template(name).render(self.values)

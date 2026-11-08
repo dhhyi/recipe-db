@@ -194,11 +194,13 @@ else
     echo "Starting existing stopped container $container_id" >&2
   fi
 fi
+# Docker Desktop may translate bind sources; retain the requested path as a label.
 if [ -n "$container_id" ] && [ -n "$private_config_dir" ] \
   && ! docker inspect "$container_id" | jq -e --arg source "$private_config_dir" '
-    any(.[0].Mounts[]?;
-      .Type == "bind" and .Source == $source
-      and .Destination == "/home/vscode/.config/recipe-db")
+    .[0] | .Config.Labels["recipe-db.private-config-source"] as $requested_source |
+    any(.Mounts[]?;
+      .Type == "bind" and .Destination == "/home/vscode/.config/recipe-db"
+      and (.Source == $source or $requested_source == $source))
   ' > /dev/null; then
   if [ "$remove_after" = true ]; then
     stale_containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
@@ -218,6 +220,7 @@ fi
 if [ "$container_running" = false ]; then
   if [ -n "$private_config_dir" ]; then
     container_result=$(devcontainer up --workspace-folder "$project_dir" \
+      --id-label "recipe-db.private-config-source=$private_config_dir" \
       --mount "type=bind,source=$private_config_dir,target=/home/vscode/.config/recipe-db")
   else
     container_result=$(devcontainer up --workspace-folder "$project_dir")
