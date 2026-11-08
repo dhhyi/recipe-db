@@ -1,0 +1,21 @@
+diff --git a/index.js b/index.js
+index a38ac43d9556366a00571355b4447e84430f3496..6fc161dbdfa60f0551a80d41644f97b3d2707a3a 100644
+--- a/index.js
++++ b/index.js
+@@ -1,6 +1,6 @@
+ ﻿const crypto = require('crypto'),
+     debug = require('debug'),
+-    minimatch = require('minimatch'),
++    { minimatch } = require('minimatch'),
+     path = require('path');
+ 
+ const defaultOptions = {
+@@ -293,7 +293,3 @@ function reduceGlobPatterns(globs) {
+     } else {
+-        // combine globs into one single RegEx
+-        const regex = new RegExp(globs.reduce((acc, exclude) => {
+-            return acc + '|' + minimatch.makeRe(exclude).source;
+-        }, '').substr(1));
+-        return param => regex.test(param);
++        return param => globs.some(pattern => minimatch(param, pattern));
+     }
