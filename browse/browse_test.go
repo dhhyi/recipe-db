@@ -565,9 +565,9 @@ func TestBrowseHTTP(t *testing.T) {
 			for _, mode := range []string{"native", "fragment", "boosted", "history"} {
 				fragment := mode == "fragment"
 				operations = nil
-				query := url.Values{"q": {"Apfel"}, "sort": {"rating"}, "page": {strconv.Itoa(tc.page)}}.Encode()
+				query := url.Values{"q": {"Apfel"}, "sort_by": {"rating_average:desc,rating_count:desc,recipe_id_sort:asc"}, "page": {strconv.Itoa(tc.page)}}.Encode()
 				if tc.page == 1 {
-					query = url.Values{"q": {"Apfel"}, "sort": {"rating"}}.Encode()
+					query = url.Values{"q": {"Apfel"}, "sort_by": {"rating_average:desc,rating_count:desc,recipe_id_sort:asc"}}.Encode()
 				}
 				recorder := httptest.NewRecorder()
 				request := httptest.NewRequest("GET", "/?"+query, nil)
