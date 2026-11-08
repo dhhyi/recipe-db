@@ -35,7 +35,7 @@ for (const role of ["anonymous", "member", "owner"]) {
 
     test("recipe overview", async ({ page, overviewRecipes }) => {
       await page.goto(
-        `/?q=${encodeURIComponent(overviewRecipes[0].name)}&sort=newest`,
+        `/?q=${encodeURIComponent(overviewRecipes[0].name)}&sort_by=created_at%3Adesc%2Crecipe_id_sort%3Aasc`,
       );
       await expectHeader(page, role);
       await page.evaluate(() =>

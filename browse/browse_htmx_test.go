@@ -198,9 +198,9 @@ func TestOpenGraphOverviewVariantsAndFragments(t *testing.T) {
 	for _, path := range []string{
 		"/",
 		"/?q=Apfel",
-		"/?sort=name-asc",
+		"/?sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc",
 		"/?page=2",
-		"/?page=2&q=Apfel&sort=rating",
+		"/?page=2&q=Apfel&sort_by=rating_average%3Adesc%2Crating_count%3Adesc%2Crecipe_id_sort%3Aasc",
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))

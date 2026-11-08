@@ -20,25 +20,15 @@ import (
 const browsePageSize = 24
 const browseRestorePageLimit = 20
 
-var browseSorts = map[string]string{
-	"relevance":    "_text_match:desc,created_at:desc,recipe_id_sort:asc",
-	"rating":       "rating_average:desc,rating_count:desc,recipe_id_sort:asc",
-	"rating-count": "rating_count:desc,rating_average:desc,recipe_id_sort:asc",
-	"name-asc":     "name_sort:asc,recipe_id_sort:asc",
-	"name-desc":    "name_sort:desc,recipe_id_sort:asc",
-	"newest":       "created_at:desc,recipe_id_sort:asc",
-	"updated":      "updated_at:desc,recipe_id_sort:asc",
-}
-
 type browseRequest struct {
-	query, sort, filterBy string
-	filterByPresent       bool
-	page                  int
+	query, sortBy, filterBy string
+	filterByPresent         bool
+	page                    int
 }
 
 type browseOptions struct {
 	Query    string  `json:"q"`
-	SortBy   string  `json:"sort_by"`
+	SortBy   string  `json:"sort_by,omitempty"`
 	FilterBy *string `json:"filter_by,omitempty"`
 	Page     int     `json:"page"`
 	PerPage  int     `json:"per_page"`
@@ -47,17 +37,12 @@ type browseOptions struct {
 func parseBrowseRequest(values url.Values) (browseRequest, error) {
 	_, filterByPresent := values["filter_by"]
 	request := browseRequest{
-		query: strings.TrimSpace(values.Get("q")), sort: values.Get("sort"),
+		query: strings.TrimSpace(values.Get("q")), sortBy: values.Get("sort_by"),
 		filterBy: values.Get("filter_by"), filterByPresent: filterByPresent, page: 1,
 	}
-	for _, key := range []string{"q", "sort", "page", "filter_by"} {
+	for _, key := range []string{"q", "sort_by", "page", "filter_by"} {
 		if len(values[key]) > 1 {
 			return request, fmt.Errorf("duplicate %s parameter", key)
-		}
-	}
-	if request.sort != "" {
-		if _, ok := browseSorts[request.sort]; !ok {
-			return request, fmt.Errorf("invalid sort: %q", request.sort)
 		}
 	}
 	if raw, present := values["page"]; present {
@@ -71,26 +56,17 @@ func parseBrowseRequest(values url.Values) (browseRequest, error) {
 }
 
 func (request browseRequest) options() json.RawMessage {
-	query, sort := request.query, request.sort
-	if sort == "" {
-		sort = "relevance"
-		if query == "" {
-			sort = "newest"
-		}
-	}
+	query := request.query
 	if query == "" {
 		query = "*"
-		if sort == "relevance" {
-			sort = "newest"
-		}
 	}
-	// This fixed structure contains no browser-supplied Typesense options.
+	// Forward only the supported browse search fields.
 	var filterBy *string
 	if request.filterByPresent {
 		filterBy = &request.filterBy
 	}
 	options, _ := json.Marshal(browseOptions{
-		Query: query, SortBy: browseSorts[sort], FilterBy: filterBy,
+		Query: query, SortBy: request.sortBy, FilterBy: filterBy,
 		Page: request.page, PerPage: browsePageSize,
 	})
 	return options
@@ -104,8 +80,8 @@ func (request browseRequest) pageURL(page int) string {
 	if request.filterByPresent {
 		values.Set("filter_by", request.filterBy)
 	}
-	if request.sort != "" {
-		values.Set("sort", request.sort)
+	if request.sortBy != "" {
+		values.Set("sort_by", request.sortBy)
 	}
 	if page > 1 {
 		values.Set("page", strconv.Itoa(page))
@@ -129,12 +105,13 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			return
 		}
 		state := components.BrowseState{
-			Query: request.query, Sort: request.sort, FilterBy: request.filterBy,
+			Query: request.query, SortBy: request.sortBy, FilterBy: request.filterBy,
 			FilterByPresent: request.filterByPresent, Page: request.page,
 			PerPage: browsePageSize, Kind: "error",
 		}
 		status := http.StatusOK
 		filterExecutionFailed := false
+		sortExecutionFailed := false
 		if err != nil {
 			log.Printf("invalid browse request: %v", err)
 			state.Message = "Ungültige Suchparameter."
@@ -212,9 +189,11 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 							if request.filterBy != "" {
 								status = http.StatusFailedDependency
 								filterExecutionFailed = true
-								if invalidSearchOptions(searchErr) {
-									status = http.StatusBadRequest
-								}
+							}
+							if invalidSearchOptions(searchErr) {
+								status = http.StatusBadRequest
+								filterExecutionFailed = request.filterBy != ""
+								sortExecutionFailed = request.sortBy != ""
 							}
 							break
 						}
@@ -253,6 +232,9 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 		if filterExecutionFailed {
 			state.Message = "Suchfilter konnten nicht angewendet werden."
 			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
+		} else if sortExecutionFailed {
+			state.Message = "Sortierung konnte nicht angewendet werden."
+			state.Kind, state.Recipes, state.NextURL = "error", nil, ""
 		} else if status >= 500 {
 			if request.filterBy != "" {
 				state.Message = "Suchfilter konnten nicht angewendet werden."
@@ -265,6 +247,8 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			title, message := "Rezepte konnten nicht geladen werden | RezeptDB", "Rezepte konnten nicht geladen werden."
 			if filterExecutionFailed {
 				title, message = "Suchfilter konnten nicht angewendet werden | RezeptDB", "Suchfilter konnten nicht angewendet werden."
+			} else if sortExecutionFailed {
+				title, message = "Sortierung konnte nicht angewendet werden | RezeptDB", "Sortierung konnte nicht angewendet werden."
 			} else if status == http.StatusBadRequest {
 				title, message = "Ungültige Suchparameter | RezeptDB", "Ungültige Suchparameter."
 			}
@@ -275,7 +259,7 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			state.Message = state.RecipeCount() + " gefunden. Alle Rezepte geladen."
 		}
 		var component templ.Component
-		if appendPage && (status >= 500 || filterExecutionFailed) {
+		if appendPage && (status >= 500 || filterExecutionFailed || sortExecutionFailed) {
 			// A failed load-more only replaces its trigger. Existing cards and the
 			// successful title/URL survive, and retries never auto-trigger.
 			component = components.BrowsePageError(state, request.pageURL(request.page))

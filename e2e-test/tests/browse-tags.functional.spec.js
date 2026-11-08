@@ -177,7 +177,7 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   expect(searchURL.searchParams.get("filter_by")).toBe(filterBy);
   expect(searchURL.searchParams.has("q")).toBe(false);
   expect(searchURL.searchParams.has("page")).toBe(false);
-  expect(searchURL.searchParams.has("sort")).toBe(false);
+  expect(searchURL.searchParams.has("sort_by")).toBe(false);
   await expect(page.locator("#browse-query")).toHaveValue("");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Suchergebnisse für Tag „E2E Filter Identität“",
@@ -206,8 +206,10 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
 
   await page
     .getByLabel("Sortieren nach", { exact: true })
-    .selectOption("rating");
-  await expect(page).toHaveURL(new RegExp(`[?&]filter_by=.*[?&]sort=rating`));
+    .selectOption("rating_average:desc,rating_count:desc,recipe_id_sort:asc");
+  expect(new URL(page.url()).searchParams.get("sort_by")).toBe(
+    "rating_average:desc,rating_count:desc,recipe_id_sort:asc",
+  );
   expect(new URL(page.url()).searchParams.get("filter_by")).toBe(filterBy);
   await expect(page.locator("#browse-query")).toHaveValue("");
   await expect(page.locator("#browse-metadata")).toHaveAttribute(

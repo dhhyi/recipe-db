@@ -52,10 +52,16 @@ test("direct full-page errors keep their status, shared layout, and message", as
       message: "Seite nicht gefunden.",
     },
     {
-      path: "/?sort=invalid",
+      path: "/?page=invalid",
       status: 400,
       title: "Ungültige Suchparameter | RezeptDB",
       message: "Ungültige Suchparameter.",
+    },
+    {
+      path: "/?sort_by=unknown_sort_field%3Adesc",
+      status: 400,
+      title: "Sortierung konnte nicht angewendet werden | RezeptDB",
+      message: "Sortierung konnte nicht angewendet werden.",
     },
   ]) {
     const response = await page.goto(testCase.path);

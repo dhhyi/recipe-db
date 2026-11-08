@@ -67,6 +67,18 @@ class TypesenseSortTests(unittest.TestCase):
         self.assertIs(result["search_cutoff"], False)
         return [hit["document"]["id"] for hit in result["hits"]]
 
+    def test_engine_default_sort_uses_insertion_order_without_a_default_field(self):
+        collection = self.call("GET", self.path)
+        self.assertNotIn("default_sorting_field", collection)
+        result = self.call("GET", self.path + "/documents/search?" + urllib.parse.urlencode({
+            "q": "*", "query_by": "name,method,ingredients", "num_typos": 0, "prefix": "false",
+        }))
+        self.assertIs(result["search_cutoff"], False)
+        self.assertEqual(
+            [hit["document"]["id"] for hit in result["hits"]],
+            ["a", "b", "c", "d", "e", "f", "g"],
+        )
+
     def test_populated_collection_accepts_optional_tag_schema_migration(self):
         schema = json.loads((Path(__file__).parent / "src/schema.json").read_text())
         schema["name"] = "tag_migration_" + uuid.uuid4().hex
