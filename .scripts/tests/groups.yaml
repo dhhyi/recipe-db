@@ -118,7 +118,9 @@ backup:
       - provisioning/files/backup-upload.py
     .scripts/tests/backup-recovery-k3d.bats:
       - .scripts/backup-recovery-k3d.sh
+      - .scripts/lib/production-config.sh
       - .scripts/tests/fixtures/rclone-local
+      - deploy/local.yaml
     .scripts/tests/backup-snapshot.bats:
       - .scripts/validate-backup-snapshot.py
     .scripts/tests/production-k3d-backup.bats: *production-k3d-inputs

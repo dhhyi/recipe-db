@@ -2,6 +2,32 @@
 
 load test_helper
 
+@test "restore startup without Google never requests an absent Redis deployment" {
+  printf '[{"name":"nats"},{"name":"typesense"},{"name":"graphql"},{"name":"browse-maintenance"},{"name":"recipes"},{"name":"search"},{"name":"browse"}]\n' \
+    > work/prior-workloads.json
+  cat > start-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+timeout=3
+google_enabled=false
+kube() {
+  printf 'kube %s\n' "$*" >> "$MOCK_LOG"
+  [[ $* != *deployment/redis* ]]
+}
+backup_projection_route() { printf 'route %s\n' "$*" >> "$MOCK_LOG"; }
+backup_refresh_projections() { printf 'refresh\n' >> "$MOCK_LOG"; }
+restore_start
+EOF
+  run bash start-harness.sh
+  [ "$status" -eq 0 ]
+  grep -q 'scale deployment/typesense --replicas=1' "$MOCK_LOG"
+  grep -q 'scale deployment/recipes --replicas=1' "$MOCK_LOG"
+  grep -Fxq 'refresh' "$MOCK_LOG"
+  run ! grep -q deployment/redis "$MOCK_LOG"
+}
+
 @test "restore read verification waits for convergence and rejects persistent failures" {
   cat > read-gate.sh << 'EOF'
 #!/usr/bin/env bash

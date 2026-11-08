@@ -249,6 +249,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           > "$MOCK_LOG.restore-deployments"; exit ;;
       *"scale deployment/"*"--replicas="*)
         name="${*: -2:1}"; name="${name#deployment/}"; replicas="${*: -1}"; replicas="${replicas#--replicas=}"
+        jq -e --arg name "$name" 'any(.items[]; .metadata.name == $name)' \
+          "$MOCK_LOG.restore-deployments" > /dev/null || exit 1
         jq --arg name "$name" --argjson replicas "$replicas" '
           (.items[] | select(.metadata.name == $name)) |= (.spec.replicas=$replicas | .status.readyReplicas=$replicas)' \
           "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
@@ -617,8 +619,11 @@ if jq -e 'has("config")' "$2" > /dev/null; then
   jq -e 'keys == ["artifact","config","files","projects","release"]
     and (.files | keys) == ["designNginx","maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
   if [[ $MOCK_RESTORE == true ]]; then
-    jq -c '. as $input | ["graphql","recipes","images","tags","search","browse","nats","typesense","redis","browse-maintenance"][] |
-      . as $name | {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
+    jq -c '. as $input |
+      (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"] +
+        (if .config.runtime.googleOAuthClientId then ["redis","oauth2-proxy"] else [] end))[] |
+      . as $name | select($name != (env.MOCK_RESTORE_MISSING_WORKLOAD // "")) |
+      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
       spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
       spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
         env:([{name:"MODE",value:"production"}] +

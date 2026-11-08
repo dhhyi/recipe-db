@@ -31,6 +31,57 @@ load production-k3d-restore-setup
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
+@test "restore without Google imports and verifies before reopening without Redis or OAuth workloads" {
+  restore_fixture
+  jq 'del(.runtime.googleOAuthClientId, .secrets["google-oauth-client-secret"],
+    .secrets["oauth2-cookie-secret"], .infrastructure.oauth2Proxy,
+    .infrastructure.redis, .volumes.redis)' "$VALUES" > no-google.json
+  mv no-google.json "$VALUES"
+  run_restore
+  [ "$status" -eq 0 ]
+  jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
+  cmp "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3" "$FIXTURE_ROOT/imported/recipes/recipes.sqlite3"
+  run ! grep -Eq 'deployment/(redis|oauth2-proxy)|restore-volume-redis' "$MOCK_LOG"
+  jq -e 'all(.items[]; .metadata.name != "redis" and .metadata.name != "oauth2-proxy")' \
+    "$MOCK_LOG.restore-deployments"
+  local propagation opening
+  propagation=$(awk '/recipe\/probe/ {n=NR} END {print n}' "$MOCK_LOG")
+  opening=$(awk '/from-file=routes.yml=.*restore-final-routes/ {print NR; exit}' "$MOCK_LOG")
+  [ "$propagation" -lt "$opening" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "Google-enabled restore waits for Redis before starting OAuth and reopens only after verification" {
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  local redis_ready oauth_start propagation opening
+  redis_ready=$(awk '/rollout status deployment\/redis / {print NR; exit}' "$MOCK_LOG")
+  oauth_start=$(awk '/scale deployment\/oauth2-proxy / {print NR; exit}' "$MOCK_LOG")
+  propagation=$(awk '/recipe\/probe/ {n=NR} END {print n}' "$MOCK_LOG")
+  opening=$(awk '/from-file=routes.yml=.*restore-final-routes/ {print NR; exit}' "$MOCK_LOG")
+  [ -n "$redis_ready" ] && [ -n "$oauth_start" ]
+  [ "$redis_ready" -lt "$oauth_start" ]
+  [ "$oauth_start" -lt "$propagation" ]
+  [ "$propagation" -lt "$opening" ]
+  grep -q 'exec restore-volume-redis -- sh -ec' "$MOCK_LOG"
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "Google-enabled restore refuses missing Redis or OAuth workloads before connecting" {
+  restore_fixture
+  local name
+  for name in redis oauth2-proxy; do
+    export MOCK_RESTORE_MISSING_WORKLOAD="$name"
+    : > "$MOCK_LOG"
+    run_restore
+    [ "$status" -ne 0 ]
+    [[ $output == *"release lacks required restore workloads"* ]]
+    run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
+    [ ! -e "$RESTORE_STATE" ]
+  done
+}
+
 @test "restore validates package and runtime secrets before connecting or taking shared Lease" {
   restore_fixture
   export MOCK_RESTORE_PACKAGE_FAIL=true

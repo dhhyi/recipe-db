@@ -15,7 +15,7 @@ The default local identity is target `local`, cluster `recipe-db-rehearsal`, con
 
 ### End-to-end backup and recovery rehearsal
 
-The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It checks populated-target refusal without changing a marker, validates recipe/rating/inspiration/tag and image-pair reads, confirms a post-restore change reaches fresh search consumers, and cleans up its own records through the backup lifecycle. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
+The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It checks populated-target refusal without changing a marker, validates recipe/rating/inspiration/tag and image-pair reads, confirms a post-restore change reaches fresh search consumers, and cleans up its own records through the backup lifecycle. It uses owner-token authentication with Google sign-in disabled, matching `deploy/local.yaml` without OAuth2 Proxy or Redis. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
 
 Use an immutable release artifact whose revision matches the checkout, after ensuring the host has the production-k3d prerequisites above:
 

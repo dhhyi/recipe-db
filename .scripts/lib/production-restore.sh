@@ -235,11 +235,14 @@ restore_import() {
 
 restore_start() {
   local name
+  local infrastructure=(typesense)
+  if [[ $google_enabled == true ]]; then infrastructure+=(redis); fi
+  infrastructure+=(browse-maintenance)
   kube scale deployment/nats --replicas=1 > /dev/null || return 1
   kube rollout status deployment/nats --timeout="${timeout}s" || return 1
   kube apply -f "$work/restore-nats-init.yml" > /dev/null || return 1
   kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" || return 1
-  for name in typesense redis browse-maintenance; do
+  for name in "${infrastructure[@]}"; do
     kube scale "deployment/$name" --replicas=1 > /dev/null || return 1
     kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
   done
@@ -525,9 +528,13 @@ restore_run() {
   yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
     '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
     > "$work/prior-workloads.json"
-  jq -e 'any(.[]; .name == "graphql") and any(.[]; .name == "search")
+  jq -e --argjson googleEnabled "$google_enabled" '
+    any(.[]; .name == "graphql") and any(.[]; .name == "search")
     and any(.[]; .name == "browse") and any(.[]; .name == "nats")
-    and any(.[]; .name == "typesense") and any(.[]; .name == "redis")' \
+    and any(.[]; .name == "typesense")
+    and (if $googleEnabled then
+      any(.[]; .name == "redis") and any(.[]; .name == "oauth2-proxy")
+      else true end)' \
     "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
   jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
     .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
