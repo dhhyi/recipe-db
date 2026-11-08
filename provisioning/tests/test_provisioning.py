@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tomllib
@@ -281,6 +282,33 @@ class ContractTests(unittest.TestCase):
         timer = next(task for task in enable["tasks"] if task["name"] == "Enable the scheduled backup timer")
         self.assertTrue(timer["ansible.builtin.systemd_service"]["enabled"])
         self.assertEqual(timer["ansible.builtin.systemd_service"]["state"], "started")
+
+    def test_backup_release_reference_requires_the_canonical_immutable_digest(self):
+        setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
+        read_inputs = next(task for task in setup["tasks"]
+                           if task["name"] == "Read prepared backup configuration without displaying it")
+        validation = next(task for task in setup["tasks"]
+                          if task["name"] == "Validate backup configuration and private input references")
+        self.assertTrue(read_inputs["no_log"])
+        self.assertTrue(validation["no_log"])
+        condition = next(item for item in validation["ansible.builtin.assert"]["that"]
+                         if item.startswith("backup_release is match("))
+        pattern = re.search(r"match\('([^']+)'\)", condition).group(1)
+        accepted = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64
+        self.assertIsNotNone(re.match(pattern, accepted))
+
+        rejected = {
+            "commit": "a" * 40,
+            "tag": "ghcr.io/dhhyi/recipe-db-releases:latest",
+            "wrong repository": "ghcr.io/dhhyi/recipe-db@sha256:" + "a" * 64,
+            "short digest": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 63,
+            "long digest": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 65,
+            "unsupported algorithm": "ghcr.io/dhhyi/recipe-db-releases@sha512:" + "a" * 64,
+            "uppercase digest": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "A" * 64,
+        }
+        for label, reference in rejected.items():
+            with self.subTest(reference=label):
+                self.assertIsNone(re.match(pattern, reference))
 
     def test_capture_wrapper_uses_private_inputs_and_isolated_toolchain(self):
         command = self.render("recipe-db-backup-capture.j2")

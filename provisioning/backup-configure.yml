@@ -53,7 +53,7 @@
           - backup_settings.captureCommand == '/usr/local/sbin/recipe-db-backup-capture'
           - backup_settings.stateDirectory == '/var/lib/recipe-db-backup'
           - backup_settings.stagingDirectory == '/var/lib/recipe-db-backup/work'
-          - backup_release is match('^[0-9a-f]{40}$')
+          - backup_release is match('^ghcr\.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$')
           - backup_values is mapping
           - backup_values.secrets is mapping
           - "'auth-accounts.json' in backup_values.secrets"
