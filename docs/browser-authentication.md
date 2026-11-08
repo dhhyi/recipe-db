@@ -1,5 +1,17 @@
 # Browser authentication
 
+This guide explains how browser identities and credentials are handled in local and production Recipe DB deployments. It is for developers and operators configuring or verifying sign-in; see [production configuration and recovery](production-configuration.md) for operator-held production inputs and [production Kubernetes operations](production-kubernetes.md) for deployment procedures.
+
+**Table of contents**
+
+- [Deployment setup](#deployment-setup)
+- [Request and identity contract](#request-and-identity-contract)
+- [Local credential-free and token identities](#local-credential-free-and-token-identities)
+  - [Testing-only degraded pages](#testing-only-degraded-pages)
+- [MCP configured-token access](#mcp-configured-token-access)
+  - [Verified VS Code user-profile setup (2026-11-06)](#verified-vs-code-user-profile-setup-2026-11-06)
+- [Session lifecycle and verification status](#session-lifecycle-and-verification-status)
+
 ## Deployment setup
 
 For local development, run:

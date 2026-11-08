@@ -16,6 +16,8 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Include only what is needed to complete the task safely and correctly. Put prerequisites and warnings near the steps they affect.
 - Link to guides for background or detailed reference instead of repeating it.
 - Put checks after the thing being checked exists.
+- Every cookbook starts with an introduction that says what it covers, who it is for, and which related documentation readers may need.
+- Every cookbook with more than two headings includes a table of contents after the introduction and before the steps. If step headings are numbered, use a numbered list in the table of contents.
 
 ### Guides
 
@@ -25,6 +27,8 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Use headings, lists, and tables to make information easy to find and compare.
 - Keep procedures brief or link to a cookbook when readers need to perform a task.
 - Define terms and avoid unexplained internal shorthand.
+- Every guide starts with an introduction that says what it covers, who it is for, and which related documentation readers may need.
+- Every guide with more than two headings includes a table of contents after the introduction and before the guide content.
 
 ### All documentation
 

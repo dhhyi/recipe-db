@@ -1,3 +1,3 @@
 # Raspberry Pi host provisioning
 
-The current host baseline, private input layout, Ansible preflight, provisioning, cluster access, and rebuild sequence are documented in the [clean Raspberry Pi rebuild cookbook](raspberry-pi-rebuild.md) and [production configuration and recovery guide](production-configuration.md).
+This short guide directs operators provisioning or replacing the production Raspberry Pi to the authoritative host setup procedure and private-input inventory. Follow the [clean Raspberry Pi rebuild cookbook](raspberry-pi-rebuild.md) for host checks, Ansible preflight, provisioning, and cluster access; use the [production configuration and recovery guide](production-configuration.md) for operator-held inputs.

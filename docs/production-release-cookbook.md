@@ -1,8 +1,16 @@
 # Publish and deploy a production release
 
-Use this cookbook to publish the current `main` commit, deploy its immutable release to the Pi, and align automated backup capture with that release. It covers routine releases, not first-time Pi provisioning or fresh-cluster restore; use the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for those.
+Operators can use this cookbook to publish the current `main` commit, deploy its immutable release to the Pi, and align automated backup capture with that release. It covers routine releases, not first-time Pi provisioning or fresh-cluster restore; use the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for those.
 
 The [production image releases guide](production-releases.md) explains the release artifact and registry requirements. The [production configuration guide](production-configuration.md) is authoritative for private inputs and their contents.
+
+**Table of contents**
+
+1. [Publish a release](#1-publish-a-release)
+2. [Prepare the workstation](#2-prepare-the-workstation)
+3. [Connect to the Pi and deploy](#3-connect-to-the-pi-and-deploy)
+4. [Align backup capture with the deployed release](#4-align-backup-capture-with-the-deployed-release)
+5. [Verify a backup, then re-enable its schedule](#5-verify-a-backup-then-re-enable-its-schedule)
 
 ## 1. Publish a release
 

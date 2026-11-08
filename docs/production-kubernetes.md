@@ -1,6 +1,28 @@
 # Production Kubernetes operations
 
-The production manifest renderer consumes project metadata and the immutable multi-platform release inventory. It does not build images. For the ordered release-to-Pi deployment workflow, see the [production release cookbook](production-release-cookbook.md). For operator-held inputs and recovery, see [Production configuration and recovery](production-configuration.md); for first-time host setup, see the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md).
+This guide is the technical reference for maintainers and operators using Recipe DB's production Kubernetes deployment, backup, and recovery lifecycle. It covers safeguards, commands, and operational constraints rather than the routine release sequence; follow the [production release cookbook](production-release-cookbook.md) to publish and deploy a release, [production configuration and recovery](production-configuration.md) for private operator inputs, and the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration.
+
+**Table of contents**
+
+- [Prerequisites and boundaries](#prerequisites-and-boundaries)
+  - [End-to-end backup and recovery rehearsal](#end-to-end-backup-and-recovery-rehearsal)
+  - [Runtime mode](#runtime-mode)
+  - [Backup cleanup Job](#backup-cleanup-job)
+  - [Backup-participant development checklist](#backup-participant-development-checklist)
+  - [Snapshot capture](#snapshot-capture)
+  - [Verified remote packaging](#verified-remote-packaging)
+  - [Fresh-deployment restore](#fresh-deployment-restore)
+- [Operator configuration and secrets](#operator-configuration-and-secrets)
+- [Create, render, deploy and inspect](#create-render-deploy-and-inspect)
+  - [Certificate-only HTTPS staging on the Pi](#certificate-only-https-staging-on-the-pi)
+    - [Explicit anonymous-only public preview](#explicit-anonymous-only-public-preview)
+    - [Google sign-in on the existing HTTPS application](#google-sign-in-on-the-existing-https-application)
+    - [Controlled test-CA renewal rehearsal](#controlled-test-ca-renewal-rehearsal)
+  - [Workstation-only token rehearsal on the Pi](#workstation-only-token-rehearsal-on-the-pi)
+  - [Home-LAN HTTP token rehearsal on the Pi](#home-lan-http-token-rehearsal-on-the-pi)
+- [What the protocol smoke verifies](#what-the-protocol-smoke-verifies)
+- [Storage, Pi adaptation and destructive deletion](#storage-pi-adaptation-and-destructive-deletion)
+- [Script regression checks](#script-regression-checks)
 
 ## Prerequisites and boundaries
 
@@ -58,7 +80,7 @@ The maintenance API is private and available only in backup mode:
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
-#### Backup-participant development checklist
+### Backup-participant development checklist
 
 - Declare `backupRole` and, for captured storage, the complete `backupData` layout; keep caches and secrets outside authoritative data.
 - Test exact maintenance routes through the real router, including supported trailing slashes and opaque IDs. Inventories must be complete, distinct and ordered; purge/compaction must tolerate retries.
@@ -68,7 +90,7 @@ Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}
 - Keep credentials and application records out of diagnostic logs; store data-bearing manifests privately.
 - Verify reads through actual routes, not rollout status alone. Bound readiness/convergence waits; never blindly replay mutations or reopen clients after failed recovery.
 
-#### Snapshot capture
+### Snapshot capture
 
 The `backup`, `backup-enter`, `backup-exit`, `restore`, `deploy`, and `storage-reattach` operations coordinate through the same `recipe-db-deploy` Lease in `kube-system`, outside the replaceable application namespace. They do not expire or automatically steal a Lease. Backup validates the explicit target/context, immutable release digest/revision, actual project container images, deployed runtime Secret, selected PVC identities, ownership and destination capacity. Backup and recovery require the release commit locally and unchanged metadata/template inputs relative to it; untracked inputs are refused, while unrelated checkout changes are allowed. This binds the authoritative inventory and cleanup definition to the release without fetching or executing another checkout. Preflight requires selected PVC requests plus 64 MiB staging headroom; because local-path requests do not enforce a quota, capture also measures each stopped PVC's exact tar byte count before copying and requires actual free space plus the same headroom. This includes sparse-file expansion and previously copied archives. It does not read the configured application secret files. The snapshot validator requires Python 3 with its standard library.
 
@@ -89,7 +111,7 @@ After cleanup, all remaining data writers terminate before role-selected PVCs ar
 
 A complete snapshot is identified only by `manifest.json` (`format: recipe-db-pvc-snapshot`, `formatVersion: 1`). It records `backupId`, `startedAt`, `capturedAt`, `completedAt`, `source` (`target`, `cluster`, `context`, `namespace`, immutable `artifact`, `revision`) and `inventory`. Each inventory entry contains `service`, `role`, `pvc`, `archive`, `sizeBytes`, `fileCount`, `sha256` and `files`; each regular-file entry has its archive-relative `path`, `sizeBytes` and `sha256`. Archives are `<service>.tar`, with no secrets or outer packaging. Present SQLite `-wal`, `-shm` and `-journal` sidecars belong to their database. Downstream packaging must require the manifest, verify archive and file hashes, reject unsafe extraction paths, and preserve this versioned inventory. Staging directories are created privately, never overwritten or recursively removed by the lifecycle.
 
-#### Verified remote packaging
+### Verified remote packaging
 
 The publisher consumes only that complete snapshot directory; it does not capture PVCs or infer service layouts. It rechecks the lifecycle manifest, every archive SHA-256, every regular-file size/hash, path safety and snapshot completeness before packaging. The uploaded `<deployment>-<capturedAt>-<backupId>.tar.gz` is an ordinary gzip-compressed tar containing `manifest.json` and the service `.tar` files in sorted order. Outer tar metadata is normalized (mtime, owner, group and mode) and the gzip timestamp is zero. Its sibling `.manifest.json` uses `format: recipe-db-backup`, `formatVersion: 1`, and records deployment/backup IDs, capture order, the original release identity and snapshot manifest, a content fingerprint, and the archive name, byte size and SHA-256. Restore tooling must verify this package manifest, archive hash and inner snapshot contract before extracting or restoring; only a matching complete archive/manifest pair is a restore point.
 
@@ -133,7 +155,7 @@ mise run production-k3d deploy "$VALUES" "$RELEASE"
 
 Reattachment checks the old namespace/claim, requested capacity, node and guarded path, and changes the claim reference atomically without deleting PVs, PVCs or directories. Ordinary redeployments keep bound claims. Host reprovisioning does not format/remove application storage. Local k3d's explicitly confirmed whole-cluster deletion still destroys rehearsal data.
 
-#### Fresh-deployment restore
+### Fresh-deployment restore
 
 Restore is recovery at the backup's recorded immutable application release, not an upgrade or in-place repair. Use a newly provisioned, explicitly identified local k3d or Pi k3s target. Never deploy the normal application first: initialization populates databases and derived volumes, making that target unsuitable for restore. Existing or partially restored data must not be wiped, merged or overwritten to make a target pass.
 

@@ -1,6 +1,12 @@
 # Production configuration and recovery
 
-This is the source of truth for operator-held production inputs, their ownership, and recovery. Use the [production release cookbook](production-release-cookbook.md) for routine releases and backup-input updates, the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration, and [production Kubernetes operations](production-kubernetes.md) for lifecycle and recovery details.
+This guide is the source of truth for operator-held production inputs, their ownership, and recovery. It is for operators preparing a workstation, rebuilding a host, or restoring production; use the [production release cookbook](production-release-cookbook.md) for routine releases and backup-input updates, the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration, and [production Kubernetes operations](production-kubernetes.md) for lifecycle and recovery details.
+
+**Table of contents**
+
+- [Private workstation directory](#private-workstation-directory)
+- [Ownership and lifecycle](#ownership-and-lifecycle)
+- [Clean rebuild boundary](#clean-rebuild-boundary)
 
 ## Private workstation directory
 

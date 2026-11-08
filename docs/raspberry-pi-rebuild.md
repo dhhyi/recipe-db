@@ -1,6 +1,17 @@
 # Clean Raspberry Pi rebuild cookbook
 
-Follow these steps in order to recreate the supported Pi host and restore its application. The authoritative private-input inventory is [Production configuration and recovery](production-configuration.md); use the [production release cookbook](production-release-cookbook.md) for deployment and backup activation after restore.
+This cookbook is for operators replacing or erasing the Raspberry Pi boot device and restoring the Recipe DB application onto a newly provisioned host. It covers hardware, host provisioning, and data restoration; the [production configuration and recovery guide](production-configuration.md) defines private inputs, and the [production release cookbook](production-release-cookbook.md) covers deployment and backup activation after restore.
+
+**Table of contents**
+
+1. [Confirm recovery readiness](#1-confirm-recovery-readiness)
+2. [Verify hardware and flash the OS](#2-verify-hardware-and-flash-the-os)
+3. [Record the new host identity](#3-record-the-new-host-identity)
+4. [Prepare private configuration](#4-prepare-private-configuration)
+5. [Provision the host](#5-provision-the-host)
+6. [Verify cluster access and host safety](#6-verify-cluster-access-and-host-safety)
+7. [Restore the application](#7-restore-the-application)
+8. [Configure automated backups](#8-configure-automated-backups)
 
 ## 1. Confirm recovery readiness
 
