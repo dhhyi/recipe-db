@@ -67,6 +67,25 @@ class TypesenseSortTests(unittest.TestCase):
         self.assertIs(result["search_cutoff"], False)
         return [hit["document"]["id"] for hit in result["hits"]]
 
+    def test_invalid_native_sort_is_rejected_by_typesense(self):
+        with self.assertRaises(AssertionError) as raised:
+            self.search("unknown_sort_field:desc")
+        status, body = raised.exception.args[0]
+        self.assertEqual(status, 404)
+        self.assertIn("Could not find a field named", body)
+
+    def test_engine_default_sort_uses_insertion_order_without_a_default_field(self):
+        collection = self.call("GET", self.path)
+        self.assertFalse(collection.get("default_sorting_field"))
+        result = self.call("GET", self.path + "/documents/search?" + urllib.parse.urlencode({
+            "q": "*", "query_by": "name,method,ingredients", "num_typos": 0, "prefix": "false",
+        }))
+        self.assertIs(result["search_cutoff"], False)
+        self.assertEqual(
+            [hit["document"]["id"] for hit in result["hits"]],
+            ["g", "f", "e", "d", "c", "b", "a"],
+        )
+
     def test_populated_collection_accepts_optional_tag_schema_migration(self):
         schema = json.loads((Path(__file__).parent / "src/schema.json").read_text())
         schema["name"] = "tag_migration_" + uuid.uuid4().hex

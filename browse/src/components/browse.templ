@@ -6,7 +6,7 @@ import "fmt"
 import "strconv"
 
 type BrowseState struct {
-	Query, Sort, FilterBy, TagName, Kind, Message string
+	Query, SortBy, FilterBy, TagName, Kind, Message string
 	Page, PerPage, Found                         int
 	FilterByPresent                              bool
 	RatingsOnline                                bool
@@ -25,6 +25,9 @@ func (state BrowseState) PaginationValues() string {
 
 func (state BrowseState) Title() string {
 	if state.Kind == "error" {
+		if state.Message == "Ungültige Suchparameter." {
+			return "Ungültige Suchparameter | RezeptDB"
+		}
 		if state.FilterBy != "" {
 			return "Suchfilter konnten nicht angewendet werden | RezeptDB"
 		}
@@ -58,24 +61,26 @@ templ browseHeading(state BrowseState, attributes templ.Attributes) {
 }
 
 type browseSortOption struct {
-	Token, Label string
+	Value, Label string
 }
 
 var browseSortOptions = []browseSortOption{
-	{"relevance", "Relevanz"},
-	{"rating", "Beste Bewertung"},
-	{"rating-count", "Meiste Bewertungen"},
-	{"name-asc", "Name A-Z"},
-	{"name-desc", "Name Z-A"},
-	{"newest", "Neueste zuerst"},
-	{"updated", "Zuletzt bearbeitet"},
+	{"_text_match:desc,created_at:desc,recipe_id_sort:asc", "Relevanz"},
+	{"rating_average:desc,rating_count:desc,recipe_id_sort:asc", "Beste Bewertung"},
+	{"rating_count:desc,rating_average:desc,recipe_id_sort:asc", "Meiste Bewertungen"},
+	{"name_sort:asc,recipe_id_sort:asc", "Name A-Z"},
+	{"name_sort:desc,recipe_id_sort:asc", "Name Z-A"},
+	{"created_at:desc,recipe_id_sort:asc", "Neueste zuerst"},
+	{"updated_at:desc,recipe_id_sort:asc", "Zuletzt bearbeitet"},
 }
 
-func automaticSortLabel(query string) string {
-	if query == "" {
-		return "Automatisch: Neueste zuerst"
+func isPredefinedBrowseSort(value string) bool {
+	for _, option := range browseSortOptions {
+		if value == option.Value {
+			return true
+		}
 	}
-	return "Automatisch: Relevanz"
+	return false
 }
 
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
@@ -112,10 +117,13 @@ templ Browse(state BrowseState) {
 					</svg>
 				</button>
 			</fieldset>
-			<select class="md:max-w-[350px] md:ml-auto! rounded-full!" id="browse-sort" name="sort" aria-label="Sortieren nach" disabled?={ state.Kind == "fallback" }>
-				<option id="browse-automatic" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
+			<select class="md:max-w-[350px] md:ml-auto! rounded-full!" id="browse-sort" name="sort_by" aria-label="Sortieren nach" disabled?={ state.Kind == "fallback" }>
+				<option id="browse-automatic" value="" selected?={ state.SortBy == "" }>Automatisch</option>
 				for _, option := range browseSortOptions {
-					<option value={ option.Token } selected?={ state.Sort == option.Token }>{ option.Label }</option>
+					<option value={ option.Value } selected?={ state.SortBy == option.Value }>{ option.Label }</option>
+				}
+				if state.SortBy != "" && !isPredefinedBrowseSort(state.SortBy) {
+					<option value={ state.SortBy } selected>Benutzerdefinierte Sortierung</option>
 				}
 			</select>
 			if state.FilterByPresent {
@@ -128,7 +136,7 @@ templ Browse(state BrowseState) {
 }
 
 templ browseStatus(state BrowseState, attributes templ.Attributes) {
-	<p { attributes... } id="browse-metadata" data-kind={ state.Kind } data-page={ strconv.Itoa(state.Page) } data-per-page={ strconv.Itoa(state.PerPage) } data-found={ strconv.Itoa(state.Found) } data-query={ state.Query } data-sort={ state.Sort } data-browse-status role="status" aria-live="polite" aria-atomic="true" class="text-center">
+	<p { attributes... } id="browse-metadata" data-kind={ state.Kind } data-page={ strconv.Itoa(state.Page) } data-per-page={ strconv.Itoa(state.PerPage) } data-found={ strconv.Itoa(state.Found) } data-query={ state.Query } data-sort-by={ state.SortBy } data-browse-status role="status" aria-live="polite" aria-atomic="true" class="text-center">
 		if state.Message != "" {
 			{ state.Message }
 		} else if state.Found == 0 {
@@ -193,9 +201,6 @@ templ BrowsePage(state BrowseState) {
 templ BrowseFragment(state BrowseState) {
 	<title>{ state.Title() }</title>
 	@browseHeading(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
-	<template>
-		<option id="browse-automatic" hx-swap-oob="outerHTML" value="" hidden selected?={ state.Sort == "" }>{ automaticSortLabel(state.Query) }</option>
-	</template>
 	@BrowseResults(state, true)
 }
 

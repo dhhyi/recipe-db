@@ -20,21 +20,26 @@ import (
 )
 
 func TestBrowseSortSelection(t *testing.T) {
-	for _, tc := range []struct{ query, sort, selected string }{
-		{"", "", `value="" hidden selected>Automatisch: Neueste zuerst`},
-		{"Apfel", "", `value="" hidden selected>Automatisch: Relevanz`},
-		{"", "relevance", `value="relevance" selected>Relevanz`},
-		{"", "newest", `value="newest" selected>Neueste zuerst`},
-		{"Apfel", "newest", `value="newest" selected>Neueste zuerst`},
+	for _, tc := range []struct {
+		query, sortBy, selected string
+		options                 int
+	}{
+		{"", "", `value="" selected>Automatisch</option>`, 8},
+		{"Apfel", "", `value="" selected>Automatisch</option>`, 8},
+		{"", "_text_match:desc,created_at:desc,recipe_id_sort:asc", `value="_text_match:desc,created_at:desc,recipe_id_sort:asc" selected>Relevanz`, 8},
+		{"", "created_at:desc,recipe_id_sort:asc", `value="created_at:desc,recipe_id_sort:asc" selected>Neueste zuerst`, 8},
+		{"Apfel", "created_at:desc,recipe_id_sort:asc", `value="created_at:desc,recipe_id_sort:asc" selected>Neueste zuerst`, 8},
+		{"", "rating_average:desc,_text_match:desc,recipe_id_sort:asc", `value="rating_average:desc,_text_match:desc,recipe_id_sort:asc" selected>Benutzerdefinierte Sortierung`, 9},
 	} {
-		t.Run(tc.query+"/"+tc.sort, func(t *testing.T) {
+		t.Run(tc.query+"/"+tc.sortBy, func(t *testing.T) {
 			var body bytes.Buffer
-			state := components.BrowseState{Query: tc.query, Sort: tc.sort, Kind: "search", Page: 1, PerPage: 24}
+			state := components.BrowseState{Query: tc.query, SortBy: tc.sortBy, Kind: "search", Page: 1, PerPage: 24}
 			if err := components.Browse(state).Render(context.Background(), &body); err != nil {
 				t.Fatal(err)
 			}
 			if !strings.Contains(body.String(), tc.selected) || strings.Count(body.String(), " selected") != 1 ||
-				strings.Count(body.String(), "<option ") != 8 || !strings.Contains(body.String(), `value="" hidden`) {
+				strings.Count(body.String(), "<option ") != tc.options || !strings.Contains(body.String(), `name="sort_by"`) ||
+				strings.Contains(body.String(), `name="sort"`) || strings.Contains(body.String(), `>Automatisch: `) {
 				t.Fatalf("explicit versus automatic selection lost: %s", body.String())
 			}
 		})
@@ -97,26 +102,28 @@ func TestRecipeCardOmitsEmptyAndUnavailableTags(t *testing.T) {
 
 func TestBrowseOptions(t *testing.T) {
 	for _, tc := range []struct {
-		name, raw, query, token, sort, filterBy string
-		filterByPresent                         bool
-		page                                    int
+		name, raw, query, sortBy, filterBy string
+		sortByPresent, filterByPresent     bool
+		page                               int
 	}{
-		{"all", "", "*", "", "created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"text", "q=++Kartoffelsuppe++", "Kartoffelsuppe", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"whitespace", "q=+++", "*", "", "created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"explicit relevance all", "sort=relevance", "*", "relevance", "created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"explicit relevance text", "q=Apfel&sort=relevance", "Apfel", "relevance", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"rating", "q=Apfel&sort=rating", "Apfel", "rating", "rating_average:desc,rating_count:desc,recipe_id_sort:asc", "", false, 1},
-		{"rating count", "sort=rating-count", "*", "rating-count", "rating_count:desc,rating_average:desc,recipe_id_sort:asc", "", false, 1},
-		{"name ascending", "sort=name-asc", "*", "name-asc", "name_sort:asc,recipe_id_sort:asc", "", false, 1},
-		{"name descending", "sort=name-desc", "*", "name-desc", "name_sort:desc,recipe_id_sort:asc", "", false, 1},
-		{"newest", "sort=newest", "*", "newest", "created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"updated page", "sort=updated&page=3", "*", "updated", "updated_at:desc,recipe_id_sort:asc", "", false, 3},
-		{"automatic form", "q=Apfel&sort=", "Apfel", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", false, 1},
-		{"tag filter", "filter_by=tag_ids%3A%3D%22tag%2F%2B%26%3F%22", "*", "", "created_at:desc,recipe_id_sort:asc", `tag_ids:="tag/+&?"`, true, 1},
-		{"combined filter", "filter_by=category%3A%3D%22main%20course%22%20%26%26%20tag_ids%3A%3D%22tag%22&q=Apfel", "Apfel", "", "_text_match:desc,created_at:desc,recipe_id_sort:asc", `category:="main course" && tag_ids:="tag"`, true, 1},
-		{"empty filter", "filter_by=", "*", "", "created_at:desc,recipe_id_sort:asc", "", true, 1},
-		{"ignore raw options", "sort_by=bad&per_page=999&query_by=secret", "*", "", "created_at:desc,recipe_id_sort:asc", "", false, 1},
+		{"all", "", "*", "", "", false, false, 1},
+		{"text", "q=++Kartoffelsuppe++", "Kartoffelsuppe", "", "", false, false, 1},
+		{"whitespace", "q=+++", "*", "", "", false, false, 1},
+		{"automatic omitted", "q=Apfel&sort_by=", "Apfel", "", "", false, false, 1},
+		{"explicit relevance all", "sort_by=_text_match%3Adesc%2Ccreated_at%3Adesc%2Crecipe_id_sort%3Aasc", "*", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"explicit relevance text", "q=Apfel&sort_by=_text_match%3Adesc%2Ccreated_at%3Adesc%2Crecipe_id_sort%3Aasc", "Apfel", "_text_match:desc,created_at:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"rating", "q=Apfel&sort_by=rating_average%3Adesc%2Crating_count%3Adesc%2Crecipe_id_sort%3Aasc", "Apfel", "rating_average:desc,rating_count:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"rating count", "sort_by=rating_count%3Adesc%2Crating_average%3Adesc%2Crecipe_id_sort%3Aasc", "*", "rating_count:desc,rating_average:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"name ascending", "sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc", "*", "name_sort:asc,recipe_id_sort:asc", "", true, false, 1},
+		{"name descending", "sort_by=name_sort%3Adesc%2Crecipe_id_sort%3Aasc", "*", "name_sort:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"newest", "sort_by=created_at%3Adesc%2Crecipe_id_sort%3Aasc", "*", "created_at:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"updated page", "sort_by=updated_at%3Adesc%2Crecipe_id_sort%3Aasc&page=3", "*", "updated_at:desc,recipe_id_sort:asc", "", true, false, 3},
+		{"custom expression", "sort_by=rating_average%3Adesc%2C_text_match%3Adesc%2Crecipe_id_sort%3Aasc", "*", "rating_average:desc,_text_match:desc,recipe_id_sort:asc", "", true, false, 1},
+		{"legacy token ignored", "sort=rating", "*", "", "", false, false, 1},
+		{"tag filter", "filter_by=tag_ids%3A%3D%22tag%2F%2B%26%3F%22", "*", "", `tag_ids:="tag/+&?"`, false, true, 1},
+		{"combined filter", "filter_by=category%3A%3D%22main%20course%22%20%26%26%20tag_ids%3A%3D%22tag%22&q=Apfel", "Apfel", "", `category:="main course" && tag_ids:="tag"`, false, true, 1},
+		{"empty filter", "filter_by=", "*", "", "", false, true, 1},
+		{"ignore other raw options", "per_page=999&query_by=secret", "*", "", "", false, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values, err := url.ParseQuery(tc.raw)
@@ -132,8 +139,12 @@ func TestBrowseOptions(t *testing.T) {
 			if err := json.Unmarshal(raw, &options); err != nil {
 				t.Fatal(err)
 			}
-			if options.Query != tc.query || options.SortBy != tc.sort || options.Page != tc.page || options.PerPage != 24 ||
-				request.sort != tc.token {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if options.Query != tc.query || options.SortBy != tc.sortBy || options.Page != tc.page || options.PerPage != 24 ||
+				tc.sortByPresent != (fields["sort_by"] != nil) || request.sortBy != tc.sortBy {
 				t.Fatalf("unexpected options/request: %s %+v", raw, request)
 			}
 			if tc.filterByPresent != (options.FilterBy != nil) ||
@@ -145,7 +156,7 @@ func TestBrowseOptions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if next.Path != "/" || next.Query().Get("sort") != tc.token || (tc.token == "" && next.Query().Has("sort")) ||
+			if next.Path != "/" || next.Query().Get("sort_by") != tc.sortBy || (!tc.sortByPresent && next.Query().Has("sort_by")) ||
 				next.Query().Get("q") == "*" || next.Query().Get("filter_by") != tc.filterBy ||
 				next.Query().Has("filter_by") != tc.filterByPresent {
 				t.Fatalf("incorrect native pagination URL: %s", next)
@@ -189,8 +200,8 @@ func TestBrowseFilterHeadingsAndControls(t *testing.T) {
 
 func TestBrowseValidation(t *testing.T) {
 	for _, query := range []string{
-		"sort=bogus", "sort=created_at:asc", "page=0", "page=-1", "page=nope", "page=", "page=1.5",
-		"page=2147483648", "page=1&page=2", "sort=rating&sort=newest", "q=one&q=two",
+		"page=0", "page=-1", "page=nope", "page=", "page=1.5",
+		"page=2147483648", "page=1&page=2", "sort_by=one&sort_by=two", "q=one&q=two",
 		"filter_by=tag_ids%3A%3Dtag&filter_by=tag_ids%3A%3Dother",
 	} {
 		t.Run(query, func(t *testing.T) {
@@ -259,12 +270,13 @@ func TestBrowseCanonicalFormURL(t *testing.T) {
 		path, location string
 		history        bool
 	}{
-		{"/?q=&sort=", "/", false},
-		{"/?q=+++&sort=", "/", false},
-		{"/?q=++Apfel++&sort=", "/?q=Apfel", false},
-		{"/?q=&sort=relevance", "/?sort=relevance", false},
-		{"/?q=&sort=newest&page=2", "/?page=2&sort=newest", false},
-		{"/?q=&sort=", "", true},
+		{"/?q=&sort_by=", "/", false},
+		{"/?q=+++", "/", false},
+		{"/?q=++Apfel++&sort_by=", "/?q=Apfel", false},
+		{"/?q=&sort_by=_text_match%3Adesc%2Ccreated_at%3Adesc%2Crecipe_id_sort%3Aasc", "/?sort_by=_text_match%3Adesc%2Ccreated_at%3Adesc%2Crecipe_id_sort%3Aasc", false},
+		{"/?sort=rating", "/", false},
+		{"/?q=&sort_by=created_at%3Adesc%2Crecipe_id_sort%3Aasc&page=2", "/?page=2&sort_by=created_at%3Adesc%2Crecipe_id_sort%3Aasc", false},
+		{"/?q=&sort_by=", "", true},
 	} {
 		t.Run(tc.path+strconv.FormatBool(tc.history), func(t *testing.T) {
 			r := httptest.NewRequest("GET", tc.path, nil)
@@ -412,6 +424,115 @@ func TestBrowseFilterFailureNeverFallsBackToUnfilteredRecipes(t *testing.T) {
 	}
 }
 
+func TestBrowseInvalidNativeSortReachesSearchAndIsReported(t *testing.T) {
+	const sortBy = "unknown_sort_field:desc"
+	for _, fragment := range []bool{false, true} {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request struct {
+				OperationName string
+				Variables     map[string]json.RawMessage
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			if request.OperationName == "BrowseServices" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+					"searchOnline": true, "ratingsOnline": false,
+				}})
+				return
+			}
+			if request.OperationName != "BrowseSearch" {
+				t.Errorf("unexpected operation: %s", request.OperationName)
+			}
+			var options map[string]any
+			if err := json.Unmarshal(request.Variables["options"], &options); err != nil {
+				t.Error(err)
+			}
+			if options["sort_by"] != sortBy {
+				t.Errorf("native sort was rewritten: %#v", options["sort_by"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"errors": []any{
+				map[string]any{"message": "invalid Typesense sort", "extensions": map[string]any{
+					"code": "invalid-search-options", "status": http.StatusBadRequest,
+				}},
+			}})
+		}))
+		handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+		request := httptest.NewRequest(http.MethodGet, "/?sort_by="+url.QueryEscape(sortBy), nil)
+		if fragment {
+			request.Header.Set("HX-Request", "true")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		upstream.Close()
+
+		wantStatus, wantMessage := http.StatusBadRequest, "Sortierung konnte nicht angewendet werden."
+		if fragment {
+			wantStatus = http.StatusOK
+		}
+		body := html.UnescapeString(response.Body.String())
+		if response.Code != wantStatus || !strings.Contains(body, wantMessage) ||
+			strings.Contains(body, `data-recipe-id=`) {
+			t.Fatalf("invalid native sort was not reported explicitly: %d %s", response.Code, body)
+		}
+		if fragment && (!strings.Contains(body, `data-kind="error"`) ||
+			!strings.Contains(body, `data-browse-status`)) {
+			t.Fatalf("HTMX error did not replace successful results with an error state: %s", body)
+		}
+	}
+}
+
+func TestBrowseInvalidSearchOptionsUseGenericErrorWhenUnattributed(t *testing.T) {
+	for _, fragment := range []bool{false, true} {
+		for _, options := range []string{
+			"filter_by=unknown_field%3A%3D%22value%22&sort_by=unknown_sort_field%3Adesc",
+			"q=very-long-query",
+		} {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct{ OperationName string }
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if request.OperationName == "BrowseServices" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+						"searchOnline": true, "ratingsOnline": false,
+					}})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []any{
+					map[string]any{"message": "invalid search options", "extensions": map[string]any{
+						"code": "invalid-search-options", "status": http.StatusBadRequest,
+					}},
+				}})
+			}))
+			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+			request := httptest.NewRequest(http.MethodGet, "/?"+options, nil)
+			if fragment {
+				request.Header.Set("HX-Request", "true")
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			upstream.Close()
+
+			body := html.UnescapeString(response.Body.String())
+			wantStatus := http.StatusBadRequest
+			if fragment {
+				wantStatus = http.StatusOK
+			}
+			if response.Code != wantStatus ||
+				!strings.Contains(body, "Ungültige Suchparameter.") ||
+				strings.Contains(body, "Suchfilter konnten nicht angewendet werden.") ||
+				strings.Contains(body, "Sortierung konnte nicht angewendet werden.") ||
+				strings.Contains(body, `data-recipe-id=`) {
+				t.Fatalf("unattributed invalid options did not produce a generic empty error state: %d %s", response.Code, body)
+			}
+			if fragment && !strings.Contains(body, "<title>Ungültige Suchparameter | RezeptDB</title>") {
+				t.Fatalf("HTMX error title was not generic: %s", body)
+			}
+		}
+	}
+}
+
 func TestBrowseHTTP(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind                   string
@@ -466,7 +587,7 @@ func TestBrowseHTTP(t *testing.T) {
 					if err := json.Unmarshal(request.Variables["options"], &options); err != nil {
 						t.Errorf("options must be a JSON object, not a quoted string: %s", request.Variables["options"])
 					}
-					if options.Query != "Apfel" || options.SortBy != browseSorts["rating"] || options.Page > tc.page || options.PerPage != 24 {
+					if options.Query != "Apfel" || options.SortBy != "rating_average:desc,rating_count:desc,recipe_id_sort:asc" || options.Page > tc.page || options.PerPage != 24 {
 						t.Errorf("incorrect options: %+v", options)
 					}
 					pageSize := 24
@@ -495,9 +616,9 @@ func TestBrowseHTTP(t *testing.T) {
 			for _, mode := range []string{"native", "fragment", "boosted", "history"} {
 				fragment := mode == "fragment"
 				operations = nil
-				query := url.Values{"q": {"Apfel"}, "sort": {"rating"}, "page": {strconv.Itoa(tc.page)}}.Encode()
+				query := url.Values{"q": {"Apfel"}, "sort_by": {"rating_average:desc,rating_count:desc,recipe_id_sort:asc"}, "page": {strconv.Itoa(tc.page)}}.Encode()
 				if tc.page == 1 {
-					query = url.Values{"q": {"Apfel"}, "sort": {"rating"}}.Encode()
+					query = url.Values{"q": {"Apfel"}, "sort_by": {"rating_average:desc,rating_count:desc,recipe_id_sort:asc"}}.Encode()
 				}
 				recorder := httptest.NewRecorder()
 				request := httptest.NewRequest("GET", "/?"+query, nil)
@@ -615,7 +736,7 @@ func TestBrowseHTTP(t *testing.T) {
 					strings.Contains(body, `aria-label="Weitere Rezepte werden geladen"`) != more {
 					t.Fatal("pagination used card count instead of API metadata")
 				}
-				if more && !strings.Contains(body, `hx-get="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort=rating"`) {
+				if more && !strings.Contains(body, `hx-get="/?page=`+strconv.Itoa(tc.page+1)+`&q=Apfel&sort_by=rating_average%3Adesc%2Crating_count%3Adesc%2Crecipe_id_sort%3Aasc"`) {
 					t.Fatalf("missing automatic pagination request: %s", body)
 				}
 				if strings.Contains(body, "data-add-recipe") {
@@ -624,7 +745,7 @@ func TestBrowseHTTP(t *testing.T) {
 				if tc.kind == "search" && tc.hits == 0 && !strings.Contains(body, "Keine Rezepte gefunden.") {
 					t.Fatal("empty successful search not distinguished")
 				}
-				if !fragment && !fullPageError && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
+				if !fragment && !fullPageError && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating_average:desc,rating_count:desc,recipe_id_sort:asc" selected`) ||
 					!strings.Contains(body, `id="browse-heading"`) || !strings.Contains(body, "header-component")) {
 					t.Fatal("full replacement did not retain controls/header")
 				}
