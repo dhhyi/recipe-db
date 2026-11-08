@@ -5,6 +5,7 @@ RUN apt-get update \
 RUN npm i -g pnpm@12.6.0
 WORKDIR /app
 COPY package.json pnpm-*.yaml /app/
+COPY patches /app/patches/
 RUN pnpm i --frozen-lockfile
 COPY . /app/
 RUN pnpm codegen --skip-elm-format
