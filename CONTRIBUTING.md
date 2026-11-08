@@ -4,6 +4,35 @@
 
 Use plain, short descriptions that start with a capital letter. Do not add prefix labels or groups such as `backend:`, `chore:`, or `fix:`. For pull request titles, include the related issue number in parentheses.
 
+## Documentation
+
+Documentation consists of two types: **cookbooks**, which help readers complete a task, and **guides**, which help readers understand a topic or make decisions.
+
+### Cookbooks
+
+- Order steps as the reader performs them.
+- For each step, state what to do, where to do it, and how to recognize success.
+- Put commands next to their expected results. Use bullets for choices and checklists; use numbered steps when order matters.
+- Include only what is needed to complete the task safely and correctly. Put prerequisites and warnings near the steps they affect.
+- Link to guides for background or detailed reference instead of repeating it.
+- Put checks after the thing being checked exists.
+
+### Guides
+
+- State the guide's scope and organize it around the topic and readers' likely questions.
+- Explain relevant concepts, constraints, responsibilities, dependencies, and lifecycle.
+- Distinguish current facts from recommendations, optional paths, and historical context.
+- Use headings, lists, and tables to make information easy to find and compare.
+- Keep procedures brief or link to a cookbook when readers need to perform a task.
+- Define terms and avoid unexplained internal shorthand.
+
+### All documentation
+
+- Write for the reader's goal; keep information that helps them understand, decide, or act.
+- Prefer concrete language and explicit names over vague instructions or unexplained jargon.
+- Keep one source of truth for facts that could drift; cross-reference it rather than duplicating content.
+- Remove repetition, filler, progress history, and implementation details that do not serve the document's purpose.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:
