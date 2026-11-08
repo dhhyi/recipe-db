@@ -15,7 +15,7 @@ This cookbook is for operators replacing or erasing the Raspberry Pi boot device
 
 ## 1. Confirm recovery readiness
 
-Do not begin an erase until an off-device backup and its package manifest have been verified, the matching immutable release artifact remains available, and required operator inputs are accessible under `~/.config/recipe-db/`. Confirm who authorizes erasing the selected USB stick. Rebuild is destructive: the boot device also holds all Pi application data.
+Do not begin an erase until an off-device backup and its package manifest have been verified, the matching immutable release artifact remains available, and required operator inputs are accessible under `~/.config/recipe-db/`. Confirm access to the dedicated Google account and backup Desktop OAuth client: the rebuilt Pi will require interactive Drive authorization. Confirm who authorizes erasing the selected USB stick. Rebuild is destructive: the boot device also holds all Pi application data and its current Drive authorization.
 
 ## 2. Verify hardware and flash the OS
 
@@ -143,7 +143,7 @@ mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 
 ## 7. Restore the application
 
-Before restoring, follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to locate and verify the backup and its matching release artifact.
+First [authorize Drive interactively on the new Pi](production-configuration.md#authorize-on-a-new-pi). No authorized rclone config is restored from operator home. Then follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to download and verify the backup and its matching release artifact. If the verified package was already downloaded before the rebuild, authorization can wait until backup configuration in step 8.
 
 Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.
 
@@ -171,4 +171,4 @@ After restore, verify:
 
 ## 8. Configure automated backups
 
-After restore acceptance, follow steps 4–5 of the [production release cookbook](production-release-cookbook.md) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. The cookbook also updates the capture checkout and immutable release reference to match the deployed application.
+After restore acceptance, [authorize Drive](production-configuration.md#authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow steps 4–5 of the [production release cookbook](production-release-cookbook.md) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. The cookbook also updates the capture checkout and immutable release reference to match the deployed application.
