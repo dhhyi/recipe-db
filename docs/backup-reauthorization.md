@@ -76,7 +76,7 @@ Replace the placeholder with the confirmed remote name only, without its folder.
 Choose one supported browser path:
 
 - **Browser available:** answer yes to browser authorization and complete the local callback.
-- **Headless/container:** use the [rclone SSH-tunnel flow](https://rclone.org/remote_setup/#configuring-using-ssh-tunnel), or a loopback-only port forward to the provisioning container's local callback port `53682`. Answer yes to browser authorization and open the displayed local URL in your own browser. Preserve SSH host verification; do not expose the callback publicly.
+- **Headless/container:** attach VS Code to the provisioning container and check its configured forwarded port `53682` in the Ports panel before reconnecting. Require the local address `127.0.0.1:53682`; if a different port is assigned, resolve the conflict before sign-in. Alternatively, use the [rclone SSH-tunnel flow](https://rclone.org/remote_setup/#configuring-using-ssh-tunnel). Answer yes to browser authorization and open the displayed local URL in your own browser. Preserve SSH host verification; do not expose the callback publicly.
 
 Rclone also documents a headless `rclone authorize` token-paste flow. Do not use generated commands containing a client secret or an encoded client-configuration blob as arguments, or capture their token output in logs. The tunneled/local-callback flow avoids that transfer and is preferred here. See [rclone reconnect](https://rclone.org/commands/rclone_config_reconnect/) and [remote setup](https://rclone.org/remote_setup/).
 
