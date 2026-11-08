@@ -1,10 +1,32 @@
-# Production Kubernetes deployment and local rehearsal
+# Production Kubernetes operations
 
-The production manifest renderer consumes the same project metadata and immutable multi-platform release inventory as production image publishing. It does not build images. A local, single-server k3d deployment is the first acceptance target; the Pi values file is a deployment contract, **not evidence of a validated Pi installation**. No real-cluster rehearsal or physical-device validation is implied by the presence of the scripts or their mocked regression tests.
+This guide is the technical reference for maintainers and operators using Recipe DB's production Kubernetes deployment, backup, and recovery lifecycle. It covers safeguards, commands, and operational constraints rather than the routine release sequence; follow the [production release cookbook](production-release-cookbook.md) to publish and deploy a release, [production configuration and recovery](production-configuration.md) for private operator inputs, and the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration.
+
+**Table of contents**
+
+- [Prerequisites and boundaries](#prerequisites-and-boundaries)
+  - [End-to-end backup and recovery rehearsal](#end-to-end-backup-and-recovery-rehearsal)
+  - [Runtime mode](#runtime-mode)
+  - [Backup cleanup Job](#backup-cleanup-job)
+  - [Backup-participant development checklist](#backup-participant-development-checklist)
+  - [Snapshot capture](#snapshot-capture)
+  - [Verified remote packaging](#verified-remote-packaging)
+  - [Fresh-deployment restore](#fresh-deployment-restore)
+- [Operator configuration and secrets](#operator-configuration-and-secrets)
+- [Create, render, deploy and inspect](#create-render-deploy-and-inspect)
+  - [Certificate-only HTTPS staging on the Pi](#certificate-only-https-staging-on-the-pi)
+    - [Explicit anonymous-only public preview](#explicit-anonymous-only-public-preview)
+    - [Google sign-in on the existing HTTPS application](#google-sign-in-on-the-existing-https-application)
+    - [Controlled test-CA renewal rehearsal](#controlled-test-ca-renewal-rehearsal)
+  - [Workstation-only token rehearsal on the Pi](#workstation-only-token-rehearsal-on-the-pi)
+  - [Home-LAN HTTP token rehearsal on the Pi](#home-lan-http-token-rehearsal-on-the-pi)
+- [What the protocol smoke verifies](#what-the-protocol-smoke-verifies)
+- [Storage, Pi adaptation and destructive deletion](#storage-pi-adaptation-and-destructive-deletion)
+- [Script regression checks](#script-regression-checks)
 
 ## Prerequisites and boundaries
 
-- For initial physical Pi setup, follow the [Windows/WSL USB bootstrap guide](raspberry-pi-bootstrap.md), then the [private host provisioning guide](raspberry-pi-provisioning.md). Bootstrap evidence and provisioning tooling are not completed Pi application acceptance.
+- For initial physical Pi setup, follow the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md). Provisioning and deployment success alone do not establish recovery or production acceptance.
 - Run commands from the repository root, with an absolute values-file path. Examples below use `/home/runner/work/recipe-db/recipe-db`; substitute your actual absolute checkout path.
 - Local rehearsal requires an x86-64 host, a running Docker daemon with **more than 8 GiB** assigned, available loopback ports 8080 and 6445, and access to GHCR. Leave enough disk space for images and the requested PVCs.
 - The tool contract is k3d **5.8.3**, k3s **v1.35.5-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
@@ -13,9 +35,11 @@ The production manifest renderer consumes the same project metadata and immutabl
 
 The default local identity is target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. Additional isolated local clusters may use names prefixed `recipe-db-rehearsal-` and matching `k3d-<cluster>` contexts, which allows source and fresh-target recovery rehearsals to remain distinct. A different configured `httpPort` is supported only with its matching loopback origin; set `apiPort` independently when its default is occupied. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
 
+Local Traefik uses a LoadBalancer Service so k3s ServiceLB forwards the k3d load balancer's port 80 to Traefik. It allocates no NodePorts or external IPs; the managed k3d host bindings remain loopback-only. Pi loopback ingress remains ClusterIP, while explicit Pi private-LAN ingress uses a LoadBalancer. Deploy and restore verify the live Service matches the selected target before reporting success or reopening ingress.
+
 ### End-to-end backup and recovery rehearsal
 
-The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It checks populated-target refusal without changing a marker, validates recipe/rating/inspiration/tag and image-pair reads, confirms a post-restore change reaches fresh search consumers, and cleans up its own records through the backup lifecycle. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
+The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It checks populated-target refusal without changing a marker, validates recipe/rating/inspiration/tag and image-pair reads, confirms a post-restore change reaches fresh search consumers, and cleans up its own records through the backup lifecycle. It uses owner-token authentication with Google sign-in disabled, matching `deploy/local.yaml` without OAuth2 Proxy or Redis. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
 
 Use an immutable release artifact whose revision matches the checkout, after ensuring the host has the production-k3d prerequisites above:
 
@@ -58,7 +82,7 @@ The maintenance API is private and available only in backup mode:
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
-#### Backup-participant development checklist
+### Backup-participant development checklist
 
 - Declare `backupRole` and, for captured storage, the complete `backupData` layout; keep caches and secrets outside authoritative data.
 - Test exact maintenance routes through the real router, including supported trailing slashes and opaque IDs. Inventories must be complete, distinct and ordered; purge/compaction must tolerate retries.
@@ -68,7 +92,7 @@ Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}
 - Keep credentials and application records out of diagnostic logs; store data-bearing manifests privately.
 - Verify reads through actual routes, not rollout status alone. Bound readiness/convergence waits; never blindly replay mutations or reopen clients after failed recovery.
 
-#### Snapshot capture
+### Snapshot capture
 
 The `backup`, `backup-enter`, `backup-exit`, `restore`, `deploy`, and `storage-reattach` operations coordinate through the same `recipe-db-deploy` Lease in `kube-system`, outside the replaceable application namespace. They do not expire or automatically steal a Lease. Backup validates the explicit target/context, immutable release digest/revision, actual project container images, deployed runtime Secret, selected PVC identities, ownership and destination capacity. Backup and recovery require the release commit locally and unchanged metadata/template inputs relative to it; untracked inputs are refused, while unrelated checkout changes are allowed. This binds the authoritative inventory and cleanup definition to the release without fetching or executing another checkout. Preflight requires selected PVC requests plus 64 MiB staging headroom; because local-path requests do not enforce a quota, capture also measures each stopped PVC's exact tar byte count before copying and requires actual free space plus the same headroom. This includes sparse-file expansion and previously copied archives. It does not read the configured application secret files. The snapshot validator requires Python 3 with its standard library.
 
@@ -89,19 +113,19 @@ After cleanup, all remaining data writers terminate before role-selected PVCs ar
 
 A complete snapshot is identified only by `manifest.json` (`format: recipe-db-pvc-snapshot`, `formatVersion: 1`). It records `backupId`, `startedAt`, `capturedAt`, `completedAt`, `source` (`target`, `cluster`, `context`, `namespace`, immutable `artifact`, `revision`) and `inventory`. Each inventory entry contains `service`, `role`, `pvc`, `archive`, `sizeBytes`, `fileCount`, `sha256` and `files`; each regular-file entry has its archive-relative `path`, `sizeBytes` and `sha256`. Archives are `<service>.tar`, with no secrets or outer packaging. Present SQLite `-wal`, `-shm` and `-journal` sidecars belong to their database. Downstream packaging must require the manifest, verify archive and file hashes, reject unsafe extraction paths, and preserve this versioned inventory. Staging directories are created privately, never overwritten or recursively removed by the lifecycle.
 
-#### Verified remote packaging
+### Verified remote packaging
 
 The publisher consumes only that complete snapshot directory; it does not capture PVCs or infer service layouts. It rechecks the lifecycle manifest, every archive SHA-256, every regular-file size/hash, path safety and snapshot completeness before packaging. The uploaded `<deployment>-<capturedAt>-<backupId>.tar.gz` is an ordinary gzip-compressed tar containing `manifest.json` and the service `.tar` files in sorted order. Outer tar metadata is normalized (mtime, owner, group and mode) and the gzip timestamp is zero. Its sibling `.manifest.json` uses `format: recipe-db-backup`, `formatVersion: 1`, and records deployment/backup IDs, capture order, the original release identity and snapshot manifest, a content fingerprint, and the archive name, byte size and SHA-256. Restore tooling must verify this package manifest, archive hash and inner snapshot contract before extracting or restoring; only a matching complete archive/manifest pair is a restore point.
 
 The change fingerprint includes snapshot format/version, immutable release artifact and revision, each service/role/PVC/archive identity, and sorted file paths, sizes and hashes. It deliberately excludes backup IDs and capture timestamps. A release-only change therefore publishes a new point, while repeated identical data can be skipped only after reading back and hashing both files from the prior verified remote point. A missing or corrupt remote baseline causes a new upload rather than a false unchanged result. Archive then manifest are copied as individual files with `rclone copyto` (never `sync`); the manifest is the final completion marker. Both files are read back and SHA-256 checked before the local baseline advances. Temporary packaging space is bounded by the configured `maxStagingBytes` (8 GiB by default); there is no local upload queue. A failed transfer preserves the prior baseline. Retention runs only after a verified upload, keeps the newest 30 complete points by `capturedAt`, and deletes only pairs whose deployment ID and manifest/archive identities verify. Pruning errors leave the verified new baseline intact and are reported separately.
 
-The provisioning playbook installs rclone 1.75.2 from its versioned ARM64 package with a pinned SHA-256 and copies the root-only local kubeconfig to `/etc/recipe-db/backup-kubeconfig.yaml` under context `recipe-db-pi`. It installs a `recipe-db-backup.service` and local-time `02:15` timer with up to 15 minutes of jitter. `Persistent=false` means missed occurrences are skipped, not replayed as backlog snapshots. A service lock prevents overlapping runs; the two-hour service timeout bounds capture and publication. The timer is enabled by provisioning, but a missing `/etc/recipe-db/backup.json` prevents the service from running. The timer's presence or enabled state is not backup health.
+The provisioning playbook installs rclone 1.75.2 from its versioned ARM64 package with a pinned SHA-256 and copies the root-only local kubeconfig to `/etc/recipe-db/backup-kubeconfig.yaml` under context `recipe-db-pi`. It installs a `recipe-db-backup.service` and local-time `02:15` timer with up to 15 minutes of jitter. `Persistent=false` means missed occurrences are skipped, not replayed as backlog snapshots. A service lock prevents overlapping runs; the two-hour service timeout bounds capture and publication. Base provisioning leaves the timer stopped and disabled. The timer's presence or enabled state is not backup health.
 
-An operator must create `/etc/recipe-db/backup.json` mode `0600`, containing `deploymentId`, `remote` (for example `gdrive:recipe-db-backups`), `rcloneConfig` (`/etc/recipe-db/rclone.conf`), `stateDirectory` (`/var/lib/recipe-db-backup`), `stagingDirectory` (`/var/lib/recipe-db-backup/work`), `captureCommand` (an absolute executable path), `captureTimeoutSeconds` and optionally `maxStagingBytes`. The capture command accepts exactly one argument: a new absolute destination directory. It must invoke the lifecycle child's `production-k3d backup` operation with the same explicit Pi values, context `recipe-db-pi`, and deployed immutable release, then return success only for a complete snapshot at that directory. Keep that checkout at `/opt/recipe-db`, at the matching release revision, and make its pinned Mise tools and private target configuration available to root's systemd process. The service supplies `KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml`. Do not copy kubeconfigs, release credentials or deployment secrets into the snapshot. The publisher suppresses subprocess output and emits only stable status codes; it never prints rclone configuration, remote content or capture-command output.
+Prepare `backup.json` under `~/.config/recipe-db/backup/` and install it with `backup-configure.yml`; the playbook places it at `/etc/recipe-db/backup.json` mode `0600`. It must contain `deploymentId`, `remote` (for example `gdrive:recipe-db-backups`), `rcloneConfig` (`/etc/recipe-db/rclone.conf`), `stateDirectory` (`/var/lib/recipe-db-backup`), `stagingDirectory` (`/var/lib/recipe-db-backup/work`), `captureCommand` (`/usr/local/sbin/recipe-db-backup-capture`), `captureTimeoutSeconds` and optionally `maxStagingBytes`. The capture command accepts exactly one argument: a new absolute destination directory. It invokes the lifecycle child's `production-k3d backup` operation with the same explicit Pi values, context `recipe-db-pi`, and deployed immutable release, then returns success only for a complete snapshot at that directory. Keep that checkout at `/opt/recipe-db`, at the matching release revision, and make its pinned Mise tools and private target configuration available to root's systemd process. The service supplies `KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml`. Do not copy kubeconfigs, release credentials or deployment secrets into the snapshot. The publisher suppresses subprocess output and emits only stable status codes; it never prints rclone configuration, remote content or capture-command output.
 
-Canonical Ansible provisioning installs `/usr/local/sbin/recipe-db-backup-capture` and its isolated checksum-pinned Mise/capture tools without repository development hooks. Set `backup_capture_revision` in the private inventory to the deployed full commit to manage `/opt/recipe-db`; an empty value does not select or update a checkout. The command reads operator-installed `/etc/recipe-db/backup-values.yaml` and `/etc/recipe-db/backup-release-ref`, then invokes the guarded lifecycle. Use this managed command as `captureCommand`, rather than manually installing host tooling. The selected visible My Drive destination is `gdrive:RecipeDB Backups`. See [private backup capture inputs](raspberry-pi-provisioning.md#private-backup-capture-inputs) for private file ownership and release-update sequencing. Provisioning neither supplies OAuth/application secrets nor starts a backup.
+Canonical Ansible provisioning installs `/usr/local/sbin/recipe-db-backup-capture` and its isolated checksum-pinned Mise/capture tools without repository development hooks. Set `backup_capture_revision` in the private inventory to the deployed full commit to manage `/opt/recipe-db`; an empty value does not select or update a checkout. The command reads operator-installed `/etc/recipe-db/backup-values.yaml` and `/etc/recipe-db/backup-release-ref`, then invokes the guarded lifecycle. Use this managed command as `captureCommand`, rather than manually installing host tooling. The selected visible My Drive destination is `gdrive:RecipeDB Backups`. See [production configuration and recovery](production-configuration.md) for private file ownership and recovery. After restore and acceptance, run `backup-configure.yml` to install the operator-prepared recovery inputs and referenced application secrets; it records a private configuration-generation timestamp only after successful installation. Start and verify one explicit capture after that timestamp; only then run `backup-enable.yml`, which requires a verified status with a later `lastCheck` before enabling the timer.
 
-Create and authorize the private rclone configuration interactively with the dedicated operator-owned Google account, then transfer it over an authenticated private channel to `/etc/recipe-db/rclone.conf` owned by root, mode `0600`. Never put OAuth tokens in the backup JSON, command arguments, source control or service logs. Follow rclone's private authorization/reauthorization procedure when access expires; replace the private config securely and verify the next status before treating uploads as healthy. Retain the protected account-recovery method separately from this device. A lost host credential can be reauthorized; it does not invalidate already verified Drive points.
+Create and authorize `rclone.conf` interactively under `~/.config/recipe-db/backup/` with the dedicated operator-owned Google account. `backup-configure.yml` installs it at `/etc/recipe-db/rclone.conf` owned by root, mode `0600`. Never put OAuth tokens in the backup JSON, command arguments, source control or service logs. Follow rclone's private authorization/reauthorization procedure when access expires; replace the private config securely and verify the next status before treating uploads as healthy. Retain the protected account-recovery method separately from this device. A lost host credential can be reauthorized; it does not invalidate already verified Drive points.
 
 The design service hosts the backup OAuth homepage at `/design/backup/` and its privacy policy at `/design/backup/privacy.html` on the existing HTTPS origin. These are public, static informational pages, not backup, authorization or maintenance endpoints. Use their full HTTPS URLs in the dedicated desktop OAuth client's Google Branding settings, supply the operator's real support email, and complete any Google-required domain verification. Request only `https://www.googleapis.com/auth/drive.file` and create the backup folders through that client; files created separately in Drive are not automatically accessible under this scope. Review the published policy against the actual setup before authorizing access. Publishing the OAuth app does not make its Drive folders public or prove backup acceptance.
 
@@ -133,11 +157,15 @@ mise run production-k3d deploy "$VALUES" "$RELEASE"
 
 Reattachment checks the old namespace/claim, requested capacity, node and guarded path, and changes the claim reference atomically without deleting PVs, PVCs or directories. Ordinary redeployments keep bound claims. Host reprovisioning does not format/remove application storage. Local k3d's explicitly confirmed whole-cluster deletion still destroys rehearsal data.
 
-#### Fresh-deployment restore
+### Fresh-deployment restore
 
 Restore is recovery at the backup's recorded immutable application release, not an upgrade or in-place repair. Use a newly provisioned, explicitly identified local k3d or Pi k3s target. Never deploy the normal application first: initialization populates databases and derived volumes, making that target unsuitable for restore. Existing or partially restored data must not be wiped, merged or overwritten to make a target pass.
 
 Select a complete package and its sibling manifest from a verified restore point. For remote backups, download both files with the private operator-owned rclone configuration into a private local directory before invoking restore; a failed download is not a restore candidate. Keep backup contents, credentials and private command output out of CI artifacts/logs. Listing or byte size alone does not verify a downloaded backup.
+
+Drive recovery can run entirely on the workstation, even if the Pi is unavailable. The provisioning devcontainer includes pinned rclone. Create `~/.config/recipe-db` before starting it; the wrapper mounts it at `/home/vscode/.config/recipe-db`. If an older container lacks the mount or tool, first preserve any container-only work, then run `mise run --raw in-devcontainer --rm provisioning true` to remove it; the next invocation builds the current configuration.
+
+Open the container with `mise run --raw in-devcontainer provisioning fish`. Use the workstation's `backup/rclone.conf` explicitly, not the Pi path in `backup.json`. The remote directory is `remote` from that JSON followed by `/deploymentId`. Use only read-only listing and remote-to-local `rclone copyto` operations to retrieve the matching archive and manifest into a new private directory. Never run the backup publisher, `sync`, upload, delete or prune for recovery. Rclone may refresh authorization during reads: use a protected working copy of its config if the original must remain unchanged. Do not print private configuration or remote listings in shared logs.
 
 ```sh
 umask 077
@@ -154,6 +182,8 @@ All file arguments are absolute. The values file explicitly selects target, cont
 
 The recorded release artifact and every application image must remain available. The corresponding release commit and unchanged render inputs must be present locally, and all configured secret inputs must be supplied independently; secrets are not recovered from backup. The accounts file must include an explicit owner bearer token for the private create/update/delete propagation probe. The probe uses only its own new recipe, verifies search and browse changes, and removes that recipe before completion; an interrupted probe's identity is retained in recovery state. No mutable image tag, replacement release, application build or implicit upgrade substitutes for a missing prerequisite. Pi restore retains the provisioning/storage-identity safeguards above; this command does not provision or reimage a device.
 
+After rendering the recorded release, restore applies the current target's Traefik Service exposure policy without changing application images or historical render inputs. For local and Pi private-LAN LoadBalancers it disables NodePort allocation and removes any already allocated NodePorts before importing data; Pi loopback remains ClusterIP. It checks the resulting Service again before reopening ingress.
+
 The shared cluster-scoped Lease excludes deployment and capture. Fresh-target inspection refuses populated authoritative, derived and external-cache storage. Application writers remain stopped during data import. Public GraphQL remains blocked while the private trusted-ingress query route permits full search rebuilding. Browse's recorded image hardcodes `http://traefik/graphql`; restore must route that internal service alias to the private entrypoint without opening the public Traefik service, rather than relying on a `GRAPHQL_URL` environment override. NATS/consumers, Typesense, search/checkpoint, browse and external caches start fresh; upstream websites are not recovery prerequisites. Completion requires data verification, search readiness, representative reads and change propagation before application access reopens.
 
 Cache expiry alone is not propagation evidence: browse's cache expires after one minute. The verification must establish that the fresh search and browse consumers acknowledged the probe's changes before reopening access.
@@ -169,66 +199,11 @@ Retain the failed target for investigation and select another genuinely fresh ta
 
 ## Operator configuration and secrets
 
-`deploy/local.yaml` and `deploy/pi.yaml` contain non-secret configuration and absolute **secret-file references**, not usable credentials. Copy the desired values under the gitignored repository-root `/.secrets` directory and edit the copy. That directory must not be committed, uploaded as an artifact, or included in diagnostics.
+The [configuration and recovery guide](production-configuration.md) is authoritative for the private directory, operator-managed files, generated state, ephemeral credentials, and recovery boundaries. Production values reference private inputs by absolute path. Deploy and restore generate fresh GraphQL ingress and Typesense credentials, create the cluster Secrets, and remove temporary copies. They are never supplied by the operator or stored in the repository. Repository `.secrets/` files are for development and disposable local rehearsals, not production inputs.
 
-```sh
-cd /home/runner/work/recipe-db/recipe-db
-umask 077
-mkdir -p .secrets
-cp deploy/local.yaml .secrets/local-values.yaml
-```
+Google OAuth uses a public client ID and operator-held client/cookie files. Keep the provider redirect URI aligned with the configured HTTPS origin. Do not disable authorization or weaken the account policy to make a rehearsal pass.
 
-Provide these private operator-managed files, all readable only by the operator:
-
-| Values key under `secrets` | Contents |
-| --- | --- |
-| `auth-accounts.json` | Valid configuration conforming to `graphql/auth-accounts.schema.json` |
-| `graphql-ingress-secret` | 43 URL-safe base64 characters shared by ingress and GraphQL |
-| `typesense-api-key` | Strong Typesense API key |
-| `google-oauth-client-secret` | Actual Google OAuth client secret |
-| `oauth2-cookie-secret` | Base64-encoded random 16-, 24- or 32-byte cookie key |
-
-Cookie keys may use standard or URL-safe base64, with or without padding and with an optional trailing newline. The driver validates the decoded length and stages a newline-free URL-safe representation for OAuth2 Proxy without modifying the operator's file.
-
-Set each corresponding value to its absolute path, and set `runtime.googleOAuthClientId` to the real, public Google client ID ending in `.apps.googleusercontent.com`. Keep the trusted issuer `https://accounts.google.com`. Configure the provider's authorized redirect URI for this origin's `/oauth2/callback`. Google browser login is not tested by the HTTP smoke. Do not disable auth or replace real provider settings with an anonymous-write policy to make a rehearsal pass.
-
-For example, after securely provisioning the files:
-
-```sh
-cd /home/runner/work/recipe-db/recipe-db
-ROOT="$PWD"
-export ROOT
-mise exec -- yq -i '
-  .secrets."auth-accounts.json" = (strenv(ROOT) + "/.secrets/auth-accounts.json") |
-  .secrets."graphql-ingress-secret" = (strenv(ROOT) + "/.secrets/graphql-ingress-secret") |
-  .secrets."typesense-api-key" = (strenv(ROOT) + "/.secrets/typesense-api-key") |
-  .secrets."google-oauth-client-secret" = (strenv(ROOT) + "/.secrets/google-oauth-client-secret") |
-  .secrets."oauth2-cookie-secret" = (strenv(ROOT) + "/.secrets/oauth2-cookie-secret")
-' "$ROOT/.secrets/local-values.yaml"
-```
-
-The smoke requires a separate private bearer-token file. Add that token as a uniquely identified principal in the operator's auth-accounts configuration. Under the **existing** policy the editor-capable role is named `owner`; `member` cannot manage recipes or images, and `editor` is not a valid role. Preserve the intended anonymous/member policy and existing accounts. The smoke does not create accounts or mint credentials automatically. It checks that the supplied token matches an explicit `owner` entry in the configured accounts file before making requests. The current GraphQL schema has no viewer/current-principal field; successful create/update/image/delete operations additionally verify the deployed policy actually authorizes the token. A local file match alone is not treated as proof of deployed authorization.
-
-To add a dedicated smoke principal to an already valid accounts file, generate a new strong token without overwriting an existing token, then use file-based input rather than putting the token on the command line:
-
-```sh
-cd /home/runner/work/recipe-db/recipe-db
-umask 077
-(
-  set -C
-  openssl rand -hex 32 > "$PWD/.secrets/production-smoke-token"
-) \
-  && mise exec -- jq --rawfile token "$PWD/.secrets/production-smoke-token" '
-  if any(.tokens[]; .id == "production-smoke") then
-    error("production-smoke principal already exists; explicitly rotate it")
-  else
-    .tokens += [{id:"production-smoke", secret:($token | rtrimstr("\n")), role:"owner"}]
-  end
-' "$PWD/.secrets/auth-accounts.json" > "$PWD/.secrets/auth-accounts.next.json" \
-  && mv "$PWD/.secrets/auth-accounts.next.json" "$PWD/.secrets/auth-accounts.json"
-```
-
-The account ID is stable and explicit; the token is not the ID. Revoke or rotate the dedicated credential after rehearsal, then redeploy to apply the updated accounts file. Do not print secret files, `kubectl get secrets`, raw manifests containing credentials, or unrestricted application/proxy logs into CI output. The smoke stores Authorization in a private curl config, never in curl arguments.
+The local protocol smoke requires a private owner bearer-token file whose token is explicitly present in the configured account policy. It does not mint credentials or create accounts. Successful create/update/image/delete operations verify deployed authorization; a local file match alone is not evidence that the policy is active. Keep smoke credentials in the private operator directory and revoke temporary principals after use.
 
 ## Create, render, deploy and inspect
 
@@ -260,7 +235,7 @@ To disable external staging, remove the two router forwards and their host firew
 
 The public preview under [#44](https://github.com/dhhyi/recipe-db/issues/44) is separate from full authenticated launch [#123](https://github.com/dhhyi/recipe-db/issues/123). After private checks and explicit operator approval, set `httpsStaging.exposeApplication: true` with `acmeEnvironment: production`; leave the optional Google OAuth configuration absent for an anonymous-only preview. Omission or `false` of the exposure flag keeps certificate-only staging; application exposure still requires the production CA for trusted HTTPS. This setting controls routing only: it neither grants permissions nor restricts roles or token definitions. GraphQL validates and enforces the accounts policy.
 
-For the approved anonymous-only preview, keep `anonymous.role: anonymous`, `tokens: []` and `googleAccounts: {}` in the accounts policy. Removing accepted tokens also revokes their private-LAN use. Deployment no longer enforces this preview policy: verify the effective capabilities and denied writes before public exposure, and obtain separate launch approval before granting privileges. Keep the required GraphQL ingress and Typesense secrets: they authenticate internal services, not public users.
+For the approved anonymous-only preview, keep `anonymous.role: anonymous`, `tokens: []` and `googleAccounts: {}` in the accounts policy. Removing accepted tokens also revokes their private-LAN use. Deployment no longer enforces this preview policy: verify the effective capabilities and denied writes before public exposure, and obtain separate launch approval before granting privileges. Deploy and restore generate the internal GraphQL ingress and Typesense credentials; these authenticate services, not public users.
 
 Read-only authorization comes entirely from the accounts policy, not a separate runtime mode. Remove the obsolete `runtime.readOnly` key and replace `httpsStaging.readOnlyPreview` with `httpsStaging.exposeApplication` in existing values; old keys are rejected rather than silently ignored. Removing `httpsStaging` and redeploying still accepts the anonymous-only policy, closes public listeners, and preserves private read-only browsing without reintroducing owner tokens.
 
@@ -318,18 +293,18 @@ For private ACME recovery, copy both environment files from the owned PVC into a
 
 ### Workstation-only token rehearsal on the Pi
 
-For an initial private rehearsal without Google login, omit `runtime.googleOAuthClientId`, OAuth secret paths, OAuth/Redis images, and `volumes.redis`; set `origin: http://127.0.0.1:8080` (matching `httpPort`). The three application secret files remain required. This is the default configuration.
+For an initial private rehearsal without Google login, omit `runtime.googleOAuthClientId`, OAuth secret paths, OAuth/Redis images, and `volumes.redis`; set `origin: http://127.0.0.1:8080` (matching `httpPort`). The account policy is required; ingress and Typesense credentials are generated by deployment. This is the default configuration.
 
 This configuration omits OAuth2 Proxy, Redis and Google callback/cookie routing. GraphQL still runs in production mode behind trusted ingress, strips untrusted identity headers and validates the accounts policy and configured bearer tokens. Deployment imposes no role or token-count requirements: define tokens only for the operations being rehearsed. Keep `anonymous.role: anonymous` and `googleAccounts: {}` for the approved rehearsal; never elevate the credential-free role for testing. For authenticated write rehearsals, generate separate strong, temporary owner tokens for operator/MCP clients in private files; revoke them afterward. Restore verification separately requires an owner token for its write probe.
 
 Traefik becomes a ClusterIP service, not a LAN load balancer. Access the application with a loopback-only Kubernetes port-forward carried through the existing private API SSH tunnel:
 
 ```sh
-mise exec -- kubectl --kubeconfig "$PWD/provisioning/.private/pi-kubeconfig.yaml" \
+mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   --context recipe-db-pi -n kube-system port-forward --address 127.0.0.1 service/traefik 8080:80
 ```
 
-Use the PR checkout's deploy command with `KUBECONFIG` set to that private kubeconfig and the `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Enabling Google login or public exposure is not part of this procedure.
+Use the production deploy command with the private values file and `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Enabling Google login or public exposure is not part of this procedure.
 
 ### Home-LAN HTTP token rehearsal on the Pi
 
@@ -348,32 +323,7 @@ Deploy using the same private API tunnel and immutable release. Traefik becomes 
 
 Anonymous browsing remains read-only. Bearer GraphQL/MCP writes are temporarily allowed on trusted-LAN HTTP at the operator's explicit request; HTTP does not protect tokens or recipe data against observers or intermediaries. Do not share these credentials, add an anonymous-owner bypass or assume browser Google login works.
 
-Before any external staging/public access, replace **every rehearsal application secret**: operator/MCP/other bearer credentials, GraphQL ingress secret and Typesense API key; generate fresh Google client/cookie secrets when enabling OAuth. Update private recovery sources and roll dependent workloads consistently. Verify old bearer tokens fail, new credentials work and temporary private-LAN exposure is removed. Preserve stable principal IDs where vote continuity is required. [#44](https://github.com/dhhyi/recipe-db/issues/44) owns HTTPS/external checks and this transition, [#68](https://github.com/dhhyi/recipe-db/issues/68) owns Google, [#52](https://github.com/dhhyi/recipe-db/issues/52) retains full access verification, [#43](https://github.com/dhhyi/recipe-db/issues/43) owns backup/recovery and [#104](https://github.com/dhhyi/recipe-db/issues/104) tracks measured operating limits. Private phone acceptance does not waive those requirements or complete [#17](https://github.com/dhhyi/recipe-db/issues/17).
-
-Physical LAN execution on 2026-10-30 passed at the operator's private IPv4 origin without an application port-forward. The deployment completed with all 18 workloads Ready; Traefik exposed only LoadBalancer port 80, `allocateLoadBalancerNodePorts: false`, and no NodePorts. Direct LAN requests verified the five original demo recipe IDs/search results, ten image/thumbnail hashes, owner create/update/delete, denied anonymous/spoofed/invalid writes with unchanged state, private-route 404s and separate-token MCP initialization/listing. The temporary authorization-test recipe was removed without deleting demo records. LAN TCP probes found SSH/80 reachable and 443/6443/10250/30080 not reachable; this is selected workstation evidence, not all-interface/internet acceptance. Actual phone confirmation remains pending in #45. No secrets were rotated yet; replacement remains mandatory before external exposure.
-
-### Physical rehearsal evidence
-
-The operator subsequently confirmed on 2026-10-30 that the private page was visible and working on their phone after being directed to the Pi's private IPv4 origin on home Wi-Fi. This supersedes the pending-phone status above; detailed search/image checks remain the separately recorded direct-LAN tests. #45 remains open pending #42/PR review.
-
-The first physical Pi deployment without Google OAuth on 2026-10-30 used artifact `ghcr.io/dhhyi/recipe-db-releases@sha256:2cae10efffe39c45c2e109690e0913b103a82734c389f16fe8339527d8e1c4fc` (source `de61f0894bf8d06b9788392e4d7011df02f4d40b`) with PR #102's deployment tooling. The initial attempt failed: Typesense reported `jemalloc: Unsupported system page size`, and the bundled Traefik chart required an `observability` object on the custom internal port. After the chart correction and an explicitly approved reboot using `kernel8.img`, the Pi reported 4096-byte pages and Typesense became Ready. Traefik 3.7.16 reconciled successfully with a ClusterIP service, no NodePorts or external IP, and no remaining service-load-balancer pod. Search rebuilt after ingress recovered, a repeated deployment completed successfully, and an anonymous GraphQL recipe-list query returned successfully through the loopback port-forward. This is not yet complete Pi acceptance; authenticated mutation, image, MCP and persistence checks are recorded separately below when verified.
-
-The subsequent bounded physical Pi smoke passed through that same loopback ingress:
-
-- Owner-bearer GraphQL create/read/update/delete; anonymous and spoofed-identity writes rejected, invalid bearer rejected, and the denied writes left the synthetic recipe unchanged.
-- Image upload and anonymous image/thumbnail downloads with content hashes matching their URLs; indexed search and rendered browse results containing the synthetic recipe.
-- Browse and both editor HTML entry points; design CSS/JavaScript redirects resolved successfully and HTMX was reachable. This does not validate interactive editor login/writes.
-- MCP initialization, recipe read and authenticated recipe change using the separate MCP owner token; GraphQL confirmed the changed value.
-- Backend, infrastructure, dashboard and OAuth paths returned 404 through application ingress.
-- Recipes, images and Typesense pods were restarted, then the identical immutable release was reapplied. The recipe, MCP-written method and image URL/content survived; every application deployment ended Ready and the deployment operation lease was released.
-
-The synthetic recipe was deleted afterward. Dependent image cleanup remains deferred under the normal backup-maintenance contract; no test reset was used. This was an ad-hoc, explicitly targeted Pi check, not execution of the guarded local-only k3d smoke. Host reboot with retained synthetic data, sustained-load/resource thresholds, off-device backup/restore, Google login and public HTTPS remain unverified. #45 stays open.
-
-The operator subsequently chose to restore the default 16 KiB Pi kernel. `deploy/pi.yaml` now pins the official `typesense/typesense:29.0-arm64-lg-page16` image by digest; local amd64 values remain unchanged. Upstream documents this supported image variant in its [large-page build instructions](https://typesense.org/docs/guide/install-typesense.html#large-page-size-build). This supersedes the temporary 4 KiB workaround, not the application version. Restoring the host requires removing the manually added `kernel=kernel8.img` boot override and an approved reboot; do not restore an entire older boot-config backup, which could discard other settings. Reapply the Pi deployment with the updated image and verify the kernel page size, Typesense/search readiness and retained demo recipes/images. The earlier smoke evidence above used 4 KiB pages; post-transition acceptance is pending.
-
-Post-transition recovery was then verified on the same day. The operator reported `16384` pages, kernel `6.18.50+rpt-rpi-2712` and active k3s; the API confirmed that kernel and the same Ready node. The exact pinned large-page image ran successfully, the immutable-release deployment completed, all 18 application deployments became Ready, and no deployment operation lease remained. All five previously imported demo recipe IDs, methods, ingredient names, inspirations and ratings survived; search indexed all five and browse rendered them. All ten image/thumbnail downloads matched their content hashes. This verifies retained demo data across the approved host reboot and image transition, not a backup restore or a repeat of every earlier authenticated smoke check.
-
-Replace the digest placeholder with the actual **artifact** digest. Keep that same reference for the initial deployment, smoke reapply and evidence.
+Before external exposure, verify the intended account policy, actual authentication and HTTPS behavior, replace temporary bearer tokens, and remove temporary private-LAN access. Do not rotate or store ingress/Typesense credentials: each deployment/restore creates fresh values and rolls dependent workloads. External exposure requires explicit approval and completed deployment acceptance criteria.
 
 ```sh
 cd /home/runner/work/recipe-db/recipe-db
@@ -449,7 +399,7 @@ The checked-in initial values request the following storage:
 
 These are initial declarative settings, **not measured Pi sizing guarantees**, reserved physical capacity, or evidence that every workload fits the target device. Account separately for k3s, Traefik, OS, image storage and filesystem overhead; tune and measure against the actual 128 GB USB device.
 
-For a Pi deployment, copy `deploy/pi.yaml` to a private absolute values path, provide a real HTTPS origin, explicit Pi kubeconfig context, OAuth configuration, operator secrets and appropriately budgeted volume/resource sizes. Install the specified k3s version and establish the real device's networking/TLS separately. Render, deploy and status use the explicit Pi context; `create`, `verify`, guarded local `kubectl`, smoke and `delete` refuse to manage a Pi cluster. Rendered declarations alone do not validate ARM64 execution, memory/disk budgets or the physical USB device. Perform and record those acceptance checks before describing the Pi as production-ready.
+For routine Pi releases, use the [production release cookbook](production-release-cookbook.md). For a new or rebuilt host, complete the [rebuild cookbook](raspberry-pi-rebuild.md) first. Render, deploy and status use the explicit Pi context; `create`, `verify`, guarded local `kubectl`, smoke and `delete` refuse to manage a Pi cluster. Rendered declarations alone do not validate ARM64 execution, memory/disk budgets or the physical USB device.
 
 Local k3d has **no host-directory persistence contract**. PVCs survive pod replacement and identical-release reapply, but deleting the cluster destroys its data. Export anything needed for investigation before deleting it. Deletion requires the exact cluster-specific confirmation:
 
@@ -460,24 +410,6 @@ mise run production-k3d delete "$PWD/.secrets/local-values.yaml" \
 ```
 
 There is no automatic teardown at the end of the smoke. Do not use the destructive command as a troubleshooting shortcut, and never treat k3d PVCs as a backup.
-
-## Verification evidence
-
-The earlier release-publication blocker is resolved. [Publish run 40515853280](https://github.com/dhhyi/recipe-db/actions/runs/40515853280) published and anonymously verified:
-
-- Artifact: `ghcr.io/dhhyi/recipe-db-releases@sha256:e05612b6e79bba7005854ab9827e2525be1ba7d9cb9174b019fa9c54097a17eb`
-- Source revision: `431f861ffb8912484f050b1bc744aba9667ea08f`
-- This artifact predates the `MODE` runtime contract and is historical verification evidence only; it is not the release used by current templates.
-
-On 2026-10-27, the full protocol smoke passed on an x86-64 Docker/k3d deployment with this real immutable release. All 11 phases completed, including private-path rejection, actual maintenance-page comparison, restored browse ingress, PVC-backed workload restarts, same-release reapplication, and retained recipe/image/search data. The test deleted only its own recipe and reported successful cleanup. The synthetic recipe name is a unique alphanumeric search token, avoiding Typesense's hyphenated-query interpretation. After restoring browse replicas, the smoke waits for ingress health as well as Kubernetes readiness.
-
-After confirmed deletion, a newly created cluster passed the same complete smoke from empty volumes (`success: true`, `cleanupSucceeded: true`, 11 checks). Rotating only the disposable ingress secret and redeploying the identical release replaced the bundled Traefik pod and preserved successful authenticated GraphQL reads. The disposable cluster was then explicitly deleted and the k3d cluster list verified empty. Recreating empty volumes is not a backup-restoration test.
-
-The operator explicitly authorized generated disposable-local owner and infrastructure credentials, including a non-production OAuth client placeholder. No production credentials, test fixture accounts, fabricated release inventory, or real Google browser login were used. This does not validate Google login, HTTPS, backup/restore, or physical Pi operation; those require separate verification.
-
-The verified tools were k3d 5.8.3 with explicit server image `rancher/k3s:v1.35.5-k3s1`, kubectl 1.35.5, ORAS 1.3.6, ytt 0.55.4, Docker 29.8.2, jq 1.8.2, yq 4.54.1 and curl 8.18.0. The bundled controller used `traefik:v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65`. The k3d CLI's displayed default k3s version is not the selected server version.
-
-Commands were the create/render/deploy/status/production-smoke commands above, using private values with `httpPort: 18080`, `apiPort: 16445` and `origin: http://127.0.0.1:18080` to avoid the running development stack. Full JSON results record the release, phase checks, cleanup status and exact client versions; secret values are excluded.
 
 ## Script regression checks
 

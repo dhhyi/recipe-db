@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tomllib
@@ -87,12 +88,24 @@ class ContractTests(unittest.TestCase):
         self.environment = Environment(
             loader=FileSystemLoader(ROOT / "templates"), undefined=StrictUndefined,
         )
+
         self.environment.filters["quote"] = shlex.quote
         self.values = dict(
             self.defaults, expected_root_uuid=UUID, inventory_hostname="recipe-db-pi",
             ansible_facts={"default_ipv4": {"address": "192.168.1.218"}},
             admin_networks=["192.168.1.0/24"], application_networks=["192.168.1.0/24"],
         )
+
+    def test_workstation_recovery_has_pinned_rclone(self):
+        project = next(yaml.safe_load_all((ROOT / ".project.yaml").read_text()))
+        self.assertIn(
+            "RUN mise use -g rclone@1.75.2",
+            project["devcontainer"]["build"]["user"],
+        )
+        version = subprocess.run(
+            ["rclone", "version"], check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(version.stdout.splitlines()[0], "rclone v1.75.2")
 
     def render(self, name):
         return self.environment.get_template(name).render(self.values)
@@ -202,12 +215,112 @@ class ContractTests(unittest.TestCase):
         maintenance = next(task for task in host_tasks
                            if task["name"] == "Provision the backup capture toolchain and selected release checkout")
         self.assertEqual(maintenance["block"][1]["ansible.builtin.systemd_service"]["state"], "stopped")
-        self.assertEqual(maintenance["always"][0]["ansible.builtin.systemd_service"]["state"], "started")
+        self.assertEqual(maintenance["always"][0]["ansible.builtin.systemd_service"]["state"], "stopped")
+        self.assertFalse(maintenance["always"][0]["ansible.builtin.systemd_service"]["enabled"])
         self.assertIn("backup_timer_active.rc", maintenance["always"][0]["when"])
         tasks = yaml.safe_load((ROOT / "backup-toolchain.yml").read_text())
         self.assertEqual(tasks[0]["ansible.builtin.command"],
                          "systemctl show --property=ActiveState --value recipe-db-backup.service")
         self.assertIn("backup_service_active.stdout not in ['inactive', 'failed']", tasks[0]["failed_when"])
+
+    def test_base_provisioning_leaves_backup_timer_disabled(self):
+        tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
+        enable = next(task for task in tasks
+                      if task["name"] == "Leave scheduled backup timer inactive until operator acceptance")
+        self.assertFalse(enable["ansible.builtin.systemd_service"]["enabled"])
+        self.assertEqual(enable["ansible.builtin.systemd_service"]["state"], "stopped")
+
+    def test_backup_setup_and_enable_are_separate_private_workflows(self):
+        setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
+        enable = yaml.safe_load((ROOT / "backup-enable.yml").read_text())[0]
+        setup_tasks = setup["tasks"]
+        configure_timer = setup_tasks[0]["ansible.builtin.systemd_service"]
+        self.assertFalse(configure_timer["enabled"])
+        self.assertEqual(configure_timer["state"], "stopped")
+        private_copies = [task for task in setup_tasks
+                          if task["name"] in ("Copy prepared backup configuration files",
+                                              "Copy referenced private application inputs",
+                                              "Install backup values with private Pi input paths")]
+        self.assertEqual(len(private_copies), 3)
+        self.assertTrue(all(task["no_log"] for task in private_copies))
+        self.assertTrue(all(task["ansible.builtin.copy"]["owner"] == "root"
+                            and task["ansible.builtin.copy"]["group"] == "root"
+                            and task["ansible.builtin.copy"]["mode"] == "0600"
+                            for task in private_copies))
+        input_copy = next(task for task in private_copies
+                          if task["name"] == "Copy referenced private application inputs")
+        self.assertEqual(input_copy["ansible.builtin.copy"]["dest"],
+                         "/etc/recipe-db/application-inputs/{{ item.key }}")
+        self.assertEqual(set(setup["vars"]["allowed_application_inputs"]), {
+            "auth-accounts.json", "google-oauth-client-secret",
+            "oauth2-cookie-secret", "acme-account-email",
+        })
+        self.assertTrue(next(task for task in setup_tasks
+                             if task["name"] == "Require each private application input to be a direct deployment file")["no_log"])
+        self.assertTrue(any(task.get("ansible.builtin.file", {}).get("mode") == "0700"
+                            for task in setup_tasks))
+        self.assertTrue(any(task["name"] == "Require a verified explicit capture before enabling the timer"
+                            and task["no_log"] for task in enable["tasks"]))
+        marker_removal = next(task for task in setup_tasks
+                              if task["name"] == "Invalidate the prior backup configuration generation")
+        self.assertEqual(marker_removal["ansible.builtin.file"]["state"], "absent")
+        self.assertLess(setup_tasks.index(marker_removal),
+                        next(index for index, task in enumerate(setup_tasks)
+                             if task["name"] == "Copy prepared backup configuration files"))
+        marker_write = next(task for task in setup_tasks
+                            if task["name"] == "Save the private backup configuration generation marker")
+        self.assertEqual(marker_write["ansible.builtin.copy"]["dest"],
+                         "/etc/recipe-db/backup-configured-at")
+        self.assertEqual(marker_write["ansible.builtin.copy"]["mode"], "0600")
+        self.assertTrue(marker_write["no_log"])
+        self.assertGreater(setup_tasks.index(marker_write),
+                           next(index for index, task in enumerate(setup_tasks)
+                                if task["name"] == "Install backup values with private Pi input paths"))
+        timestamp_task = next(task for task in setup_tasks
+                              if task["name"] == "Record the completed backup configuration generation")
+        self.assertEqual(timestamp_task["ansible.builtin.command"],
+                         "date -u +%Y-%m-%dT%H:%M:%S+00:00")
+        self.assertLess(setup_tasks.index(timestamp_task), setup_tasks.index(marker_write))
+        status_gate = next(task for task in enable["tasks"]
+                           if task["name"] == "Require a verified explicit capture before enabling the timer")
+        self.assertTrue(any("lastCheck >" in condition for condition in status_gate["ansible.builtin.assert"]["that"]))
+        marker = "2026-11-06T21:24:08+00:00"
+        self.assertFalse("2026-11-06T21:24:07+00:00" > marker)
+        self.assertFalse(marker > marker)
+        self.assertTrue("2026-11-06T21:24:09+00:00" > marker)
+        marker_read = next(task for task in enable["tasks"]
+                           if task["name"] == "Read the private backup configuration generation marker")
+        self.assertTrue(marker_read["no_log"])
+        timer = next(task for task in enable["tasks"] if task["name"] == "Enable the scheduled backup timer")
+        self.assertTrue(timer["ansible.builtin.systemd_service"]["enabled"])
+        self.assertEqual(timer["ansible.builtin.systemd_service"]["state"], "started")
+
+    def test_backup_release_reference_requires_the_canonical_immutable_digest(self):
+        setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
+        read_inputs = next(task for task in setup["tasks"]
+                           if task["name"] == "Read prepared backup configuration without displaying it")
+        validation = next(task for task in setup["tasks"]
+                          if task["name"] == "Validate backup configuration and private input references")
+        self.assertTrue(read_inputs["no_log"])
+        self.assertTrue(validation["no_log"])
+        condition = next(item for item in validation["ansible.builtin.assert"]["that"]
+                         if item.startswith("backup_release is match("))
+        pattern = re.search(r"match\('([^']+)'\)", condition).group(1)
+        accepted = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64
+        self.assertIsNotNone(re.match(pattern, accepted))
+
+        rejected = {
+            "commit": "a" * 40,
+            "tag": "ghcr.io/dhhyi/recipe-db-releases:latest",
+            "wrong repository": "ghcr.io/dhhyi/recipe-db@sha256:" + "a" * 64,
+            "short digest": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 63,
+            "long digest": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 65,
+            "unsupported algorithm": "ghcr.io/dhhyi/recipe-db-releases@sha512:" + "a" * 64,
+            "uppercase digest": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "A" * 64,
+        }
+        for label, reference in rejected.items():
+            with self.subTest(reference=label):
+                self.assertIsNone(re.match(pattern, reference))
 
     def test_capture_wrapper_uses_private_inputs_and_isolated_toolchain(self):
         command = self.render("recipe-db-backup-capture.j2")

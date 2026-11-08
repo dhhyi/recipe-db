@@ -24,7 +24,7 @@ setup() {
   export MOCK_LOCK_OWNER_CHANGE=false
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
-  export MOCK_LAN=false MOCK_NODEPORT=false
+  export MOCK_LAN=false MOCK_NODEPORT=false MOCK_EXTERNAL_IP=false MOCK_SERVICE_TYPE=auto MOCK_ALLOCATE_NODEPORT=false
   export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
   export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
@@ -40,14 +40,10 @@ setup() {
       maintenance:"nginx:1.28",oauth2Proxy:"quay.io/oauth2-proxy/oauth2-proxy:v7.9.0",redis:"redis:8.0"},
     runtime:{googleOAuthClientId:"explicit.apps.googleusercontent.com",trustedIssuer:"https://accounts.google.com"},
     secrets:{"auth-accounts.json":($root+"/auth-accounts.json"),
-      "graphql-ingress-secret":($root+"/graphql-ingress-secret"),
-      "typesense-api-key":($root+"/typesense-api-key"),
       "google-oauth-client-secret":($root+"/google-oauth-client-secret"),
       "oauth2-cookie-secret":($root+"/oauth2-cookie-secret")}
   }' > "$VALUES"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
-  printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > graphql-ingress-secret
-  printf 'private-typesense-value-for-tests' > typesense-api-key
   printf 'acme@example.org\n' > acme-account-email
   printf 'private-oauth-client-value-for-tests' > google-oauth-client-secret
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
@@ -253,6 +249,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           > "$MOCK_LOG.restore-deployments"; exit ;;
       *"scale deployment/"*"--replicas="*)
         name="${*: -2:1}"; name="${name#deployment/}"; replicas="${*: -1}"; replicas="${replicas#--replicas=}"
+        jq -e --arg name "$name" 'any(.items[]; .metadata.name == $name)' \
+          "$MOCK_LOG.restore-deployments" > /dev/null || exit 1
         jq --arg name "$name" --argjson replicas "$replicas" '
           (.items[] | select(.metadata.name == $name)) |= (.spec.replicas=$replicas | .status.readyReplicas=$replicas)' \
           "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
@@ -424,11 +422,29 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   fi
   case "$*" in
   *"get service traefik -o json"*)
-    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" --arg https "$MOCK_HTTPS" '
-      {spec:{type:(if $lan == "true" then "LoadBalancer" else "ClusterIP" end),
-        allocateLoadBalancerNodePorts:false,ports:[{port:80} +
+    if [[ ${MOCK_SERVICE_DRIFT:-false} == true ]]; then
+      count=$(cat "$MOCK_LOG.service-check-count" 2> /dev/null || echo 0)
+      count=$((count + 1))
+      echo "$count" > "$MOCK_LOG.service-check-count"
+      if ((count >= 3)); then
+        MOCK_EXTERNAL_IP=true
+      fi
+    fi
+    [[ ! -e $MOCK_LOG.ingress-nodeports-removed ]] || MOCK_NODEPORT=false
+    jq -n --arg lan "$MOCK_LAN" --arg pi "${MOCK_PI:-false}" --arg type "$MOCK_SERVICE_TYPE" \
+      --arg nodeport "$MOCK_NODEPORT" --arg allocate "$MOCK_ALLOCATE_NODEPORT" \
+      --arg external "$MOCK_EXTERNAL_IP" --arg https "$MOCK_HTTPS" '
+      {metadata:{resourceVersion:"42"},spec:{type:(if $type != "auto" then $type
+          elif $lan == "true" or $pi != "true" then "LoadBalancer" else "ClusterIP" end),
+        allocateLoadBalancerNodePorts:($allocate == "true"),
+        externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),ports:[{port:80} +
           (if $nodeport == "true" then {nodePort:30080} else {} end)] +
           (if $https == "true" then [{port:8081},{port:8443}] else [] end)}}' ;;
+  *"patch service traefik --type=strategic --patch-file "*)
+    [[ ${MOCK_INGRESS_PATCH_FAIL:-false} != true ]] || exit 1
+    jq -e '.metadata.resourceVersion == "42" and
+      .spec.ports == [{port:80,nodePort:null}]' "${*: -1}" > /dev/null || exit 1
+    touch "$MOCK_LOG.ingress-nodeports-removed" ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)
     if [[ ${MOCK_PI:-false} = true ]]; then
@@ -533,6 +549,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   *"create secret generic recipe-db-runtime"*)
     for argument in "$@"; do
       case "$argument" in
+        --from-file=graphql-ingress-secret=*)
+          jq -eRs 'test("^[A-Za-z0-9_-]{43}\\z")' \
+            "${argument#--from-file=graphql-ingress-secret=}" > /dev/null || exit 1 ;;
+        --from-file=typesense-api-key=*)
+          path=${argument#--from-file=typesense-api-key=}
+          jq -eRs 'test("^[0-9a-f]{64}\\n?\\z")' "$path" > /dev/null || exit 1
+          sha256sum "$path" | cut -d ' ' -f1 >> "$MOCK_LOG.typesense-key-checksums"
+          sha256sum "${path%/*}/template-values.json" | cut -d ' ' -f1 >> "$MOCK_LOG.input-checksums"
+          sha256sum "${path%/*}/rendered-base.yml" | cut -d ' ' -f1 >> "$MOCK_LOG.render-checksums" ;;
         --from-file=oauth2-cookie-secret=*)
           jq -eRs 'test("^[A-Za-z0-9_-]+$")' \
             "${argument#--from-file=oauth2-cookie-secret=}" > /dev/null || exit 1 ;;
@@ -554,6 +579,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     if yq -e 'select(.metadata.namespace != "kube-system")' "$last" > /dev/null; then exit 1; fi
     yq -r '.spec.valuesContent | from_yaml | .deployment.podAnnotations."recipe-db/routes-checksum"' \
       "$last" > "$MOCK_LOG.route-checksum"
+    yq -o=json -I=0 'select(.kind == "HelmChartConfig").spec.valuesContent | from_yaml' \
+      "$last" > "$MOCK_LOG.helm-values"
     cat "$MOCK_LOG.route-checksum" >> "$MOCK_LOG.route-checksums"
     [[ $* == *"--namespace kube-system apply"* ]] ;;
   *"apply -f "*application.yml)
@@ -612,8 +639,11 @@ if jq -e 'has("config")' "$2" > /dev/null; then
   jq -e 'keys == ["artifact","config","files","projects","release"]
     and (.files | keys) == ["designNginx","maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
   if [[ $MOCK_RESTORE == true ]]; then
-    jq -c '. as $input | ["graphql","recipes","images","tags","search","browse","nats","typesense","redis","browse-maintenance"][] |
-      . as $name | {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
+    jq -c '. as $input |
+      (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"] +
+        (if .config.runtime.googleOAuthClientId then ["redis","oauth2-proxy"] else [] end))[] |
+      . as $name | select($name != (env.MOCK_RESTORE_MISSING_WORKLOAD // "")) |
+      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
       spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
       spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
         env:([{name:"MODE",value:"production"}] +

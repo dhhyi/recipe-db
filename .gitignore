@@ -5,6 +5,8 @@ target
 dist-newstyle
 .docker
 .DS_Store
+/.cache/
+/.local/
 /.restore-test-work/
 /.scripts/**/__pycache__/
 

@@ -1,6 +1,25 @@
 # Access-model verification
 
-Evidence consolidated through 2026-11-06 for [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52). Historical component checks and operator observations are reused; new targeted runs are identified individually below. This is not final access-model acceptance or go-live approval.
+This reference consolidates evidence about Recipe DB's authorization behavior for maintainers and operators assessing the access model. It includes prior component checks and operator observations alongside dated targeted verification; it is not final access-model acceptance or go-live approval. See [browser authentication](browser-authentication.md) for the user-facing identity contract and [production Kubernetes operations](production-kubernetes.md) for deployment procedures.
+
+**Table of contents**
+
+- [Permission contract](#permission-contract)
+- [Evidence sources and tested configurations](#evidence-sources-and-tested-configurations)
+- [Coverage map](#coverage-map)
+- [Operator-confirmed browser results](#operator-confirmed-browser-results)
+- [Access-model checklist reconciliation](#access-model-checklist-reconciliation)
+  - [Route and ingress verification (2026-11-06)](#route-and-ingress-verification-2026-11-06)
+  - [VS Code/Copilot MCP client verification (2026-11-06)](#vs-codecopilot-mcp-client-verification-2026-11-06)
+  - [Public-only indexing and anonymous markup (2026-11-06)](#public-only-indexing-and-anonymous-markup-2026-11-06)
+  - [Ratings and GraphQL partial responses (2026-11-06)](#ratings-and-graphql-partial-responses-2026-11-06)
+  - [Access matrix, transport, recovery and browser history (2026-11-06)](#access-matrix-transport-recovery-and-browser-history-2026-11-06)
+  - [Integrated mock-OIDC lifecycle and dependency outages (2026-11-06)](#integrated-mock-oidc-lifecycle-and-dependency-outages-2026-11-06)
+- [Remaining acceptance and known limitations](#remaining-acceptance-and-known-limitations)
+- [Operating and recovery instructions](#operating-and-recovery-instructions)
+  - [Verified Google setup and evidence method](#verified-google-setup-and-evidence-method)
+
+Evidence is consolidated through 2026-11-06 for [#52: Verify and document the complete access model](https://github.com/dhhyi/recipe-db/issues/52). Historical component checks and operator observations are reused; new targeted runs are identified individually below.
 
 ## Permission contract
 

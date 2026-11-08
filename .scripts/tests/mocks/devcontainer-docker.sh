@@ -15,6 +15,11 @@ case "$1" in
     fi
     ;;
   stop | rm) exit "${CLEANUP_STATUS:-0}" ;;
+  inspect)
+    labels=${CONTAINER_LABELS:-}
+    [ -n "$labels" ] || labels='{}'
+    printf '[{"Mounts":%s,"Config":{"Labels":%s}}]\n' "${CONTAINER_MOUNTS:-[]}" "$labels"
+    ;;
   *)
     echo "Unexpected docker invocation: $*" >&2
     exit 99
