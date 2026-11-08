@@ -4,6 +4,7 @@ packageImportMethod: copy
 allowBuilds:
   elm: true
   elm-format: true
+# TODO: Remove this override and patch when folder-hash can be upgraded to a release with the minimatch compatibility fix.
 overrides:
   folder-hash>minimatch: ^11.0.1
 patchedDependencies:
