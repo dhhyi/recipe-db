@@ -694,7 +694,7 @@ func TestBrowseHTTP(t *testing.T) {
 				if tc.kind == "search" && tc.hits == 0 && !strings.Contains(body, "Keine Rezepte gefunden.") {
 					t.Fatal("empty successful search not distinguished")
 				}
-				if !fragment && !fullPageError && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating" selected`) ||
+				if !fragment && !fullPageError && (!strings.Contains(body, `value="Apfel"`) || !strings.Contains(body, `value="rating_average:desc,rating_count:desc,recipe_id_sort:asc" selected`) ||
 					!strings.Contains(body, `id="browse-heading"`) || !strings.Contains(body, "header-component")) {
 					t.Fatal("full replacement did not retain controls/header")
 				}
