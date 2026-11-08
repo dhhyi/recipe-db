@@ -6,7 +6,6 @@ This cookbook is for operators authorizing Google Drive backups on a newly provi
 
 1. [Authorize on a new Pi](#1-authorize-on-a-new-pi)
 2. [Reauthorize only when needed](#2-reauthorize-only-when-needed)
-3. [Remove former home copies](#3-remove-former-home-copies)
 
 ## 1. Authorize on a new Pi
 
@@ -75,7 +74,3 @@ sudo mv -T "$AUTH_DIRECTORY/rclone.conf" /etc/recipe-db/rclone.conf
 ```
 
 Verify the next backup before removing the prior config. On failure, keep the timer disabled and investigate; restore the prior file only if its authorization is still usable. After acceptance, remove only that rehearsal directory and its files, then re-enable the schedule using the release cookbook. No authorized copy is sent to the workstation.
-
-## 3. Remove former home copies
-
-For an existing centralized setup, first confirm that the Pi's authorization works and that `drive-oauth-client.json` and independent Google account access are available. Then remove the former `backup/rclone.conf` from the home directory and from chezmoi's managed source using the operator's private dotfile workflow. Do not run an old chezmoi apply that recreates it. Do not copy the Pi's file back to home. This repository change does not itself remove files from your private home directory or dotfile repository.

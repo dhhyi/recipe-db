@@ -71,7 +71,7 @@ Your home directory stores the Google Drive client credentials, but not the auth
 
 Updates and application restores leave the Pi's Drive authorization unchanged. Rclone automatically renews its access tokens on the Pi; you do not need to sign in again for each backup.
 
-Follow the [Google Drive authorization cookbook](google-drive-authorization.md) to authorize a new Pi, repair lost authorization or remove former home copies.
+Follow the [Google Drive authorization cookbook](google-drive-authorization.md) to authorize a new Pi or repair lost authorization.
 
 ## Clean rebuild boundary
 
