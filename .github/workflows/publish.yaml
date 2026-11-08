@@ -1,6 +1,7 @@
 name: Publish
 concurrency:
-  group: publish-${{ github.event.pull_request.number || github.sha }}
+  group: publish-${{ github.event.pull_request.number || github.ref }}
+  queue: ${{ github.event_name == 'push' && 'max' || 'single' }}
   cancel-in-progress: >-
     ${{ github.event_name == 'pull_request' &&
         (github.event.action != 'edited' ||
