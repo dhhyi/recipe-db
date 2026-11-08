@@ -18,6 +18,15 @@ const test = base.extend({
 });
 
 const appOrigin = new URL(process.env.BASE_URL || "http://traefik").origin;
+const sortByValues = {
+  relevance: "_text_match:desc,created_at:desc,recipe_id_sort:asc",
+  rating: "rating_average:desc,rating_count:desc,recipe_id_sort:asc",
+  ratingCount: "rating_count:desc,rating_average:desc,recipe_id_sort:asc",
+  nameAsc: "name_sort:asc,recipe_id_sort:asc",
+  nameDesc: "name_sort:desc,recipe_id_sort:asc",
+  newest: "created_at:desc,recipe_id_sort:asc",
+  updated: "updated_at:desc,recipe_id_sort:asc",
+};
 
 function resultsFragment({
   page = 1,
@@ -25,7 +34,7 @@ function resultsFragment({
   ids = ["result"],
   kind = "search",
   query = "boundary",
-  sort = "",
+  sortBy = "",
   append = false,
   seen = [],
 } = {}) {
@@ -41,8 +50,10 @@ function resultsFragment({
           : found === 0
             ? "Keine Rezepte gefunden."
             : `${count} gefunden.`;
-  const nextURL = `/?page=${page + 1}&q=${query}${sort ? `&sort=${sort}` : ""}`;
-  const metadata = `<p id="browse-metadata" ${append ? 'hx-swap-oob="outerHTML"' : ""} data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort="${sort}" data-browse-status role="status" aria-live="polite">${message}</p>`;
+  const nextURLParams = new URLSearchParams({ page: page + 1, q: query });
+  if (sortBy) nextURLParams.set("sort_by", sortBy);
+  const nextURL = `/?${nextURLParams}`;
+  const metadata = `<p id="browse-metadata" ${append ? 'hx-swap-oob="outerHTML"' : ""} data-kind="${kind}" data-page="${page}" data-per-page="24" data-found="${found}" data-query="${query}" data-sort-by="${sortBy}" data-browse-status role="status" aria-live="polite">${message}</p>`;
   const values = JSON.stringify({ seen: [...new Set([...seen, ...ids])] });
   const cards = [...new Set(ids)]
     .filter((id) => !append || !seen.includes(id))
@@ -75,7 +86,7 @@ async function fulfillBrowse(route, options = {}, authorizationHeader) {
   const response = await route.fetch({ headers });
   const url = new URL(route.request().url());
   const query = url.searchParams.get("q") || "";
-  const sort = url.searchParams.get("sort") || "";
+  const sortBy = url.searchParams.get("sort_by") || "";
   const number = Number(url.searchParams.get("page") || 1);
   const kind = options.kind || "search";
   const append =
@@ -95,7 +106,7 @@ async function fulfillBrowse(route, options = {}, authorizationHeader) {
   let body = (await response.text())
     .replace(
       /<section id="browse-results"[\s\S]*?<\/section>/,
-      resultsFragment({ page: number, query, sort, ...options }),
+      resultsFragment({ page: number, query, sortBy, ...options }),
     )
     .replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`)
     .replace(
@@ -106,7 +117,7 @@ async function fulfillBrowse(route, options = {}, authorizationHeader) {
     body = `<title>${title}</title>${headingHTML}${resultsFragment({
       page: number,
       query,
-      sort,
+      sortBy,
       ...options,
       append,
       seen,
@@ -114,9 +125,9 @@ async function fulfillBrowse(route, options = {}, authorizationHeader) {
   if (kind === "fallback")
     body = `<title>${title}</title>${body.match(/<main>([\s\S]*)<\/main>/)[1]}`
       .replaceAll('name="q"', 'disabled name="q"')
-      .replaceAll('name="sort"', 'disabled name="sort"')
+      .replaceAll('name="sort_by"', 'disabled name="sort_by"')
       .replaceAll('type="submit"', 'disabled type="submit"');
-  if (!sort) url.searchParams.delete("sort");
+  if (!sortBy) url.searchParams.delete("sort_by");
   url.searchParams.delete("seen");
   if (number === 1) url.searchParams.delete("page");
   url.searchParams.sort();
@@ -172,7 +183,9 @@ async function triggerSentinel(page) {
 test("banner resets search without losing the header or form", async ({
   page,
 }) => {
-  await page.goto("/?q=banner-reset&sort=rating");
+  await page.goto(
+    `/?q=banner-reset&sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
   const banner = page.locator("header-component a[href='/']");
   await expect(banner).toBeVisible();
   const response = page.waitForResponse(
@@ -212,12 +225,14 @@ test("search retains explicit sorting, focus and composition state", async ({
   const sort = page.getByLabel("Sortieren nach", { exact: true });
   await expect(search).toBeVisible();
   await expect(sort).toBeVisible();
-  await sort.selectOption("rating");
-  await expect(page).toHaveURL("/?sort=rating");
+  await sort.selectOption(sortByValues.rating);
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
 
   await search.fill(demoRecipe.name);
   await expect(page).toHaveURL(
-    `/?q=${encodeURIComponent(demoRecipe.name).replaceAll("%20", "+")}&sort=rating`,
+    `/?q=${encodeURIComponent(demoRecipe.name).replaceAll("%20", "+")}&sort_by=${encodeURIComponent(sortByValues.rating)}`,
   );
   await expect(search).toBeFocused();
   await expect(page).toHaveTitle(
@@ -256,7 +271,9 @@ test("search retains explicit sorting, focus and composition state", async ({
     ),
   );
   await search.press("Enter");
-  await expect(page).toHaveURL("/?q=Unfertige+Eingabe&sort=rating");
+  await expect(page).toHaveURL(
+    `/?q=Unfertige+Eingabe&sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
   await expect(
     page.getByText("Keine Rezepte gefunden.", { exact: true }),
   ).toBeVisible();
@@ -264,9 +281,11 @@ test("search retains explicit sorting, focus and composition state", async ({
   expect(sentQueries.slice(beforeComposition)).toEqual(["Unfertige Eingabe"]);
   await search.fill("");
   await search.press("Enter");
-  await expect(page).toHaveURL("/?sort=rating");
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.rating)}`,
+  );
   await page.reload();
-  await expect(sort).toHaveValue("rating");
+  await expect(sort).toHaveValue(sortByValues.rating);
   await expect(search).toHaveValue("");
   await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
 });
@@ -279,9 +298,7 @@ test("automatic sorting, titles and headings follow the current query", async ({
   await page.goto("/");
   const sort = page.getByLabel("Sortieren nach", { exact: true });
   const search = page.getByRole("searchbox");
-  await expect(sort.locator("option:checked")).toHaveText(
-    "Automatisch: Neueste zuerst",
-  );
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Alle Rezepte",
@@ -291,9 +308,7 @@ test("automatic sorting, titles and headings follow the current query", async ({
     "data-query",
     demoRecipe.name,
   );
-  await expect(sort.locator("option:checked")).toHaveText(
-    "Automatisch: Relevanz",
-  );
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
   await expect(page).toHaveTitle(
     `1 Rezept für '${demoRecipe.name}' | RezeptDB`,
   );
@@ -310,9 +325,7 @@ test("automatic sorting, titles and headings follow the current query", async ({
   await search.fill("");
   await search.press("Enter");
   await expect(page).toHaveURL("/");
-  await expect(sort.locator("option:checked")).toHaveText(
-    "Automatisch: Neueste zuerst",
-  );
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
   await expect(page).toHaveTitle("Alle Rezepte | RezeptDB");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Alle Rezepte",
@@ -347,7 +360,9 @@ test("German name keys preserve names and use IDs to break ties", async ({
     .filter((recipe) => ["Strasse", "Straße"].includes(recipe.name))
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((recipe) => recipe.name);
-  await page.goto(`/?q=${marker}&sort=name-asc`);
+  await page.goto(
+    `/?q=${marker}&sort_by=${encodeURIComponent(sortByValues.nameAsc)}`,
+  );
   const titles = page.locator("main recipe-tile-component [slot=title]");
   await expect(titles).toHaveText([
     "Apfel",
@@ -359,7 +374,7 @@ test("German name keys preserve names and use IDs to break ties", async ({
   ]);
   await page
     .getByLabel("Sortieren nach", { exact: true })
-    .selectOption("name-desc");
+    .selectOption(sortByValues.nameDesc);
   await expect(titles).toHaveText([
     "Zwiebel",
     ...tied,
@@ -370,7 +385,7 @@ test("German name keys preserve names and use IDs to break ties", async ({
   ]);
   await page
     .getByLabel("Sortieren nach", { exact: true })
-    .selectOption("newest");
+    .selectOption(sortByValues.newest);
   await expect(titles).toHaveText([...names].reverse());
 });
 
@@ -379,37 +394,104 @@ test("explicit relevance survives an empty query and reload", async ({
   demoRecipe,
 }) => {
   await waitForRecipeIndexed(page.request, demoRecipe.id);
-  await page.goto("/?sort=relevance");
+  await page.goto(`/?sort_by=${encodeURIComponent(sortByValues.relevance)}`);
   const search = page.getByRole("searchbox");
   const sort = page.getByLabel("Sortieren nach", { exact: true });
-  await expect(sort).toHaveValue("relevance");
+  await expect(sort).toHaveValue(sortByValues.relevance);
   await search.fill(demoRecipe.name);
   await search.press("Enter");
-  await expect(page).toHaveURL(/q=E2E.*sort=relevance/);
+  expect(new URL(page.url()).searchParams.get("sort_by")).toBe(
+    sortByValues.relevance,
+  );
   await search.fill("   ");
   await search.press("Enter");
-  await expect(page).toHaveURL("/?sort=relevance");
-  await expect(sort).toHaveValue("relevance");
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.relevance)}`,
+  );
+  await expect(sort).toHaveValue(sortByValues.relevance);
   await page.reload();
   await expect(search).toHaveValue("");
-  await expect(sort).toHaveValue("relevance");
+  await expect(sort).toHaveValue(sortByValues.relevance);
 });
 
-test("choosing the automatic default explicitly remains a user choice", async ({
+test("custom native sort survives pagination, reload, history, and text edits", async ({
+  page,
+  searchRecipes,
+}) => {
+  await manualSentinel(page);
+  expect(searchRecipes).toHaveLength(25);
+  const sortBy = "rating_average:desc,_text_match:desc,recipe_id_sort:asc";
+  const url = new URL("/", process.env.BASE_URL || "http://traefik");
+  url.searchParams.set("q", "E2E Suchrezept");
+  url.searchParams.set("sort_by", sortBy);
+  await page.goto(url.pathname + url.search);
+
+  const sort = page.getByLabel("Sortieren nach", { exact: true });
+  const search = page.getByRole("searchbox", { name: "Rezepte suchen" });
+  await expect(sort).toHaveValue(sortBy);
+  await expect(sort.locator("option:checked")).toHaveText(
+    "Benutzerdefinierte Sortierung",
+  );
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+  await triggerSentinel(page);
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+  expect(new URL(page.url()).searchParams.get("sort_by")).toBe(sortBy);
+  await page.reload();
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+  await expect(sort).toHaveValue(sortBy);
+
+  await page.locator("[data-recipe-id] a[slot=title]").first().click();
+  await expect(page).toHaveURL(/\/recipe\//);
+  await page.goBack();
+  await expect(page).toHaveURL(/sort_by=/);
+  expect(new URL(page.url()).searchParams.get("sort_by")).toBe(sortBy);
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+  await expect(sort).toHaveValue(sortBy);
+  await page.goForward();
+  await expect(page).toHaveURL(/\/recipe\//);
+  await page.goBack();
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+  await expect(sort).toHaveValue(sortBy);
+
+  await search.fill("custom sort query");
+  await expect(page).toHaveURL(/q=custom\+sort\+query/);
+  expect(new URL(page.url()).searchParams.get("sort_by")).toBe(sortBy);
+  await expect(sort).toHaveValue(sortBy);
+  await page.reload();
+  await expect(search).toHaveValue("custom sort query");
+  await expect(sort).toHaveValue(sortBy);
+  await expect(sort.locator("option:checked")).toHaveText(
+    "Benutzerdefinierte Sortierung",
+  );
+  await sort.selectOption("");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("sort_by"))
+    .toBe(false);
+  expect(new URL(page.url()).searchParams.has("sort_by")).toBe(false);
+  await expect(sort.locator("option:checked")).toHaveText("Automatisch");
+});
+
+test("explicit newest sorting remains selected across text searches", async ({
   page,
 }) => {
   await page.goto("/");
   const sort = page.getByLabel("Sortieren nach", { exact: true });
-  await sort.selectOption("newest");
-  await expect(page).toHaveURL("/?sort=newest");
+  await sort.selectOption(sortByValues.newest);
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.newest)}`,
+  );
   const search = page.getByRole("searchbox");
   await search.fill("Kartoffelsuppe");
   await search.press("Enter");
-  await expect(page).toHaveURL("/?q=Kartoffelsuppe&sort=newest");
-  await expect(sort).toHaveValue("newest");
+  await expect(page).toHaveURL(
+    `/?q=Kartoffelsuppe&sort_by=${encodeURIComponent(sortByValues.newest)}`,
+  );
+  await expect(sort).toHaveValue(sortByValues.newest);
   await search.fill("");
   await search.press("Enter");
-  await expect(page).toHaveURL("/?sort=newest");
+  await expect(page).toHaveURL(
+    `/?sort_by=${encodeURIComponent(sortByValues.newest)}`,
+  );
 });
 
 test("search controls fit the content area without horizontal overflow", async ({
@@ -447,12 +529,16 @@ test("ordinary GET search works without JavaScript", async ({
   browser,
   baseURL,
   request,
+  authContexts,
   demoRecipe,
 }) => {
   await waitForRecipeIndexed(request, demoRecipe.id);
   const context = await browser.newContext({
     javaScriptEnabled: false,
     baseURL,
+    extraHTTPHeaders: {
+      authorization: authContexts.authorizationHeader("owner"),
+    },
   });
   try {
     const page = await context.newPage();
@@ -462,11 +548,13 @@ test("ordinary GET search works without JavaScript", async ({
       .fill(demoRecipe.name);
     await page
       .getByLabel("Sortieren nach", { exact: true })
-      .selectOption("name-asc");
+      .selectOption(sortByValues.nameAsc);
     await page
       .getByRole("searchbox", { name: "Rezepte suchen" })
       .press("Enter");
-    await expect(page).toHaveURL(/q=E2E.*sort=name-asc/);
+    expect(new URL(page.url()).searchParams.get("sort_by")).toBe(
+      sortByValues.nameAsc,
+    );
     await expect(
       page.getByRole("link", {
         name: `Rezept ${demoRecipe.name}`,
@@ -812,7 +900,7 @@ for (const action of ["sort", "query"]) {
         await pending;
       }
       const id =
-        url.searchParams.get("sort") === "updated" ||
+        url.searchParams.get("sort_by") === sortByValues.updated ||
         url.searchParams.get("q") === "new"
           ? "new-state"
           : `old-${number}`;
@@ -832,7 +920,7 @@ for (const action of ["sort", "query"]) {
     if (action === "sort")
       await page
         .getByLabel("Sortieren nach", { exact: true })
-        .selectOption("updated");
+        .selectOption(sortByValues.updated);
     else await page.getByRole("searchbox").fill("new");
     release();
     await finished;
@@ -910,7 +998,7 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
     const url = new URL(route.request().url());
     queries.push([
       url.searchParams.get("q"),
-      url.searchParams.get("sort") || null,
+      url.searchParams.get("sort_by") || null,
     ]);
     await fulfillBrowse(
       route,
@@ -931,12 +1019,12 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
   await expect.poll(() => queries).toHaveLength(2);
   await page
     .getByLabel("Sortieren nach", { exact: true })
-    .selectOption("updated");
+    .selectOption(sortByValues.updated);
   await expect.poll(() => queries).toHaveLength(3);
-  expect(queries[2]).toEqual(["enter", "updated"]);
+  expect(queries[2]).toEqual(["enter", sortByValues.updated]);
   await expect(page.locator("#browse-metadata")).toHaveAttribute(
-    "data-sort",
-    "updated",
+    "data-sort-by",
+    sortByValues.updated,
   );
   await input.blur();
   await page.clock.runFor(400);
@@ -1082,7 +1170,9 @@ test.describe("pagination", () => {
     searchRecipes,
   }) => {
     await manualSentinel(page);
-    await page.goto(`/?q=${encodeURIComponent("E2E Suchrezept")}&sort=newest`);
+    await page.goto(
+      `/?q=${encodeURIComponent("E2E Suchrezept")}&sort_by=${encodeURIComponent(sortByValues.newest)}`,
+    );
     await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
     const pagination = page.getByRole("navigation", {
       name: "Weitere Rezepte",
@@ -1109,7 +1199,9 @@ test.describe("pagination", () => {
     );
     await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
     await expect(page.getByRole("link", { name: "Mehr laden" })).toHaveCount(0);
-    await expect(page).toHaveURL(/page=2.*sort=newest/);
+    expect(new URL(page.url()).searchParams.get("sort_by")).toBe(
+      sortByValues.newest,
+    );
     expect(new URL(page.url()).searchParams.has("seen")).toBe(false);
     await page.reload();
     await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
@@ -1130,7 +1222,7 @@ test.describe("pagination", () => {
     try {
       const page = await identity.browserContext.newPage();
       await page.goto(
-        `/?q=${encodeURIComponent("E2E Suchrezept")}&sort=newest`,
+        `/?q=${encodeURIComponent("E2E Suchrezept")}&sort_by=${encodeURIComponent(sortByValues.newest)}`,
       );
       await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
       await expect(

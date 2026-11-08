@@ -70,19 +70,19 @@ Source outages never authorize deletion. Optional fields retain their previous i
 
 ## Sort contract
 
-Typesense 29.0 accepts at most three sort fields. Browse uses these fixed expressions (no browser-supplied Typesense options):
+Typesense 29.0 accepts at most three sort fields. Browse's readable sort choices use these native `sort_by` expressions and forward them unchanged. A manually supplied expression is also passed through for Typesense to validate:
 
-| Sort | `sort_by` |
+| Label | `sort_by` |
 | --- | --- |
-| Relevance with text | `_text_match:desc,created_at:desc,recipe_id_sort:asc` |
-| Newest / relevance without text | `created_at:desc,recipe_id_sort:asc` |
-| Highest rated | `rating_average:desc,rating_count:desc,recipe_id_sort:asc` |
-| Most rated | `rating_count:desc,rating_average:desc,recipe_id_sort:asc` |
-| Name A–Z | `name_sort:asc,recipe_id_sort:asc` |
-| Name Z–A | `name_sort:desc,recipe_id_sort:asc` |
-| Recently updated | `updated_at:desc,recipe_id_sort:asc` |
+| Relevanz | `_text_match:desc,created_at:desc,recipe_id_sort:asc` |
+| Beste Bewertung | `rating_average:desc,rating_count:desc,recipe_id_sort:asc` |
+| Meiste Bewertungen | `rating_count:desc,rating_average:desc,recipe_id_sort:asc` |
+| Name A-Z | `name_sort:asc,recipe_id_sort:asc` |
+| Name Z-A | `name_sort:desc,recipe_id_sort:asc` |
+| Neueste zuerst | `created_at:desc,recipe_id_sort:asc` |
+| Zuletzt bearbeitet | `updated_at:desc,recipe_id_sort:asc` |
 
-Zero-valued unrated recipes follow positive ratings without missing-value directives. Explicit sorts prioritize the chosen field over relevance. ID breaks equal keys deterministically.
+When the URL has no `sort_by` (the dropdown's `Automatisch` choice), browse omits it from the search request so Typesense applies its default: text-match score followed by the collection's default sorting field. The schema has no `default_sorting_field`, so equal text-match scores retain insertion-order tie-breaking; automatic wildcard and tag-only results are not guaranteed to be newest. `Neueste zuerst` is an explicit choice. Zero-valued unrated recipes follow positive ratings without missing-value directives. Preset expressions include `recipe_id_sort` to break equal keys deterministically.
 
 `test_typesense.py` verifies every expression, equal keys, German keys, unrated values, and microsecond storage against the pinned engine using a uniquely named disposable collection. Run it inside the search devcontainer with `TYPESENSE_TEST_KEY_FILE` pointing to a private mounted key file; no key contents are logged. Normal checks skip these opt-in engine tests when that variable is absent. `search-test` covers source metadata, event reloads, and rebuild preservation on the full deployed stack.
 
