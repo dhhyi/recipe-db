@@ -1,6 +1,6 @@
 # Production Kubernetes operations
 
-The production manifest renderer consumes project metadata and the immutable multi-platform release inventory. It does not build images. For operator-held inputs and recovery, see [Production configuration and recovery](production-configuration.md); for first-time host setup, see the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md).
+The production manifest renderer consumes project metadata and the immutable multi-platform release inventory. It does not build images. For the ordered release-to-Pi deployment workflow, see the [production release cookbook](production-release-cookbook.md). For operator-held inputs and recovery, see [Production configuration and recovery](production-configuration.md); for first-time host setup, see the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md).
 
 ## Prerequisites and boundaries
 
@@ -373,7 +373,7 @@ The checked-in initial values request the following storage:
 
 These are initial declarative settings, **not measured Pi sizing guarantees**, reserved physical capacity, or evidence that every workload fits the target device. Account separately for k3s, Traefik, OS, image storage and filesystem overhead; tune and measure against the actual 128 GB USB device.
 
-For a Pi deployment, use the private values file and current inputs in the [configuration guide](production-configuration.md), and complete the [rebuild cookbook](raspberry-pi-rebuild.md) before deploying. Render, deploy and status use the explicit Pi context; `create`, `verify`, guarded local `kubectl`, smoke and `delete` refuse to manage a Pi cluster. Rendered declarations alone do not validate ARM64 execution, memory/disk budgets or the physical USB device.
+For routine Pi releases, use the [production release cookbook](production-release-cookbook.md). For a new or rebuilt host, complete the [rebuild cookbook](raspberry-pi-rebuild.md) first. Render, deploy and status use the explicit Pi context; `create`, `verify`, guarded local `kubectl`, smoke and `delete` refuse to manage a Pi cluster. Rendered declarations alone do not validate ARM64 execution, memory/disk budgets or the physical USB device.
 
 Local k3d has **no host-directory persistence contract**. PVCs survive pod replacement and identical-release reapply, but deleting the cluster destroys its data. Export anything needed for investigation before deleting it. Deletion requires the exact cluster-specific confirmation:
 

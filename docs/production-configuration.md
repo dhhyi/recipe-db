@@ -1,6 +1,6 @@
 # Production configuration and recovery
 
-This is the source of truth for operator-held production inputs, their ownership, and recovery. The [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) gives the ordered setup procedure; [production Kubernetes operations](production-kubernetes.md) covers deployment and backup/restore commands.
+This is the source of truth for operator-held production inputs, their ownership, and recovery. Use the [production release cookbook](production-release-cookbook.md) for routine releases and backup-input updates, the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration, and [production Kubernetes operations](production-kubernetes.md) for lifecycle and recovery details.
 
 ## Private workstation directory
 
@@ -55,9 +55,7 @@ The backup inputs are operator-prepared. `backup.json` must use `/etc/recipe-db/
 
 Development `.secrets/` files are fixtures for local Compose and tests. They are not production inputs and must not be copied into this directory as production secrets.
 
-## Backup activation
-
-Base Ansible host provisioning installs the backup service and timer units but leaves the timer stopped and disabled. After restore acceptance, run `backup-configure.yml` from the provisioning devcontainer to install prepared files. It invalidates any prior configuration marker and records a private completion timestamp only after all inputs are installed. Then start `recipe-db-backup.service` explicitly and verify `verified-upload` or `verified-unchanged` via the publisher's status command. Only after that verification, run the separate `backup-enable.yml` playbook; it requires the verified status's `lastCheck` to be later than the latest configuration timestamp before enabling the timer. Neither setup nor routine provisioning activates scheduled capture.
+The backup service and timer remain stopped and disabled after host provisioning or backup-input installation. Use the [production release cookbook](production-release-cookbook.md) to install inputs, verify a capture, and enable the schedule in the required order.
 
 ## Clean rebuild boundary
 

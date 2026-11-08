@@ -1,6 +1,6 @@
 # Clean Raspberry Pi rebuild cookbook
 
-Follow these steps in order to recreate the supported Pi host and restore its application. The authoritative private-input inventory is [Production configuration and recovery](production-configuration.md); use [Production Kubernetes operations](production-kubernetes.md) for deployment and restore commands.
+Follow these steps in order to recreate the supported Pi host and restore its application. The authoritative private-input inventory is [Production configuration and recovery](production-configuration.md); use the [production release cookbook](production-release-cookbook.md) for deployment and backup activation after restore.
 
 ## 1. Confirm recovery readiness
 
@@ -158,30 +158,6 @@ After restore, verify:
 - Verify sign-in if configured.
 - Reboot the Pi and confirm Recipe DB becomes accessible again.
 
-## 8. Set up automated backups
+## 8. Configure automated backups
 
-- Prepare the backup files and application inputs listed in the [configuration guide](production-configuration.md#private-workstation-directory).
-- In the provisioning devcontainer's SSH-agent shell, install the prepared inputs:
-
-  ```sh
-  ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
-    backup-configure.yml --ask-become-pass
-  ```
-
-  This installs the prepared files on the Pi. Scheduled backups remain disabled.
-
-- On the Pi, run a backup and check its status:
-
-  ```sh
-  sudo systemctl start recipe-db-backup.service
-  sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
-  ```
-
-  Continue only if status is `verified-upload` or `verified-unchanged`. Investigate any other result before enabling scheduled backups.
-
-- In the provisioning devcontainer's SSH-agent shell, enable scheduled backups:
-
-  ```sh
-  ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
-    backup-enable.yml --ask-become-pass
-  ```
+After restore acceptance, follow steps 4–5 of the [production release cookbook](production-release-cookbook.md) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. The cookbook also updates the capture checkout and immutable release reference to match the deployed application.
