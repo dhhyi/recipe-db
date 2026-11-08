@@ -133,6 +133,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("Environment=KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml", service)
         self.assertIn("ExecStart=/usr/local/sbin/recipe-db-backup-upload nightly", service)
         self.assertIn("ReadWritePaths=/var/lib/recipe-db-backup", service)
+        self.assertIn("ReadWritePaths=/etc/recipe-db", service)
         self.assertIn("OnCalendar=*-*-* 02:15:00", timer)
         self.assertIn("Persistent=false", timer)
         self.assertIn("RandomizedDelaySec=15min", timer)
@@ -321,6 +322,45 @@ class ContractTests(unittest.TestCase):
         for label, reference in rejected.items():
             with self.subTest(reference=label):
                 self.assertIsNone(re.match(pattern, reference))
+
+    def test_backup_sync_preserves_pi_authorization_and_never_uses_a_home_copy(self):
+        setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
+        self.assertNotIn("rclone.conf", setup["vars"]["operator_backup_source_names"])
+        self.assertNotIn("rclone.conf", {
+            item["name"] for item in setup["vars"]["operator_backup_files"]
+        })
+        tasks = setup["tasks"]
+        service_guard = next(task for task in tasks
+                             if task["name"] == "Refuse configuration changes while a backup is running")
+        self.assertEqual(
+            service_guard["failed_when"],
+            "backup_service_active.stdout not in ['inactive', 'failed']",
+        )
+        inspection = next(task for task in tasks
+                          if task["name"] == "Inspect Pi-owned Drive authorization without retrieving it")
+        self.assertEqual(inspection["ansible.builtin.stat"]["path"], "/etc/recipe-db/rclone.conf")
+        self.assertFalse(inspection["ansible.builtin.stat"]["get_checksum"])
+        self.assertTrue(inspection["no_log"])
+        validation = next(task for task in tasks
+                          if task["name"] == "Require private Pi-owned Drive authorization")
+        conditions = validation["ansible.builtin.assert"]["that"]
+        expression = self.environment.compile_expression(" and ".join(
+            f"({condition})" for condition in conditions
+        ))
+        valid = dict(exists=True, isreg=True, islnk=False, size=1, uid=0, gid=0, mode="0600")
+        self.assertTrue(expression(pi_drive_authorization={"stat": valid}))
+        for change in (
+            {"exists": False}, {"isreg": False}, {"islnk": True}, {"size": 0},
+            {"uid": 1000}, {"gid": 1000}, {"mode": "0644"},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(expression(pi_drive_authorization={"stat": valid | change}))
+        self.assertFalse(expression(pi_drive_authorization={"stat": {"exists": False}}))
+        first_copy = next(index for index, task in enumerate(tasks)
+                          if task["name"] == "Copy prepared backup configuration files")
+        self.assertLess(tasks.index(service_guard), first_copy)
+        self.assertLess(tasks.index(validation), first_copy)
+        self.assertNotIn("ansible.builtin.fetch", (ROOT / "backup-configure.yml").read_text())
 
     def test_capture_wrapper_uses_private_inputs_and_isolated_toolchain(self):
         command = self.render("recipe-db-backup-capture.j2")

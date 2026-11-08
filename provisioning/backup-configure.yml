@@ -12,12 +12,10 @@
           name: backup-release-ref,
           destination: /etc/recipe-db/backup-release-ref,
         }
-      - { name: rclone.conf, destination: /etc/recipe-db/rclone.conf }
     operator_backup_source_names:
       - backup.json
       - backup-values.yaml
       - backup-release-ref
-      - rclone.conf
     allowed_application_inputs:
       - auth-accounts.json
       - google-oauth-client-secret
@@ -30,10 +28,36 @@
         enabled: false
         state: stopped
 
+    - name: Refuse configuration changes while a backup is running
+      ansible.builtin.command: systemctl show --property=ActiveState --value recipe-db-backup.service
+      register: backup_service_active
+      changed_when: false
+      failed_when: backup_service_active.stdout not in ['inactive', 'failed']
+
     - name: Invalidate the prior backup configuration generation
       ansible.builtin.file:
         path: /etc/recipe-db/backup-configured-at
         state: absent
+
+    - name: Inspect Pi-owned Drive authorization without retrieving it
+      ansible.builtin.stat:
+        path: /etc/recipe-db/rclone.conf
+        get_checksum: false
+        get_mime: false
+      register: pi_drive_authorization
+      no_log: true
+
+    - name: Require private Pi-owned Drive authorization
+      ansible.builtin.assert:
+        that:
+          - pi_drive_authorization.stat.exists
+          - pi_drive_authorization.stat.isreg | default(false)
+          - not (pi_drive_authorization.stat.islnk | default(false))
+          - pi_drive_authorization.stat.size | default(0) > 0
+          - pi_drive_authorization.stat.uid | default(-1) == 0
+          - pi_drive_authorization.stat.gid | default(-1) == 0
+          - pi_drive_authorization.stat.mode | default('') == '0600'
+        fail_msg: Authorize Drive interactively on the Pi first; rclone.conf must be root-owned mode 0600.
 
     - name: Read prepared backup configuration without displaying it
       ansible.builtin.set_fact:

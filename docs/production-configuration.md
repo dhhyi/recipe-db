@@ -6,6 +6,7 @@ This guide is the source of truth for operator-held production inputs, their own
 
 - [Private workstation directory](#private-workstation-directory)
 - [Ownership and lifecycle](#ownership-and-lifecycle)
+- [Drive authorization](#drive-authorization)
 - [Clean rebuild boundary](#clean-rebuild-boundary)
 
 ## Private workstation directory
@@ -31,7 +32,7 @@ Keep operator configuration outside the checkout in `~/.config/recipe-db/`. Rest
     ├── backup.json
     ├── backup-values.yaml
     ├── backup-release-ref
-    └── rclone.conf
+    └── drive-oauth-client.json         # dedicated Desktop OAuth client, not tokens
 ```
 
 The backup inputs are operator-prepared. `backup.json` must use `/etc/recipe-db/rclone.conf`, `/var/lib/recipe-db-backup`, `/var/lib/recipe-db-backup/work`, and `/usr/local/sbin/recipe-db-backup-capture` for its rclone config, state, staging, and capture command paths. In `backup-values.yaml`, private `secrets` entries must point to direct files under `~/.config/recipe-db/deployment/`. The explicit `backup-configure.yml` playbook copies the files and referenced application inputs into root-only `/etc/recipe-db/`, then rewrites those values paths to `/etc/recipe-db/application-inputs/`. The Pi never mounts operator home.
@@ -49,6 +50,7 @@ The backup inputs are operator-prepared. `backup.json` must use `/etc/recipe-db/
 | Provisioning code, pinned tool versions/checksums, deployment templates, authorization schema | Repository | Authoritative; review changes in source control |
 | Pi values file and auth-account policy | Operator directory | Authoritative private inputs; preserve across rebuilds |
 | Google OAuth client secret and cookie key | Google/client and operator directory | Required only when Google sign-in is enabled; preserve securely |
+| `backup/drive-oauth-client.json` | Google/client and operator directory | Dedicated backup Desktop OAuth client credentials; preserve encrypted with chezmoi. Separate from application sign-in credentials. |
 | SSH private key and verified host key | Operator directory | Required to provision/administer the Pi |
 | USB root UUID, Pi hostname, allowed network CIDRs | Measured/operator-specific | Record in inventory; UUID must be measured again after changing the boot device |
 | Pi kubeconfig | Generated from the running cluster | Runtime admin credential; do not treat as recoverable from a backup |
@@ -56,13 +58,21 @@ The backup inputs are operator-prepared. `backup.json` must use `/etc/recipe-db/
 | GraphQL ingress token and Typesense API key | Generated during each production deploy/restore | Ephemeral cluster credentials. The operation creates and uses them, then deletes its private temporary copies. Do not configure, retain, or back them up. Each operation rotates them and rolls dependent workloads. |
 | Kubernetes Secrets and application PVC data | Live cluster | Runtime state; restore through the documented backup/recovery workflow |
 | ACME account and certificate files | Traefik's retained `recipe-db-acme` PVC | Runtime state, outside application backup capture. Protect separately or reissue after recovery. |
-| `backup.json`, backup values, release reference, rclone authorization and referenced application inputs | Pi under `/etc/recipe-db/` and operator recovery directory | Operator-managed recovery inputs; installed explicitly after restore and acceptance; application backup archives do not include them |
-| `rclone.conf` | Google Drive authorization state | Not derivable from OAuth client JSON. Preserve it securely or reauthorize interactively; never assume client JSON alone restores Drive access. |
+| `backup.json`, backup values, release reference and referenced application inputs | Pi under `/etc/recipe-db/` and operator recovery directory | Operator-managed recovery inputs; installed explicitly after restore and acceptance; application backup archives do not include them |
+| `/etc/recipe-db/rclone.conf` | Pi-only Google Drive authorization state | Created interactively on the Pi; rclone refreshes its tokens there. Never copy it to/from operator home, chezmoi or application backups. Reauthorize after a fresh host rebuild or lost/broken authorization, not routine updates or application restores. |
 
 Development `.secrets/` files are fixtures for local Compose and tests. They are not production inputs and must not be copied into this directory as production secrets.
 
 The backup service and timer remain stopped and disabled after host provisioning or backup-input installation. Use the [production release cookbook](production-release-cookbook.md) to install inputs, verify a capture, and enable the schedule in the required order.
 
+## Drive authorization
+
+Your home directory stores the Google Drive client credentials, but not the authorization created when you sign in. That authorization stays on the Pi. When rebuilding, use the same Google account and client so you can access your existing backups.
+
+Updates and application restores leave the Pi's Drive authorization unchanged. Rclone automatically renews its access tokens on the Pi; you do not need to sign in again for each backup.
+
+Follow the [Google Drive authorization cookbook](google-drive-authorization.md) to authorize a new Pi or repair lost authorization.
+
 ## Clean rebuild boundary
 
-Before erasing or replacing the boot device, independently verify an off-device application backup, its matching immutable release, all required private files, and the ability to reauthorize Drive if needed. Reimage destroys both the OS and all on-device application data. Follow the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md), then restore into the new cluster using the recorded release and the [production recovery procedure](production-kubernetes.md).
+Before erasing or replacing the boot device, independently verify an off-device application backup, its matching immutable release, all required private files, and the ability to authorize Drive with the dedicated client and account. Reimage destroys the Pi's authorization along with the OS and all on-device application data. Follow the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md), authorize Drive on the new Pi, then restore into the new cluster using the recorded release and the [production recovery procedure](production-kubernetes.md).
