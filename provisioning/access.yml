@@ -23,7 +23,7 @@
 
     - name: Save separate private kubeconfig with tunnel endpoint and explicit context
       ansible.builtin.copy:
-        dest: .private/pi-kubeconfig.yaml
+        dest: "{{ lookup('env', 'HOME') }}/.config/recipe-db/kubeconfig/pi.yaml"
         mode: "0600"
         content: |
           apiVersion: v1

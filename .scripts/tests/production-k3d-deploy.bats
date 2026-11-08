@@ -423,6 +423,46 @@ legacy_pi_claims() {
   ' "$MOCK_LOG.routers"
 }
 
+@test "local loopback deploy requires a safe LoadBalancer and managed loopback bindings" {
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  for fault in type nodeport allocate external; do
+    export MOCK_SERVICE_TYPE=auto MOCK_NODEPORT=false MOCK_ALLOCATE_NODEPORT=false MOCK_EXTERNAL_IP=false
+    case "$fault" in
+      type) export MOCK_SERVICE_TYPE=ClusterIP ;;
+      nodeport) export MOCK_NODEPORT=true ;;
+      allocate) export MOCK_ALLOCATE_NODEPORT=true ;;
+      external) export MOCK_EXTERNAL_IP=true ;;
+    esac
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  done
+  export MOCK_PUBLIC=true
+  : > "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"loopback-only"* ]]
+  run ! grep -q 'apply -f' "$MOCK_LOG"
+}
+
+@test "Pi loopback deploy requires ClusterIP and rejects unsafe exposure" {
+  no_google_values
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  for fault in type nodeport external; do
+    export MOCK_SERVICE_TYPE=auto MOCK_NODEPORT=false MOCK_EXTERNAL_IP=false
+    case "$fault" in
+      type) export MOCK_SERVICE_TYPE=LoadBalancer ;;
+      nodeport) export MOCK_NODEPORT=true ;;
+      external) export MOCK_EXTERNAL_IP=true ;;
+    esac
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  done
+}
+
 @test "Google-disabled private LAN ingress is explicit and refuses public origins and NodePorts" {
   no_google_values
   set_value '.runtime.ingressMode="private-lan" | .origin="http://recipe-pi.home"'
@@ -537,7 +577,7 @@ legacy_pi_claims() {
 }
 
 @test "values reject unknown runtime inputs missing fields and extra durable state" {
-  for expression in 'del(.runtime.googleOAuthClientId)' '.runtime.extra="guess"' '.volumes.auth="1Gi"' '.origin="http://0.0.0.0:8080"' '.infrastructure.redis="redis:latest"' '.secrets["typesense-api-key"]="relative"'; do
+  for expression in 'del(.runtime.googleOAuthClientId)' '.runtime.extra="guess"' '.volumes.auth="1Gi"' '.origin="http://0.0.0.0:8080"' '.infrastructure.redis="redis:latest"' '.secrets["graphql-ingress-secret"]="relative"'; do
     cp "$VALUES" values.original
     set_value "$expression"
     run bash .scripts/production-k3d.sh verify "$VALUES"
@@ -583,7 +623,7 @@ legacy_pi_claims() {
 }
 
 @test "render needs no secret files or cluster and prints only nonsecret YAML" {
-  rm auth-accounts.json graphql-ingress-secret typesense-api-key google-oauth-client-secret oauth2-cookie-secret
+  rm -f auth-accounts.json graphql-ingress-secret typesense-api-key google-oauth-client-secret oauth2-cookie-secret
   run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   [[ $output == "apiVersion: v1"* ]]
@@ -693,20 +733,21 @@ legacy_pi_claims() {
   run ! grep -Eq 'create secret|apply -f .*application.yml' "$MOCK_LOG"
 }
 
-@test "application checksums are stable across identical deploys and change for rotated staged secrets" {
+@test "deployment generates fresh internal credentials and rolls dependent workloads" {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
-  jq '.anonymous.displayName="Updated"' auth-accounts.json > accounts.next
-  mv accounts.next auth-accounts.json
-  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
-  [ "$status" -eq 0 ]
-  [ "$(wc -l < "$MOCK_LOG.checksums")" -eq 3 ]
-  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" = "$(sed -n '2p' "$MOCK_LOG.checksums")" ]
-  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
+  [ "$(wc -l < "$MOCK_LOG.checksums")" -eq 2 ]
+  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" != "$(sed -n '2p' "$MOCK_LOG.checksums")" ]
+  [ "$(wc -l < "$MOCK_LOG.typesense-key-checksums")" -eq 2 ]
+  [ "$(sed -n '1p' "$MOCK_LOG.typesense-key-checksums")" != "$(sed -n '2p' "$MOCK_LOG.typesense-key-checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.render-checksums")" = "$(sed -n '2p' "$MOCK_LOG.render-checksums")" ]
+  [ "$(wc -l < "$MOCK_LOG.route-checksums")" -eq 2 ]
+  [ "$(sed -n '1p' "$MOCK_LOG.route-checksums")" != "$(sed -n '2p' "$MOCK_LOG.route-checksums")" ]
   grep -Eq '^[0-9a-f]{64}$' "$MOCK_LOG.checksums"
   run ! grep -q 'rollout restart' "$MOCK_LOG"
+  run ! compgen -G '.production-k3d.*'
 }
 
 @test "application checksums change when rendered configuration files change" {
@@ -724,10 +765,10 @@ legacy_pi_claims() {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$MOCK_LOG.checksums")" -eq 5 ]
-  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" = "$(sed -n '2p' "$MOCK_LOG.checksums")" ]
-  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
-  [ "$(sed -n '3p' "$MOCK_LOG.checksums")" != "$(sed -n '4p' "$MOCK_LOG.checksums")" ]
-  [ "$(sed -n '4p' "$MOCK_LOG.checksums")" != "$(sed -n '5p' "$MOCK_LOG.checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.input-checksums")" = "$(sed -n '2p' "$MOCK_LOG.input-checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.input-checksums")" != "$(sed -n '3p' "$MOCK_LOG.input-checksums")" ]
+  [ "$(sed -n '3p' "$MOCK_LOG.input-checksums")" != "$(sed -n '4p' "$MOCK_LOG.input-checksums")" ]
+  [ "$(sed -n '4p' "$MOCK_LOG.input-checksums")" != "$(sed -n '5p' "$MOCK_LOG.input-checksums")" ]
 }
 
 @test "application checksums change when template output changes without input or secret changes" {
@@ -740,8 +781,8 @@ legacy_pi_claims() {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$MOCK_LOG.checksums")" -eq 3 ]
-  [ "$(sed -n '1p' "$MOCK_LOG.checksums")" = "$(sed -n '2p' "$MOCK_LOG.checksums")" ]
-  [ "$(sed -n '2p' "$MOCK_LOG.checksums")" != "$(sed -n '3p' "$MOCK_LOG.checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.render-checksums")" = "$(sed -n '2p' "$MOCK_LOG.render-checksums")" ]
+  [ "$(sed -n '2p' "$MOCK_LOG.render-checksums")" != "$(sed -n '3p' "$MOCK_LOG.render-checksums")" ]
 }
 
 @test "existing deployment lease fails closed without deleting another owners lock" {
@@ -792,17 +833,16 @@ legacy_pi_claims() {
   run ! grep -q 'delete --raw' "$MOCK_LOG"
 }
 
-@test "ingress secret rotation updates Traefik pod checksum and waits past stale deployment" {
+@test "ingress credential rotates on deploy and waits past a stale Traefik checksum" {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
-  printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' > graphql-ingress-secret
   export MOCK_STALE_ROUTES=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
-  [ "$(sed -n '1p' "$MOCK_LOG.route-checksums")" = "$(sed -n '2p' "$MOCK_LOG.route-checksums")" ]
-  [ "$(sed -n '1p' "$MOCK_LOG.route-checksums")" != "$(sed -n '3p' "$MOCK_LOG.route-checksums")" ]
+  [ "$(sed -n '1p' "$MOCK_LOG.route-checksums")" != "$(sed -n '2p' "$MOCK_LOG.route-checksums")" ]
+  [ "$(sed -n '2p' "$MOCK_LOG.route-checksums")" != "$(sed -n '3p' "$MOCK_LOG.route-checksums")" ]
   [ "$(grep -c 'get deployment traefik -o json' "$MOCK_LOG")" -eq 4 ]
   grep -Eq '^[0-9a-f]{64}$' "$MOCK_LOG.route-checksum"
 }
@@ -857,11 +897,11 @@ legacy_pi_claims() {
 }
 
 @test "deploy validates secret files before connecting or taking lock" {
-  printf 'short' > graphql-ingress-secret
+  printf 'not-json' > auth-accounts.json
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  [[ $output == *"invalid secret format"* ]]
-  [[ $output != *short* ]]
+  [[ $output == *"invalid auth-accounts.json"* ]]
+  [[ $output != *not-json* ]]
   run ! grep -q '^kubectl' "$MOCK_LOG"
 }
 

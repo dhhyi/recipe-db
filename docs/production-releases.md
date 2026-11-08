@@ -1,5 +1,13 @@
 # Production image releases
 
+This guide explains the immutable GHCR release artifact produced by the `Publish` workflow for maintainers and operators validating release inventory and registry access. For the ordered sequence from publication through Pi deployment and backup configuration, use the [production release cookbook](production-release-cookbook.md).
+
+**Table of contents**
+
+- [Get and verify a release](#get-and-verify-a-release)
+- [GHCR access and permissions](#ghcr-access-and-permissions)
+- [Retry and recovery](#retry-and-recovery)
+
 After the `Publish` workflow validates a commit on `main`, it publishes one immutable release inventory to GHCR. Production deployment is manual. Pull the inventory by its digest, not by the `sha-<revision>` discovery tag or an application image's compatibility `latest` tag.
 
 The inventory is `release.json`, pushed as an OCI artifact with artifact type `application/vnd.dhhyi.recipe-db.release.v1+json` and a JSON payload media type of `application/json`. Its `schemaVersion` is `1`; `revision` is the full Git commit SHA; `images` contains exactly the backend, API, and frontend projects selected from `.project.yaml`, each addressed by an application repository digest. Each digest identifies an index with runnable `linux/amd64` and `linux/arm64` manifests. Other non-runnable descriptors, such as attestations, may also be present.
@@ -47,17 +55,9 @@ jq -r '.images[]' release/release.json | while IFS= read -r image; do
 done
 ```
 
-To confirm anonymous access, run the ORAS and Docker commands with empty credentials. Activate mise tools before replacing `HOME`, so the shims can still find the installed tools:
+Routine publication already performs these inventory and platform checks; use this procedure when independently inspecting an artifact.
 
-```sh
-anonymous_home="$(mktemp -d)"
-anonymous_docker="$(mktemp -d)"
-printf '{}\n' > "$anonymous_docker/config.json"
-mise exec -- env HOME="$anonymous_home" DOCKER_CONFIG="$anonymous_docker" \
-  oras manifest fetch ghcr.io/dhhyi/recipe-db-releases@sha256:<artifact-digest>
-```
-
-The workflow also pulls each image platform and the artifact anonymously before treating publication as complete. Platform verification pulls and inspects the individual manifest digests from each index, avoiding Docker image-store conflicts when pulling both platforms under one index reference. It logs the verified image digests and exact release-artifact digest. Native AMD64 and ARM64 runners also start the production `design` image and check its `/health` endpoint.
+The successful workflow verifies the inventory, both image platforms, and anonymous artifact/image access before reporting the exact artifact digest. Use that digest for deployment. For manual artifact inspection and validation details, see the workflow implementation and validation scripts.
 
 ## GHCR access and permissions
 

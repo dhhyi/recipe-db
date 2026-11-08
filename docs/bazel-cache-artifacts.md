@@ -1,5 +1,15 @@
 # Bazel disk-cache workflow artifacts
 
+This guide describes the Bazel disk-cache artifact lifecycle for maintainers of the Publish workflow and CI. It covers artifact selection, validation, cleanup, and cache-miss behavior; the [production release guide](production-releases.md) describes the separate immutable application release artifacts.
+
+**Table of contents**
+
+- [Contract](#contract)
+- [Nightly cleanup](#nightly-cleanup)
+- [Safety limits and fallback](#safety-limits-and-fallback)
+- [Rebuild diagnostics](#rebuild-diagnostics)
+- [Trust and evidence boundary](#trust-and-evidence-boundary)
+
 The Publish `quality-checks` job uses completed Bazel disk-cache snapshots as workflow artifacts. This replaces only the Bazel `actions/cache` step. Mise tool caching, the quality gates, WIP handling, integration/image jobs, and other workflow artifacts are unchanged.
 
 ## Contract

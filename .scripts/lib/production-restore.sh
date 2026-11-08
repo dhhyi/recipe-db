@@ -3,6 +3,49 @@
 # SC2016: GraphQL variables and remote shell expressions must stay literal.
 # shellcheck disable=SC2034,SC2154,SC2016
 
+restore_ingress_values() {
+  local service_type=ClusterIP
+  [[ $target != local && $ingress_mode != private-lan ]] || service_type=LoadBalancer
+  yq -o=json -I=0 'select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
+    .metadata.namespace == "kube-system")' "$work/rendered-base.yml" | jq -se '
+      length == 1 and (.[0].spec.valuesContent | type == "string")' > /dev/null \
+    || production_fail "restore requires exactly one Traefik HelmChartConfig"
+  if [[ $service_type == LoadBalancer ]]; then
+    SERVICE_TYPE="$service_type" yq -i '
+      (select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
+        .metadata.namespace == "kube-system").spec.valuesContent) |=
+        (from_yaml | .service.type = strenv(SERVICE_TYPE) |
+          .service.spec.allocateLoadBalancerNodePorts = false | to_yaml)' "$work/rendered-base.yml"
+  else
+    SERVICE_TYPE="$service_type" yq -i '
+      (select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
+        .metadata.namespace == "kube-system").spec.valuesContent) |=
+        (from_yaml | .service.type = strenv(SERVICE_TYPE) |
+          del(.service.spec.allocateLoadBalancerNodePorts) | to_yaml)' "$work/rendered-base.yml"
+  fi
+}
+
+restore_remove_ingress_nodeports() {
+  [[ $target == local || $ingress_mode == private-lan ]] || return 0
+  kube --namespace kube-system get service traefik -o json > "$work/restore-ingress-service.json"
+  jq -e --slurpfile config "$work/config.json" '
+    .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
+    ((.spec.externalIPs // []) | length == 0) and
+    ([.spec.ports[].port] | sort) ==
+      (if $config[0].httpsStaging then [80,8081,8443] else [80] end) and
+    (.metadata.resourceVersion | type == "string" and length > 0)' \
+    "$work/restore-ingress-service.json" > /dev/null \
+    || production_fail "restore ingress is not a safe LoadBalancer"
+  if jq -e 'any(.spec.ports[]; .nodePort != null)' "$work/restore-ingress-service.json" > /dev/null; then
+    jq '{metadata:{resourceVersion:.metadata.resourceVersion},
+      spec:{ports:[.spec.ports[] | select(.nodePort != null) | {port, nodePort:null}]}}' \
+      "$work/restore-ingress-service.json" > "$work/restore-ingress-patch.json"
+    kube --namespace kube-system patch service traefik --type=strategic \
+      --patch-file "$work/restore-ingress-patch.json" > /dev/null \
+      || production_fail "restore could not remove allocated ingress NodePorts"
+  fi
+}
+
 restore_state_write() {
   local status=$1 phase=$2
   jq --arg status "$status" --arg phase "$phase" \
@@ -235,11 +278,14 @@ restore_import() {
 
 restore_start() {
   local name
+  local infrastructure=(typesense)
+  if [[ $google_enabled == true ]]; then infrastructure+=(redis); fi
+  infrastructure+=(browse-maintenance)
   kube scale deployment/nats --replicas=1 > /dev/null || return 1
   kube rollout status deployment/nats --timeout="${timeout}s" || return 1
   kube apply -f "$work/restore-nats-init.yml" > /dev/null || return 1
   kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" || return 1
-  for name in typesense redis browse-maintenance; do
+  for name in "${infrastructure[@]}"; do
     kube scale "deployment/$name" --replicas=1 > /dev/null || return 1
     kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
   done
@@ -522,6 +568,26 @@ restore_run() {
     || production_fail "restore verification requires an explicit owner token in auth-accounts.json"
   printf 'header = "%s: %s %s"\n' Authorization Bearer "$(cat "$work/restore-owner-token")" > "$work/restore-curl.conf"
   render
+  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
+    '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
+    > "$work/prior-workloads.json"
+  jq -e --argjson googleEnabled "$google_enabled" '
+    any(.[]; .name == "graphql") and any(.[]; .name == "search")
+    and any(.[]; .name == "browse") and any(.[]; .name == "nats")
+    and any(.[]; .name == "typesense")
+    and (if $googleEnabled then
+      any(.[]; .name == "redis") and any(.[]; .name == "oauth2-proxy")
+      else true end)' \
+    "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
+  jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
+    .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
+  connect
+  lock_holder="restore-$expected-$$"
+  cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
+  locked=true
+  guard_helm_config
+  restore_fresh_target
+  production_ephemeral_secrets
   routes
   cp "$work/routes.yml" "$work/restore-final-routes.json"
   image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
@@ -538,21 +604,6 @@ restore_run() {
     "$work/routes.yml" > "$work/restore-barrier-routes.json"
   cp "$work/restore-barrier-routes.json" "$work/routes.yml"
   annotate_credentials
-  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
-    '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
-    > "$work/prior-workloads.json"
-  jq -e 'any(.[]; .name == "graphql") and any(.[]; .name == "search")
-    and any(.[]; .name == "browse") and any(.[]; .name == "nats")
-    and any(.[]; .name == "typesense") and any(.[]; .name == "redis")' \
-    "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
-  jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
-    .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
-  connect
-  lock_holder="restore-$expected-$$"
-  cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
-  locked=true
-  guard_helm_config
-  restore_fresh_target
   mkdir -m 700 "$state"
   restore_state=$state
   jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
@@ -578,6 +629,8 @@ restore_run() {
   restore_routes_apply "$work/restore-barrier-routes.json"
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
+  restore_remove_ingress_nodeports
+  guard_ingress_service
   restore_current_phase=storage-preflight
   restore_phase "$restore_current_phase"
   if [[ $target == pi ]]; then
@@ -645,6 +698,7 @@ restore_run() {
   restore_wait_reads
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
+  guard_ingress_service
   kube --namespace kube-system patch service recipe-db-internal --type=strategic \
     -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null
   restore_routes_apply "$work/restore-final-routes.json"

@@ -37,5 +37,3 @@ runtime:
   trustedIssuer: https://accounts.google.com
 secrets:
   auth-accounts.json: /absolute/private/path/auth-accounts.json
-  graphql-ingress-secret: /absolute/private/path/graphql-ingress-secret
-  typesense-api-key: /absolute/private/path/typesense-api-key

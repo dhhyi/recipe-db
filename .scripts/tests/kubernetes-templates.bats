@@ -95,6 +95,21 @@ render() {
   ' manifests.json
 }
 
+@test "local loopback uses ServiceLB without exposing internal entrypoints or allocating NodePorts" {
+  for mode in default explicit; do
+    if [ "$mode" = explicit ]; then
+      jq '.config.runtime.ingressMode="loopback"' values.json > local-values.json
+    else
+      jq 'del(.config.runtime.ingressMode)' values.json > local-values.json
+    fi
+    render local-values.json
+    jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+    yq -o=json '.' helm-values.yaml | jq -e '
+      .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
+      and .ports.websecure.expose.default == false and .ports["rest-internal"].expose.default == false'
+  done
+}
+
 @test "explicit private LAN rehearsal exposes only HTTP without NodePorts" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |

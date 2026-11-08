@@ -4,6 +4,10 @@
 
 Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.
 
+## Documentation
+
+Follow the [documentation guidelines in CONTRIBUTING.md](CONTRIBUTING.md#documentation) when writing or revising documentation.
+
 ## Dependency coverage for new projects
 
 When adding a project or dependency manifest, update [.github/dependabot.yml](.github/dependabot.yml) in the same change for every source supported by Dependabot security updates. Preserve the security-only policy (`open-pull-requests-limit: 0`). If introducing another supported ecosystem or manifest layout, extend discovery and Bazel inputs for [.scripts/tests/dependabot.bats](.scripts/tests/dependabot.bats) so future omissions fail CI. For unsupported sources, document the coverage gap in [CONTRIBUTING.md](CONTRIBUTING.md#dependency-security-updates); do not claim they are scanned or enable routine version updates without approval.

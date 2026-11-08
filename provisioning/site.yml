@@ -87,7 +87,7 @@
           - -o
           - StrictHostKeyChecking=yes
           - -o
-          - UserKnownHostsFile=.private/known_hosts
+          - UserKnownHostsFile=~/.config/recipe-db/ssh/known_hosts
           - -i
           - "{{ ansible_ssh_private_key_file }}"
           - "{{ ansible_user }}@{{ ansible_host }}"
@@ -188,11 +188,12 @@
             - name: Manage backup capture prerequisites
               ansible.builtin.import_tasks: backup-toolchain.yml
           always:
-            - name: Restore the previously active backup timer
+            - name: Keep scheduled backups disabled after toolchain maintenance
               ansible.builtin.systemd_service:
                 name: recipe-db-backup.timer
-                state: started
-              when: backup_timer_active.rc | default(-1) == 0
+                enabled: false
+                state: stopped
+              when: backup_timer_active.rc | default(-1) in [0, 3]
 
         - name: Install verified backup publisher
           ansible.builtin.copy:
@@ -492,12 +493,12 @@
           when: "'recipe-db-pi' not in backup_contexts.stdout_lines"
           changed_when: true
 
-        - name: Enable nightly backup timer
+        - name: Leave scheduled backup timer inactive until operator acceptance
           ansible.builtin.systemd_service:
             name: recipe-db-backup.timer
             daemon_reload: true
-            enabled: true
-            state: started
+            enabled: false
+            state: stopped
 
         - name: Verify bundled Traefik is available
           ansible.builtin.command: /usr/local/bin/k3s kubectl -n kube-system rollout status deployment/traefik --timeout=300s

@@ -1,0 +1,38 @@
+- name: Explicitly enable scheduled backups after acceptance
+  hosts: pi
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Check backup capture status without displaying private details
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/recipe-db-backup-upload
+          - status
+          - --config
+          - /etc/recipe-db/backup.json
+      register: backup_status
+      changed_when: false
+      no_log: true
+
+    - name: Read the private backup configuration generation marker
+      ansible.builtin.slurp:
+        src: /etc/recipe-db/backup-configured-at
+      register: backup_configuration_timestamp
+      no_log: true
+
+    - name: Require a verified explicit capture before enabling the timer
+      ansible.builtin.assert:
+        that:
+          - (backup_status.stdout | from_json).status in ['verified-upload', 'verified-unchanged']
+          - (backup_status.stdout | from_json).lastCheck is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+]00:00$')
+          - (backup_configuration_timestamp.content | b64decode | trim) is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+]00:00$')
+          - (backup_status.stdout | from_json).lastCheck > (backup_configuration_timestamp.content | b64decode | trim)
+        fail_msg: Run and verify an explicit backup capture before enabling the timer.
+      no_log: true
+
+    - name: Enable the scheduled backup timer
+      ansible.builtin.systemd_service:
+        name: recipe-db-backup.timer
+        daemon_reload: true
+        enabled: true
+        state: started

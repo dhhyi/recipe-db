@@ -170,9 +170,22 @@ fi
 
 config_file=$project_dir/.devcontainer/devcontainer.json
 label=devcontainer.config_file=$config_file
+private_config_dir=
+container_running=false
+if [ "$project" = provisioning ] && [ -n "${HOME:-}" ] \
+  && [ -d "$HOME/.config/recipe-db" ]; then
+  private_config_dir=$(cd "$HOME/.config/recipe-db" && pwd -P)
+  case $private_config_dir in
+    *,*)
+      echo "The provisioning configuration path cannot contain a comma" >&2
+      exit 1
+      ;;
+  esac
+fi
 containers=$(docker ps --filter "label=$label" --format '{{.ID}}')
 container_id=$(printf '%s\n' "$containers" | sed -n '1p')
 if [ -n "$container_id" ]; then
+  container_running=true
   echo "Using existing running container $container_id" >&2
 else
   containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
@@ -180,7 +193,38 @@ else
   if [ -n "$container_id" ]; then
     echo "Starting existing stopped container $container_id" >&2
   fi
-  container_result=$(devcontainer up --workspace-folder "$project_dir")
+fi
+# Docker Desktop may translate bind sources; retain the requested path as a label.
+if [ -n "$container_id" ] && [ -n "$private_config_dir" ] \
+  && ! docker inspect "$container_id" | jq -e --arg source "$private_config_dir" '
+    .[0] | .Config.Labels["recipe-db.private-config-source"] as $requested_source |
+    any(.Mounts[]?;
+      .Type == "bind" and .Destination == "/home/vscode/.config/recipe-db"
+      and (.Source == $source or $requested_source == $source))
+  ' > /dev/null; then
+  if [ "$remove_after" = true ]; then
+    stale_containers=$(docker ps -a --filter "label=$label" --format '{{.ID}}')
+    while IFS= read -r stale_container; do
+      [ -n "$stale_container" ] || continue
+      docker rm -f "$stale_container" >&2
+    done << EOF
+$stale_containers
+EOF
+    container_id=
+    container_running=false
+  else
+    echo "The existing provisioning container lacks the private configuration mount; rerun with --rm to recreate it" >&2
+    exit 1
+  fi
+fi
+if [ "$container_running" = false ]; then
+  if [ -n "$private_config_dir" ]; then
+    container_result=$(devcontainer up --workspace-folder "$project_dir" \
+      --id-label "recipe-db.private-config-source=$private_config_dir" \
+      --mount "type=bind,source=$private_config_dir,target=/home/vscode/.config/recipe-db")
+  else
+    container_result=$(devcontainer up --workspace-folder "$project_dir")
+  fi
   container_id=$(printf '%s\n' "$container_result" | jq -er '.containerId')
   if [ "$retain" = false ]; then
     stop_after=true

@@ -401,7 +401,7 @@ assert_compose() {
   jq -n --arg id "test.apps.googleusercontent.com" --slurpfile projects projects.jsonl \
     '{projects:$projects,googleOAuthClientId:$id}' > route-values.json
 
-  run mise exec -- ytt \
+  run --separate-stderr mise exec -- ytt \
     -f .scripts/templates/traefik-template.yml \
     -f .scripts/templates/browse-maintenance-template.lib.yml \
     -f .scripts/templates/service-template.lib.yml \
