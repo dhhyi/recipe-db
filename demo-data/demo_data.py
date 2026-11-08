@@ -167,14 +167,16 @@ async def assign_demo_tags(recipe_id, tag_ids, graphql_client=None):
 
 
 async def maybe_add_image(number, recipe_id):
-    image_file = f"recipe{number}.jpg"
-    if file_exists(image_file):
-        print(f"Adding image to recipe {recipe_id}")
-        with open(image_file, mode="rb") as content:
-            content = content.read()
-            upload = Upload(image_file, content, "image/jpeg")
-            result = await client.add_image(recipe_id, upload)
-            print(f"-> {result.set_image.url}")
+    for extension, content_type in [("jpg", "image/jpeg"), ("png", "image/png")]:
+        image_file = f"recipe{number}.{extension}"
+        if file_exists(image_file):
+            print(f"Adding image to recipe {recipe_id}")
+            with open(image_file, mode="rb") as content:
+                content = content.read()
+                upload = Upload(image_file, content, content_type)
+                result = await client.add_image(recipe_id, upload)
+                print(f"-> {result.set_image.url}")
+            return
 
 
 async def main():
@@ -208,6 +210,10 @@ async def main():
         recipe_id = await insert_recipe(5)
         await maybe_add_image(5, recipe_id)
         await random_rate_recipe(recipe_id)
+
+        recipe_id = await insert_recipe(6)
+        await maybe_add_image(6, recipe_id)
+        await rate_recipe(recipe_id, 4)
 
     except GraphQLClientHttpError as graphql_error:
         print(f"HTTP error: {graphql_error.status_code}")

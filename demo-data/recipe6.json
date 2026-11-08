@@ -1,0 +1,33 @@
+{
+  "name": "Kritharaki-Pfanne mit Gemüse",
+  "ingredients": [
+    { "name": "Zwiebeln ", "amount": "3", "unit": null, "optional": false },
+    { "name": "Paprika ", "amount": "500", "unit": "g", "optional": false },
+    { "name": "Zucchini ", "amount": "500", "unit": "g", "optional": false },
+    {
+      "name": "Passierte Tomaten ",
+      "amount": null,
+      "unit": "Flasche",
+      "optional": false
+    },
+    { "name": "Erbsen (TK)", "amount": "500", "unit": "g", "optional": false },
+    { "name": "Babyspinat ", "amount": null, "unit": null, "optional": false },
+    { "name": "Kritharaki", "amount": "500", "unit": "g", "optional": false },
+    {
+      "name": "Knoblauchgranulat ",
+      "amount": null,
+      "unit": null,
+      "optional": false
+    },
+    { "name": "Pfeffer ", "amount": null, "unit": null, "optional": false },
+    { "name": "Salz", "amount": null, "unit": null, "optional": false },
+    { "name": "Brühpulver", "amount": null, "unit": null, "optional": false },
+    {
+      "name": "Paprikapulver",
+      "amount": null,
+      "unit": null,
+      "optional": false
+    },
+    { "name": "Olivenöl ", "amount": null, "unit": null, "optional": false }
+  ]
+}
