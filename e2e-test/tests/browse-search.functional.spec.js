@@ -464,6 +464,9 @@ test("custom native sort survives pagination, reload, history, and text edits", 
     "Benutzerdefinierte Sortierung",
   );
   await sort.selectOption("");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("sort_by"))
+    .toBe(false);
   expect(new URL(page.url()).searchParams.has("sort_by")).toBe(false);
   await expect(sort.locator("option:checked")).toHaveText("Automatisch");
 });
