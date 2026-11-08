@@ -20,6 +20,15 @@ setup() {
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
+@test "CI builds all Bazel targets including script regression tests" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  script=$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks and unit tests") | .run' "$workflow")
+
+  [[ "$script" == *"mise run --raw generate-bazel-build"* ]]
+  [[ "$script" == *"mise run --raw bazel build"* ]]
+  [[ "$script" == *" //:all"* ]]
+}
+
 @test "Publish validates title edits only when WIP is removed without cancelling on other edits" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   run env WORKFLOW="$(yq -o=json "$workflow")" node << 'EOF'

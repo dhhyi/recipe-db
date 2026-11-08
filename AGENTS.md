@@ -90,7 +90,7 @@ When instructed to create a Git worktree, run `mise install` from the new worktr
 
 ## Working on Bazel scripts
 
-When running checks, linting, or regression tests for Bazel scripts, run them directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules, not a requirement to duplicate the pre-commit hook's checks.
+When running checks, linting, or regression tests for Bazel scripts, run them directly on the host from the repository root, not inside any project's devcontainer. This is an exception to the project-tooling and precommit-check rules.
 
 For a single topic group, use `mise run test-scripts <group>` or `mise run --raw bazel build --action_env=PATH --jobs=1 //:test_scripts_<group>`. For one suite, use `mise run test-scripts .scripts/tests/<suite>.bats` or build `//:test_scripts_suite_<suite>`. Use the `bazel` Mise task for direct Bazel commands, as the hook and CI do: it constructs PATH from Mise-managed tool directories, the Mise executable's directory and fixed system directories (`/usr/local/bin:/usr/bin:/bin`), excluding caller-specific Git/VS Code paths. Keep `--action_env=PATH` on builds so tool-path changes still invalidate actions. Groups and each suite's explicit inputs are defined in `.scripts/tests/groups.yaml`: `compose`, `release`, `deploy`, `backup`, `restore`, `tasks`, `workflows`, `precommit`, `freshness`, `devcontainer`, `formatting`, and `tooling`. Each suite has an independent Bazel cache action; group targets aggregate their suites. Assign every new Bats suite to exactly one group and list its inputs; generation rejects unassigned suites and patterns matching no files.
 
@@ -100,7 +100,9 @@ Project generator, format, and check commands invoked by Bazel must still run in
 
 Unless the user asks to leave changes uncommitted, commit each self-contained implementation step before moving to the next instead of waiting until the whole task is done. Sessions can time out and lose uncommitted work.
 
-The pre-commit hook runs ShellCheck, all script regression test groups, and applicable project formatting/checks. Do not manually duplicate these standard checks before committing. During development, run only targeted tests needed to reproduce a bug or verify an intermediate change, preferably through the corresponding Bazel target so pre-commit can reuse its cache. Run broader checks manually only when explicitly requested, diagnosing a hook failure, or when no commit will be made.
+The pre-commit hook runs ShellCheck and applicable project formatting/checks, but no script regression tests. CI builds all Bazel targets, including every script regression suite. Do not manually duplicate the hook's checks before committing.
+
+Whenever changing code or scripts, run the smallest relevant tests that verify the changed behavior and preserve existing behavior, even when a commit will be made. Prefer a single script-test suite or focused project test selector; use a topic group only when the change spans multiple suites. Use the commands above for script tests and the project's devcontainer for project tests. Leave exhaustive tests to CI; run broader checks locally only when explicitly requested or needed to diagnose a failure.
 
 The pre-commit hook may apply formatting fixes and then abort the commit with `Files were probably changed by precommit script`. In that case, review the changes, stage the affected files again with `git add`, and repeat the commit.
 

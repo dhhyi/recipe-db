@@ -43,7 +43,7 @@ setup() {
   [ ! -s "$MOCK_LOG" ]
 }
 
-@test "precommit builds the cacheable script-test and lint targets for root file changes" {
+@test "precommit builds ShellCheck without script tests for root file changes" {
   touch root.txt
   git add root.txt
 
@@ -53,7 +53,7 @@ setup() {
   cat > expected-calls << 'EOF'
 pnpm exec prettier --log-level warn --write .
 mise run --raw generate-bazel-build
-mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck
 EOF
   cmp expected-calls "$MOCK_LOG"
 }
@@ -73,7 +73,7 @@ EOF
 mise run --raw bazel build --action_env=PATH --jobs=1 //:example_format_check
 mise run --raw bazel build --action_env=PATH --jobs=1 //:other_format_check
 mise run --raw bazel build --action_env=PATH --jobs=1 //:example_check //:other_check
-mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck
 EOF
   cmp expected-calls bazel-calls
   run -1 grep -F 'in-devcontainer' "$MOCK_LOG"
