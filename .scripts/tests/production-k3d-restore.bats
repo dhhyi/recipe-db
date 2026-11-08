@@ -36,11 +36,48 @@ load production-k3d-restore-setup
   export MOCK_SERVICE_TYPE=ClusterIP
   run_restore
   [ "$status" -ne 0 ]
-  [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
   [ -e "$MOCK_LOG.lease" ]
   jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
   jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
   run ! grep -Eq 'restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
+}
+
+@test "restore hardens historical default LoadBalancer and removes allocated NodePorts" {
+  restore_fixture
+  export MOCK_NODEPORT=true
+  run_restore
+  [ "$status" -eq 0 ]
+  [ -e "$MOCK_LOG.ingress-nodeports-removed" ]
+  jq -e '.service.type == "LoadBalancer" and
+    .service.spec.allocateLoadBalancerNodePorts == false and .deployment != null' "$MOCK_LOG.helm-values"
+  local patch imports
+  patch=$(awk '/patch service traefik --type=strategic --patch-file/ {print NR; exit}' "$MOCK_LOG")
+  imports=$(awk '/exec -i restore-volume-.*tar -xpkf/ {print NR; exit}' "$MOCK_LOG")
+  [ "$patch" -lt "$imports" ]
+  jq -e '.status == "succeeded"' "$RESTORE_STATE/restore-state.json"
+}
+
+@test "restore fails closed if allocated NodePorts cannot be removed" {
+  restore_fixture
+  export MOCK_NODEPORT=true MOCK_INGRESS_PATCH_FAIL=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restore could not remove allocated ingress NodePorts"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+  run ! grep -Eq 'restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
+}
+
+@test "restore never patches a LoadBalancer with unsafe exposure" {
+  restore_fixture
+  export MOCK_NODEPORT=true MOCK_EXTERNAL_IP=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq 'patch service traefik|restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
 }
 
 @test "restore rechecks ingress before reopening and retains the barrier on drift" {

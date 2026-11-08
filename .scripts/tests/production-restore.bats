@@ -2,6 +2,51 @@
 
 load test_helper
 
+@test "restore changes only target-specific Traefik service policy in historical values" {
+  cat > work/rendered-base.yml << 'EOF'
+kind: HelmChartConfig
+metadata: {name: traefik, namespace: kube-system}
+spec:
+  valuesContent: |
+    deployment: {replicas: 1}
+    ports:
+      websecure: {expose: {default: false}}
+      rest-internal: {expose: {default: false}}
+EOF
+  cp work/rendered-base.yml original.yml
+  cat > ingress-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+target=$1
+ingress_mode=$2
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+restore_ingress_values
+EOF
+  for case in 'local loopback LoadBalancer' 'pi loopback ClusterIP' 'pi private-lan LoadBalancer'; do
+    read -r target mode expected <<< "$case"
+    cp original.yml work/rendered-base.yml
+    run bash ingress-harness.sh "$target" "$mode"
+    [ "$status" -eq 0 ]
+    yq -o=json '.spec.valuesContent | from_yaml' work/rendered-base.yml \
+      | jq -e --arg expected "$expected" '
+        .service.type == $expected and
+        (if $expected == "LoadBalancer" then .service.spec.allocateLoadBalancerNodePorts == false
+         else .service.spec.allocateLoadBalancerNodePorts == null end) and
+        .deployment == {replicas:1} and .ports.websecure.expose.default == false and
+        .ports["rest-internal"].expose.default == false'
+  done
+  {
+    cat original.yml
+    printf '%s\n' '---'
+    cat original.yml
+  } > work/rendered-base.yml
+  run bash ingress-harness.sh local loopback
+  [ "$status" -ne 0 ]
+  [[ $output == *"exactly one Traefik HelmChartConfig"* ]]
+}
+
 @test "restore startup without Google never requests an absent Redis deployment" {
   printf '[{"name":"nats"},{"name":"typesense"},{"name":"graphql"},{"name":"browse-maintenance"},{"name":"recipes"},{"name":"search"},{"name":"browse"}]\n' \
     > work/prior-workloads.json

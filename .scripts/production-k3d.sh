@@ -191,6 +191,9 @@ render() {
   ytt -f "$root/.scripts/templates/kubernetes-template.yml" \
     -f "$root/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
+  if [[ $command == restore ]]; then
+    restore_ingress_values
+  fi
   yq '(select(.kind == "HelmChartConfig").metadata.labels."app.kubernetes.io/part-of") = "recipe-db"' \
     "$work/rendered-base.yml" > "$work/rendered.yml"
 }
