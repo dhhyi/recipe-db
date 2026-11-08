@@ -1,5 +1,5 @@
 diff --git a/index.js b/index.js
-index a38ac43d9556366a00571355b4447e84430f3496..6fc161dbdfa60f0551a80d41644f97b3d2707a3a 100644
+index a38ac43d9556366a00571355b4447e84430f3496..7d4abcb830ed2b189870f0ea6336f4f486adcc92 100644
 --- a/index.js
 +++ b/index.js
 @@ -1,6 +1,6 @@
@@ -10,7 +10,9 @@ index a38ac43d9556366a00571355b4447e84430f3496..6fc161dbdfa60f0551a80d41644f97b3
      path = require('path');
  
  const defaultOptions = {
-@@ -293,7 +293,3 @@ function reduceGlobPatterns(globs) {
+@@ -291,10 +291,6 @@ function reduceGlobPatterns(globs) {
+     else if (!globs || !Array.isArray(globs) || globs.length === 0) {
+         return undefined;
      } else {
 -        // combine globs into one single RegEx
 -        const regex = new RegExp(globs.reduce((acc, exclude) => {
@@ -19,3 +21,4 @@ index a38ac43d9556366a00571355b4447e84430f3496..6fc161dbdfa60f0551a80d41644f97b3
 -        return param => regex.test(param);
 +        return param => globs.some(pattern => minimatch(param, pattern));
      }
+ }

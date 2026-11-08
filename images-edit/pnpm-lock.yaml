@@ -166,7 +166,7 @@ overrides:
   folder-hash>minimatch: ^11.0.1
 
 patchedDependencies:
-  folder-hash@3.3.5: ea38df60c6a3ef6eb3c6e77ebe63d54be80eebee59037bae613e8abd92c75d71
+  folder-hash@3.3.5: c73f88d685d73b041a0d66e485cf18349bdc1cca8ba9e556279aef649a24d2c5
 
 importers:
 
@@ -947,7 +947,7 @@ snapshots:
       elm-solve-deps-wasm: 2.0.0
       fastest-levenshtein: 1.0.16
       find-up: 5.0.0
-      folder-hash: 3.3.5(patch_hash=ea38df60c6a3ef6eb3c6e77ebe63d54be80eebee59037bae613e8abd92c75d71)(supports-color@7.2.0)
+      folder-hash: 3.3.5(patch_hash=c73f88d685d73b041a0d66e485cf18349bdc1cca8ba9e556279aef649a24d2c5)(supports-color@7.2.0)
       got: 11.8.6
       graceful-fs: 4.2.11
       minimist: 1.2.8
@@ -993,7 +993,7 @@ snapshots:
       locate-path: 6.0.0
       path-exists: 4.0.0
 
-  folder-hash@3.3.5(patch_hash=ea38df60c6a3ef6eb3c6e77ebe63d54be80eebee59037bae613e8abd92c75d71)(supports-color@7.2.0):
+  folder-hash@3.3.5(patch_hash=c73f88d685d73b041a0d66e485cf18349bdc1cca8ba9e556279aef649a24d2c5)(supports-color@7.2.0):
     dependencies:
       debug: 4.3.7(supports-color@7.2.0)
       graceful-fs: 4.2.11
