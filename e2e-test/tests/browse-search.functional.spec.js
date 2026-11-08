@@ -441,6 +441,7 @@ test("custom native sort survives pagination, reload, history, and text edits", 
   await expect(sort).toHaveValue(sortBy);
 
   await page.locator("[data-recipe-id] a[slot=title]").first().click();
+  await expect(page).toHaveURL(/\/recipe\//);
   await page.goBack();
   await expect(page).toHaveURL(/sort_by=/);
   expect(new URL(page.url()).searchParams.get("sort_by")).toBe(sortBy);
@@ -525,12 +526,16 @@ test("ordinary GET search works without JavaScript", async ({
   browser,
   baseURL,
   request,
+  authContexts,
   demoRecipe,
 }) => {
   await waitForRecipeIndexed(request, demoRecipe.id);
   const context = await browser.newContext({
     javaScriptEnabled: false,
     baseURL,
+    extraHTTPHeaders: {
+      authorization: authContexts.authorizationHeader("owner"),
+    },
   });
   try {
     const page = await context.newPage();
@@ -1013,7 +1018,7 @@ test("typing debounces by 300ms while Enter and sorting submit immediately", asy
     .getByLabel("Sortieren nach", { exact: true })
     .selectOption(sortByValues.updated);
   await expect.poll(() => queries).toHaveLength(3);
-  expect(queries[2]).toEqual(["enter", "updated"]);
+  expect(queries[2]).toEqual(["enter", sortByValues.updated]);
   await expect(page.locator("#browse-metadata")).toHaveAttribute(
     "data-sort-by",
     sortByValues.updated,

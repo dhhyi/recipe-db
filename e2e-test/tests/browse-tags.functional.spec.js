@@ -207,6 +207,9 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   await page
     .getByLabel("Sortieren nach", { exact: true })
     .selectOption("rating_average:desc,rating_count:desc,recipe_id_sort:asc");
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("sort_by"))
+    .toBe("rating_average:desc,rating_count:desc,recipe_id_sort:asc");
   expect(new URL(page.url()).searchParams.get("sort_by")).toBe(
     "rating_average:desc,rating_count:desc,recipe_id_sort:asc",
   );

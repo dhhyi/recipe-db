@@ -63,6 +63,12 @@ fn searchResponse(a: Allocator, root: Value) ![]const u8 {
     });
 }
 
+fn invalidTypesenseOptions(response: Response) bool {
+    if (response.status == 400 or response.status == 422) return true;
+    return response.status == 404 and
+        std.mem.indexOf(u8, response.body, "Could not find a field named") != null;
+}
+
 test "search cutoff is explicitly forwarded and missing or malformed metadata fails closed" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -83,6 +89,21 @@ test "search cutoff is explicitly forwarded and missing or malformed metadata fa
     }
     _ = root.object.swapRemove("search_cutoff");
     try std.testing.expectError(error.InvalidDependencyResponse, searchResponse(a, root));
+}
+
+test "Typesense unknown search fields are invalid options, not dependency outages" {
+    try std.testing.expect(invalidTypesenseOptions(.{
+        .status = 404,
+        .body = "{\"message\":\"Could not find a field named `unknown_sort_field` in the schema.\"}",
+    }));
+    try std.testing.expect(!invalidTypesenseOptions(.{
+        .status = 404,
+        .body = "{\"message\":\"Collection not found.\"}",
+    }));
+    try std.testing.expect(!invalidTypesenseOptions(.{
+        .status = 503,
+        .body = "{\"message\":\"Could not find a field named `unknown_sort_field` in the schema.\"}",
+    }));
 }
 
 fn problem(request: *std.http.Server.Request, a: Allocator, status: std.http.Status, code: []const u8, detail: []const u8) !void {
@@ -140,7 +161,7 @@ fn serve(request: *std.http.Server.Request, a: Allocator, cfg: Config, state: *S
         return problem(request, a, if (err == error.InvalidSearchOptions) .bad_request else .service_unavailable, if (err == error.InvalidSearchOptions) "invalid-search-options" else "search-dependency-unavailable", if (err == error.InvalidSearchOptions) "Expected a flat JSON object of string, number or boolean Typesense options." else "Search could not reach or validate its Typesense dependency.");
     };
     if (response.status != 200) {
-        const invalid = response.status == 400 or response.status == 422;
+        const invalid = invalidTypesenseOptions(response);
         return problem(request, a, if (invalid) .bad_request else .service_unavailable, if (invalid) "invalid-search-options" else "search-dependency-unavailable", if (invalid) response.body else "Typesense rejected the search request.");
     }
     try request.respond(response.body, .{ .keep_alive = false, .extra_headers = &.{.{ .name = "Content-Type", .value = "application/json" }} });
