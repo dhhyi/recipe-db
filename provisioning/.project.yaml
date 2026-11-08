@@ -13,6 +13,8 @@ devcontainer:
       - RUN mise use -g python@3.13.9
       - RUN pip install ansible-core==2.20.1
       - RUN mise use -g rclone@1.75.2
+  ports:
+    - 53682
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
 vscode:
