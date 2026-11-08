@@ -17,7 +17,7 @@ This cookbook helps the operator diagnose and rehearse recovery of the dedicated
 **Operator action:** approve a protected-copy rehearsal first, with a separate approval gate before live installation or a service run. Confirm privately:
 
 - The dedicated Google account is accessible. An independent, off-device account access/recovery method exists; its only copy must not be on the Pi, workstation or behind the Drive authorization being recovered. Do not disclose the method. Google account recovery may require operator/provider action and is not guaranteed.
-- The existing dedicated **Desktop OAuth client** configuration is available. It is separate from application sign-in credentials and from `backup/rclone.conf`, which contains authorized, refresh-token-bearing remote state. Client JSON alone does not restore Drive access.
+- The existing dedicated **Desktop OAuth client** configuration is available privately, for example as `backup/drive-oauth-client.json` in the operator directory. It is separate from application sign-in credentials and from the Pi's `/etc/recipe-db/rclone.conf`, which contains authorized, refresh-token-bearing remote state. Do not assume a workstation copy of that authorization exists. Client JSON alone does not restore Drive access.
 - The intended remote, folder and deployment identity match `backup/backup.json` and the existing authorized remote. The deployed destination is documented as `gdrive:RecipeDB Backups`; confirm the actual private configuration rather than assuming it.
 - Authorization must retain the same client, account, remote settings and `https://www.googleapis.com/auth/drive.file` scope. Files created outside that client may not be accessible. Do not recreate folders or broaden scope to make a test pass.
 - The current deployment, release and private administration target are identified. A later rebuilt deployment needs its own live checks.
@@ -57,7 +57,13 @@ In its private terminal:
 ```fish
 umask 077
 set rehearsal (mktemp -d ~/.config/recipe-db/backup/reauthorization.XXXXXXXX)
-cp ~/.config/recipe-db/backup/rclone.conf "$rehearsal/rclone.conf"
+```
+
+**Operator-approved input preparation:** place a protected copy of the latest usable authorization at `$rehearsal/rclone.conf`. If authorization exists only on the Pi, coordinate a quiescent, locked window as in step 5 and retrieve the file through authenticated private administration with verified SSH host keys and secret-output suppression. Do not display its contents, run installation to retrieve it, or assume an older workstation copy is current. If the Pi is unavailable and no usable copy exists, stop and agree a private reconstruction flow using the existing client and exact remote settings; client JSON is not an authorized config.
+
+After the private working copy exists, in the same terminal:
+
+```fish
 chmod 600 "$rehearsal/rclone.conf"
 rclone config reconnect '<confirmed-remote-name>:' \
   --config "$rehearsal/rclone.conf"
