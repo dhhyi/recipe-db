@@ -25,6 +25,9 @@ func (state BrowseState) PaginationValues() string {
 
 func (state BrowseState) Title() string {
 	if state.Kind == "error" {
+		if state.Message == "Ungültige Suchparameter." {
+			return "Ungültige Suchparameter | RezeptDB"
+		}
 		if state.FilterBy != "" {
 			return "Suchfilter konnten nicht angewendet werden | RezeptDB"
 		}

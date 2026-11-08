@@ -192,8 +192,10 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 							}
 							if invalidSearchOptions(searchErr) {
 								status = http.StatusBadRequest
-								filterExecutionFailed = request.filterBy != ""
-								sortExecutionFailed = request.sortBy != ""
+								state.Message = "Ungültige Suchparameter."
+								state.Kind, state.Recipes, state.NextURL = "error", nil, ""
+								filterExecutionFailed = request.filterBy != "" && request.sortBy == ""
+								sortExecutionFailed = request.sortBy != "" && request.filterBy == ""
 							}
 							break
 						}

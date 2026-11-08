@@ -482,6 +482,57 @@ func TestBrowseInvalidNativeSortReachesSearchAndIsReported(t *testing.T) {
 	}
 }
 
+func TestBrowseInvalidSearchOptionsUseGenericErrorWhenUnattributed(t *testing.T) {
+	for _, fragment := range []bool{false, true} {
+		for _, options := range []string{
+			"filter_by=unknown_field%3A%3D%22value%22&sort_by=unknown_sort_field%3Adesc",
+			"q=very-long-query",
+		} {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct{ OperationName string }
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				if request.OperationName == "BrowseServices" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+						"searchOnline": true, "ratingsOnline": false,
+					}})
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []any{
+					map[string]any{"message": "invalid search options", "extensions": map[string]any{
+						"code": "invalid-search-options", "status": http.StatusBadRequest,
+					}},
+				}})
+			}))
+			handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+			request := httptest.NewRequest(http.MethodGet, "/?"+options, nil)
+			if fragment {
+				request.Header.Set("HX-Request", "true")
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			upstream.Close()
+
+			body := html.UnescapeString(response.Body.String())
+			wantStatus := http.StatusBadRequest
+			if fragment {
+				wantStatus = http.StatusOK
+			}
+			if response.Code != wantStatus ||
+				!strings.Contains(body, "Ungültige Suchparameter.") ||
+				strings.Contains(body, "Suchfilter konnten nicht angewendet werden.") ||
+				strings.Contains(body, "Sortierung konnte nicht angewendet werden.") ||
+				strings.Contains(body, `data-recipe-id=`) {
+				t.Fatalf("unattributed invalid options did not produce a generic empty error state: %d %s", response.Code, body)
+			}
+			if fragment && !strings.Contains(body, "<title>Ungültige Suchparameter | RezeptDB</title>") {
+				t.Fatalf("HTMX error title was not generic: %s", body)
+			}
+		}
+	}
+}
+
 func TestBrowseHTTP(t *testing.T) {
 	for _, tc := range []struct {
 		name, kind                   string
