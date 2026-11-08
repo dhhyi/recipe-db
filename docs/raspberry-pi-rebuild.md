@@ -134,7 +134,9 @@ mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 
 Before restoring, follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to locate and verify the backup and its matching release artifact.
 
-Restore directly into the fresh cluster using the recorded package/manifest pair and a new private state path. Do **not** deploy the application first:
+Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.
+
+Replace `MANIFEST` and `ARCHIVE` with the matching files obtained through the [recovery guide](production-kubernetes.md#fresh-deployment-restore). Leave the remaining lines unchanged.
 
 ```sh
 VALUES="$HOME/.config/recipe-db/deployment/pi-values.yaml"
@@ -147,20 +149,18 @@ KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
   "$BACKUP_ID" "$STATE" "RESTORE-$BACKUP_ID"
 ```
 
-Restore verifies package contents and release compatibility, refuses populated targets, isolates writers, rebuilds derived services and keeps public access blocked until validation succeeds. Don't hand-copy PVC contents or apply rendered manifests. See the [restore verification and failure-recovery procedure](production-kubernetes.md#fresh-deployment-restore).
+If restore fails, keep the target isolated and follow the [failure-recovery procedure](production-kubernetes.md#fresh-deployment-restore). Don't copy PVC data, apply rendered manifests, delete data or release a recovery lock manually to force success.
 
 After restore, verify:
 
-- Recipe DB is accessible; representative recipe reads and image pairs work.
-- Search is ready and changes propagate.
-- Configured browser authentication works.
-- Host reboot recovery works.
-
-If restore fails, keep the target isolated. Don't delete data or release a recovery lock to force success. Record verification evidence before considering the rebuild complete.
+- Open Recipe DB; view a recipe and its image.
+- Search for a recipe, edit it, and confirm the change appears.
+- Verify sign-in if configured.
+- Reboot the Pi and confirm Recipe DB becomes accessible again.
 
 ## 8. Set up automated backups
 
-- After restore and acceptance, prepare `backup.json`, `backup-values.yaml`, `backup-release-ref`, and `rclone.conf` under `~/.config/recipe-db/backup/`. Keep any private application files referenced by `backup-values.yaml` directly under `~/.config/recipe-db/deployment/`. The configuration guide documents the required values and paths.
+- Prepare the backup files and application inputs listed in the [configuration guide](production-configuration.md#private-workstation-directory).
 - In the provisioning devcontainer's SSH-agent shell, install the prepared inputs:
 
   ```sh
@@ -168,23 +168,20 @@ If restore fails, keep the target isolated. Don't delete data or release a recov
     backup-configure.yml --ask-become-pass
   ```
 
-  The playbook copies these inputs and the referenced application files to root-owned `/etc/recipe-db/` with mode `0600`, and rewrites the values file's private-input paths to its Pi locations. It does not mount or copy the operator's home directory onto the Pi, expose secret values in Ansible output, or enable scheduled capture.
+  This installs the prepared files on the Pi. Scheduled backups remain disabled.
 
-- If Drive authorization can't be restored, reauthorize it interactively; OAuth client JSON cannot recreate an rclone grant.
-- While the timer remains disabled, run an explicit capture on the Pi and confirm its result:
+- On the Pi, run a backup and check its status:
 
   ```sh
   sudo systemctl start recipe-db-backup.service
   sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
   ```
 
-  Continue only when status is `verified-upload` or `verified-unchanged`; these statuses require remote readback verification. The configure playbook records a private completion timestamp, and the enable playbook also requires `lastCheck` to be later than that timestamp, so a capture from before or during reconfiguration cannot authorize scheduling. Investigate any other status before proceeding.
+  Continue only if status is `verified-upload` or `verified-unchanged`. Investigate any other result before enabling scheduled backups.
 
-- Only after verifying the capture, explicitly enable the timer from the provisioning devcontainer's SSH-agent shell:
+- In the provisioning devcontainer's SSH-agent shell, enable scheduled backups:
 
   ```sh
   ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
     backup-enable.yml --ask-become-pass
   ```
-
-  This playbook refuses to enable the timer without a verified capture. Base host provisioning always leaves scheduled capture stopped and disabled.
