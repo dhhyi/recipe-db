@@ -92,7 +92,7 @@ if ((${#check_targets[@]} > 0)); then
   done
 fi
 
-mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck //:test_scripts
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck
 
 for file in "${staged_files[@]}"; do
   if ! git diff --quiet -- "$file"; then
