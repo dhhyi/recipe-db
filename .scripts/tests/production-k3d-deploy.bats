@@ -423,6 +423,46 @@ legacy_pi_claims() {
   ' "$MOCK_LOG.routers"
 }
 
+@test "local loopback deploy requires a safe LoadBalancer and managed loopback bindings" {
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  for fault in type nodeport allocate external; do
+    export MOCK_SERVICE_TYPE=auto MOCK_NODEPORT=false MOCK_ALLOCATE_NODEPORT=false MOCK_EXTERNAL_IP=false
+    case "$fault" in
+      type) export MOCK_SERVICE_TYPE=ClusterIP ;;
+      nodeport) export MOCK_NODEPORT=true ;;
+      allocate) export MOCK_ALLOCATE_NODEPORT=true ;;
+      external) export MOCK_EXTERNAL_IP=true ;;
+    esac
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  done
+  export MOCK_PUBLIC=true
+  : > "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"loopback-only"* ]]
+  run ! grep -q 'apply -f' "$MOCK_LOG"
+}
+
+@test "Pi loopback deploy requires ClusterIP and rejects unsafe exposure" {
+  no_google_values
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  for fault in type nodeport external; do
+    export MOCK_SERVICE_TYPE=auto MOCK_NODEPORT=false MOCK_EXTERNAL_IP=false
+    case "$fault" in
+      type) export MOCK_SERVICE_TYPE=LoadBalancer ;;
+      nodeport) export MOCK_NODEPORT=true ;;
+      external) export MOCK_EXTERNAL_IP=true ;;
+    esac
+    run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+    [ "$status" -ne 0 ]
+    [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  done
+}
+
 @test "Google-disabled private LAN ingress is explicit and refuses public origins and NodePorts" {
   no_google_values
   set_value '.runtime.ingressMode="private-lan" | .origin="http://recipe-pi.home"'

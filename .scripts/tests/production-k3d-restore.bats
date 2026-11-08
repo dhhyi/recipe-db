@@ -31,6 +31,30 @@ load production-k3d-restore-setup
   run ! grep -q private-restore-token "$MOCK_LOG"
 }
 
+@test "restore retains its barrier when local ingress is not a safe LoadBalancer" {
+  restore_fixture
+  export MOCK_SERVICE_TYPE=ClusterIP
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+  run ! grep -Eq 'restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
+}
+
+@test "restore rechecks ingress before reopening and retains the barrier on drift" {
+  restore_fixture
+  export MOCK_SERVICE_DRIFT=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"ingress does not match the requested exposure without NodePorts"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+  run ! grep -q 'restore-final-routes' "$MOCK_LOG"
+}
+
 @test "restore without Google imports and verifies before reopening without Redis or OAuth workloads" {
   restore_fixture
   jq 'del(.runtime.googleOAuthClientId, .secrets["google-oauth-client-secret"],

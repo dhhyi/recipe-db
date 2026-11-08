@@ -309,6 +309,19 @@ guard_helm_config() {
   fi
 }
 
+guard_ingress_service() {
+  kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
+  jq -e --arg target "$target" --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
+    (if $target == "local" or $ingress == "private-lan" then
+      .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
+      ([.spec.ports[].port] | sort) ==
+        (if $config[0].httpsStaging then [80,8081,8443] else [80] end)
+     else .spec.type == "ClusterIP" end) and
+    ((.spec.externalIPs // []) | length == 0) and
+    all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
+    || production_fail "ingress does not match the requested exposure without NodePorts"
+}
+
 guard_acme_claim() {
   [[ $(jq -r 'has("httpsStaging")' "$work/config.json") == true ]] || return 0
   kube --namespace kube-system get pvc recipe-db-acme --ignore-not-found -o json \
@@ -1305,18 +1318,7 @@ case "$command" in
       diagnostics
       production_fail "deployment failed (secret-safe diagnostics above)"
     fi
-    if [[ $ingress_mode = loopback || $ingress_mode = private-lan ]]; then
-      kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
-      jq -e --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
-        (if $ingress == "private-lan" then
-          .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
-          ([.spec.ports[].port] | sort) ==
-            (if $config[0].httpsStaging then [80,8081,8443] else [80] end)
-         else .spec.type == "ClusterIP" end) and
-        ((.spec.externalIPs // []) | length == 0) and
-        all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
-        || production_fail "ingress does not match the requested exposure without NodePorts"
-    fi
+    guard_ingress_service
     ;;
   backup | backup-enter)
     backup_run "$1" "$2"

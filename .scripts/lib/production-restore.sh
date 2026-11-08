@@ -586,6 +586,7 @@ restore_run() {
   restore_routes_apply "$work/restore-barrier-routes.json"
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
+  guard_ingress_service
   restore_current_phase=storage-preflight
   restore_phase "$restore_current_phase"
   if [[ $target == pi ]]; then
@@ -653,6 +654,7 @@ restore_run() {
   restore_wait_reads
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
+  guard_ingress_service
   kube --namespace kube-system patch service recipe-db-internal --type=strategic \
     -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null
   restore_routes_apply "$work/restore-final-routes.json"

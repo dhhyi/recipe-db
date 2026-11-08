@@ -24,7 +24,7 @@ setup() {
   export MOCK_LOCK_OWNER_CHANGE=false
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
-  export MOCK_LAN=false MOCK_NODEPORT=false
+  export MOCK_LAN=false MOCK_NODEPORT=false MOCK_EXTERNAL_IP=false MOCK_SERVICE_TYPE=auto MOCK_ALLOCATE_NODEPORT=false
   export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
   export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
@@ -422,9 +422,20 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   fi
   case "$*" in
   *"get service traefik -o json"*)
-    jq -n --arg lan "$MOCK_LAN" --arg nodeport "$MOCK_NODEPORT" --arg https "$MOCK_HTTPS" '
-      {spec:{type:(if $lan == "true" then "LoadBalancer" else "ClusterIP" end),
-        allocateLoadBalancerNodePorts:false,ports:[{port:80} +
+    if [[ ${MOCK_SERVICE_DRIFT:-false} == true ]]; then
+      if [[ -e $MOCK_LOG.service-checked ]]; then
+        MOCK_EXTERNAL_IP=true
+      else
+        touch "$MOCK_LOG.service-checked"
+      fi
+    fi
+    jq -n --arg lan "$MOCK_LAN" --arg pi "${MOCK_PI:-false}" --arg type "$MOCK_SERVICE_TYPE" \
+      --arg nodeport "$MOCK_NODEPORT" --arg allocate "$MOCK_ALLOCATE_NODEPORT" \
+      --arg external "$MOCK_EXTERNAL_IP" --arg https "$MOCK_HTTPS" '
+      {spec:{type:(if $type != "auto" then $type
+          elif $lan == "true" or $pi != "true" then "LoadBalancer" else "ClusterIP" end),
+        allocateLoadBalancerNodePorts:($allocate == "true"),
+        externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),ports:[{port:80} +
           (if $nodeport == "true" then {nodePort:30080} else {} end)] +
           (if $https == "true" then [{port:8081},{port:8443}] else [] end)}}' ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
