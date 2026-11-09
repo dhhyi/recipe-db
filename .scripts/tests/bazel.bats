@@ -43,7 +43,26 @@ EOF
   [ "${lines[0]}" = "$direct_path" ]
 }
 
-@test "Bazel builds print commands and rebuild explanations and retain unique logs" {
+@test "Bazel builds without diagnostics pass through without explanation output or logs" {
+  run env -u BAZEL_DIAGNOSTICS_DIR /bin/bash .scripts/bazel.sh build --action_env=PATH "//:target with spaces"
+  [ "$status" -eq 0 ]
+  [ "${lines[4]}" = build ]
+  [ "${lines[5]}" = --action_env=PATH ]
+  [ "${lines[6]}" = "//:target with spaces" ]
+  [ "${#lines[@]}" -eq 7 ]
+  [ ! -d "$BAZEL_DIAGNOSTICS_DIR" ]
+}
+
+@test "Bazel builds with empty diagnostics preserve failures without explanation output or logs" {
+  run env BAZEL_DIAGNOSTICS_DIR= BAZEL_STATUS=27 /bin/bash .scripts/bazel.sh build //:all
+  [ "$status" -eq 27 ]
+  [ "${lines[4]}" = build ]
+  [ "${lines[5]}" = //:all ]
+  [ "${#lines[@]}" -eq 6 ]
+  [ ! -d "$BAZEL_DIAGNOSTICS_DIR" ]
+}
+
+@test "Bazel builds with diagnostics print commands and rebuild explanations and retain unique logs" {
   for attempt in 1 2; do
     run /bin/bash .scripts/bazel.sh build --action_env=PATH "//:target with spaces"
     [ "$status" -eq 0 ]
