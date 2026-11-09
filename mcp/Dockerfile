@@ -3,11 +3,13 @@ FROM mcr.microsoft.com/dotnet/sdk:9.0-bookworm-slim@sha256:7e3a4bd66701a451823db
 WORKDIR /ws
 
 COPY mcp.csproj /ws/
-RUN dotnet restore
+RUN --mount=type=cache,id=mcp-nuget-http,target=/root/.local/share/NuGet/http-cache,sharing=locked \
+  dotnet restore
 
 COPY .graphqlrc.json operations.graphql recipe-db.graphqls *.cs /ws/
 COPY Tools /ws/Tools
-RUN dotnet publish -c Release -o /app
+RUN --mount=type=cache,id=mcp-nuget-http,target=/root/.local/share/NuGet/http-cache,sharing=locked \
+  dotnet publish -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:9.0-bookworm-slim@sha256:8bbd3f6fcc157792d96f0932107d9d435df814a2c058ce2891a267fe341dea1a
 

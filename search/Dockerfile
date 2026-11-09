@@ -16,6 +16,7 @@ ENV ZIG_ARCH=aarch64 ZIG_CPU=cortex_a53
 ENV ZIG_SHA=f7a654acc967864f7a050ddacfaa778c7504a0eca8d2b678839c21eea47c992b
 
 FROM download-${TARGETARCH} AS builder
+ARG TARGETARCH
 RUN curl -fsSL "https://ziglang.org/download/0.14.1/zig-${ZIG_ARCH}-linux-0.14.1.tar.xz" -o /tmp/zig.tar.xz \
   && echo "$ZIG_SHA  /tmp/zig.tar.xz" | sha256sum -c - \
   && mkdir /opt/zig \
@@ -28,7 +29,8 @@ COPY build.zig .
 COPY generate_operations.py test_generate_operations.py recipe-db.graphqls ./
 COPY src src
 ENV PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
-RUN python3 generate_operations.py \
+RUN --mount=type=cache,id=search-zig-${TARGETARCH},target=/root/.cache/zig,sharing=locked \
+  python3 generate_operations.py \
   && python3 -m unittest -v \
   && zig build test -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe \
   && zig build -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe

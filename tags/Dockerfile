@@ -12,7 +12,8 @@ RUN opam init --disable-sandboxing --bare --yes \
   && opam switch create 5.3.0 --jobs=2 --yes
 
 COPY tags.opam dune-project ./
-RUN opam install --switch=5.3.0 --deps-only --yes ./tags.opam
+RUN --mount=type=cache,id=tags-opam-downloads,target=/root/.opam/download-cache,sharing=locked \
+  opam install --switch=5.3.0 --deps-only --yes ./tags.opam
 
 COPY src ./src
 COPY bin ./bin
