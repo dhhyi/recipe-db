@@ -237,6 +237,17 @@ test("clickable tags search by exact ID and preserve URL, pagination, sorting, a
   await search.fill("E2E Milchreis");
   await expect(page).toHaveURL(/q=E2E\+Milchreis/);
   expect(new URL(page.url()).searchParams.has("filter_by")).toBe(false);
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
+    "data-query",
+    "E2E Milchreis",
+  );
+  await expect(page.locator("#browse-metadata")).toHaveAttribute(
+    "data-found",
+    "26",
+  );
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+  await triggerSentinel(page);
+  await expect(page.locator("[data-recipe-id]")).toHaveCount(26);
   await expect(
     page.locator(`[data-recipe-id="${unrelated.id}"]`),
   ).toBeVisible();
