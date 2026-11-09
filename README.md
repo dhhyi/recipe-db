@@ -1,5 +1,7 @@
 # Recipe DB
 
+[Visit the live Recipe DB](https://rezept-db.freeddns.org/)
+
 This project is intended to be a playground for a microservice architecture in the domain of a recipe collection.
 
 As part of the exercise, I want to try as many different programming languages, frameworks and methods as possible. The goal is to learn how to deal with problems that arise in this polyglot architecture.
@@ -9,6 +11,15 @@ There are really just three rules:
 - No technology should be used twice. (Different languages, frameworks, libraries, etc.)
 - Cut as early as possible to get as many running parts as possible.
 - Limit the amount of JavaScript/TypeScript to a minimum. (I see enough of it in my day job.)
+
+# Documentation
+
+- **Develop locally:** [Getting started](#getting-started) and [contributing](CONTRIBUTING.md).
+- **Authentication and MCP access:** [Browser authentication and configured tokens](docs/browser-authentication.md).
+- **Deploy a release:** [Production release cookbook](docs/production-release-cookbook.md) and [Kubernetes operations reference](docs/production-kubernetes.md).
+- **Configure and recover production:** [Private configuration and recovery](docs/production-configuration.md) and [clean Raspberry Pi rebuild](docs/raspberry-pi-rebuild.md).
+
+Individual service documentation is linked under [Technologies / Building Blocks](#technologies--building-blocks).
 
 # Getting Started
 
