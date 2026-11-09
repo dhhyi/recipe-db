@@ -186,7 +186,7 @@ After rendering the recorded release, restore applies the current target's Traef
 
 The shared cluster-scoped Lease excludes deployment and capture. Fresh-target inspection refuses populated authoritative, derived and external-cache storage. Application writers remain stopped during data import. Public GraphQL remains blocked while the private trusted-ingress query route permits full search rebuilding. Browse's recorded image hardcodes `http://traefik/graphql`; restore must route that internal service alias to the private entrypoint without opening the public Traefik service, rather than relying on a `GRAPHQL_URL` environment override. NATS/consumers, Typesense, search/checkpoint, browse and external caches start fresh; upstream websites are not recovery prerequisites. Completion requires data verification, search readiness, representative reads and change propagation before application access reopens.
 
-On a fresh Pi, restore runs the guarded storage preflight and creates the retained StorageClass before applying Traefik infrastructure. HTTPS needs this class for its separate ACME certificate PVC; waiting for Traefik before preparing storage would prevent the first HTTPS restore from progressing.
+On a fresh Pi, restore runs the guarded storage preflight and creates the retained StorageClass before applying Traefik infrastructure. HTTPS needs this class for its separate ACME certificate PVC and the private ACME contact Secret, which deploy and restore both install before starting Traefik.
 
 Cache expiry alone is not propagation evidence: browse's cache expires after one minute. The verification must establish that the fresh search and browse consumers acknowledged the probe's changes before reopening access.
 

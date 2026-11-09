@@ -569,6 +569,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       esac
     done
     echo '{"kind":"Secret","data":{}}' ;;
+  *"create secret generic recipe-db-acme-contact"*)
+    if [[ ${MOCK_ACME_CONTACT_ERROR:-false} == true ]]; then
+      echo 'unsafe-private-contact' >&2
+      exit 1
+    fi
+    echo '{"kind":"Secret","data":{}}' ;;
   *"create namespace "* | *"create secret "*) echo '{"kind":"Secret","data":{}}' ;;
   *"apply -f -")
     cat > /dev/null

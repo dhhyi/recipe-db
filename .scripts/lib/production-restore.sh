@@ -633,6 +633,7 @@ restore_run() {
     production_storage_prepare_claims "$work/rendered.yml"
   fi
   restore_phase installing-barrier
+  apply_acme_contact
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
   restore_remove_ingress_nodeports
