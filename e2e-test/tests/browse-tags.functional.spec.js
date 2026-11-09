@@ -253,6 +253,19 @@ test("recipe card title, image, and rating still navigate to detail", async ({
       `[data-recipe-id="${recipe.id}"] a[slot="${slot}"]`,
     );
     await expect(link).toBeVisible();
+    if (slot !== "image") {
+      await link.hover();
+      await expect(link).toHaveCSS("text-decoration-line", "none");
+      await link.focus();
+      await expect(link).toHaveCSS("text-decoration-line", "none");
+    }
+    const tagLink = page
+      .locator(`[data-recipe-id="${recipe.id}"] a[data-recipe-tag]`)
+      .first();
+    await tagLink.hover();
+    await expect(tagLink).toHaveCSS("text-decoration-line", "underline");
+    await tagLink.focus();
+    await expect(tagLink).toHaveCSS("text-decoration-line", "underline");
     await link.click();
     await expect(page).toHaveURL(new RegExp(`/recipe/${recipe.id}$`));
   }

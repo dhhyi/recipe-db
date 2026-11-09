@@ -76,7 +76,7 @@ export class RecipeTile extends LitElement {
 
     ::slotted(a[slot="rating"]) {
       color: inherit !important;
-      text-decoration: none;
+      text-decoration: none !important;
     }
 
     .rating {
@@ -139,7 +139,7 @@ export class RecipeTile extends LitElement {
       align-items: end;
       display: flex;
       pointer-events: auto;
-      text-decoration: none;
+      text-decoration: none !important;
       width: 100%;
     }
   `;
