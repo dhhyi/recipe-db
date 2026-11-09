@@ -627,16 +627,16 @@ restore_run() {
       select(.name == "web").targetPort) = 3000' "$work/rendered.yml" > "$work/infrastructure.yml"
   restore_barrier=true
   restore_routes_apply "$work/restore-barrier-routes.json"
+  if [[ $target == pi ]]; then
+    restore_phase storage-preflight
+    production_storage_preflight
+    production_storage_prepare_claims "$work/rendered.yml"
+  fi
+  restore_phase installing-barrier
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
   restore_remove_ingress_nodeports
   guard_ingress_service
-  restore_current_phase=storage-preflight
-  restore_phase "$restore_current_phase"
-  if [[ $target == pi ]]; then
-    production_storage_preflight
-    production_storage_prepare_claims "$work/rendered.yml"
-  fi
   restore_phase checking-empty-volumes
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
