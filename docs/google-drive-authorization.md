@@ -17,15 +17,29 @@ Before starting, make sure:
 - You can sign in to the dedicated Google backup account.
 - Its client credentials are available in `~/.config/recipe-db/backup/drive-oauth-client.json`.
 
-Run the following SSH command on your workstation. It connects to the Pi and lets your workstation browser complete Google authorization.
+Open the provisioning devcontainer in VS Code. Its configuration declares port `53682`; in the **Ports** panel, confirm it is forwarded privately to workstation port `53682`, not a different local port. Google authorization uses that exact loopback port.
+
+In a provisioning devcontainer terminal, unlock the SSH key if it is not already loaded in the shell's agent:
+
+```sh
+ssh-add "$HOME/.config/recipe-db/ssh/recipe-db-pi"
+```
+
+Use the SSH-agent shell from the [rebuild cookbook](raspberry-pi-rebuild.md#5-provision-the-host), or start one with `ssh-agent bash` before `ssh-add` if needed.
+
+Run the following SSH command in that container shell. It forwards the Pi's authorization callback to the container; VS Code forwards it onward to your workstation browser.
 
 ```sh
 ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
-  -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
+  -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$HOME/.config/recipe-db/ssh/known_hosts" \
+  -o ExitOnForwardFailure=yes \
   -L 127.0.0.1:53682:127.0.0.1:53682 piadmin@recipe-pi.home
 ```
 
-Success: you see a shell prompt on the Pi without a forwarding error. Keep this connection open until Google authorization finishes.
+Success: you see a shell prompt on the Pi without a forwarding error, and VS Code shows local port `53682` forwarded. Keep this connection and the container open until Google authorization finishes. If another SSH tunnel already owns this port, close that authorization tunnel before starting this one; leave the separate Kubernetes tunnel running.
+
+Alternatively, run the same SSH command directly on the workstation, without VS Code port forwarding. This requires the browser to reach that workstation's loopback port; do not mix both forwarding routes.
 
 In that Pi shell, stop the backup schedule, then check whether a backup is still running:
 
@@ -48,13 +62,13 @@ Success: rclone displays its interactive configuration menu. Choose `n` to creat
 At the rclone prompts:
 
 1. Name the remote `gdrive`.
-2. Select **Google Drive**.
+2. At `Storage`, enter `drive` for **Google Drive**.
 3. Enter `client_id` and `client_secret` from the `installed` section of your workstation's `~/.config/recipe-db/backup/drive-oauth-client.json`.
 4. Select the `drive.file` scope. Do not select full Drive access.
 
 Enter the credentials only at the prompts, not in shell commands or chat.
 
-When rclone asks whether to use a browser for authorization, choose **Yes**. Open the displayed `http://127.0.0.1:53682/...` link in your workstation browser.
+Leave the service-account file empty and choose **No** for advanced configuration. When rclone asks whether to use a browser for authorization, choose **Yes**. Open the displayed `http://127.0.0.1:53682/...` link in your workstation browser.
 
 Sign in to the dedicated Google backup account and approve access. Return to the Pi shell and confirm the remote configuration when prompted.
 
@@ -83,7 +97,7 @@ Follow the [release cookbook](production-release-cookbook.md#4-align-backup-capt
 
 Use this section when Google has revoked the Pi's authorization or its refresh token no longer works. Routine updates and application restores do not require reauthorization. If the authorization file is missing, follow [Authorize on a new Pi](#1-authorize-on-a-new-pi) instead.
 
-Connect from your workstation using the SSH command in section 1. In the Pi shell, check backup status:
+Connect using the forwarding route and SSH command in section 1. In the Pi shell, check backup status:
 
 ```sh
 sudo /usr/local/sbin/recipe-db-backup-upload status \
