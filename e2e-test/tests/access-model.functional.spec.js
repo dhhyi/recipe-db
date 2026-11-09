@@ -545,7 +545,14 @@ test("public shells and personal HTMX fragments remain isolated between users", 
         await page
           .getByRole("link", { name: "Zur Startseite", exact: true })
           .click();
+        await page.waitForURL(new URL("/", baseURL).href, {
+          waitUntil: "load",
+        });
+        await expect(
+          page.getByRole("searchbox", { name: "Rezepte suchen" }),
+        ).toBeVisible();
         await page.goBack();
+        await expect(page).toHaveURL(`${baseURL}/recipe/${id}`);
         await expect(widget).toHaveAttribute("rating", "3");
         if (vote === null)
           await expect(widget).not.toHaveAttribute("my-rating");
