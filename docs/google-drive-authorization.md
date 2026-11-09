@@ -17,17 +17,7 @@ Before starting, make sure:
 - You can sign in to the dedicated Google backup account.
 - Its client credentials are available in `~/.config/recipe-db/backup/drive-oauth-client.json`.
 
-Open the provisioning devcontainer in VS Code. Its configuration declares port `53682`; in the **Ports** panel, confirm it is forwarded privately to workstation port `53682`, not a different local port. Google authorization uses that exact loopback port.
-
-In a provisioning devcontainer terminal, unlock the SSH key if it is not already loaded in the shell's agent:
-
-```sh
-ssh-add "$HOME/.config/recipe-db/ssh/recipe-db-pi"
-```
-
-Use the SSH-agent shell from the [rebuild cookbook](raspberry-pi-rebuild.md#5-provision-the-host), or start one with `ssh-agent bash` before `ssh-add` if needed.
-
-Run the following SSH command in that container shell. It forwards the Pi's authorization callback to the container; VS Code forwards it onward to your workstation browser.
+Run the following SSH command directly in your workstation terminal, **not in the provisioning container**. It forwards the Pi's authorization callback to workstation loopback port `53682`. Enter the SSH key passphrase if prompted; no devcontainer or VS Code port forwarding is needed. Leave the separate Kubernetes tunnel running.
 
 ```sh
 ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
@@ -37,9 +27,11 @@ ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
   -L 127.0.0.1:53682:127.0.0.1:53682 piadmin@recipe-pi.home
 ```
 
-Success: you see a shell prompt on the Pi without a forwarding error, and VS Code shows local port `53682` forwarded. Keep this connection and the container open until Google authorization finishes. If another SSH tunnel already owns this port, close that authorization tunnel before starting this one; leave the separate Kubernetes tunnel running.
+Success: you see a shell prompt on the Pi without a forwarding error. Keep this connection open until Google authorization finishes. If another workstation authorization tunnel already owns this port, close it before starting this one.
 
-Alternatively, run the same SSH command directly on the workstation, without VS Code port forwarding. This requires the browser to reach that workstation's loopback port; do not mix both forwarding routes.
+**On WSL2, use a browser running inside WSL**, such as WSLg Chromium. Windows browser loopback is not the same network endpoint: Windows can reserve port `53682`, preventing Docker publication and Windows-to-WSL localhost forwarding. The provisioning container's `forwardPorts` declaration does not create a tunnel when it is started through the Mise CLI.
+
+With Chromium installed in WSL, run `chromium` from a second WSL terminal to open its window. Use that browser for the authorization link below; do not open it in the default Windows browser. On a non-WSL workstation, use its local browser normally.
 
 In that Pi shell, stop the backup schedule, then check whether a backup is still running:
 
@@ -68,7 +60,17 @@ At the rclone prompts:
 
 Enter the credentials only at the prompts, not in shell commands or chat.
 
-Leave the service-account file empty and choose **No** for advanced configuration. When rclone asks whether to use a browser for authorization, choose **Yes**. Open the displayed `http://127.0.0.1:53682/...` link in your workstation browser.
+Leave the service-account file empty and choose **No** for advanced configuration. When rclone asks whether to use a browser for authorization, choose **Yes**. Open the displayed `http://127.0.0.1:53682/...` link in your workstation browser (the WSL browser on WSL2).
+
+If the link does not connect, leave rclone waiting and check from another workstation terminal:
+
+```sh
+curl --noproxy '*' --connect-timeout 3 --max-time 5 \
+  -sS -o /dev/null -w 'Callback HTTP status: %{http_code}\n' \
+  http://127.0.0.1:53682/
+```
+
+An HTTP `400` at `/` is expected while rclone awaits its authorization link: the callback server is reachable, but this probe intentionally supplies no authorization state. Connection refused or HTTP `000` means the SSH tunnel or Pi-side listener is missing. Do not change OAuth scopes, copy authorization tokens to the workstation, or expose the listener on the LAN to work around forwarding.
 
 Sign in to the dedicated Google backup account and approve access. Return to the Pi shell and confirm the remote configuration when prompted.
 
