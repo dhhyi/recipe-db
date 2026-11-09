@@ -5,7 +5,8 @@ RUN rust_target=$(rustc -vV | sed -n 's/^host: \(.*\)-unknown-linux-gnu$/\1-unkn
   && test -n "$rust_target" \
   && printf '%s\n' "$rust_target" > /rust-target \
   && rustup target add "$rust_target"
-RUN cargo install cargo-chef --locked
+RUN --mount=type=cache,id=graphql-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+  cargo install cargo-chef --locked
 
 WORKDIR /app
 
@@ -16,11 +17,13 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN rust_target=$(cat /rust-target) \
+RUN --mount=type=cache,id=graphql-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+  rust_target=$(cat /rust-target) \
   && cargo chef cook --release --target "$rust_target" --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock ./
 COPY src src
-RUN rust_target=$(cat /rust-target) \
+RUN --mount=type=cache,id=graphql-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+  rust_target=$(cat /rust-target) \
   && cargo build --release --target "$rust_target" \
   && mkdir -p /app/output \
   && cp "target/$rust_target/release/graphql" /app/output/graphql
