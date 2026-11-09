@@ -15,7 +15,7 @@ This cookbook is for operators replacing or erasing the Raspberry Pi boot device
 
 ## 1. Confirm recovery readiness
 
-Do not begin an erase until an off-device backup and its package manifest have been verified, the matching immutable release artifact remains available, and required operator inputs are accessible under `~/.config/recipe-db/`. Confirm access to the dedicated Google account and backup Desktop OAuth client: the rebuilt Pi will require interactive Drive authorization. Confirm who authorizes erasing the selected USB stick. Rebuild is destructive: the boot device also holds all Pi application data and its current Drive authorization.
+Use the latest complete off-device backup from the tested backup workflow. A separate pre-erase download and validation rehearsal is not required; restore validates the selected package before importing data. Confirm the matching immutable release artifact remains available and required operator inputs are accessible under `~/.config/recipe-db/`. Confirm access to the dedicated Google account and backup Desktop OAuth client: the rebuilt Pi will require interactive Drive authorization. Confirm who authorizes erasing the selected USB stick. Rebuild is destructive: the boot device also holds all Pi application data and its current Drive authorization.
 
 ## 2. Verify hardware and flash the OS
 
@@ -30,13 +30,14 @@ In Raspberry Pi Imager:
 - Configure a non-root administrator (username `piadmin`), strong local password, hostname (`recipe-pi`), locale, and public-key-only SSH. The local network resolves it as `recipe-pi.home`.
 - Wi-Fi is optional; Ethernet is preferred.
 - Confirm erasure only after checking the selected device. Do not format Linux partitions when Windows prompts after flashing.
+- Let Pi Imager complete writing and verification successfully; no separate OS-image checksum step is required.
 
-Use the existing dedicated SSH key if preserving the installation; otherwise create a new one, referred to below as `recipe-db-pi`.
+Use the dedicated SSH key at `~/.config/recipe-db/ssh/recipe-db-pi`; preserve it across a rebuild unless intentionally replacing it. Configure its public key in Pi Imager.
 
 Boot from USB and connect to the Pi using its configured hostname:
 
 ```sh
-ssh -i ~/.ssh/recipe-db-pi -o IdentitiesOnly=yes piadmin@recipe-pi.home
+ssh -i ~/.config/recipe-db/ssh/recipe-db-pi -o IdentitiesOnly=yes piadmin@recipe-pi.home
 ```
 
 Confirm the host is the newly flashed Pi before accepting its SSH fingerprint. Do not trust unverified `ssh-keyscan` output or disable host-key checking. Copy the accepted key entry into the central private directory; provisioning reads its `known_hosts` from there:
@@ -52,7 +53,7 @@ chmod 600 ~/.config/recipe-db/ssh/known_hosts
 
 On the Pi, check each result as you go:
 
-- `hostname` → `recipe-p`
+- `hostname` → `recipe-pi`
 - `cat /etc/os-release` → a supported Raspberry Pi OS release
 - `uname -m` → `aarch64`
 - `findmnt -no SOURCE,FSTYPE,UUID /` → root on the USB device, `ext4`, and its new UUID; record the UUID in the private inventory
@@ -70,9 +71,19 @@ Create the private directory structure from the [configuration guide](production
 ```sh
 umask 077
 mkdir -p ~/.config/recipe-db/{deployment,provisioning,ssh,kubeconfig,backup}
-cp provisioning/inventory.example.yml ~/.config/recipe-db/provisioning/inventory.yml
-cp deploy/pi.yaml ~/.config/recipe-db/deployment/pi-values.yaml
 chmod 700 ~/.config/recipe-db ~/.config/recipe-db/{deployment,provisioning,ssh,kubeconfig,backup}
+```
+
+For a rebuild, retain your existing private inventory and values and update them below. **Do not replace them with templates.** Only on first-time setup, when these files do not exist, copy the templates:
+
+```sh
+cp -i provisioning/inventory.example.yml ~/.config/recipe-db/provisioning/inventory.yml
+cp -i deploy/pi.yaml ~/.config/recipe-db/deployment/pi-values.yaml
+```
+
+Restrict both files:
+
+```sh
 chmod 600 ~/.config/recipe-db/provisioning/inventory.yml \
   ~/.config/recipe-db/deployment/pi-values.yaml
 ```
@@ -87,6 +98,7 @@ Update `inventory.yml` to match the Pi Imager settings and the checks above:
 Update `pi-values.yaml`:
 
 - Set `piStorage.expectedRootUuid` to the UUID recorded above.
+- Update the same UUID in `backup/backup-values.yaml`.
 - Set `origin` to the deployment's URL.
 - Set private input paths as listed in the [configuration inventory](production-configuration.md).
 - Keep the template's data path, images and resource defaults unless intentionally changing them.
@@ -120,12 +132,16 @@ ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml access.yml --
 
 The access playbook creates `kubeconfig/pi.yaml` with mode `0600`. It is tied to this cluster and must be regenerated if the cluster is replaced.
 
+Expect `changed=2` on repeat runs: the backup kubeconfig is recopied and its context renamed. Investigate other changes or failures.
+
+Every `site.yml` run disables scheduled backups. After maintenance, [verify a backup and re-enable the timer](production-release-cookbook.md#5-verify-a-backup-then-re-enable-its-schedule).
+
 ## 6. Verify cluster access and host safety
 
 In a terminal, open a loopback-only SSH tunnel:
 
 ```sh
-ssh -i ~/.ssh/recipe-db-pi -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
+ssh -i ~/.config/recipe-db/ssh/recipe-db-pi -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
   -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home
 ```
 
@@ -146,6 +162,10 @@ mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 First [authorize Drive interactively on the new Pi](google-drive-authorization.md#1-authorize-on-a-new-pi). No authorized rclone config is restored from operator home. Then follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to download and verify the backup and its matching release artifact. If the verified package was already downloaded before the rebuild, authorization can wait until backup configuration in step 8.
 
 Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.
+
+Restore blocks application ingress until data and consumer verification succeeds. Do not bypass this barrier or use ordinary deployment to reopen an incomplete restore. HTTPS certificate-challenge access is separate from application access; router forwarding need not be disabled solely to run the guarded restore.
+
+Traefik's Let's Encrypt HTTPS certificates and ACME account keys are stored separately from application backups. Preserve that state separately or allow certificate reissuance; see [HTTPS certificate operations and recovery](production-kubernetes.md#certificate-only-https-staging-on-the-pi).
 
 Replace `MANIFEST` and `ARCHIVE` with the matching files obtained through the [recovery guide](production-kubernetes.md#fresh-deployment-restore). Leave the remaining lines unchanged.
 

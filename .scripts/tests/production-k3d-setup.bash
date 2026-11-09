@@ -457,7 +457,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   *"get storageclass local-path "*)
     echo '{"metadata":{"name":"local-path"},"provisioner":"rancher.io/local-path","reclaimPolicy":"Delete"}' ;;
   *"get storageclass recipe-db-retained "*)
+    if [[ ${MOCK_RETAINED_CLASS_MISSING:-false} == true && ! -e $MOCK_LOG.retained-class ]]; then
+      exit 1
+    fi
     echo '{"metadata":{"name":"recipe-db-retained","labels":{"app.kubernetes.io/part-of":"recipe-db"}},"provisioner":"rancher.io/local-path","parameters":{"nodePath":"/srv/recipe-db/storage"},"reclaimPolicy":"Retain","volumeBindingMode":"WaitForFirstConsumer","allowedTopologies":[{"matchLabelExpressions":[{"key":"kubernetes.io/hostname","values":["recipe-db-pi"]}]}]}' ;;
+  *"create -f "*retained-storage-class.json)
+    touch "$MOCK_LOG.retained-class" ;;
   *"patch storageclass "*) echo 'StorageClass fields are immutable' >&2; exit 1 ;;
   *"get persistentvolumeclaims -o json"* | *"get pvc -o json"*)
     if [[ -f $MOCK_LOG.pvcs ]]; then cat "$MOCK_LOG.pvcs"; else echo '{"items":[]}'; fi ;;
@@ -564,6 +569,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       esac
     done
     echo '{"kind":"Secret","data":{}}' ;;
+  *"create secret generic recipe-db-acme-contact"*)
+    if [[ ${MOCK_ACME_CONTACT_ERROR:-false} == true ]]; then
+      echo 'unsafe-private-contact' >&2
+      exit 1
+    fi
+    echo '{"kind":"Secret","data":{}}' ;;
   *"create namespace "* | *"create secret "*) echo '{"kind":"Secret","data":{}}' ;;
   *"apply -f -")
     cat > /dev/null
@@ -650,10 +661,12 @@ if jq -e 'has("config")' "$2" > /dev/null; then
           (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}]}}}}' "$2" | while IFS= read -r doc; do
         printf '%s\n---\n' "$doc"
       done
-    jq -c '.config.volumes | keys[] | {apiVersion:"v1",kind:"PersistentVolumeClaim",
-      metadata:{name:.,namespace:"recipe-db"},spec:{}}' "$2" | while IFS= read -r doc; do
-        printf '%s\n---\n' "$doc"
-      done
+    if [[ ${MOCK_PI:-false} != true ]]; then
+      jq -c '.config.volumes | keys[] | {apiVersion:"v1",kind:"PersistentVolumeClaim",
+        metadata:{name:.,namespace:"recipe-db"},spec:{}}' "$2" | while IFS= read -r doc; do
+          printf '%s\n---\n' "$doc"
+        done
+    fi
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n---\n'
   elif [[ $MOCK_BACKUP = true ]]; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'

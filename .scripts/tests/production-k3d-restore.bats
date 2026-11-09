@@ -5,6 +5,43 @@
 load production-k3d-setup
 load production-k3d-restore-setup
 
+@test "fresh Pi HTTPS restore creates retained storage before applying Traefik certificate infrastructure" {
+  restore_fixture
+  export MOCK_PI=true MOCK_LAN=true MOCK_HTTPS=true MOCK_RETAINED_CLASS_MISSING=true
+  export MOCK_SERVICE_TYPE=ClusterIP
+  set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
+    .storageClass="recipe-db-retained" |
+    .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
+    .origin="https://recipes.example.org" | .runtime.ingressMode="private-lan" |
+    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true} |
+    .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email"))'
+  run_restore
+  printf '%s\n' "$output"
+  [ "$status" -ne 0 ]
+  [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
+  local storage infrastructure inspection contact
+  storage=$(awk '/create -f .*retained-storage-class.json/ {print NR; exit}' "$MOCK_LOG")
+  inspection=$(awk '/delete pod recipe-db-storage-inspection/ {print NR; exit}' "$MOCK_LOG")
+  infrastructure=$(awk '/apply -f .*infrastructure.yml/ {print NR; exit}' "$MOCK_LOG")
+  contact=$(awk '/create secret generic recipe-db-acme-contact/ {print NR; exit}' "$MOCK_LOG")
+  [ -n "$storage" ] && [ -n "$inspection" ] && [ -n "$infrastructure" ]
+  [ "$storage" -lt "$inspection" ]
+  [ "$inspection" -lt "$infrastructure" ]
+  [ -n "$contact" ] && [ "$contact" -lt "$infrastructure" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  run ! grep -q 'exec -i restore-volume-' "$MOCK_LOG"
+  export MOCK_ACME_CONTACT_ERROR=true
+  RESTORE_STATE="$FIXTURE_ROOT/backups/contact-failure"
+  rm "$MOCK_LOG.lease" "$MOCK_LOG.cluster-restore-state"
+  : > "$MOCK_LOG"
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"ACME contact Secret could not be applied"* ]]
+  [[ $output != *"unsafe-private-contact"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq 'apply -f .*infrastructure.yml|exec -i restore-volume-' "$MOCK_LOG"
+}
+
 @test "restore fully imports only after ALL volumes are empty and verifies propagation before public reopening" {
   restore_fixture
   run_restore

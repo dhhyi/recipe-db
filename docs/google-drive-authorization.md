@@ -17,15 +17,21 @@ Before starting, make sure:
 - You can sign in to the dedicated Google backup account.
 - Its client credentials are available in `~/.config/recipe-db/backup/drive-oauth-client.json`.
 
-Run the following SSH command on your workstation. It connects to the Pi and lets your workstation browser complete Google authorization.
+Run the following SSH command directly in your workstation terminal, **not in the provisioning container**. It forwards the Pi's authorization callback to workstation loopback port `53682`. Enter the SSH key passphrase if prompted; no devcontainer or VS Code port forwarding is needed. Leave the separate Kubernetes tunnel running.
 
 ```sh
 ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
-  -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
+  -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile="$HOME/.config/recipe-db/ssh/known_hosts" \
+  -o ExitOnForwardFailure=yes \
   -L 127.0.0.1:53682:127.0.0.1:53682 piadmin@recipe-pi.home
 ```
 
-Success: you see a shell prompt on the Pi without a forwarding error. Keep this connection open until Google authorization finishes.
+Success: you see a shell prompt on the Pi without a forwarding error. Keep this connection open until Google authorization finishes. If another workstation authorization tunnel already owns this port, close it before starting this one.
+
+**On WSL2, use a browser running inside WSL**, such as WSLg Chromium. Windows browser loopback is not the same network endpoint: Windows can reserve port `53682`, preventing Docker publication and Windows-to-WSL localhost forwarding. The provisioning container's `forwardPorts` declaration does not create a tunnel when it is started through the Mise CLI.
+
+With Chromium installed in WSL, run `chromium` from a second WSL terminal to open its window. Use that browser for the authorization link below; do not open it in the default Windows browser. On a non-WSL workstation, use its local browser normally.
 
 In that Pi shell, stop the backup schedule, then check whether a backup is still running:
 
@@ -48,13 +54,23 @@ Success: rclone displays its interactive configuration menu. Choose `n` to creat
 At the rclone prompts:
 
 1. Name the remote `gdrive`.
-2. Select **Google Drive**.
+2. At `Storage`, enter `drive` for **Google Drive**.
 3. Enter `client_id` and `client_secret` from the `installed` section of your workstation's `~/.config/recipe-db/backup/drive-oauth-client.json`.
 4. Select the `drive.file` scope. Do not select full Drive access.
 
 Enter the credentials only at the prompts, not in shell commands or chat.
 
-When rclone asks whether to use a browser for authorization, choose **Yes**. Open the displayed `http://127.0.0.1:53682/...` link in your workstation browser.
+Leave the service-account file empty and choose **No** for advanced configuration. When rclone asks whether to use a browser for authorization, choose **Yes**. Open the displayed `http://127.0.0.1:53682/...` link in your workstation browser (the WSL browser on WSL2).
+
+If the link does not connect, leave rclone waiting and check from another workstation terminal:
+
+```sh
+curl --noproxy '*' --connect-timeout 3 --max-time 5 \
+  -sS -o /dev/null -w 'Callback HTTP status: %{http_code}\n' \
+  http://127.0.0.1:53682/
+```
+
+An HTTP `400` at `/` is expected while rclone awaits its authorization link: the callback server is reachable, but this probe intentionally supplies no authorization state. Connection refused or HTTP `000` means the SSH tunnel or Pi-side listener is missing. Do not change OAuth scopes, copy authorization tokens to the workstation, or expose the listener on the LAN to work around forwarding.
 
 Sign in to the dedicated Google backup account and approve access. Return to the Pi shell and confirm the remote configuration when prompted.
 
@@ -83,7 +99,7 @@ Follow the [release cookbook](production-release-cookbook.md#4-align-backup-capt
 
 Use this section when Google has revoked the Pi's authorization or its refresh token no longer works. Routine updates and application restores do not require reauthorization. If the authorization file is missing, follow [Authorize on a new Pi](#1-authorize-on-a-new-pi) instead.
 
-Connect from your workstation using the SSH command in section 1. In the Pi shell, check backup status:
+Connect using the forwarding route and SSH command in section 1. In the Pi shell, check backup status:
 
 ```sh
 sudo /usr/local/sbin/recipe-db-backup-upload status \

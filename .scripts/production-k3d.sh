@@ -198,6 +198,18 @@ render() {
     "$work/rendered-base.yml" > "$work/rendered.yml"
 }
 
+apply_acme_contact() {
+  [[ -f $work/acme-account-email ]] || return 0
+  if ! {
+    kube --namespace kube-system create secret generic recipe-db-acme-contact \
+      "--from-file=email=$work/acme-account-email" --dry-run=client -o json \
+      | jq '.metadata.labels["app.kubernetes.io/part-of"] = "recipe-db"' \
+      | kube --namespace kube-system apply -f - > /dev/null
+  } 2> "$work/acme-contact-error"; then
+    production_fail "ACME contact Secret could not be applied (details suppressed to protect contact)"
+  fi
+}
+
 annotate_credentials() {
   local checksum
   local route_inputs=(routes.yml config.json)
@@ -1297,16 +1309,7 @@ case "$command" in
     } 2> "$work/route-secret-error"; then
       production_fail "route Secret could not be applied (details suppressed to protect secrets)"
     fi
-    if [[ -f $work/acme-account-email ]]; then
-      if ! {
-        kube --namespace kube-system create secret generic recipe-db-acme-contact \
-          "--from-file=email=$work/acme-account-email" --dry-run=client -o json \
-          | jq '.metadata.labels["app.kubernetes.io/part-of"] = "recipe-db"' \
-          | kube --namespace kube-system apply -f - > /dev/null
-      } 2> "$work/acme-contact-error"; then
-        production_fail "ACME contact Secret could not be applied (details suppressed to protect contact)"
-      fi
-    fi
+    apply_acme_contact
     if ! {
       # Job pod templates are immutable; provisioning is deliberately idempotent.
       kube delete job nats-init --ignore-not-found --wait=true --timeout="${timeout}s" > /dev/null \
