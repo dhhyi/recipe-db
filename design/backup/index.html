@@ -8,15 +8,14 @@
       content="Recipe DB Backup is a personal tool for backing up and recovering a privately operated recipe database."
     />
     <title>Recipe DB Backup</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="/design/styles.css" />
+    <script type="module" crossorigin src="/design/components.js"></script>
   </head>
-  <body>
-    <header>
-      <p>Recipe DB</p>
+  <body class="container">
+    <header-component></header-component>
+    <main>
       <h1>Recipe DB Backup</h1>
       <p>Private backups for a personally operated recipe database.</p>
-    </header>
-    <main>
       <section aria-labelledby="purpose">
         <h2 id="purpose">What this tool does</h2>
         <p>
@@ -50,6 +49,5 @@
         </p>
       </section>
     </main>
-    <footer><a href="/">Recipe DB home</a></footer>
   </body>
 </html>
