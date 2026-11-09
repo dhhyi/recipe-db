@@ -132,6 +132,10 @@ ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml access.yml --
 
 The access playbook creates `kubeconfig/pi.yaml` with mode `0600`. It is tied to this cluster and must be regenerated if the cluster is replaced.
 
+On an otherwise unchanged host, `site.yml` normally reports `changed=2`: **Copy the root-only local kubeconfig for the backup service** copies k3s's original kubeconfig, then **Name the local backup kubeconfig context** renames its `default` context to `recipe-db-pi`. Each run repeats this copy-and-rename sequence; these two changes are expected, not evidence of application or storage drift. Investigate other changed tasks or failures.
+
+Rerunning `site.yml` also stops and disables the backup timer. After backups have been enabled, do not rerun it solely to investigate the expected `changed=2`; after necessary provisioning maintenance, follow the [release cookbook](production-release-cookbook.md#5-verify-a-backup-then-re-enable-its-schedule) to verify a capture and re-enable the schedule.
+
 ## 6. Verify cluster access and host safety
 
 In a terminal, open a loopback-only SSH tunnel:
