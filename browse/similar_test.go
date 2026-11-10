@@ -380,7 +380,7 @@ func TestSimilarRecipesPostedQueueIsDeduplicated(t *testing.T) {
 func TestSimilarRecipesPlaceholderIsLazyAndStable(t *testing.T) {
 	response := &gql.RecipeByIdResponse{Recipe: &gql.RecipeDetail{Id: "source", Name: "Source"}}
 	var body bytes.Buffer
-	if err := components.Detail(response).Render(context.Background(), &body); err != nil {
+	if err := components.Detail(response, "https://recipes.example.test/recipe/42").Render(context.Background(), &body); err != nil {
 		t.Fatal(err)
 	}
 

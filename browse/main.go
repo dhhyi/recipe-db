@@ -97,9 +97,10 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 	if resp.Recipe.Rating == nil && !serviceUnavailableField(err, "ratings", "rating") {
 		return nil, errors.New("recipe rating was null without a ratings outage error")
 	}
-	ctx = templ.WithChildren(ctx, components.Detail(resp))
+	metadata := recipeOpenGraphMetadata(publicOrigin(), resp.Recipe)
+	ctx = templ.WithChildren(ctx, components.Detail(resp, metadata.URL))
 	var html bytes.Buffer
-	if err := components.Layout(resp.Recipe.Name+" | RezeptDB", recipeOpenGraphMetadata(publicOrigin(), resp.Recipe)).Render(ctx, &html); err != nil {
+	if err := components.Layout(resp.Recipe.Name+" | RezeptDB", metadata).Render(ctx, &html); err != nil {
 		return nil, err
 	}
 	if resp.Recipe.Tags == nil {

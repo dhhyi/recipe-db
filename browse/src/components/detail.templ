@@ -2,6 +2,7 @@ package components
 
 import "frontend/src/generated"
 import "frontend/src/util"
+import "net/url"
 
 templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	if recipeEdit || (images && imageEdit) {
@@ -39,7 +40,7 @@ templ image(recipe *gql.RecipeDetail) {
 	</figure>
 }
 
-templ ingredients(recipe *gql.RecipeDetail) {
+templ ingredients(recipe *gql.RecipeDetail, publicURL string) {
 	<section>
 		<header>
 			<h2>Zutaten</h2>
@@ -71,6 +72,16 @@ templ ingredients(recipe *gql.RecipeDetail) {
 					</tr>
 				}
 			</tbody>
+			<tfoot>
+				<tr>
+					<td colspan="2" class="px-0!">
+						<bring-import-component class="flex justify-end pt-4" data-recipe-url={ publicURL }>
+							<div data-bring-language="de" data-bring-requires-consent="true" data-bring-base-quantity="4" data-bring-requested-quantity="4" style="display:none"></div>
+							<a href={ templ.SafeURL("https://api.getbring.com/rest/bringrecipes/deeplink?url=" + url.QueryEscape(publicURL) + "&source=web&baseQuantity=4&requestedQuantity=4") }>Mit Bring! zur Einkaufsliste</a>
+						</bring-import-component>
+					</td>
+				</tr>
+			</tfoot>
 		</table>
 	</section>
 }
@@ -88,7 +99,7 @@ templ method(recipe *gql.RecipeDetail) {
 	}
 }
 
-templ Detail(resp *gql.RecipeByIdResponse) {
+templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 	{{ recipe := resp.Recipe }}
 	<div itemscope itemtype="https://schema.org/Recipe" class="contents" hx-history="false">
 		<div class="flex flex-col sm:flex-row pt-1">
@@ -112,7 +123,7 @@ templ Detail(resp *gql.RecipeByIdResponse) {
 				@recipeDetailTags(recipe.Id, recipe.Tags)
 			}
 			if len(recipe.Ingredients) > 0 {
-				@ingredients(recipe)
+				@ingredients(recipe, publicURL)
 			}
 		</section>
 		if recipe.Method != nil && len(*recipe.Method) > 0 {
