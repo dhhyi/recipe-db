@@ -78,7 +78,7 @@ def validate_timestamp(value):
     return parsed.astimezone(timezone.utc)
 
 
-def validate_snapshot(snapshot):
+def validate_snapshot(snapshot, require_storage_versions=False):
     snapshot = Path(snapshot)
     if snapshot.is_symlink() or not snapshot.is_dir():
         raise ValueError("invalid snapshot directory")
@@ -159,6 +159,7 @@ def validate_snapshot(snapshot):
                 or not isinstance(files, list) or len(files) != pvc["fileCount"]:
             raise ValueError("invalid file inventory")
         expected_files = {}
+        expected_storage_version = None
         for entry in files:
             if not isinstance(entry, dict):
                 raise ValueError("invalid file entry")
@@ -169,9 +170,19 @@ def validate_snapshot(snapshot):
             if name in expected_files or type(size) is not int or size < 0 or not HASH_PATTERN.fullmatch(digest or ""):
                 raise ValueError("invalid file entry")
             expected_files[name] = (size, digest)
+            if name == "storage-version":
+                version = entry.get("storageVersion")
+                if type(version) is not int or version < 1:
+                    raise ValueError("invalid storage-version inventory")
+                expected_storage_version = version
+            elif "storageVersion" in entry:
+                raise ValueError("unexpected storage-version inventory")
         if list(expected_files) != sorted(expected_files):
             raise ValueError("unordered file inventory")
+        if require_storage_versions and expected_storage_version is None:
+            raise ValueError("missing storage-version marker")
         observed = {}
+        observed_storage_version = None
         directories = set()
         try:
             with tarfile.open(archive, "r:") as source_tar:
@@ -194,20 +205,31 @@ def validate_snapshot(snapshot):
                         raise ValueError("unreadable archive member")
                     file_digest = hashlib.sha256()
                     size = 0
+                    marker = bytearray()
                     while block := stream.read(1024 * 1024):
                         file_digest.update(block)
                         size += len(block)
+                        if name == "storage-version":
+                            marker.extend(block)
                     observed[name] = (size, file_digest.hexdigest())
+                    if name == "storage-version":
+                        if size > 64 or not re.fullmatch(rb"[1-9][0-9]*\n?", bytes(marker)):
+                            raise ValueError("malformed storage-version marker")
+                        observed_storage_version = int(marker.strip())
         except tarfile.TarError as error:
             raise ValueError("invalid archive") from error
         if observed != expected_files or file_hash(archive) != pvc["sha256"]:
             raise ValueError("archive integrity mismatch")
+        if observed_storage_version != expected_storage_version:
+            raise ValueError("storage-version marker does not match the inventory")
         if directories and directories != {"public", "manifests"}:
             raise ValueError("incomplete image directories")
         if pvc["service"] == "images" and directories != {"public", "manifests"}:
             raise ValueError("image snapshot lacks storage directories")
         if pvc["service"] != "images" and directories:
             raise ValueError("unclassified archive directories")
+        if require_storage_versions and expected_storage_version is None:
+            raise ValueError("missing storage-version marker")
     if {entry.name for entry in snapshot.iterdir()} != expected_names:
         raise ValueError("unexpected snapshot content")
     return manifest
@@ -820,12 +842,12 @@ def terminate_capture_process_group(process):
     process.wait()
 
 
-def upload_snapshot(snapshot, config):
+def upload_snapshot(snapshot, config, require_storage_versions=False, force_upload=False):
     ensure_private_dir(config["stateDirectory"])
     stage_root = ensure_private_dir(config["stagingDirectory"])
     baseline_file = baseline_path(config)
     try:
-        manifest = validate_snapshot(snapshot)
+        manifest = validate_snapshot(snapshot, require_storage_versions)
         fingerprint = content_fingerprint(manifest)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         write_status(config, "capture-failure", "invalid-snapshot")
@@ -841,25 +863,30 @@ def upload_snapshot(snapshot, config):
     try:
         rclone(config, "mkdir", remote_base(config))
         names = remote_names(config)
-        if baseline and baseline.get("fingerprint") == fingerprint and verify_baseline(config, baseline, names):
+        if not force_upload and baseline and baseline.get("fingerprint") == fingerprint \
+                and verify_baseline(config, baseline, names):
             value = write_status(config, "verified-unchanged", "content-unchanged",
                                  manifest["backupId"], baseline.get("lastUpload"))
             return value["status"]
         with tempfile.TemporaryDirectory(prefix="publish-", dir=stage_root) as temporary:
             package = create_package(snapshot, temporary, manifest, config["deploymentId"],
                                      config["maxStagingBytes"])
-            if package["archive"] in names or package["manifest"] in names:
-                raise BackupError("upload-failure", "remote-name-collision")
             remote = remote_base(config)
-            rclone(config, "copyto", str(Path(temporary) / package["archive"]),
-                   remote + "/" + package["archive"])
-            if remote_hash(config, package["archive"], package["archiveSizeBytes"]) != package["archiveSha256"]:
-                raise BackupError("upload-failure", "archive-integrity")
-            rclone(config, "copyto", str(Path(temporary) / package["manifest"]),
-                   remote + "/" + package["manifest"])
-            manifest_size = (Path(temporary) / package["manifest"]).stat().st_size
-            if remote_hash(config, package["manifest"], manifest_size) != package["manifestSha256"]:
-                raise BackupError("upload-failure", "manifest-integrity")
+            archive_path = Path(temporary) / package["archive"]
+            manifest_path = Path(temporary) / package["manifest"]
+            for name, path, size, digest in (
+                (package["archive"], archive_path, package["archiveSizeBytes"], package["archiveSha256"]),
+                (package["manifest"], manifest_path, manifest_path.stat().st_size, package["manifestSha256"]),
+            ):
+                if name in names:
+                    if remote_hash(config, name, size) != digest:
+                        raise BackupError("upload-failure", "remote-name-collision")
+                    continue
+                rclone(config, "copyto", str(path), remote + "/" + name)
+                if remote_hash(config, name, size) != digest:
+                    raise BackupError("upload-failure", "archive-integrity" if name == package["archive"]
+                                      else "manifest-integrity")
+            manifest_size = manifest_path.stat().st_size
             last_upload = datetime.now(timezone.utc).isoformat(timespec="seconds")
             new_baseline = {
                 "fingerprint": package["fingerprint"],
@@ -895,6 +922,52 @@ def upload_snapshot(snapshot, config):
         if error.status != "retention-failure":
             write_status(config, error.status, error.code, manifest.get("backupId"), prior_upload)
         raise
+
+
+def run_release_upload(config):
+    ensure_private_dir(config["stateDirectory"])
+    lock_fd = acquire_run_lock(config)
+    maintenance = maintenance_state_path(config)
+    try:
+        state = lifecycle_state(maintenance)
+        if not isinstance(state, dict) or state.get("status") != "access-open" \
+                or state.get("phase") != "post-release-backup-captured":
+            raise BackupError("capture-failure", "release-gates-incomplete")
+        website_check = state.get("websiteCheck")
+        disposition = state.get("postCheckDisposition")
+        partial_failure_accepted = isinstance(disposition, dict) \
+            and disposition.get("choice") == "accept-partial-failure"
+        if not isinstance(website_check, dict) or not (
+            website_check.get("outcome") == "passed"
+            or (website_check.get("outcome") == "failed" and partial_failure_accepted)
+        ):
+            raise BackupError("capture-failure", "release-gates-incomplete")
+        candidate = state.get("candidate")
+        post_release = state.get("postReleaseBackup")
+        if not isinstance(candidate, dict) or not isinstance(post_release, dict) \
+                or candidate.get("artifact") == state.get("source", {}).get("artifact") \
+                or post_release.get("status") != "captured" \
+                or post_release.get("artifact") != candidate.get("artifact"):
+            raise BackupError("capture-failure", "release-backup-identity-mismatch")
+        snapshot = maintenance / "post-release-backup"
+        if post_release.get("snapshotPath") != str(snapshot):
+            raise BackupError("capture-failure", "release-backup-path-mismatch")
+        try:
+            manifest = validate_snapshot(snapshot, require_storage_versions=True)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise BackupError("capture-failure", "invalid-release-snapshot") from error
+        if manifest.get("backupId") != post_release.get("backupId") \
+                or manifest.get("source", {}).get("artifact") != candidate.get("artifact"):
+            raise BackupError("capture-failure", "release-backup-identity-mismatch")
+        result = upload_snapshot(snapshot, config, require_storage_versions=True, force_upload=True)
+        if result != "verified-upload":
+            raise BackupError("upload-failure", "changed-release-requires-verified-upload")
+        state["postReleaseBackup"]["uploadStatus"] = result
+        state["postReleaseBackup"]["uploadedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        atomic_json(maintenance / "backup-state.json", state)
+        return result
+    finally:
+        os.close(lock_fd)
 
 
 def run_nightly(config):
@@ -1009,7 +1082,7 @@ def report_status(config):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("nightly", "status", "maintenance-enter"))
+    parser.add_argument("action", choices=("nightly", "status", "maintenance-enter", "release-upload"))
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config = safe_config(args.config)
@@ -1024,6 +1097,9 @@ def main():
         return 0
     if args.action == "maintenance-enter":
         enter_maintenance(config)
+        return 0
+    if args.action == "release-upload":
+        print(run_release_upload(config))
         return 0
     run_nightly(config)
     return 0

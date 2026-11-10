@@ -37,8 +37,11 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
             member.size = len(content)
             member.mtime = mtime
             archive.addfile(member, io.BytesIO(content))
-            entries.append({"path": name, "sizeBytes": len(content),
-                            "sha256": hashlib.sha256(content).hexdigest()})
+            entry = {"path": name, "sizeBytes": len(content),
+                     "sha256": hashlib.sha256(content).hexdigest()}
+            if name == "storage-version":
+                entry["storageVersion"] = int(content.strip())
+            entries.append(entry)
     raw_archive = archive_path.read_bytes()
     manifest = {
         "format": "recipe-db-pvc-snapshot",
@@ -148,6 +151,74 @@ raise SystemExit(0)
 
     def make_snapshot(self, name="snapshot", **kwargs):
         return snapshot(self.root / name, **kwargs)
+
+    def test_release_upload_requires_passed_website_and_changed_versioned_artifact(self):
+        candidate = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "b" * 64
+        backup_id = "backup-20261110T100000-42"
+        maintenance = self.state / "maintenance"
+        release_snapshot = maintenance / "post-release-backup"
+        snapshot(
+            release_snapshot,
+            files={"recipes.sqlite3": b"sqlite data", "storage-version": b"2\n"},
+            backup_id=backup_id,
+            artifact=candidate,
+            revision="b" * 40,
+        )
+        maintenance.mkdir(parents=True, exist_ok=True)
+        state = {
+            "stateVersion": 2,
+            "status": "access-open",
+            "phase": "post-release-backup-captured",
+            "source": {"artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64},
+            "candidate": {"artifact": candidate},
+            "websiteCheck": {"outcome": "failed"},
+            "postReleaseBackup": {
+                "status": "captured", "artifact": candidate, "backupId": backup_id,
+                "snapshotPath": str(release_snapshot),
+            },
+        }
+        backup.atomic_json(maintenance / "backup-state.json", state)
+
+        with self.assertRaisesRegex(backup.BackupError, "release-gates-incomplete"):
+            backup.run_release_upload(self.config)
+        state["postCheckDisposition"] = {"choice": "accept-partial-failure"}
+        backup.atomic_json(maintenance / "backup-state.json", state)
+        self.assertEqual(backup.run_release_upload(self.config), "verified-upload")
+        uploaded = backup.read_json(maintenance / "backup-state.json")
+        self.assertEqual(uploaded["postReleaseBackup"]["uploadStatus"], "verified-upload")
+        status = backup.read_json(backup.status_path(self.config))
+        self.assertEqual(status["backupId"], backup_id)
+        self.assertEqual(status["status"], "verified-upload")
+        self.assertEqual(backup.run_release_upload(self.config), "verified-upload")
+
+    def test_release_upload_rejects_missing_storage_version_before_remote_write(self):
+        candidate = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "b" * 64
+        backup_id = "backup-20261110T100000-43"
+        maintenance = self.state / "maintenance"
+        release_snapshot = maintenance / "post-release-backup"
+        snapshot(
+            release_snapshot,
+            backup_id=backup_id,
+            artifact=candidate,
+            revision="b" * 40,
+        )
+        maintenance.mkdir(parents=True, exist_ok=True)
+        backup.atomic_json(maintenance / "backup-state.json", {
+            "stateVersion": 2,
+            "status": "access-open",
+            "phase": "post-release-backup-captured",
+            "source": {"artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64},
+            "candidate": {"artifact": candidate},
+            "websiteCheck": {"outcome": "passed"},
+            "postReleaseBackup": {
+                "status": "captured", "artifact": candidate, "backupId": backup_id,
+                "snapshotPath": str(release_snapshot),
+            },
+        })
+
+        with self.assertRaisesRegex(backup.BackupError, "invalid-release-snapshot"):
+            backup.run_release_upload(self.config)
+        self.assertFalse((self.remote / "backups").exists())
 
     def write_maintenance_capture(self):
         command = Path(self.config["captureCommand"])

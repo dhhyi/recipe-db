@@ -10,10 +10,11 @@ import tarfile
 from urllib.parse import unquote
 
 
-def validate(archive, layout):
+def validate(archive, layout, require_storage_version=False):
     files = {}
     directories = set()
     inventory = []
+    storage_version = None
     with tarfile.open(archive, "r:") as source:
         for member in source:
             name = member.name.removeprefix("./")
@@ -34,7 +35,7 @@ def validate(archive, layout):
                 raise ValueError("archive file is unreadable")
             digest = hashlib.sha256()
             content = bytearray()
-            keep_content = name.endswith(".json")
+            keep_content = name.endswith(".json") or name == "storage-version"
             first = b""
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
@@ -42,8 +43,18 @@ def validate(archive, layout):
                     first = block[:16]
                 if keep_content:
                     content.extend(block)
-            files[name] = (member.size, digest.hexdigest(), bytes(content), first)
-            inventory.append({"path": name, "sizeBytes": member.size, "sha256": digest.hexdigest()})
+            value = bytes(content)
+            if name == "storage-version":
+                if member.size > 64 or not re.fullmatch(rb"[1-9][0-9]*\n?", value):
+                    raise ValueError("malformed storage-version marker")
+                storage_version = int(value.strip())
+            files[name] = (member.size, digest.hexdigest(), value, first)
+            entry = {"path": name, "sizeBytes": member.size, "sha256": digest.hexdigest()}
+            if name == "storage-version":
+                entry["storageVersion"] = storage_version
+            inventory.append(entry)
+    if require_storage_version and storage_version is None:
+        raise ValueError("missing storage-version marker")
     kind = layout["kind"]
     if kind in ("sqlite", "json"):
         name = layout["file"]
@@ -52,6 +63,7 @@ def validate(archive, layout):
         allowed = {name}
         if kind == "sqlite":
             allowed.update({name + "-wal", name + "-shm", name + "-journal"})
+        allowed.add("storage-version")
         if name not in files or not set(files).issubset(allowed):
             raise ValueError("missing authoritative database or unclassified PVC data")
         if kind == "sqlite" and files[name][3] != b"SQLite format 3\x00":
@@ -87,6 +99,8 @@ def validate(archive, layout):
                 if field == "url" and files[output][0] != document["size"]:
                     raise ValueError("image manifest size mismatch")
                 selected.add(output)
+        if "storage-version" in files:
+            selected.add("storage-version")
         if selected != set(files):
             raise ValueError("image archive contains unselected or unclassified data")
     else:
@@ -95,9 +109,14 @@ def validate(archive, layout):
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise ValueError("usage: validate-backup-snapshot.py ARCHIVE LAYOUT_JSON")
-    print(json.dumps(validate(sys.argv[1], json.loads(sys.argv[2]))))
+    require_storage_version = False
+    arguments = sys.argv[1:]
+    if "--require-storage-version" in arguments:
+        arguments.remove("--require-storage-version")
+        require_storage_version = True
+    if len(arguments) != 2:
+        raise ValueError("usage: validate-backup-snapshot.py [--require-storage-version] ARCHIVE LAYOUT_JSON")
+    print(json.dumps(validate(arguments[0], json.loads(arguments[1]), require_storage_version)))
 
 
 if __name__ == "__main__":

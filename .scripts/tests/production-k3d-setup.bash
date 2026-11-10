@@ -303,7 +303,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         jq --arg name "$name" '.items[] | select(.metadata.name == $name)' "$MOCK_LOG.deployments"
         handled=true ;;
       *" get configmap recipe-db-release -o json"*)
-        jq -n --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" '{data:{artifact:$artifact,revision:$revision}}'
+        release_artifact=$(jq -r '.items[0].spec.template.metadata.annotations["recipe-db/release"]' \
+          "$MOCK_LOG.deployments")
+        jq -n --arg artifact "$release_artifact" --arg revision "$MOCK_REVISION" \
+          '{data:{artifact:$artifact,revision:$revision}}'
         handled=true ;;
       *" get secret recipe-db-runtime -o json"*)
         jq -n '{metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
@@ -698,13 +701,23 @@ if jq -e 'has("config")' "$2" > /dev/null; then
   elif [[ $MOCK_RELEASE_LIFECYCLE = true ]]; then
     jq -c '. as $input |
       (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"])[] |
-      . as $name | {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
-      spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
-      spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
-        env:([{name:"MODE",value:"production"}] +
-          (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}]}}}}' "$2" |
+      . as $name | ($input.config.volumes | has($name)) as $durable |
+      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
+        spec:{replicas:1,template:{
+          metadata:{annotations:{"recipe-db/release":$input.artifact}},
+          spec:{
+            containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
+              env:([{name:"MODE",value:"production"}] +
+                (if $durable then [{name:"DATA_LOCATION",value:"/data"}] else [] end) +
+                (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end)),
+              volumeMounts:(if $durable then [{name:"data",mountPath:"/data"}] else [] end)}],
+            volumes:(if $durable then [{name:"data",persistentVolumeClaim:{claimName:$name}}] else [] end)
+          }
+        }}
+      }' "$2" |
       while IFS= read -r doc; do printf '%s\n---\n' "$doc"; done
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  template:\n    spec:\n      containers:\n        - name: provision\n          image: ghcr.io/dhhyi/recipe-db-graphql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n          args: [provision-events]\n      volumes: []\n---\n'
+    printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n---\n'
   elif [[ $MOCK_BACKUP = true ]]; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'
   else
