@@ -566,19 +566,30 @@ Artifact link: https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/$digest
 EOF
 }
 
+write_release_acceptance() {
+  jq -n --arg revision "$REVISION" --arg artifact "$1" '{
+    status:"release-accepted",phase:"operator-accepted",
+    candidate:{revision:$revision,artifact:$artifact},
+    acceptedAt:"2026-11-10T12:00:00Z",websiteCheck:{outcome:"passed"},
+    postReleaseBackup:{revision:$revision,artifact:$artifact,status:"verified-upload",
+      storageVersions:[{service:"recipes",version:2}]}
+  }' > acceptance.json
+}
+
 @test "GitHub release publisher creates the next sequential release from authored notes and retries safely" {
   local artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   mock_github_releases
   write_release_notes "$artifact"
+  write_release_acceptance "$artifact"
 
-  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
   [ "$status" -eq 0 ]
   [[ $output == *"v1 https://github.com/dhhyi/recipe-db/releases/tag/v1"* ]]
   [ "$(grep -c 'release create v1' "$MOCK_GH_LOG")" -eq 1 ]
   run grep -q -- '--generate-notes' "$MOCK_GH_LOG"
   [ "$status" -ne 0 ]
 
-  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
   [ "$status" -eq 0 ]
   [ "$(grep -c 'release create v1' "$MOCK_GH_LOG")" -eq 1 ]
 }
@@ -586,17 +597,45 @@ EOF
 @test "GitHub release publisher rejects missing evidence and non-sequential existing releases" {
   local artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   mock_github_releases
+  write_release_acceptance "$artifact"
   printf 'Only an artifact %s\n' "$artifact" > release-notes.md
-  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
   [ "$status" -ne 0 ]
   [ ! -s "$MOCK_GH_LOG" ]
 
   write_release_notes "$artifact"
   printf '[{"tagName":"v2","isDraft":false,"isPrerelease":false,"publishedAt":"2026-11-10T12:00:00Z"}]\n' \
     > "$MOCK_RELEASES"
-  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
   [ "$status" -ne 0 ]
   [[ $output == *"not contiguous"* ]]
   run grep -q 'release create' "$MOCK_GH_LOG"
   [ "$status" -ne 0 ]
+}
+
+@test "GitHub release publisher rejects absent failed and mismatched acceptance before GitHub calls" {
+  local artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  mock_github_releases
+  write_release_notes "$artifact"
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md missing.json
+  [ "$status" -ne 0 ]
+  [ ! -s "$MOCK_GH_LOG" ]
+
+  local invalid
+  for invalid in \
+    '.status="access-open"' \
+    '.websiteCheck.outcome="failed"' \
+    '.postReleaseBackup.status="verified-unchanged"' \
+    '.candidate.revision="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+    '.candidate.artifact="different"' \
+    '.postReleaseBackup.artifact="different"' \
+    '.postReleaseBackup.storageVersions=[]' \
+    'del(.acceptedAt)'; do
+    write_release_acceptance "$artifact"
+    jq "$invalid" acceptance.json > invalid.json
+    run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md invalid.json
+    [ "$status" -ne 0 ]
+    [[ $output == *"acceptance and verified-upload evidence are required"* ]]
+    [ ! -s "$MOCK_GH_LOG" ]
+  done
 }

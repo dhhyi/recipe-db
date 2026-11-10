@@ -2,17 +2,39 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s <40-character revision> <immutable release artifact> <operator-authored notes file>\n' "$0" >&2
+  printf 'usage: %s <40-character revision> <immutable release artifact> <operator-authored notes file> <acceptance evidence file>\n' "$0" >&2
   exit 2
 }
 
-[[ $# = 3 ]] || usage
+[[ $# = 4 ]] || usage
 revision=$1
 artifact=$2
 notes_file=$3
+acceptance_file=$4
 [[ $revision =~ ^[0-9a-f]{40}$ ]] || usage
 [[ $artifact =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$ ]] || usage
 [[ -f $notes_file && ! -L $notes_file && -r $notes_file ]] || usage
+[[ -f $acceptance_file && ! -L $acceptance_file && -r $acceptance_file ]] || usage
+
+jq -e --arg revision "$revision" --arg artifact "$artifact" '
+  .status == "release-accepted" and .phase == "operator-accepted"
+  and .candidate.revision == $revision and .candidate.artifact == $artifact
+  and (.acceptedAt | type == "string" and length > 0)
+  and (
+    .websiteCheck.outcome == "passed"
+    or (.websiteCheck.outcome == "failed"
+      and .postCheckDisposition.choice == "accept-partial-failure")
+  )
+  and .postReleaseBackup.artifact == $artifact
+  and .postReleaseBackup.revision == $revision
+  and .postReleaseBackup.status == "verified-upload"
+  and (.postReleaseBackup.storageVersions | type == "array" and length > 0
+    and all(.[]; (.service | type == "string" and length > 0)
+      and (.version | type == "number" and . > 0)))
+' "$acceptance_file" > /dev/null || {
+  printf 'release: candidate-bound operator acceptance and verified-upload evidence are required before publication\n' >&2
+  exit 1
+}
 
 notes=$(< "$notes_file")
 [[ -n $notes && $notes == *"$artifact"* ]] || {

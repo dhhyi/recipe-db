@@ -313,14 +313,30 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-accept \
 
 ### Publish, then clean up
 
-On the workstation, write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and a direct link to its OCI manifest, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Publish from the checkout at `REVISION`:
+On the Pi, export only the acceptance evidence from the retained state. Do not copy the whole state or private configuration into public notes:
+
+```sh
+jq '{status,phase,candidate,acceptedAt,websiteCheck,postCheckDisposition,
+  postReleaseBackup:(.postReleaseBackup | {artifact,revision,status,storageVersions})}' \
+  "$STATE/backup-state.json" > "$STATE/release-acceptance.json"
+```
+
+On the workstation, set `STATE` to the Pi's absolute retained state directory and copy the evidence privately, using the verified SSH user and host from step 1:
+
+```sh
+ACCEPTANCE="$HOME/.config/recipe-db/release-acceptance.json"
+scp -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" -o IdentitiesOnly=yes \
+  "piadmin@recipe-pi.home:$STATE/release-acceptance.json" "$ACCEPTANCE"
+```
+
+Write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and a direct link to its OCI manifest, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Publish from the checkout at `REVISION`:
 
 ```sh
 NOTES="$HOME/.config/recipe-db/release-notes.md"
-.scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES"
+.scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES" "$ACCEPTANCE"
 ```
 
-The script selects the next contiguous `vN` tag, publishes the supplied notes for `REVISION`, and safely recognizes a matching already-published release on retry. Do not finalize if publication fails or the published release does not match the candidate. On the Pi, use the tag printed by the publisher:
+The script requires candidate-bound operator acceptance and verified-upload evidence before any GitHub call. It selects the next contiguous `vN` tag, publishes the supplied notes for `REVISION`, and safely recognizes a matching already-published release on retry. Do not finalize if publication fails or the published release does not match the candidate. On the Pi, use the tag printed by the publisher:
 
 ```sh
 TAG=vN
@@ -328,7 +344,7 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-finalize \
   "$VALUES" "$STATE" "$RELEASE" "$TAG" "PUBLISHED-$HOLDER-$TAG"
 ```
 
-Finalization independently checks GitHub's published release, commit, tag and artifact link. Only after that succeeds does it remove the temporary Pi release snapshot, progress files and operation Lease. The verified Drive backup and application data are not removed. If publication or its verification fails, keep the state and Lease and retry or investigate; do not manually delete them.
+Finalization independently checks GitHub's published release, commit, artifact link and contiguous release numbering. Only after that succeeds does it remove the temporary Pi release snapshot, progress files and operation Lease. The verified Drive backup and application data are not removed. If publication or its verification fails, keep the state and Lease and retry or investigate; do not manually delete them.
 
 Back in the provisioning container's SSH-agent shell, enable the schedule:
 

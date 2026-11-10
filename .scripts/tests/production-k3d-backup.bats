@@ -41,7 +41,12 @@ mock_github_release_api() {
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$MOCK_LOG"
 [[ $MOCK_CURL_FAIL != true ]] || exit 22
-cat "$MOCK_GITHUB_RELEASE_JSON"
+case "${*: -1}" in
+  *"/releases?"*)
+    jq '[{tag_name:.tag_name,draft:.draft,prerelease:.prerelease}]' "$MOCK_GITHUB_RELEASE_JSON"
+    ;;
+  *) cat "$MOCK_GITHUB_RELEASE_JSON" ;;
+esac
 EOF
   chmod +x bin/curl
 }
@@ -725,6 +730,18 @@ EOF
   [ -e "$MOCK_LOG.lease" ]
 
   export MOCK_CURL_FAIL=false
+  jq '.tag_name="v9" | .html_url="https://github.com/dhhyi/recipe-db/releases/tag/v9"' \
+    "$MOCK_GITHUB_RELEASE_JSON" > "$MOCK_GITHUB_RELEASE_JSON.next"
+  mv "$MOCK_GITHUB_RELEASE_JSON.next" "$MOCK_GITHUB_RELEASE_JSON"
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v9 "PUBLISHED-$HOLDER-v9"
+  [ "$status" -ne 0 ]
+  [[ $output == *"release numbers are not contiguous"* ]]
+  [ -e "$STATE/post-release-backup/manifest.json" ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq '.tag_name="v1" | .html_url="https://github.com/dhhyi/recipe-db/releases/tag/v1"' \
+    "$MOCK_GITHUB_RELEASE_JSON" > "$MOCK_GITHUB_RELEASE_JSON.next"
+  mv "$MOCK_GITHUB_RELEASE_JSON.next" "$MOCK_GITHUB_RELEASE_JSON"
   run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
     "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
   [ "$status" -eq 0 ]

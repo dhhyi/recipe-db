@@ -1927,6 +1927,7 @@ release_accept() {
 
 release_finalize() {
   local candidate=$2 tag=$3 confirmation=$4 old_release current api_url
+  local page=1
   local lease_present=false
   snapshot=$1
   backup_load_state "$snapshot"
@@ -1991,6 +1992,27 @@ release_finalize() {
     and (.body | type == "string" and contains($candidate) and contains($artifactLink))
   ' "$work/github-release.json" > /dev/null \
     || production_fail "published GitHub Release does not match the candidate artifact and revision"
+  mkdir "$work/github-release-pages"
+  while :; do
+    curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "https://api.github.com/repos/dhhyi/recipe-db/releases?per_page=100&page=$page" \
+      > "$work/github-release-pages/$page.json" \
+      || production_fail "cannot verify sequential GitHub releases; temporary state and Lease are retained"
+    jq -e 'type == "array"' "$work/github-release-pages/$page.json" > /dev/null \
+      || production_fail "GitHub release listing is invalid; temporary state and Lease are retained"
+    [[ $(jq length "$work/github-release-pages/$page.json") -eq 100 ]] || break
+    page=$((page + 1))
+  done
+  jq -se --arg tag "$tag" '
+    add | map(select(.draft == false and .prerelease == false)) |
+    if all(.[]; .tag_name | test("^v[1-9][0-9]*$")) then
+      map(.tag_name | ltrimstr("v") | tonumber) | sort |
+      length > 0 and index($tag | ltrimstr("v") | tonumber) != null
+      and . == [range(1; (max + 1))]
+    else false end
+  ' "$work/github-release-pages/"*.json > /dev/null \
+    || production_fail "GitHub release numbers are not contiguous; temporary state and Lease are retained"
   api_url=$(jq -r .html_url "$work/github-release.json")
   if $lease_present; then
     release_state_write release-published published-cleanup-pending \
