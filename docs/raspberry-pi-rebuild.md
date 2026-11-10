@@ -134,7 +134,7 @@ The access playbook creates `kubeconfig/pi.yaml` with mode `0600`. It is tied to
 
 Expect `changed=2` on repeat runs: the backup kubeconfig is recopied and its context renamed. Investigate other changes or failures.
 
-Every `site.yml` run disables scheduled backups. After maintenance, [verify a backup and re-enable the timer](production-release-cookbook.md#5-verify-a-backup-then-re-enable-its-schedule).
+Every `site.yml` run disables scheduled backups. After maintenance, [verify a backup and re-enable the timer](production-release-cookbook.md#verify-a-backup-then-re-enable-its-schedule).
 
 ## 6. Verify cluster access and host safety
 
@@ -191,4 +191,4 @@ After restore, verify:
 
 ## 8. Configure automated backups
 
-After restore acceptance, [authorize Drive](google-drive-authorization.md#1-authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow steps 4–5 of the [production release cookbook](production-release-cookbook.md) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. The cookbook also updates the capture checkout and immutable release reference to match the deployed application.
+After restore acceptance, [authorize Drive](google-drive-authorization.md#1-authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow [Align backups and record the result](production-release-cookbook.md#10-align-backups-and-record-the-result) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. That procedure also updates the capture checkout and immutable release reference to match the deployed application.

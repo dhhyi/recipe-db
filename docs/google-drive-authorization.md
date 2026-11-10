@@ -93,7 +93,7 @@ sudo rclone lsf "gdrive:RecipeDB Backups" \
 
 Success: the command finishes without an error. This checks folder access, not backup integrity. If it fails, investigate; do not create another folder or request broader permissions.
 
-Follow the [release cookbook](production-release-cookbook.md#4-align-backup-capture-with-the-deployed-release) to configure backups, verify a backup run and enable the schedule. Close the SSH connection when finished.
+Follow the [release cookbook](production-release-cookbook.md#10-align-backups-and-record-the-result) to configure backups, verify a backup run and enable the schedule. Close the SSH connection when finished.
 
 ## 2. Reauthorize only when needed
 
@@ -169,4 +169,4 @@ sudo rm -- "$AUTH_DIRECTORY/previous.conf"
 sudo rmdir -- "$AUTH_DIRECTORY"
 ```
 
-Use the [release cookbook](production-release-cookbook.md#5-verify-a-backup-then-re-enable-its-schedule) to re-enable the backup schedule. Close the SSH connection when finished. Authorization files stay on the Pi.
+Use the [release cookbook](production-release-cookbook.md#verify-a-backup-then-re-enable-its-schedule) to re-enable the backup schedule. Close the SSH connection when finished. Authorization files stay on the Pi.
