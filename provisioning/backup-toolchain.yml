@@ -5,6 +5,31 @@
   failed_when: >-
     backup_service_active.rc != 0 or backup_service_active.stdout not in ['inactive', 'failed']
 
+- name: Check whether backup configuration is installed
+  ansible.builtin.stat:
+    path: /etc/recipe-db/backup.json
+  register: backup_configuration
+
+- name: Inspect lifecycle state before changing the capture checkout
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/recipe-db-backup-upload
+      - status
+      - --config
+      - /etc/recipe-db/backup.json
+  register: backup_lifecycle_status
+  changed_when: false
+  when: backup_configuration.stat.exists
+  no_log: true
+
+- name: Refuse capture checkout changes during release maintenance
+  ansible.builtin.assert:
+    that:
+      - not ((backup_lifecycle_status.stdout | from_json).maintenanceActive | default(false))
+    fail_msg: Resolve the retained maintenance operation before changing its capture checkout.
+  when: backup_configuration.stat.exists
+  no_log: true
+
 - name: Create the private backup toolchain configuration directory
   ansible.builtin.file:
     path: /etc/recipe-db/backup-toolchain

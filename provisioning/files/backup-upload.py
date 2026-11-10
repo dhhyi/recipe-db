@@ -86,8 +86,21 @@ def validate_snapshot(snapshot):
     manifest = read_json(manifest_path)
     if manifest.get("format") != FORMAT or manifest.get("formatVersion") != 1:
         raise ValueError("unsupported snapshot format")
-    if (snapshot / "backup-state.json").exists():
-        raise ValueError("snapshot is incomplete")
+    state_path = snapshot / "backup-state.json"
+    expected_names = {"manifest.json"}
+    if state_path.exists() or state_path.is_symlink():
+        state = read_json(state_path)
+        state_source = state.get("source") if isinstance(state, dict) else None
+        manifest_source = manifest.get("source")
+        if (not isinstance(state, dict) or not isinstance(state_source, dict)
+                or not isinstance(manifest_source, dict)
+                or state.get("stateVersion") != 2 or state.get("status") != "captured"
+                or state.get("phase") != "captured"
+                or state.get("backupId") != manifest.get("backupId")
+                or state_source.get("artifact") != manifest_source.get("artifact")
+                or state_source.get("revision") != manifest_source.get("revision")):
+            raise ValueError("maintenance state does not match the complete snapshot")
+        expected_names.add("backup-state.json")
     if not BACKUP_ID_PATTERN.fullmatch(manifest.get("backupId", "")):
         raise ValueError("invalid backup identity")
     source = manifest.get("source")
@@ -104,7 +117,6 @@ def validate_snapshot(snapshot):
     inventory = manifest.get("inventory")
     if not isinstance(inventory, list) or not inventory:
         raise ValueError("empty snapshot inventory")
-    expected_names = {"manifest.json"}
     seen_archives = set()
     for pvc in inventory:
         if not isinstance(pvc, dict):
@@ -112,6 +124,21 @@ def validate_snapshot(snapshot):
         if not all(isinstance(pvc.get(key), str) and pvc[key]
                    for key in ("service", "role", "pvc")):
             raise ValueError("invalid inventory identity")
+        layout = pvc.get("layout")
+        if layout is not None and (not isinstance(layout, dict)
+                                   or layout.get("kind") not in ("images", "sqlite", "json")):
+            raise ValueError("invalid storage layout")
+        storage = pvc.get("storage")
+        if storage is not None and (
+            not isinstance(storage, dict)
+            or not all(isinstance(storage.get(key), str) and storage[key]
+                       for key in ("uid", "volumeName", "storageClassName",
+                                   "requestedStorage", "capacity", "volumeMode"))
+            or not isinstance(storage.get("accessModes"), list)
+            or not storage["accessModes"]
+            or not all(isinstance(mode, str) and mode for mode in storage["accessModes"])
+        ):
+            raise ValueError("invalid storage identity")
         archive_name = pvc.get("archive")
         if not isinstance(archive_name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.tar", archive_name):
             raise ValueError("invalid archive name")
@@ -199,6 +226,8 @@ def content_fingerprint(manifest):
                 "role": item["role"],
                 "pvc": item["pvc"],
                 "archive": item["archive"],
+                "layout": item.get("layout"),
+                "storage": item.get("storage"),
                 "files": item["files"],
             }
             for item in sorted(manifest["inventory"], key=lambda item: item["archive"])
@@ -358,6 +387,38 @@ def status_path(config):
     return Path(config["stateDirectory"]) / "status.json"
 
 
+def maintenance_state_path(config):
+    return Path(config["stateDirectory"]) / "maintenance"
+
+
+def maintenance_active(config):
+    path = maintenance_state_path(config)
+    if path.is_symlink():
+        return True
+    if not path.exists():
+        return False
+    return not safely_recovered(lifecycle_state(path))
+
+
+def archive_recovered_maintenance(config):
+    path = maintenance_state_path(config)
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or not path.is_dir():
+        raise BackupError("restart-failure", "invalid-maintenance-state")
+    state = lifecycle_state(path)
+    if not safely_recovered(state):
+        return
+    backup_id = state.get("backupId")
+    if not isinstance(backup_id, str) or not BACKUP_ID_PATTERN.fullmatch(backup_id):
+        raise BackupError("restart-failure", "invalid-maintenance-state")
+    history = ensure_private_dir(Path(config["stateDirectory"]) / "maintenance-history")
+    destination = history / backup_id
+    if destination.exists() or destination.is_symlink():
+        raise BackupError("restart-failure", "maintenance-history-collision")
+    os.replace(path, destination)
+
+
 def write_status(config, status, code, backup_id=None, last_upload=None):
     path = status_path(config)
     prior = {}
@@ -377,6 +438,140 @@ def write_status(config, status, code, backup_id=None, last_upload=None):
     }
     atomic_json(path, value)
     return value
+
+
+def acquire_run_lock(config):
+    state = ensure_private_dir(config["stateDirectory"])
+    lock_path = state / "run.lock"
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        os.close(lock_fd)
+        write_status(config, "interrupted", "already-running")
+        raise BackupError("interrupted", "already-running") from error
+    return lock_fd
+
+
+def capture_environment(config):
+    return {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "KUBECONFIG": os.environ.get(
+            "KUBECONFIG", "/etc/recipe-db/backup-kubeconfig.yaml",
+        ),
+        "RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES": str(
+            config["maxStagingBytes"] // 2,
+        ),
+    }
+
+
+def capture_command(config):
+    capture = Path(config["captureCommand"])
+    if capture.is_symlink() or not capture.is_file() or not os.access(capture, os.X_OK):
+        raise BackupError("capture-failure", "capture-command-unavailable")
+    return capture
+
+
+def run_capture_command(config, *arguments):
+    try:
+        process = subprocess.Popen(
+            [str(capture_command(config)), *map(str, arguments)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=capture_environment(config), start_new_session=True,
+        )
+        try:
+            result = process.wait(timeout=config["captureTimeoutSeconds"])
+        except (subprocess.TimeoutExpired, KeyboardInterrupt) as error:
+            terminate_capture_process_group(process)
+            raise BackupError("restart-failure", "capture-interrupted") from error
+    except OSError as error:
+        raise BackupError("capture-failure", "capture-command-unavailable") from error
+    if result:
+        raise BackupError("restart-failure", "capture-command-failed")
+
+
+def run_maintenance_capture(config):
+    snapshot = maintenance_state_path(config)
+    if snapshot.is_symlink() or not snapshot.is_dir():
+        raise BackupError("restart-failure", "maintenance-state-unavailable")
+    state = lifecycle_state(snapshot)
+    if not isinstance(state, dict):
+        raise BackupError("restart-failure", "maintenance-state-invalid")
+    backup_id = state.get("backupId")
+    manifest_path = snapshot / "manifest.json"
+    if state.get("status") == "backup-mode" and state.get("phase") == "maintenance-entered":
+        if manifest_path.exists() or manifest_path.is_symlink():
+            raise BackupError("restart-failure", "unexpected-maintenance-manifest")
+        run_capture_command(config, "maintenance-capture", snapshot)
+    elif state.get("status") != "captured" or state.get("phase") != "captured":
+        raise BackupError("restart-failure", "maintenance-recovery-required")
+    try:
+        manifest = validate_snapshot(snapshot)
+        if manifest.get("backupId") != backup_id:
+            raise ValueError("maintenance backup identity mismatch")
+        result = upload_snapshot(snapshot, config)
+        status = read_json(status_path(config))
+        if status.get("status") != result or status.get("backupId") != backup_id \
+                or result not in ("verified-upload", "verified-unchanged"):
+            raise BackupError("upload-failure", "remote-verification-mismatch")
+        return result
+    except BackupError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+        write_status(config, "capture-failure", "invalid-maintenance-snapshot", backup_id)
+        raise BackupError("capture-failure", "invalid-maintenance-snapshot") from error
+
+
+def enter_maintenance(config):
+    state = ensure_private_dir(config["stateDirectory"])
+    try:
+        result = subprocess.run(
+            ["systemctl", "disable", "--now", "recipe-db-backup.timer"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        write_status(config, "capture-failure", "timer-disable-failed")
+        raise BackupError("capture-failure", "timer-disable-failed") from error
+    if result.returncode:
+        write_status(config, "capture-failure", "timer-disable-failed")
+        raise BackupError("capture-failure", "timer-disable-failed")
+    lock_fd = acquire_run_lock(config)
+    try:
+        try:
+            service = subprocess.run(
+                ["systemctl", "show", "--property=ActiveState", "--value",
+                 "recipe-db-backup.service"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                check=False, text=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise BackupError("capture-failure", "backup-service-status-failed") from error
+        if service.returncode or service.stdout.strip() not in ("inactive", "failed"):
+            raise BackupError("interrupted", "backup-service-active")
+        try:
+            reconcile_stale_captures(state)
+        except BackupError:
+            raise
+        if has_unresolved_recovery(state):
+            raise BackupError("restart-failure", "recovery-required")
+        archive_recovered_maintenance(config)
+        path = maintenance_state_path(config)
+        if path.exists() or path.is_symlink():
+            raise BackupError("restart-failure", "maintenance-already-active")
+        run_capture_command(config, "maintenance-enter", path)
+        saved = lifecycle_state(path)
+        if not isinstance(saved, dict) or saved.get("status") != "backup-mode" \
+                or saved.get("phase") != "maintenance-entered":
+            raise BackupError("restart-failure", "maintenance-state-invalid")
+        write_status(config, "maintenance-entered", "maintenance-entered", saved.get("backupId"))
+    except BackupError as error:
+        saved = lifecycle_state(maintenance_state_path(config))
+        backup_id = saved.get("backupId") if isinstance(saved, dict) else None
+        write_status(config, error.status, error.code, backup_id)
+        raise
+    finally:
+        os.close(lock_fd)
 
 
 def rclone(config, *args, timeout=3600):
@@ -704,14 +899,7 @@ def upload_snapshot(snapshot, config):
 
 def run_nightly(config):
     state = ensure_private_dir(config["stateDirectory"])
-    lock_path = state / "run.lock"
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as error:
-        os.close(lock_fd)
-        write_status(config, "interrupted", "already-running")
-        raise BackupError("interrupted", "already-running") from error
+    lock_fd = acquire_run_lock(config)
     try:
         try:
             reconcile_stale_captures(state)
@@ -722,25 +910,33 @@ def run_nightly(config):
             write_status(config, "restart-failure", "recovery-required")
             raise BackupError("restart-failure", "recovery-required")
         clear_stale_staging(config["stagingDirectory"])
-        capture = Path(config["captureCommand"])
-        if capture.is_symlink() or not capture.is_file() or not os.access(capture, os.X_OK):
-            write_status(config, "capture-failure", "capture-command-unavailable")
-            raise BackupError("capture-failure", "capture-command-unavailable")
+        try:
+            capture = capture_command(config)
+        except BackupError as error:
+            write_status(config, error.status, error.code)
+            raise
+        maintenance = maintenance_state_path(config)
+        if maintenance.is_symlink():
+            raise BackupError("restart-failure", "invalid-maintenance-state")
+        if maintenance.exists():
+            maintenance_data = lifecycle_state(maintenance)
+            if safely_recovered(maintenance_data):
+                archive_recovered_maintenance(config)
+            else:
+                try:
+                    return run_maintenance_capture(config)
+                except BackupError as error:
+                    backup_id = maintenance_data.get("backupId") \
+                        if isinstance(maintenance_data, dict) else None
+                    write_status(config, error.status, error.code, backup_id)
+                    raise
         snapshots = ensure_private_dir(state / "staging")
         snapshot = snapshots / f"capture-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
         try:
             process = subprocess.Popen(
                 [str(capture), str(snapshot)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env={
-                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                    "KUBECONFIG": os.environ.get(
-                        "KUBECONFIG", "/etc/recipe-db/backup-kubeconfig.yaml",
-                    ),
-                    "RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES": str(
-                        config["maxStagingBytes"] // 2,
-                    ),
-                },
+                env=capture_environment(config),
                 start_new_session=True,
             )
             try:
@@ -789,7 +985,13 @@ def report_status(config):
         value = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
         return {"format": STATUS_FORMAT, "status": "overdue", "code": "no-check-record",
-                "lastCheck": None, "lastUpload": None, "backupId": None}
+                "lastCheck": None, "lastUpload": None, "backupId": None,
+                "maintenanceActive": maintenance_active(config)}
+    if not isinstance(value, dict):
+        return {"format": STATUS_FORMAT, "status": "capture-failure",
+                "code": "invalid-status-record", "lastCheck": None,
+                "lastUpload": None, "backupId": None,
+                "maintenanceActive": maintenance_active(config)}
     if not value.get("lastCheck"):
         value["status"] = "overdue"
         value["code"] = "no-check-record"
@@ -801,12 +1003,13 @@ def report_status(config):
         except ValueError:
             value["status"] = "capture-failure"
             value["code"] = "invalid-status-record"
+    value["maintenanceActive"] = maintenance_active(config)
     return value
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("nightly", "status"))
+    parser.add_argument("action", choices=("nightly", "status", "maintenance-enter"))
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config = safe_config(args.config)
@@ -818,6 +1021,9 @@ def main():
     ensure_private_dir(config["stagingDirectory"])
     if args.action == "status":
         print(json.dumps(report_status(config), sort_keys=True))
+        return 0
+    if args.action == "maintenance-enter":
+        enter_maintenance(config)
         return 0
     run_nightly(config)
     return 0
