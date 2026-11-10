@@ -221,7 +221,7 @@ After reopening, on the normal website, view a recipe and image, search, and che
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
   "$VALUES" "$STATE" "$RELEASE" close-access \
   "DISPOSITION-$HOLDER-close-access"
-# Or record that a temporary fix and another release are intended.
+# Or close access and stop workloads to stage a new temporary-fix release.
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
   "$VALUES" "$STATE" "$RELEASE" temporary-fix \
   "DISPOSITION-$HOLDER-temporary-fix"
@@ -231,7 +231,7 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
   "DISPOSITION-$HOLDER-accept-partial-failure"
 ```
 
-`close-access` reasserts the GraphQL backup-mode barrier. The other choices only record the operator's disposition; they do not apply fixes, close access, release ownership or recover data. Never restore automatically: writes accepted after reopening may be lost by restoring the pre-release backup. Any rollback or destructive recovery requires a separate explicit decision. Static pages are not required to remain reachable during maintenance.
+`close-access` reasserts the GraphQL backup-mode barrier. `temporary-fix` also stops the candidate's application workloads and waits for selected PVCs to unmount, while retaining the same operation Lease and recovery state. After preparing and publishing a new immutable candidate, repeat step 5 with that candidate against the retained, verified pre-migration backup state; then repeat steps 6–9. This reuses the original backup and does not claim that a backup of the newly running candidate has been aligned or verified. `accept-partial-failure` records the operator's decision without applying a fix, closing access, releasing ownership or recovering data. Never restore automatically: writes accepted after reopening may be lost by restoring the pre-release backup. Any rollback or destructive recovery requires a separate explicit decision. Static pages are not required to remain reachable during maintenance.
 
 The disposition stays with the operator: close access and assess rollback, apply a temporary fix and release again, or accept a partial failure and continue. No choice automatically rolls back or restores. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock. The release Lease and recovery state remain retained for the backup-alignment/closeout work; do not start step 10 until that work defines its guarded handoff.
 

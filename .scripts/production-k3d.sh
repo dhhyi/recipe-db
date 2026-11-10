@@ -1311,11 +1311,13 @@ release_require_lease_phase() {
 }
 
 release_pull_candidate() {
-  local candidate=$1 expected_revision checkout_revision untracked
+  local candidate=$1 allow_new=${2:-false} expected_revision checkout_revision untracked
   pull_release "$candidate"
   expected_revision=$(jq -r '.candidate.revision // ""' "$snapshot/backup-state.json")
-  if [[ -n $expected_revision ]]; then
+  if [[ -n $expected_revision && $candidate == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]]; then
     [[ $revision = "$expected_revision" ]] || production_fail "candidate revision changed"
+  elif [[ -n $expected_revision && $allow_new != true ]]; then
+    production_fail "candidate does not match the retained staged release"
   fi
   checkout_revision=$(git -C "$root" rev-parse HEAD 2> /dev/null) \
     || production_fail "candidate source checkout has no verifiable revision"
@@ -1357,13 +1359,72 @@ release_assert_staged_workloads() {
   backup_validate_workload_images "$work/release-deployments.json"
 }
 
+release_assert_maintenance_barrier() {
+  local deployments=$1 expected_release=$2 all_stopped=${3:-false}
+  jq -e --arg release "$expected_release" \
+    'all(.items[]; .spec.template.metadata.annotations["recipe-db/release"] == $release)' \
+    "$deployments" > /dev/null \
+    || {
+      jq -r --arg release "$expected_release" '
+        .items[] | select(.spec.template.metadata.annotations["recipe-db/release"] != $release)
+        | "workload " + .metadata.name + " uses " +
+          (.spec.template.metadata.annotations["recipe-db/release"] // "<missing>")
+      ' "$deployments" >&2
+      production_fail "workloads no longer match the expected release"
+    }
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual | all($state[0].maintenanceWorkloads[];
+      . as $name |
+      any($actual.items[];
+        .metadata.name == $name
+        and (.spec.replicas // 0) == 0
+        and (.status.readyReplicas // 0) == 0))
+  ' "$deployments" > /dev/null \
+    || production_fail "storage workloads restarted after maintenance capture"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    ($state[0] | if .candidate then .candidate.workloads
+      else .priorWorkloads end) as $expected |
+    ([ $actual.items[] | select(.metadata.name == "graphql") ] | length) == 1
+    and any($actual.items[];
+      .metadata.name == "graphql"
+      and .spec.replicas == ($expected[] | select(.name == "graphql") | .replicas)
+      and (.status.readyReplicas // 0) == .spec.replicas
+      and any(.spec.template.spec.containers[]; .name == "graphql"
+        and any(.env[]?; .name == "MODE" and .value == "backup")))
+  ' "$deployments" > /dev/null \
+    || production_fail "GraphQL maintenance access barrier is not active"
+  if [[ $all_stopped == true ]]; then
+    jq -e 'all(.items[]; .metadata.name == "graphql" or (.spec.replicas // 0) == 0)' \
+      "$deployments" > /dev/null \
+      || production_fail "application workloads restarted during temporary-fix handoff"
+  fi
+}
+
 release_stage() {
-  local candidate=$2 backup_status=$3 verification=$4 old_release candidate_workloads nats_init_job verified_at
+  local candidate=$2 backup_status=$3 verification=$4 current_release previous_candidate
+  local candidate_workloads nats_init_job verified_at retry=false
   local -a secret_args=()
   release_load_operation "$1" "$candidate"
-  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "captured/captured" ]] \
-    || production_fail "release staging requires a captured, remotely verified maintenance backup"
-  release_require_lease_phase captured
+  case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
+    captured/captured)
+      release_require_lease_phase captured
+      current_release=$(jq -r .source.artifact "$snapshot/backup-state.json")
+      ;;
+    post-check-disposition/temporary-fix)
+      release_require_lease_phase post-check-temporary-fix
+      retry=true
+      previous_candidate=$(jq -er .candidate.artifact "$snapshot/backup-state.json") \
+        || production_fail "temporary-fix handoff has no current candidate"
+      [[ $candidate != "$previous_candidate" ]] \
+        || production_fail "temporary-fix release requires a new immutable candidate"
+      release_pull_candidate "$previous_candidate"
+      current_release=$previous_candidate
+      ;;
+    *)
+      production_fail "release staging requires a captured backup or guarded temporary-fix handoff"
+      ;;
+  esac
   [[ $backup_status == verified-upload || $backup_status == verified-unchanged ]] \
     || production_fail "release staging requires verified-upload or verified-unchanged remote backup status"
   [[ $verification == "VERIFIED-$backup_id-$backup_status" ]] \
@@ -1376,17 +1437,13 @@ release_stage() {
     and .backupId == $id and .source.artifact == $release
   ' "$snapshot/manifest.json" > /dev/null \
     || production_fail "backup manifest does not match retained release state"
-  old_release=$(jq -r .source.artifact "$snapshot/backup-state.json")
   kube get deployments -o json > "$work/original-deployments.json" \
     || production_fail "cannot inspect original workloads before staging"
   backup_validate_workload_images "$work/original-deployments.json" \
-    || production_fail "workloads no longer match the recorded original release"
-  jq -e --arg release "$old_release" \
-    'all(.items[]; .spec.template.metadata.annotations["recipe-db/release"] == $release)' \
-    "$work/original-deployments.json" > /dev/null \
-    || production_fail "workloads no longer match the recorded original release"
+    || production_fail "workloads no longer match the expected release"
+  release_assert_maintenance_barrier "$work/original-deployments.json" "$current_release" "$retry"
   cp "$work/pulled/release.json" "$work/original-release.json"
-  release_pull_candidate "$candidate"
+  release_pull_candidate "$candidate" true
   cp "$work/pulled/release.json" "$work/candidate-release.json"
   render
   production_secrets
@@ -1445,11 +1502,17 @@ release_stage() {
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null || return 1
   kube apply -f "$work/staged-application.yml" > /dev/null || return 1
   release_state_write candidate-staged candidate-staged \
-    "$(jq -cn --arg artifact "$candidate" --arg revision "$(jq -r .revision "$work/candidate-release.json")" \
+    "$(jq -cn --slurpfile prior "$snapshot/backup-state.json" \
+      --arg artifact "$candidate" --arg revision "$(jq -r .revision "$work/candidate-release.json")" \
       --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f1)" \
       --arg backupId "$backup_id" --arg backupStatus "$backup_status" --arg verifiedAt "$verified_at" \
       --argjson workloads "$candidate_workloads" --argjson natsInitJob "$nats_init_job" \
-      '{candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
+      '{candidateHistory:(($prior[0].candidateHistory // []) +
+          (if $prior[0].candidate then [{candidate:$prior[0].candidate,
+            migrationResult:($prior[0].migrationResult // null),
+            postCheckDisposition:($prior[0].postCheckDisposition // null)}] else [] end)),
+        candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
+        migrationResult:null,postCheckDisposition:null,
         backupVerification:{backupId:$backupId,status:$backupStatus,acknowledgedAt:$verifiedAt}}
       | .candidate.natsInitJob=$natsInitJob')" \
     || return 1
@@ -1627,6 +1690,21 @@ release_disposition() {
       cluster_operation_lock_update recovery-required || true
       production_fail "application access could not be verified closed; recovery state and Lease remain"
     }
+  fi
+  if [[ $disposition == temporary-fix ]]; then
+    cluster_operation_lock_update access-closing || return 1
+    backup_reblock_graphql || {
+      release_state_write recovery-required close-access-failed '{}' || true
+      cluster_operation_lock_update recovery-required || true
+      production_fail "application access could not be verified closed; recovery state and Lease remain"
+    }
+    kube get deployments -o json > "$work/temporary-fix-deployments.json" \
+      || production_fail "cannot inspect candidate workloads before temporary-fix handoff"
+    jq -c '[.items[].metadata.name | select(. != "graphql")]' \
+      "$work/temporary-fix-deployments.json" > "$work/temporary-fix-workloads.json" \
+      || return 1
+    backup_stop "$(< "$work/temporary-fix-workloads.json")" || return 1
+    backup_wait_selected_pvcs_unmounted || return 1
   fi
   release_state_write post-check-disposition "$disposition" \
     "$(jq -cn --arg disposition "$disposition" \

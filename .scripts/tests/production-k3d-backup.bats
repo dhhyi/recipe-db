@@ -524,16 +524,65 @@ complete_candidate_release() {
   [ "$workloads_stopped" -lt "$routes_secret" ]
 }
 
-@test "temporary-fix and partial-failure dispositions are recorded without automatic recovery" {
+@test "candidate staging rejects a lost GraphQL maintenance barrier" {
+  prepare_captured_release
+  jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[0].env[]
+    | select(.name == "MODE").value)="production"' \
+    "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
+  mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
+
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -ne 0 ]
+  [[ $output == *"GraphQL maintenance access barrier is not active"* ]]
+  [ "$(jq -r '.status + "/" + .phase' "$STATE/backup-state.json")" = "captured/captured" ]
+  run ! grep -q 'apply -f .*staged-application.yml' "$MOCK_LOG"
+}
+
+@test "candidate staging rejects restarted storage workloads" {
+  prepare_captured_release
+  jq '(.items[] | select(.metadata.name == "recipes")) |=
+    (.spec.replicas=1 | .status.readyReplicas=1)' \
+    "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
+  mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
+
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -ne 0 ]
+  [[ $output == *"storage workloads restarted after maintenance capture"* ]]
+  [ "$(jq -r '.status + "/" + .phase' "$STATE/backup-state.json")" = "captured/captured" ]
+  run ! grep -q 'apply -f .*staged-application.yml' "$MOCK_LOG"
+}
+
+@test "temporary-fix disposition closes access and permits a guarded subsequent release" {
   prepare_candidate_release
   complete_candidate_release no-migration-required
   run bash .scripts/production-k3d.sh release-disposition "$VALUES" "$STATE" "$CANDIDATE" \
     temporary-fix "DISPOSITION-$HOLDER-temporary-fix"
   [ "$status" -eq 0 ]
   jq -e '.postCheckDisposition.choice == "temporary-fix"' "$STATE/backup-state.json" > /dev/null
+  [ "$(jq -r '.status + "/" + .phase' "$STATE/backup-state.json")" = \
+    "post-check-disposition/temporary-fix" ]
   [ "$(jq -r '.spec.holderIdentity' "$MOCK_LOG.lease")" = "$HOLDER" ]
   jq -e '.items[] | select(.metadata.name == "graphql")
-    | .spec.template.spec.containers[0].env[0].value == "production"' "$MOCK_LOG.deployments" > /dev/null
+    | .spec.template.spec.containers[0].env[0].value == "backup"
+      and .spec.replicas == 1' "$MOCK_LOG.deployments" > /dev/null
+  jq -e 'all(.items[] | select(.metadata.name != "graphql"); .spec.replicas == 0)' \
+    "$MOCK_LOG.deployments" > /dev/null
+
+  local next_candidate=ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$next_candidate" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -eq 0 ]
+  jq -e --arg candidate "$next_candidate" --arg previous "$CANDIDATE" '
+    .candidate.artifact == $candidate
+    and .candidateHistory[-1].candidate.artifact == $previous
+    and .candidateHistory[-1].postCheckDisposition.choice == "temporary-fix"
+    and .migrationResult == null and .postCheckDisposition == null
+  ' "$STATE/backup-state.json" > /dev/null
+  CANDIDATE=$next_candidate
+  complete_candidate_release no-migration-required
+  jq -e '.status == "access-open" and .phase == "operator-reopened"' "$STATE/backup-state.json" > /dev/null
 }
 
 @test "operator may explicitly accept a partial failure without rollback or restore" {
