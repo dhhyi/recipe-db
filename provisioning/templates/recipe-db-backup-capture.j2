@@ -29,7 +29,7 @@ case "$action" in
       exit 1
     }
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-      backup /etc/recipe-db/backup-values.yaml "$release" "$path"
+      backup-run /etc/recipe-db/backup-values.yaml "$release" "$path"
     ;;
   maintenance-enter)
     [[ $path == /* && ! -e $path && ! -L $path ]] || {

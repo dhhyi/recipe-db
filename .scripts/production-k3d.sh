@@ -15,14 +15,14 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup|backup-enter|backup-capture|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
 case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
-  backup | backup-enter) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
+  backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 ]] || production_fail "backup-capture requires the existing maintenance state directory" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
@@ -154,7 +154,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup | backup-enter | backup-capture | backup-exit | restore)
+    backup-run | backup-enter | backup-capture | backup-exit | restore)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
@@ -1402,7 +1402,7 @@ case "$command" in
     fi
     guard_ingress_service
     ;;
-  backup | backup-enter)
+  backup-run | backup-enter)
     backup_run "$1" "$2"
     ;;
   backup-capture)
