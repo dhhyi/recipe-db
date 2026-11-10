@@ -214,7 +214,16 @@ Readiness never reopens access. If reopening fails, the command attempts to reas
 
 ## 9. Check the normal website
 
-After reopening, on the normal website, view a recipe and image, search, and check sign-in if configured. Verify an intended edit only when that write is approved. Readiness alone is not website acceptance. Record one operator-directed disposition:
+After reopening, thoroughly check the actual public website, especially every feature changed in this release. Decide what to inspect; viewing a recipe and image, search, and sign-in when configured are reminders, not a complete checklist. Verify an intended edit only when that write is approved. Readiness and GraphQL output are not acceptance.
+
+```sh
+RESULT=passed
+NOTES='Operator notes on the actual public website check'
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-website-result \
+  "$VALUES" "$STATE" "$RELEASE" "$RESULT" "$NOTES" "WEBSITE-$HOLDER-$RESULT"
+```
+
+Set `RESULT=failed` and record concise, non-sensitive notes when any required website check fails. A failed result does not capture a post-release backup or enable scheduled backups. The preferred response is to close access, recover or fix the problem, then repeat the release. On failure, choose an explicit operator-directed disposition:
 
 ```sh
 # Close application access and then assess recovery yourself.
@@ -231,13 +240,13 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
   "DISPOSITION-$HOLDER-accept-partial-failure"
 ```
 
-`close-access` reasserts the GraphQL backup-mode barrier. `temporary-fix` also stops the candidate's application workloads and waits for selected PVCs to unmount, while retaining the same operation Lease and recovery state. After preparing and publishing a new immutable candidate, repeat step 5 with that candidate against the retained, verified pre-migration backup state; then repeat steps 6–9. This reuses the original backup and does not claim that a backup of the newly running candidate has been aligned or verified. `accept-partial-failure` records the operator's decision without applying a fix, closing access, releasing ownership or recovering data. Never restore automatically: writes accepted after reopening may be lost by restoring the pre-release backup. Any rollback or destructive recovery requires a separate explicit decision. Static pages are not required to remain reachable during maintenance.
+`close-access` reasserts the GraphQL backup-mode barrier. `temporary-fix` also stops the candidate's application workloads and waits for selected PVCs to unmount, while retaining the same operation Lease and recovery state. After preparing and publishing a new immutable candidate, repeat step 5 with that candidate against the retained, verified pre-migration backup state; then repeat steps 6–9. This reuses the original backup and does not claim that a backup of the newly running candidate has been aligned or verified. `accept-partial-failure` records an explicit decision to continue; only then may you proceed to step 10 after a failed website check. It does not apply a fix, close access, release ownership or recover data. Never restore automatically: writes accepted after reopening may be lost by restoring the pre-release backup. Any rollback or destructive recovery requires a separate explicit decision. Static pages are not required to remain reachable during maintenance.
 
-The disposition stays with the operator: close access and assess rollback, apply a temporary fix and release again, or accept a partial failure and continue. No choice automatically rolls back or restores. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock. The release Lease and recovery state remain retained for the backup-alignment/closeout work; do not start step 10 until that work defines its guarded handoff.
+No choice automatically rolls back or restores. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock. Keep the release Lease and recovery state through backup alignment, explicit acceptance and GitHub publication.
 
 ## 10. Align backups and record the result
 
-Start after the deployed release has been accepted. Keep scheduled capture disabled until its inputs match the deployed release and a new explicit backup check succeeds.
+Continue only after a passed website check or an explicit `accept-partial-failure` disposition. Keep scheduled capture disabled until its inputs match the deployed release and a new backup reports `verified-upload`.
 
 The following procedure also applies after accepted fresh-target recovery.
 
@@ -271,17 +280,55 @@ Run the Ansible commands from the shell opened inside the provisioning container
 
 If provisioning preflight fails, stop and resolve its reported issue before continuing. Do not enable scheduled capture until the next step succeeds.
 
-### Verify a backup, then re-enable its schedule
+### Capture and verify the post-release backup
 
-On the Pi, run one capture and inspect its status:
+On the Pi, capture the deployed candidate while the release Lease remains held. The guarded command reads each stateful service's actual `storage-version` file from its read-only backup and records the observed values; it never stamps or changes application data:
 
 ```sh
-sudo systemctl start recipe-db-backup.service
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-backup-capture \
+  "$VALUES" "$STATE" "$RELEASE"
+```
+
+Upload that exact snapshot, then inspect the status and record the confirmation:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload release-upload \
+  --config /etc/recipe-db/backup.json
 sudo /usr/local/sbin/recipe-db-backup-upload status \
   --config /etc/recipe-db/backup.json
 ```
 
-Continue only if status is `verified-upload` or `verified-unchanged`. Otherwise leave the timer disabled and investigate the reported failure.
+Continue only if the matching post-release `backupId` reports `verified-upload`. A pre-release `verified-upload` or `verified-unchanged` is acceptable; after deploying a different artifact, `verified-unchanged` is not. Stop and investigate any other result. Record the uploaded result and operator acceptance in the retained release state:
+
+```sh
+POST_BACKUP_ID=$(jq -er '.postReleaseBackup.backupId' "$STATE/backup-state.json")
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-backup-verify \
+  "$VALUES" "$STATE" "$RELEASE" verified-upload \
+  "UPLOADED-$POST_BACKUP_ID-verified-upload"
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-accept \
+  "$VALUES" "$STATE" "$RELEASE" "ACCEPT-$HOLDER"
+```
+
+`release-accept` is an explicit operator decision. It requires the public website result and post-release upload gate; it does not generate release notes or publish automatically. Do not copy secret values, credentials, private configuration, or application records into public release notes.
+
+### Publish, then clean up
+
+On the workstation, write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and a direct link to its OCI manifest, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Publish from the checkout at `REVISION`:
+
+```sh
+NOTES="$HOME/.config/recipe-db/release-notes.md"
+.scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES"
+```
+
+The script selects the next contiguous `vN` tag, publishes the supplied notes for `REVISION`, and safely recognizes a matching already-published release on retry. Do not finalize if publication fails or the published release does not match the candidate. On the Pi, use the tag printed by the publisher:
+
+```sh
+TAG=vN
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-finalize \
+  "$VALUES" "$STATE" "$RELEASE" "$TAG" "PUBLISHED-$HOLDER-$TAG"
+```
+
+Finalization independently checks GitHub's published release, commit, tag and artifact link. Only after that succeeds does it remove the temporary Pi release snapshot, progress files and operation Lease. The verified Drive backup and application data are not removed. If publication or its verification fails, keep the state and Lease and retry or investigate; do not manually delete them.
 
 Back in the provisioning container's SSH-agent shell, enable the schedule:
 
@@ -290,8 +337,6 @@ ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
   backup-enable.yml --ask-become-pass
 ```
 
-The playbook requires the verified backup check to have completed after the latest configuration installation.
+Enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
 
-**Success:** the Pi is running `RELEASE`, the managed capture checkout is at `REVISION`, the backup inputs match, and scheduled capture has been enabled only after a verified run. Record the release identity and website/backup check outcomes privately; do not publish application records, secrets or private configuration in release evidence.
-
-**Open:** the release result record and its connection to these backup checks remain to be defined.
+**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was enabled only afterward.

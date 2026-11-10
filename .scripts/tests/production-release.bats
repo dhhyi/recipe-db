@@ -11,6 +11,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../check-production-release.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../publish-production-release.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../publish-production-github-release.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../smoke-production-image.sh" .scripts/
   use_mise_tools
   setup_mock_bin
@@ -492,4 +493,110 @@ EOF
   [[ "$stderr" == *"failed its /health smoke check"* ]]
   [[ "$stderr" == *"nginx failed to start"* ]]
   grep -F 'rm --force production-image-smoke' "$MOCK_LOG"
+}
+
+mock_github_releases() {
+  export MOCK_GH_LOG="$FIXTURE_ROOT/gh.log"
+  export MOCK_RELEASES="$FIXTURE_ROOT/releases.json"
+  export MOCK_RELEASE_VIEW="$FIXTURE_ROOT/release-view.json"
+  printf '[]\n' > "$MOCK_RELEASES"
+  cat > bin/gh << 'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MOCK_GH_LOG"
+[[ $1 == release ]] || exit 2
+case "$2" in
+  list)
+    cat "$MOCK_RELEASES"
+    ;;
+  view)
+    cat "$MOCK_RELEASE_VIEW"
+    ;;
+  create)
+    tag=$3
+    shift 3
+    revision=
+    notes_file=
+    while (($#)); do
+      case "$1" in
+        --target) revision=$2; shift 2 ;;
+        --notes-file) notes_file=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    [[ -n $revision && -n $notes_file ]] || exit 2
+    jq -n --arg tag "$tag" --arg revision "$revision" \
+      --rawfile body "$notes_file" --arg url "https://github.com/dhhyi/recipe-db/releases/tag/$tag" \
+      '{tagName:$tag,targetCommitish:$revision,body:$body,url:$url,
+        isDraft:false,isPrerelease:false,publishedAt:"2026-11-10T12:00:00Z"}' \
+      > "$MOCK_RELEASE_VIEW"
+    jq -n --slurpfile current "$MOCK_RELEASES" --arg tag "$tag" '
+      $current[0] + [{tagName:$tag,isDraft:false,isPrerelease:false,
+        publishedAt:"2026-11-10T12:00:00Z"}]
+    ' > "$MOCK_RELEASES.next"
+    mv "$MOCK_RELEASES.next" "$MOCK_RELEASES"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+  chmod +x bin/gh
+}
+
+write_release_notes() {
+  local digest=${1##*@}
+  cat > release-notes.md << EOF
+## Accepted gates
+Release gates passed and operator accepted the release.
+
+## Website checks
+Operator checked the changed public recipe feature.
+
+## Backup result
+Verified upload and scheduled capture aligned.
+
+## Storage versions/migrations
+Recorded actual service markers and migration result.
+
+## Release features
+Recipe import improvements.
+
+Artifact: $1
+Artifact link: https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/$digest
+EOF
+}
+
+@test "GitHub release publisher creates the next sequential release from authored notes and retries safely" {
+  local artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  mock_github_releases
+  write_release_notes "$artifact"
+
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  [ "$status" -eq 0 ]
+  [[ $output == *"v1 https://github.com/dhhyi/recipe-db/releases/tag/v1"* ]]
+  [ "$(grep -c 'release create v1' "$MOCK_GH_LOG")" -eq 1 ]
+  run grep -q -- '--generate-notes' "$MOCK_GH_LOG"
+  [ "$status" -ne 0 ]
+
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'release create v1' "$MOCK_GH_LOG")" -eq 1 ]
+}
+
+@test "GitHub release publisher rejects missing evidence and non-sequential existing releases" {
+  local artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  mock_github_releases
+  printf 'Only an artifact %s\n' "$artifact" > release-notes.md
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  [ "$status" -ne 0 ]
+  [ ! -s "$MOCK_GH_LOG" ]
+
+  write_release_notes "$artifact"
+  printf '[{"tagName":"v2","isDraft":false,"isPrerelease":false,"publishedAt":"2026-11-10T12:00:00Z"}]\n' \
+    > "$MOCK_RELEASES"
+  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md
+  [ "$status" -ne 0 ]
+  [[ $output == *"not contiguous"* ]]
+  run grep -q 'release create' "$MOCK_GH_LOG"
+  [ "$status" -ne 0 ]
 }

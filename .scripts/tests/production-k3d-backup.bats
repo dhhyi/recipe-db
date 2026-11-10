@@ -34,6 +34,18 @@ complete_candidate_release() {
   [ "$status" -eq 0 ]
 }
 
+mock_github_release_api() {
+  export MOCK_GITHUB_RELEASE_JSON="$FIXTURE_ROOT/github-release.json"
+  export MOCK_CURL_FAIL=false
+  cat > bin/curl << 'EOF'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> "$MOCK_LOG"
+[[ $MOCK_CURL_FAIL != true ]] || exit 22
+cat "$MOCK_GITHUB_RELEASE_JSON"
+EOF
+  chmod +x bin/curl
+}
+
 @test "backup uses the deploy Lease, GraphQL barrier, metadata-selected PVCs and read-only copies" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-success"
@@ -599,4 +611,128 @@ complete_candidate_release() {
     all(.items[]; .metadata.name == "graphql"
       or .spec.template.metadata.annotations["recipe-db/release"] == $candidate)
   ' "$MOCK_LOG.deployments" > /dev/null
+}
+
+@test "website failure blocks post-release capture and keeps the release operation" {
+  prepare_candidate_release
+  complete_candidate_release no-migration-required
+  run bash .scripts/production-k3d.sh release-website-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "Changed feature did not work" "WEBSITE-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  [[ $output == *"no post-release backup"* ]]
+  [ ! -e "$STATE/post-release-backup" ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.websiteCheck.outcome == "failed"' "$STATE/backup-state.json" > /dev/null
+
+  run bash .scripts/production-k3d.sh release-backup-capture "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires a passed website check or explicit partial-failure acceptance"* ]]
+  [ ! -e "$STATE/post-release-backup" ]
+  [ -e "$MOCK_LOG.lease" ]
+
+  run bash .scripts/production-k3d.sh release-disposition "$VALUES" "$STATE" "$CANDIDATE" \
+    accept-partial-failure "DISPOSITION-$HOLDER-accept-partial-failure"
+  [ "$status" -eq 0 ]
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/recipes/storage-version"
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/tags/storage-version"
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
+  run bash .scripts/production-k3d.sh release-backup-capture "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  jq -e '.postCheckDisposition.choice == "accept-partial-failure"
+    and .websiteCheck.outcome == "failed"
+    and .postReleaseBackup.status == "captured"' "$STATE/backup-state.json" > /dev/null
+  local post_id
+  post_id=$(jq -r '.postReleaseBackup.backupId' "$STATE/backup-state.json")
+  jq '.postReleaseBackup.uploadStatus="verified-upload"' \
+    "$STATE/backup-state.json" > "$STATE/backup-state.next"
+  mv "$STATE/backup-state.next" "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-backup-verify "$VALUES" "$STATE" \
+    "$CANDIDATE" verified-upload "UPLOADED-$post_id-verified-upload"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-accept "$VALUES" "$STATE" \
+    "$CANDIDATE" "ACCEPT-$HOLDER"
+  [ "$status" -eq 0 ]
+
+  mock_github_release_api
+  jq -n --arg revision "$MOCK_REVISION" --arg candidate "$CANDIDATE" \
+    --arg digest "${CANDIDATE##*@}" '
+    {tag_name:"v1",target_commitish:$revision,draft:false,prerelease:false,
+      published_at:"2026-11-10T12:00:00Z",
+      html_url:"https://github.com/dhhyi/recipe-db/releases/tag/v1",
+      body:("Partial failure explicitly accepted; " + $candidate +
+        " https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/" + $digest)}
+  ' > "$MOCK_GITHUB_RELEASE_JSON"
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -eq 0 ]
+  [ ! -e "$STATE" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "changed release requires uploaded storage markers and publication before cleanup" {
+  prepare_candidate_release
+  complete_candidate_release no-migration-required
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/recipes/storage-version"
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/tags/storage-version"
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
+  run bash .scripts/production-k3d.sh release-website-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Checked changed public recipe feature" "WEBSITE-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-backup-capture "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e --arg candidate "$CANDIDATE" '
+    .source.artifact == $candidate
+    and all(.inventory[]; any(.files[];
+      .path == "storage-version" and .storageVersion == 2))
+  ' "$STATE/post-release-backup/manifest.json" > /dev/null
+  local post_id
+  post_id=$(jq -r '.postReleaseBackup.backupId' "$STATE/backup-state.json")
+  jq '.postReleaseBackup.uploadStatus="verified-upload"' \
+    "$STATE/backup-state.json" > "$STATE/backup-state.next"
+  mv "$STATE/backup-state.next" "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-backup-verify "$VALUES" "$STATE" \
+    "$CANDIDATE" verified-unchanged "UPLOADED-$post_id-verified-unchanged"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires post-release verified-upload"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+
+  run bash .scripts/production-k3d.sh release-backup-verify "$VALUES" "$STATE" \
+    "$CANDIDATE" verified-upload "UPLOADED-$post_id-verified-upload"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-accept "$VALUES" "$STATE" \
+    "$CANDIDATE" "ACCEPT-$HOLDER"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "release-accepted" and .postReleaseBackup.status == "verified-upload"' \
+    "$STATE/backup-state.json" > /dev/null
+
+  mock_github_release_api
+  jq -n --arg tag v1 --arg revision "$MOCK_REVISION" --arg candidate "$CANDIDATE" \
+    --arg digest "${CANDIDATE##*@}" '
+    {tag_name:$tag,target_commitish:$revision,draft:false,prerelease:false,
+      published_at:"2026-11-10T12:00:00Z",
+      html_url:"https://github.com/dhhyi/recipe-db/releases/tag/v1",
+      body:("Website checks passed; backup verified; " + $candidate +
+        " https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/" + $digest)}
+  ' > "$MOCK_GITHUB_RELEASE_JSON"
+  export MOCK_CURL_FAIL=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"temporary state and Lease are retained"* ]]
+  [ -e "$STATE/backup-state.json" ]
+  [ -e "$STATE/post-release-backup/manifest.json" ]
+  [ -e "$MOCK_LOG.lease" ]
+
+  export MOCK_CURL_FAIL=false
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -eq 0 ]
+  [ ! -e "$STATE" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  local confirmation deletion
+  confirmation=$(awk '/^curl / {line=NR} END {print line}' "$MOCK_LOG")
+  deletion=$(awk '/delete --raw \/apis\/coordination.k8s.io\/v1\/namespaces\/kube-system\/leases\/recipe-db-deploy/ {line=NR} END {print line}' \
+    "$MOCK_LOG")
+  [ "$confirmation" -lt "$deletion" ]
 }

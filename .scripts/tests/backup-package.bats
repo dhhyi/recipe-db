@@ -445,3 +445,27 @@ PY
 @test "backup package checks real SQLite integrity and WAL-only recent rows without changing staged archives" {
   package_cases sqlite
 }
+
+@test "snapshot validation preserves actual storage versions and can require every marker" {
+  mkdir -p marker-data
+  printf 'SQLite format 3\000database' > marker-data/recipes.sqlite3
+  tar -C marker-data -cf versioned.tar recipes.sqlite3
+  run python3 .scripts/validate-backup-snapshot.py versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  [ "$status" -eq 0 ]
+  run python3 .scripts/validate-backup-snapshot.py --require-storage-version \
+    versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  [ "$status" -ne 0 ]
+
+  printf '3\n' > marker-data/storage-version
+  tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version
+  run python3 .scripts/validate-backup-snapshot.py --require-storage-version \
+    versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  [ "$status" -eq 0 ]
+  jq -e 'any(.[]; .path == "storage-version" and .storageVersion == 3)' \
+    <<< "$output" > /dev/null
+
+  printf '0\n' > marker-data/storage-version
+  tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version
+  run python3 .scripts/validate-backup-snapshot.py versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  [ "$status" -ne 0 ]
+}
