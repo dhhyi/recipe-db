@@ -34,6 +34,46 @@
       changed_when: false
       failed_when: backup_service_active.stdout not in ['inactive', 'failed']
 
+    - name: Check whether backup configuration is installed
+      ansible.builtin.stat:
+        path: /etc/recipe-db/backup.json
+      register: backup_configuration
+
+    - name: Inspect maintenance state without displaying private details
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/recipe-db-backup-upload
+          - status
+          - --config
+          - /etc/recipe-db/backup.json
+      register: backup_lifecycle_status
+      changed_when: false
+      when: backup_configuration.stat.exists
+      no_log: true
+
+    - name: Refuse backup input changes during release maintenance
+      ansible.builtin.assert:
+        that:
+          - not ((backup_lifecycle_status.stdout | from_json).maintenanceActive | default(false))
+        fail_msg: Resolve the retained maintenance operation before changing backup inputs.
+      when: backup_configuration.stat.exists
+      no_log: true
+
+    - name: Check for retained maintenance state without backup configuration
+      ansible.builtin.stat:
+        path: /var/lib/recipe-db-backup/maintenance
+      register: unconfigured_maintenance_state
+      when: not backup_configuration.stat.exists
+
+    - name: Refuse configuration without checking an existing maintenance operation
+      ansible.builtin.assert:
+        that:
+          - not (unconfigured_maintenance_state.stat.exists | default(false))
+          - not (unconfigured_maintenance_state.stat.islnk | default(false))
+        fail_msg: Resolve the retained maintenance operation before installing backup inputs.
+      when: not backup_configuration.stat.exists
+      no_log: true
+
     - name: Invalidate the prior backup configuration generation
       ansible.builtin.file:
         path: /etc/recipe-db/backup-configured-at

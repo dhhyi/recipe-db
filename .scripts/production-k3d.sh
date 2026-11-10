@@ -15,14 +15,15 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup|backup-enter|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
 case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
-  backup | backup-enter) [[ $# = 2 ]] || production_fail "backup requires an immutable release artifact and new absolute snapshot directory" ;;
+  backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
+  backup-capture) [[ $# = 1 ]] || production_fail "backup-capture requires the existing maintenance state directory" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
@@ -153,7 +154,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup | backup-enter | backup-exit | restore)
+    backup-run | backup-enter | backup-capture | backup-exit | restore)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
@@ -480,7 +481,7 @@ backup_wait_selected_pvcs_unmounted() {
 }
 
 backup_role_inventory() {
-  local project name role pvc layout
+  local project name role pvc layout storage
   local authoritative=0 participants=0
   : > "$work/backup-pvcs.jsonl"
   while IFS= read -r project; do
@@ -515,6 +516,16 @@ backup_role_inventory() {
       and (.spec.accessModes | index("ReadWriteOnce") != null)
     ' "$work/pvc.json" > /dev/null \
       || production_fail "backup PVC is unowned, unbound, or has unexpected storage: $pvc"
+    storage=$(jq -ce '
+      {uid:.metadata.uid,volumeName:.spec.volumeName,
+       storageClassName:.spec.storageClassName,
+       requestedStorage:.spec.resources.requests.storage,
+       capacity:.status.capacity.storage,
+       accessModes:.spec.accessModes,volumeMode:(.spec.volumeMode // "Filesystem")}
+      | select(all([.uid,.volumeName,.storageClassName,.requestedStorage,.capacity,.volumeMode][];
+          type == "string" and length > 0)
+        and (.accessModes | type == "array" and length > 0))
+    ' "$work/pvc.json") || production_fail "backup PVC storage identity is incomplete: $pvc"
     kube get deployment "$name" -o json > "$work/deployment.json" \
       || production_fail "backup workload is missing: $name"
     jq -e --arg pvc "$pvc" --arg name "$name" '
@@ -527,8 +538,10 @@ backup_role_inventory() {
         and .spec.template.metadata.annotations["recipe-db/release"] != null
     ' "$work/deployment.json" > /dev/null \
       || production_fail "backup workload does not mount its own PVC at /data: $name"
-    jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" --argjson layout "$layout" \
-      '{name:$name,role:$role,pvc:$pvc,layout:$layout}' >> "$work/backup-pvcs.jsonl"
+    jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
+      --argjson layout "$layout" --argjson storage "$storage" \
+      '{name:$name,role:$role,pvc:$pvc,layout:$layout,storage:$storage}' \
+      >> "$work/backup-pvcs.jsonl"
   done < <(jq -c 'select(.category == "backend" or .category == "api")' "$work/projects.jsonl")
   [[ $authoritative = 1 && $participants -gt 0 ]] \
     || production_fail "backup inventory requires one authoritative source and at least one cleanup participant"
@@ -739,7 +752,9 @@ backup_start_modes() {
 }
 
 backup_copy_pvc() {
-  local name=$1 pvc=$2 role=$3 layout=$4 pod archive size sha files
+  local name=$1 pvc=$2 role=$3 layout=$4 pod archive size sha files storage
+  storage=$(jq -ce --arg name "$name" 'select(.name == $name) | .storage' \
+    "$work/backup-pvcs.jsonl") || return 1
   pod="backup-copy-${name}-${backup_id##*-}"
   archive="$snapshot/$name.tar"
   jq -n --arg name "$pod" --arg namespace "$namespace" --arg image "$copy_image" \
@@ -771,9 +786,11 @@ backup_copy_pvc() {
   files=$(jq 'length' "$work/$name-files.json")
   jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
     --arg archive "$name.tar" --arg sha256 "$sha" --argjson sizeBytes "$size" \
-    --argjson fileCount "$files" --slurpfile files "$work/$name-files.json" \
+    --argjson fileCount "$files" --argjson storage "$storage" \
+    --argjson layout "$layout" --slurpfile files "$work/$name-files.json" \
     '{service:$name,role:$role,pvc:$pvc,archive:$archive,sha256:$sha256,
-      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0]}'
+      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0],
+      layout:$layout,storage:$storage}'
 }
 
 backup_check_archive_capacity() {
@@ -1048,7 +1065,7 @@ backup_run() {
     --slurpfile pvcs "$work/backup-pvcs.jsonl" \
     --slurpfile maintenance "$work/maintenance-workloads.json" \
     --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
-    '{backupId:$id,status:"in-progress",phase:"prepared",startedAt:$startedAt,
+    '{stateVersion:2,backupId:$id,status:"in-progress",phase:"prepared",startedAt:$startedAt,
       source:{target:$target,cluster:$cluster,context:$context,namespace:$namespace,
         artifact:$artifact,revision:$revision},
       configSha256:$configSha256,priorWorkloads:$workloads[0],
@@ -1073,7 +1090,8 @@ backup_run() {
     return 1
   fi
   if [[ $command = backup-enter ]]; then
-    backup_state_write backup-mode maintenance-entered || return 1
+    backup_state_write backup-mode maintenance-entered \
+      && cluster_operation_lock_update maintenance-entered || return 1
     return 0
   fi
   if ! backup_restore_production; then
@@ -1090,6 +1108,12 @@ backup_run() {
   }
   locked=false
   retain_lock=false
+  backup_write_manifest || return 1
+  rm -f -- "$snapshot/backup-state.json"
+  printf 'production: complete PVC snapshot written to %s/manifest.json\n' "$snapshot"
+}
+
+backup_write_manifest() {
   jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
     --arg revision "$revision" --arg startedAt "$(jq -r .startedAt "$snapshot/backup-state.json")" \
@@ -1102,9 +1126,61 @@ backup_run() {
         artifact:$artifact,revision:$revision},inventory:$inventory[0]}' \
     > "$snapshot/manifest.next" || return 1
   chmod 600 "$snapshot/manifest.next" \
-    && mv "$snapshot/manifest.next" "$snapshot/manifest.json" || return 1
-  rm -f -- "$snapshot/backup-state.json"
-  printf 'production: complete PVC snapshot written to %s/manifest.json\n' "$snapshot"
+    && mv "$snapshot/manifest.next" "$snapshot/manifest.json"
+}
+
+backup_capture_maintenance() {
+  local current release artifact
+  snapshot=$1
+  [[ $snapshot = /* && -d $snapshot && $(realpath -e "$snapshot") = "$snapshot" &&
+  -f $snapshot/backup-state.json && ! -L $snapshot/backup-state.json ]] \
+    || production_fail "backup-capture requires the original absolute maintenance state directory"
+  release=$(jq -er .source.artifact "$snapshot/backup-state.json") \
+    || production_fail "maintenance recovery state has no immutable release"
+  artifact=$release
+  pull_release "$release"
+  [[ $revision = "$(jq -r .source.revision "$snapshot/backup-state.json")" ]] \
+    || production_fail "maintenance release revision changed"
+  render
+  backup_load_state "$snapshot"
+  copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
+  jq -e '.stateVersion == 2 and .status == "backup-mode"
+    and .phase == "maintenance-entered"' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "maintenance state is not ready for its first capture"
+  [[ ! -e $snapshot/manifest.json && ! -L $snapshot/manifest.json ]] \
+    || production_fail "maintenance snapshot was already captured"
+  connect
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect maintenance Lease"
+  jq -e --arg holder "$backup_id" --arg release "$release" '
+    .spec.holderIdentity == $holder
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/release"] == $release
+  ' <<< "$current" > /dev/null || production_fail "maintenance Lease does not match saved state"
+  cluster_operation_lock_holder=$backup_id
+  lock_holder=$backup_id
+  locked=true
+  retain_lock=true
+  if [[ $target = pi ]]; then production_storage_preflight; fi
+  kube get deployments -o json > "$work/maintenance-current-workloads.json" || return 1
+  backup_validate_workload_images "$work/maintenance-current-workloads.json" || return 1
+  jq -e --slurpfile prior "$work/prior-workloads.json" '
+    . as $actual | all($prior[0][]; . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name and
+        .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release))
+  ' "$work/maintenance-current-workloads.json" > /dev/null || {
+    printf 'production: maintenance workloads changed releases; retain the barrier and investigate\n' >&2
+    return 1
+  }
+  barrier_touched=true
+  backup_establish_barrier || return 1
+  backup_scale_zero || return 1
+  backup_state_write backup-mode writers-stopped || return 1
+  backup_capture || return 1
+  backup_write_manifest || return 1
+  cluster_operation_lock_update captured || return 1
+  printf 'production: maintenance snapshot captured at %s/manifest.json; holder=%s\n' \
+    "$snapshot" "$backup_id"
 }
 
 backup_load_state() {
@@ -1326,8 +1402,11 @@ case "$command" in
     fi
     guard_ingress_service
     ;;
-  backup | backup-enter)
+  backup-run | backup-enter)
     backup_run "$1" "$2"
+    ;;
+  backup-capture)
+    backup_capture_maintenance "$1"
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"

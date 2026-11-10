@@ -8,7 +8,7 @@ load production-k3d-setup
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-success"
 
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -eq 0 ]
   [ -f "$snapshot/manifest.json" ]
   [ ! -e "$snapshot/backup-state.json" ]
@@ -40,7 +40,7 @@ load production-k3d-setup
   export MOCK_BACKUP=true MOCK_LOCK=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-locked"
 
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"cannot be acquired"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -52,7 +52,7 @@ load production-k3d-setup
   printf 'stale image purged before another cleanup operation failed' > "$FIXTURE_ROOT/tar-data/images/public/stale.png"
   local snapshot="$FIXTURE_ROOT/backups/snapshot-cleanup-failed"
 
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"no complete snapshot was published"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -69,7 +69,7 @@ load production-k3d-setup
   export MOCK_BACKUP=true MOCK_COPY_FAIL=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-copy-failed"
 
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"no complete snapshot was published"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -82,7 +82,7 @@ load production-k3d-setup
   export MOCK_BACKUP=true MOCK_CLEANUP_FAIL=true MOCK_RECOVERY_FAIL=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-recovery-failed"
 
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"GraphQL barrier and cluster Lease are retained"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -122,10 +122,36 @@ load production-k3d-setup
   jq -e '.items[] | select(.metadata.name == "tags") | .spec.replicas == 2' "$MOCK_LOG.deployments"
 }
 
+@test "maintenance capture continues the saved operation and retains its lock and recovery state" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance-capture" holder
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  [ -f "$snapshot/manifest.json" ]
+  [ -f "$snapshot/backup-state.json" ]
+  jq -e '.stateVersion == 2 and .status == "captured" and .phase == "captured"' \
+    "$snapshot/backup-state.json"
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease"
+  jq -e 'all(.inventory[]; .storage.uid != null and .storage.volumeName != null
+    and .storage.storageClassName == "local-path" and .layout.kind != null)' \
+    "$snapshot/manifest.json"
+  run ! grep -q ' MODE=production ' "$MOCK_LOG"
+  grep -q 'scale deployment/recipes --replicas=0' "$MOCK_LOG"
+  grep -q 'create -f .*copy-pod.json' "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh backup-status "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
 @test "forced termination prevents capture and preserves actionable recovery state" {
   export MOCK_BACKUP=true MOCK_FORCED_TERMINATION=capture
   local snapshot="$FIXTURE_ROOT/backups/forced"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"force-killed"* ]]
   [ -e "$MOCK_LOG.cleaned" ]
@@ -137,7 +163,7 @@ load production-k3d-setup
   export MOCK_BACKUP=true
   rm "$FIXTURE_ROOT/tar-data/tags/tags.sqlite"
   local snapshot="$FIXTURE_ROOT/backups/missing"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"missing authoritative database"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -150,7 +176,7 @@ load production-k3d-setup
   MOCK_ARCHIVE_BYTES=$(df -Pk "$FIXTURE_ROOT/backups" \
     | awk 'NR == 2 {printf "%.0f\n", $4 * 1024 - 67108864 + 1}')
   local snapshot="$FIXTURE_ROOT/backups/insufficient-measured-space"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"measured archive capacity"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -161,7 +187,7 @@ load production-k3d-setup
 @test "capture respects the publisher staging bound before copying a PVC archive" {
   export MOCK_BACKUP=true RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES=1
   local snapshot="$FIXTURE_ROOT/backups/staging-limit"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"snapshot exceeds configured staging limit"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -173,7 +199,7 @@ load production-k3d-setup
 @test "projection failure retains the barrier Lease and recovery state" {
   export MOCK_BACKUP=true MOCK_PROJECTION_FAIL=true
   local snapshot="$FIXTURE_ROOT/backups/projection-failed"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"projection recovery failed"* ]]
   [ ! -e "$snapshot/manifest.json" ]
@@ -203,7 +229,7 @@ load production-k3d-setup
 @test "projection refresh completes before the GraphQL client barrier is removed" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/projections"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -eq 0 ]
   local refresh reopen
   refresh=$(awk '/rollout status deployment\/search / {line=NR} END {print line}' "$MOCK_LOG")
@@ -221,7 +247,7 @@ load production-k3d-setup
   jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].image)="foreign:latest"' \
     "$MOCK_LOG.deployments" > deployments.next
   mv deployments.next "$MOCK_LOG.deployments"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/image-drift"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/image-drift"
   [ "$status" -ne 0 ]
   [[ $output == *"container images do not match"* ]]
   [ ! -e "$MOCK_LOG.lease" ]
@@ -248,7 +274,7 @@ load production-k3d-setup
 @test "backup refuses modified release metadata before connecting or acquiring a Lease" {
   export MOCK_BACKUP=true
   printf '\n# changed classification\n' >> .scripts/lib/project-metadata.sh
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/metadata-drift"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/metadata-drift"
   [ "$status" -ne 0 ]
   [[ $output == *"metadata and templates must match"* ]]
   run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
@@ -259,7 +285,7 @@ load production-k3d-setup
   mkdir extra-backend
   printf 'category: backend\n' > extra-backend/.project.yaml
   printf 'extra-backend/\n' > .gitignore
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/untracked-metadata"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/untracked-metadata"
   [ "$status" -ne 0 ]
   [[ $output == *"untracked metadata"* ]]
   run ! grep -Eq '^(kubectl|k3d|docker)' "$MOCK_LOG"
@@ -270,7 +296,7 @@ load production-k3d-setup
   printf 'unrelated documentation\n' > note.txt
   git add note.txt
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Unrelated checkout change'
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/same-inputs"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/same-inputs"
   [ "$status" -eq 0 ]
 }
 
@@ -288,7 +314,7 @@ load production-k3d-setup
 @test "recovered backend validation happens before GraphQL is reopened" {
   export MOCK_BACKUP=true MOCK_RECOVERY_DRIFT=true
   local snapshot="$FIXTURE_ROOT/backups/recovery-count-drift"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"recovered backend state could not be verified"* ]]
   [ -e "$MOCK_LOG.lease" ]
@@ -299,7 +325,7 @@ load production-k3d-setup
 @test "failed GraphQL reopen and reblock rollout falls back to stopping all GraphQL Pods" {
   export MOCK_BACKUP=true MOCK_GRAPHQL_REOPEN_FAIL=true
   local snapshot="$FIXTURE_ROOT/backups/reopen-failure"
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
   [[ $output == *"stopping GraphQL to preserve the client barrier"* ]]
   [ -e "$MOCK_LOG.lease" ]

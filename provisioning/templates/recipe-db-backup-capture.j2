@@ -1,10 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 umask 077
-[[ $# == 1 && $1 == /* && ! -e $1 && ! -L $1 ]] || {
-  printf 'backup capture requires one new absolute snapshot directory\n' >&2
+if [[ $# == 1 ]]; then
+  action=nightly
+  path=$1
+elif [[ $# == 2 ]]; then
+  action=$1
+  path=$2
+else
+  printf 'backup capture requires an action and its absolute state or snapshot directory\n' >&2
   exit 1
-}
+fi
 export HOME=/root
 {% for key, value in backup_toolchain_environment.items() %}
 export {{ key }}={{ value | quote }}
@@ -16,5 +22,33 @@ cd /opt/recipe-db
   exit 1
 }
 release=$(cat /etc/recipe-db/backup-release-ref)
-exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-  backup /etc/recipe-db/backup-values.yaml "$release" "$1"
+case "$action" in
+  nightly)
+    [[ $# == 1 && $path == /* && ! -e $path && ! -L $path ]] || {
+      printf 'nightly backup requires a new absolute snapshot directory\n' >&2
+      exit 1
+    }
+    exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+      backup-run /etc/recipe-db/backup-values.yaml "$release" "$path"
+    ;;
+  maintenance-enter)
+    [[ $path == /* && ! -e $path && ! -L $path ]] || {
+      printf 'maintenance entry requires a new absolute state directory\n' >&2
+      exit 1
+    }
+    exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+      backup-enter /etc/recipe-db/backup-values.yaml "$release" "$path"
+    ;;
+  maintenance-capture)
+    [[ $path == /* && -d $path && ! -L $path ]] || {
+      printf 'maintenance capture requires its original absolute state directory\n' >&2
+      exit 1
+    }
+    exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+      backup-capture /etc/recipe-db/backup-values.yaml "$path"
+    ;;
+  *)
+    printf 'unsupported backup capture action\n' >&2
+    exit 1
+    ;;
+esac

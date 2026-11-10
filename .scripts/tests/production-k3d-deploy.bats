@@ -351,7 +351,7 @@ legacy_pi_claims() {
         spec:{storageClassName:"local-path",volumeName:("pvc-"+$uid),
           accessModes:["ReadWriteOnce"],volumeMode:"Filesystem",
           resources:{requests:{storage:$config.volumes[.value]}}},
-        status:{phase:"Bound"}})
+        status:{phase:"Bound",capacity:{storage:$config.volumes[.value]}}})
   }' "$VALUES" > "$MOCK_LOG.pvcs"
   jq '{items:[.items[] | {
     apiVersion:"v1",kind:"PersistentVolume",
@@ -393,7 +393,7 @@ legacy_pi_claims() {
   export MOCK_BACKUP=true
   no_google_values
   legacy_pi_claims
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
   [ "$status" -eq 0 ]
   [ -f "$FIXTURE_ROOT/snapshot/manifest.json" ]
   run ! grep -q 'patch storageclass' "$MOCK_LOG"
@@ -403,7 +403,7 @@ legacy_pi_claims() {
   export MOCK_BACKUP=true MOCK_PVC_DRIFT=true
   no_google_values
   legacy_pi_claims
-  run bash .scripts/production-k3d.sh backup "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
   [ "$status" -ne 0 ]
   [ ! -e "$FIXTURE_ROOT/snapshot" ]
   run ! grep -Eq 'set env deployment/|exec backup-copy-' "$MOCK_LOG"

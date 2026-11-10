@@ -76,7 +76,8 @@ production_config() {
         and (.dataRoot | type == "string" and test("^/srv/[a-zA-Z0-9_-]+$")))
       else true end)
     and (if .target == "pi" and
-      ($action == "deploy" or $action == "backup" or $action == "backup-enter"
+      ($action == "deploy" or $action == "backup-run" or $action == "backup-enter"
+        or $action == "backup-capture"
         or $action == "backup-exit" or $action == "restore" or $action == "storage-reattach")
       then has("piStorage")
         and .piStorage.node == .cluster
