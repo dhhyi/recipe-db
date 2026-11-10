@@ -20,11 +20,30 @@ export class HeaderComponent extends LitElement {
     return this;
   }
 
+  private startLogin(event: Event) {
+    const link = event.currentTarget;
+    if (!(link instanceof HTMLAnchorElement)) return;
+
+    const { origin, pathname, search, hash } = window.location;
+    const currentURL = `${pathname}${search}${hash}`;
+    let returnTo = "/";
+    if (currentURL.startsWith("/") && !currentURL.startsWith("//")) {
+      const destination = new URL(currentURL, origin);
+      if (destination.origin === origin) returnTo = currentURL;
+    }
+
+    const loginURL = new URL("/oauth2/start", origin);
+    loginURL.searchParams.set("rd", returnTo);
+    link.href = `${loginURL.pathname}${loginURL.search}`;
+  }
+
   private renderAuth() {
     if (!this.authRole || !this.authEnabled) return null;
     if (this.authRole === "anonymous") {
       return html`<ul class="unlist">
-        <li><a href="/oauth2/start?rd=%2F">Anmelden</a></li>
+        <li>
+          <a href="/oauth2/start?rd=%2F" @click=${this.startLogin}>Anmelden</a>
+        </li>
       </ul>`;
     }
     return html`<ul class="unlist">
