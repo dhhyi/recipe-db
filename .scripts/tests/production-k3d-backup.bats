@@ -742,6 +742,36 @@ EOF
   jq '.tag_name="v1" | .html_url="https://github.com/dhhyi/recipe-db/releases/tag/v1"' \
     "$MOCK_GITHUB_RELEASE_JSON" > "$MOCK_GITHUB_RELEASE_JSON.next"
   mv "$MOCK_GITHUB_RELEASE_JSON.next" "$MOCK_GITHUB_RELEASE_JSON"
+  export MOCK_REAL_FIND
+  MOCK_REAL_FIND=$(command -v find)
+  cat > bin/find << 'EOF'
+#!/usr/bin/env bash
+if [[ ${MOCK_FINALIZE_INTERRUPT:-false} == true ]]; then
+  kill -TERM "$PPID"
+  exit 143
+fi
+exec "$MOCK_REAL_FIND" "$@"
+EOF
+  chmod +x bin/find
+  export MOCK_FINALIZE_INTERRUPT=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -eq 143 ]
+  jq -e '.status == "release-published" and .phase == "published-cleanup-pending"
+    and .publishedRelease.tag == "v1"' "$STATE/backup-state.json" > /dev/null
+  jq -e '.metadata.annotations["recipe-db/phase"] == "release-published"' \
+    "$MOCK_LOG.lease" > /dev/null
+  [ -e "$STATE/post-release-backup/manifest.json" ]
+
+  export MOCK_FINALIZE_INTERRUPT=false MOCK_CURL_FAIL=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [ -e "$STATE/post-release-backup/manifest.json" ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.phase == "published-cleanup-pending"' "$STATE/backup-state.json" > /dev/null
+
+  export MOCK_CURL_FAIL=false
   run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
     "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
   [ "$status" -eq 0 ]
