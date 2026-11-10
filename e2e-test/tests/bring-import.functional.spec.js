@@ -20,7 +20,7 @@ async function expectDestination(page, recipe) {
   return publicURL;
 }
 
-test("Bring widget survives HTMX replacement without analytics consent or duplicate loading", async ({
+test("Bring widget survives HTMX replacement without analytics consent or retained runtimes", async ({
   page,
   request,
   demoRecipe,
@@ -35,9 +35,9 @@ test("Bring widget survives HTMX replacement without analytics consent or duplic
           disabled: window["ga-disable-UA-32355059-8"],
           requiresConsent: document.currentScript.dataset.bringRequiresConsent,
         };
-        window.bringRenders = [];
+        window.parent.bringRenders ??= [];
         window.bringwidgets = { import: { render(element, config) {
-          window.bringRenders.push(config);
+          window.parent.bringRenders.push(config);
           const action = document.createElement("a");
           action.href = "https://example.test/bring";
           action.textContent = "Zur Einkaufsliste";
@@ -49,7 +49,7 @@ test("Bring widget survives HTMX replacement without analytics consent or duplic
   });
   await page.goto(`/recipe/${demoRecipe.id}`);
   const firstURL = await expectDestination(page, demoRecipe);
-  const action = widget(page).getByRole("link", {
+  const action = widget(page).frameLocator("iframe").getByRole("link", {
     name: "Bring! – Zur Einkaufsliste",
     exact: true,
   });
@@ -57,7 +57,11 @@ test("Bring widget survives HTMX replacement without analytics consent or duplic
   await expect(fallback(page)).toBeHidden();
   await action.focus();
   await expect(action).toBeFocused();
-  expect(await page.evaluate(() => window.privacyAtBringLoad)).toEqual({
+  expect(
+    await widget(page)
+      .locator("iframe")
+      .evaluate((frame) => frame.contentWindow.privacyAtBringLoad),
+  ).toEqual({
     disabled: true,
     requiresConsent: "true",
   });
@@ -73,7 +77,12 @@ test("Bring widget survives HTMX replacement without analytics consent or duplic
   const { createRecipe: second } = await graphql(
     request,
     "mutation($value: RecipeInput!) { createRecipe(value: $value) { id } }",
-    { value: { name: "E2E Bring zweites Rezept", ingredients: [{ name: "Ei" }] } },
+    {
+      value: {
+        name: "E2E Bring zweites Rezept",
+        ingredients: [{ name: "Ei" }],
+      },
+    },
   );
   await page.evaluate(async (id) => {
     window.bringNavigationMarker = true;
@@ -87,15 +96,53 @@ test("Bring widget survives HTMX replacement without analytics consent or duplic
   const secondURL = await expectDestination(page, second);
   await expect(fallback(page)).toBeHidden();
   expect(await page.evaluate(() => window.bringNavigationMarker)).toBe(true);
-  expect(await page.evaluate(() => window.bringRenders.map(({ url }) => url))).toEqual([
-    firstURL,
-    secondURL,
-  ]);
-  expect(loads).toBe(1);
-  await expect(widget(page).locator("a:visible")).toHaveCount(1);
+  expect(
+    await page.evaluate(() => window.bringRenders.map(({ url }) => url)),
+  ).toEqual([firstURL, secondURL]);
+  expect(loads).toBe(2);
+  await expect(widget(page).locator("iframe")).toHaveCount(1);
+  await expect(
+    widget(page).frameLocator("iframe").locator("a:visible"),
+  ).toHaveCount(1);
 });
 
-for (const failure of ["blocked", "missing API", "render error", "empty render"]) {
+test("a delayed widget preserves keyboard focus when replacing its fallback", async ({
+  page,
+  demoRecipe,
+}) => {
+  let release;
+  const ready = new Promise((resolve) => {
+    release = resolve;
+  });
+  await page.route(scriptURL, async (route) => {
+    await ready;
+    await route.fulfill({
+      contentType: "application/javascript",
+      body: `window.bringwidgets = { import: { render(element) {
+        element.innerHTML = '<a href="https://example.test/bring">Zur Einkaufsliste</a>';
+      } } };`,
+    });
+  });
+  await page.goto(`/recipe/${demoRecipe.id}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await fallback(page).focus();
+  await expect(fallback(page)).toBeFocused();
+  release();
+  const action = widget(page)
+    .frameLocator("iframe")
+    .getByRole("link", { name: "Bring! – Zur Einkaufsliste" });
+  await expect(action).toBeVisible();
+  await expect(action).toBeFocused();
+  await expect(fallback(page)).toBeHidden();
+});
+
+for (const failure of [
+  "blocked",
+  "missing API",
+  "render error",
+  "empty render",
+]) {
   test(`Bring plain link remains usable: ${failure}`, async ({
     page,
     demoRecipe,
@@ -109,7 +156,9 @@ for (const failure of ["blocked", "missing API", "render error", "empty render"]
               failure === "missing API"
                 ? ""
                 : `window.bringwidgets = { import: { render() { ${
-                    failure === "render error" ? 'throw new Error("blocked");' : ""
+                    failure === "render error"
+                      ? 'throw new Error("blocked");'
+                      : ""
                   } } } };`,
           }),
     );
@@ -122,8 +171,16 @@ for (const failure of ["blocked", "missing API", "render error", "empty render"]
     const table = page.locator("table");
     const footer = table.locator("tfoot");
     await expect(footer.locator("td")).toHaveAttribute("colspan", "2");
-    expect(await widget(page).evaluate((element) => getComputedStyle(element).justifyContent)).toBe("flex-end");
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(
+      await widget(page).evaluate(
+        (element) => getComputedStyle(element).justifyContent,
+      ),
+    ).toBe("flex-end");
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
   });
 }
 
@@ -132,7 +189,10 @@ test("Bring import remains available without JavaScript", async ({
   baseURL,
   demoRecipe,
 }) => {
-  const context = await browser.newContext({ baseURL, javaScriptEnabled: false });
+  const context = await browser.newContext({
+    baseURL,
+    javaScriptEnabled: false,
+  });
   try {
     const page = await context.newPage();
     await page.goto(`/recipe/${demoRecipe.id}`);

@@ -11,17 +11,14 @@ type BringImport = {
   ) => void;
 };
 
-declare global {
-  interface Window {
-    bringwidgets?: { import: BringImport };
-    "ga-disable-UA-32355059-8"?: boolean;
-  }
+interface BringWindow extends Window {
+  bringwidgets?: { import: BringImport };
+  "ga-disable-UA-32355059-8"?: boolean;
 }
 
-let widgetScript: Promise<BringImport> | undefined;
-
-function loadWidget(): Promise<BringImport> {
-  return (widgetScript ??= new Promise((resolve, reject) => {
+function loadWidget(document: Document): Promise<BringImport> {
+  return new Promise((resolve, reject) => {
+    const window = document.defaultView as BringWindow;
     // The widget downloads analytics.js even when consent is required.
     // Disable its tracker before loading; never grant analytics consent.
     window["ga-disable-UA-32355059-8"] = true;
@@ -38,42 +35,69 @@ function loadWidget(): Promise<BringImport> {
     };
     script.onerror = () => reject(new Error("Bring widget failed to load"));
     document.head.append(script);
-  }));
+  });
 }
 
 class BringImportComponent extends HTMLElement {
-  private initialized = false;
+  private frame?: HTMLIFrameElement;
 
   connectedCallback() {
     // Also runs for HTMX swaps; wait until parsed children are available.
     queueMicrotask(() => void this.initialize());
   }
 
+  disconnectedCallback() {
+    // Bring has no documented teardown API; discard its entire runtime.
+    this.frame?.remove();
+    this.frame = undefined;
+  }
+
   private async initialize() {
-    if (this.initialized || !this.isConnected) return;
+    if (this.frame || !this.isConnected) return;
     const widget = this.querySelector<HTMLElement>("[data-bring-language]");
     const fallback = this.querySelector<HTMLAnchorElement>(":scope > a");
     const url = this.dataset.recipeUrl;
     if (!widget || !fallback || !url) return;
-    this.initialized = true;
+    fallback.hidden = false;
+    const frame = document.createElement("iframe");
+    frame.title = "Bring! – Zur Einkaufsliste";
+    frame.style.cssText = "display:block;border:0;width:220px;height:40px";
+    this.frame = frame;
+    widget.style.cssText = "display:block;position:absolute;visibility:hidden";
+    widget.replaceChildren(frame);
     try {
-      const bring = await loadWidget();
-      if (!this.isConnected) {
-        this.initialized = false;
-        return;
-      }
-      bring.render(widget, {
+      const document = frame.contentDocument!;
+      document.documentElement.lang = "de";
+      document.body.style.cssText = "margin:0;display:inline-block";
+      const focusStyle = document.createElement("style");
+      focusStyle.textContent =
+        "a:focus-visible{outline:2px solid currentColor;outline-offset:-2px}";
+      document.head.append(focusStyle);
+      const mount = document.createElement("div");
+      document.body.append(mount);
+      const bring = await loadWidget(document);
+      if (!this.isConnected || this.frame !== frame) return;
+      bring.render(mount, {
         url,
         language: widget.dataset.bringLanguage!,
         baseQuantity: widget.dataset.bringBaseQuantity!,
         requestedQuantity: widget.dataset.bringRequestedQuantity!,
         requiresConsent: true,
       });
-      const action = widget.querySelector<HTMLAnchorElement>("a[href]");
+      const action = mount.querySelector<HTMLAnchorElement>("a[href]");
       if (!action?.textContent?.trim()) throw new Error("Bring action missing");
       action.setAttribute("aria-label", "Bring! – Zur Einkaufsliste");
+      action.target = "_blank";
+      action.rel = "noopener noreferrer";
+      const bounds = action.getBoundingClientRect();
+      frame.style.width = `${Math.ceil(bounds.width)}px`;
+      frame.style.height = `${Math.ceil(bounds.height)}px`;
+      widget.style.cssText = "";
+      if (fallback === window.document.activeElement) action.focus();
       fallback.hidden = true;
     } catch {
+      if (this.frame !== frame) return;
+      frame.remove();
       widget.style.display = "none";
       fallback.hidden = false;
     }
