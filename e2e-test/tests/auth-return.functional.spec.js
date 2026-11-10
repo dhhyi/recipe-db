@@ -51,9 +51,10 @@ test("login returns to the current URL across shared-header consumers", async ({
 
   try {
     const recipePath = `/recipe/${demoRecipe.id}`;
-    const overview =
-      `/?q=${encodeURIComponent(demoRecipe.name)}&sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc&filter_by=tag_ids%3A%22a%2Bb%22&extra=one&extra=two#ingredients%2Flist`;
-    await expectReturnToCurrentURL(`${appOrigin}${recipePath}?return=%252F#method`);
+    const overview = `/?q=${encodeURIComponent(demoRecipe.name)}&sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc&filter_by=tag_ids%3A%22a%2Bb%22&extra=one&extra=two#ingredients%2Flist`;
+    await expectReturnToCurrentURL(
+      `${appOrigin}${recipePath}?return=%252F#method`,
+    );
     await expectReturnToCurrentURL(`${appOrigin}${overview}`);
     await expectReturnToCurrentURL(
       `${appOrigin}/edit/${demoRecipe.id}?tab=ingredients&return=%252F#editor%2Fform`,
@@ -66,7 +67,9 @@ test("login returns to the current URL across shared-header consumers", async ({
 
     await waitForRecipeIndexed(identity.api, demoRecipe.id);
     await page.goto(`${appOrigin}/`);
-    await expect(page.locator(`[data-recipe-id="${demoRecipe.id}"]`)).toBeVisible();
+    await expect(
+      page.locator(`[data-recipe-id="${demoRecipe.id}"]`),
+    ).toBeVisible();
     await page.locator(`[data-recipe-id="${demoRecipe.id}"]`).click();
     await expect(page).toHaveURL(new RegExp(`${recipePath}$`));
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
@@ -103,8 +106,11 @@ test("login returns to the current URL across shared-header consumers", async ({
     await expectLoginForCurrentURL();
 
     const header = page.locator("header-component");
-    await header.evaluate((element) => element.setAttribute("auth-role", "owner"));
+    await header.evaluate((element) =>
+      element.setAttribute("auth-role", "owner"),
+    );
     await expect(page.getByRole("link", { name: "Anmelden" })).toHaveCount(0);
+    await header.locator("summary").click();
     await expect(
       page.getByRole("link", { name: "Abmelden", exact: true }),
     ).toHaveAttribute("href", "/oauth2/sign_out?rd=%2F");

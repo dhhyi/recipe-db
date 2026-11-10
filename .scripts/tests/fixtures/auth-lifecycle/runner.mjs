@@ -154,7 +154,9 @@ async function returnDestinations() {
     );
     role(await gql(jar), "owner");
   }
-  console.log("PASS local return destination preservation and unsafe redirect rejection");
+  console.log(
+    "PASS local return destination preservation and unsafe redirect rejection",
+  );
 }
 
 async function signedIn(user) {
