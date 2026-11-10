@@ -351,7 +351,7 @@ legacy_pi_claims() {
         spec:{storageClassName:"local-path",volumeName:("pvc-"+$uid),
           accessModes:["ReadWriteOnce"],volumeMode:"Filesystem",
           resources:{requests:{storage:$config.volumes[.value]}}},
-        status:{phase:"Bound"}})
+        status:{phase:"Bound",capacity:{storage:$config.volumes[.value]}}})
   }' "$VALUES" > "$MOCK_LOG.pvcs"
   jq '{items:[.items[] | {
     apiVersion:"v1",kind:"PersistentVolume",

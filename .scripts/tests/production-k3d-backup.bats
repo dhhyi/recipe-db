@@ -122,6 +122,32 @@ load production-k3d-setup
   jq -e '.items[] | select(.metadata.name == "tags") | .spec.replicas == 2' "$MOCK_LOG.deployments"
 }
 
+@test "maintenance capture continues the saved operation and retains its lock and recovery state" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance-capture" holder
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  [ -f "$snapshot/manifest.json" ]
+  [ -f "$snapshot/backup-state.json" ]
+  jq -e '.stateVersion == 2 and .status == "captured" and .phase == "captured"' \
+    "$snapshot/backup-state.json"
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease"
+  jq -e 'all(.inventory[]; .storage.uid != null and .storage.volumeName != null
+    and .storage.storageClassName == "local-path" and .layout.kind != null)' \
+    "$snapshot/manifest.json"
+  run ! grep -q ' MODE=production ' "$MOCK_LOG"
+  grep -q 'scale deployment/recipes --replicas=0' "$MOCK_LOG"
+  grep -q 'create -f .*copy-pod.json' "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh backup-status "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+}
+
 @test "forced termination prevents capture and preserves actionable recovery state" {
   export MOCK_BACKUP=true MOCK_FORCED_TERMINATION=capture
   local snapshot="$FIXTURE_ROOT/backups/forced"

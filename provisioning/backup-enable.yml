@@ -24,6 +24,7 @@
       ansible.builtin.assert:
         that:
           - (backup_status.stdout | from_json).status in ['verified-upload', 'verified-unchanged']
+          - not ((backup_status.stdout | from_json).maintenanceActive | default(false))
           - (backup_status.stdout | from_json).lastCheck is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+]00:00$')
           - (backup_configuration_timestamp.content | b64decode | trim) is match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+]00:00$')
           - (backup_status.stdout | from_json).lastCheck > (backup_configuration_timestamp.content | b64decode | trim)

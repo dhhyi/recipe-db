@@ -299,13 +299,20 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         if [[ -f $MOCK_LOG.pvcs ]]; then
           jq --arg name "$pvc" --arg drift "${MOCK_PVC_DRIFT:-false}" '
             .items[] | select(.metadata.name == $name) |
+            (.metadata.uid //= ("claim-"+$name)) |
+            (.spec.volumeName //= ("pv-"+$name)) |
+            (.status //= {}) |
+            (.status.capacity //= {}) |
+            (.status.capacity.storage //= .spec.resources.requests.storage) |
             if $drift == "true" then .metadata.uid="changed-claim-uid" else . end
           ' "$MOCK_LOG.pvcs"
         else
           jq -n --arg pvc "$pvc" '{
-            metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-            status:{phase:"Bound"},
-            spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"],
+            metadata:{uid:("claim-"+$pvc),namespace:"recipe-db",
+              labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            status:{phase:"Bound",capacity:{storage:"1Gi"}},
+            spec:{volumeName:("pv-"+$pvc),storageClassName:"local-path",accessModes:["ReadWriteOnce"],
+              volumeMode:"Filesystem",
               resources:{requests:{storage:"1Gi"}}}
           }'
         fi

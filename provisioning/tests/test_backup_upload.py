@@ -120,6 +120,24 @@ else:
     raise SystemExit(2)
 """)
         fake.chmod(0o755)
+        systemctl = self.bin / "systemctl"
+        self.systemctl_log = self.root / "systemctl.log"
+        systemctl.write_text(f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+with Path({str(self.systemctl_log)!r}).open("a") as log:
+    log.write(" ".join(args) + "\\n")
+if args[:1] == ["show"]:
+    print(os.environ.get("FAKE_BACKUP_SERVICE_ACTIVE", "inactive"))
+    raise SystemExit(0)
+if args[:2] == ["disable", "--now"] and os.environ.get("FAKE_TIMER_DISABLE_FAIL") == "true":
+    raise SystemExit(1)
+raise SystemExit(0)
+""")
+        systemctl.chmod(0o755)
         self.env = patch.dict(os.environ, {"PATH": f"{self.bin}:{os.environ['PATH']}",
                                            "FAKE_REMOTE": str(self.remote)})
         self.env.start()
@@ -130,6 +148,66 @@ else:
 
     def make_snapshot(self, name="snapshot", **kwargs):
         return snapshot(self.root / name, **kwargs)
+
+    def write_maintenance_capture(self):
+        command = Path(self.config["captureCommand"])
+        command.write_text(f"""#!/usr/bin/env python3
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tarfile
+
+action, path = sys.argv[1:]
+path = Path(path)
+with Path({str(self.root / "capture-actions.log")!r}).open("a") as log:
+    log.write(action + "\\n")
+backup_id = "backup-20261110T100000-42"
+artifact = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64
+revision = "a" * 40
+state_path = path / "backup-state.json"
+if action == "maintenance-enter":
+    path.mkdir(mode=0o700)
+    state_path.write_text(json.dumps({{
+        "stateVersion": 2, "backupId": backup_id, "status": "backup-mode",
+        "phase": "maintenance-entered",
+        "source": {{"artifact": artifact, "revision": revision}},
+    }}))
+    raise SystemExit(0)
+if action != "maintenance-capture":
+    raise SystemExit(2)
+state = json.loads(state_path.read_text())
+data = b"sqlite data"
+with tarfile.open(path / "recipes.tar", "w") as archive:
+    import io
+    member = tarfile.TarInfo("recipes.sqlite3")
+    member.size = len(data)
+    archive.addfile(member, io.BytesIO(data))
+archive_path = path / "recipes.tar"
+manifest = {{
+    "format": "recipe-db-pvc-snapshot", "formatVersion": 1,
+    "backupId": backup_id, "capturedAt": "2026-11-10T10:00:00Z",
+    "source": {{"target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+        "namespace": "recipe-db", "artifact": artifact, "revision": revision}},
+    "inventory": [{{
+        "service": "recipes", "role": "authoritative-read-only", "pvc": "recipes",
+        "archive": "recipes.tar", "sizeBytes": archive_path.stat().st_size,
+        "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+        "fileCount": 1, "files":[{{"path":"recipes.sqlite3","sizeBytes":len(data),
+            "sha256":hashlib.sha256(data).hexdigest()}}],
+        "layout": {{"kind":"sqlite","file":"recipes.sqlite3"}},
+        "storage": {{"uid":"claim-recipes","volumeName":"pv-recipes",
+            "storageClassName":"local-path","requestedStorage":"1Gi","capacity":"1Gi",
+            "accessModes":["ReadWriteOnce"],"volumeMode":"Filesystem"}},
+    }}],
+}}
+(path / "manifest.json").write_text(json.dumps(manifest))
+state["status"] = "captured"
+state["phase"] = "captured"
+state_path.write_text(json.dumps(state))
+""")
+        command.chmod(0o755)
 
     def test_release_aware_fingerprint_ignores_capture_times_and_ids(self):
         first = self.make_snapshot("first")
@@ -430,6 +508,59 @@ else:
         old["lastCheck"] = "2026-10-29T00:00:00+00:00"
         path.write_bytes(backup.json_bytes(old))
         self.assertEqual(backup.report_status(self.config)["status"], "overdue")
+
+    def test_maintenance_entry_disables_timer_and_requires_an_idle_backup_service(self):
+        self.write_maintenance_capture()
+        with patch.dict(os.environ, {"FAKE_BACKUP_SERVICE_ACTIVE": "active"}):
+            with self.assertRaises(backup.BackupError) as error:
+                backup.enter_maintenance(self.config)
+        self.assertEqual(error.exception.code, "backup-service-active")
+        self.assertIn("disable --now recipe-db-backup.timer", self.systemctl_log.read_text())
+        self.assertFalse(backup.maintenance_state_path(self.config).exists())
+        self.assertFalse(backup.report_status(self.config)["maintenanceActive"])
+
+        with patch.dict(os.environ, {"FAKE_BACKUP_SERVICE_ACTIVE": "inactive"}):
+            backup.enter_maintenance(self.config)
+        state = backup.lifecycle_state(backup.maintenance_state_path(self.config))
+        self.assertEqual(state["status"], "backup-mode")
+        self.assertEqual(state["phase"], "maintenance-entered")
+        status = backup.report_status(self.config)
+        self.assertTrue(status["maintenanceActive"])
+        self.assertEqual(status["backupId"], state["backupId"])
+        self.assertEqual(self.systemctl_log.read_text().splitlines().count(
+            "disable --now recipe-db-backup.timer"), 2)
+
+    def test_maintenance_capture_upload_failure_preserves_state_and_retries_upload_only(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        with patch.dict(os.environ, {"FAKE_RCLONE_FAIL": "copyto"}):
+            with self.assertRaises(backup.BackupError) as error:
+                backup.run_nightly(self.config)
+        self.assertEqual(error.exception.status, "upload-failure")
+        maintenance = backup.maintenance_state_path(self.config)
+        self.assertTrue((maintenance / "manifest.json").is_file())
+        self.assertEqual(backup.lifecycle_state(maintenance)["phase"], "captured")
+        self.assertTrue(backup.report_status(self.config)["maintenanceActive"])
+        self.assertEqual((self.root / "capture-actions.log").read_text().splitlines(),
+                         ["maintenance-enter", "maintenance-capture"])
+
+        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        self.assertEqual((self.root / "capture-actions.log").read_text().splitlines(),
+                         ["maintenance-enter", "maintenance-capture"])
+        status = backup.report_status(self.config)
+        self.assertEqual(status["status"], "verified-upload")
+        self.assertEqual(status["backupId"], backup.lifecycle_state(maintenance)["backupId"])
+        self.assertTrue(status["maintenanceActive"])
+        self.assertTrue((maintenance / "backup-state.json").is_file())
+
+    def test_verified_maintenance_capture_is_not_removed_or_recaptured(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        self.assertEqual(backup.run_nightly(self.config), "verified-unchanged")
+        self.assertEqual((self.root / "capture-actions.log").read_text().splitlines(),
+                         ["maintenance-enter", "maintenance-capture"])
+        self.assertTrue((backup.maintenance_state_path(self.config) / "manifest.json").is_file())
 
 
 if __name__ == "__main__":

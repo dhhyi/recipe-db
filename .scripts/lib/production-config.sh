@@ -77,6 +77,7 @@ production_config() {
       else true end)
     and (if .target == "pi" and
       ($action == "deploy" or $action == "backup" or $action == "backup-enter"
+        or $action == "backup-capture"
         or $action == "backup-exit" or $action == "restore" or $action == "storage-reattach")
       then has("piStorage")
         and .piStorage.node == .cluster

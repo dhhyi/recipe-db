@@ -209,7 +209,10 @@ class ContractTests(unittest.TestCase):
         contents = (ROOT / "backup-toolchain.yml").read_text()
         self.assertNotIn("mise run", contents)
         self.assertNotIn("rclone.conf", contents)
-        self.assertNotIn("backup.json", contents)
+        self.assertFalse(any(
+            task.get("ansible.builtin.template", {}).get("dest") == "/etc/recipe-db/backup.json"
+            for task in tasks
+        ))
 
     def test_backup_toolchain_maintenance_excludes_scheduled_and_active_capture(self):
         host_tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
@@ -223,6 +226,13 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(tasks[0]["ansible.builtin.command"],
                          "systemctl show --property=ActiveState --value recipe-db-backup.service")
         self.assertIn("backup_service_active.stdout not in ['inactive', 'failed']", tasks[0]["failed_when"])
+        inspect = next(task for task in tasks
+                       if task["name"] == "Inspect lifecycle state before changing the capture checkout")
+        self.assertTrue(inspect["no_log"])
+        self.assertIn("status", inspect["ansible.builtin.command"]["argv"])
+        guard = next(task for task in tasks
+                     if task["name"] == "Refuse capture checkout changes during release maintenance")
+        self.assertIn("maintenanceActive", guard["ansible.builtin.assert"]["that"][0])
 
     def test_base_provisioning_leaves_backup_timer_disabled(self):
         tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
@@ -285,6 +295,28 @@ class ContractTests(unittest.TestCase):
         status_gate = next(task for task in enable["tasks"]
                            if task["name"] == "Require a verified explicit capture before enabling the timer")
         self.assertTrue(any("lastCheck >" in condition for condition in status_gate["ansible.builtin.assert"]["that"]))
+        self.assertTrue(any("maintenanceActive" in condition
+                            for condition in status_gate["ansible.builtin.assert"]["that"]))
+        maintenance_gate = next(task for task in setup_tasks
+                                if task["name"] == "Refuse backup input changes during release maintenance")
+        self.assertTrue(maintenance_gate["no_log"])
+        self.assertIn("maintenanceActive",
+                      maintenance_gate["ansible.builtin.assert"]["that"][0])
+        config_check = next(task for task in setup_tasks
+                            if task["name"] == "Check whether backup configuration is installed")
+        self.assertEqual(config_check["ansible.builtin.stat"]["path"],
+                         "/etc/recipe-db/backup.json")
+        lifecycle_check = next(task for task in setup_tasks
+                               if task["name"] == "Inspect maintenance state without displaying private details")
+        self.assertEqual(lifecycle_check["when"], "backup_configuration.stat.exists")
+        self.assertEqual(maintenance_gate["when"], "backup_configuration.stat.exists")
+        unconfigured_state = next(task for task in setup_tasks
+                                  if task["name"] == "Check for retained maintenance state without backup configuration")
+        self.assertEqual(unconfigured_state["when"], "not backup_configuration.stat.exists")
+        unconfigured_gate = next(task for task in setup_tasks
+                                 if task["name"] == "Refuse configuration without checking an existing maintenance operation")
+        self.assertTrue(unconfigured_gate["no_log"])
+        self.assertEqual(unconfigured_gate["when"], "not backup_configuration.stat.exists")
         marker = "2026-11-06T21:24:08+00:00"
         self.assertFalse("2026-11-06T21:24:07+00:00" > marker)
         self.assertFalse(marker > marker)
@@ -365,13 +397,15 @@ class ContractTests(unittest.TestCase):
     def test_capture_wrapper_uses_private_inputs_and_isolated_toolchain(self):
         command = self.render("recipe-db-backup-capture.j2")
         subprocess.run(["bash", "-n"], input=command, text=True, check=True)
-        self.assertIn('! -e $1 && ! -L $1', command)
+        self.assertIn('! -e $path && ! -L $path', command)
         for key, value in self.defaults["backup_toolchain_environment"].items():
             self.assertIn(f"export {key}={shlex.quote(value)}", command)
         self.assertIn("export HOME=/root", command)
         self.assertIn('KUBECONFIG="${KUBECONFIG:-/etc/recipe-db/backup-kubeconfig.yaml}"', command)
         self.assertIn("exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh", command)
-        self.assertIn('backup /etc/recipe-db/backup-values.yaml "$release" "$1"', command)
+        self.assertIn('backup /etc/recipe-db/backup-values.yaml "$release" "$path"', command)
+        self.assertIn('backup-enter /etc/recipe-db/backup-values.yaml "$release" "$path"', command)
+        self.assertIn('backup-capture /etc/recipe-db/backup-values.yaml "$path"', command)
         self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
         self.assertNotIn("mise run", command)
 

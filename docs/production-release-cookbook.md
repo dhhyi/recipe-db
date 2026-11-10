@@ -97,19 +97,32 @@ Expect exit status zero and `success: true` in `$RESULT/result.json`. Clusters a
 
 ## 3. Block application access and enter maintenance
 
-After testing, use an approved maintenance window with no competing operation or scheduled backup. Keep the old release's matching checkout and a private recovery-state directory on the workstation.
+After testing, use an approved maintenance window. Keep the old release's matching checkout and the Pi's private backup configuration available.
 
-The existing [maintenance command](production-kubernetes.md#snapshot-capture) blocks application operations, runs cleanup and retains the operation lock and recovery state. Static pages may remain reachable; backup-mode services still use storage.
+On the Pi, enter maintenance through the backup service's uploader:
 
-**Open / stop before entering maintenance:** safe continuation and scheduled-backup coordination are missing. The operation lock does not pause the Pi timer.
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload maintenance-enter \
+  --config /etc/recipe-db/backup.json
+sudo /usr/local/sbin/recipe-db-backup-upload status \
+  --config /etc/recipe-db/backup.json
+```
+
+Entry stops and disables the scheduled timer, refuses to overlap an active capture, then blocks application operations, runs cleanup and retains the operation lock and recovery state. Continue only when status is `maintenance-entered` and `maintenanceActive` is `true`. Static pages may remain reachable; backup-mode services still use storage. If entry fails, leave maintenance unstarted and resolve the reported backup status.
 
 ## 4. Capture and verify the pre-migration backup
 
-Within maintenance, stop remaining storage users and capture the old data. Keep access blocked and preserve the old release and recovery configuration. Secrets stay outside application backups.
+With maintenance active, start the existing service on the Pi. It continues the retained operation, stops remaining storage users, captures and validates the old data, uploads it, then reads back and verifies both remote files:
 
-**Success:** a verified backup tied to the old release, with access still blocked. Capture and remote-backup verification requirements remain to be agreed.
+```sh
+sudo systemctl start recipe-db-backup.service
+sudo /usr/local/sbin/recipe-db-backup-upload status \
+  --config /etc/recipe-db/backup.json
+```
 
-**Open / stop:** capture without reopening is missing. Do not chain `backup-enter` and `backup`: entry retains the lock, while standalone backup starts its own operation and reopens the old release.
+Continue only when status is `verified-upload` or `verified-unchanged` and `maintenanceActive` remains `true`. The lock and access barrier remain in place, and the timer stays disabled. If upload fails after capture, starting the service again retries the same validated snapshot without recapturing. If status reports recovery is required, stop and follow [snapshot recovery](production-kubernetes.md#snapshot-capture); do not start a new backup or release the lock. Secrets stay outside application backups.
+
+**Success:** a complete, locally validated snapshot tied to the old release and remotely verified, with application access blocked. Do not run `backup-exit`; it restores the old release and ends maintenance.
 
 ## 5. Stage the candidate without starting normal workloads
 
