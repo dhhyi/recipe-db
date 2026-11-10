@@ -108,7 +108,7 @@ sudo /usr/local/sbin/recipe-db-backup-upload status \
   --config /etc/recipe-db/backup.json
 ```
 
-Entry stops and disables the scheduled timer, refuses to overlap an active capture, then blocks application operations, runs cleanup and retains the operation lock and recovery state. Continue only when status is `maintenance-entered` and `maintenanceActive` is `true`. Static pages may remain reachable; backup-mode services still use storage. If entry fails, leave maintenance unstarted and resolve the reported backup status.
+Entry stops and disables the scheduled timer, refuses to overlap an active capture, then blocks application operations, runs cleanup and retains the operation lock and recovery state. Continue only when status is `maintenance-entered` and `maintenanceActive` is `true`. Static pages may remain reachable; backup-mode services still use storage. If entry fails, inspect status before acting: when `maintenanceActive` is `true`, treat the operation as potentially across the access barrier, do not retry entry or proceed, and follow [snapshot recovery](production-kubernetes.md#snapshot-capture). When it is `false`, resolve the reported failure before retrying.
 
 ## 4. Capture and verify the pre-migration backup
 
