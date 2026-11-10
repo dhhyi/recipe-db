@@ -309,6 +309,15 @@ async function seedRandomRecipeTags(request, recipes) {
 }
 
 export const test = base.extend({
+  blockBringWidget: [
+    async ({ page }, use) => {
+      await page.route("https://platform.getbring.com/widgets/import.js", (route) =>
+        route.abort(),
+      );
+      await use();
+    },
+    { auto: true },
+  ],
   authContexts: async (
     {
       browser,
