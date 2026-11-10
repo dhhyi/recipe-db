@@ -1,6 +1,6 @@
 # Production image releases
 
-This guide explains the immutable GHCR release artifact produced by the `Publish` workflow for maintainers and operators validating release inventory and registry access. For the ordered sequence from publication through Pi deployment and backup configuration, use the [production release cookbook](production-release-cookbook.md).
+This guide explains the immutable GHCR release artifact produced by the `Publish` workflow for maintainers and operators validating release inventory and registry access. For the ten-step release outline, existing commands and steps that are not yet supported, use the [production release cookbook](production-release-cookbook.md).
 
 **Table of contents**
 

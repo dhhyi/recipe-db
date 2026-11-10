@@ -1,18 +1,31 @@
-# Publish and deploy a production release
+# Release production in ten steps
 
-Operators can use this cookbook to publish the current `main` commit, deploy its immutable release to the Pi, and align automated backup capture with that release. It covers routine releases, not first-time Pi provisioning or fresh-cluster restore; use the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for those.
+This cookbook is for operators releasing Recipe DB to the Pi, with AI help where useful. It follows the agreed ten-step release sequence. It covers routine releases, not first-time Pi provisioning or fresh-cluster restore; use the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for those.
 
 The [production image releases guide](production-releases.md) explains the release artifact and registry requirements. The [production configuration guide](production-configuration.md) is authoritative for private inputs and their contents.
 
+**The complete release procedure is not available yet.** Stop at an open step; do not combine standalone commands to work around it.
+
+For current capabilities and limits, see the [release capability overview](production-kubernetes.md#release-capability-inventory). The agreed sequence and remaining work are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143).
+
 **Table of contents**
 
-1. [Publish a release](#1-publish-a-release)
-2. [Prepare the workstation](#2-prepare-the-workstation)
-3. [Connect to the Pi and deploy](#3-connect-to-the-pi-and-deploy)
-4. [Align backup capture with the deployed release](#4-align-backup-capture-with-the-deployed-release)
-5. [Verify a backup, then re-enable its schedule](#5-verify-a-backup-then-re-enable-its-schedule)
+1. [Prepare the candidate](#1-prepare-the-candidate)
+2. [Finish testing and upgrade rehearsals](#2-finish-testing-and-upgrade-rehearsals)
+3. [Block application access and enter maintenance](#3-block-application-access-and-enter-maintenance)
+4. [Capture and verify the pre-migration backup](#4-capture-and-verify-the-pre-migration-backup)
+5. [Stage the candidate without starting normal workloads](#5-stage-the-candidate-without-starting-normal-workloads)
+6. [Run and validate migrations](#6-run-and-validate-migrations)
+7. [Start the candidate and wait for readiness](#7-start-the-candidate-and-wait-for-readiness)
+8. [Explicitly reopen application access](#8-explicitly-reopen-application-access)
+9. [Check the normal website](#9-check-the-normal-website)
+10. [Align backups and record the result](#10-align-backups-and-record-the-result)
 
-## 1. Publish a release
+## 1. Prepare the candidate
+
+Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root.
+
+### Publish the candidate
 
 Merge the intended changes to `main` and wait for the `Publish` workflow for that commit to succeed. The workflow runs automatically on pushes to `main`; production deployment remains a separate manual action.
 
@@ -23,7 +36,7 @@ Record both values from the successful workflow:
 
 Use the artifact digest, not a `sha-<revision>` or `latest` tag. The workflow's successful publication verifies the inventory and its platform images. If you need to independently inspect or retrieve the artifact, follow [Get and verify a release](production-releases.md#get-and-verify-a-release).
 
-## 2. Prepare the workstation
+### Prepare the workstation
 
 Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Define the SHA from the successful workflow first. Check that the checkout has no local changes before selecting the revision, then install its pinned tools:
 
@@ -47,7 +60,9 @@ KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml"
 
 Confirm that `VALUES` and `KUBECONFIG` identify the intended Pi configuration and its generated kubeconfig. If either check fails, stop and correct the configuration first.
 
-## 3. Connect to the Pi and deploy
+Record the currently deployed release separately as `OLD_RELEASE`. Backup operations need that release's matching source inputs, not the candidate's. Do not switch a checkout while it owns a running operation.
+
+### Prepare the Pi connection
 
 Keep a loopback-only SSH tunnel open to the Pi Kubernetes API. In a separate terminal:
 
@@ -59,7 +74,66 @@ ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
 
 The tunnel command must remain running. If the Pi hostname or SSH user differs, use the values in the private provisioning inventory and verified `known_hosts`; do not bypass host-key checking.
 
-From the repository root, deploy and inspect status:
+**Success:** the candidate digest, revision, matching checkout and Pi connection are ready. Nothing has been deployed.
+
+**Open:** selecting the required data versions and migration artifacts is not yet supported.
+
+## 2. Finish testing and upgrade rehearsals
+
+Test the candidate website on demo data. Before production maintenance, rehearse restoring old data, migrating it and running the candidate on isolated storage.
+
+The existing rehearsal tests only same-release backup and recovery. From a matching checkout on a workstation with the [k3d prerequisites](production-kubernetes.md#prerequisites-and-boundaries):
+
+```sh
+umask 077
+mkdir -p "$PWD/.backups"
+RESULT="$PWD/.backups/backup-recovery-$(date -u +%Y%m%dT%H%M%SZ)"
+mise run production-backup-recovery-k3d "$RELEASE" "$RESULT"
+```
+
+Expect exit status zero and `success: true` in `$RESULT/result.json`. Clusters and private diagnostics remain for inspection; follow the [rehearsal reference](production-kubernetes.md#end-to-end-backup-and-recovery-rehearsal) for cleanup. This uses synthetic data and a fake remote, not production credentials.
+
+**Open / stop:** upgrade rehearsals and release gates are not implemented. This baseline does not prove upgrade safety. Real-backup rehearsals require approval and private handling; any rehearsal of step 4's fresh backup must follow its capture.
+
+## 3. Block application access and enter maintenance
+
+After testing, use an approved maintenance window with no competing operation or scheduled backup. Keep the old release's matching checkout and a private recovery-state directory on the workstation.
+
+The existing [maintenance command](production-kubernetes.md#snapshot-capture) blocks application operations, runs cleanup and retains the operation lock and recovery state. Static pages may remain reachable; backup-mode services still use storage.
+
+**Open / stop before entering maintenance:** safe continuation and scheduled-backup coordination are missing. The operation lock does not pause the Pi timer.
+
+## 4. Capture and verify the pre-migration backup
+
+Within maintenance, stop remaining storage users and capture the old data. Keep access blocked and preserve the old release and recovery configuration. Secrets stay outside application backups.
+
+**Success:** a verified backup tied to the old release, with access still blocked. Capture and remote-backup verification requirements remain to be agreed.
+
+**Open / stop:** capture without reopening is missing. Do not chain `backup-enter` and `backup`: entry retains the lock, while standalone backup starts its own operation and reopens the old release.
+
+## 5. Stage the candidate without starting normal workloads
+
+After verifying the backup, prepare the candidate on the target while access stays blocked. Do not start normal applications against unmigrated data.
+
+**Open / stop:** target staging is missing. `render` only produces local manifests; `deploy` starts workloads. Neither completes this step safely.
+
+## 6. Run and validate migrations
+
+With the candidate staged and affected applications stopped, run separate migration jobs against their storage. Validate the data and record completion before startup.
+
+**Open / stop:** migration design and execution are not implemented. Do not use application startup to migrate data implicitly.
+
+## 7. Start the candidate and wait for readiness
+
+After migration validation, start the candidate and wait for readiness with application access still blocked.
+
+**Open / stop:** startup within the retained maintenance operation is missing.
+
+### Existing standalone deployment
+
+For a separately approved deployment onto compatible storage, with no retained maintenance operation, the existing commands are:
+
+From the candidate checkout on the workstation, deploy and inspect status:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d deploy "$VALUES" "$RELEASE"
@@ -68,7 +142,27 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d status "$VALUES"
 
 Continue only when deployment completes successfully and status reports the expected Pi target/context and ready workloads. `deploy` applies the release and waits for readiness; it does not provision the Pi or restore application data. Do not run `create`, `verify`, or `delete` against the Pi.
 
-## 4. Align backup capture with the deployed release
+## 8. Explicitly reopen application access
+
+Once the candidate is ready, reopen using a separate command on the operator's instruction. An AI may execute it; readiness must not reopen access automatically.
+
+**Open / stop:** candidate reopening is missing. `backup-exit` restores the old deployment, not a migrated candidate.
+
+## 9. Check the normal website
+
+On the normal website, view a recipe and image, search, and check sign-in if configured. Verify an intended edit only when that write is approved. Record the outcome; readiness alone is not website acceptance.
+
+If the check fails, close access again and assess recovery; never restore automatically. New writes after reopening may be lost by restoring the pre-release backup. Any destructive recovery requires a separate explicit decision.
+
+**Open:** exact checks, closing access again and recovery instructions remain unsettled. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock.
+
+## 10. Align backups and record the result
+
+Start after the deployed release has been accepted. Keep scheduled capture disabled until its inputs match the deployed release and a new explicit backup check succeeds.
+
+The following procedure also applies after accepted fresh-target recovery.
+
+### Align backup capture with the deployed release
 
 Backup capture must use the same immutable release as the deployed application and a checkout at its source revision. In the chezmoi-managed operator files:
 
@@ -98,7 +192,7 @@ Run the Ansible commands from the shell opened inside the provisioning container
 
 If provisioning preflight fails, stop and resolve its reported issue before continuing. Do not enable scheduled capture until the next step succeeds.
 
-## 5. Verify a backup, then re-enable its schedule
+### Verify a backup, then re-enable its schedule
 
 On the Pi, run one capture and inspect its status:
 
@@ -117,4 +211,8 @@ ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
   backup-enable.yml --ask-become-pass
 ```
 
-The playbook requires the verified backup check to have completed after the latest configuration installation. The deployment is complete when the Pi is running `RELEASE`, the managed capture checkout is at `REVISION`, the backup inputs match, and scheduled capture has been enabled only after a verified run.
+The playbook requires the verified backup check to have completed after the latest configuration installation.
+
+**Success:** the Pi is running `RELEASE`, the managed capture checkout is at `REVISION`, the backup inputs match, and scheduled capture has been enabled only after a verified run. Record the release identity and website/backup check outcomes privately; do not publish application records, secrets or private configuration in release evidence.
+
+**Open:** the release result record and its connection to these backup checks remain to be defined.

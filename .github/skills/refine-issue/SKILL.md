@@ -5,7 +5,7 @@ description: Refine GitHub issues, classify manual tasks requiring human involve
 
 # Refine an issue
 
-Follow [CONTRIBUTING.md](../../../CONTRIBUTING.md) and [AGENTS.md](../../../AGENTS.md). Refine future work; do not implement it during this workflow.
+Follow the canonical [issue process](../../../CONTRIBUTING.md#issue-planning-and-refinement). This workflow does not authorize implementation, including documentation edits. If the user mixes refinement and implementation without clear authorization, clarify the next action before proceeding.
 
 ## Gather context
 
@@ -29,10 +29,10 @@ Standalone ideas may become specs, umbrellas, manual tasks, or decisions when re
 
 ## Persist and verify
 
-1. Present the proposed issue content and related changes for user confirmation before applying them.
+1. Present the proposed issue content and related changes, then end the turn and wait for confirmation. Announcing a plan is not confirmation; approval to persist refinement is not approval to implement.
 2. Update the existing issue's description, preserving its identity, discussion, and relevant context. Retain its workflow label when the type is unchanged; otherwise replace it with exactly one agreed workflow label. Preserve other metadata labels. For material changes to an accepted contract, create a separate, explicitly superseding decision and link the old and new decisions.
 3. For an umbrella, create the agreed native sub-issues or attach existing ones without duplicating work. Preserve settled child specs; create split-out, implementation-ready children as specs and unresolved children as ideas. Only umbrellas may own sub-issues. If the refined issue becomes an umbrella, attach its children directly to it.
 4. Model dependencies with native GitHub blocked-by relationships, including external dependencies. Do not substitute labels or diagram arrows for native relationships. Relate standalone decisions to affected issues with native "Relates to" relationships and update their descriptions with contract links. A decision reference is not automatically a blocker or parent/child relationship.
 5. Update every affected umbrella's main description in the same task: base-contract links, progress, open questions, next steps, and a Mermaid `flowchart TD` of implementation order and dependencies among its direct sub-issues. Each node label must contain only the issue number and current issue title, followed by ` (closed)` if the issue is closed (for example, `#123 Issue title (closed)`). Do not add other metadata to node labels or include PR references anywhere in the diagram. Link every issue node to its GitHub URL using a `click` directive. Use prerequisite-to-dependent arrows matching native blockers; document external dependencies outside the diagram. Contract references are not automatically blockers.
-6. Close accepted decisions, but leave new specs, manual tasks, and umbrellas open. Preserve existing completion state unless the agreed scope change requires reopening; never close specs, manual tasks, or umbrellas merely because refinement is complete. Close manual tasks only after verifying completion of the required human actions. Refinement is not implementation; blockers must be resolved before implementing a spec or executing dependent manual steps.
+6. Preserve completion state unless an approved change requires otherwise. Close accepted decisions after approval and manual tasks only after verified human actions. PR-backed implementation stays open until merge, with a closing keyword in the PR; local verification/publication is awaiting review, not completion or resolution of blockers. Direct closure requires an explicit request.
 7. Re-read affected issues and verify descriptions, exclusive workflow labels, hierarchy, dependencies, native relates-to relationships, decision links, and diagrams, including current issue numbers, titles, closed markers, and absence of PR references. For splits, verify that every original requirement and acceptance criterion is still covered and progress is preserved. Report issue links and any incomplete updates explicitly; do not claim success if persistence failed.
