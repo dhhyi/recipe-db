@@ -110,6 +110,8 @@ Solid arrows change issue type; dashed arrows create children or reference contr
 
 ## Hierarchy, dependencies, and completion
 
+- Add, remove, or change native issue relationships (parent/sub-issue, blocked-by, or relates-to) only with explicit operator authorization covering those changes. General refinement approval does not authorize undisclosed relationship changes.
+- Preserve blocked-by relationships after prerequisites close or merge; GitHub handles whether they currently block work. Completion alone never authorizes relationship cleanup.
 - Only umbrellas may have native sub-issues. If a child becomes an umbrella, attach its children directly to that new umbrella, not to ordinary issues.
 - Model dependencies with GitHub's native **blocked by** relationships, not labels or diagrams alone. These may cross umbrella boundaries or involve standalone ideas and specs.
 - When asked to relate issues that are not blockers or parent/child, create GitHub's native **Relates to** relationship. A prose or Markdown reference alone does not establish this relationship; keep references in descriptions when useful for context.
