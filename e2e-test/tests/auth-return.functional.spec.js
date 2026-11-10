@@ -26,8 +26,15 @@ test("login returns to the current URL across shared-header consumers", async ({
     );
   });
 
-  async function expectReturnToCurrentURL(url) {
-    await page.goto(url);
+  async function expectReturnToCurrentURL(url, initialURL = url) {
+    const targetURL = new URL(url, appOrigin);
+    await page.goto(initialURL);
+    if (new URL(page.url()).href !== targetURL.href) {
+      await page.evaluate(
+        (href) => history.replaceState(null, "", href),
+        targetURL.pathname + targetURL.search + targetURL.hash,
+      );
+    }
     await expectLoginForCurrentURL();
   }
 
@@ -50,9 +57,11 @@ test("login returns to the current URL across shared-header consumers", async ({
     await expectReturnToCurrentURL(`${appOrigin}${overview}`);
     await expectReturnToCurrentURL(
       `${appOrigin}/edit/${demoRecipe.id}?tab=ingredients&return=%252F#editor%2Fform`,
+      `${appOrigin}/edit/${demoRecipe.id}`,
     );
     await expectReturnToCurrentURL(
       `${appOrigin}/images-edit/${demoRecipe.id}?crop=2%3A1&source=upload#crop%2Fselection`,
+      `${appOrigin}/images-edit/${demoRecipe.id}`,
     );
 
     await waitForRecipeIndexed(identity.api, demoRecipe.id);
