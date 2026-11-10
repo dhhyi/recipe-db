@@ -24,29 +24,11 @@ When developing or changing a service, follow the [backup-participant checklist]
 
 ## GitHub issue planning
 
-Follow [CONTRIBUTING.md](CONTRIBUTING.md) for the canonical issue refinement process. Use GitHub issues to plan and refine future work, not to track ad-hoc work performed in the current session.
+Follow [issue planning and refinement](CONTRIBUTING.md#issue-planning-and-refinement) and [completion rules](CONTRIBUTING.md#hierarchy-dependencies-and-completion).
 
-- Create issues when the user asks to capture, plan, refine, or defer work for later implementation.
-- Do not create an issue merely because the user requests an immediate fix, investigation, or code change. Handle that work directly in the session.
-- When working on an existing issue, keep it and any relevant umbrella issue current. Do not create another issue for the same work.
-- If you discover follow-up work outside the current scope, mention it; do not create an issue unless the user asks.
-
-- Give each issue exactly one workflow label: `idea`, `umbrella`, `spec`, `manual`, or `decision`; other metadata labels may coexist. Replace the workflow label only when the issue type changes during refinement, preserving the issue and discussion.
-- Capture problems and feature wishes as `idea`, with context and optional implementation hints, not a full specification. Research, exploration, and unresolved requirements remain `idea` unless the task requires direct human involvement and is classified as `manual`.
-- Refine standalone ideas into `spec`, `umbrella`, or `manual`, or into `decision` when recording an agreed contract rather than tracking implementation. A `spec` must settle material requirements and define scope, behavior, constraints, dependencies, and verifiable acceptance criteria for autonomous implementation; minor implementation choices remain open to agent judgment and review.
-- Use `manual` for tasks that cannot be completed autonomously and require the operator's direct action or approval. Any idea, or an existing spec, may become manual; preserve scope, settled acceptance criteria, metadata, hierarchy, and native dependencies. Record required human actions, prerequisites, completion evidence, safety boundaries, and unresolved requirements. Agents may refine, prepare checklists, and assist, but must not independently execute human-only steps or claim completion. The label does not imply readiness or waive blockers. Separate automatable specs from manual steps when practical.
-- Refinement also supports revising specs and restructuring umbrellas. When splitting a spec, convert the existing issue into an umbrella, preserve settled requirements, acceptance criteria, and progress across its children and completion criteria, and review affected dependencies. Fully settled split-out children may be specs directly; unresolved new scope remains ideas.
-- Create `decision` records standalone or under an umbrella. Record context, chosen approach, alternatives, and consequences. Relate standalone decisions to affected issues with native "Relates to" relationships and link the contract in their descriptions; do not create an umbrella solely to hold a decision. Link umbrella decisions as its base contract and require affected specs to conform to applicable decisions. Close accepted decisions; explicitly supersede material contract changes and review affected specs.
-- Model dependencies with GitHub's native "blocked by" feature, including cross-umbrella and standalone dependencies, not labels or diagrams alone. Implement specs only after blockers are resolved; clarify material ambiguities before proceeding.
-- Close specs after verifying acceptance criteria and manual tasks after verifying completion of the required human actions, not merely after refinement.
-
-### Keeping umbrella issues current
-
-Umbrella issues track larger outcomes through native sub-issues. New unresolved scopes start as `idea` and may become specs, manual tasks, decisions, or umbrellas; use `manual` when direct human involvement is required, preserve existing specs, and create fully settled split-out automatable scopes directly as specs. Define scope and completion criteria. Whenever a child, dependency, or decision changes, update the umbrella's main description and diagram in the same task to reflect its base contract, progress, open questions, and next steps rather than relying only on comments. Keep refinement distinct from implementation and close the umbrella only when its overall completion criteria are met.
-
-Only issues labeled `umbrella` may have sub-issues. Attach sub-issues directly to the appropriate umbrella; do not nest them under ordinary issues. If a non-umbrella issue already has sub-issues, move those children to its umbrella.
-
-Every umbrella issue must include a Mermaid `flowchart TD` showing implementation order and dependencies among its direct sub-issues. Each node label must contain only the issue number and current issue title, followed by ` (closed)` if the issue is closed (for example, `#123 Issue title (closed)`). Do not add other metadata to node labels or include PR references anywhere in the diagram. Every node representing an issue must link to its GitHub URL using a Mermaid `click` directive. Use prerequisite-to-dependent arrows matching native GitHub "blocked by" dependencies. Document external dependencies separately, outside this diagram; contract references are not automatically blockers. Prefer a flowchart over a Gantt chart because these plans express dependencies, not dates.
+- Propose refinement changes and wait for confirmation before modifying issues. Plan approval does not authorize implementation; documentation edits count as implementation.
+- Keep PR-backed issues open until merge; use a closing keyword in the PR. Report pending review accurately in umbrellas and dependencies.
+- Create future-work issues only when asked; reuse existing issues and preserve their agreed scope and discussion.
 
 ## Running commands for a project
 

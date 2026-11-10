@@ -16,8 +16,6 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Include only what is needed to complete the task safely and correctly. Put prerequisites and warnings near the steps they affect.
 - Link to guides for background or detailed reference instead of repeating it.
 - Put checks after the thing being checked exists.
-- Every cookbook starts with an introduction that says what it covers, who it is for, and which related documentation readers may need.
-- Every cookbook with more than two headings includes a table of contents after the introduction and before the steps. If step headings are numbered, use a numbered list in the table of contents.
 
 ### Guides
 
@@ -27,15 +25,14 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Use headings, lists, and tables to make information easy to find and compare.
 - Keep procedures brief or link to a cookbook when readers need to perform a task.
 - Define terms and avoid unexplained internal shorthand.
-- Every guide starts with an introduction that says what it covers, who it is for, and which related documentation readers may need.
-- Every guide with more than two headings includes a table of contents after the introduction and before the guide content.
 
 ### All documentation
 
 - Write for the reader's goal; keep information that helps them understand, decide, or act.
 - Prefer concrete language and explicit names over vague instructions or unexplained jargon.
 - Keep one source of truth for facts that could drift; cross-reference it rather than duplicating content.
-- Remove repetition, filler, progress history, and implementation details that do not serve the document's purpose.
+- Start with scope, audience and related reading. With more than two headings, add a table of contents after the introduction; match numbered cookbook steps with a numbered contents list.
+- Keep investigation evidence, test inventories and delivery tracking in issues or PRs. Include implementation details only when readers need them to act or understand; remove repetition, filler and progress history.
 
 ## Project formatting
 
@@ -68,6 +65,8 @@ For pnpm 12 two-document lockfiles, GitHub fixed application dependency detectio
 
 ## Issue planning and refinement
 
+Present proposed issue content and related metadata/hierarchy changes, then end the turn and wait for confirmation before applying them. Plan or spec approval does not authorize implementation, including documentation edits. If a request mixes refinement and implementation without clear authorization, clarify the intended next action first.
+
 Use issues to capture and refine future work. Every issue in this process has exactly one workflow label: `idea`, `umbrella`, `spec`, `manual`, or `decision`. Other metadata labels may coexist. Labels describe issue type; open/closed state tracks completion.
 
 - **`idea` — Capture:** State the problem or feature wish, context, and desired outcome. Implementation hints are welcome; a specification is not required.
@@ -82,25 +81,6 @@ Refinement is not limited to ideas: revise existing specs and restructure umbrel
 
 To split a spec, convert the existing issue into an umbrella and attach the resulting scopes as native sub-issues. Map every original requirement and acceptance criterion to child scope or umbrella completion criteria. Preserve existing specs and create fully settled, implementation-ready child scopes directly as specs; only unresolved new scope starts as ideas. Review incoming and outgoing native dependencies against the split, updating affected umbrellas and their diagrams. Refinement alone does not close work or reset its completion state.
 
-```mermaid
-flowchart TD
-    Idea[Standalone idea] --> Spec[spec]
-    Idea --> Umbrella[umbrella]
-    Idea --> Manual[manual]
-    Idea --> Decision[decision]
-    Spec -->|Requires direct human involvement| Manual
-    Spec -->|Split, preserving settled scope| Umbrella
-    Umbrella -.->|Create native sub-issues| Child[Scoped idea]
-    Umbrella -.->|Preserve settled split-out scope| ChildSpec[spec]
-    Child --> ChildSpec[spec]
-    Child --> Manual
-    Child --> Decision
-    Child --> Nested[umbrella]
-    Decision -.->|Defines base contract| Umbrella
-```
-
-Solid arrows are label transitions. Dashed arrows create sub-issues or reference contracts, not blocked-by dependencies. This diagram describes issue types, not individual issues.
-
 ## Hierarchy, dependencies, and completion
 
 - Only umbrellas may have native sub-issues. If a child becomes an umbrella, attach its children directly to that new umbrella, not to ordinary issues.
@@ -108,5 +88,6 @@ Solid arrows are label transitions. Dashed arrows create sub-issues or reference
 - When asked to relate issues that are not blockers or parent/child, create GitHub's native **Relates to** relationship. A prose or Markdown reference alone does not establish this relationship; keep references in descriptions when useful for context.
 - Every umbrella must include a Mermaid `flowchart TD` showing implementation order and dependencies among its direct sub-issues. Each node label must contain only the issue number and current issue title, followed by ` (closed)` if the issue is closed (for example, `#123 Issue title (closed)`). Do not add other metadata to node labels or include PR references anywhere in the diagram. Every node representing an issue must link to that issue using a Mermaid `click` directive with its GitHub URL. Use prerequisite-to-dependent arrows matching native blocked-by relationships. Keep external dependencies out of this diagram; document them separately. Contract references are not automatically blockers.
 - Whenever a child, dependency, or decision changes, update the umbrella's main description and diagram in the same task, not only its comments. Manual children retain native hierarchy and dependencies; keep workflow metadata outside diagram node labels.
-- Implement specs only after blockers are resolved. Clarify material ambiguities before implementation.
-- Close specs after verifying acceptance criteria and manual tasks after verifying completion of the required human actions. Close umbrellas only when their overall completion criteria are met; refinement alone is not implementation.
+- Implement specs only after authorization, settled material requirements and resolved blockers.
+- For PR-backed implementation, verify acceptance criteria but keep the issue open with `Closes #…` in the PR description. Tests, commits and publication mean **implemented, awaiting review**, not complete. Do not mark umbrella children complete or their blockers resolved while review is pending. Direct closure requires an explicit request.
+- Accepted decisions may close after approval; manual tasks close only after verified human actions. Umbrellas close only when their overall completion criteria are met. Refinement alone never completes implementation.
