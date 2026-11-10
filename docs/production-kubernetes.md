@@ -35,14 +35,14 @@ The release tools support separate operations, but not yet a complete upgrade wi
 | 2. Test and rehearse | Synthetic same-release backup and fresh-target recovery. | Upgrade rehearsals and agreed release gates. |
 | 3. Enter maintenance | Pi uploader disables the scheduled timer, then `backup-enter` blocks application operations and retains recovery state. | Continuing the full release safely. |
 | 4. Capture a backup | The existing backup service continues the retained operation, validates the snapshot and verifies remote readback without reopening access. | Integration with the release result. |
-| 5. Stage the candidate | `render` produces manifests locally. | Staging on the target without starting applications. |
-| 6. Run migrations | No release migration support. | Migration definitions, execution and validation. |
-| 7. Start the candidate | `deploy` starts workloads and waits for readiness. | Startup while application access stays blocked. |
-| 8. Reopen access | `backup-exit` restores the old release. | Explicit acceptance and reopening of the candidate. |
-| 9. Check the website | Manual checks on the normal website. | Agreed checks and a safe close-again path. |
+| 5. Stage the candidate | `release-stage` validates the candidate checkout and applies it with all Deployments stopped under the retained Lease. | Remote-backup verification is an explicit operator precondition; the command records the operator's attestation. |
+| 6. Run migrations | `release-migration-result` records either validated migration success or an explicit no-migration result, leaving the candidate stopped. | Migration selection, job design, conversion, validation and no-migration determination. |
+| 7. Start the candidate | `release-start` requires the recorded handoff, starts GraphQL in backup mode, and waits for candidate readiness without reopening access. | Migration execution and readiness checks beyond deployment rollouts. |
+| 8. Reopen access | `release-reopen` is a separate operator-confirmed action; `backup-exit` remains old-release recovery only. | None for the guarded reopen operation. |
+| 9. Check the website | Manual website checks followed by `release-disposition` record close-access, temporary-fix, or accept-partial-failure. | Website acceptance criteria and release/backup closeout. |
 | 10. Align backups | Input installation, verified capture and guarded timer enablement. | Integration with the release result. |
 
-Maintenance keeps a cluster-wide operation lock, so standalone backup and deployment commands cannot simply be chained after entry. The Pi uploader's maintenance continuation reuses the retained operation; the timer remains disabled and access stays blocked after verified upload. See [snapshot capture](#snapshot-capture) for the lifecycle and recovery safeguards.
+Maintenance keeps a cluster-wide operation lock, so standalone backup and deployment commands cannot simply be chained after entry. The guarded `release-*` commands continue that retained operation; they keep the original release identity and Lease until later closeout. The stage command's typed backup confirmation is an operator attestation, not a remote verification mechanism. Migration results are likewise supplied handoffs: these commands do not determine whether migration is needed, execute it or validate its result. The Pi uploader's maintenance continuation reuses the retained operation; the timer remains disabled and access stays blocked after verified upload. See [snapshot capture](#snapshot-capture) for the lifecycle and recovery safeguards.
 
 Migration design is still open. Archive format versions do not describe service data versions, and removing migration source must not prevent recovery of supported older backups. Existing [fresh-deployment restore](#fresh-deployment-restore) restores the backup's recorded release into empty storage; it is not an in-place rollback.
 

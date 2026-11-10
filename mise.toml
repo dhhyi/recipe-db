@@ -51,7 +51,7 @@ description = "Validate GraphQL events, fan-out, outages and broker restart agai
 run = "sh .scripts/test-message-bus.sh"
 
 [tasks.production-k3d]
-description = "Create, render, deploy, inspect, or explicitly delete a production rehearsal"
+description = "Manage guarded production releases and rehearsals"
 run = "bash .scripts/production-k3d.sh"
 raw_args = true
 
