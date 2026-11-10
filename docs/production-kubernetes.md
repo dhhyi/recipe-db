@@ -1,9 +1,10 @@
 # Production Kubernetes operations
 
-This guide is the technical reference for maintainers and operators using Recipe DB's production Kubernetes deployment, backup, and recovery lifecycle. It covers safeguards, commands, and operational constraints rather than the routine release sequence; follow the [production release cookbook](production-release-cookbook.md) to publish and deploy a release, [production configuration and recovery](production-configuration.md) for private operator inputs, and the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration.
+This guide is the technical reference for maintainers and operators using Recipe DB's production Kubernetes deployment, backup, and recovery lifecycle. It covers safeguards, commands, and operational constraints rather than the routine release sequence; use the [production release cookbook](production-release-cookbook.md) for the ten-step release outline and its current limitations, [production configuration and recovery](production-configuration.md) for private operator inputs, and the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for host setup and fresh-cluster restoration.
 
 **Table of contents**
 
+- [Release capability inventory](#release-capability-inventory)
 - [Prerequisites and boundaries](#prerequisites-and-boundaries)
   - [End-to-end backup and recovery rehearsal](#end-to-end-backup-and-recovery-rehearsal)
   - [Runtime mode](#runtime-mode)
@@ -23,6 +24,29 @@ This guide is the technical reference for maintainers and operators using Recipe
 - [What the protocol smoke verifies](#what-the-protocol-smoke-verifies)
 - [Storage, Pi adaptation and destructive deletion](#storage-pi-adaptation-and-destructive-deletion)
 - [Script regression checks](#script-regression-checks)
+
+## Release capability inventory
+
+The release tools support separate operations, but not yet a complete upgrade with access blocked throughout. This overview explains the current limits; use the [release cookbook](production-release-cookbook.md) for actions and checks.
+
+| Release step | Available today | Still missing |
+| --- | --- | --- |
+| 1. Prepare the candidate | Immutable application releases and matching source revisions. | Required data versions and migration artifacts. |
+| 2. Test and rehearse | Synthetic same-release backup and fresh-target recovery. | Upgrade rehearsals and agreed release gates. |
+| 3. Enter maintenance | `backup-enter` blocks application operations and saves recovery state. | Continuing the release safely and coordinating scheduled backups. |
+| 4. Capture a backup | Standalone capture, validation and verified upload. | Capture without reopening the old release. |
+| 5. Stage the candidate | `render` produces manifests locally. | Staging on the target without starting applications. |
+| 6. Run migrations | No release migration support. | Migration definitions, execution and validation. |
+| 7. Start the candidate | `deploy` starts workloads and waits for readiness. | Startup while application access stays blocked. |
+| 8. Reopen access | `backup-exit` restores the old release. | Explicit acceptance and reopening of the candidate. |
+| 9. Check the website | Manual checks on the normal website. | Agreed checks and a safe close-again path. |
+| 10. Align backups | Input installation, verified capture and guarded timer enablement. | Integration with the release result. |
+
+Maintenance keeps a cluster-wide operation lock, so standalone backup and deployment commands cannot simply be chained after entry. See [snapshot capture](#snapshot-capture) for existing maintenance and recovery safeguards.
+
+Migration design is still open. Archive format versions do not describe service data versions, and removing migration source must not prevent recovery of supported older backups. Existing [fresh-deployment restore](#fresh-deployment-restore) restores the backup's recorded release into empty storage; it is not an in-place rollback.
+
+Detailed findings and delivery ownership are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143) and [#246: Inventory the current release process and start the release cookbook](https://github.com/dhhyi/recipe-db/issues/246), rather than repeated here.
 
 ## Prerequisites and boundaries
 

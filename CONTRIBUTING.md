@@ -16,8 +16,6 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Include only what is needed to complete the task safely and correctly. Put prerequisites and warnings near the steps they affect.
 - Link to guides for background or detailed reference instead of repeating it.
 - Put checks after the thing being checked exists.
-- Every cookbook starts with an introduction that says what it covers, who it is for, and which related documentation readers may need.
-- Every cookbook with more than two headings includes a table of contents after the introduction and before the steps. If step headings are numbered, use a numbered list in the table of contents.
 
 ### Guides
 
@@ -27,15 +25,15 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Use headings, lists, and tables to make information easy to find and compare.
 - Keep procedures brief or link to a cookbook when readers need to perform a task.
 - Define terms and avoid unexplained internal shorthand.
-- Every guide starts with an introduction that says what it covers, who it is for, and which related documentation readers may need.
-- Every guide with more than two headings includes a table of contents after the introduction and before the guide content.
 
 ### All documentation
 
 - Write for the reader's goal; keep information that helps them understand, decide, or act.
 - Prefer concrete language and explicit names over vague instructions or unexplained jargon.
+- Prefer diagrams for relationships, bullets for distinct rules (one per bullet), and numbered lists for ordered steps. Use short prose for context and rationale; do not repeat the same explanation in every format.
 - Keep one source of truth for facts that could drift; cross-reference it rather than duplicating content.
-- Remove repetition, filler, progress history, and implementation details that do not serve the document's purpose.
+- Start with scope, audience and related reading. With more than two headings, add a table of contents after the introduction; match numbered cookbook steps with a numbered contents list.
+- Keep investigation evidence, test inventories and delivery tracking in issues or PRs. Include implementation details only when readers need them to act or understand; remove repetition, filler and progress history.
 
 ## Project formatting
 
@@ -68,19 +66,17 @@ For pnpm 12 two-document lockfiles, GitHub fixed application dependency detectio
 
 ## Issue planning and refinement
 
+1. Present proposed issue content and related metadata/hierarchy changes.
+2. End the turn and wait for confirmation before applying them.
+3. Implement only with separate authorization, including documentation edits. Clarify mixed requests when authorization is unclear.
+
 Use issues to capture and refine future work. Every issue in this process has exactly one workflow label: `idea`, `umbrella`, `spec`, `manual`, or `decision`. Other metadata labels may coexist. Labels describe issue type; open/closed state tracks completion.
 
-- **`idea` — Capture:** State the problem or feature wish, context, and desired outcome. Implementation hints are welcome; a specification is not required.
-- **`umbrella` — Coordinate:** Refine a larger idea into an outcome with scope, completion criteria, and native sub-issues, initially labeled `idea`. Maintain current progress, a linked base contract of decisions, and a dependency diagram in the description.
-- **`spec` — Implement:** Define scope, expected behavior, constraints, dependencies, and verifiable acceptance criteria so an autonomous agent can implement without guessing material requirements. Settle significant decisions; allow minor implementation choices to be resolved by the agent and review.
-- **`manual` — Human action:** Track work that cannot be completed autonomously and requires the operator's direct action or approval. Record the required human involvement, prerequisites, completion evidence, safety boundaries, and any unresolved requirements. Agents may help refine the task, prepare checklists, and assist, but must not independently execute the human-only steps or claim completion. The label does not imply readiness or waive blockers; close only after verified completion.
-- **`decision` — Record:** Preserve an agreed contract: context, chosen approach, alternatives, and consequences. Decisions may stand alone or belong to an umbrella. Relate standalone decisions to affected issues with native **Relates to** relationships and link the contract in their descriptions; do not create an umbrella solely to hold a decision. Umbrellas reference their decisions as part of their base contract. Affected specs must conform to the applicable contract. Close decisions when accepted; record material changes in explicitly superseding decisions and review affected specs.
-
-When refinement changes the issue type, replace the previous workflow label, preserving the issue and its discussion. Any idea may become manual when direct human involvement is required; existing specs may also become manual without losing their settled scope or acceptance criteria. Separate automatable specs from manual steps when work can be split, attaching them to an umbrella if a parent is needed. Standalone ideas become specs, umbrellas, manual tasks, or decisions when their purpose is to record an agreed contract rather than track implementation. Research, exploration, and unresolved requirements otherwise remain ideas.
-
-Refinement is not limited to ideas: revise existing specs and restructure umbrellas in place, retaining the workflow label when the issue type is unchanged. Preserve settled requirements, acceptance criteria, and implementation progress unless a change is explicitly agreed. Revisit accepted decisions through explicitly superseding decisions for material contract changes, not by rewriting the historical agreement.
-
-To split a spec, convert the existing issue into an umbrella and attach the resulting scopes as native sub-issues. Map every original requirement and acceptance criterion to child scope or umbrella completion criteria. Preserve existing specs and create fully settled, implementation-ready child scopes directly as specs; only unresolved new scope starts as ideas. Review incoming and outgoing native dependencies against the split, updating affected umbrellas and their diagrams. Refinement alone does not close work or reset its completion state.
+- **`idea`:** Problem or wish, context and desired outcome. Research and unresolved requirements stay ideas; implementation hints are optional.
+- **`umbrella`:** Overall outcome, scope, completion criteria, native children, base-contract decisions and dependency diagram.
+- **`spec`:** Settled scope, behavior, constraints, dependencies and verifiable acceptance criteria for autonomous implementation. Minor implementation choices remain open.
+- **`manual`:** Required human actions/approvals, prerequisites, evidence, safety boundaries and unresolved requirements. Agents may prepare and assist, not execute human-only steps. Blockers still apply.
+- **`decision`:** Agreed context, approach, alternatives and consequences. May stand alone or belong to an umbrella; affected specs must conform.
 
 ```mermaid
 flowchart TD
@@ -99,14 +95,32 @@ flowchart TD
     Decision -.->|Defines base contract| Umbrella
 ```
 
-Solid arrows are label transitions. Dashed arrows create sub-issues or reference contracts, not blocked-by dependencies. This diagram describes issue types, not individual issues.
+Solid arrows change issue type; dashed arrows create children or reference contracts, not blockers. Nodes represent types, not individual issues.
+
+- Replace the workflow label only when the type changes; preserve other metadata and resolve missing or conflicting workflow labels with the user.
+- Separate automatable work from human-only steps when practical.
+- Relate standalone decisions to affected issues natively and link the contract in their descriptions. Do not create an umbrella solely to hold a decision.
+
+- Revise existing issues in place, preserving discussion, settled requirements, acceptance criteria and progress unless changes are agreed.
+- Supersede material changes to accepted decisions in a new linked decision; preserve history and review affected specs.
+
+- When splitting a spec, convert it into an umbrella and map every original requirement and acceptance criterion to children or overall completion criteria.
+- Preserve settled child specs. Fully settled split-out scopes may be specs directly; unresolved children start as ideas.
+- Review incoming/outgoing dependencies and update affected umbrellas when restructuring.
 
 ## Hierarchy, dependencies, and completion
 
 - Only umbrellas may have native sub-issues. If a child becomes an umbrella, attach its children directly to that new umbrella, not to ordinary issues.
 - Model dependencies with GitHub's native **blocked by** relationships, not labels or diagrams alone. These may cross umbrella boundaries or involve standalone ideas and specs.
 - When asked to relate issues that are not blockers or parent/child, create GitHub's native **Relates to** relationship. A prose or Markdown reference alone does not establish this relationship; keep references in descriptions when useful for context.
-- Every umbrella must include a Mermaid `flowchart TD` showing implementation order and dependencies among its direct sub-issues. Each node label must contain only the issue number and current issue title, followed by ` (closed)` if the issue is closed (for example, `#123 Issue title (closed)`). Do not add other metadata to node labels or include PR references anywhere in the diagram. Every node representing an issue must link to that issue using a Mermaid `click` directive with its GitHub URL. Use prerequisite-to-dependent arrows matching native blocked-by relationships. Keep external dependencies out of this diagram; document them separately. Contract references are not automatically blockers.
+- Every umbrella includes a Mermaid `flowchart TD` of its direct children:
+  - Node labels contain only the issue number, current title and ` (closed)` when applicable.
+  - Each issue node links to its GitHub URL with a `click` directive.
+  - Arrows run prerequisite-to-dependent and match native blockers; contract references are not automatically blockers.
+  - Document external dependencies separately. No PR references or other metadata belong in the diagram.
 - Whenever a child, dependency, or decision changes, update the umbrella's main description and diagram in the same task, not only its comments. Manual children retain native hierarchy and dependencies; keep workflow metadata outside diagram node labels.
-- Implement specs only after blockers are resolved. Clarify material ambiguities before implementation.
-- Close specs after verifying acceptance criteria and manual tasks after verifying completion of the required human actions. Close umbrellas only when their overall completion criteria are met; refinement alone is not implementation.
+- Implement specs only after authorization, settled material requirements and resolved blockers.
+- Verify acceptance criteria, but keep PR-backed issues open with `Closes #…` in the PR description. Direct closure requires an explicit request.
+- Tests, commits and publication mean **implemented, awaiting review**, not complete. Keep umbrella progress and blockers pending until merge.
+- Close accepted decisions after approval, manual tasks after verified human actions, and umbrellas after their overall completion criteria are met.
+- Refinement alone never completes implementation.
