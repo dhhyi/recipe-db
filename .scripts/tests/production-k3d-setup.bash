@@ -27,7 +27,7 @@ setup() {
   export MOCK_LAN=false MOCK_NODEPORT=false MOCK_EXTERNAL_IP=false MOCK_SERVICE_TYPE=auto MOCK_ALLOCATE_NODEPORT=false
   export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
   export MOCK_FOREIGN_ACME_CONTACT=false
-  export MOCK_BACKUP=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
+  export MOCK_BACKUP=false MOCK_RELEASE_LIFECYCLE=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
   export MOCK_RESTORE=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
@@ -49,7 +49,7 @@ setup() {
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
 application_project_metadata_to_jsonl() {
-  if [[ $MOCK_BACKUP = true || $MOCK_RESTORE = true ]]; then
+  if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true || $MOCK_RESTORE = true ]]; then
     printf '%s\n' \
       '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"devcontainer":{"ports":[8081],"environment":{}}}' \
       '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"backupData":{"kind":"images"},"devcontainer":{"ports":[8082],"environment":{}}}' \
@@ -264,9 +264,23 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"; exit ;;
     esac
   fi
-  if [[ $MOCK_BACKUP = true ]]; then
+  if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true ]]; then
     handled=false
     case "$*" in
+      *" get job nats-init --ignore-not-found -o json"*)
+        if [[ -f $MOCK_LOG.nats-init-job ]]; then
+          echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'
+        fi
+        handled=true ;;
+      *" delete job nats-init "*)
+        rm -f "$MOCK_LOG.nats-init-job"
+        handled=true ;;
+      *"apply -f "*nats-init-job.json)
+        touch "$MOCK_LOG.nats-init-job"
+        handled=true ;;
+      *" wait --for=condition=complete job/nats-init "*)
+        [[ ${MOCK_NATS_INIT_FAIL:-false} != true ]] || exit 1
+        handled=true ;;
       *" get --raw /api/v1/namespaces/recipe-db/pods?watch=true&resourceVersion=1&timeoutSeconds="*)
         while true; do
           if [[ -f $MOCK_LOG.events ]]; then cat "$MOCK_LOG.events"; fi
@@ -278,6 +292,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
             (.items[] | select(.metadata.name == "tags").status.readyReplicas)=0
           else . end
         ' "$MOCK_LOG.deployments"
+        handled=true ;;
+      *"apply -f "*staged-application.yml)
+        last="${*: -1}"
+        yq -o=json -I=0 'select(.kind == "Deployment")' "$last" |
+          jq -s '{items:map(. + {status:{readyReplicas:.spec.replicas}})}' > "$MOCK_LOG.deployments"
         handled=true ;;
       *" get deployment "*"-o json"*)
         name="${*: -3:1}"
@@ -352,6 +371,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         [[ ${MOCK_PROJECTION_FAIL:-false} != true ]] || exit 1
         handled=true ;;
       *" rollout status deployment/graphql "*)
+        [[ ${MOCK_RELEASE_ROLLOUT_FAIL:-false} != true ]] || exit 1
         if [[ ${MOCK_GRAPHQL_REOPEN_FAIL:-false} = true && -e $MOCK_LOG.reopening ]]; then exit 1; fi
         handled=true ;;
       *" scale deployment/"*"--replicas="*)
@@ -674,7 +694,17 @@ if jq -e 'has("config")' "$2" > /dev/null; then
           printf '%s\n---\n' "$doc"
         done
     fi
-    printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n---\n'
+    printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  template:\n    spec:\n      containers:\n        - name: provision\n          image: ghcr.io/dhhyi/recipe-db-graphql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n          args: [provision-events]\n      volumes: []\n---\n'
+  elif [[ $MOCK_RELEASE_LIFECYCLE = true ]]; then
+    jq -c '. as $input |
+      (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"])[] |
+      . as $name | {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
+      spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
+      spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
+        env:([{name:"MODE",value:"production"}] +
+          (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}]}}}}' "$2" |
+      while IFS= read -r doc; do printf '%s\n---\n' "$doc"; done
+    printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  template:\n    spec:\n      containers:\n        - name: provision\n          image: ghcr.io/dhhyi/recipe-db-graphql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n          args: [provision-events]\n      volumes: []\n---\n'
   elif [[ $MOCK_BACKUP = true ]]; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'
   else
@@ -788,7 +818,7 @@ EOF
           volumes:(if .claim == null then [] else [{name:"data",persistentVolumeClaim:{claimName:.claim}}] end)}}},
       status:{readyReplicas:1}})}' > "$MOCK_LOG.deployments"
   git init -q
-  git add .scripts/lib/project-metadata.sh message-bus/nats.conf \
+  git add .scripts/production-k3d.sh .scripts/lib/*.sh message-bus/nats.conf \
     browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg design/nginx.conf
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture release inputs'
   export MOCK_REVISION

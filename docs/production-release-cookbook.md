@@ -128,23 +128,69 @@ Continue only when status is `verified-upload` or `verified-unchanged` and `main
 
 After verifying the backup, prepare the candidate on the target while access stays blocked. Do not start normal applications against unmigrated data.
 
-**Open / stop:** target staging is missing. `render` only produces local manifests; `deploy` starts workloads. Neither completes this step safely.
+On the Pi, keep `/opt/recipe-db` at the old release for recovery. In a root shell, create a separate, clean checkout at the candidate revision and install its pinned tools:
+
+```sh
+CANDIDATE_DIR="/opt/recipe-db-candidate-$REVISION"
+git -C /opt/recipe-db fetch origin "$REVISION"
+git -C /opt/recipe-db worktree add --detach "$CANDIDATE_DIR" "$REVISION"
+cd "$CANDIDATE_DIR"
+mise install
+test "$(git rev-parse HEAD)" = "$REVISION"
+test -z "$(git status --porcelain)"
+```
+
+Set the Pi-only values and retained maintenance state paths, and use the explicit backup kubeconfig:
+
+```sh
+VALUES=/etc/recipe-db/backup-values.yaml
+STATE=/var/lib/recipe-db-backup/maintenance
+KUBECONFIG=/etc/recipe-db/backup-kubeconfig.yaml
+HOLDER=$(jq -er .backupId "$STATE/backup-state.json")
+```
+
+Run staging only after the uploader reports `verified-upload` or `verified-unchanged` with `maintenanceActive: true`:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-stage \
+  "$VALUES" "$STATE" "$RELEASE" verified-upload "VERIFIED-$HOLDER-verified-upload"
+```
+
+Use the exact `verified-upload` or `verified-unchanged` status reported by the uploader and confirm `maintenanceActive: true`; substitute that status in both command arguments as needed. The typed value records the operator's remote-verification check; it does not perform an upload or verify the remote itself. Staging validates the immutable candidate against this checkout, stops all workloads, applies the candidate with every Deployment at zero replicas, and retains the old-release state, access barrier and Lease. Continue only when it reports `candidate staged with workloads stopped`. If it fails or is interrupted, inspect the saved state and Lease; do not run `deploy`, `backup-exit`, or recovery automatically.
 
 ## 6. Run and validate migrations
 
-With the candidate staged and affected applications stopped, run separate migration jobs against their storage. Validate the data and record completion before startup.
+Migration selection, jobs, conversion, validation and determining that no migration is required are not implemented here. Stop until those decisions and mechanics are supplied by the migration work. Do not start application workloads to discover or perform migrations.
 
-**Open / stop:** migration design and execution are not implemented. Do not use application startup to migrate data implicitly.
+When an approved migration process has completed and its result is validated, record that handoff. If the agreed determination is that this candidate needs no migration, record that explicit result instead:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-result \
+  "$VALUES" "$STATE" "$RELEASE" migration-succeeded \
+  "RECORD-migration-succeeded-$HOLDER"
+# Or, only after the no-migration determination has been made:
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-result \
+  "$VALUES" "$STATE" "$RELEASE" no-migration-required \
+  "RECORD-no-migration-required-$HOLDER"
+```
+
+This command records the supplied result; it does not choose, execute or validate a migration. Either outcome leaves the candidate staged and stopped with the access barrier and Lease retained. A failure, interruption or mismatched candidate cannot authorize startup.
 
 ## 7. Start the candidate and wait for readiness
 
-After migration validation, start the candidate and wait for readiness with application access still blocked.
+Only after recording one of the two outcomes above, start the candidate:
 
-**Open / stop:** startup within the retained maintenance operation is missing.
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-start \
+  "$VALUES" "$STATE" "$RELEASE"
+KUBECONFIG="$KUBECONFIG" mise run production-k3d backup-status "$VALUES" "$STATE"
+```
+
+Startup is guarded by the exact candidate identity and recorded handoff. GraphQL starts in backup mode first; other candidate workloads then start and must become ready while GraphQL continues blocking application operations. Continue only when state is `release-ready/ready` and all candidate workloads are ready. A startup or readiness failure retains the Lease and inspectable recovery state; do not reopen access or roll back automatically.
 
 ### Existing standalone deployment
 
-For a separately approved deployment onto compatible storage, with no retained maintenance operation, the existing commands are:
+For a separately approved deployment onto compatible storage, with no retained maintenance operation, the existing standalone commands are:
 
 From the candidate checkout on the workstation, deploy and inspect status:
 
@@ -157,17 +203,37 @@ Continue only when deployment completes successfully and status reports the expe
 
 ## 8. Explicitly reopen application access
 
-Once the candidate is ready, reopen using a separate command on the operator's instruction. An AI may execute it; readiness must not reopen access automatically.
+Once the candidate is ready and the operator explicitly instructs reopening, run the separate guarded command:
 
-**Open / stop:** candidate reopening is missing. `backup-exit` restores the old deployment, not a migrated candidate.
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-reopen \
+  "$VALUES" "$STATE" "$RELEASE" "OPEN-$HOLDER"
+```
+
+Readiness never reopens access. If reopening fails, the command attempts to reassert the GraphQL barrier and retains state and Lease for inspection. `backup-exit` is not a candidate rollback command and is refused after staging.
 
 ## 9. Check the normal website
 
-On the normal website, view a recipe and image, search, and check sign-in if configured. Verify an intended edit only when that write is approved. Record the outcome; readiness alone is not website acceptance.
+After reopening, on the normal website, view a recipe and image, search, and check sign-in if configured. Verify an intended edit only when that write is approved. Readiness alone is not website acceptance. Record one operator-directed disposition:
 
-If the check fails, close access again and assess recovery; never restore automatically. New writes after reopening may be lost by restoring the pre-release backup. Any destructive recovery requires a separate explicit decision.
+```sh
+# Close application access and then assess recovery yourself.
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
+  "$VALUES" "$STATE" "$RELEASE" close-access \
+  "DISPOSITION-$HOLDER-close-access"
+# Or record that a temporary fix and another release are intended.
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
+  "$VALUES" "$STATE" "$RELEASE" temporary-fix \
+  "DISPOSITION-$HOLDER-temporary-fix"
+# Or explicitly accept a partial failure and continue.
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-disposition \
+  "$VALUES" "$STATE" "$RELEASE" accept-partial-failure \
+  "DISPOSITION-$HOLDER-accept-partial-failure"
+```
 
-**Open:** exact checks, closing access again and recovery instructions remain unsettled. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock.
+`close-access` reasserts the GraphQL backup-mode barrier. The other choices only record the operator's disposition; they do not apply fixes, close access, release ownership or recover data. Never restore automatically: writes accepted after reopening may be lost by restoring the pre-release backup. Any rollback or destructive recovery requires a separate explicit decision. Static pages are not required to remain reachable during maintenance.
+
+The disposition stays with the operator: close access and assess rollback, apply a temporary fix and release again, or accept a partial failure and continue. No choice automatically rolls back or restores. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock. The release Lease and recovery state remain retained for the backup-alignment/closeout work; do not start step 10 until that work defines its guarded handoff.
 
 ## 10. Align backups and record the result
 

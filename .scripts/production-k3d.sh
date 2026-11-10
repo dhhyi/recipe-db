@@ -15,7 +15,7 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-migration-result|release-start|release-reopen|release-disposition|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
@@ -24,6 +24,11 @@ case "$command" in
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 ]] || production_fail "backup-capture requires the existing maintenance state directory" ;;
+  release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
+  release-migration-result) [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and RECORD-<outcome>-<holder> confirmation" ;;
+  release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
+  release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
+  release-disposition) [[ $# = 4 ]] || production_fail "release-disposition requires the maintenance state directory, candidate artifact, disposition and DISPOSITION-<holder>-<choice> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
@@ -39,8 +44,10 @@ export TMPDIR="$work"
 locked=false
 retain_lock=false
 lock_holder=
+release_lease_phase=
 barrier_touched=false
 barrier_established=false
+release_mutation_started=false
 pod_watch_pid=
 cleanup() {
   local result=$?
@@ -51,10 +58,13 @@ cleanup() {
     wait "$pod_watch_pid" 2> /dev/null || true
   fi
   if [[ $result -ne 0 ]] && $locked && $retain_lock \
+    && ([[ $command != release-* ]] || $release_mutation_started) \
     && [[ -n ${snapshot:-} && -f $snapshot/backup-state.json ]] \
     && [[ $(jq -r .status "$snapshot/backup-state.json") != recovery-required ]]; then
     backup_state_write recovery-required interrupted \
       || printf 'production: could not record interrupted recovery state\n' >&2
+    cluster_operation_lock_update recovery-required \
+      || printf 'production: could not mark the retained operation Lease as requiring recovery\n' >&2
   fi
   if $locked && ! $retain_lock; then
     if ! cluster_operation_lock_release "$lock_holder"; then
@@ -146,6 +156,7 @@ pull_release() {
     and (.layers[0].digest | test("^sha256:[0-9a-f]{64}$"))
     and (.layers[0].size | type == "number" and . > 0 and . <= 1048576)
   ' "$work/manifest.json" > /dev/null || production_fail "unsafe or invalid release artifact shape"
+  rm -rf -- "$work/pulled"
   mkdir "$work/pulled"
   oras pull "$artifact" --output "$work/pulled" > /dev/null
   [[ -f $work/pulled/release.json && ! -L $work/pulled/release.json ]] \
@@ -1210,6 +1221,10 @@ backup_load_state() {
 backup_exit() {
   local expected=$2 confirmation=$3 current release
   backup_load_state "$1"
+  jq -e '(.status == "backup-mode" and .phase == "maintenance-entered")
+    or (.status == "captured" and .phase == "captured")' \
+    "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "backup-exit only recovers the original release; candidate lifecycle state must not use it"
   [[ $expected = "$backup_id" && $confirmation = "EXIT-$expected" ]] \
     || production_fail "backup-exit requires the exact saved holder and EXIT-<holder> confirmation"
   release=$(jq -er .source.artifact "$snapshot/backup-state.json")
@@ -1249,6 +1264,377 @@ backup_exit() {
   retain_lock=false
   backup_state_write recovered safely-recovered || return 1
   printf 'production: production restored; recovery state retained at %s/backup-state.json\n' "$snapshot"
+}
+
+release_state_write() {
+  local status=$1 phase=$2 fields=$3
+  jq --arg status "$status" --arg phase "$phase" \
+    --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson fields "$fields" \
+    '. + $fields | .status=$status | .phase=$phase | .updatedAt=$updatedAt' \
+    "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
+    && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
+}
+
+release_load_operation() {
+  local current old_release
+  snapshot=$1
+  artifact=$2
+  backup_load_state "$snapshot"
+  old_release=$(jq -er .source.artifact "$snapshot/backup-state.json") \
+    || production_fail "release state has no original immutable release"
+  pull_release "$old_release"
+  [[ $revision = "$(jq -r .source.revision "$snapshot/backup-state.json")" ]] \
+    || production_fail "original release revision changed"
+  connect
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect release Lease"
+  jq -e --arg holder "$backup_id" --arg release "$old_release" '
+    .spec.holderIdentity == $holder
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/release"] == $release
+  ' <<< "$current" > /dev/null || production_fail "release Lease does not match saved recovery state"
+  release_lease_phase=$(jq -r '.metadata.annotations["recipe-db/phase"] // ""' <<< "$current")
+  [[ -n $release_lease_phase ]] || production_fail "release Lease has no lifecycle phase"
+  cluster_operation_lock_holder=$backup_id
+  lock_holder=$backup_id
+  locked=true
+  retain_lock=true
+  if [[ $target = pi ]]; then production_storage_preflight; fi
+}
+
+release_require_lease_phase() {
+  local accepted
+  for accepted in "$@"; do
+    [[ $release_lease_phase != "$accepted" ]] || return 0
+  done
+  production_fail "release Lease phase does not match the saved lifecycle state"
+}
+
+release_pull_candidate() {
+  local candidate=$1 expected_revision checkout_revision untracked
+  pull_release "$candidate"
+  expected_revision=$(jq -r '.candidate.revision // ""' "$snapshot/backup-state.json")
+  if [[ -n $expected_revision ]]; then
+    [[ $revision = "$expected_revision" ]] || production_fail "candidate revision changed"
+  fi
+  checkout_revision=$(git -C "$root" rev-parse HEAD 2> /dev/null) \
+    || production_fail "candidate source checkout has no verifiable revision"
+  [[ $checkout_revision = "$revision" ]] \
+    || production_fail "candidate checkout must match the immutable candidate revision"
+  git -C "$root" diff --quiet HEAD -- \
+    || production_fail "candidate source checkout has modified tracked files"
+  untracked=$(git -C "$root" status --porcelain --untracked-files=all -- \
+    .scripts/templates ':(glob)**/.project.yaml') \
+    || production_fail "candidate source checkout metadata cannot be verified"
+  [[ -z $untracked ]] || production_fail "candidate source checkout has untracked release metadata"
+}
+
+release_assert_candidate() {
+  local candidate=$1
+  jq -e --arg artifact "$candidate" '
+    .candidate.artifact == $artifact
+    and (.candidate.revision | test("^[0-9a-f]{40}$"))
+    and (.candidate.workloads | type == "array" and length > 0)
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "candidate does not match the retained staged release"
+  release_pull_candidate "$candidate"
+}
+
+release_assert_staged_workloads() {
+  kube get deployments -o json > "$work/release-deployments.json" \
+    || production_fail "cannot inspect staged candidate workloads"
+  jq -e --slurpfile candidate "$snapshot/backup-state.json" '
+    . as $actual |
+    all($candidate[0].candidate.workloads[];
+      . as $wanted |
+      any($actual.items[];
+        .metadata.name == $wanted.name and
+        .spec.template.metadata.annotations["recipe-db/release"] == $candidate[0].candidate.artifact and
+        .spec.replicas == 0))
+    and all($actual.items[]; .spec.replicas == 0)
+  ' "$work/release-deployments.json" > /dev/null \
+    || production_fail "candidate is not fully staged with every workload stopped"
+  backup_validate_workload_images "$work/release-deployments.json"
+}
+
+release_stage() {
+  local candidate=$2 backup_status=$3 verification=$4 old_release candidate_workloads nats_init_job verified_at
+  local -a secret_args=()
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "captured/captured" ]] \
+    || production_fail "release staging requires a captured, remotely verified maintenance backup"
+  release_require_lease_phase captured
+  [[ $backup_status == verified-upload || $backup_status == verified-unchanged ]] \
+    || production_fail "release staging requires verified-upload or verified-unchanged remote backup status"
+  [[ $verification == "VERIFIED-$backup_id-$backup_status" ]] \
+    || production_fail "release staging requires VERIFIED-<backup-id>-<status> confirmation"
+  verified_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  [[ -f $snapshot/manifest.json && ! -L $snapshot/manifest.json ]] \
+    || production_fail "release staging requires the retained complete backup manifest"
+  jq -e --arg id "$backup_id" --arg release "$(jq -r .source.artifact "$snapshot/backup-state.json")" '
+    .format == "recipe-db-pvc-snapshot" and .formatVersion == 1
+    and .backupId == $id and .source.artifact == $release
+  ' "$snapshot/manifest.json" > /dev/null \
+    || production_fail "backup manifest does not match retained release state"
+  old_release=$(jq -r .source.artifact "$snapshot/backup-state.json")
+  kube get deployments -o json > "$work/original-deployments.json" \
+    || production_fail "cannot inspect original workloads before staging"
+  backup_validate_workload_images "$work/original-deployments.json" \
+    || production_fail "workloads no longer match the recorded original release"
+  jq -e --arg release "$old_release" \
+    'all(.items[]; .spec.template.metadata.annotations["recipe-db/release"] == $release)' \
+    "$work/original-deployments.json" > /dev/null \
+    || production_fail "workloads no longer match the recorded original release"
+  cp "$work/pulled/release.json" "$work/original-release.json"
+  release_pull_candidate "$candidate"
+  cp "$work/pulled/release.json" "$work/candidate-release.json"
+  render
+  production_secrets
+  guard_helm_config
+  guard_acme_claim
+  production_ephemeral_secrets
+  routes
+  annotate_credentials
+  yq 'select(.metadata.namespace == "kube-system" and .kind != "Job" and .kind != "CronJob")' \
+    "$work/rendered.yml" > "$work/infrastructure.yml"
+  yq 'select(.metadata.namespace != "kube-system" and .kind != "Job" and .kind != "CronJob") |
+    if .kind == "Deployment" then .spec.replicas=0 else . end' \
+    "$work/rendered.yml" > "$work/staged-application.yml"
+  candidate_workloads=$(yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" \
+    | jq -s '[.[] | {name:.metadata.name,replicas:(.spec.replicas // 1)}]') \
+    || production_fail "could not record candidate workload inventory"
+  nats_init_job=$(yq -o=json -I=0 \
+    'select(.kind == "Job" and .metadata.name == "nats-init")' "$work/rendered.yml" \
+    | jq -se 'if length == 1 then .[0] else error("expected exactly one nats-init Job") end') \
+    || production_fail "candidate lacks the expected NATS initialization Job"
+  jq -e --arg image "$(jq -r '.images.graphql' "$work/candidate-release.json")" '
+    .kind == "Job" and .metadata.name == "nats-init"
+    and any(.spec.template.spec.containers[];
+      .image == $image and .args == ["provision-events"])
+    and all(.spec.template.spec.volumes[]?; .persistentVolumeClaim == null)
+  ' <<< "$nats_init_job" > /dev/null \
+    || production_fail "candidate NATS initialization Job is unsafe or mismatched"
+  jq -e 'any(.[]; .name == "graphql" and .replicas > 0)' \
+    <<< "$candidate_workloads" > /dev/null \
+    || production_fail "candidate lacks a ready GraphQL barrier workload"
+  release_mutation_started=true
+  jq -c '[.items[].metadata.name]' "$work/original-deployments.json" \
+    > "$work/release-stop-names.json" || return 1
+  backup_stop "$(< "$work/release-stop-names.json")" || return 1
+  backup_wait_selected_pvcs_unmounted || return 1
+  if [[ $target = pi ]]; then production_storage_prepare_claims "$work/rendered.yml"; fi
+  ensure_namespace
+  apply_acme_contact
+  for key in "${secret_keys[@]}"; do
+    secret_args+=("--from-file=$key=$work/$key")
+  done
+  if ! {
+    kube create secret generic recipe-db-runtime "${secret_args[@]}" --dry-run=client -o json \
+      | jq '.metadata.labels["app.kubernetes.io/part-of"] = "recipe-db"' \
+      | kube apply -f - > /dev/null
+  } 2> "$work/runtime-secret-error"; then
+    production_fail "runtime Secret could not be staged (details suppressed to protect secrets)"
+  fi
+  if ! {
+    kube --namespace kube-system create secret generic recipe-db-routes \
+      "--from-file=routes.yml=$work/routes.yml" --dry-run=client -o json \
+      | kube --namespace kube-system apply -f - > /dev/null
+  } 2> "$work/route-secret-error"; then
+    production_fail "route Secret could not be staged (details suppressed to protect secrets)"
+  fi
+  kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null || return 1
+  kube apply -f "$work/staged-application.yml" > /dev/null || return 1
+  release_state_write candidate-staged candidate-staged \
+    "$(jq -cn --arg artifact "$candidate" --arg revision "$(jq -r .revision "$work/candidate-release.json")" \
+      --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f1)" \
+      --arg backupId "$backup_id" --arg backupStatus "$backup_status" --arg verifiedAt "$verified_at" \
+      --argjson workloads "$candidate_workloads" --argjson natsInitJob "$nats_init_job" \
+      '{candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
+        backupVerification:{backupId:$backupId,status:$backupStatus,acknowledgedAt:$verifiedAt}}
+      | .candidate.natsInitJob=$natsInitJob')" \
+    || return 1
+  cluster_operation_lock_update candidate-staged || return 1
+  release_assert_staged_workloads
+  printf 'production: candidate staged with workloads stopped; holder=%s; recovery state=%s/backup-state.json\n' \
+    "$backup_id" "$snapshot"
+}
+
+release_record_migration_result() {
+  local candidate=$2 outcome=$3 confirmation=$4
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "candidate-staged/candidate-staged" ]] \
+    || production_fail "migration handoff requires the staged candidate"
+  release_require_lease_phase candidate-staged
+  jq -e '.migrationResult == null' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "a migration result is already recorded and cannot be replaced"
+  [[ $outcome == migration-succeeded || $outcome == no-migration-required ]] \
+    || production_fail "migration outcome must be migration-succeeded or no-migration-required"
+  [[ $confirmation == "RECORD-$outcome-$backup_id" ]] \
+    || production_fail "migration handoff requires RECORD-<outcome>-<holder> confirmation"
+  release_assert_candidate "$candidate"
+  release_assert_staged_workloads
+  release_mutation_started=true
+  release_state_write candidate-staged candidate-staged \
+    "$(jq -cn --arg outcome "$outcome" --arg artifact "$candidate" \
+      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{migrationResult:{outcome:$outcome,artifact:$artifact,recordedAt:$recordedAt}}')" \
+    || return 1
+  cluster_operation_lock_update migration-result-recorded || return 1
+  printf 'production: migration handoff recorded as %s; candidate remains stopped and access remains blocked\n' "$outcome"
+}
+
+release_start() {
+  local candidate=$2 graphql_replicas nats_replicas name replicas
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "candidate-staged/candidate-staged" ]] \
+    || production_fail "candidate startup requires the staged handoff state"
+  release_require_lease_phase candidate-staged migration-result-recorded
+  jq -e --arg artifact "$candidate" '
+    .migrationResult.artifact == $artifact
+    and (.migrationResult.outcome == "migration-succeeded"
+      or .migrationResult.outcome == "no-migration-required")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "candidate startup requires a recorded migration or no-migration outcome"
+  release_assert_candidate "$candidate"
+  release_assert_staged_workloads
+  nats_replicas=$(jq -er '.candidate.workloads[] | select(.name == "nats") | .replicas' \
+    "$snapshot/backup-state.json") || production_fail "candidate lacks its NATS workload"
+  ((nats_replicas > 0)) || production_fail "candidate NATS workload must have at least one replica"
+  graphql_replicas=$(jq -er '.candidate.workloads[] | select(.name == "graphql") | .replicas' \
+    "$snapshot/backup-state.json")
+  ((graphql_replicas > 0)) || production_fail "candidate GraphQL barrier must have at least one replica"
+  release_mutation_started=true
+  cluster_operation_lock_update candidate-starting || return 1
+  kube scale deployment/nats "--replicas=$nats_replicas" > /dev/null || return 1
+  kube rollout status deployment/nats --timeout="${timeout}s" || return 1
+  jq -e --arg image "$(jq -r '.candidate.natsInitJob.spec.template.spec.containers[]
+    | select(.args == ["provision-events"]) | .image' "$snapshot/backup-state.json")" \
+    --arg expected "$(jq -r .images.graphql "$work/pulled/release.json")" '
+    .candidate.natsInitJob.kind == "Job"
+    and .candidate.natsInitJob.metadata.name == "nats-init"
+    and (.candidate.natsInitJob.spec.template.spec.volumes // [] |
+      all(.[]; .persistentVolumeClaim == null))
+    and $image == $expected
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "recorded candidate NATS initialization Job is invalid"
+  kube get job nats-init --ignore-not-found -o json > "$work/existing-nats-init.json" \
+    || production_fail "cannot inspect the existing NATS initialization Job"
+  if [[ -s $work/existing-nats-init.json ]]; then
+    jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+      "$work/existing-nats-init.json" > /dev/null \
+      || production_fail "refusing to replace an unowned NATS initialization Job"
+    kube delete job nats-init --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  fi
+  jq '.candidate.natsInitJob' "$snapshot/backup-state.json" > "$work/nats-init-job.json" \
+    || return 1
+  kube apply -f "$work/nats-init-job.json" > /dev/null || return 1
+  kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" || return 1
+  kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || return 1
+  kube scale deployment/graphql "--replicas=$graphql_replicas" > /dev/null || return 1
+  kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
+  while IFS= read -r entry; do
+    name=$(jq -r .name <<< "$entry")
+    [[ $name == graphql || $name == nats ]] && continue
+    replicas=$(jq -r .replicas <<< "$entry")
+    ((replicas > 0)) || continue
+    kube scale "deployment/$name" "--replicas=$replicas" > /dev/null || return 1
+    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
+  done < <(jq -c '.candidate.workloads[]' "$snapshot/backup-state.json")
+  kube get deployments -o json > "$work/release-deployments.json" \
+    || production_fail "cannot inspect candidate readiness"
+  backup_validate_workload_images "$work/release-deployments.json" \
+    || production_fail "started workloads do not match the staged candidate"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    all($state[0].candidate.workloads[];
+      . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $state[0].candidate.artifact
+        and .spec.replicas == $wanted.replicas
+        and (.status.readyReplicas // 0) == $wanted.replicas))
+    and any($actual.items[]; .metadata.name == "graphql"
+      and any(.spec.template.spec.containers[]; .name == "graphql"
+        and any(.env[]; .name == "MODE" and .value == "backup")))
+  ' "$work/release-deployments.json" > /dev/null \
+    || production_fail "candidate readiness or GraphQL access barrier could not be verified"
+  release_state_write release-ready ready \
+    "$(jq -cn --arg readyAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{candidateReadyAt:$readyAt}')" \
+    || return 1
+  cluster_operation_lock_update ready || return 1
+  printf 'production: candidate ready with application access blocked; operator-directed reopen is required\n'
+}
+
+release_reopen() {
+  local candidate=$2 confirmation=$3
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "release-ready/ready" ]] \
+    || production_fail "reopening requires a ready candidate"
+  release_require_lease_phase ready
+  [[ $confirmation == "OPEN-$backup_id" ]] \
+    || production_fail "reopening requires the operator's OPEN-<holder> confirmation"
+  release_assert_candidate "$candidate"
+  kube get deployments -o json > "$work/release-deployments.json" \
+    || production_fail "cannot inspect candidate readiness before reopening"
+  backup_validate_workload_images "$work/release-deployments.json" \
+    || production_fail "candidate changed before reopening"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    all($state[0].candidate.workloads[];
+      . as $wanted |
+      any($actual.items[];
+        .metadata.name == $wanted.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $state[0].candidate.artifact
+        and (.spec.replicas // 0) == $wanted.replicas
+        and (.status.readyReplicas // 0) == $wanted.replicas
+        and (if .metadata.name == "graphql" then
+          any(.spec.template.spec.containers[]; .name == "graphql"
+            and any(.env[]; .name == "MODE" and .value == "backup"))
+        else true end)))
+  ' "$work/release-deployments.json" > /dev/null \
+    || production_fail "candidate GraphQL barrier is not ready"
+  release_mutation_started=true
+  cluster_operation_lock_update reopening || return 1
+  kube set env deployment/graphql MODE=production --containers=graphql > /dev/null || return 1
+  if ! kube rollout status deployment/graphql --timeout="${timeout}s"; then
+    backup_reblock_graphql || true
+    release_state_write recovery-required reopen-failed '{}' || true
+    cluster_operation_lock_update recovery-required || true
+    production_fail "candidate reopen failed; access was reblocked where possible and recovery state and Lease remain"
+  fi
+  release_state_write access-open operator-reopened \
+    "$(jq -cn --arg openedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{accessOpenedAt:$openedAt}')" \
+    || return 1
+  cluster_operation_lock_update operator-reopened || return 1
+  printf 'production: application access reopened by operator instruction; check the website and record a disposition\n'
+}
+
+release_disposition() {
+  local candidate=$2 disposition=$3 confirmation=$4
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "access-open/operator-reopened" ]] \
+    || production_fail "post-check disposition requires operator-reopened access"
+  release_require_lease_phase operator-reopened
+  [[ $disposition == close-access || $disposition == temporary-fix || $disposition == accept-partial-failure ]] \
+    || production_fail "disposition must be close-access, temporary-fix or accept-partial-failure"
+  [[ $confirmation == "DISPOSITION-$backup_id-$disposition" ]] \
+    || production_fail "disposition requires DISPOSITION-<holder>-<choice> confirmation"
+  release_assert_candidate "$candidate"
+  release_mutation_started=true
+  if [[ $disposition == close-access ]]; then
+    cluster_operation_lock_update access-closing || return 1
+    backup_reblock_graphql || {
+      release_state_write recovery-required close-access-failed '{}' || true
+      cluster_operation_lock_update recovery-required || true
+      production_fail "application access could not be verified closed; recovery state and Lease remain"
+    }
+  fi
+  release_state_write post-check-disposition "$disposition" \
+    "$(jq -cn --arg disposition "$disposition" \
+      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{postCheckDisposition:{choice:$disposition,recordedAt:$recordedAt}}')" \
+    || return 1
+  cluster_operation_lock_update "post-check-$disposition" || return 1
+  printf 'production: post-check disposition recorded as %s; recovery remains operator-directed and the Lease is retained\n' "$disposition"
 }
 
 backup_establish_barrier() {
@@ -1423,6 +1809,21 @@ case "$command" in
     ;;
   backup-exit)
     backup_exit "$1" "$2" "$3"
+    ;;
+  release-stage)
+    release_stage "$1" "$2" "$3" "$4"
+    ;;
+  release-migration-result)
+    release_record_migration_result "$1" "$2" "$3" "$4"
+    ;;
+  release-start)
+    release_start "$1" "$2"
+    ;;
+  release-reopen)
+    release_reopen "$1" "$2" "$3"
+    ;;
+  release-disposition)
+    release_disposition "$1" "$2" "$3" "$4"
     ;;
   storage-reattach)
     [[ $target = pi && $1 = "REATTACH-$cluster" ]] \

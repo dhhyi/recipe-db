@@ -77,8 +77,10 @@ production_config() {
       else true end)
     and (if .target == "pi" and
       ($action == "deploy" or $action == "backup-run" or $action == "backup-enter"
-        or $action == "backup-capture"
-        or $action == "backup-exit" or $action == "restore" or $action == "storage-reattach")
+        or $action == "backup-capture" or $action == "backup-exit"
+        or $action == "release-stage" or $action == "release-migration-result"
+        or $action == "release-start" or $action == "release-reopen"
+        or $action == "release-disposition" or $action == "restore" or $action == "storage-reattach")
       then has("piStorage")
         and .piStorage.node == .cluster
         and (.piStorage.expectedRootUuid | test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
