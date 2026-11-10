@@ -111,9 +111,11 @@ function deniedCookie(response) {
   );
 }
 
-async function login(user) {
+async function login(user, destination = "/identity") {
   const jar = new Jar();
-  const start = await http("/oauth2/start?rd=%2Fidentity", { jar });
+  const startURL = new URL("/oauth2/start", app);
+  if (destination !== null) startURL.searchParams.set("rd", destination);
+  const start = await http(startURL.pathname + startURL.search, { jar });
   assert.equal(start.status, 302, "login start failed");
   const target = new URL(start.headers.location);
   assert.equal(target.searchParams.get("code_challenge_method"), "S256");
@@ -126,6 +128,35 @@ async function login(user) {
   assert.equal(approved.status, 302, "mock authorization failed");
   const callback = await http(approved.headers.location, { jar });
   return { jar, callback };
+}
+
+async function returnDestinations() {
+  const destination =
+    "/recipe/meal%2Fdetail?filter_by=tag_ids%3A%22abc%2Bdef%22&search=hot%2520sauce#ingredients%2Flist";
+  const attempts = [
+    [destination, destination],
+    [null, "/"],
+    ["https://outside.invalid/anything", "/"],
+    ["//outside.invalid/anything", "/"],
+    ["http://[::1", "/"],
+  ];
+
+  for (const [requested, expected] of attempts) {
+    const { jar, callback } = await login("owner", requested);
+    assert.equal(callback.status, 302, "login callback failed");
+    assert(jar.cookies._oauth2_proxy, "callback did not set session cookie");
+    const finalURL = new URL(callback.headers.location, app);
+    assert.equal(finalURL.origin, new URL(app).origin);
+    assert.equal(
+      finalURL.pathname + finalURL.search + finalURL.hash,
+      expected,
+      `unexpected completed-login destination for ${requested}`,
+    );
+    role(await gql(jar), "owner");
+  }
+  console.log(
+    "PASS local return destination preservation and unsafe redirect rejection",
+  );
 }
 
 async function signedIn(user) {
@@ -164,6 +195,7 @@ async function ready() {
 async function basic() {
   await ready();
   role(await gql(), "anonymous");
+  await returnDestinations();
   let owner;
   for (const [user, expected] of [
     ["owner", "owner"],
