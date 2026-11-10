@@ -44,6 +44,7 @@ release:
       - .scripts/validate-production-image-index.sh
       - .scripts/check-production-release.sh
       - .scripts/publish-production-release.sh
+      - .scripts/publish-production-github-release.sh
       - .scripts/smoke-production-image.sh
       - .scripts/generate-production-build-metadata.sh
       - package.json

@@ -15,7 +15,7 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-migration-result|release-start|release-reopen|release-disposition|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-migration-result|release-start|release-reopen|release-disposition|release-website-result|release-backup-capture|release-backup-verify|release-accept|release-finalize|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
@@ -29,6 +29,11 @@ case "$command" in
   release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
   release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
   release-disposition) [[ $# = 4 ]] || production_fail "release-disposition requires the maintenance state directory, candidate artifact, disposition and DISPOSITION-<holder>-<choice> confirmation" ;;
+  release-website-result) [[ $# = 5 ]] || production_fail "release-website-result requires the maintenance state directory, candidate artifact, passed|failed result, operator notes and WEBSITE-<holder>-<result> confirmation" ;;
+  release-backup-capture) [[ $# = 2 ]] || production_fail "release-backup-capture requires the maintenance state directory and accepted candidate artifact" ;;
+  release-backup-verify) [[ $# = 4 ]] || production_fail "release-backup-verify requires the maintenance state directory, candidate artifact, verified-upload status and UPLOADED-<backup-id>-verified-upload confirmation" ;;
+  release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
+  release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
@@ -48,6 +53,7 @@ release_lease_phase=
 barrier_touched=false
 barrier_established=false
 release_mutation_started=false
+require_storage_versions=false
 pod_watch_pid=
 cleanup() {
   local result=$?
@@ -789,8 +795,13 @@ backup_copy_pvc() {
   kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
   backup_wait_pod_gone "$pod" || return 1
   [[ -s $archive ]] || return 1
-  python3 "$root/.scripts/validate-backup-snapshot.py" "$archive" "$layout" \
-    > "$work/$name-files.json" || return 1
+  if $require_storage_versions; then
+    python3 "$root/.scripts/validate-backup-snapshot.py" \
+      --require-storage-version "$archive" "$layout" > "$work/$name-files.json" || return 1
+  else
+    python3 "$root/.scripts/validate-backup-snapshot.py" "$archive" "$layout" \
+      > "$work/$name-files.json" || return 1
+  fi
   size=$(stat -c '%s' "$archive") || return 1
   sha=$(sha256sum "$archive") || return 1
   sha=${sha%% *}
@@ -1674,9 +1685,11 @@ release_reopen() {
 release_disposition() {
   local candidate=$2 disposition=$3 confirmation=$4
   release_load_operation "$1" "$candidate"
-  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "access-open/operator-reopened" ]] \
+  jq -e '.status == "access-open"
+    and (.phase == "operator-reopened" or .phase == "website-passed" or .phase == "website-failed")
+    and .postCheckDisposition == null' "$snapshot/backup-state.json" > /dev/null \
     || production_fail "post-check disposition requires operator-reopened access"
-  release_require_lease_phase operator-reopened
+  release_require_lease_phase operator-reopened website-passed website-failed
   [[ $disposition == close-access || $disposition == temporary-fix || $disposition == accept-partial-failure ]] \
     || production_fail "disposition must be close-access, temporary-fix or accept-partial-failure"
   [[ $confirmation == "DISPOSITION-$backup_id-$disposition" ]] \
@@ -1713,6 +1726,313 @@ release_disposition() {
     || return 1
   cluster_operation_lock_update "post-check-$disposition" || return 1
   printf 'production: post-check disposition recorded as %s; recovery remains operator-directed and the Lease is retained\n' "$disposition"
+}
+
+release_website_result() {
+  local candidate=$2 result=$3 notes=$4 confirmation=$5
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "access-open/operator-reopened" ]] \
+    || production_fail "website result requires reopened candidate access"
+  release_require_lease_phase operator-reopened
+  [[ $result == passed || $result == failed ]] \
+    || production_fail "website result must be passed or failed"
+  [[ -n $notes && ${#notes} -le 1000 && $notes != *$'\n'* ]] \
+    || production_fail "website notes must be a non-empty single line of at most 1000 characters"
+  [[ $confirmation == "WEBSITE-$backup_id-$result" ]] \
+    || production_fail "website result requires WEBSITE-<holder>-<result> confirmation"
+  jq -e '.websiteCheck == null' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "a website result is already recorded"
+  release_assert_candidate "$candidate"
+  release_state_write access-open "website-$result" \
+    "$(jq -cn --arg outcome "$result" --arg notes "$notes" \
+      --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{websiteCheck:{outcome:$outcome,notes:$notes,checkedAt:$checkedAt}}')" \
+    || return 1
+  cluster_operation_lock_update "website-$result" || return 1
+  if [[ $result == failed ]]; then
+    printf 'production: website check failed; no post-release backup or schedule enablement is allowed; choose an operator-directed disposition\n'
+  else
+    printf 'production: operator recorded website acceptance; backup alignment and verified-upload are still required\n'
+  fi
+}
+
+release_backup_capture() {
+  local candidate=$2 release_snapshot=$1 release_holder post_snapshot post_backup_id
+  local config_sha old_artifact
+  release_load_operation "$release_snapshot" "$candidate"
+  release_holder=$backup_id
+  jq -e '((
+      .status == "access-open" and .phase == "website-passed"
+      and .websiteCheck.outcome == "passed"
+    ) or (
+      .status == "post-check-disposition" and .phase == "accept-partial-failure"
+      and .websiteCheck.outcome == "failed"
+      and .postCheckDisposition.choice == "accept-partial-failure"
+    )) and .postReleaseBackup == null' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "post-release backup requires a passed website check or explicit partial-failure acceptance"
+  release_require_lease_phase website-passed post-check-accept-partial-failure
+  release_assert_candidate "$candidate"
+  render
+  [[ $candidate != "$(jq -r .source.artifact "$snapshot/backup-state.json")" ]] \
+    || production_fail "post-release backup requires a different immutable release artifact"
+  old_artifact=$artifact
+  post_snapshot="$release_snapshot/post-release-backup"
+  [[ ! -e $post_snapshot && ! -L $post_snapshot ]] \
+    || production_fail "post-release backup destination already exists; inspect retained state"
+  mkdir -m 700 -- "$post_snapshot" || production_fail "could not create post-release backup directory"
+  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  storage_class=$(jq -r .storageClass "$work/config.json")
+  backup_role_inventory
+  backup_capture_workloads "$candidate"
+  copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
+  backup_check_capacity "$post_snapshot"
+  post_backup_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
+  config_sha=$(sha256sum "$work/config.json")
+  config_sha=${config_sha%% *}
+  jq -n --arg id "$post_backup_id" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg namespace "$namespace" --arg artifact "$candidate" \
+    --arg revision "$revision" --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --slurpfile workloads "$work/prior-workloads.json" \
+    --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+    --slurpfile maintenance "$work/maintenance-workloads.json" \
+    --arg configSha256 "$config_sha" \
+    '{stateVersion:2,backupId:$id,status:"in-progress",phase:"prepared",startedAt:$startedAt,
+      source:{target:$target,cluster:$cluster,context:$context,namespace:$namespace,
+        artifact:$artifact,revision:$revision},
+      configSha256:$configSha256,priorWorkloads:$workloads[0],
+      maintenanceWorkloads:$maintenance[0],selectedPVCs:$pvcs}' > "$post_snapshot/backup-state.json" \
+    || production_fail "could not persist post-release backup recovery state"
+  snapshot=$post_snapshot
+  backup_id=$post_backup_id
+  artifact=$candidate
+  require_storage_versions=true
+  release_mutation_started=true
+  if ! backup_run_locked "$candidate"; then
+    if ! backup_restore_production; then
+      snapshot=$release_snapshot
+      backup_id=$release_holder
+      artifact=$old_artifact
+      release_state_write recovery-required post-release-backup-recovery-required '{}' || true
+      cluster_operation_lock_update recovery-required || true
+      production_fail "post-release capture failed and candidate recovery is incomplete; access barrier, progress and Lease are retained"
+    fi
+    snapshot=$release_snapshot
+    backup_id=$release_holder
+    artifact=$old_artifact
+    release_state_write recovery-required post-release-backup-failed '{}' || true
+    cluster_operation_lock_update recovery-required || true
+    production_fail "post-release capture failed; recovery state and Lease are retained"
+  fi
+  if ! backup_restore_production; then
+    snapshot=$release_snapshot
+    backup_id=$release_holder
+    artifact=$old_artifact
+    release_state_write recovery-required post-release-backup-recovery-required '{}' || true
+    cluster_operation_lock_update recovery-required || true
+    production_fail "post-release capture completed but candidate recovery failed; access barrier and Lease are retained"
+  fi
+  if ! backup_write_manifest; then
+    snapshot=$release_snapshot
+    backup_id=$release_holder
+    artifact=$old_artifact
+    release_state_write recovery-required post-release-backup-manifest-failed '{}' || true
+    cluster_operation_lock_update recovery-required || true
+    production_fail "post-release archive could not be finalized; progress state and Lease are retained"
+  fi
+  jq -e 'all(.inventory[]; any(.files[];
+    .path == "storage-version" and (.storageVersion | type == "number" and . > 0)))' \
+    "$post_snapshot/manifest.json" > /dev/null || {
+    snapshot=$release_snapshot
+    backup_id=$release_holder
+    artifact=$old_artifact
+    release_state_write recovery-required post-release-storage-version-failed '{}' || true
+    cluster_operation_lock_update recovery-required || true
+    production_fail "complete post-release backup lacks an actual storage-version marker for every stateful service"
+  }
+  rm -f -- "$post_snapshot/backup-state.json" || return 1
+  snapshot=$release_snapshot
+  backup_id=$release_holder
+  artifact=$old_artifact
+  require_storage_versions=false
+  release_state_write access-open post-release-backup-captured \
+    "$(jq -cn --arg id "$post_backup_id" --arg candidate "$candidate" \
+      --arg revision "$(jq -r '.candidate.revision' "$snapshot/backup-state.json")" \
+      --arg path "$post_snapshot" --arg capturedAt "$(jq -r .capturedAt "$post_snapshot/manifest.json")" \
+      '{postReleaseBackup:{backupId:$id,artifact:$candidate,revision:$revision,
+        snapshotPath:$path,capturedAt:$capturedAt,status:"captured"}}')" \
+    || return 1
+  cluster_operation_lock_update post-release-backup-captured || return 1
+  printf 'production: post-release snapshot captured and storage-version markers verified; upload with recipe-db-backup-upload release-upload\n'
+}
+
+release_backup_verify() {
+  local candidate=$2 status=$3 confirmation=$4 post_snapshot versions
+  release_load_operation "$1" "$candidate"
+  jq -e '.status == "access-open" and .phase == "post-release-backup-captured"
+    and .postReleaseBackup.status == "captured"
+    and .postReleaseBackup.uploadStatus == "verified-upload"' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "post-release backup verification requires a completed capture"
+  release_require_lease_phase post-release-backup-captured
+  [[ $status == verified-upload ]] \
+    || production_fail "a changed release artifact requires post-release verified-upload"
+  post_snapshot=$(jq -er '.postReleaseBackup.snapshotPath' "$snapshot/backup-state.json")
+  [[ $post_snapshot == "$snapshot/post-release-backup" && -d $post_snapshot &&
+    ! -L $post_snapshot/manifest.json ]] \
+    || production_fail "post-release backup snapshot path is invalid"
+  jq -e --arg candidate "$candidate" --arg id "$(jq -r .postReleaseBackup.backupId "$snapshot/backup-state.json")" '
+    .source.artifact == $candidate and .backupId == $id
+    and all(.inventory[]; any(.files[];
+      .path == "storage-version" and (.storageVersion | type == "number" and . > 0)))
+  ' "$post_snapshot/manifest.json" > /dev/null \
+    || production_fail "post-release backup does not match the candidate or lacks actual storage-version markers"
+  [[ $confirmation == "UPLOADED-$(jq -r .postReleaseBackup.backupId "$snapshot/backup-state.json")-verified-upload" ]] \
+    || production_fail "backup verification requires UPLOADED-<backup-id>-verified-upload confirmation"
+  versions=$(jq -c '[.inventory[] | {
+    service,
+    version:(.files[] | select(.path == "storage-version") | .storageVersion)
+  }] | sort_by(.service)' "$post_snapshot/manifest.json") \
+    || production_fail "could not record storage-version results"
+  release_state_write access-open post-release-backup-verified \
+    "$(jq -cn --argjson versions "$versions" --arg status "$status" \
+      --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --argjson backup "$(jq -c .postReleaseBackup "$snapshot/backup-state.json")" \
+      '{postReleaseBackup:($backup + {status:$status,storageVersions:$versions,verifiedAt:$checkedAt})}')" \
+    || return 1
+  cluster_operation_lock_update post-release-backup-verified || return 1
+  printf 'production: post-release backup remotely verified with verified-upload; operator acceptance is still required\n'
+}
+
+release_accept() {
+  local candidate=$2 confirmation=$3
+  release_load_operation "$1" "$candidate"
+  jq -e '.status == "access-open" and .phase == "post-release-backup-verified"
+    and (
+      .websiteCheck.outcome == "passed"
+      or (.websiteCheck.outcome == "failed"
+        and .postCheckDisposition.choice == "accept-partial-failure")
+    )
+    and .postReleaseBackup.status == "verified-upload"
+    and (.acceptedAt == null)' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "release acceptance requires a passed website check and verified-upload post-release backup"
+  release_require_lease_phase post-release-backup-verified
+  [[ $confirmation == "ACCEPT-$backup_id" ]] \
+    || production_fail "release acceptance requires ACCEPT-<holder> confirmation"
+  release_assert_candidate "$candidate"
+  release_state_write release-accepted operator-accepted \
+    "$(jq -cn --arg acceptedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{acceptedAt:$acceptedAt}')" \
+    || return 1
+  cluster_operation_lock_update release-accepted || return 1
+  printf 'production: operator accepted the release; publish its sequential GitHub Release before finalization\n'
+}
+
+release_finalize() {
+  local candidate=$2 tag=$3 confirmation=$4 old_release current api_url
+  local page=1
+  local lease_present=false
+  snapshot=$1
+  backup_load_state "$snapshot"
+  [[ $confirmation == "PUBLISHED-$backup_id-$tag" ]] \
+    || production_fail "release finalization requires PUBLISHED-<holder>-<tag> confirmation"
+  [[ $tag =~ ^v[1-9][0-9]*$ ]] \
+    || production_fail "GitHub release tag must be a sequential vN tag"
+  jq -e --arg candidate "$candidate" '
+    (.status == "release-accepted" and .phase == "operator-accepted")
+    or (.status == "release-published" and .phase == "published-cleanup-pending")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "release finalization requires explicit operator acceptance"
+  jq -e --arg candidate "$candidate" '
+    .candidate.artifact == $candidate
+    and (
+      .websiteCheck.outcome == "passed"
+      or (.websiteCheck.outcome == "failed"
+        and .postCheckDisposition.choice == "accept-partial-failure")
+    )
+    and .postReleaseBackup.status == "verified-upload"
+    and (.acceptedAt | type == "string" and length > 0)
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "release acceptance evidence is incomplete"
+  old_release=$(jq -er .source.artifact "$snapshot/backup-state.json")
+  pull_release "$old_release"
+  [[ $revision = "$(jq -r .source.revision "$snapshot/backup-state.json")" ]] \
+    || production_fail "original release revision changed"
+  release_assert_candidate "$candidate"
+  connect
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect release Lease before cleanup"
+  if [[ -n $current ]]; then
+    jq -e --arg holder "$backup_id" --arg release "$old_release" '
+      .spec.holderIdentity == $holder
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.annotations["recipe-db/operation"] == "backup"
+      and .metadata.annotations["recipe-db/release"] == $release
+      and (.metadata.annotations["recipe-db/phase"] == "release-accepted"
+        or .metadata.annotations["recipe-db/phase"] == "release-published")
+    ' <<< "$current" > /dev/null || production_fail "release Lease does not match accepted operation"
+    cluster_operation_lock_holder=$backup_id
+    lock_holder=$backup_id
+    locked=true
+    retain_lock=true
+    lease_present=true
+  else
+    jq -e --arg tag "$tag" '.status == "release-published"
+      and .publishedRelease.tag == $tag' "$snapshot/backup-state.json" > /dev/null \
+      || production_fail "release Lease is absent without a recorded successful publication"
+  fi
+  curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "https://api.github.com/repos/dhhyi/recipe-db/releases/tags/$tag" \
+    > "$work/github-release.json" \
+    || production_fail "GitHub has not confirmed the release; temporary state and Lease are retained"
+  jq -e --arg tag "$tag" --arg revision "$(jq -r '.candidate.revision' "$snapshot/backup-state.json")" \
+    --arg candidate "$candidate" \
+    --arg artifactLink "https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/${candidate##*@}" '
+    .tag_name == $tag and .target_commitish == $revision
+    and .draft == false and .prerelease == false
+    and (.published_at | type == "string" and length > 0)
+    and (.html_url | startswith("https://github.com/dhhyi/recipe-db/releases/tag/"))
+    and (.body | type == "string" and contains($candidate) and contains($artifactLink))
+  ' "$work/github-release.json" > /dev/null \
+    || production_fail "published GitHub Release does not match the candidate artifact and revision"
+  mkdir "$work/github-release-pages"
+  while :; do
+    curl -fsS --max-time 20 -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "https://api.github.com/repos/dhhyi/recipe-db/releases?per_page=100&page=$page" \
+      > "$work/github-release-pages/$page.json" \
+      || production_fail "cannot verify sequential GitHub releases; temporary state and Lease are retained"
+    jq -e 'type == "array"' "$work/github-release-pages/$page.json" > /dev/null \
+      || production_fail "GitHub release listing is invalid; temporary state and Lease are retained"
+    [[ $(jq length "$work/github-release-pages/$page.json") -eq 100 ]] || break
+    page=$((page + 1))
+  done
+  jq -se --arg tag "$tag" '
+    add | map(select(.draft == false and .prerelease == false)) |
+    if all(.[]; .tag_name | test("^v[1-9][0-9]*$")) then
+      map(.tag_name | ltrimstr("v") | tonumber) | sort |
+      length > 0 and index($tag | ltrimstr("v") | tonumber) != null
+      and . == [range(1; (max + 1))]
+    else false end
+  ' "$work/github-release-pages/"*.json > /dev/null \
+    || production_fail "GitHub release numbers are not contiguous; temporary state and Lease are retained"
+  api_url=$(jq -r .html_url "$work/github-release.json")
+  if $lease_present; then
+    release_state_write release-published published-cleanup-pending \
+      "$(jq -cn --arg tag "$tag" --arg url "$api_url" \
+        --arg verifiedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{publishedRelease:{tag:$tag,url:$url,verifiedAt:$verifiedAt}}')" \
+      || return 1
+    cluster_operation_lock_update release-published || return 1
+    find "$snapshot" -mindepth 1 -maxdepth 1 ! -name backup-state.json \
+      -exec rm -rf -- {} + || production_fail "published release is verified but temporary data cleanup failed; Lease and progress state remain"
+    cluster_operation_lock_release "$backup_id" \
+      || production_fail "published release is verified but the release Lease could not be removed; progress state remains"
+    locked=false
+    retain_lock=false
+  fi
+  rm -f -- "$snapshot/backup-state.json" \
+    || production_fail "published release is verified and Lease is released; retry cleanup of the remaining state file"
+  rmdir -- "$snapshot" \
+    || production_fail "published release is verified and Lease is released; retry cleanup of the remaining state directory"
+  printf 'production: GitHub Release %s is confirmed; temporary release data and operation Lease were removed\n' "$tag"
 }
 
 backup_establish_barrier() {
@@ -1902,6 +2222,21 @@ case "$command" in
     ;;
   release-disposition)
     release_disposition "$1" "$2" "$3" "$4"
+    ;;
+  release-website-result)
+    release_website_result "$1" "$2" "$3" "$4" "$5"
+    ;;
+  release-backup-capture)
+    release_backup_capture "$1" "$2"
+    ;;
+  release-backup-verify)
+    release_backup_verify "$1" "$2" "$3" "$4"
+    ;;
+  release-accept)
+    release_accept "$1" "$2" "$3"
+    ;;
+  release-finalize)
+    release_finalize "$1" "$2" "$3" "$4"
     ;;
   storage-reattach)
     [[ $target = pi && $1 = "REATTACH-$cluster" ]] \
