@@ -15,7 +15,7 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-migration-result|release-start|release-reopen|release-disposition|release-website-result|release-backup-capture|release-backup-verify|release-accept|release-finalize|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-fallback-stage|release-migration-result|release-start|release-reopen|release-disposition|release-website-result|release-backup-capture|release-backup-verify|release-accept|release-finalize|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
@@ -25,6 +25,7 @@ case "$command" in
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 ]] || production_fail "backup-capture requires the existing maintenance state directory" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
+  release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
   release-migration-result) [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and RECORD-<outcome>-<holder> confirmation" ;;
   release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
   release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
@@ -53,6 +54,7 @@ release_lease_phase=
 barrier_touched=false
 barrier_established=false
 release_mutation_started=false
+release_fallback_mode=false
 require_storage_versions=false
 pod_watch_pid=
 cleanup() {
@@ -1322,18 +1324,28 @@ release_require_lease_phase() {
 }
 
 release_pull_candidate() {
-  local candidate=$1 allow_new=${2:-false} expected_revision checkout_revision untracked
+  local candidate=$1 allow_new=${2:-false} fallback_from=${3:-}
+  local expected_revision checkout_revision expected_checkout untracked
   pull_release "$candidate"
   expected_revision=$(jq -r '.candidate.revision // ""' "$snapshot/backup-state.json")
-  if [[ -n $expected_revision && $candidate == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]]; then
+  if [[ -n $fallback_from ]]; then
+    [[ $candidate == "$(jq -r .source.artifact "$snapshot/backup-state.json")" &&
+    $revision == "$(jq -r .source.revision "$snapshot/backup-state.json")" &&
+    $fallback_from == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]] \
+      || production_fail "fallback release does not match the retained original release"
+    expected_checkout=$expected_revision
+  elif [[ -n $expected_revision && $candidate == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]]; then
     [[ $revision = "$expected_revision" ]] || production_fail "candidate revision changed"
+    expected_checkout=$revision
   elif [[ -n $expected_revision && $allow_new != true ]]; then
     production_fail "candidate does not match the retained staged release"
+  else
+    expected_checkout=$revision
   fi
   checkout_revision=$(git -C "$root" rev-parse HEAD 2> /dev/null) \
     || production_fail "candidate source checkout has no verifiable revision"
-  [[ $checkout_revision = "$revision" ]] \
-    || production_fail "candidate checkout must match the immutable candidate revision"
+  [[ $checkout_revision = "$expected_checkout" ]] \
+    || production_fail "checkout must match the immutable release revision required for this handoff"
   git -C "$root" diff --quiet HEAD -- \
     || production_fail "candidate source checkout has modified tracked files"
   untracked=$(git -C "$root" status --porcelain --untracked-files=all -- \
@@ -1454,7 +1466,11 @@ release_stage() {
     || production_fail "workloads no longer match the expected release"
   release_assert_maintenance_barrier "$work/original-deployments.json" "$current_release" "$retry"
   cp "$work/pulled/release.json" "$work/original-release.json"
-  release_pull_candidate "$candidate" true
+  if [[ $release_fallback_mode == true ]]; then
+    release_pull_candidate "$candidate" true "$previous_candidate"
+  else
+    release_pull_candidate "$candidate" true
+  fi
   cp "$work/pulled/release.json" "$work/candidate-release.json"
   render
   production_secrets
@@ -1531,6 +1547,71 @@ release_stage() {
   release_assert_staged_workloads
   printf 'production: candidate staged with workloads stopped; holder=%s; recovery state=%s/backup-state.json\n' \
     "$backup_id" "$snapshot"
+}
+
+release_fallback_stage() {
+  local failed_candidate=$2 original_release backup_status confirmation
+  confirmation=$3
+  release_load_operation "$1" "$failed_candidate"
+  jq -e --arg candidate "$failed_candidate" '
+    .status == "recovery-required" and .phase == "interrupted"
+    and .candidate.artifact == $candidate
+    and .migrationResult.outcome == "no-migration-required"
+    and .postCheckDisposition == null
+    and .postReleaseBackup == null
+    and (.backupVerification.status == "verified-upload"
+      or .backupVerification.status == "verified-unchanged")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "fallback is limited to an interrupted, no-migration candidate start before reopening"
+  release_require_lease_phase recovery-required
+  [[ $failed_candidate != "$(jq -r .source.artifact "$snapshot/backup-state.json")" ]] \
+    || production_fail "failed candidate must differ from the original release"
+  [[ $confirmation == "FALLBACK-$backup_id-MARKERS-1-UNCHANGED-FORMAT" ]] \
+    || production_fail "fallback requires FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation"
+  release_mutation_started=true
+  backup_reblock_graphql \
+    || production_fail "GraphQL access could not be verified closed; recovery state and Lease remain"
+  release_assert_candidate "$failed_candidate"
+  kube get deployments -o json > "$work/fallback-deployments.json" \
+    || production_fail "cannot inspect failed candidate workloads"
+  backup_validate_workload_images "$work/fallback-deployments.json" \
+    || production_fail "failed candidate workloads do not match the retained artifact"
+  jq -e --arg candidate "$failed_candidate" --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    ($actual.items | length) == ($state[0].candidate.workloads | length)
+    and all($state[0].candidate.workloads[]; . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $candidate))
+  ' "$work/fallback-deployments.json" > /dev/null \
+    || production_fail "failed candidate workloads do not match the retained artifact; keep access blocked and inspect"
+
+  jq -e 'any(.items[]; .metadata.name == "graphql"
+    and .spec.replicas > 0 and (.status.readyReplicas // 0) == .spec.replicas
+    and any(.spec.template.spec.containers[]; .name == "graphql"
+      and any(.env[]?; .name == "MODE" and .value == "backup")))' \
+    "$work/fallback-deployments.json" > /dev/null \
+    || production_fail "GraphQL is not ready behind the maintenance barrier; keep access blocked and inspect"
+  jq -c '[.items[].metadata.name | select(. != "graphql")]' \
+    "$work/fallback-deployments.json" > "$work/fallback-workloads.json" \
+    || return 1
+  backup_stop "$(< "$work/fallback-workloads.json")" || return 1
+  backup_wait_selected_pvcs_unmounted || return 1
+
+  original_release=$(jq -er .source.artifact "$snapshot/backup-state.json")
+  backup_status=$(jq -er .backupVerification.status "$snapshot/backup-state.json")
+  release_state_write post-check-disposition temporary-fix \
+    "$(jq -cn --arg old "$original_release" --arg failed "$failed_candidate" \
+      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{postCheckDisposition:{choice:"temporary-fix",reason:"approved-marker-only-fallback",
+          originalRelease:$old,failedCandidate:$failed,recordedAt:$recordedAt},
+        fallback:{kind:"marker-only-version-1",originalRelease:$old,
+          failedCandidate:$failed,recordedAt:$recordedAt}}')" \
+    || return 1
+  cluster_operation_lock_update post-check-temporary-fix || return 1
+  release_fallback_mode=true
+  release_stage "$snapshot" "$original_release" "$backup_status" \
+    "VERIFIED-$backup_id-$backup_status"
+  printf 'production: previous release staged on unchanged storage; stop here for the checkout handoff and explicit operator approval\n'
 }
 
 release_record_migration_result() {
@@ -2210,6 +2291,9 @@ case "$command" in
     ;;
   release-stage)
     release_stage "$1" "$2" "$3" "$4"
+    ;;
+  release-fallback-stage)
+    release_fallback_stage "$1" "$2" "$3"
     ;;
   release-migration-result)
     release_record_migration_result "$1" "$2" "$3" "$4"

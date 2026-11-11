@@ -28,6 +28,7 @@ setup() {
   export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
   export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_RELEASE_LIFECYCLE=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
   export MOCK_RESTORE=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
@@ -305,7 +306,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *" get configmap recipe-db-release -o json"*)
         release_artifact=$(jq -r '.items[0].spec.template.metadata.annotations["recipe-db/release"]' \
           "$MOCK_LOG.deployments")
-        jq -n --arg artifact "$release_artifact" --arg revision "$MOCK_REVISION" \
+        release_revision=$MOCK_REVISION
+        [[ $release_artifact != "$ARTIFACT" ]] \
+          || release_revision=${MOCK_SOURCE_REVISION:-$MOCK_REVISION}
+        jq -n --arg artifact "$release_artifact" --arg revision "$release_revision" \
           '{data:{artifact:$artifact,revision:$revision}}'
         handled=true ;;
       *" get secret recipe-db-runtime -o json"*)
@@ -376,6 +380,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *" rollout status deployment/graphql "*)
         [[ ${MOCK_RELEASE_ROLLOUT_FAIL:-false} != true ]] || exit 1
         if [[ ${MOCK_GRAPHQL_REOPEN_FAIL:-false} = true && -e $MOCK_LOG.reopening ]]; then exit 1; fi
+        handled=true ;;
+      *" rollout status deployment/recipes "*)
+        [[ ${MOCK_RELEASE_RECIPES_ROLLOUT_FAIL:-false} != true ]] || exit 1
         handled=true ;;
       *" scale deployment/"*"--replicas="*)
         resource="${*: -2:1}"
@@ -645,9 +652,16 @@ EOF
   cat > bin/oras << 'EOF'
 #!/usr/bin/env bash
 printf 'oras %s\n' "$*" >> "$MOCK_LOG"
-if [[ $1 = manifest ]]; then
-  if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
-    jq -n --arg shape "$MOCK_SHAPE" --arg revision "$MOCK_REVISION" '{
+  artifact_revision() {
+    case "$1" in
+      *"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        printf '%s' "${MOCK_SOURCE_REVISION:-$MOCK_REVISION}" ;;
+      *) printf '%s' "$MOCK_REVISION" ;;
+    esac
+  }
+  if [[ $1 = manifest ]]; then
+    if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
+      jq -n --arg shape "$MOCK_SHAPE" --arg revision "$(artifact_revision "$3")" '{
       schemaVersion:2,artifactType:"application/vnd.dhhyi.recipe-db.release.v1+json",
       annotations:{"org.opencontainers.image.source":"https://github.com/dhhyi/recipe-db",
         "org.opencontainers.image.revision":$revision},
@@ -662,14 +676,15 @@ if [[ $1 = manifest ]]; then
   fi
 else
   [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]] || exit 1
-  while [[ $1 != --output ]]; do shift; done
-  jq -n --arg revision "$MOCK_REVISION" '{schemaVersion:1,revision:$revision,images:{
+  release=$2
+  output=$4
+  jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:1,revision:$revision,images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
     images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
     graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
     tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
     search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
-    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))}}' > "$2/release.json"
+    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))}}' > "$output/release.json"
 fi
 EOF
   cat > bin/ytt << 'EOF'

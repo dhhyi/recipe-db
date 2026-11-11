@@ -34,6 +34,15 @@ complete_candidate_release() {
   [ "$status" -eq 0 ]
 }
 
+create_two_release_revisions() {
+  export MOCK_SOURCE_REVISION
+  MOCK_SOURCE_REVISION=$(git rev-parse HEAD)
+  git -c user.name=Test -c user.email=test@example.invalid \
+    commit --allow-empty -qm 'Candidate fixture revision'
+  export MOCK_REVISION
+  MOCK_REVISION=$(git rev-parse HEAD)
+}
+
 mock_github_release_api() {
   export MOCK_GITHUB_RELEASE_JSON="$FIXTURE_ROOT/github-release.json"
   export MOCK_CURL_FAIL=false
@@ -481,6 +490,7 @@ EOF
 }
 
 @test "candidate migration success is recorded but readiness failure retains the barrier and ownership" {
+  local workload_changes
   prepare_candidate_release
   run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
     "$CANDIDATE" migration-succeeded "RECORD-migration-succeeded-$HOLDER"
@@ -500,6 +510,78 @@ EOF
     "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -ne 0 ]
+  workload_changes=$(grep -c 'scale deployment/' "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"fallback is limited to an interrupted, no-migration candidate start"* ]]
+  [ "$(grep -c 'scale deployment/' "$MOCK_LOG")" -eq "$workload_changes" ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "marker-only fallback stages the previous release across the checkout handoff" {
+  create_two_release_revisions
+  prepare_captured_release
+  git checkout --detach "$MOCK_REVISION" > /dev/null
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+
+  for service in recipes images ratings inspirations tags; do
+    mkdir -p "$FIXTURE_ROOT/tar-data/$service"
+    printf '1\n' > "$FIXTURE_ROOT/tar-data/$service/storage-version"
+  done
+  local marker_before marker_after
+  marker_before=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=true
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "recovery-required" and .phase == "interrupted"' \
+    "$STATE/backup-state.json" > /dev/null
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
+
+  local workload_changes
+  workload_changes=$(grep -c 'scale deployment/' "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    "FALLBACK-$HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"fallback requires FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation"* ]]
+  [ "$(grep -c 'scale deployment/' "$MOCK_LOG")" -eq "$workload_changes" ]
+
+  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
+  [ "$status" -eq 0 ]
+  jq -e --arg old "$ARTIFACT" --arg failed "$CANDIDATE" --arg revision "$MOCK_SOURCE_REVISION" '
+    .status == "candidate-staged" and .phase == "candidate-staged"
+    and .candidate.artifact == $old and .candidate.revision == $revision
+    and .fallback.kind == "marker-only-version-1"
+    and .fallback.originalRelease == $old and .fallback.failedCandidate == $failed
+    and any(.candidateHistory[]; .postCheckDisposition.choice == "temporary-fix")
+    and .postCheckDisposition == null
+  ' "$STATE/backup-state.json" > /dev/null
+  jq -e 'all(.items[]; .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
+  jq -e --arg holder "$HOLDER" --arg old "$ARTIFACT" '
+    .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/release"] == $old
+    and .metadata.annotations["recipe-db/phase"] == "candidate-staged"
+  ' "$MOCK_LOG.lease" > /dev/null
+
+  git checkout --detach "$MOCK_SOURCE_REVISION" > /dev/null
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$ARTIFACT" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$ARTIFACT" "OPEN-$HOLDER"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "access-open" and .candidate.artifact == .source.artifact' \
+    "$STATE/backup-state.json" > /dev/null
+  marker_after=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+  [ "$marker_after" = "$marker_before" ]
 }
 
 @test "candidate staging interruption preserves inspectable state and the original Lease" {
