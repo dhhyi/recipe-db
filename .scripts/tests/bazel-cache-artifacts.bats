@@ -65,7 +65,7 @@ load test_helper
   [ "$status" -eq 1 ]
 }
 
-@test "Bazel snapshot upload depends on both completed Bazel stages" {
+@test "Bazel snapshot preservation runs after failures and cancellation with verified source" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   slice="$BATS_TEST_TMPDIR/workflow-slice"
   sed -n '/- name: check project formatting/,/- name: validate message bus integration/p' "$workflow" > "$slice"
@@ -73,7 +73,13 @@ load test_helper
   grep -F -- "--execution_log_json_file=\"\$RUNNER_TEMP/bazel-format-execution.json\"" "$slice"
   grep -F -- "--execution_log_json_file=\"\$RUNNER_TEMP/bazel-check-execution.json\"" "$slice"
   grep -F 'steps.prepare-bazel-cache.outputs.name' "$slice"
-  grep -F 'if: success()' "$slice"
+  run yq -r '.jobs.quality-checks.steps[] | select(.id == "prepare-bazel-cache") | .if' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = "always() && steps.source.outcome == 'success'" ]
+
+  run yq -r '.jobs.quality-checks.steps[] | select(.name == "upload Bazel cache snapshot") | .if' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = "always() && steps.prepare-bazel-cache.outcome == 'success' && steps.prepare-bazel-cache.outputs.name != ''" ]
 }
 
 @test "Publish retains rebuild explanations even when Bazel fails" {
