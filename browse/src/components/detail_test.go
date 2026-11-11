@@ -31,10 +31,10 @@ func TestBringIngredientFooter(t *testing.T) {
 		if !strings.Contains(body, markup) {
 			t.Errorf("missing footer markup %q in %s", markup, body)
 		}
-		for _, obsolete := range []string{"bring-import-component", "data-bring", "<iframe", `role="button"`, "widgets/import.js"} {
-			if strings.Contains(body, obsolete) {
-				t.Errorf("plain import link must not contain %q", obsolete)
-			}
+	}
+	for _, obsolete := range []string{"bring-import-component", "data-bring", "<iframe", `role="button"`, "widgets/import.js"} {
+		if strings.Contains(body, obsolete) {
+			t.Errorf("plain import link must not contain %q", obsolete)
 		}
 	}
 	link := regexp.MustCompile(`<a href="(https://api.getbring.com/[^"]+)"`).FindStringSubmatch(body)

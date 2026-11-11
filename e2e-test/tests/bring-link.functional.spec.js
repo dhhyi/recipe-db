@@ -32,7 +32,11 @@ test("Bring link targets the displayed recipe after HTMX navigation without thir
 }) => {
   const thirdPartyRequests = [];
   page.on("request", (request) => {
-    if (/getbring\.com|google-analytics\.com/.test(new URL(request.url()).hostname)) {
+    if (
+      /getbring\.com|google-analytics\.com/.test(
+        new URL(request.url()).hostname,
+      )
+    ) {
       thirdPartyRequests.push(request.url());
     }
   });
@@ -49,13 +53,20 @@ test("Bring link targets the displayed recipe after HTMX navigation without thir
     ),
   ).toBeLessThan(1);
   expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
   ).toBe(true);
 
   const { createRecipe: second } = await graphql(
     request,
     "mutation($value: RecipeInput!) { createRecipe(value: $value) { id } }",
-    { value: { name: "E2E Bring zweites Rezept", ingredients: [{ name: "Ei" }] } },
+    {
+      value: {
+        name: "E2E Bring zweites Rezept",
+        ingredients: [{ name: "Ei" }],
+      },
+    },
   );
   await page.evaluate(async (id) => {
     await htmx.ajax("GET", `/recipe/${id}`, {
@@ -94,7 +105,9 @@ test("Bring link works without JavaScript on a narrow screen", async ({
     await importLink(page).focus();
     await expect(importLink(page)).toBeFocused();
     expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
     ).toBe(true);
   } finally {
     await context.close();
