@@ -84,9 +84,9 @@ test("browse seeded recipes, open a recipe and return home", async ({
           - cell "(optional)"
           - cell "Zimt"
       - rowgroup:
-        - row "Mit Bring! zur Einkaufsliste":
-          - cell "Mit Bring! zur Einkaufsliste":
-            - link "Mit Bring! zur Einkaufsliste"
+        - row "Auf die Einkaufsliste":
+          - cell "Auf die Einkaufsliste":
+            - link "Auf die Einkaufsliste"
   `);
   await expect(
     page.getByRole("heading", { name: "Zubereitung", exact: true }),

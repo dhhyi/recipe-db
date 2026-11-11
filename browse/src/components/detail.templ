@@ -75,10 +75,9 @@ templ ingredients(recipe *gql.RecipeDetail, publicURL string) {
 			<tfoot>
 				<tr>
 					<td colspan="2" class="px-0!">
-						<bring-import-component class="flex justify-end pt-4" data-recipe-url={ publicURL }>
-							<div data-bring-language="de" data-bring-requires-consent="true" data-bring-base-quantity="4" data-bring-requested-quantity="4" style="display:none"></div>
-							<a href={ templ.SafeURL("https://api.getbring.com/rest/bringrecipes/deeplink?url=" + url.QueryEscape(publicURL) + "&source=web&baseQuantity=4&requestedQuantity=4") }>Mit Bring! zur Einkaufsliste</a>
-						</bring-import-component>
+						<div class="flex justify-end pt-4">
+							<a href={ templ.SafeURL("https://api.getbring.com/rest/bringrecipes/deeplink?url=" + url.QueryEscape(publicURL) + "&source=web&baseQuantity=4&requestedQuantity=4") }>Auf die Einkaufsliste</a>
+						</div>
 					</td>
 				</tr>
 			</tfoot>

@@ -26,15 +26,15 @@ func TestBringIngredientFooter(t *testing.T) {
 		`</tbody><tfoot>`,
 		`colspan="2"`,
 		`class="flex justify-end pt-4"`,
-		`data-recipe-url="` + publicURL + `"`,
-		`data-bring-language="de"`,
-		`data-bring-requires-consent="true"`,
-		`data-bring-base-quantity="4"`,
-		`data-bring-requested-quantity="4"`,
-		`Mit Bring! zur Einkaufsliste</a>`,
+		`Auf die Einkaufsliste</a>`,
 	} {
 		if !strings.Contains(body, markup) {
 			t.Errorf("missing footer markup %q in %s", markup, body)
+		}
+		for _, obsolete := range []string{"bring-import-component", "data-bring", "<iframe", `role="button"`, "widgets/import.js"} {
+			if strings.Contains(body, obsolete) {
+				t.Errorf("plain import link must not contain %q", obsolete)
+			}
 		}
 	}
 	link := regexp.MustCompile(`<a href="(https://api.getbring.com/[^"]+)"`).FindStringSubmatch(body)
