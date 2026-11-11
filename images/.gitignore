@@ -5,6 +5,7 @@ nimbledeps/
 nimble.develop
 nimble.paths
 config.nims
+storage_version_generated.nim
 
 # data
 /public

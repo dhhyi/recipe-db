@@ -78,6 +78,10 @@ file = ".scripts/sync-tailwind.sh"
 description = "Regenerate Docker and Prettier ignore files"
 file = ".scripts/sync-ignore-files.sh"
 
+[tasks.sync-storage-version-templates]
+description = "Generate service source files for declared storage versions"
+file = ".scripts/sync-storage-version-templates.sh"
+
 [tasks.sync-vscode-settings]
 description = "Generate repository VS Code settings"
 file = ".scripts/sync-vscode-settings.sh"
@@ -88,7 +92,12 @@ outputs = [".vscode/settings.json"]
 description = "Validate file layout and synchronize shared generated files"
 depends = ["check-forbidden-files"]
 run = [
-  { tasks = ["sync-tailwind", "sync-ignore-files", "sync-vscode-settings"] },
+  { tasks = [
+    "sync-tailwind",
+    "sync-ignore-files",
+    "sync-storage-version-templates",
+    "sync-vscode-settings"
+  ] },
 ]
 
 [tasks.sync-devcontainers]
@@ -117,6 +126,7 @@ run = [
 [tasks.generate-docker-compose]
 description = "Generate the development Compose configuration"
 depends = [
+  "sync-files",
   "create-intranet",
   "create-search-key",
   "create-auth-test-fixture",

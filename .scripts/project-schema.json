@@ -86,9 +86,33 @@
       }
     },
     "storageVersion": {
-      "description": "Positive version of this service's authoritative stored data.",
-      "type": "integer",
-      "minimum": 1
+      "description": "Required storage version and language-specific source template generated into the project.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "file", "template"],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "file": {
+          "description": "Project-relative path to the ignored generated source file.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "allOf": [
+            { "not": { "pattern": "^/" } },
+            { "not": { "pattern": "/$" } },
+            { "not": { "pattern": "//" } },
+            { "not": { "pattern": "(^|/)\\.\\.?(/|$)" } }
+          ]
+        },
+        "template": {
+          "description": "Source content with exactly one {{STORAGE_VERSION}} placeholder.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "graphqlSchema": {
       "type": "string",

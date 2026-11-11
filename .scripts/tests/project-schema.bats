@@ -5,9 +5,11 @@ load test_helper
 @test "project schema requires authoritative storage declarations and rejects invalid versions" {
   run python3 - << 'PY'
 import json
+import re
 from pathlib import Path
 
 schema = json.loads(Path(".scripts/project-schema.json").read_text())
+
 data_roles = ["authoritative-read-only", "cleanup-participant"]
 rule = next(
     item for item in schema["allOf"]
@@ -19,7 +21,10 @@ assert {"backupData", "storageVersion"} <= required
 forbidden = set(rule["else"]["not"]["required"])
 assert "storageVersion" in forbidden
 version = schema["properties"]["storageVersion"]
-assert version["type"] == "integer" and version["minimum"] == 1
+assert version["type"] == "object"
+assert set(version["required"]) == {"value", "file", "template"}
+assert version["properties"]["value"]["type"] == "integer"
+assert version["properties"]["value"]["minimum"] == 1
 
 
 def valid(project):
@@ -31,31 +36,59 @@ def valid(project):
     if not owns_data and forbidden & project.keys():
         return False
     if "storageVersion" in project:
-        value = project["storageVersion"]
-        if type(value) is not int or value < version["minimum"]:
+        declaration = project["storageVersion"]
+        if not isinstance(declaration, dict) or set(declaration) != {"value", "file", "template"}:
+            return False
+        value = declaration["value"]
+        if type(value) is not int or value < version["properties"]["value"]["minimum"]:
+            return False
+        if not isinstance(declaration["file"], str) or not re.fullmatch(
+            r"[A-Za-z0-9._/-]+", declaration["file"]
+        ):
+            return False
+        if any(part in {"", ".", ".."} for part in declaration["file"].split("/")):
+            return False
+        if declaration["file"].startswith("/") or "//" in declaration["file"] or declaration["file"].endswith("/"):
+            return False
+        if not isinstance(declaration["template"], str) or declaration["template"].count(
+            "{{STORAGE_VERSION}}"
+        ) != 1:
             return False
     return True
 
 
 for role in data_roles:
-    declaration = {"backupRole": role, "backupData": {"kind": "json"}, "storageVersion": 1}
+    storage = {
+        "value": 1,
+        "file": "src/storage_version_generated.ml",
+        "template": "let value = {{STORAGE_VERSION}}",
+    }
+    declaration = {"backupRole": role, "backupData": {"kind": "json"}, "storageVersion": storage}
     assert valid(declaration)
-    assert not valid(declaration | {"storageVersion": 0})
-    assert not valid(declaration | {"storageVersion": -1})
-    assert not valid(declaration | {"storageVersion": 1.5})
-    assert not valid(declaration | {"storageVersion": "1"})
-    assert not valid(declaration | {"storageVersion": True})
-    assert not valid(declaration | {"storageVersion": None})
-    assert not valid(declaration | {"storageVersion": 1} | {"backupData": None})
+    for invalid_storage in [
+        storage | {"value": 0},
+        storage | {"value": -1},
+        storage | {"value": 1.5},
+        storage | {"value": "1"},
+        storage | {"value": True},
+        storage | {"value": None},
+        storage | {"file": "../escape.ml"},
+        storage | {"file": "/absolute.ml"},
+        storage | {"file": "src//generated.ml"},
+        storage | {"template": "let value = 1"},
+        storage | {"template": "{{STORAGE_VERSION}} {{STORAGE_VERSION}}"},
+    ]:
+        assert not valid(declaration | {"storageVersion": invalid_storage})
+    assert not valid(declaration | {"backupData": None})
     assert not valid({"backupRole": role, "backupData": {"kind": "json"}})
-    assert not valid({"backupRole": role, "storageVersion": 1})
+    assert not valid({"backupRole": role, "storageVersion": storage})
 
 assert valid({"backupRole": "derived-stateless"})
 assert valid({"backupRole": "excluded-external-cache"})
 assert valid({})
-assert not valid({"backupRole": "derived-stateless", "storageVersion": 1})
-assert not valid({"backupRole": "excluded-external-cache", "storageVersion": 1})
-assert not valid({"storageVersion": 1})
+assert not valid({"backupRole": "derived-stateless", "storageVersion": storage})
+assert not valid({"backupRole": "excluded-external-cache", "storageVersion": storage})
+assert not valid({"storageVersion": storage})
 PY
   [ "$status" -eq 0 ]
 }

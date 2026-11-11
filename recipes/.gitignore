@@ -3,6 +3,7 @@
 /db
 /_build
 /deps
+/lib/recipes/storage_version_generated.ex
 /erl_crash.dump
 /*.sqlite3
 /*.sqlite3-shm

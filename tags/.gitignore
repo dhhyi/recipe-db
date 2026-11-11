@@ -1,4 +1,5 @@
 _build/
+src/storage_version_generated.ml
 .opam/
 *.sqlite
 *.sqlite-shm

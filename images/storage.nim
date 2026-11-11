@@ -1,6 +1,7 @@
 import std/[algorithm, json, os, posix, strutils, times, uri]
 import nimcrypto/sha2
 import pixie
+import storage_version_generated
 
 type
   ImageStorage* = object
@@ -8,20 +9,6 @@ type
   StorageError* = object of CatchableError
   ImageNotFound* = object of CatchableError
   ImageStateInvalid* = object of CatchableError
-
-const projectMetadata = staticRead(".project.yaml")
-
-proc declaredStorageVersion(): int {.compileTime.} =
-  var matches = 0
-  for line in projectMetadata.splitLines:
-    let value = line.strip()
-    if value.startsWith("storageVersion: "):
-      inc matches
-      result = parseInt(value["storageVersion: ".len .. ^1])
-  if matches != 1 or result <= 0:
-    raise newException(ValueError, "Expected one positive storageVersion in .project.yaml")
-
-const expectedStorageVersion = declaredStorageVersion()
 
 proc validRecipeId*(id: string): bool =
   if id.len == 0 or id.len > 128 or ".." in id:

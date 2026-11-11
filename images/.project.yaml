@@ -69,7 +69,11 @@ category: backend
 backupRole: cleanup-participant
 backupCompact: true
 backupData: { kind: images }
-storageVersion: 1
+storageVersion:
+  value: 1
+  file: storage_version_generated.nim
+  template: |
+    const expectedStorageVersion* = {{STORAGE_VERSION}}
 prettier:
   ignore:
     - "*.nim"

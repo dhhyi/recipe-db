@@ -11,7 +11,7 @@ WORKDIR /app
 RUN opam init --disable-sandboxing --bare --yes \
   && opam switch create 5.3.0 --jobs=2 --yes
 
-COPY tags.opam dune-project .project.yaml ./
+COPY tags.opam dune-project ./
 RUN --mount=type=cache,id=tags-opam-downloads,target=/root/.opam/download-cache,sharing=locked \
   opam install --switch=5.3.0 --deps-only --yes ./tags.opam
 

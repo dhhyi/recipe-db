@@ -12,7 +12,7 @@ WORKDIR /app
 
 RUN mix local.hex --force && mix local.rebar --force
 
-COPY mix.exs mix.lock .project.yaml ./
+COPY mix.exs mix.lock ./
 RUN --mount=type=cache,id=recipes-hex,target=/root/.hex/packages,sharing=locked \
   mix deps.get --only prod && mix deps.compile
 

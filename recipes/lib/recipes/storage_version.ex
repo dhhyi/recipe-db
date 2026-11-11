@@ -1,13 +1,7 @@
 defmodule Recipes.StorageVersion do
   @moduledoc false
 
-  @project_file Path.expand("../../.project.yaml", __DIR__)
-  @external_resource @project_file
-  @storage_version_regex ~r/^storageVersion: ([1-9][0-9]*)$/m
-  @expected_version (case Regex.scan(@storage_version_regex, File.read!(@project_file)) do
-                       [[_, value]] -> String.to_integer(value)
-                       _ -> raise "Expected exactly one positive storageVersion in .project.yaml"
-                     end)
+  @expected_version Recipes.StorageVersionGenerated.value()
 
   def check!(database, mode) do
     root = Path.dirname(database)

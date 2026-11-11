@@ -111,8 +111,13 @@ for project in $projects; do
       cat "$project/.gitignore"
       echo
     fi
-    if ! grep -Fq '.project.yaml' "$project/Dockerfile"; then
-      echo .project.yaml
+    echo .project.yaml
+    storage_version_file=$(mise exec -- yq -r \
+      'select(documentIndex == 1) | .storageVersion.file // ""' "$project/.project.yaml")
+    if [ -n "$storage_version_file" ]; then
+      echo
+      echo "# generated storage-version source"
+      echo "!/$storage_version_file"
     fi
     cat << 'EOF'
 

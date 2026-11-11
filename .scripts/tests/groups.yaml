@@ -47,6 +47,7 @@ release:
       - .scripts/publish-production-github-release.sh
       - .scripts/smoke-production-image.sh
       - .scripts/generate-production-build-metadata.sh
+      - .scripts/sync-storage-version-templates.sh
       - package.json
 deploy:
   tests:
@@ -280,6 +281,7 @@ tooling:
     - .scripts/tests/merge-graphql-schemas.bats
     - .scripts/tests/project-schema.bats
     - .scripts/tests/sync-ignore-files.bats
+    - .scripts/tests/sync-storage-version-templates.bats
     - .scripts/tests/sync-tailwind.bats
   suite_inputs:
     .scripts/tests/check-forbidden-files.bats:
@@ -310,6 +312,11 @@ tooling:
       - .scripts/tests/mocks/devcontainer-*
       - ":(glob)*/.project.yaml"
       - ":(glob)*/.gitignore"
+    .scripts/tests/sync-storage-version-templates.bats:
+      - .scripts/sync-storage-version-templates.sh
+      - .scripts/tests/groups.yaml
+      - mise.toml
+      - ":(glob)*/.project.yaml"
     .scripts/tests/sync-tailwind.bats:
       - .scripts/sync-tailwind.sh
       - ":(glob)*/.project.yaml"

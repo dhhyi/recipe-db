@@ -40,8 +40,6 @@ devcontainer:
       - RUN cd $HOME && eerie install https://github.com/IoLanguage/Socket.git
       - RUN cd $HOME && eerie install https://github.com/IoLanguage/CGI.git
       - RUN cd $HOME && eerie install https://github.com/IoLanguage/SQLite3.git
-  initialize: |
-    sh generate_storage_version.sh .project.yaml > lib/storage_version_generated.io
   ports:
     - 8456
   environment:
@@ -76,15 +74,17 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 backupData: { kind: sqlite, file: db.sqlite }
-storageVersion: 1
+storageVersion:
+  value: 1
+  file: lib/storage_version_generated.io
+  template: |
+    StorageVersionGenerated := {{STORAGE_VERSION}}
 prettier:
   ignore:
     - "*.io"
 check: |
-  sh generate_storage_version.sh .project.yaml > lib/storage_version_generated.io
   io --version
   timeout 10 io tests/coroutines.io
   io tests/maintenance.io
   io tests/storage_version.io
-  rm -f lib/storage_version_generated.io
-test: sh generate_storage_version.sh .project.yaml > lib/storage_version_generated.io; timeout 10 io tests/coroutines.io && io tests/maintenance.io && io tests/storage_version.io; set result $status; rm -f lib/storage_version_generated.io; exit $result
+test: timeout 10 io tests/coroutines.io && io tests/maintenance.io && io tests/storage_version.io
