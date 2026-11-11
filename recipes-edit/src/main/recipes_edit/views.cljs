@@ -113,18 +113,17 @@
      (when (= :success (:kind feedback))
        [:p.feedback.success {:role "status" :aria-live "polite"}
         (:message feedback)])
-     [:div.editor-actions {:class "grid! gap-2 my-3"}
-      [:div.editor-buttons.flex.flex-wrap.gap-2
-       [:button.w-auto!.max-w-full
-        (cond-> {:type "submit" :disabled (or saving? (not dirty?))}
-          saving? (assoc :aria-busy "true"))
-        (if save-failed? "Erneut speichern" "Speichern")]
-       [:button.outline.w-auto!.max-w-full
-        {:type "button"
-         :disabled (or saving? (not dirty?))
-         :on-click #(rf/dispatch [::events/discard])}
-        "Änderungen verwerfen"]]
-      [return-action state]]]))
+     [:div.flex.flex-wrap.gap-2
+      [:button.w-auto!.max-w-full
+       (cond-> {:type "submit" :disabled (or saving? (not dirty?))}
+         saving? (assoc :aria-busy "true"))
+       (if save-failed? "Erneut speichern" "Speichern")]
+      [:button.outline.w-auto!.max-w-full
+       {:type "button"
+        :disabled (or saving? (not dirty?))
+        :on-click #(rf/dispatch [::events/discard])}
+       "Änderungen verwerfen"]]
+     [:p [return-action state]]]))
 
 (defn app []
   (let [{:keys [route status feedback] :as state} @(rf/subscribe [::subs/state])]

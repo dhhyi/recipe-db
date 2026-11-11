@@ -89,53 +89,53 @@ editorView model =
 
                     _ ->
                         savedView model
-        , div [ class "editor-actions grid! gap-2 my-3" ]
-            [ label [ for "upload-image" ] [ text "JPEG- oder PNG-Bild auswählen (maximal 10 MiB)" ]
-            , input
-                [ id "upload-image"
-                , class "max-w-full"
-                , type_ "file"
-                , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
-                , disabled (not canSelect)
-                , on "change" (D.map GotFile fileDecoder)
-                ]
-                []
-            , if model.session /= Nothing || model.phase == Loading then
-                div [ class "editor-buttons flex flex-wrap gap-2" ]
-                    [ button
-                        ([ type_ "button"
-                         , disabled (not (dirty model && (model.phase == Editing || model.phase == SaveFailed) && (model.session |> Maybe.map .previewReady |> Maybe.withDefault False)))
-                         , onClick Save
-                         ]
-                            ++ (if busy then
-                                    [ attribute "aria-busy" "true" ]
+        , label [ for "upload-image" ] [ text "JPEG- oder PNG-Bild auswählen (maximal 10 MiB)" ]
+        , input
+            [ id "upload-image"
+            , class "max-w-full"
+            , type_ "file"
+            , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
+            , disabled (not canSelect)
+            , on "change" (D.map GotFile fileDecoder)
+            ]
+            []
+        , if model.session /= Nothing || model.phase == Loading then
+            div [ class "flex flex-wrap gap-2" ]
+                [ button
+                    ([ type_ "button"
+                     , disabled (not (dirty model && (model.phase == Editing || model.phase == SaveFailed) && (model.session |> Maybe.map .previewReady |> Maybe.withDefault False)))
+                     , onClick Save
+                     ]
+                        ++ (if busy then
+                                [ attribute "aria-busy" "true" ]
 
-                                else
-                                    []
-                               )
+                            else
+                                []
+                           )
+                    )
+                    [ text
+                        (if model.phase == SaveFailed then
+                            "Erneut speichern"
+
+                         else
+                            "Speichern"
                         )
-                        [ text
-                            (if model.phase == SaveFailed then
-                                "Erneut speichern"
-
-                             else
-                                "Speichern"
-                            )
-                        ]
-                    , button [ type_ "button", class "outline", disabled (busy || model.phase == Loading), onClick Close ]
-                        [ text
-                            (if dirty model then
-                                "Abbrechen"
-
-                             else
-                                "Schließen"
-                            )
-                        ]
                     ]
+                , button [ type_ "button", class "outline", disabled (busy || model.phase == Loading), onClick Close ]
+                    [ text
+                        (if dirty model then
+                            "Abbrechen"
 
-              else
-                text ""
-            , a
+                         else
+                            "Schließen"
+                        )
+                    ]
+                ]
+
+          else
+            text ""
+        , p []
+            [ a
                 [ href ("/recipe/" ++ model.recipeId)
                 , attribute "aria-disabled" (boolString busy)
                 , attribute "tabindex"

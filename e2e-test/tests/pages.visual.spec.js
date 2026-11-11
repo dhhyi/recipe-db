@@ -22,6 +22,17 @@ for (const role of ["anonymous", "member", "owner"]) {
   test.describe(role, () => {
     test.use({ visualRole: role });
     const screenshot = async (page, name) => {
+      if (
+        role === "owner" &&
+        /^\/(?:edit|images-edit)\//.test(new URL(page.url()).pathname)
+      ) {
+        await expect(
+          page.locator("main .editor-actions, main .editor-buttons"),
+        ).toHaveCount(0);
+        await expect(
+          page.locator("main p > a").filter({ hasText: /^Zurück (?:zum|zur)/ }),
+        ).toHaveCount(1);
+      }
       await page.mouse.move(0, 0);
       await page.evaluate(async () => {
         window.scrollTo(0, 0);
