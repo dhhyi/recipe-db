@@ -3,6 +3,7 @@ import {
   expect,
   graphql,
   uploadImage,
+  waitForImageDecoded,
   withIgnoredServices,
 } from "./fixtures.js";
 
@@ -264,6 +265,9 @@ test("recipe card title, image, and rating still navigate to detail", async ({
       `[data-recipe-id="${recipe.id}"] a[slot="${slot}"]`,
     );
     await expect(link).toBeVisible();
+    if (slot === "image") {
+      await waitForImageDecoded(link.locator("img"));
+    }
     if (slot !== "image") {
       await link.hover();
       await expect(link).toHaveCSS("text-decoration-line", "none");
@@ -278,6 +282,30 @@ test("recipe card title, image, and rating still navigate to detail", async ({
     await tagLink.focus();
     await expect(tagLink).toHaveCSS("text-decoration-line", "underline");
     await link.click();
+    await expect(page).toHaveURL(new RegExp(`/recipe/${recipe.id}$`));
+  }
+});
+
+test("missing and failed recipe images remain clickable through the title overlay", async ({
+  page,
+  request,
+  tagSearchRecipes: { matches },
+}) => {
+  const { recipe } = await graphql(
+    request,
+    "query($id: ID!) { recipe(id: $id) { image { thumbUrl } } }",
+    { id: matches[0].id },
+  );
+  await page.route(recipe.image.thumbUrl, (route) => route.abort("failed"));
+  for (const recipe of [matches[1], matches[0]]) {
+    await page.goto(`/?q=${encodeURIComponent(recipe.name)}`);
+    const tile = page.locator(`[data-recipe-id="${recipe.id}"]`);
+    const fallback = tile.locator(".fallback-image");
+    await expect(fallback).toBeVisible();
+    await waitForImageDecoded(fallback);
+    const box = await fallback.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await expect(page).toHaveURL(new RegExp(`/recipe/${recipe.id}$`));
   }
 });

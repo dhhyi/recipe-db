@@ -138,10 +138,13 @@ export class RecipeTile extends LitElement {
     ::slotted(a[slot="title"]) {
       align-items: end;
       display: flex;
-      height: 100%;
       pointer-events: auto;
       text-decoration: none !important;
       width: 100%;
+    }
+
+    .image:has(> .fallback-image:not([hidden])) ::slotted(a[slot="title"]) {
+      height: 100%;
     }
   `;
 
