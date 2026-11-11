@@ -241,6 +241,14 @@ assert_compose() {
     and (.services | has("oauth2-proxy") | not)
     and (.services | has("redis") | not)
     and .services.traefik.ports == ["8080:80", "3000:3000"]
+    and ([
+      "traefik.http.routers.rest-internal-unrouted.entrypoints=rest-internal",
+      "traefik.http.routers.rest-internal-unrouted.rule=PathPrefix(`/`)",
+      "traefik.http.routers.rest-internal-unrouted.priority=1",
+      "traefik.http.routers.rest-internal-unrouted.service=rest-internal-unrouted",
+      "traefik.http.services.rest-internal-unrouted.loadbalancer.server.port=9",
+      "traefik.http.services.rest-internal-unrouted.loadbalancer.healthcheck.path=/"
+    ] - .services.traefik.labels == [])
     and .services.job.profiles == ["development"]
     and .services.test.profiles == ["test"]
     and .services.test.command == ["/bin/sh", "-c", "echo tested"]
@@ -444,6 +452,7 @@ assert_compose() {
     and .http.middlewares["oauth2-forward-auth"].forwardAuth.trustForwardHeader == false
     and .http.middlewares["identity-strip"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == ""
     and (.http.middlewares | has("graphql-ingress") | not)
+    and (tostring | contains("rest-internal-unrouted") | not)
     and (tostring | contains("@docker") | not)
   ' <<< "$output"
 }
