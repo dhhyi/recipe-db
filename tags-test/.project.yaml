@@ -9,11 +9,10 @@ devcontainer:
   build:
     args:
       JAVA_VERSION: "21"
-      GRADLE_VERSION: "8.14.3"
       HOST_UID: "${HOST_UID:-1000}"
       HOST_GID: "${HOST_GID:-1000}"
     user:
-      - RUN mise use -g java@$JAVA_VERSION gradle@$GRADLE_VERSION
+      - RUN mise use -g java@$JAVA_VERSION
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     TAGS_API: http://tags-test-api:8900
@@ -34,14 +33,14 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: GRADLE_USER_HOME=target/gradle-cache gradle --no-daemon --project-cache-dir target/gradle-project-cache test
+test: GRADLE_USER_HOME=target/gradle-cache ./gradlew --no-daemon --project-cache-dir target/gradle-project-cache test
 format:
-  - check: gradle --no-daemon "-PspotlessFiles="(string join , $argv) spotlessCheck
-    apply: gradle --no-daemon "-PspotlessFiles="(string join , $argv) spotlessApply
+  - check: ./gradlew --no-daemon "-PspotlessFiles="(string join , $argv) spotlessCheck
+    apply: ./gradlew --no-daemon "-PspotlessFiles="(string join , $argv) spotlessApply
     files: ["src/**/*.groovy", "*.gradle"]
 check: |
   java --version
-  gradle --version
+  ./gradlew --version
 prettier:
   ignore:
     - "*.gradle"

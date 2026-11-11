@@ -277,7 +277,7 @@ jobs:
           echo "::endgroup::"
 
       - name: build development and standalone test images
-        run: docker compose --profile development --profile test build
+        run: docker compose --progress plain --profile development --profile test build
 
       - name: verify production ingress trust
         run: mise run test-auth-ingress
