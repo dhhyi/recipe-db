@@ -10,7 +10,7 @@ export class FooterComponent extends LitElement {
   render() {
     return html`
       <hr />
-      <footer class="mb-3 text-center text-sm">
+      <footer class="mb-3 text-center">
         <a
           href="https://github.com/dhhyi/recipe-db/blob/main/README.md"
           class="secondary"

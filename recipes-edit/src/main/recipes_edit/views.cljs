@@ -30,7 +30,7 @@
 
 (defn- ingredient-row [index ingredient]
   [:div.flex.flex-row.gap-1.items-center {:key index}
-   [:input.w-20!.sm:w-28!.min-w-0
+   [:input.min-w-0
     {:type "text"
      :id (str "ingredient-amount-unit-" index)
      :placeholder "Menge/Einheit"

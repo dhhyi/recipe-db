@@ -86,7 +86,7 @@ func isPredefinedBrowseSort(value string) bool {
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 	<recipe-tile-component itemscope itemtype="https://schema.org/Recipe" data-recipe-id={ item.Id }>
 		<a href={ "/recipe/" + item.Id } slot="title" aria-label={ recipeAccessibleLabel(item) } hx-boost="true">
-			<h2 class="font-bold recipe-tile-title" itemprop="name" title={ item.Name }>{ item.Name }</h2>
+			<h2 class="recipe-tile-title" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 		</a>
 		if item.Image != nil {
 			<a href={ "/recipe/" + item.Id } slot="image" aria-label={ "Bild von Rezept " + item.Name } hx-boost="true">
@@ -152,7 +152,7 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 		if includeStatus {
 			@browseStatus(state, nil)
 		}
-		<div data-browse-grid class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 md:gap-4 mx-auto max-w-[350px] sm:max-w-none">
+		<div data-browse-grid class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 mx-auto max-w-[350px] sm:max-w-none">
 			<div data-recipe-list class="contents">
 				for _, recipe := range state.Recipes {
 					@recipeTile(recipe, state.RatingsOnline)
