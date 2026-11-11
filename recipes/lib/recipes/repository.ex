@@ -25,6 +25,14 @@ defmodule Recipes.Repository do
   @impl true
   def init(options) do
     database = Keyword.get_lazy(options, :database, &database_path/0)
+
+    storage_state =
+      if Keyword.get(options, :validate_storage, false) do
+        Recipes.StorageVersion.check!(database, Application.get_env(:recipes, :mode))
+      else
+        :skip
+      end
+
     database |> Path.dirname() |> File.mkdir_p!()
 
     with {:ok, connection} <-
@@ -38,6 +46,7 @@ defmodule Recipes.Repository do
              connection,
              "CREATE TABLE IF NOT EXISTS recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)"
            ) do
+      if storage_state == :fresh, do: Recipes.StorageVersion.publish!(database)
       {:ok, connection}
     end
   end
@@ -138,7 +147,7 @@ defmodule Recipes.Repository do
     {:reply, reply, connection}
   end
 
-  defp database_path do
+  def database_path do
     System.get_env("DATA_LOCATION", "db")
     |> Path.join("recipes.sqlite3")
   end

@@ -304,6 +304,15 @@ suite "backend HTTP publication contract":
   test "backup maintenance APIs enumerate, compact, purge, and block writes":
     if dirExists(root):
       removeDir(root)
+    var bootstrap = startServer(mode = some("testing"))
+    bootstrap.stopServer()
+    let seedStore = ImageStorage(root: root)
+    let seedNormal = newImage(648, 486)
+    let seedThumb = newImage(300, 225)
+    seedNormal.fill(parseHtmlColor("#ff0000"))
+    seedThumb.fill(parseHtmlColor("#ff0000"))
+    discard seedStore.publish("recipe-a", seedNormal.encodeImage(PngFormat),
+        seedThumb.encodeImage(PngFormat))
     var server = startServer(mode = some("backup"))
     let client = newHttpClient(timeout = 5000)
     defer:

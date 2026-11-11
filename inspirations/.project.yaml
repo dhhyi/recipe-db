@@ -31,6 +31,7 @@ devcontainer:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     MODE: testing
   initialize: |
+    sh generate_storage_version.sh .project.yaml > storage_version_generated.lua
     luarocks make --tree lua_modules
     luarocks install https://raw.githubusercontent.com/dhhyi/Milua/main/milua-0.1-1.rockspec --tree lua_modules
     luarocks install --server=https://luarocks.org/dev luaformatter --tree lua_modules
@@ -71,6 +72,7 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 backupData: { kind: json, file: db.json }
+storageVersion: 1
 prettier:
   ignore:
     - "*.lua"
@@ -83,7 +85,11 @@ format:
     apply: lua-format $argv -i --column-table-limit=1
     files: ["*.rockspec"]
 check: |
+  sh generate_storage_version.sh .project.yaml > storage_version_generated.lua
+  luarocks make --tree lua_modules
   lua -v
   luacheck *.lua tests/*.lua
+  rm -rf tests/storage-fixture
   mkdir -p tests/storage-fixture
-  lua tests/storage.lua tests/storage-fixture; set result $status; rmdir tests/storage-fixture; exit $result
+  lua tests/storage.lua tests/storage-fixture; set result $status; rm -rf tests/storage-fixture; rm -f storage_version_generated.lua; exit $result
+test: sh generate_storage_version.sh .project.yaml > storage_version_generated.lua; luarocks make --tree lua_modules; rm -rf tests/storage-fixture; mkdir -p tests/storage-fixture; lua tests/storage.lua tests/storage-fixture; set result $status; rm -rf tests/storage-fixture; rm -f storage_version_generated.lua; exit $result

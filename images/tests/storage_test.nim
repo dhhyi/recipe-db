@@ -3,6 +3,7 @@ import pixie
 import ../storage
 
 const testRoot = "tests/storage-test-data"
+const versionRoot = "tests/storage-version-data"
 
 proc outputs(color: string): tuple[normal, thumb: string] =
   let normal = newImage(648, 486)
@@ -13,6 +14,16 @@ proc outputs(color: string): tuple[normal, thumb: string] =
 
 proc filename(metadata: JsonNode, key: string): string =
   decodeUrl(metadata[key].getStr[8 .. ^1], decodePlus = false)
+
+proc cleanDirectory(path: string) =
+  if dirExists(path):
+    for kind, entry in walkDir(path):
+      if kind == pcDir:
+        cleanDirectory(entry)
+        removeDir(entry)
+      else:
+        removeFile(entry)
+    removeDir(path)
 
 suite "immutable image storage":
   setup:
@@ -39,6 +50,43 @@ suite "immutable image storage":
     for name in ["a.png", "a-thumb.png", "../a-" & hash & ".png",
         "a-" & hash & ".png.pending-1", ".manifest.json"]:
       check not parseImageName(name).valid
+
+  test "storage version gates fresh, existing, empty-marked, and invalid roots":
+    cleanDirectory(versionRoot)
+    let versionedStore = ImageStorage(root: versionRoot)
+    check versionedStore.checkStorageVersion("production")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("backup")
+
+    createDir(versionRoot)
+    createDir(versionedStore.publicFolder)
+    createDir(versionedStore.manifestFolder)
+    check versionedStore.checkStorageVersion("testing")
+    writeFile(versionRoot / "unknown", "untouched")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("production")
+    check readFile(versionRoot / "unknown") == "untouched"
+    removeFile(versionRoot / "unknown")
+
+    versionedStore.initialize()
+    versionedStore.publishStorageVersion()
+    check readFile(versionRoot / "storage-version") == "1\n"
+    expect StorageError:
+      versionedStore.publishStorageVersion()
+    check readFile(versionRoot / "storage-version") == "1\n"
+    check not versionedStore.checkStorageVersion("production")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("backup")
+
+    writeFile(versionRoot / "storage-version", "2\n")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("production")
+    check readFile(versionRoot / "storage-version") == "2\n"
+    writeFile(versionRoot / "storage-version", "not-a-version")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("testing")
+    check readFile(versionRoot / "storage-version") == "not-a-version"
+    cleanDirectory(versionRoot)
 
   test "restart, retention, identical uploads and A to B to A":
     let a = outputs("#ff0000")

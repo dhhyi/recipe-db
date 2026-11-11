@@ -24,6 +24,9 @@ RUN cd /tmp/io && mkdir build && cd build \
 ENV PATH=${PATH}:${HOME}/.local/bin:${HOME}/.eerie/base/bin
 ENV LD_LIBRARY_PATH=${HOME}/.local/lib
 ENV EERIEDIR=${HOME}/.eerie
+COPY .project.yaml generate_storage_version.sh /app/
+RUN mkdir -p /app/lib \
+  && sh /app/generate_storage_version.sh /app/.project.yaml > /app/lib/storage_version_generated.io
 
 COPY tests/coroutines.io /tmp/coroutines.io
 RUN timeout 10 io /tmp/coroutines.io
@@ -54,6 +57,7 @@ COPY --from=builder /root/.eerie /root/.eerie
 COPY --from=builder /installed_packages /installed_packages
 COPY *.io /app/
 COPY lib /app/lib
+COPY --from=builder /app/lib/storage_version_generated.io /app/lib/storage_version_generated.io
 
 FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 RUN apt-get update \
@@ -65,6 +69,7 @@ COPY --from=minimal / /
 COPY --from=builder /usr/local/lib/libpcre.so* /usr/lib/
 
 WORKDIR /app
+ENV DATA_LOCATION=/data
 
 ENTRYPOINT [ "io" ]
 

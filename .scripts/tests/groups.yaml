@@ -278,6 +278,7 @@ tooling:
     - .scripts/tests/check-forbidden-files.bats
     - .scripts/tests/generate-bazel-build.bats
     - .scripts/tests/merge-graphql-schemas.bats
+    - .scripts/tests/project-schema.bats
     - .scripts/tests/sync-ignore-files.bats
     - .scripts/tests/sync-tailwind.bats
   suite_inputs:
@@ -301,6 +302,8 @@ tooling:
       - .scripts/merge-graphql-schemas.sh
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"
+    .scripts/tests/project-schema.bats:
+      - .scripts/project-schema.json
     .scripts/tests/sync-ignore-files.bats:
       - .scripts/sync-ignore-files.sh
       - .scripts/format-files.sh

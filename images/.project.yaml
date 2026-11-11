@@ -69,6 +69,7 @@ category: backend
 backupRole: cleanup-participant
 backupCompact: true
 backupData: { kind: images }
+storageVersion: 1
 prettier:
   ignore:
     - "*.nim"
@@ -80,3 +81,4 @@ format:
 check: |
   nim --version
   nimble build -d:release -y --threads:off
+test: nimble test -y

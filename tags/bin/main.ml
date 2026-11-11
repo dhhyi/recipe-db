@@ -3,7 +3,14 @@ let () =
     try Tags.mode_of_environment (Sys.getenv_opt "MODE")
     with Invalid_argument message -> prerr_endline message; exit 1
   in
+  let fresh_storage =
+    try Tags.check_storage_version (Sys.getenv_opt "DATA_LOCATION") mode
+    with Failure message -> prerr_endline message; exit 1
+  in
   let database = Tags.open_database (Sys.getenv_opt "DATA_LOCATION") in
+  if fresh_storage then
+    (try Tags.publish_storage_version (Sys.getenv_opt "DATA_LOCATION")
+     with Failure message -> prerr_endline message; exit 1);
   let port =
     match Sys.getenv_opt "PORT" with
     | None -> 8900

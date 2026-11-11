@@ -1,3 +1,11 @@
 (library
  (name tags)
  (libraries dream lwt.unix sqlite3 yojson uunf.string uucp unix))
+
+(rule
+ (target storage_version_generated.ml)
+ (deps generate_storage_version.sh ../.project.yaml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run sh %{dep:generate_storage_version.sh} %{dep:../.project.yaml}))))

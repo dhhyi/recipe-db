@@ -36,6 +36,24 @@
         },
         "required": ["backupRole"]
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "backupRole": {
+            "enum": ["authoritative-read-only", "cleanup-participant"]
+          }
+        },
+        "required": ["backupRole"]
+      },
+      "then": {
+        "required": ["backupData", "storageVersion"]
+      },
+      "else": {
+        "not": {
+          "required": ["storageVersion"]
+        }
+      }
     }
   ],
   "properties": {
@@ -66,6 +84,11 @@
         "kind": { "enum": ["sqlite", "json", "images"] },
         "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
       }
+    },
+    "storageVersion": {
+      "description": "Positive version of this service's authoritative stored data.",
+      "type": "integer",
+      "minimum": 1
     },
     "graphqlSchema": {
       "type": "string",

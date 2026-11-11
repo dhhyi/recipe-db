@@ -299,6 +299,8 @@ def validate_sqlite(archive, layout, output):
                 if member.isdir():
                     continue
                 name = member.name.removeprefix("./")
+                if name == "storage-version":
+                    continue
                 if name not in allowed or not member.isreg():
                     raise ValueError("unclassified SQLite validation input")
                 copied += member.size

@@ -61,6 +61,7 @@ traefik:
 category: backend
 backupRole: authoritative-read-only
 backupData: { kind: sqlite, file: recipes.sqlite3 }
+storageVersion: 1
 format:
   - check: mix format --check-formatted $argv
     apply: mix format $argv

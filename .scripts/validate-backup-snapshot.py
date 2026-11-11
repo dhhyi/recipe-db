@@ -30,6 +30,8 @@ def validate(archive, layout, require_storage_version=False):
                 continue
             if not member.isfile() or name in files:
                 raise ValueError("archive contains a link, special file or duplicate")
+            if name == "storage-version" and member.size > 64:
+                raise ValueError("malformed storage-version marker")
             stream = source.extractfile(member)
             if stream is None:
                 raise ValueError("archive file is unreadable")
@@ -45,7 +47,7 @@ def validate(archive, layout, require_storage_version=False):
                     content.extend(block)
             value = bytes(content)
             if name == "storage-version":
-                if member.size > 64 or not re.fullmatch(rb"[1-9][0-9]*\n?", value):
+                if not re.fullmatch(rb"[1-9][0-9]*\n", value):
                     raise ValueError("malformed storage-version marker")
                 storage_version = int(value.strip())
             files[name] = (member.size, digest.hexdigest(), value, first)

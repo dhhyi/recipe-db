@@ -10,6 +10,7 @@ dependencies = {
 build = {
     type = "builtin",
     modules = {
-        inspirations_server = "server.lua"
+        inspirations_server = "server.lua",
+        storage_version_generated = "storage_version_generated.lua"
     }
 }

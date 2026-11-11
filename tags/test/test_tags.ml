@@ -179,6 +179,82 @@ let test_reset_is_complete_and_transactional () =
         (Tags.assigned_tags database "orphan" = [])
         "reset clears even orphaned assignments")
 
+let test_storage_version_startup_gates () =
+  let root = "storage-version-fixture" in
+  let database_path = Filename.concat root "tags.sqlite" in
+  let marker = Filename.concat root "storage-version" in
+  let cleanup () =
+    List.iter
+      (fun path -> if Sys.file_exists path then Sys.remove path)
+      [ database_path; database_path ^ "-wal"; database_path ^ "-shm"; marker ];
+    if Sys.file_exists root then Unix.rmdir root
+  in
+  cleanup ();
+  Unix.mkdir root 0o700;
+  check (Tags.check_storage_version (Some root) Tags.Testing)
+    "empty storage is eligible for testing initialization";
+  let channel = open_out_bin database_path in
+  output_string channel "existing";
+  close_out channel;
+  (match Tags.check_storage_version (Some root) Tags.Testing with
+  | _ -> fail "unversioned database was accepted"
+  | exception Failure message ->
+      check (String.starts_with ~prefix:"tags storage version failure at " message)
+        "storage error identifies service and marker");
+  check (In_channel.with_open_bin database_path In_channel.input_all = "existing")
+    "rejected storage remains unchanged";
+  Sys.remove database_path;
+  let database = Tags.open_database (Some root) in
+  Tags.publish_storage_version (Some root);
+  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
+    "marker is published after database initialization";
+  check (not (Tags.check_storage_version (Some root) Tags.Production))
+    "versioned database starts";
+  Tags.reset_database database;
+  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
+    "reset preserves marker";
+  Tags.close_database database;
+  let sidecar_root = Filename.concat root "sidecar-only" in
+  Unix.mkdir sidecar_root 0o700;
+  let sidecar_marker = Filename.concat sidecar_root "storage-version" in
+  let sidecar_database = Filename.concat sidecar_root "tags.sqlite" in
+  let write path content =
+    let channel = open_out_bin path in
+    output_string channel content;
+    close_out channel
+  in
+  write sidecar_marker "1\n";
+  write (sidecar_database ^ "-wal") "";
+  let missing_database_rejected =
+    try
+      ignore (Tags.check_storage_version (Some sidecar_root) Tags.Backup);
+      false
+    with Failure _ -> true
+  in
+  check missing_database_rejected
+    "backup startup rejects a marker and SQLite sidecar without the database";
+  check (not (Sys.file_exists sidecar_database))
+    "missing database stays absent after rejected startup";
+  Sys.remove (sidecar_database ^ "-wal");
+  Sys.remove sidecar_marker;
+  Unix.rmdir sidecar_root;
+  (match Tags.publish_storage_version (Some root) with
+  | () -> fail "existing marker was overwritten"
+  | exception Failure _ -> ());
+  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
+    "failed publication preserves marker";
+  let channel = open_out_bin marker in
+  output_string channel "2\n";
+  close_out channel;
+  (match Tags.check_storage_version (Some root) Tags.Testing with
+  | _ -> fail "mismatched marker was accepted"
+  | exception Failure message ->
+      check (String.ends_with ~suffix:"actual 2" message)
+        "mismatch reports actual version");
+  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
+    "mismatched marker remains unchanged";
+  cleanup ()
+
 let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =
   Dream.test (Tags.router ~mode db)
     (Dream.request ~method_ ~target
@@ -311,5 +387,6 @@ let () =
   test_bulk_validation_and_conflicts ();
   test_restart_persistence ();
   test_reset_is_complete_and_transactional ();
+  test_storage_version_startup_gates ();
   test_runtime_modes_and_http_reset ();
   test_http_errors_and_rollback ()
