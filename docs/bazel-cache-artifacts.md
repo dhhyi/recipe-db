@@ -36,7 +36,7 @@ For a squash restore, both artifacts are staged and validated independently befo
 
 The union deduplicates identical CAS entries, rejects different bytes under the same CAS digest, combines action-result keys, and keeps main's valid result for conflicting action keys while retaining both sources' CAS blobs. Both sources must pass the normal complete snapshot validation; an invalid source is rejected as a whole and is not repaired from the other. The workflow never imports output bases or active cache directories.
 
-The artifact is uploaded once after both Bazel stages succeed and before integration or image validation. Therefore a later job failure does not make the completed snapshot ineligible. Main artifacts retain for 90 days; PR artifacts retain for seven days.
+After source verification succeeds, snapshot preparation runs even if formatting or Bazel checks fail or the job is cancelled. Upload runs once before integration or image validation when preparation succeeds and produces a validated snapshot. Completed actions remain reusable even when another action fails; incomplete temporary entries are excluded. A failed or cancelled producer remains eligible only if its cache-upload step succeeded. Cache preservation does not change the original quality-check result, and runner termination can still prevent an upload. Main artifacts retain for 90 days; PR artifacts retain for seven days.
 
 ## Nightly cleanup
 
