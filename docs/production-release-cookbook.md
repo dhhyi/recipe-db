@@ -78,7 +78,7 @@ The tunnel command must remain running. If the Pi hostname or SSH user differs, 
 
 **Open / stop:** services now enforce their declared storage version, but this implementation does not stamp existing production storage. Existing unversioned production data will cause startup to fail; do not deploy these builds until [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260) has completed controlled initialization and verified the backup. There is no deployment-time bypass. Migration artifacts and execution remain separate work; see [#262: Discover and execute release migrations sequentially](https://github.com/dhhyi/recipe-db/issues/262).
 
-The one-time version-1 rollout is not a routine release: follow the manual checklist in [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260), including its single-checkout handoff and recovery boundaries. Do not use the candidate worktree procedure below for that rollout.
+The one-time version-1 rollout is not a routine release. [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260) remains blocked until its exact commands, single-checkout handoff and recovery path are proven. Do not begin marker writes or use the candidate worktree procedure below for that rollout.
 
 ## 2. Finish testing and upgrade rehearsals
 
