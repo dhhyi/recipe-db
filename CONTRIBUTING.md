@@ -35,6 +35,12 @@ Documentation consists of two types: **cookbooks**, which help readers complete 
 - Start with scope, audience and related reading. With more than two headings, add a table of contents after the introduction; match numbered cookbook steps with a numbered contents list.
 - Keep investigation evidence, test inventories and delivery tracking in issues or PRs. Include implementation details only when readers need them to act or understand; remove repetition, filler and progress history.
 
+## E2E screenshot baselines
+
+The Playwright screenshot baselines use Git LFS. Install Git LFS in the environment where you run Git, then run `git lfs install` before cloning or updating the repository. If you already have a checkout with pointer files, run `git lfs pull` to download the images before running E2E tests or updating baselines. `git lfs ls-files` marks downloaded files with `*` and pointers with `-`.
+
+The ARM64 CI validation job downloads the baselines; jobs that do not run visual tests leave them as pointers.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:

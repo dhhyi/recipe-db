@@ -29,6 +29,14 @@ setup() {
   [[ "$script" == *" //:all"* ]]
 }
 
+@test "only ARM64 validation downloads LFS screenshot baselines" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  [ "$(yq '.jobs.arm64-validation.steps[] | select(.name == "checkout") | .with.lfs' "$workflow")" = true ]
+  for job in quality-checks publish; do
+    [ "$(yq ".jobs.$job.steps[] | select(.name == \"checkout\") | .with.lfs // false" "$workflow")" = false ]
+  done
+}
+
 @test "Publish validates title edits only when WIP is removed without cancelling on other edits" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   run env WORKFLOW="$(yq -o=json "$workflow")" node << 'EOF'
