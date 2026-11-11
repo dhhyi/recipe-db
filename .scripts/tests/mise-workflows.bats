@@ -37,6 +37,13 @@ setup() {
   done
 }
 
+@test "ARM64 image builds retain package installation diagnostics" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  script=$(yq '.jobs.arm64-validation.steps[] | select(.name == "build development and standalone test images") | .run' "$workflow")
+
+  [[ "$script" == *"docker compose --progress plain --profile development --profile test build"* ]]
+}
+
 @test "Publish validates title edits only when WIP is removed without cancelling on other edits" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   run env WORKFLOW="$(yq -o=json "$workflow")" node << 'EOF'
