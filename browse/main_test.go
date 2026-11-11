@@ -317,6 +317,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		`itemtype="https://schema.org/AggregateRating"`,
 		`itemprop="ratingValue" content="4"`,
 		`itemprop="ratingCount" content="2"`,
+		`url=https%3A%2F%2Frecipes.example.test%2Frecipe%2F42`,
 	} {
 		if !strings.Contains(pageHTML, markup) {
 			t.Fatalf("anonymous server-rendered detail lacks recipe markup: %s", markup)
