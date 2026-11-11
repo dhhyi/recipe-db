@@ -50,6 +50,15 @@ EOF
   [ ! -e config-only/.dockerignore ]
 }
 
+@test "project Docker ignores include metadata explicitly copied by the Dockerfile" {
+  printf '%s\n' 'COPY .project.yaml /app/' > example/Dockerfile
+
+  run sh .scripts/sync-ignore-files.sh
+
+  [ "$status" -eq 0 ]
+  run -1 grep -Fx .project.yaml example/.dockerignore
+}
+
 @test "removes obsolete project prettier ignores and regenerates deterministically" {
   touch example/.prettierignore config-only/.prettierignore
 

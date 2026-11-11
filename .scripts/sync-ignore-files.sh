@@ -111,9 +111,11 @@ for project in $projects; do
       cat "$project/.gitignore"
       echo
     fi
+    if ! grep -Fq '.project.yaml' "$project/Dockerfile"; then
+      echo .project.yaml
+    fi
     cat << 'EOF'
 
-.project.yaml
 .gitignore
 README.md
 EOF
