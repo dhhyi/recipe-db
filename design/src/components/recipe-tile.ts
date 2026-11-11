@@ -87,7 +87,7 @@ export class RecipeTile extends LitElement {
       position: absolute;
       right: 0.5rem;
       top: 0.5rem;
-      z-index: 1;
+      z-index: 2;
     }
 
     .rating[hidden] {
@@ -138,6 +138,7 @@ export class RecipeTile extends LitElement {
     ::slotted(a[slot="title"]) {
       align-items: end;
       display: flex;
+      height: 100%;
       pointer-events: auto;
       text-decoration: none !important;
       width: 100%;
