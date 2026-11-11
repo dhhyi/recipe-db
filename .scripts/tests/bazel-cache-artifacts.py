@@ -1676,7 +1676,9 @@ class CacheArtifactTests(unittest.TestCase):
             **run, "repository": {"id": 9, "full_name": "owner/repo"},
             "path": CACHE.WORKFLOW, "name": "Publish", "conclusion": "failure",
         }
-        jobs = [{"name": CACHE.JOB, "steps": [
+        jobs = [{"name": CACHE.JOB, "conclusion": "failure", "steps": [
+            {"name": "check project formatting", "conclusion": "success"},
+            {"name": "Bazel precommit checks and unit tests", "conclusion": "failure"},
             {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
         ]}]
         manifest = {
@@ -1694,6 +1696,17 @@ class CacheArtifactTests(unittest.TestCase):
             run, detail, jobs, manifest, "bazel-cache-v2-pr-3-r25-a2", "pr", 3,
             "owner/repo", associated_pr,
         )
+        for conclusion in ("failure", "skipped", "cancelled"):
+            with self.subTest(upload_conclusion=conclusion):
+                rejected_jobs = [{"name": CACHE.JOB, "steps": [
+                    {"name": CACHE.UPLOAD_STEP, "conclusion": conclusion},
+                ]}]
+                with self.assertRaisesRegex(CACHE.Invalid, "upload step"):
+                    CACHE.verify_producer(
+                        run, detail, rejected_jobs, manifest,
+                        "bazel-cache-v2-pr-3-r25-a2", "pr", 3,
+                        "owner/repo", associated_pr,
+                    )
         with self.assertRaisesRegex(CACHE.Invalid, "identity"):
             CACHE.verify_producer(
                 run, detail, jobs, manifest, "bazel-cache-v2-pr-3-r25-a2",

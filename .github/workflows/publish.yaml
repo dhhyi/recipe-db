@@ -139,6 +139,7 @@ jobs:
 
       - name: prepare Bazel cache snapshot
         id: prepare-bazel-cache
+        if: always() && steps.source.outcome == 'success'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || '' }}
         run: |
@@ -158,7 +159,7 @@ jobs:
             --output "$GITHUB_OUTPUT"
 
       - name: upload Bazel cache snapshot
-        if: success() && steps.prepare-bazel-cache.outputs.name != ''
+        if: always() && steps.prepare-bazel-cache.outcome == 'success' && steps.prepare-bazel-cache.outputs.name != ''
         uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
@@ -276,7 +277,7 @@ jobs:
           echo "::endgroup::"
 
       - name: build development and standalone test images
-        run: docker compose --profile development --profile test build
+        run: docker compose --progress plain --profile development --profile test build
 
       - name: verify production ingress trust
         run: mise run test-auth-ingress
