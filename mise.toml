@@ -99,7 +99,7 @@ file = ".scripts/sync-storage-version-templates.sh"
 sources = ["*/.project.yaml"]
 outputs = [
   '''
-{%- set paths = exec(command="yq -r 'select(documentIndex == 1) | select(.storageVersion.value != null) | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .storageVersion.file' */.project.yaml") | split(pat="\n") -%}
+{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.storageVersion.value != null) | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .storageVersion.file' \"$@\"; fi") | split(pat="\n") -%}
 {%- if paths | length > 1 -%}
   {{ "{" ~ paths | join(sep=",") ~ "}" }}
 {%- else -%}
@@ -216,7 +216,7 @@ file = ".scripts/merge-graphql-schemas.sh"
 sources = [".generated/graphql/recipe-db.graphqls", "*/.project.yaml"]
 outputs = [
   '''
-{%- set paths = exec(command="yq -r 'select(documentIndex == 1) | select(.graphqlSchema != null and .graphqlSchema != \"\") | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .graphqlSchema + \"/recipe-db.graphqls\"' */.project.yaml") | split(pat="\n") -%}
+{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.graphqlSchema != null and .graphqlSchema != \"\") | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .graphqlSchema + \"/recipe-db.graphqls\"' \"$@\"; fi") | split(pat="\n") -%}
 {%- if paths | length > 1 -%}
   {{ "{" ~ paths | join(sep=",") ~ "}" }}
 {%- else -%}
