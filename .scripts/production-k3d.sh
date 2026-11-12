@@ -219,7 +219,7 @@ pull_release() {
   while IFS= read -r image; do
     oras manifest fetch "$image" > "$work/image-index.json"
     sh "$root/.scripts/validate-production-image-index.sh" "$work/image-index.json"
-  done < <(jq -r '.images[]' "$work/pulled/release.json")
+  done < <(jq -r '(.images[]), (.migrations[]?.image)' "$work/pulled/release.json")
 }
 
 render() {
@@ -1539,9 +1539,83 @@ release_assert_maintenance_barrier() {
   fi
 }
 
+release_stage_migration_jobs() {
+  local job name existing desired defaulting_input defaulted defaulting_name
+  while IFS= read -r job; do
+    name=$(jq -er '.metadata.name' <<< "$job") || return 1
+    desired="$work/migration-$name.json"
+    existing="$work/existing-migration-$name.json"
+    defaulting_input="$work/defaulting-migration-$name.json"
+    defaulted="$work/defaulted-migration-$name.json"
+    jq '.' <<< "$job" > "$desired" || return 1
+    kube get job "$name" --ignore-not-found -o json > "$existing" \
+      || production_fail "cannot inspect existing migrator Job $name"
+    if [[ -s $existing ]]; then
+      defaulting_name="migration-template-validation-$$-$RANDOM"
+      jq --arg name "$defaulting_name" '.metadata.name = $name' "$desired" > "$defaulting_input"
+      kube create --dry-run=server -f "$defaulting_input" -o json > "$defaulted" \
+        || production_fail "cannot validate existing migrator Job defaults for $name"
+      jq -e --slurpfile desired "$desired" --slurpfile defaulted "$defaulted" '
+        def selector_is_generated:
+          . as $job
+          | ($job.spec.selector // null) as $selector
+          | if $selector == null then
+              ([ "batch.kubernetes.io/controller-uid", "batch.kubernetes.io/job-name",
+                 "controller-uid", "job-name" ]
+                | all(. as $label | $job.spec.template.metadata.labels // {} | has($label) | not))
+            elif ($selector | keys) != ["matchLabels"] then
+              false
+            else
+              ($selector.matchLabels // {}) as $match
+              | ($job.spec.template.metadata.labels // {}) as $template_labels
+              | ($match | keys) as $labels
+              | ($labels | length > 0)
+                and ($labels | any(. as $label |
+                  ["batch.kubernetes.io/controller-uid", "controller-uid"] | index($label) != null))
+                and ($labels | all(. as $label |
+                  ["batch.kubernetes.io/controller-uid", "batch.kubernetes.io/job-name",
+                   "controller-uid", "job-name"] | index($label) != null))
+                and ($labels | all(. as $label |
+                  if $label == "batch.kubernetes.io/controller-uid" or $label == "controller-uid" then
+                    $match[$label] == $job.metadata.uid
+                  else
+                    $match[$label] == $job.metadata.name
+                  end))
+                and ($labels | all(. as $label | $template_labels[$label] == $match[$label]))
+                and (all(["batch.kubernetes.io/controller-uid", "controller-uid"][];
+                  ($template_labels[.] // $job.metadata.uid) == $job.metadata.uid))
+                and (all(["batch.kubernetes.io/job-name", "job-name"][];
+                  ($template_labels[.] // $job.metadata.name) == $job.metadata.name))
+            end;
+        def normalized_job_spec:
+          del(.suspend, .selector)
+          | .template.metadata.labels |= del(
+              ."batch.kubernetes.io/controller-uid",
+              ."batch.kubernetes.io/job-name",
+              ."controller-uid",
+              ."job-name"
+            );
+        . as $job
+        | $defaulted[0] as $expected
+        | $job.metadata.name == $desired[0].metadata.name
+        and .metadata.namespace == $desired[0].metadata.namespace
+        and (.metadata.labels // {}) == ($desired[0].metadata.labels // {})
+        and (.metadata.annotations // {}) == ($desired[0].metadata.annotations // {})
+        and ($job | selector_is_generated)
+        and ($expected | selector_is_generated)
+        and ($job.spec | normalized_job_spec) == ($expected.spec | normalized_job_spec)
+      ' "$existing" > /dev/null \
+        || production_fail "existing migrator Job $name does not match this immutable release"
+      continue
+    fi
+    kube create -f "$desired" > /dev/null \
+      || production_fail "could not stage suspended migrator Job $name"
+  done < <(jq -c '.[]' "$work/candidate-migration-jobs.json")
+}
+
 release_stage() {
   local candidate=$2 backup_status=$3 verification=$4 current_release previous_candidate
-  local candidate_workloads nats_init_job verified_at retry=false
+  local candidate_workloads nats_init_job candidate_migration_jobs verified_at retry=false
   local -a secret_args=()
   release_load_operation "$1" "$candidate"
   case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
@@ -1613,6 +1687,46 @@ release_stage() {
     and all(.spec.template.spec.volumes[]?; .persistentVolumeClaim == null)
   ' <<< "$nats_init_job" > /dev/null \
     || production_fail "candidate NATS initialization Job is unsafe or mismatched"
+  candidate_migration_jobs=$(yq -o=json -I=0 '.' "$work/rendered.yml" \
+    | jq -s '[.[] | select(.kind == "Job" and .metadata.labels["recipe-db/migration"] == "staged")]') \
+    || production_fail "could not collect candidate migrator Jobs"
+  jq -e --arg revision "$revision" --arg artifact "$candidate" --arg namespace "$namespace" \
+    --argjson migrations "$(jq -c '.migrations // []' "$work/candidate-release.json")" \
+    --argjson jobs "$candidate_migration_jobs" --argjson resources "$(jq -c '.resources' "$work/config.json")" '
+      ($jobs | length) == ($migrations | length)
+      and all($migrations[]; . as $migration |
+        ("migration-" + $revision[0:12] + "-" + $migration.image[-40:]) as $name |
+        [$jobs[] | select(.metadata.name == $name)] as $matching_jobs |
+        ($matching_jobs | length) == 1
+        and ($matching_jobs[0] as $job |
+        $job.kind == "Job"
+        and $job.metadata.name == $name
+        and $job.metadata.namespace == $namespace
+        and $job.metadata.labels["recipe-db/migration"] == "staged"
+        and $job.metadata.annotations["recipe-db/release"] == $artifact
+        and $job.metadata.annotations["recipe-db/revision"] == $revision
+        and $job.metadata.annotations["recipe-db/migration-service"] == $migration.service
+        and $job.metadata.annotations["recipe-db/migration-from-version"] == ($migration.fromVersion | tostring)
+        and $job.metadata.annotations["recipe-db/migration-to-version"] == ($migration.toVersion | tostring)
+        and $job.spec.suspend == true
+        and $job.spec.activeDeadlineSeconds == $migration.timeoutSeconds
+        and $job.spec.backoffLimit == 0
+        and ($job.spec | keys | sort) == ["activeDeadlineSeconds", "backoffLimit", "suspend", "template"]
+        and $job.spec.template.spec.restartPolicy == "Never"
+        and $job.spec.template.spec.automountServiceAccountToken == false
+        and ($job.spec.template.spec | has("serviceAccountName") | not)
+        and $job.spec.template.spec.containers == [{
+          "name": "migration", "image": $migration.image, "resources": $resources,
+          "volumeMounts": [{"name": "data", "mountPath": "/data"}]
+        }]
+        and $job.spec.template.spec.volumes == [{
+          "name": "data", "persistentVolumeClaim": {"claimName": $migration.service}
+        }]
+        )
+      )
+    ' > /dev/null <<< "$candidate_migration_jobs" \
+    || production_fail "candidate migrator Jobs do not match the immutable release inventory"
+  printf '%s\n' "$candidate_migration_jobs" > "$work/candidate-migration-jobs.json"
   jq -e 'any(.[]; .name == "graphql" and .replicas > 0)' \
     <<< "$candidate_workloads" > /dev/null \
     || production_fail "candidate lacks a ready GraphQL barrier workload"
@@ -1643,6 +1757,7 @@ release_stage() {
   fi
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null || return 1
   kube apply -f "$work/staged-application.yml" > /dev/null || return 1
+  release_stage_migration_jobs || return 1
   release_state_write candidate-staged candidate-staged \
     "$(jq -cn --slurpfile prior "$snapshot/backup-state.json" \
       --arg artifact "$candidate" --arg revision "$(jq -r .revision "$work/candidate-release.json")" \

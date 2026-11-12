@@ -97,6 +97,64 @@
 #@   return {"apiVersion": "batch/v1", "kind": "Job", "metadata": metadata("backup-cleanup"), "spec": {"suspend": True, "activeDeadlineSeconds": cfg["timeoutSeconds"], "backoffLimit": 0, "template": {"metadata": {"labels": metadata("backup-cleanup")["labels"]}, "spec": {"restartPolicy": "Never", "automountServiceAccountToken": False, "containers": [{"name": "cleanup", "image": inventory["images"]["graphql"], "command": ["/app/graphql"], "args": ["backup-cleanup"], "env": [{"name": "BACKUP_TARGET", "value": cfg["target"]}, {"name": "BACKUP_NAMESPACE", "value": ns}, {"name": "BACKUP_RELEASE", "value": data.values.artifact}, {"name": "BACKUP_REVISION", "value": inventory["revision"]}, {"name": "BACKUP_PARTICIPANTS", "value": ",".join(participants)}], "resources": cfg["resources"]}]}}}}
 #@ end
 
+#@ def migration_job(migration):
+#@   service_name = migration["service"]
+#@   if service_name not in cfg["volumes"]:
+#@     fail("Missing persistent volume request for migrator service " + service_name)
+#@   end
+#@   name = "migration-" + inventory["revision"][:12] + "-" + migration["image"][-40:]
+#@   annotations = {
+#@     "recipe-db/release": data.values.artifact,
+#@     "recipe-db/revision": inventory["revision"],
+#@     "recipe-db/migration-service": service_name,
+#@     "recipe-db/migration-from-version": str(migration["fromVersion"]),
+#@     "recipe-db/migration-to-version": str(migration["toVersion"]),
+#@   }
+#@   labels = {
+#@     "app.kubernetes.io/part-of": "recipe-db",
+#@     "app.kubernetes.io/name": "migration",
+#@     "recipe-db/migration": "staged",
+#@     "recipe-db/revision": inventory["revision"],
+#@   }
+#@   return {
+#@     "apiVersion": "batch/v1",
+#@     "kind": "Job",
+#@     "metadata": {
+#@       "name": name,
+#@       "namespace": ns,
+#@       "labels": labels,
+#@       "annotations": annotations,
+#@     },
+#@     "spec": {
+#@       "suspend": True,
+#@       "activeDeadlineSeconds": migration["timeoutSeconds"],
+#@       "backoffLimit": 0,
+#@       "template": {
+#@         "metadata": {"labels": labels},
+#@         "spec": {
+#@           "restartPolicy": "Never",
+#@           "automountServiceAccountToken": False,
+#@           "containers": [{
+#@             "name": "migration",
+#@             "image": migration["image"],
+#@             "resources": cfg["resources"],
+#@             "volumeMounts": [{"name": "data", "mountPath": "/data"}],
+#@           }],
+#@           "volumes": [{
+#@             "name": "data",
+#@             "persistentVolumeClaim": {"claimName": service_name},
+#@           }],
+#@         },
+#@       },
+#@     },
+#@   }
+#@ end
+
+#@ def migration_jobs():
+#@   migrations = inventory.get("migrations", [])
+#@   return [migration_job(migration) for migration in migrations]
+#@ end
+
 #@ def project_workload(project):
 #@   p = struct.decode(project)
 #@   name = p["name"]

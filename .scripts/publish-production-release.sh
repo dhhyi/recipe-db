@@ -1,23 +1,25 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: $0 <release.json> <full-revision>" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "usage: $0 <release.json> <full-revision> [project-root]" >&2
   exit 2
 fi
 
 release_file=$1
 revision=$2
-project_root=$(cd "$(dirname "$0")/.." && pwd)
-. "$project_root/.scripts/lib/release-validation.sh"
-sh "$project_root/.scripts/validate-production-release.sh" "$release_file" "$revision"
-verify_release_images_anonymously "$release_file" "$revision" "$project_root"
+script_root=$(cd "$(dirname "$0")/.." && pwd)
+project_root=${3:-$script_root}
+project_root=$(cd "$project_root" && pwd)
+. "$script_root/.scripts/lib/release-validation.sh"
+sh "$script_root/.scripts/validate-production-release.sh" "$release_file" "$revision" "$project_root"
+verify_release_images_anonymously "$release_file" "$revision" "$script_root"
 echo "Verified image digests for revision $revision:" >&2
 cat "$release_file" >&2
 
 temporary_directory=$(mktemp -d)
 trap 'rm -rf "$temporary_directory"' EXIT
-existing=$(sh "$project_root/.scripts/check-production-release.sh" "$revision" "$temporary_directory/existing.json")
+existing=$(sh "$script_root/.scripts/check-production-release.sh" "$revision" "$temporary_directory/existing.json" "$project_root")
 if [ "$existing" != absent ]; then
   digest=${existing#found:}
   if ! jq -S . "$release_file" > "$temporary_directory/current.json" \
@@ -40,7 +42,7 @@ mise exec -- sh -c 'cd "$1" && shift && exec oras "$@"' sh "$(dirname "$release_
   "$release_tag" \
   "$(basename "$release_file"):application/json"
 
-published=$(sh "$project_root/.scripts/check-production-release.sh" "$revision")
+published=$(sh "$script_root/.scripts/check-production-release.sh" "$revision" "" "$project_root")
 case "$published" in
   found:sha256:*) ;;
   *)

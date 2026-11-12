@@ -1,0 +1,8 @@
+extends: dcc://debian
+devcontainer:
+  ports: [8080]
+---
+category: backend
+backupRole: authoritative-read-only
+storageVersion:
+  value: 1

@@ -47,6 +47,11 @@ setup() {
   [[ "$script" == *" //:all"* ]]
 }
 
+@test "CI explicitly runs standalone migrator packaging tests" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrator packaging") | .run' "$workflow")" = "mise run test-migrator-packaging" ]
+}
+
 @test "only ARM64 validation downloads LFS screenshot baselines" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.arm64-validation.steps[] | select(.name == "checkout") | .with.lfs' "$workflow")" = true ]

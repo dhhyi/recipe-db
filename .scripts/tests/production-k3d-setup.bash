@@ -28,6 +28,9 @@ setup() {
   export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
   export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_RELEASE_LIFECYCLE=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
+  export MOCK_MIGRATIONS=false
+  export MOCK_COMPLETED_MIGRATION=false
+  export MOCK_UNSAFE_MIGRATION=false
   export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
   export MOCK_RESTORE=false
   jq -n --arg root "$FIXTURE_ROOT" '{
@@ -68,7 +71,7 @@ application_project_metadata_to_jsonl() {
 EOF
   cat > .scripts/validate-production-release.sh << 'EOF'
 #!/bin/sh
-jq -e --arg revision "$2" '.schemaVersion == 1 and .revision == $revision' "$1" > /dev/null
+  jq -e --arg revision "$2" '(.schemaVersion == 1 or .schemaVersion == 2) and .revision == $revision' "$1" > /dev/null
 EOF
   printf 'test\n' > message-bus/nats.conf
   printf 'test\n' > browse-maintenance/nginx.conf
@@ -110,6 +113,32 @@ jq -n --arg foreign "$MOCK_FOREIGN" --arg public "$MOCK_PUBLIC" '[
 EOF
   cat > bin/kubectl << 'EOF'
 #!/usr/bin/env bash
+default_migration_job() {
+  local uid=$1 input=$2
+  jq --arg uid "$uid" '
+    (.metadata.name) as $name
+    | .metadata.uid = $uid
+    | .spec.selector = {matchLabels:{
+        "batch.kubernetes.io/controller-uid":$uid,
+        "batch.kubernetes.io/job-name":$name
+      }}
+    | .spec.template.metadata.labels += {
+        "batch.kubernetes.io/controller-uid":$uid,
+        "batch.kubernetes.io/job-name":$name
+      }
+    | .spec.parallelism = 1
+    | .spec.completions = 1
+    | .spec.completionMode = "NonIndexed"
+    | .spec.manualSelector = false
+    | .spec.template.spec.dnsPolicy = "ClusterFirst"
+    | .spec.template.spec.schedulerName = "default-scheduler"
+    | .spec.template.spec.terminationGracePeriodSeconds = 30
+    | .spec.template.spec.enableServiceLinks = true
+    | .spec.template.spec.serviceAccountName = "default"
+    | .spec.template.spec.containers |= map(.imagePullPolicy = "IfNotPresent")
+  ' "$input"
+}
+
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   [[ $* != *"--resource-version="* ]] || { echo 'unknown flag: --resource-version' >&2; exit 1; }
   case "$*" in
@@ -273,11 +302,43 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'
         fi
         handled=true ;;
+      *" get job migration-"*"--ignore-not-found"*" -o json"* | \
+      *" get job migration-"*"-o json"*"--ignore-not-found"*)
+        if [[ $MOCK_COMPLETED_MIGRATION = true ]]; then
+          default_migration_job "existing-migration-uid" "$MOCK_LOG.migration-template.json" \
+            | jq --arg unsafe "$MOCK_UNSAFE_MIGRATION" \
+                --arg single_selector "${MOCK_SINGLE_KEY_MIGRATION_SELECTOR:-false}" '
+                .spec.suspend = false
+                | .status.succeeded = 1
+                | if $unsafe == "true" then
+                    .spec.template.spec.initContainers = [{name:"unexpected",image:"untrusted"}]
+                  else . end
+                  | if $single_selector == "true" then
+                      .spec.selector.matchLabels = {"batch.kubernetes.io/controller-uid":"existing-migration-uid"}
+                    else . end
+              ' \
+            | tee "$MOCK_LOG.existing-migration-job.json"
+        elif [[ -f $MOCK_LOG.migration-job.json ]]; then
+          cat "$MOCK_LOG.migration-job.json"
+        fi
+        handled=true ;;
       *" delete job nats-init "*)
         rm -f "$MOCK_LOG.nats-init-job"
         handled=true ;;
+      *" create --dry-run=server -f "*"-o json"*)
+        for argument in "$@"; do
+          case "$argument" in
+            *.json) last=$argument ;;
+          esac
+        done
+        default_migration_job "dry-run-migration-uid" "$last"
+        handled=true ;;
       *"apply -f "*nats-init-job.json)
         touch "$MOCK_LOG.nats-init-job"
+        handled=true ;;
+      *"create -f "*migration-*.json)
+        last="${*: -1}"
+        cp "$last" "$MOCK_LOG.migration-job.json"
         handled=true ;;
       *" wait --for=condition=complete job/nats-init "*)
         [[ ${MOCK_NATS_INIT_FAIL:-false} != true ]] || exit 1
@@ -701,13 +762,26 @@ else
   [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]] || exit 1
   release=$2
   output=$4
-  jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:1,revision:$revision,images:{
+    if [[ $MOCK_MIGRATIONS = true ]]; then
+      jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:2,revision:$revision,images:{
+        recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
+        images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
+        graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
+        tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
+        search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
+        browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))},
+        migrations:[{service:"images",fromVersion:1,toVersion:2,timeoutSeconds:300,
+          image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))}]}' \
+        > "$output/release.json"
+    else
+      jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:1,revision:$revision,images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
     images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
     graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
     tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
     search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
     browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))}}' > "$output/release.json"
+    fi
 fi
 EOF
   cat > bin/ytt << 'EOF'
@@ -756,6 +830,62 @@ if jq -e 'has("config")' "$2" > /dev/null; then
       while IFS= read -r doc; do printf '%s\n---\n' "$doc"; done
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  template:\n    spec:\n      containers:\n        - name: provision\n          image: ghcr.io/dhhyi/recipe-db-graphql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n          args: [provision-events]\n      volumes: []\n---\n'
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n---\n'
+    if [[ $MOCK_MIGRATIONS = true ]]; then
+      jq -c '
+        . as $input |
+        .release.migrations[] as $migration |
+        ($input.release.revision) as $revision |
+        {
+          apiVersion:"batch/v1",
+          kind:"Job",
+          metadata:{
+            name:("migration-" + $revision[0:12] + "-" + $migration.image[-40:]),
+            namespace:$input.config.namespace,
+            labels:{
+              "app.kubernetes.io/part-of":"recipe-db",
+              "app.kubernetes.io/name":"migration",
+              "recipe-db/migration":"staged",
+              "recipe-db/revision":$revision
+            },
+            annotations:{
+              "recipe-db/release":$input.artifact,
+              "recipe-db/revision":$revision,
+              "recipe-db/migration-service":$migration.service,
+              "recipe-db/migration-from-version":($migration.fromVersion|tostring),
+              "recipe-db/migration-to-version":($migration.toVersion|tostring)
+            }
+          },
+          spec:{
+            suspend:true,
+            activeDeadlineSeconds:$migration.timeoutSeconds,
+            backoffLimit:0,
+            template:{
+              metadata:{labels:{
+                "app.kubernetes.io/part-of":"recipe-db",
+                "app.kubernetes.io/name":"migration",
+                "recipe-db/migration":"staged",
+                "recipe-db/revision":$revision
+              }},
+              spec:{
+                restartPolicy:"Never",
+                automountServiceAccountToken:false,
+                containers:[{
+                  name:"migration",
+                  image:$migration.image,
+                  resources:$input.config.resources,
+                  volumeMounts:[{name:"data",mountPath:"/data"}]
+                }],
+                volumes:[{
+                  name:"data",
+                  persistentVolumeClaim:{claimName:$migration.service}
+                }]
+              }
+            }
+          }
+        }
+      ' "$2" | tee "$MOCK_LOG.migration-template.json" \
+        | while IFS= read -r doc; do printf '%s\n---\n' "$doc"; done
+    fi
   elif [[ $MOCK_BACKUP = true ]]; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: backup-cleanup\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  suspend: true\n'
   else

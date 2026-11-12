@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-  echo "usage: $0 <full-revision> [inventory-output.json]" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
+  echo "usage: $0 <full-revision> [inventory-output.json] [project-root]" >&2
   exit 2
 fi
 
@@ -18,8 +18,10 @@ if [ "${#revision}" -ne 40 ]; then
   exit 1
 fi
 
-project_root=$(cd "$(dirname "$0")/.." && pwd)
-. "$project_root/.scripts/lib/release-validation.sh"
+script_root=$(cd "$(dirname "$0")/.." && pwd)
+project_root=${3:-$script_root}
+project_root=$(cd "$project_root" && pwd)
+. "$script_root/.scripts/lib/release-validation.sh"
 anonymous_directory=$(mktemp -d)
 trap 'rm -rf "$anonymous_directory"' EXIT
 mkdir -p "$anonymous_directory/docker" "$anonymous_directory/home"
@@ -68,10 +70,10 @@ if ! mise exec -- env HOME="$anonymous_directory/home" DOCKER_CONFIG="$anonymous
   exit 1
 fi
 release_file="$pull_directory/release.json"
-sh "$project_root/.scripts/validate-production-release.sh" "$release_file" "$revision"
-verify_release_images_anonymously "$release_file" "$revision" "$project_root"
+sh "$script_root/.scripts/validate-production-release.sh" "$release_file" "$revision" "$project_root"
+verify_release_images_anonymously "$release_file" "$revision" "$script_root"
 echo "Verified anonymous release artifact $artifact_reference" >&2
-if [ "$#" -eq 2 ]; then
+if [ "$#" -ge 2 ] && [ -n "$2" ]; then
   cp "$release_file" "$2"
 fi
 echo "found:$digest"

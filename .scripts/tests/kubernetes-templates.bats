@@ -302,6 +302,68 @@ render() {
   ' manifests.json
 }
 
+@test "migration Jobs are release-specific, suspended, pinned, and mounted only to their service data" {
+  jq '
+    .release.schemaVersion=2 |
+    .release.migrations=[
+      {service:"images",fromVersion:1,toVersion:2,timeoutSeconds:300,
+        image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:" + ("d" * 64))},
+      {service:"images",fromVersion:2,toVersion:3,timeoutSeconds:90,
+        image:("ghcr.io/dhhyi/recipe-db-migrator-images-2-to-3@sha256:" + ("e" * 64))}
+    ]
+  ' values.json > migration-values.json
+  render migration-values.json
+  jq -e --arg revision "$(jq -r '.release.revision' migration-values.json)" \
+    --arg artifact "$(jq -r '.artifact' migration-values.json)" \
+    --arg resources "$(jq -c '.config.resources' migration-values.json)" '
+      [.items[] | select(.kind == "Job" and .metadata.labels["recipe-db/migration"] == "staged")] as $jobs |
+      ($jobs | length) == 2
+      and all(range(0; ($jobs | length)); . as $i | $jobs[$i] as $job |
+        $job.metadata.name == (
+          "migration-" + $revision[0:12] + "-" +
+          $job.spec.template.spec.containers[0].image[-40:]
+        )
+        and $job.metadata.namespace == "recipe-db"
+        and $job.metadata.labels["recipe-db/revision"] == $revision
+        and $job.metadata.annotations["recipe-db/release"] == $artifact
+        and $job.metadata.annotations["recipe-db/revision"] == $revision
+        and $job.metadata.annotations["recipe-db/migration-service"] == "images"
+        and $job.metadata.annotations["recipe-db/migration-from-version"] == (["1", "2"][$i])
+        and $job.metadata.annotations["recipe-db/migration-to-version"] == (["2", "3"][$i])
+        and $job.spec.suspend == true
+        and $job.spec.activeDeadlineSeconds == ([300, 90][$i])
+        and $job.spec.backoffLimit == 0
+        and $job.spec.template.spec.restartPolicy == "Never"
+        and $job.spec.template.spec.automountServiceAccountToken == false
+        and ($job.spec.template.spec | has("serviceAccountName") | not)
+        and ($job.spec.template.spec.containers | length) == 1
+        and $job.spec.template.spec.containers[0].name == "migration"
+        and $job.spec.template.spec.containers[0].image == [
+          "ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:" + ("d" * 64),
+          "ghcr.io/dhhyi/recipe-db-migrator-images-2-to-3@sha256:" + ("e" * 64)
+        ][$i]
+        and $job.spec.template.spec.containers[0].resources == ($resources | fromjson)
+        and $job.spec.template.spec.containers[0].volumeMounts == [{"name":"data","mountPath":"/data"}]
+        and ($job.spec.template.spec.containers[0] | has("env") | not)
+        and ($job.spec.template.spec.containers[0] | has("command") | not)
+        and ($job.spec.template.spec.containers[0] | has("args") | not)
+        and $job.spec.template.spec.volumes == [{
+          "name":"data","persistentVolumeClaim":{"claimName":"images"}
+        }]
+      )
+    ' manifests.json
+}
+
+@test "schema-1 and empty schema-2 inventories render no migration Jobs" {
+  render values.json
+  jq -e '[.items[] | select(.kind == "Job" and .metadata.labels["recipe-db/migration"] == "staged")] | length == 0' \
+    manifests.json
+  jq '.release.schemaVersion=2 | .release.migrations=[]' values.json > empty-migration-values.json
+  render empty-migration-values.json
+  jq -e '[.items[] | select(.kind == "Job" and .metadata.labels["recipe-db/migration"] == "staged")] | length == 0' \
+    manifests.json
+}
+
 @test "application workloads explicitly use production mode" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '
