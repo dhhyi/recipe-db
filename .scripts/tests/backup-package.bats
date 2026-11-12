@@ -51,6 +51,19 @@ def tar_bytes(entries, mode=None):
     return output.getvalue()
 
 
+def storage_marker(archive, content):
+    entries = []
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        for member in source:
+            if member.isdir():
+                entries.append((member.name, b"", tarfile.DIRTYPE))
+            elif member.isfile():
+                entries.append((member.name, source.extractfile(member).read(), None))
+    entries = [item for item in entries if item[0] != "storage-version"]
+    entries.append(("storage-version", content, None))
+    return tar_bytes(entries)
+
+
 normal, thumb = b"normal image", b"thumbnail"
 normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
@@ -157,8 +170,11 @@ def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None, 
     content = []
     for item in manifest["inventory"]:
         path = metadata.parent / "capture" / item["archive"]
-        data = inner if inner is not None and item["service"] == inner_service else path.read_bytes()
-        if inner is not None and item["service"] == inner_service:
+        inner_data = inner.get(item["service"]) if isinstance(inner, dict) else (
+            inner if item["service"] == inner_service else None
+        )
+        data = inner_data if inner_data is not None else path.read_bytes()
+        if inner_data is not None:
             item["sizeBytes"] = len(data)
             item["sha256"] = hashlib.sha256(data).hexdigest()
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as source:
@@ -166,8 +182,11 @@ def repack(metadata, archive, manifest=None, outer=None, inner=None, mode=None, 
                 for member in source:
                     if member.isfile():
                         value = source.extractfile(member).read()
-                        files.append({"path": member.name, "sizeBytes": len(value),
-                                      "sha256": hashlib.sha256(value).hexdigest()})
+                        entry = {"path": member.name, "sizeBytes": len(value),
+                                 "sha256": hashlib.sha256(value).hexdigest()}
+                        if member.name == "storage-version":
+                            entry["storageVersion"] = int(value.strip())
+                        files.append(entry)
             item["files"] = sorted(files, key=lambda item: item["path"])
             item["fileCount"] = len(files)
         content.append((item["archive"], data, None))
@@ -424,6 +443,24 @@ elif group == "unsafe":
          for value in image_files],
     ]:
         reject(lambda c, m, a, p, s, values=values: repack(m, a, inner=tar_bytes(values)))
+elif group == "storage":
+    case, metadata, archive, projects, manifest = fixture()
+    inners = {}
+    for item in manifest["inventory"]:
+        source = (case / "capture" / item["archive"]).read_bytes()
+        inners[item["service"]] = storage_marker(source, b"4\n")
+    repack(metadata, archive, manifest, inner=inners)
+    output = case / "snapshot"
+    module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
+    for item in manifest["inventory"]:
+        with tarfile.open(output / item["archive"], "r:") as restored:
+            assert restored.extractfile("storage-version").read() == b"4\n"
+
+    def malformed(c, m, a, p, s):
+        recipes = next(item for item in s["inventory"] if item["service"] == "recipes")
+        source = (c / "capture" / recipes["archive"]).read_bytes()
+        repack(m, a, s, inner={"recipes": storage_marker(source, b"4")})
+    reject(malformed)
 else:
     raise AssertionError(group)
 PY
@@ -446,6 +483,10 @@ PY
   package_cases sqlite
 }
 
+@test "backup package preserves valid storage markers and rejects malformed markers" {
+  package_cases storage
+}
+
 @test "snapshot validation preserves actual storage versions and can require every marker" {
   mkdir -p marker-data
   printf 'SQLite format 3\000database' > marker-data/recipes.sqlite3
@@ -463,6 +504,12 @@ PY
   [ "$status" -eq 0 ]
   jq -e 'any(.[]; .path == "storage-version" and .storageVersion == 3)' \
     <<< "$output" > /dev/null
+
+  printf '3' > marker-data/storage-version
+  tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version
+  run python3 .scripts/validate-backup-snapshot.py versioned.tar \
+    '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  [ "$status" -ne 0 ]
 
   printf '0\n' > marker-data/storage-version
   tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version

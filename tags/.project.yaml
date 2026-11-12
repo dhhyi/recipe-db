@@ -59,6 +59,11 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 backupData: { kind: sqlite, file: tags.sqlite }
+storageVersion:
+  value: 1
+  file: src/storage_version_generated.ml
+  template: |
+    let value = {{STORAGE_VERSION}}
 format:
   - check: opam exec --switch=5.3.0 -- dune fmt --preview
     apply: format-apply-copy 'opam exec --switch=5.3.0 -- dune fmt; or opam exec --switch=5.3.0 -- dune fmt' $argv

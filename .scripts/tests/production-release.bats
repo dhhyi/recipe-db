@@ -7,6 +7,7 @@ setup() {
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/release-validation.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../sync-storage-version-templates.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-production-release.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../check-production-release.sh" .scripts/

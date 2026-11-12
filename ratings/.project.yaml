@@ -74,6 +74,11 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 backupData: { kind: sqlite, file: db.sqlite }
+storageVersion:
+  value: 1
+  file: lib/storage_version_generated.io
+  template: |
+    StorageVersionGenerated := {{STORAGE_VERSION}}
 prettier:
   ignore:
     - "*.io"
@@ -81,3 +86,5 @@ check: |
   io --version
   timeout 10 io tests/coroutines.io
   io tests/maintenance.io
+  io tests/storage_version.io
+test: timeout 10 io tests/coroutines.io && io tests/maintenance.io && io tests/storage_version.io

@@ -1,6 +1,7 @@
-import std/[algorithm, json, os, strutils, times, uri]
+import std/[algorithm, json, os, posix, strutils, times, uri]
 import nimcrypto/sha2
 import pixie
+import storage_version_generated
 
 type
   ImageStorage* = object
@@ -47,6 +48,85 @@ proc manifestPath*(store: ImageStorage, id: string): string =
 proc initialize*(store: ImageStorage) =
   createDir(store.publicFolder)
   createDir(store.manifestFolder)
+
+proc storageFailure(marker, reason: string) {.noreturn.} =
+  raise newException(StorageError, "images storage version failure at " &
+    marker & ": expected " & $expectedStorageVersion & ", " & reason)
+
+proc emptyDirectory(path: string): bool =
+  if not dirExists(path):
+    return false
+  for _ in walkDir(path):
+    return false
+  true
+
+proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
+  let marker = store.root / "storage-version"
+  var version = -1
+  if fileExists(marker) or dirExists(marker):
+    let info = getFileInfo(marker, followSymlink = false)
+    if info.kind != pcFile:
+      storageFailure(marker, "unsafe marker file type")
+    try:
+      let contents = readFile(marker)
+      if not contents.endsWith("\n") or contents.len < 2 or
+          contents[0 .. ^2].len == 0 or contents[0] == '0':
+        storageFailure(marker, "invalid marker contents")
+      for c in contents[0 .. ^2]:
+        if c notin {'0'..'9'}:
+          storageFailure(marker, "invalid marker contents")
+      version = parseInt(contents[0 .. ^2])
+      if version <= 0:
+        storageFailure(marker, "invalid marker contents")
+    except StorageError:
+      raise
+    except CatchableError:
+      storageFailure(marker, "cannot read marker")
+  elif fileExists(store.root):
+    storageFailure(marker, "cannot inspect data root")
+
+  var dataEntries = 0
+  if dirExists(store.root):
+    try:
+      for kind, path in walkDir(store.root):
+        let name = extractFilename(path)
+        if name == "storage-version":
+          if kind != pcFile:
+            storageFailure(marker, "unsafe marker file type")
+          continue
+        if kind == pcDir and name in ["public", "manifests"] and
+            emptyDirectory(path):
+          continue
+        inc dataEntries
+    except StorageError:
+      raise
+    except CatchableError:
+      storageFailure(marker, "cannot inspect data root")
+
+  if version == -1:
+    if dataEntries > 0:
+      storageFailure(marker, "marker missing; existing data found")
+    if mode == "backup":
+      storageFailure(marker, "marker missing; backup mode cannot initialize")
+    return true
+  if version != expectedStorageVersion:
+    storageFailure(marker, "actual " & $version)
+  if dataEntries == 0:
+    if mode == "backup":
+      storageFailure(marker, "application data missing; backup mode cannot initialize")
+    return false
+  false
+
+proc publishStorageVersion*(store: ImageStorage) =
+  let marker = store.root / "storage-version"
+  let temporary = marker & ".pending-" & $getpid()
+  try:
+    writeFile(temporary, $expectedStorageVersion & "\n")
+    if posix.link(temporary.cstring, marker.cstring) != 0:
+      storageFailure(marker, "cannot atomically publish marker")
+  finally:
+    if fileExists(temporary):
+      removeFile(temporary)
 
 var nextTemporary = 0
 

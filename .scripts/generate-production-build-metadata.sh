@@ -37,6 +37,7 @@ esac
 
 project_root=$(cd "$(dirname "$0")/.." && pwd)
 . "$project_root/.scripts/lib/project-metadata.sh"
+sh "$project_root/.scripts/sync-storage-version-templates.sh"
 temporary_directory=$(mktemp -d)
 trap 'rm -rf "$temporary_directory"' EXIT
 fragments="$temporary_directory/project-fragments.jsonl"

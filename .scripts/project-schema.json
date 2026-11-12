@@ -36,6 +36,24 @@
         },
         "required": ["backupRole"]
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "backupRole": {
+            "enum": ["authoritative-read-only", "cleanup-participant"]
+          }
+        },
+        "required": ["backupRole"]
+      },
+      "then": {
+        "required": ["backupData", "storageVersion"]
+      },
+      "else": {
+        "not": {
+          "required": ["storageVersion"]
+        }
+      }
     }
   ],
   "properties": {
@@ -65,6 +83,35 @@
       "properties": {
         "kind": { "enum": ["sqlite", "json", "images"] },
         "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+      }
+    },
+    "storageVersion": {
+      "description": "Required storage version and language-specific source template generated into the project.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "file", "template"],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "file": {
+          "description": "Project-relative path to the ignored generated source file.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$",
+          "allOf": [
+            { "not": { "pattern": "^/" } },
+            { "not": { "pattern": "/$" } },
+            { "not": { "pattern": "//" } },
+            { "not": { "pattern": "(^|/)\\.\\.?(/|$)" } }
+          ]
+        },
+        "template": {
+          "description": "Source content with exactly one {{STORAGE_VERSION}} placeholder.",
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
     "graphqlSchema": {

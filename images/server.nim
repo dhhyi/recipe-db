@@ -266,7 +266,10 @@ proc main() =
     levelThreshold = if verbose: lvlInfo else: lvlWarn,
     fmtStr = "$levelname ",
   ))
+  let freshStorage = store.checkStorageVersion(runtimeMode)
   store.initialize()
+  if freshStorage:
+    store.publishStorageVersion()
   info "Data location '", dataFolder, "'"
   if runtimeMode == "production":
     info "Running in production mode"

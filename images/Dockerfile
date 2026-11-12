@@ -4,7 +4,7 @@ RUN apk add --no-cache nim nimble gcc musl-dev git
 WORKDIR /app
 COPY images.nimble /app/
 RUN nimble install -d -y
-COPY server.nim storage.nim processing.nim /app/
+COPY server.nim storage.nim processing.nim storage_version_generated.nim /app/
 RUN --mount=type=cache,id=images-nim-${TARGETARCH},target=/root/.cache/nim,sharing=locked \
   nimble build -d:release -y --threads:off --passL:"-static" \
   && strip server \

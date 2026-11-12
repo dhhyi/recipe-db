@@ -23,6 +23,147 @@ let mode_of_environment = function
   | Some "backup" -> Backup
   | Some _ -> invalid_arg "Invalid MODE; expected production, testing or backup"
 
+let database_file = function
+  | None -> "tags.sqlite"
+  | Some path
+    when Filename.check_suffix path ".sqlite" || Filename.check_suffix path ".db" ->
+      path
+  | Some directory -> Filename.concat directory "tags.sqlite"
+
+let storage_version () = Storage_version_generated.value
+
+let storage_root database_path = Filename.dirname database_path
+
+let storage_marker database_path =
+  Filename.concat (storage_root database_path) "storage-version"
+
+let storage_failure marker expected reason =
+  failwith
+    (Printf.sprintf "tags storage version failure at %s: expected %d, %s"
+       marker expected reason)
+
+let directory_entries path =
+  let handle = Unix.opendir path in
+  Fun.protect
+    ~finally:(fun () -> Unix.closedir handle)
+    (fun () ->
+      let rec read accumulated =
+        match Unix.readdir handle with
+        | "." | ".." -> read accumulated
+        | name -> read (name :: accumulated)
+        | exception End_of_file -> accumulated
+      in
+      read [])
+
+let check_storage_version configured_location mode =
+  let path = database_file configured_location in
+  let root = storage_root path in
+  let marker = storage_marker path in
+  let expected = storage_version () in
+  let marker_version =
+    try
+      let stat = Unix.lstat marker in
+      if stat.Unix.st_kind <> Unix.S_REG then
+        storage_failure marker expected "unsafe marker file type";
+      let channel = open_in_bin marker in
+      let contents = really_input_string channel (in_channel_length channel) in
+      close_in channel;
+      if not (Filename.check_suffix contents "\n") then
+        storage_failure marker expected "invalid marker contents";
+      let value = String.sub contents 0 (String.length contents - 1) in
+      if value = "" || value.[0] = '0'
+         || String.exists (fun c -> c < '0' || c > '9') value
+      then
+        storage_failure marker expected "invalid marker contents";
+      (match int_of_string_opt value with
+      | Some version when version > 0 -> Some version
+      | _ -> storage_failure marker expected "invalid marker contents")
+    with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> None
+    | Unix.Unix_error (error, _, _) ->
+        storage_failure marker expected
+          ("cannot inspect or read marker: " ^ Unix.error_message error)
+    | Sys_error reason ->
+        storage_failure marker expected ("cannot read marker: " ^ reason)
+  in
+  let entries =
+    try directory_entries root
+    with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> []
+    | Unix.Unix_error (error, _, _) ->
+        storage_failure marker expected
+          ("cannot inspect data root: " ^ Unix.error_message error)
+  in
+  let entries = List.filter (( <> ) "storage-version") entries in
+  let database_name = Filename.basename path in
+  List.iter
+    (fun name ->
+      if name <> database_name && name <> database_name ^ "-wal"
+         && name <> database_name ^ "-shm" && name <> database_name ^ "-journal"
+      then storage_failure marker expected ("unrecognized data-root entry " ^ name))
+    entries;
+  let empty = entries = [] in
+  match marker_version with
+  | None when empty ->
+      if mode = Backup then
+        storage_failure marker expected "marker missing; backup mode cannot initialize";
+      true
+  | None -> storage_failure marker expected "marker missing; existing data found"
+  | Some actual when actual <> expected ->
+      storage_failure marker expected (Printf.sprintf "actual %d" actual)
+  | Some _ when empty ->
+      if mode = Backup then
+        storage_failure marker expected
+          "application data missing; backup mode cannot initialize";
+      false
+  | Some _ ->
+      let database_is_regular =
+        try (Unix.lstat path).Unix.st_kind = Unix.S_REG
+        with Unix.Unix_error (Unix.ENOENT, _, _) -> false
+      in
+      if not database_is_regular then
+        storage_failure marker expected
+          "database file is missing or not a regular file";
+      false
+
+let publish_storage_version configured_location =
+  let marker = storage_marker (database_file configured_location) in
+  let expected = storage_version () in
+  let temporary = marker ^ ".pending-" ^ string_of_int (Unix.getpid ()) in
+  let descriptor =
+    try Unix.openfile temporary [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+    with Unix.Unix_error (error, _, _) ->
+      storage_failure marker expected
+        ("cannot create temporary marker: " ^ Unix.error_message error)
+  in
+  let write_contents contents =
+    let rec write offset =
+      if offset < String.length contents then
+        let count =
+          Unix.write_substring descriptor contents offset (String.length contents - offset)
+        in
+        if count = 0 then storage_failure marker expected "cannot write marker";
+        write (offset + count)
+    in
+    write 0
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.close descriptor;
+      try Unix.unlink temporary with Unix.Unix_error _ -> ())
+    (fun () ->
+      let contents = Printf.sprintf "%d\n" expected in
+      (try
+         write_contents contents;
+         Unix.fsync descriptor
+       with Unix.Unix_error (error, _, _) ->
+         storage_failure marker expected
+           ("cannot write temporary marker: " ^ Unix.error_message error));
+      try Unix.link temporary marker
+      with Unix.Unix_error (error, _, _) ->
+        storage_failure marker expected
+          ("cannot atomically publish marker: " ^ Unix.error_message error))
+
 let category_slug = function
   | Cuisine -> "cuisine"
   | Dietary_style -> "dietary-style"
@@ -205,13 +346,6 @@ let rec ensure_directory path =
   if path <> "" && path <> "." && not (Sys.file_exists path) then (
     ensure_directory (Filename.dirname path);
     Unix.mkdir path 0o755)
-
-let database_file = function
-  | None -> "tags.sqlite"
-  | Some path
-    when Filename.check_suffix path ".sqlite" || Filename.check_suffix path ".db" ->
-      path
-  | Some directory -> Filename.concat directory "tags.sqlite"
 
 let open_database configured_location =
   let path = database_file configured_location in

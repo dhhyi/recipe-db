@@ -14,8 +14,14 @@ setup() {
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_CONFIG_DIR="$BATS_TEST_TMPDIR/mise-config"
   export MISE_TASK_RUN_AUTO_INSTALL=false
-  mkdir -p example .git/hooks
-  printf '%s\n' 'name: example' > example/.project.yaml
+  mkdir -p example design/src
+  git init -q
+  printf '%s\n' '*.tmp' > .gitignore
+  printf '%s\n' 'name: example' '---' 'category: backend' > example/.project.yaml
+  cat > design/Dockerfile << 'EOF'
+# BEGIN generated Tailwind Docker inputs
+# END generated Tailwind Docker inputs
+EOF
   setup_mock_bin
   cat > bin/docker << 'EOF'
 #!/bin/sh

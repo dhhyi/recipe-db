@@ -69,6 +69,11 @@ category: backend
 backupRole: cleanup-participant
 backupCompact: true
 backupData: { kind: images }
+storageVersion:
+  value: 1
+  file: storage_version_generated.nim
+  template: |
+    const expectedStorageVersion* = {{STORAGE_VERSION}}
 prettier:
   ignore:
     - "*.nim"
@@ -80,3 +85,4 @@ format:
 check: |
   nim --version
   nimble build -d:release -y --threads:off
+test: nimble test -y

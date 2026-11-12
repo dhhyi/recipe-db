@@ -11,7 +11,7 @@ defmodule Recipes.Application do
     Application.put_env(:recipes, :mode, mode)
 
     children = [
-      {Recipes.Repository, []},
+      {Recipes.Repository, [validate_storage: true]},
       {Bandit,
        plug: Recipes.Router, port: 5000, ip: {0, 0, 0, 0}, http_1_options: [max_requests: 1]}
     ]

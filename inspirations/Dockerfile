@@ -15,6 +15,7 @@ RUN apt-get update \
 COPY --from=builder /build/lua_modules/share/lua /usr/local/share/lua/
 COPY --from=builder /build/lua_modules/lib/lua /usr/local/lib/lua/
 EXPOSE 8800
+ENV DATA_LOCATION=/data
 WORKDIR /app
 ENTRYPOINT [ "tini", "--" ]
 CMD [ "lua", "/usr/local/share/lua/5.4/inspirations_server.lua" ]

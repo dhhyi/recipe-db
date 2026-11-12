@@ -76,7 +76,7 @@ The tunnel command must remain running. If the Pi hostname or SSH user differs, 
 
 **Success:** the candidate digest, revision, matching checkout and Pi connection are ready. Nothing has been deployed.
 
-**Open:** selecting the required data versions and migration artifacts is not yet supported.
+**Open / stop:** services now enforce their declared storage version, but this implementation does not stamp existing production storage. Existing unversioned production data will cause startup to fail; do not deploy these builds until [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260) has completed controlled initialization and verified the backup. There is no deployment-time bypass. Migration artifacts and execution remain separate work; see [#262: Discover and execute release migrations sequentially](https://github.com/dhhyi/recipe-db/issues/262).
 
 ## 2. Finish testing and upgrade rehearsals
 

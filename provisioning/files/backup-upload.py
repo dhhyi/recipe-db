@@ -200,6 +200,8 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                         continue
                     if not member.isfile() or name in observed:
                         raise ValueError("unsafe archive member")
+                    if name == "storage-version" and member.size > 64:
+                        raise ValueError("malformed storage-version marker")
                     stream = source_tar.extractfile(member)
                     if stream is None:
                         raise ValueError("unreadable archive member")
@@ -213,7 +215,7 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                             marker.extend(block)
                     observed[name] = (size, file_digest.hexdigest())
                     if name == "storage-version":
-                        if size > 64 or not re.fullmatch(rb"[1-9][0-9]*\n?", bytes(marker)):
+                        if not re.fullmatch(rb"[1-9][0-9]*\n", bytes(marker)):
                             raise ValueError("malformed storage-version marker")
                         observed_storage_version = int(marker.strip())
         except tarfile.TarError as error:
