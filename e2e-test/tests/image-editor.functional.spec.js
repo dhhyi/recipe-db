@@ -444,7 +444,9 @@ test("header home navigation respects unsaved crop confirmation", async ({
   await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
   await expect(selection(page)).toBeVisible();
   const navigation = page.waitForRequest(
-    (request) => request.isNavigationRequest() && request.url() === new URL("/", page.url()).href,
+    (request) =>
+      request.isNavigationRequest() &&
+      request.url() === new URL("/", page.url()).href,
   );
   page.once("dialog", (dialog) => dialog.accept());
   await home.click();

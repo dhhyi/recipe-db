@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="htmx-config" content='{"disableSelector":"[hx-disable], [data-hx-disable], header-component a"}' />
+    <meta
+      name="htmx-config"
+      content='{"disableSelector":"[hx-disable], [data-hx-disable], header-component a"}'
+    />
     <link rel="stylesheet" href="/design/styles.css" />
     <script type="module" src="/design/components.js"></script>
     <script src="/design/htmx.min.js"></script>
@@ -95,7 +98,11 @@
   </head>
 
   <body class="container">
-    <header-component hx-get="/identity" hx-trigger="load" hx-swap="outerHTML"></header-component>
+    <header-component
+      hx-get="/identity"
+      hx-trigger="load"
+      hx-swap="outerHTML"
+    ></header-component>
     <script src="/images-edit/elm.js"></script>
     <main></main>
     <footer-component></footer-component>
