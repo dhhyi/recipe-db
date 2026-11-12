@@ -488,11 +488,15 @@ test("dirty form confirmation decline and accept on return and header links", as
       await expect(nameField(page)).toHaveValue(dirtyName);
       await expect(dirtyStatus(page)).toBeVisible();
 
+      const navigation = triggerCase.name === "header"
+        ? page.waitForRequest((request) => request.isNavigationRequest() && request.url() === new URL("/", page.url()).href)
+        : null;
       await runActionExpectSingleDialog(page, {
         trigger: triggerCase.trigger,
         decision: "accept",
         expectedType: "confirm",
       });
+      if (navigation) await navigation;
       await expect(page).toHaveURL(triggerCase.destination);
     }
   }

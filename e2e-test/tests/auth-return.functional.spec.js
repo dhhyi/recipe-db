@@ -1,5 +1,76 @@
 import { test, expect, waitForRecipeIndexed } from "./fixtures.js";
 
+test("all headers replace stale identity using the shared HTMX fragment", async ({
+  ownerIdentity,
+  demoRecipe,
+}) => {
+  const page = await ownerIdentity.browserContext.newPage();
+  const cases = [
+    {
+      name: "rejected session",
+      fragment: '<header-component auth-role="anonymous" auth-enabled></header-component>',
+      role: "anonymous",
+      login: true,
+    },
+    {
+      name: "lookup failure",
+      fragment: "<header-component></header-component>",
+      role: null,
+      login: false,
+    },
+    {
+      name: "Google disabled",
+      fragment: '<header-component auth-role="anonymous"></header-component>',
+      role: "anonymous",
+      login: false,
+    },
+    {
+      name: "authenticated",
+      fragment: '<header-component auth-role="owner" auth-enabled></header-component>',
+      role: "owner",
+      login: false,
+    },
+  ];
+  try {
+    for (const path of ["/", `/edit/${demoRecipe.id}`, `/images-edit/${demoRecipe.id}`]) {
+      for (const scenario of cases) {
+        await test.step(`${path}: ${scenario.name}`, async () => {
+          let release;
+          const gate = new Promise((resolve) => (release = resolve));
+          let received;
+          const requestReceived = new Promise((resolve) => (received = resolve));
+          await page.route("**/identity", async (route) => {
+            expect(route.request().headers()["hx-request"]).toBe("true");
+            received();
+            await gate;
+            await route.fulfill({ contentType: "text/html", body: scenario.fragment });
+          });
+          await page.goto(path);
+          await requestReceived;
+          const header = page.locator("header-component");
+          await header.evaluate((element) => {
+            element.setAttribute("auth-role", "owner");
+            element.setAttribute("auth-name", "Stale");
+            element.setAttribute("auth-enabled", "");
+          });
+          release();
+          await expect(header).not.toHaveAttribute("auth-name");
+          if (scenario.role) await expect(header).toHaveAttribute("auth-role", scenario.role);
+          else await expect(header).not.toHaveAttribute("auth-role");
+          await expect(page.getByRole("link", { name: "Anmelden", exact: true })).toHaveCount(scenario.login ? 1 : 0);
+          await expect(header.getByText("Stale")).toHaveCount(0);
+          if (scenario.role !== "owner") {
+            await expect(page.getByRole("link", { name: "Abmelden", exact: true })).toHaveCount(0);
+          }
+          await page.unroute("**/identity");
+        });
+      }
+    }
+  } finally {
+    await page.close();
+  }
+});
+
 test("login returns to the current URL across shared-header consumers", async ({
   authContexts,
   demoRecipe,

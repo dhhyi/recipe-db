@@ -173,6 +173,9 @@ test("saving locks shared header navigation and clean state removes unload liste
   const bridge = harness();
   bridge.receive({ action: "guard", dirty: true, saving: true });
   assert.equal(bridge.header.inert, true);
+  bridge.header.inert = false;
+  bridge.dispatch("htmx:afterSwap");
+  assert.equal(bridge.header.inert, true);
   let prevented = false;
   const event = {
     preventDefault: () => {
