@@ -73,9 +73,16 @@ description = "Verify production ingress token routing and configuration isolati
 env = { TEST_AUTH_INGRESS = "true" }
 run = "bats --print-output-on-failure .scripts/tests/traefik-ingress.bats"
 
+[tasks.check-tailwind-sources]
+description = "Validate that metadata-declared Tailwind source paths exist"
+run = "sh .scripts/sync-tailwind.sh --check-sources"
+
 [tasks.sync-tailwind]
 description = "Generate shared Tailwind sources and Docker build inputs"
+depends = ["check-tailwind-sources"]
 file = ".scripts/sync-tailwind.sh"
+sources = ["*/.project.yaml", "design/Dockerfile"]
+outputs = ["design/src/tailwind-sources.css", "design/Dockerfile"]
 
 [tasks.sync-ignore-files]
 description = "Regenerate Docker and Prettier ignore files"

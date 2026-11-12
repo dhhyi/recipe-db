@@ -461,6 +461,80 @@ EOF
   done
 }
 
+@test "Tailwind generation skips source content edits but tracks metadata and generated outputs" {
+  mkdir example/templates
+  printf '%s\n' 'tailwindSources: [templates]' >> example/.project.yaml
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  [[ $output == *"Writing "* ]]
+  css_mtime=$(stat -c %y design/src/tailwind-sources.css)
+  docker_mtime=$(stat -c %y design/Dockerfile)
+
+  printf '%s\n' '<div class="p-4"></div>' > example/templates/page.html
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  [[ $output != *"Writing "* ]]
+  [ "$(stat -c %y design/src/tailwind-sources.css)" = "$css_mtime" ]
+  [ "$(stat -c %y design/Dockerfile)" = "$docker_mtime" ]
+
+  for file in design/src/tailwind-sources.css design/Dockerfile; do
+    printf '\n# changed\n' >> "$file"
+    run mise run --raw sync-tailwind
+    [ "$status" -eq 0 ]
+    [[ $output == *"Writing "* ]]
+  done
+  grep -Fx '# changed' design/Dockerfile
+
+  rm design/src/tailwind-sources.css
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  [ -s design/src/tailwind-sources.css ]
+
+  mkdir second
+  touch second/page.html
+  printf '%s\n' 'name: second' '---' 'tailwindSources: [page.html]' > second/.project.yaml
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  grep -Fx '@source "../../second/page.html";' design/src/tailwind-sources.css
+
+  rm second/.project.yaml
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  run -1 grep -F second/ design/src/tailwind-sources.css
+}
+
+@test "Tailwind cache hits still reject missing files and directories without changing outputs" {
+  mkdir example/templates
+  touch example/page.html
+  printf '%s\n' 'tailwindSources: [templates, page.html]' >> example/.project.yaml
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  cp design/src/tailwind-sources.css expected.css
+  cp design/Dockerfile expected.Dockerfile
+
+  for source in example/page.html example/templates; do
+    if [ -d "$source" ]; then
+      rmdir "$source"
+    else
+      rm "$source"
+    fi
+    run mise run --raw sync-tailwind
+    [ "$status" -ne 0 ]
+    [[ $output == *"Tailwind source $source must be an existing file or directory"* ]]
+    cmp expected.css design/src/tailwind-sources.css
+    cmp expected.Dockerfile design/Dockerfile
+    if [ "$source" = example/templates ]; then
+      mkdir "$source"
+    else
+      touch "$source"
+    fi
+  done
+
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  [[ $output != *"Writing "* ]]
+}
+
 @test "storage-version generation follows metadata outputs and skips unchanged inputs" {
   cat >> example/.project.yaml << 'EOF'
 storageVersion:

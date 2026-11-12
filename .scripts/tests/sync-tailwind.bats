@@ -73,6 +73,20 @@ EOF
   [ ! -e design/src/tailwind-sources.css ]
 }
 
+@test "source validation does not write generated files and reports malformed metadata" {
+  cp design/Dockerfile expected.Dockerfile
+  run sh .scripts/sync-tailwind.sh --check-sources
+  [ "$status" -eq 0 ]
+  [ ! -e design/src/tailwind-sources.css ]
+  cmp expected.Dockerfile design/Dockerfile
+
+  printf '%s\n' '[' > example/.project.yaml
+  run sh .scripts/sync-tailwind.sh --check-sources
+  [ "$status" -ne 0 ]
+  [ ! -e design/src/tailwind-sources.css ]
+  cmp expected.Dockerfile design/Dockerfile
+}
+
 @test "fails on missing or duplicate Docker markers without replacing the Dockerfile" {
   for markers in missing duplicate; do
     if [ "$markers" = missing ]; then
