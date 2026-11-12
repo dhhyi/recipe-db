@@ -229,8 +229,8 @@ run = "docker compose up -d --wait"
 raw_args = true
 
 [tasks.dev-down]
-description = "Stop the development stack and remove orphan containers; accepts extra Compose down arguments"
-run = "docker compose down --remove-orphans"
+description = "Stop the development stack and delete its volumes and orphan containers; accepts extra Compose down arguments"
+run = "docker compose down --volumes --remove-orphans"
 raw_args = true
 
 [tasks.start-test-fixtures]

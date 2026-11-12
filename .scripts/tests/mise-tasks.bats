@@ -158,7 +158,7 @@ EOF
   [ ! -e generated ]
 }
 
-@test "dev-down removes orphans and forwards arguments and exit status" {
+@test "dev-down removes volumes and orphans and forwards arguments and exit status" {
   setup_mock_bin
   cat > bin/docker << 'EOF'
 #!/bin/sh
@@ -170,12 +170,12 @@ EOF
   run mise run --raw dev-down
 
   [ "$status" -eq 0 ]
-  [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--remove-orphans>' ]
+  [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--volumes>\n<--remove-orphans>' ]
 
   run env DOCKER_STATUS=23 mise run --raw dev-down --timeout 120 "two words"
 
   [ "$status" -eq 23 ]
-  [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--remove-orphans>\n<--timeout>\n<120>\n<two words>' ]
+  [ "$(cat "$MOCK_LOG")" = $'<compose>\n<down>\n<--volumes>\n<--remove-orphans>\n<--timeout>\n<120>\n<two words>' ]
 }
 
 @test "dev-up generates configuration before Compose and preserves arguments and exit status" {
