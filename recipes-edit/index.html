@@ -3,34 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="htmx-config" content='{"disableSelector":"[hx-disable], [data-hx-disable], header-component a"}' />
     <link rel="stylesheet" href="/design/styles.css" />
     <script type="module" src="/design/components.js"></script>
+    <script src="/design/htmx.min.js"></script>
     <title>Rezept bearbeiten | RezeptDB</title>
   </head>
   <body class="container">
-    <header-component></header-component>
+    <header-component hx-get="/identity" hx-trigger="load" hx-swap="outerHTML"></header-component>
     <main id="app" class="recipe-editor"></main>
     <footer-component></footer-component>
     <script src="/edit/js/main.js"></script>
-    <script>
-      fetch("/identity", { cache: "no-store" })
-        .then((response) => (response.ok ? response.text() : ""))
-        .then((markup) => {
-          if (!markup) return;
-          const identity = new DOMParser()
-            .parseFromString(markup, "text/html")
-            .querySelector("header-component");
-          const header = document.querySelector("header-component");
-          if (!identity || !header) return;
-          for (const attribute of ["auth-role", "auth-name", "auth-enabled"]) {
-            if (identity.hasAttribute(attribute)) {
-              header.setAttribute(attribute, identity.getAttribute(attribute));
-            } else {
-              header.removeAttribute(attribute);
-            }
-          }
-        })
-        .catch(() => {});
-    </script>
   </body>
 </html>

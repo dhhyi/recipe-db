@@ -21,6 +21,8 @@
                 (set-guard! (or saving? (model/dirty? (:form state) (:baseline state))))
                 (when-let [header (.querySelector js/document "header-component")]
                   (set! (.-inert header) saving?))))
+            (after-swap! [_]
+              (sync-state! @db/app-db))
             (click! [event]
               (when-let [anchor (some #(when (and (.-matches %) (.matches % "a[href]")) %)
                                       (array-seq (.composedPath event)))]
@@ -50,9 +52,11 @@
                       (do (.preventDefault event) (.stopImmediatePropagation event)))))))]
       (add-watch db/app-db ::guards (fn [_ _ _ state] (sync-state! state)))
       (.addEventListener js/document "click" click! true)
+      (.addEventListener js/document "htmx:afterSwap" after-swap!)
       (sync-state! @db/app-db)
       (reset! stop-guards!
               (fn []
                 (remove-watch db/app-db ::guards)
                 (.removeEventListener js/document "click" click! true)
+                (.removeEventListener js/document "htmx:afterSwap" after-swap!)
                 (set-guard! false))))))
