@@ -228,6 +228,7 @@ sources = ["pwa/.project.yaml"]
 outputs = [
   "pwa/.devcontainer/devcontainer.json",
   "pwa/.devcontainer/Dockerfile",
+  "pwa/.vscode/tasks.json",
   "pwa/.update_devcontainer.sh",
 ]
 
