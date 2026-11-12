@@ -206,6 +206,17 @@ outputs = [
 description = "Distribute the cached GraphQL SDL to metadata-declared consumers"
 depends = ["export-graphql-schema"]
 file = ".scripts/merge-graphql-schemas.sh"
+sources = [".generated/graphql/recipe-db.graphqls", "*/.project.yaml"]
+outputs = [
+  '''
+{%- set paths = exec(command="yq -r 'select(documentIndex == 1) | select(.graphqlSchema != null and .graphqlSchema != \"\") | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .graphqlSchema + \"/recipe-db.graphqls\"' */.project.yaml") | split(pat="\n") -%}
+{%- if paths | length > 1 -%}
+  {{ "{" ~ paths | join(sep=",") ~ "}" }}
+{%- else -%}
+  {{ paths | first }}
+{%- endif -%}
+'''
+]
 
 [tasks.in-devcontainer]
 description = "Run a command in a project devcontainer: [--rm | --keep-running] <project> [--rm | --keep-running] <command> [args...]; retention also via DEVCONTAINER_KEEP_RUNNING=true"
