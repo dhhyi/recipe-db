@@ -25,8 +25,8 @@ command=$1
 values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
-  [[ $command == release-* || $command == render ]] \
-    || production_fail "Git release sources are limited to render and guarded release operations"
+  [[ $command == release-* || $command == render || $command == backup-capture ]] \
+    || production_fail "Git release sources are limited to render, backup-capture and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
     || production_fail "Git release sources require a clean tooling checkout"
@@ -35,7 +35,7 @@ case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
-  backup-capture) [[ $# = 1 ]] || production_fail "backup-capture requires the existing maintenance state directory" ;;
+  backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
   release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
   release-migration-result) [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and RECORD-<outcome>-<holder> confirmation" ;;
@@ -195,10 +195,12 @@ pull_release() {
         oauth2-proxy/oauth2-proxy.cfg design/nginx.conf ':(glob)*/.project.yaml')
       git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
         || production_fail "backup requires the release revision in the local checkout"
-      git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
-        || production_fail "backup metadata and templates must match the immutable release revision"
-      [[ -z $(git -C "$root" ls-files --others -- "${inputs[@]}") ]] \
-        || production_fail "backup refuses untracked metadata or template inputs"
+      if [[ $release_sources_from_git != true ]]; then
+        git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
+          || production_fail "backup metadata and templates must match the immutable release revision"
+        [[ -z $(git -C "$root" ls-files --others -- "${inputs[@]}") ]] \
+          || production_fail "backup refuses untracked metadata or template inputs"
+      fi
       ;;
   esac
   release_root=$root
@@ -1099,7 +1101,7 @@ backup_run() {
     esac
     production_storage_preflight
   fi
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   storage_class=$(jq -r .storageClass "$work/config.json")
   backup_role_inventory
   backup_capture_workloads "$artifact"
@@ -1177,8 +1179,58 @@ backup_write_manifest() {
     && mv "$snapshot/manifest.next" "$snapshot/manifest.json"
 }
 
+backup_validate_legacy_receipt() {
+  local receipt=$1 entry name volume
+  [[ $receipt = /* && -f $receipt && ! -L $receipt &&
+    $(realpath -e "$receipt") = "$receipt" &&
+    $(stat -c %u "$receipt") = "$EUID" ]] \
+    || production_fail "legacy capture requires an absolute, private, operator-owned identity receipt"
+  [[ $((8#$(stat -c %a "$receipt") & 077)) == 0 ]] \
+    || production_fail "legacy identity receipt must not be accessible to group or others"
+  case "$receipt" in "$snapshot"/*) production_fail "legacy identity receipt must be outside the snapshot" ;; esac
+  cp -- "$receipt" "$work/legacy-receipt.json"
+  kube get namespace kube-system -o json > "$work/legacy-system.json"
+  kube get namespace "$namespace" -o json > "$work/legacy-namespace.json"
+  jq -e --slurpfile state "$snapshot/backup-state.json" \
+    --slurpfile system "$work/legacy-system.json" \
+    --slurpfile application "$work/legacy-namespace.json" '
+    . as $receipt | .format == "recipe-db-legacy-storage-identities" and .formatVersion == 1
+    and .source == ($state[0].source | {target,cluster,context,namespace})
+    and (.recordedAt | fromdateiso8601) < ($state[0].startedAt | fromdateiso8601)
+    and (.namespaceUids.system | type == "string" and length > 0)
+    and (.namespaceUids.application | type == "string" and length > 0)
+    and .namespaceUids.system == $system[0].metadata.uid
+    and .namespaceUids.application == $application[0].metadata.uid
+    and (.pvcs | type == "array" and length > 0)
+    and ([.pvcs[].name] | sort) == ([$state[0].selectedPVCs[].pvc] | sort)
+    and ([.pvcs[].name] | unique | length) == (.pvcs | length)
+    and all(.pvcs[]; all([.name,.uid,.volumeName,.volumeUid][];
+      type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))
+  ' "$work/legacy-receipt.json" > /dev/null \
+    || production_fail "legacy identity receipt does not match the target or pre-maintenance time"
+  while IFS= read -r entry; do
+    name=$(jq -r .pvc <<< "$entry")
+    volume=$(jq -r .storage.volumeName <<< "$entry")
+    kube get pv "$volume" -o json > "$work/legacy-pv.json"
+    jq -e --arg name "$name" --arg ns "$namespace" --argjson inventory "$entry" \
+      --slurpfile pv "$work/legacy-pv.json" '
+      [.pvcs[] | select(.name == $name)] as $saved |
+      ($saved | length) == 1
+      and $saved[0].uid == $inventory.storage.uid
+      and $saved[0].volumeName == $inventory.storage.volumeName
+      and $saved[0].volumeUid == $pv[0].metadata.uid
+      and $pv[0].metadata.name == $saved[0].volumeName
+      and $pv[0].status.phase == "Bound"
+      and $pv[0].spec.claimRef.name == $name
+      and $pv[0].spec.claimRef.namespace == $ns
+      and $pv[0].spec.claimRef.uid == $saved[0].uid
+    ' "$work/legacy-receipt.json" > /dev/null \
+      || production_fail "legacy PVC or PV identity changed since the pre-maintenance receipt"
+  done < "$work/backup-pvcs.jsonl"
+}
+
 backup_capture_maintenance() {
-  local current release artifact
+  local current release artifact legacy_state=false legacy_receipt=${2:-}
   snapshot=$1
   [[ $snapshot = /* && -d $snapshot && $(realpath -e "$snapshot") = "$snapshot" &&
   -f $snapshot/backup-state.json && ! -L $snapshot/backup-state.json ]] \
@@ -1192,9 +1244,21 @@ backup_capture_maintenance() {
   render
   backup_load_state "$snapshot"
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
-  jq -e '.stateVersion == 2 and .status == "backup-mode"
-    and .phase == "maintenance-entered"' "$snapshot/backup-state.json" > /dev/null \
+  if [[ $release_sources_from_git == true &&
+    $revision == a7e14347b604a35875ed0716c645d7b2436b6aac ]] \
+    && jq -e 'has("stateVersion") | not' "$snapshot/backup-state.json" > /dev/null; then
+    legacy_state=true
+  fi
+  jq -e --argjson legacy "$legacy_state" '
+    (.stateVersion == 2 or ($legacy and (has("stateVersion") | not)))
+    and .status == "backup-mode" and .phase == "maintenance-entered"' \
+    "$snapshot/backup-state.json" > /dev/null \
     || production_fail "maintenance state is not ready for its first capture"
+  if $legacy_state; then
+    [[ -n $legacy_receipt ]] || production_fail "legacy capture requires a pre-maintenance identity receipt"
+  else
+    [[ -z $legacy_receipt ]] || production_fail "identity receipts are only supported for the exact legacy maintenance state"
+  fi
   [[ ! -e $snapshot/manifest.json && ! -L $snapshot/manifest.json ]] \
     || production_fail "maintenance snapshot was already captured"
   connect
@@ -1220,6 +1284,21 @@ backup_capture_maintenance() {
     printf 'production: maintenance workloads changed releases; retain the barrier and investigate\n' >&2
     return 1
   }
+  if $legacy_state; then
+    storage_class=$(jq -r .storageClass "$work/config.json")
+    backup_role_inventory
+    jq -s 'map(del(.storage)) | sort_by(.name)' "$work/backup-pvcs.jsonl" \
+      > "$work/legacy-inventory.json"
+    jq -e --slurpfile inventory "$work/legacy-inventory.json" '
+      (.selectedPVCs | sort_by(.name)) == $inventory[0]
+    ' "$snapshot/backup-state.json" > /dev/null \
+      || production_fail "legacy maintenance PVC inventory does not match the immutable release"
+    backup_validate_legacy_receipt "$legacy_receipt"
+    jq --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+      '.stateVersion=2 | .selectedPVCs=$pvcs' "$snapshot/backup-state.json" \
+      > "$snapshot/backup-state.next" \
+      && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json" || return 1
+  fi
   barrier_touched=true
   backup_establish_barrier || return 1
   backup_scale_zero || return 1
@@ -2310,7 +2389,7 @@ case "$command" in
     backup_run "$1" "$2"
     ;;
   backup-capture)
-    backup_capture_maintenance "$1"
+    backup_capture_maintenance "$@"
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"

@@ -320,6 +320,20 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *" get service graphql-projection -o json"*)
         echo '{"spec":{"type":"ClusterIP","selector":{"app.kubernetes.io/name":"graphql"},"ports":[{"name":"graphql","port":4000,"targetPort":4000,"protocol":"TCP"}]}}'
         handled=true ;;
+      *" get namespace kube-system -o json"*)
+        echo '{"metadata":{"uid":"system-namespace"}}'
+        handled=true ;;
+      *" get namespace recipe-db -o json"*)
+        echo '{"metadata":{"uid":"application-namespace"}}'
+        handled=true ;;
+      *" get pv "*"-o json"*)
+        volume="${*: -3:1}"
+        jq -n --arg volume "$volume" --arg drift "${MOCK_LEGACY_PV_DRIFT:-false}" '{
+          metadata:{name:$volume,uid:(if $drift == "true" then "replaced-pv" else ("uid-"+$volume) end)},
+          status:{phase:"Bound"},
+          spec:{claimRef:{name:($volume | ltrimstr("pv-")),namespace:"recipe-db",
+            uid:("claim-"+($volume | ltrimstr("pv-")))}}}'
+        handled=true ;;
       *" get pvc "*"-o json"*)
         pvc="${*: -3:1}"
         if [[ -f $MOCK_LOG.pvcs ]]; then
@@ -333,8 +347,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
             if $drift == "true" then .metadata.uid="changed-claim-uid" else . end
           ' "$MOCK_LOG.pvcs"
         else
-          jq -n --arg pvc "$pvc" '{
-            metadata:{uid:("claim-"+$pvc),namespace:"recipe-db",
+          jq -n --arg pvc "$pvc" --arg drift "${MOCK_LEGACY_PVC_DRIFT:-false}" '{
+            metadata:{uid:(if $drift == "true" then "replaced-claim" else ("claim-"+$pvc) end),namespace:"recipe-db",
               labels:{"app.kubernetes.io/part-of":"recipe-db"}},
             status:{phase:"Bound",capacity:{storage:"1Gi"}},
             spec:{volumeName:("pv-"+$pvc),storageClassName:"local-path",accessModes:["ReadWriteOnce"],

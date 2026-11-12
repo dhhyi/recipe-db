@@ -204,6 +204,119 @@ EOF
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
+@test "pinned tooling captures maintenance using the original release sources and existing guards" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/pinned-capture" old_revision holder
+  local receipt="$FIXTURE_ROOT/legacy-identities.json"
+  mkdir recipes
+  printf 'old metadata\n' > recipes/.project.yaml
+  # shellcheck disable=SC2016
+  sed -i '/^application_project_metadata_to_jsonl() {/a\  cat "$1/recipes/.project.yaml" >> "$MOCK_LOG.metadata-source"' \
+    .scripts/lib/project-metadata.sh
+  printf '*\n' > .gitignore
+  git add -f .gitignore recipes/.project.yaml .scripts/lib/project-metadata.sh
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Original fixture metadata'
+  old_revision=$(git rev-parse HEAD)
+  export MOCK_REVISION="$old_revision" MOCK_SOURCE_REVISION="$old_revision"
+
+  jq -n --slurpfile values "$VALUES" '{
+    format:"recipe-db-legacy-storage-identities",formatVersion:1,
+    recordedAt:"2000-01-01T00:00:00Z",
+    source:($values[0] | {target,cluster,context,namespace}),
+    namespaceUids:{system:"system-namespace",application:"application-namespace"},
+    pvcs:(["recipes","images","tags"] | map({
+      name:.,uid:("claim-"+.),volumeName:("pv-"+.),volumeUid:("uid-pv-"+.)}))
+  }' > "$receipt"
+  chmod 600 "$receipt"
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  jq 'del(.stateVersion) | .selectedPVCs |= map(del(.storage))' \
+    "$snapshot/backup-state.json" > legacy-state.json
+  cp legacy-state.json "$snapshot/backup-state.json"
+  printf 'new metadata\n' > recipes/.project.yaml
+  printf 'new template input\n' > message-bus/nats.conf
+  sed -i "s/a7e14347b604a35875ed0716c645d7b2436b6aac/$old_revision/" .scripts/production-k3d.sh
+  git add -f recipes/.project.yaml message-bus/nats.conf .scripts/production-k3d.sh
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'New tooling inputs'
+  MOCK_REVISION=$(git rev-parse HEAD)
+
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  printf '\n' >> .scripts/production-k3d.sh
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"require a clean tooling checkout"* ]]
+  git restore .scripts/production-k3d.sh
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"limited to render, backup-capture and guarded release operations"* ]]
+
+  cp "$snapshot/backup-state.json" original-state.json
+  jq --arg revision "$MOCK_REVISION" '.source.revision = $revision' \
+    original-state.json > "$snapshot/backup-state.json"
+  MOCK_SOURCE_REVISION=$MOCK_REVISION
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"maintenance state is not ready"* ]]
+  MOCK_SOURCE_REVISION=$old_revision
+  cp original-state.json "$snapshot/backup-state.json"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires a pre-maintenance identity receipt"* ]]
+  cp "$MOCK_LOG.lease" original-lease.json
+  jq '.spec.holderIdentity = "other-holder"' original-lease.json > "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -ne 0 ]
+  [[ $output == *"maintenance Lease does not match saved state"* ]]
+  cmp original-state.json "$snapshot/backup-state.json"
+  cp original-lease.json "$MOCK_LOG.lease"
+
+  jq '.selectedPVCs[0].pvc = "unexpected"' original-state.json > "$snapshot/backup-state.json"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -ne 0 ]
+  [[ $output == *"legacy maintenance PVC inventory does not match"* ]]
+  [ ! -e "$snapshot/manifest.json" ]
+  cp original-state.json "$snapshot/backup-state.json"
+  cp original-lease.json "$MOCK_LOG.lease"
+
+  local drift
+  for drift in MOCK_LEGACY_PVC_DRIFT MOCK_LEGACY_PV_DRIFT; do
+    export "$drift=true"
+    run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+    [ "$status" -ne 0 ]
+    [[ $output == *"PVC or PV identity changed"* ]]
+    [ ! -e "$snapshot/manifest.json" ]
+    unset "$drift"
+    cp original-state.json "$snapshot/backup-state.json"
+    cp original-lease.json "$MOCK_LOG.lease"
+  done
+  cp "$receipt" original-receipt.json
+  jq --arg time "$(jq -r .startedAt original-state.json)" '.recordedAt=$time' \
+    original-receipt.json > "$receipt"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -ne 0 ]
+  [[ $output == *"pre-maintenance time"* ]]
+  cp original-receipt.json "$receipt"
+  cp original-state.json "$snapshot/backup-state.json"
+  cp original-lease.json "$MOCK_LOG.lease"
+
+  : > "$MOCK_LOG.metadata-source"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG.metadata-source")" = "old metadata" ]
+  jq -e --arg revision "$old_revision" --arg artifact "$ARTIFACT" '
+    .source.revision == $revision and .source.artifact == $artifact
+    and (.inventory | length) == 3
+    and all(.inventory[]; .storage.uid != null and .layout.kind != null)
+  ' "$snapshot/manifest.json" > /dev/null
+  jq -e '.stateVersion == 2 and .status == "captured" and .phase == "captured"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "captured"' "$MOCK_LOG.lease" > /dev/null
+}
+
 @test "accepted-release alignment status inspection preserves state Lease and access barrier" {
   prepare_captured_release
   jq --arg candidate "$CANDIDATE" --arg revision "$MOCK_REVISION" '
@@ -230,10 +343,10 @@ EOF
   cmp "$STATE/backup-state.json" before-state.json
   cmp "$MOCK_LOG.lease" before-lease.json
   cmp "$MOCK_LOG.deployments" before-deployments.json
-  run ! grep -Eq ' (apply|patch|delete|scale|set) ' "$MOCK_LOG"
-  [ "$status" -eq 0 ]
+  run grep -Eq ' (apply|patch|delete|scale|set) ' "$MOCK_LOG"
+  [ "$status" -eq 1 ]
 
-  yq -i '.namespace = "another-namespace"' "$VALUES"
+  yq -i '.timeoutSeconds = 599' "$VALUES"
   run bash .scripts/production-k3d.sh backup-status "$VALUES" "$STATE"
   [ "$status" -ne 0 ]
   [[ $output == *"recovery state does not match the explicit target and original values"* ]]
