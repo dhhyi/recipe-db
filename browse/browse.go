@@ -283,8 +283,9 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			status = http.StatusOK
 		} else {
 			ctx := templ.WithChildren(r.Context(), components.Browse(state))
+			ctx = components.WithPageMetadata(ctx, browsePageMetadata(publicOrigin(), state))
 			r = r.WithContext(ctx)
-			component = components.Layout(state.Title(), overviewOpenGraphMetadata(publicOrigin()))
+			component = components.Layout()
 			if r.Header.Get("HX-History-Restore-Request") == "true" {
 				status = http.StatusOK
 			}

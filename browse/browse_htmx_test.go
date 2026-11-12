@@ -167,7 +167,7 @@ func TestBrowseCumulativeHistory(t *testing.T) {
 	}
 }
 
-func TestOpenGraphOverviewVariantsAndFragments(t *testing.T) {
+func TestBrowsePageMetadataAndFragments(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			OperationName string
@@ -194,41 +194,42 @@ func TestOpenGraphOverviewVariantsAndFragments(t *testing.T) {
 	t.Setenv("PUBLIC_ORIGIN", "https://recipes.example.test")
 	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
 
-	var expectedMetadata string
-	for _, path := range []string{
-		"/",
-		"/?q=Apfel",
-		"/?sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc",
-		"/?page=2",
-		"/?page=2&q=Apfel&sort_by=rating_average%3Adesc%2Crating_count%3Adesc%2Crecipe_id_sort%3Aasc",
+	for _, tc := range []struct {
+		path, title, description string
+	}{
+		{"/", "Alle Rezepte | RezeptDB", "Alle Rezepte"},
+		{"/?q=Apfel", "0 Rezepte für 'Apfel' | RezeptDB", "0 Rezepte für 'Apfel'"},
+		{"/?sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc", "Alle Rezepte | RezeptDB", "Alle Rezepte"},
+		{"/?page=2", "Alle Rezepte | RezeptDB", "Alle Rezepte"},
+		{"/?page=2&q=Apfel&sort_by=rating_average%3Adesc%2Crating_count%3Adesc%2Crecipe_id_sort%3Aasc",
+			"0 Rezepte für 'Apfel' | RezeptDB", "0 Rezepte für 'Apfel'"},
 	} {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
 		body := response.Body.String()
 		head := strings.SplitN(body, "</head>", 2)[0]
 		start := strings.Index(head, `<meta property="og:title"`)
 		if response.Code != http.StatusOK || start == -1 {
-			t.Fatalf("full overview response lacks metadata: %s (%d)", path, response.Code)
+			t.Fatalf("full browse response lacks metadata: %s (%d)", tc.path, response.Code)
 		}
-		metadata := head[start:]
-		if expectedMetadata == "" {
-			expectedMetadata = metadata
-		} else if metadata != expectedMetadata {
-			t.Fatalf("overview metadata changed for %s:\n%s\nwant:\n%s", path, metadata, expectedMetadata)
+		metadata := html.UnescapeString(head[start:])
+		if !strings.Contains(html.UnescapeString(head), "<title>"+tc.title+"</title>") {
+			t.Errorf("browse document title for %s missing %q: %s", tc.path, tc.title, head)
 		}
 		for _, value := range []string{
-			`property="og:title" content="Rezepte entdecken | RezeptDB"`,
+			`property="og:title" content="RezeptDB"`,
 			`property="og:type" content="website"`,
 			`property="og:image" content="https://recipes.example.test/design/og-image.svg"`,
 			`property="og:url" content="https://recipes.example.test/"`,
-			`property="og:description" content="` + siteDescription + `"`,
+			`property="og:description" content="` + tc.description + `"`,
+			`name="description" content="` + tc.description + `"`,
 		} {
 			if !strings.Contains(metadata, value) {
-				t.Errorf("overview metadata missing %q: %s", value, metadata)
+				t.Errorf("browse metadata for %s missing %q: %s", tc.path, value, metadata)
 			}
 		}
-		if strings.Contains(metadata, "Apfel") || strings.Contains(metadata, "page=2") {
-			t.Fatalf("overview query leaked into metadata: %s", metadata)
+		if !strings.Contains(html.UnescapeString(body), `<h1 id="browse-heading">`+tc.description+`</h1>`) {
+			t.Errorf("browse heading does not match description for %s: %s", tc.path, body)
 		}
 	}
 
@@ -236,8 +237,13 @@ func TestOpenGraphOverviewVariantsAndFragments(t *testing.T) {
 	fragment.Header.Set("HX-Request", "true")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, fragment)
-	if strings.Contains(response.Body.String(), "<head") || strings.Contains(response.Body.String(), "og:") {
-		t.Fatalf("overview fragment must not contain document metadata: %s", response.Body.String())
+	body := response.Body.String()
+	rendered := html.UnescapeString(body)
+	if strings.Contains(body, "<head") || strings.Contains(body, "og:") ||
+		strings.Contains(body, `name="description"`) ||
+		!strings.Contains(rendered, "<title>0 Rezepte für 'Apfel' | RezeptDB</title>") ||
+		!strings.Contains(rendered, `<h1 id="browse-heading" hx-swap-oob="outerHTML">0 Rezepte für 'Apfel'</h1>`) {
+		t.Fatalf("browse fragment metadata contract failed: %s", response.Body.String())
 	}
 }
 
