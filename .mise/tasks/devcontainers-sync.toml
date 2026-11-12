@@ -220,6 +220,17 @@ outputs = [
   "provisioning/.update_devcontainer.sh",
 ]
 
+["sync-devcontainer:pwa"]
+description = "Synchronize the PWA devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - pwa/.project.yaml pwa"
+sources = ["pwa/.project.yaml"]
+outputs = [
+  "pwa/.devcontainer/devcontainer.json",
+  "pwa/.devcontainer/Dockerfile",
+  "pwa/.update_devcontainer.sh",
+]
+
 ["sync-devcontainer:ratings"]
 description = "Synchronize the ratings devcontainer"
 shell = "bash -o pipefail -c"

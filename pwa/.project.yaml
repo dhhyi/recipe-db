@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-pwa
+  build:
+    packages:
+      - nginx
+      - librsvg2-bin
+  ports:
+    - 80
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-pwa:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        pwa:
+          rule: PathPrefix(`/pwa`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: frontend
+check: nginx -t -c "$PWD/nginx.conf"
+test: python3 -m json.tool manifest.webmanifest >/dev/null && nginx -t -c "$PWD/nginx.conf"
