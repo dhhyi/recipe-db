@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/language_schema.json
+extends: dcc://debian
+devcontainer:
+  name: recipe-db-pwa
+  build:
+    packages:
+      - nginx
+      - librsvg2-bin
+      - python3
+  ports:
+    - 80
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+  initialize: |
+    mkdir -p icons
+    ./generate-icons.sh
+vscode:
+  settings:
+    peacock.remoteColor: "#dba694"
+  tasks:
+    - label: Generate PWA icons
+      command: ./generate-icons.sh
+extras:
+  - traefik
+traefik:
+  network: intranet
+  labels:
+    http:
+      services:
+        recipe-db-pwa:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+      routers:
+        pwa:
+          rule: PathPrefix(`/pwa`)
+          entrypoints: web
+---
+# yaml-language-server: $schema=../.scripts/project-schema.json
+category: frontend
+check: sudo cp nginx.conf /etc/nginx/conf.d/default.conf && sudo nginx -t
+test: python3 test-icons.py && sudo cp nginx.conf /etc/nginx/conf.d/default.conf && sudo nginx -t

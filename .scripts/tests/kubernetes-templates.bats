@@ -213,12 +213,15 @@ render() {
       and (.additionalArguments | index("--entrypoints.websecure.http.aliasHeadersStrategy=delete") != null)'
 }
 
-@test "Kubernetes templates select every application project including design" {
+@test "Kubernetes templates select every application project including design and PWA" {
   render values.json
   jq -e --slurpfile projects projects.jsonl '
     [.items[] | select(.kind == "Deployment") | .metadata.name] as $deployed |
     all($projects[]; .name as $name | $deployed | index($name) != null)
     and ($deployed | index("design") != null)
+    and ($deployed | index("pwa") != null)
+    and any($projects[]; .name == "pwa" and
+      .traefik.labels.http.routers.pwa.rule == "PathPrefix(`/pwa`)")
     and all(.items[]; .kind != "Secret")
     and all(.items[] | select(.kind == "Deployment");
       .spec.replicas == 1 and .spec.strategy.type == "Recreate"

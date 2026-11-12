@@ -5,7 +5,7 @@
 #@   return {
 #@     "routers": {
 #@       "browse-maintenance": {
-#@         "rule": "PathPrefix(`/`) && !PathPrefix(`/graphql`) && !PathPrefix(`/mcp`) && !PathPrefix(`/public`) && !PathPrefix(`/images`) && !PathPrefix(`/edit`) && !PathPrefix(`/design`) && (Method(`GET`) || Method(`HEAD`)) && HeaderRegexp(`Accept`, `(?i)text/html`)",
+#@         "rule": "PathPrefix(`/`) && !PathPrefix(`/graphql`) && !PathPrefix(`/mcp`) && !PathPrefix(`/public`) && !PathPrefix(`/images`) && !PathPrefix(`/edit`) && !PathPrefix(`/design`) && !PathPrefix(`/pwa`) && (Method(`GET`) || Method(`HEAD`)) && HeaderRegexp(`Accept`, `(?i)text/html`)",
 #@         "entrypoints": ["web"] if production else "web",
 #@         "priority": 1,
 #@         "service": "browse-maintenance",
