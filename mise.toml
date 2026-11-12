@@ -80,6 +80,11 @@ file = ".scripts/sync-tailwind.sh"
 [tasks.sync-ignore-files]
 description = "Regenerate Docker and Prettier ignore files"
 file = ".scripts/sync-ignore-files.sh"
+sources = [
+  ".gitignore",
+  "*/{.project.yaml,.gitignore,Dockerfile,.prettierignore}"
+]
+outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
 
 [tasks.sync-storage-version-templates]
 description = "Generate service source files for declared storage versions"

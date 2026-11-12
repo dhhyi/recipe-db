@@ -49,6 +49,10 @@ When adding, renaming, or removing a project, update its task in [.mise/tasks/de
 
 Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project coverage, freshness, and failure handling.
 
+## Ignore-file synchronization
+
+`mise run sync-ignore-files` skips unchanged inputs. It tracks root ignore rules, project metadata, project ignore rules, and Dockerfiles; missing generated ignore files trigger regeneration. Creating an obsolete project `.prettierignore` triggers its removal.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:

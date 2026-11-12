@@ -461,6 +461,70 @@ EOF
   done
 }
 
+@test "ignore files skip unchanged inputs and repair missing outputs" {
+  touch example/Dockerfile
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  [[ $output == *"Writing .prettierignore"* ]]
+
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  [[ $output != *"Writing "* ]]
+
+  for file in .dockerignore .prettierignore example/.dockerignore; do
+    rm "$file"
+    run mise run --raw sync-ignore-files
+    [ "$status" -eq 0 ]
+    [ -s "$file" ]
+  done
+}
+
+@test "ignore files detect rule changes, project and Dockerfile discovery, and obsolete ignores" {
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+
+  printf '%s\n' root-rule >> .gitignore
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  grep -Fx root-rule .prettierignore
+
+  printf '%s\n' local-rule > example/.gitignore
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  grep -Fx '/example/**/local-rule' .prettierignore
+
+  printf '%s\n' 'name: example' '---' 'prettier: {ignore: [metadata-rule]}' > example/.project.yaml
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  grep -Fx '/example/**/metadata-rule' .prettierignore
+
+  mkdir second
+  cp -p example/.project.yaml second/.project.yaml
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  grep -Fx '/second/**/metadata-rule' .prettierignore
+
+  touch second/Dockerfile
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  [ -s second/.dockerignore ]
+
+  touch second/.prettierignore
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  [ ! -e second/.prettierignore ]
+
+  rm second/.project.yaml example/.gitignore
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  run -1 grep -F /second/ .prettierignore
+  run -1 grep -F local-rule .prettierignore
+
+  run mise run --raw sync-ignore-files
+  [ "$status" -eq 0 ]
+  [[ $output != *"Writing "* ]]
+}
+
 @test "VS Code settings skip unchanged inputs and regenerate after changes or missing output" {
   run mise run --raw sync-vscode-settings
   [ "$status" -eq 0 ]
