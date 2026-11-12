@@ -9,6 +9,23 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
+func identityAuthenticationRejected(err error, upstreamStatus int) bool {
+	if upstreamStatus == http.StatusUnauthorized {
+		return true
+	}
+	var list gqlerror.List
+	if !errors.As(err, &list) {
+		return false
+	}
+	for _, gqlErr := range list {
+		if gqlErr != nil && (gqlErr.Extensions["code"] == "invalid-credentials" ||
+			gqlErr.Extensions["code"] == "authentication-required") {
+			return true
+		}
+	}
+	return false
+}
+
 func tagErrorsOnly(err error) bool {
 	return serviceUnavailableOnly(err, map[string]string{"tags": "tags"})
 }

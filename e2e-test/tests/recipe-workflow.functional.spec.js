@@ -488,11 +488,20 @@ test("dirty form confirmation decline and accept on return and header links", as
       await expect(nameField(page)).toHaveValue(dirtyName);
       await expect(dirtyStatus(page)).toBeVisible();
 
+      const navigation =
+        triggerCase.name === "header"
+          ? page.waitForRequest(
+              (request) =>
+                request.isNavigationRequest() &&
+                request.url() === new URL("/", page.url()).href,
+            )
+          : null;
       await runActionExpectSingleDialog(page, {
         trigger: triggerCase.trigger,
         decision: "accept",
         expectedType: "confirm",
       });
+      if (navigation) await navigation;
       await expect(page).toHaveURL(triggerCase.destination);
     }
   }
@@ -526,6 +535,50 @@ test("beforeunload prompts when dirty and is removed after returning to clean", 
   await page.reload();
   page.off("dialog", listener);
   expect(dialogCount).toBe(0);
+});
+
+test("a delayed identity swap keeps the header locked during save", async ({
+  page,
+  demoRecipe,
+}) => {
+  const identity = deferred();
+  const started = deferred();
+  const release = deferred();
+  await page.route("**/identity", async (route) => {
+    await identity.promise;
+    await route.fulfill({
+      contentType: "text/html",
+      body: '<header-component auth-role="owner" auth-enabled></header-component>',
+    });
+  });
+  await page.route("**/graphql", async (route) => {
+    if (requestIsOperation(route.request(), "UpdateRecipe", "updateRecipe")) {
+      started.resolve();
+      await release.promise;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.goto(`/edit/${demoRecipe.id}`);
+    await waitForEditorForm(page);
+    await nameField(page).fill(`${demoRecipe.name} delayed identity`);
+    const saveClick = saveButton(page).click();
+    await started.promise;
+    await expect(page.locator("header-component")).toHaveAttribute("inert", "");
+    identity.resolve();
+    await expect(page.locator("header-component")).toHaveAttribute(
+      "auth-role",
+      "owner",
+    );
+    await expect(page.locator("header-component")).toHaveAttribute("inert", "");
+    release.resolve();
+    await saveClick;
+    await expect(successStatus(page)).toBeVisible();
+    await expect(page.locator("header-component")).not.toHaveAttribute("inert");
+  } finally {
+    identity.resolve();
+    release.resolve();
+  }
 });
 
 test("beforeunload guard is active while save is pending", async ({

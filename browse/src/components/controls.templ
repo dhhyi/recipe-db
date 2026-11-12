@@ -38,8 +38,12 @@ templ RecipeRatingUnavailable() {
 	</div>
 }
 
-templ BrowseIdentityUnavailable() {
-	<header-component></header-component>
+templ BrowseIdentityUnavailable(showLogin bool) {
+	if showLogin {
+		<header-component auth-role="anonymous" auth-enabled></header-component>
+	} else {
+		<header-component></header-component>
+	}
 }
 
 templ RatingDeniedPage(status int) {

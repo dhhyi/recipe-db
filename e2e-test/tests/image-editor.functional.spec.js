@@ -433,6 +433,27 @@ test("Cancel after a successful save discards only the later local changes", asy
   await expectCropPixels(image, pngFile(), savedCrop, 648, 486);
 });
 
+test("header home navigation respects unsaved crop confirmation", async ({
+  page,
+  demoRecipe,
+}) => {
+  await selectSource(page, demoRecipe);
+  const home = page.locator("header-component a[href='/']");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await home.click();
+  await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
+  await expect(selection(page)).toBeVisible();
+  const navigation = page.waitForRequest(
+    (request) =>
+      request.isNavigationRequest() &&
+      request.url() === new URL("/", page.url()).href,
+  );
+  page.once("dialog", (dialog) => dialog.accept());
+  await home.click();
+  await navigation;
+  await expect(page).toHaveURL("/");
+});
+
 test("native unload confirmation can decline reloading an unsaved crop", async ({
   page,
   demoRecipe,

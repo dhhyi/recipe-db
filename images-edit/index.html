@@ -3,8 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="htmx-config"
+      content='{"disableSelector":"[hx-disable], [data-hx-disable], header-component a"}'
+    />
     <link rel="stylesheet" href="/design/styles.css" />
     <script type="module" src="/design/components.js"></script>
+    <script src="/design/htmx.min.js"></script>
     <title>Bilder bearbeiten | RezeptDB</title>
     <style>
       .image-editor .editor-image-area {
@@ -93,27 +98,11 @@
   </head>
 
   <body class="container">
-    <header-component></header-component>
-    <script>
-      fetch("/identity", { cache: "no-store" })
-        .then((response) => (response.ok ? response.text() : ""))
-        .then((markup) => {
-          if (!markup) return;
-          const identity = new DOMParser()
-            .parseFromString(markup, "text/html")
-            .querySelector("header-component");
-          const header = document.querySelector("header-component");
-          if (!identity || !header) return;
-          for (const attribute of ["auth-role", "auth-name", "auth-enabled"]) {
-            if (identity.hasAttribute(attribute)) {
-              header.setAttribute(attribute, identity.getAttribute(attribute));
-            } else {
-              header.removeAttribute(attribute);
-            }
-          }
-        })
-        .catch(() => {});
-    </script>
+    <header-component
+      hx-get="/identity"
+      hx-trigger="load"
+      hx-swap="outerHTML"
+    ></header-component>
     <script src="/images-edit/elm.js"></script>
     <main></main>
     <footer-component></footer-component>
@@ -128,6 +117,10 @@
         let saving = false;
         let pointer = null;
         const send = (event) => app.ports.editorEvent.send(event);
+        document.addEventListener("htmx:afterSwap", () => {
+          const header = document.querySelector("header-component");
+          if (header) header.inert = saving;
+        });
 
         // Read dimensions and EXIF without allocating a decoded pixel buffer.
         // The browser then displays the original using its native orientation.
