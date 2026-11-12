@@ -15,10 +15,22 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-fallback-stage|release-migration-result|release-start|release-reopen|release-disposition|release-website-result|release-backup-capture|release-backup-verify|release-accept|release-finalize|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+release_sources_from_git=false
+if [[ ${1:-} == --release-sources-from-git ]]; then
+  release_sources_from_git=true
+  shift
+fi
+[[ $# -ge 2 ]] || production_fail "usage: $0 [--release-sources-from-git] <operation> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
+if [[ $release_sources_from_git == true ]]; then
+  [[ $command == release-* || $command == render ]] \
+    || production_fail "Git release sources are limited to render and guarded release operations"
+  tooling_revision=$(git -C "$root" rev-parse HEAD)
+  [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
+    || production_fail "Git release sources require a clean tooling checkout"
+fi
 case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
@@ -46,6 +58,7 @@ case "$command" in
   *) production_fail "unknown command" ;;
 esac
 work=$(mktemp -d "$root/.production-k3d.XXXXXXXX")
+release_root=$root
 export TMPDIR="$work"
 locked=false
 retain_lock=false
@@ -188,7 +201,18 @@ pull_release() {
         || production_fail "backup refuses untracked metadata or template inputs"
       ;;
   esac
-  sh "$root/.scripts/validate-production-release.sh" "$work/pulled/release.json" "$revision"
+  release_root=$root
+  if [[ $release_sources_from_git == true ]]; then
+    git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
+      || production_fail "immutable release source revision is not available locally"
+    release_root="$work/source-$revision"
+    if [[ ! -d $release_root ]]; then
+      mkdir "$release_root"
+      git -C "$root" archive "$revision" | tar -xf - -C "$release_root" \
+        || production_fail "cannot materialize immutable release sources"
+    fi
+  fi
+  sh "$root/.scripts/validate-production-release.sh" "$work/pulled/release.json" "$revision" "$release_root"
   local image
   while IFS= read -r image; do
     oras manifest fetch "$image" > "$work/image-index.json"
@@ -197,19 +221,19 @@ pull_release() {
 }
 
 render() {
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   jq -n --slurpfile config "$work/config.json" --slurpfile projects "$work/projects.jsonl" \
     --slurpfile release "$work/pulled/release.json" --arg artifact "$artifact" \
-    --rawfile nats "$root/message-bus/nats.conf" \
-    --rawfile maintenanceNginx "$root/browse-maintenance/nginx.conf" \
-    --rawfile maintenanceHtml "$root/browse-maintenance/unavailable.html" \
-    --rawfile oauthConfig "$root/oauth2-proxy/oauth2-proxy.cfg" \
-    --rawfile designNginx "$root/design/nginx.conf" \
+    --rawfile nats "$release_root/message-bus/nats.conf" \
+    --rawfile maintenanceNginx "$release_root/browse-maintenance/nginx.conf" \
+    --rawfile maintenanceHtml "$release_root/browse-maintenance/unavailable.html" \
+    --rawfile oauthConfig "$release_root/oauth2-proxy/oauth2-proxy.cfg" \
+    --rawfile designNginx "$release_root/design/nginx.conf" \
     '{config:$config[0],projects:$projects,release:$release[0],artifact:$artifact,
       files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig,designNginx:$designNginx}}' \
     > "$work/template-values.json"
-  ytt -f "$root/.scripts/templates/kubernetes-template.yml" \
-    -f "$root/.scripts/templates/kubernetes.lib.yml" \
+  ytt -f "$release_root/.scripts/templates/kubernetes-template.yml" \
+    -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
   if [[ $command == restore ]]; then
     restore_ingress_values
@@ -254,9 +278,9 @@ annotate_credentials() {
 routes() {
   jq -n --slurpfile projects "$work/projects.jsonl" --slurpfile config "$work/config.json" \
     '{projects:$projects,googleOAuthClientId:($config[0].runtime.googleOAuthClientId // "")}' > "$work/route-values.json"
-  ytt -f "$root/.scripts/templates/traefik-template.yml" \
-    -f "$root/.scripts/templates/browse-maintenance-template.lib.yml" \
-    -f "$root/.scripts/templates/service-template.lib.yml" \
+  ytt -f "$release_root/.scripts/templates/traefik-template.yml" \
+    -f "$release_root/.scripts/templates/browse-maintenance-template.lib.yml" \
+    -f "$release_root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
   jq --arg ns "$namespace" --argjson googleEnabled "$google_enabled" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
@@ -1288,11 +1312,20 @@ release_state_write() {
     && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
 }
 
+release_assert_tooling() {
+  if jq -e '.toolingRevision != null' "$snapshot/backup-state.json" > /dev/null; then
+    [[ $release_sources_from_git == true &&
+      $tooling_revision == "$(jq -r .toolingRevision "$snapshot/backup-state.json")" ]] \
+      || production_fail "retained release requires its pinned tooling revision and Git release sources"
+  fi
+}
+
 release_load_operation() {
   local current old_release
   snapshot=$1
   artifact=$2
   backup_load_state "$snapshot"
+  release_assert_tooling
   old_release=$(jq -er .source.artifact "$snapshot/backup-state.json") \
     || production_fail "release state has no original immutable release"
   pull_release "$old_release"
@@ -1341,6 +1374,9 @@ release_pull_candidate() {
     production_fail "candidate does not match the retained staged release"
   else
     expected_checkout=$revision
+  fi
+  if [[ $release_sources_from_git == true ]]; then
+    return 0
   fi
   checkout_revision=$(git -C "$root" rev-parse HEAD 2> /dev/null) \
     || production_fail "candidate source checkout has no verifiable revision"
@@ -1534,6 +1570,7 @@ release_stage() {
       --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f1)" \
       --arg backupId "$backup_id" --arg backupStatus "$backup_status" --arg verifiedAt "$verified_at" \
       --argjson workloads "$candidate_workloads" --argjson natsInitJob "$nats_init_job" \
+      --arg toolingRevision "${tooling_revision:-}" \
       '{candidateHistory:(($prior[0].candidateHistory // []) +
           (if $prior[0].candidate then [{candidate:$prior[0].candidate,
             migrationResult:($prior[0].migrationResult // null),
@@ -1541,7 +1578,8 @@ release_stage() {
         candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
         migrationResult:null,postCheckDisposition:null,
         backupVerification:{backupId:$backupId,status:$backupStatus,acknowledgedAt:$verifiedAt}}
-      | .candidate.natsInitJob=$natsInitJob')" \
+      | .candidate.natsInitJob=$natsInitJob
+      | if $toolingRevision != "" then .toolingRevision=$toolingRevision else . end')" \
     || return 1
   cluster_operation_lock_update candidate-staged || return 1
   release_assert_staged_workloads
@@ -1861,7 +1899,7 @@ release_backup_capture() {
   [[ ! -e $post_snapshot && ! -L $post_snapshot ]] \
     || production_fail "post-release backup destination already exists; inspect retained state"
   mkdir -m 700 -- "$post_snapshot" || production_fail "could not create post-release backup directory"
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   storage_class=$(jq -r .storageClass "$work/config.json")
   backup_role_inventory
   backup_capture_workloads "$candidate"
@@ -2012,6 +2050,7 @@ release_finalize() {
   local lease_present=false
   snapshot=$1
   backup_load_state "$snapshot"
+  release_assert_tooling
   [[ $confirmation == "PUBLISHED-$backup_id-$tag" ]] \
     || production_fail "release finalization requires PUBLISHED-<holder>-<tag> confirmation"
   [[ $tag =~ ^v[1-9][0-9]*$ ]] \

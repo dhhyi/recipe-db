@@ -204,6 +204,44 @@ EOF
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
+@test "accepted-release alignment status inspection preserves state Lease and access barrier" {
+  prepare_captured_release
+  jq --arg candidate "$CANDIDATE" --arg revision "$MOCK_REVISION" '
+    .status="release-accepted" | .phase="operator-accepted" |
+    .candidate={artifact:$candidate,revision:$revision} |
+    .websiteCheck={outcome:"passed"} |
+    .postReleaseBackup={artifact:$candidate,revision:$revision,status:"verified-upload"}
+  ' "$STATE/backup-state.json" > accepted.json
+  mv accepted.json "$STATE/backup-state.json"
+  jq '.metadata.annotations["recipe-db/phase"]="release-accepted"' \
+    "$MOCK_LOG.lease" > lease.next
+  mv lease.next "$MOCK_LOG.lease"
+  cp "$STATE/backup-state.json" before-state.json
+  cp "$MOCK_LOG.lease" before-lease.json
+  cp "$MOCK_LOG.deployments" before-deployments.json
+  : > "$MOCK_LOG"
+
+  run bash .scripts/production-k3d.sh backup-status "$VALUES" "$STATE"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | jq -e --arg candidate "$CANDIDATE" --arg holder "$HOLDER" '
+    .state.status == "release-accepted" and .state.candidate.artifact == $candidate
+    and .lease.spec.holderIdentity == $holder
+    and .lease.metadata.annotations["recipe-db/phase"] == "release-accepted"'
+  cmp "$STATE/backup-state.json" before-state.json
+  cmp "$MOCK_LOG.lease" before-lease.json
+  cmp "$MOCK_LOG.deployments" before-deployments.json
+  run ! grep -Eq ' (apply|patch|delete|scale|set) ' "$MOCK_LOG"
+  [ "$status" -eq 0 ]
+
+  yq -i '.namespace = "another-namespace"' "$VALUES"
+  run bash .scripts/production-k3d.sh backup-status "$VALUES" "$STATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery state does not match the explicit target and original values"* ]]
+  cmp "$STATE/backup-state.json" before-state.json
+  cmp "$MOCK_LOG.lease" before-lease.json
+  cmp "$MOCK_LOG.deployments" before-deployments.json
+}
+
 @test "forced termination prevents capture and preserves actionable recovery state" {
   export MOCK_BACKUP=true MOCK_FORCED_TERMINATION=capture
   local snapshot="$FIXTURE_ROOT/backups/forced"
@@ -582,6 +620,52 @@ EOF
     "$STATE/backup-state.json" > /dev/null
   marker_after=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
   [ "$marker_after" = "$marker_before" ]
+}
+
+@test "pinned tooling continues immutable release sources without switching back to obsolete tools" {
+  create_two_release_revisions
+  prepare_captured_release
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Separate tooling revision'
+  local tooling_revision
+  tooling_revision=$(git rev-parse HEAD)
+
+  printf '\n' >> .scripts/production-k3d.sh
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -ne 0 ]
+  [[ $output == *"require a clean tooling checkout"* ]]
+  git restore .scripts/production-k3d.sh
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -eq 0 ]
+  jq -e --arg revision "$tooling_revision" '.toolingRevision == $revision' \
+    "$STATE/backup-state.json" > /dev/null
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires its pinned tooling revision"* ]]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-result \
+    "$VALUES" "$STATE" "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=true
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
+    "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-fallback-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
+  [ "$status" -eq 0 ]
+  [ "$(git rev-parse HEAD)" = "$tooling_revision" ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-result \
+    "$VALUES" "$STATE" "$ARTIFACT" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
+    "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e --arg holder "$HOLDER" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease" > /dev/null
 }
 
 @test "candidate staging interruption preserves inspectable state and the original Lease" {
