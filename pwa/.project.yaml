@@ -11,9 +11,15 @@ devcontainer:
     - 80
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+  initialize: |
+    mkdir -p icons
+    ./generate-icons.sh
 vscode:
   settings:
     peacock.remoteColor: "#dba694"
+  tasks:
+    - label: Generate PWA icons
+      command: ./generate-icons.sh
 extras:
   - traefik
 traefik:

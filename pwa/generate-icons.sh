@@ -2,7 +2,7 @@
 set -eu
 
 project_root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-command -v rsvg-convert >/dev/null 2>&1 || {
+command -v rsvg-convert > /dev/null 2>&1 || {
   echo "rsvg-convert is required; install librsvg2-bin" >&2
   exit 1
 }
