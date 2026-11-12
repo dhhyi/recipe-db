@@ -1804,6 +1804,7 @@ release_start() {
   kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || return 1
   kube scale deployment/graphql "--replicas=$graphql_replicas" > /dev/null || return 1
   kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
+  backup_projection_route 4001 || return 1
   while IFS= read -r entry; do
     name=$(jq -r .name <<< "$entry")
     [[ $name == graphql || $name == nats ]] && continue
@@ -1833,6 +1834,7 @@ release_start() {
         and any(.env[]; .name == "MODE" and .value == "backup")))
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate readiness or GraphQL access barrier could not be verified"
+  backup_projection_route 4000 || return 1
   release_state_write release-ready ready \
     "$(jq -cn --arg readyAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{candidateReadyAt:$readyAt}')" \
     || return 1

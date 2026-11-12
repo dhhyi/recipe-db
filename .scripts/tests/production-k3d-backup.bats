@@ -640,7 +640,7 @@ EOF
   [ -e "$MOCK_LOG.lease" ]
 }
 
-@test "candidate startup scales remaining dependencies before waiting for search readiness" {
+@test "candidate startup makes dependencies and the private projection route available before search readiness" {
   prepare_candidate_release
   export MOCK_SEARCH_DEPENDENCIES=true
   run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
@@ -648,6 +648,13 @@ EOF
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG.projection-port")" = 4000 ]
+  local projection_ready search_ready projection_reset
+  projection_ready=$(awk '/patch service graphql-projection .*"targetPort":4001/ {line=NR} END {print line}' "$MOCK_LOG")
+  search_ready=$(awk '/rollout status deployment\/search / {line=NR} END {print line}' "$MOCK_LOG")
+  projection_reset=$(awk '/patch service graphql-projection .*"targetPort":4000/ {line=NR} END {print line}' "$MOCK_LOG")
+  [ "$projection_ready" -lt "$search_ready" ]
+  [ "$search_ready" -lt "$projection_reset" ]
   jq -e '.status == "release-ready" and .phase == "ready"' "$STATE/backup-state.json" > /dev/null
   jq -e '.items[] | select(.metadata.name == "graphql") |
     any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "backup")' \
@@ -708,6 +715,7 @@ EOF
   [ "$status" -ne 0 ]
   jq -e '.status == "recovery-required" and .phase == "interrupted"' \
     "$STATE/backup-state.json" > /dev/null
+  [ "$(cat "$MOCK_LOG.projection-port")" = 4001 ]
   export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
 
   local workload_changes

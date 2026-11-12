@@ -320,6 +320,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *" get service graphql-projection -o json"*)
         echo '{"spec":{"type":"ClusterIP","selector":{"app.kubernetes.io/name":"graphql"},"ports":[{"name":"graphql","port":4000,"targetPort":4000,"protocol":"TCP"}]}}'
         handled=true ;;
+      *" patch service graphql-projection --type=merge "*)
+        jq -er '.spec.ports[0].targetPort' <<< "${*: -1}" > "$MOCK_LOG.projection-port"
+        handled=true ;;
       *" get namespace kube-system -o json"*)
         echo '{"metadata":{"uid":"system-namespace"}}'
         handled=true ;;
@@ -394,6 +397,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           jq -e '[.items[] | select(.metadata.name == "tags" or .metadata.name == "typesense")] |
             length == 2 and all(.[]; .spec.replicas > 0)' "$MOCK_LOG.deployments" > /dev/null \
             || exit 1
+          [[ $(cat "$MOCK_LOG.projection-port") == 4001 ]] || exit 1
         fi
         handled=true ;;
       *" rollout status deployment/graphql "*)
