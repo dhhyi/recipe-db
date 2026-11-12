@@ -14,6 +14,7 @@ import (
 
 	"github.com/Khan/genqlient/graphql"
 
+	"frontend/page_metadata"
 	"frontend/src/components"
 )
 
@@ -89,7 +90,7 @@ func TestOpenGraphMetadataEscapesValues(t *testing.T) {
 	}
 
 	var body bytes.Buffer
-	metadata := components.PageMetadata{
+	metadata := pagemetadata.PageMetadata{
 		DocumentTitle:  `<recipe> " &`,
 		OpenGraphTitle: `<recipe> " &`,
 		OpenGraphType:  "article",
@@ -97,7 +98,7 @@ func TestOpenGraphMetadataEscapesValues(t *testing.T) {
 		OpenGraphURL:   "https://recipes.example.test/recipe/42",
 		Description:    `<description> &`,
 	}
-	ctx := components.WithPageMetadata(context.Background(), metadata)
+	ctx := pagemetadata.WithContext(context.Background(), metadata)
 	if err := components.Layout().Render(ctx, &body); err != nil {
 		t.Fatal(err)
 	}

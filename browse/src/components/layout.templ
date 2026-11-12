@@ -1,7 +1,9 @@
 package components
 
+import "frontend/page_metadata"
+
 templ Layout() {
-	{{ metadata := pageMetadataFromContext(ctx) }}
+	{{ metadata := pagemetadata.FromContext(ctx) }}
 	<!DOCTYPE html>
 	<html lang="de">
 		<head>

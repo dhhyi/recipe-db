@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,70 +18,15 @@ import (
 	"github.com/Khan/genqlient/graphql"
 	"github.com/a-h/templ"
 
+	"frontend/page_metadata"
 	"frontend/src/components"
 	gql "frontend/src/generated"
 )
 
 const graphqlEndpoint = "http://traefik/graphql"
 
-const (
-	defaultPublicOrigin = "http://localhost:8080"
-	siteDescription     = "Entdecke und teile vielfältige Rezepte auf RezeptDB."
-	fallbackImagePath   = "/design/og-image.svg"
-)
-
 var errTagsUnavailable = errors.New("recipe tags unavailable")
 var errOptionalServicesUnavailable = errors.New("optional recipe services unavailable")
-
-func publicOrigin() string {
-	origin := strings.TrimRight(os.Getenv("PUBLIC_ORIGIN"), "/")
-	if origin == "" {
-		return defaultPublicOrigin
-	}
-	return origin
-}
-
-func browsePageMetadata(origin string, state components.BrowseState) components.PageMetadata {
-	return components.PageMetadata{
-		DocumentTitle:  state.Title(),
-		OpenGraphTitle: "RezeptDB",
-		OpenGraphType:  "website",
-		OpenGraphImage: absolutePublicURL(origin, fallbackImagePath),
-		OpenGraphURL:   absolutePublicURL(origin, "/"),
-		Description:    state.Heading(),
-	}
-}
-
-func recipePageMetadata(origin string, recipe *gql.RecipeDetail) components.PageMetadata {
-	image := fallbackImagePath
-	if recipe.Image != nil && recipe.Image.Url != "" {
-		image = recipe.Image.Url
-	}
-	return components.PageMetadata{
-		DocumentTitle:  recipe.Name + " | RezeptDB",
-		OpenGraphTitle: recipe.Name,
-		OpenGraphType:  "article",
-		OpenGraphImage: absolutePublicURL(origin, image),
-		OpenGraphURL:   absolutePublicURL(origin, "/recipe/"+url.PathEscape(recipe.Id)),
-		Description:    siteDescription,
-	}
-}
-
-func absolutePublicURL(origin, path string) string {
-	base, err := url.Parse(strings.TrimRight(origin, "/") + "/")
-	if err != nil ||
-		(!strings.EqualFold(base.Scheme, "http") && !strings.EqualFold(base.Scheme, "https")) ||
-		base.Host == "" {
-		base, _ = url.Parse(defaultPublicOrigin + "/")
-	}
-	reference, err := url.Parse(path)
-	if err != nil || reference.Scheme != "" &&
-		(!strings.EqualFold(reference.Scheme, "http") && !strings.EqualFold(reference.Scheme, "https") ||
-			reference.Host == "") {
-		reference, _ = url.Parse(fallbackImagePath)
-	}
-	return base.ResolveReference(reference).String()
-}
 
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
@@ -101,7 +45,7 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 	}
 	metadata := recipePageMetadata(publicOrigin(), resp.Recipe)
 	ctx = templ.WithChildren(ctx, components.Detail(resp, metadata.OpenGraphURL))
-	ctx = components.WithPageMetadata(ctx, metadata)
+	ctx = pagemetadata.WithContext(ctx, metadata)
 	var html bytes.Buffer
 	if err := components.Layout().Render(ctx, &html); err != nil {
 		return nil, err
@@ -122,7 +66,7 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 
 func writeErrorPage(w http.ResponseWriter, r *http.Request, status int, title, message string) {
 	ctx := templ.WithChildren(r.Context(), components.ErrorContent(message))
-	ctx = components.WithPageMetadata(ctx, components.PageMetadata{DocumentTitle: title})
+	ctx = pagemetadata.WithContext(ctx, pagemetadata.PageMetadata{DocumentTitle: title})
 	var body bytes.Buffer
 	if err := components.Layout().Render(ctx, &body); err != nil {
 		log.Printf("failed to render error page: %v", err)
@@ -157,7 +101,7 @@ func writeErrorPage(w http.ResponseWriter, r *http.Request, status int, title, m
 
 func writeRatingDeniedPage(w http.ResponseWriter, r *http.Request, status int) {
 	ctx := templ.WithChildren(r.Context(), components.RatingDeniedPage(status))
-	ctx = components.WithPageMetadata(ctx, components.PageMetadata{DocumentTitle: "Bewertung nicht möglich | RezeptDB"})
+	ctx = pagemetadata.WithContext(ctx, pagemetadata.PageMetadata{DocumentTitle: "Bewertung nicht möglich | RezeptDB"})
 	var body bytes.Buffer
 	if err := components.Layout().Render(ctx, &body); err != nil {
 		http.Error(w, "Bewertung nicht möglich", http.StatusForbidden)
