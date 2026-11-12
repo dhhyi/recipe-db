@@ -25,9 +25,85 @@
 - name: Refuse capture checkout changes during release maintenance
   ansible.builtin.assert:
     that:
-      - not ((backup_lifecycle_status.stdout | from_json).maintenanceActive | default(false))
-    fail_msg: Resolve the retained maintenance operation before changing its capture checkout.
+      - not ((backup_lifecycle_status.stdout | from_json).maintenanceActive | default(false)) or backup_alignment is defined
+    fail_msg: Resolve retained maintenance or explicitly align its accepted candidate.
   when: backup_configuration.stat.exists
+  no_log: true
+
+- name: Validate explicit accepted-release alignment inputs
+  ansible.builtin.assert:
+    that:
+      - backup_configuration.stat.exists
+      - (backup_lifecycle_status.stdout | from_json).maintenanceActive
+      - backup_alignment is mapping
+      - backup_alignment.artifact is match('^ghcr\.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$')
+      - backup_alignment.revision is match('^[0-9a-f]{40}$')
+      - backup_capture_revision == backup_alignment.revision
+    fail_msg: Alignment requires the exact retained accepted candidate and capture revision.
+  when: backup_alignment is defined
+  no_log: true
+
+- name: Read the installed uploader state directory before alignment
+  ansible.builtin.slurp:
+    src: /etc/recipe-db/backup.json
+  register: backup_alignment_configuration
+  when: backup_alignment is defined
+  no_log: true
+
+- name: Require the canonical retained maintenance directory during alignment
+  ansible.builtin.assert:
+    that:
+      - (backup_alignment_configuration.content | b64decode | from_json).stateDirectory == '/var/lib/recipe-db-backup'
+    fail_msg: Alignment requires the managed uploader state directory.
+  when: backup_alignment is defined
+  no_log: true
+
+- name: Inspect retained accepted release and target without changing lifecycle state
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/mise
+      - exec
+      - --
+      - bash
+      - /opt/recipe-db/.scripts/production-k3d.sh
+      - backup-status
+      - /etc/recipe-db/backup-values.yaml
+      - /var/lib/recipe-db-backup/maintenance
+    chdir: /var/lib/recipe-db-backup
+  environment: "{{ backup_toolchain_environment | combine({'KUBECONFIG': '/etc/recipe-db/backup-kubeconfig.yaml'}) }}"
+  register: backup_alignment_status
+  changed_when: false
+  when: backup_alignment is defined
+  no_log: true
+
+- name: Require candidate-bound acceptance and the retained release Lease before alignment
+  ansible.builtin.assert:
+    that:
+      - retained.state.status == 'release-accepted'
+      - retained.state.phase == 'operator-accepted'
+      - retained.state.acceptedAt | length > 0
+      - retained.state.websiteCheck.outcome == 'passed'
+      - retained.state.candidate.artifact == backup_alignment.artifact
+      - retained.state.candidate.revision == backup_alignment.revision
+      - retained.state.postReleaseBackup.artifact == backup_alignment.artifact
+      - retained.state.postReleaseBackup.revision == backup_alignment.revision
+      - retained.state.postReleaseBackup.status == 'verified-upload'
+      - retained.state.postReleaseBackup.uploadStatus == 'verified-upload'
+      - retained.state.postReleaseBackup.storageVersions | length > 0
+      - retained.state.source.target == 'pi'
+      - retained.state.source.cluster == backup_alignment.cluster
+      - retained.state.source.context == backup_alignment.context
+      - retained.state.source.namespace == backup_alignment.namespace
+      - retained.state.backupId == backup_alignment.holder
+      - retained.lease.spec.holderIdentity == backup_alignment.holder
+      - retained.lease.metadata.labels['app.kubernetes.io/part-of'] == 'recipe-db'
+      - retained.lease.metadata.annotations['recipe-db/operation'] == 'backup'
+      - retained.lease.metadata.annotations['recipe-db/release'] == retained.state.source.artifact
+      - retained.lease.metadata.annotations['recipe-db/phase'] == 'release-accepted'
+    fail_msg: Alignment requires a passed website check, verified candidate backup and matching retained acceptance Lease.
+  vars:
+    retained: "{{ backup_alignment_status.stdout | from_json }}"
+  when: backup_alignment is defined
   no_log: true
 
 - name: Create the private backup toolchain configuration directory
