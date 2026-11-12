@@ -112,6 +112,24 @@ func TestOpenGraphMetadataEscapesValues(t *testing.T) {
 	}
 }
 
+func TestInstallMetadata(t *testing.T) {
+	var body bytes.Buffer
+	if err := components.Layout("Test", components.OpenGraphMetadata{}).Render(context.Background(), &body); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tag := range []string{
+		`<link rel="manifest" href="/pwa/manifest.webmanifest">`,
+		`<link rel="apple-touch-icon" href="/pwa/icons/apple-touch-icon.png">`,
+		`<meta name="theme-color" content="#014463">`,
+		`<link rel="icon" type="image/png" sizes="192x192" href="/pwa/icons/chef-hat-192.png">`,
+	} {
+		if !strings.Contains(body.String(), tag) {
+			t.Errorf("install metadata missing %q: %s", tag, body.String())
+		}
+	}
+}
+
 func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	const imageURL = "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two"
 	const thumbURL = "/assets/unrelated/thumb-token.png?rev=opaque&size=small"

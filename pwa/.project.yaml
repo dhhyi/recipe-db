@@ -6,8 +6,14 @@ devcontainer:
     packages:
       - nginx
       - librsvg2-bin
+      - python3
   ports:
     - 80
+  environment:
+    MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
+vscode:
+  settings:
+    peacock.remoteColor: "#dba694"
 extras:
   - traefik
 traefik:
@@ -28,5 +34,5 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
-check: nginx -t -c "$PWD/nginx.conf"
-test: python3 -m json.tool manifest.webmanifest >/dev/null && nginx -t -c "$PWD/nginx.conf"
+check: sudo cp nginx.conf /etc/nginx/conf.d/default.conf && sudo nginx -t
+test: python3 test-icons.py && sudo cp nginx.conf /etc/nginx/conf.d/default.conf && sudo nginx -t
