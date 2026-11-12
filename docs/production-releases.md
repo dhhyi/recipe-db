@@ -8,21 +8,34 @@ This guide explains the immutable GHCR release artifact produced by the `Publish
 - [GHCR access and permissions](#ghcr-access-and-permissions)
 - [Retry and recovery](#retry-and-recovery)
 
-After the `Publish` workflow validates a commit on `main`, it publishes one immutable release inventory to GHCR. Production deployment is manual. Pull the inventory by its digest, not by the `sha-<revision>` discovery tag or an application image's compatibility `latest` tag.
+After the `Publish` workflow validates a commit on `main`, it publishes one immutable release inventory to GHCR. New inventories use schema version 2; existing schema-1 inventories remain valid for release, deployment, backup, and recovery operations. Schema 1 has no migration metadata, which does not establish that no migration is required. Production deployment is manual. Pull the inventory by its digest, not by the `sha-<revision>` discovery tag or an application's compatibility `latest` tag.
 
-The inventory is `release.json`, pushed as an OCI artifact with artifact type `application/vnd.dhhyi.recipe-db.release.v1+json` and a JSON payload media type of `application/json`. Its `schemaVersion` is `1`; `revision` is the full Git commit SHA; `images` contains exactly the backend, API, and frontend projects selected from `.project.yaml`, each addressed by an application repository digest. Each digest identifies an index with runnable `linux/amd64` and `linux/arm64` manifests. Other non-runnable descriptors, such as attestations, may also be present.
+The inventory is `release.json`, pushed as an OCI artifact with artifact type `application/vnd.dhhyi.recipe-db.release.v1+json` and a JSON payload media type of `application/json`. The OCI artifact type is independent of the inventory's `schemaVersion`. In schema 2, `revision` is the full Git commit SHA, `images` contains exactly the backend, API, and frontend projects selected from `.project.yaml`, and `migrations` is a deterministic array derived from validated migrator manifests. Each image is an immutable repository digest whose index has runnable `linux/amd64` and `linux/arm64` manifests. Other non-runnable descriptors, such as attestations, may also be present.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "revision": "<full-commit-SHA>",
   "images": {
     "<project-name>": "ghcr.io/dhhyi/recipe-db-<project-name>@sha256:<image-index-digest>"
-  }
+  },
+  "migrations": [
+    {
+      "service": "images",
+      "fromVersion": 1,
+      "toVersion": 2,
+      "timeoutSeconds": 300,
+      "image": "ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:<image-index-digest>"
+    }
+  ]
 }
 ```
 
-The workflow publishes the artifact only after validating every image and platform. The equivalent ORAS push is:
+The example omits application entries and abbreviates SHAs/digests; the inventory contains the complete application membership and migration array (empty when no migrators are declared). Each migrator image reference and its service/version/timeout values must match the validated source manifest. Migrators are declared only as `migrators/<unique-safe-directory>/migration.json` with a regular sibling `Dockerfile`; the directory is the image-name suffix, not a transition selector. The manifest contains exactly `service`, `fromVersion`, `toVersion`, and `timeoutSeconds`: `service` matches `^[a-z][a-z0-9-]*$`, source and timeout are positive integers, target is at least 2 and exactly one greater than source. Repository validation requires an existing authoritative storage owner and rejects duplicate transitions or unsafe paths. Migrator images are self-contained and use `/data` for the one service data volume; they are not `.project.yaml` projects, are excluded from development/demo generation, and do not install dependencies or mount checkout scripts at runtime. Run `mise run test-migrator-packaging` to build and execute the isolated fixture image with external data and version-marker assertions; CI runs this standalone task separately from the ordinary script and project suites.
+
+Published migrator indexes include the repository source and full revision metadata plus stable labels for artifact kind, service, source version, and target version. These labels support inventory and deliberate cleanup; they do not authorize automatic registry deletion. Do not automate source or image deletion. After accepted release closeout, consider those separate cleanup actions only when they cannot affect active releases, rehearsals, or immediate recovery; arbitrary historical-backup upgrades are not guaranteed.
+
+The workflow publishes the artifact only after validating every application and migrator image and platform. The equivalent ORAS push is:
 
 ```sh
 oras push \
@@ -42,20 +55,21 @@ revision=<full-commit-SHA>
 oras manifest fetch --descriptor "ghcr.io/dhhyi/recipe-db-releases:sha-$revision"
 oras pull ghcr.io/dhhyi/recipe-db-releases@sha256:<artifact-digest> --output release
 jq -e --arg revision "$revision" \
-  '.schemaVersion == 1 and .revision == $revision and (.images | type == "object")' \
+  '(.schemaVersion == 1 or (.schemaVersion == 2 and (.migrations | type == "array")))
+   and .revision == $revision and (.images | type == "object")' \
   release/release.json
 ```
 
-In a checkout, `sh .scripts/validate-production-release.sh release/release.json "$revision"` additionally checks exact category-derived membership and immutable GHCR digest references. Pull either platform explicitly:
+In a checkout, `sh .scripts/validate-production-release.sh release/release.json "$revision"` additionally checks exact category-derived application membership, migration/source consistency, and immutable GHCR digest references. Pull either platform explicitly:
 
 ```sh
-jq -r '.images[]' release/release.json | while IFS= read -r image; do
+jq -r '(.images[]), (.migrations[]?.image)' release/release.json | while IFS= read -r image; do
   docker pull --platform linux/amd64 "$image"
   docker pull --platform linux/arm64 "$image"
 done
 ```
 
-Routine publication already performs these inventory and platform checks; use this procedure when independently inspecting an artifact.
+Routine publication already performs these inventory and platform checks, verifies public access, and reuses a complete immutable artifact rather than overwriting it; use this procedure when independently inspecting an artifact. Candidate staging renders migrator Jobs suspended with no retries. Staging never activates them; migration selection and execution belong to the separate guarded release step.
 
 The successful workflow verifies the inventory, both image platforms, and anonymous artifact/image access before reporting the exact artifact digest. Use that digest for deployment. For manual artifact inspection and validation details, see the workflow implementation and validation scripts.
 

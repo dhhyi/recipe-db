@@ -173,6 +173,9 @@ jobs:
       - name: validate message bus integration and recovery
         run: mise run test-message-bus
 
+      - name: test migrator packaging
+        run: mise run test-migrator-packaging
+
       - name: build and validate production AMD64 images for pull requests
         if: github.event_name == 'pull_request'
         run: |
@@ -464,13 +467,13 @@ jobs:
             docker pull --platform linux/amd64 "$smoke_image"
             sh .scripts/smoke-production-image.sh "$smoke_image"
 
-            while IFS= read -r project; do
-              image="ghcr.io/dhhyi/recipe-db-$project"
+            while IFS= read -r architecture_image; do
+              image=${architecture_image%-amd64}
               docker buildx imagetools create \
-                --tag "$image:sha-${{ steps.source.outputs.sha }}" \
-                "$image:sha-${{ steps.source.outputs.sha }}-amd64" \
-                "$image:sha-${{ steps.source.outputs.sha }}-arm64"
-            done < <(jq -r '.target | keys[]' "$metadata")
+                --tag "$image" \
+                "$architecture_image" \
+                "$image-arm64"
+            done < <(jq -r '.target[] | .tags[0]' "$metadata")
 
             sh .scripts/create-production-release-inventory.sh "${{ steps.source.outputs.sha }}" "$inventory"
             sh .scripts/publish-production-release.sh "$inventory" "${{ steps.source.outputs.sha }}"

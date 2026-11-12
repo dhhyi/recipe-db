@@ -39,6 +39,7 @@ release:
   suite_inputs:
     .scripts/tests/production-release.bats:
       - .scripts/lib/project-metadata.sh
+      - .scripts/migrator-manifest.schema.json
       - .scripts/lib/release-validation.sh
       - .scripts/validate-production-release.sh
       - .scripts/validate-production-image-index.sh

@@ -158,7 +158,17 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-stage \
   "$VALUES" "$STATE" "$RELEASE" verified-upload "VERIFIED-$HOLDER-verified-upload"
 ```
 
-Use the exact `verified-upload` or `verified-unchanged` status reported by the uploader and confirm `maintenanceActive: true`; substitute that status in both command arguments as needed. The typed value records the operator's remote-verification check; it does not perform an upload or verify the remote itself. Staging validates the immutable candidate against this checkout, stops all workloads, applies the candidate with every Deployment at zero replicas, and retains the old-release state, access barrier and Lease. Continue only when it reports `candidate staged with workloads stopped`. If it fails or is interrupted, inspect the saved state and Lease; do not run `deploy`, `backup-exit`, or recovery automatically.
+Use the exact `verified-upload` or `verified-unchanged` status reported by the uploader and confirm `maintenanceActive: true`; substitute that status in both command arguments as needed. The typed value records the operator's remote-verification check; it does not perform an upload or verify the remote itself. Staging validates the immutable candidate against this checkout, stops all workloads, applies the candidate with every Deployment at zero replicas, and retains the old-release state, access barrier and Lease. Continue only when it reports `candidate staged with workloads stopped`. Schema-2 migrators are created as release-specific Jobs with pinned images and are left suspended; staging never runs them. Immediately inspect the candidate's migration Jobs on first staging. The release-specific revision label selects only this candidate. An empty result is expected for a schema-2 inventory with `migrations: []`; a schema-1 inventory's missing metadata does not prove that no migration is needed. See [production image releases](production-releases.md) for the manifest and packaging contract and `mise run test-migrator-packaging`. Do not automatically delete migrator images; retain images needed by active releases, rehearsals, and immediate recovery.
+
+```sh
+NAMESPACE=$(yq -r '.namespace' "$VALUES")
+CONTEXT=$(yq -r '.context' "$VALUES")
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" --namespace "$NAMESPACE" \
+  get jobs -l "recipe-db/revision=$REVISION,recipe-db/migration=staged" -o json \
+  | jq -e 'all(.items[]; .spec.suspend == true and .spec.backoffLimit == 0)'
+```
+
+If staging fails or is interrupted, inspect the saved state and Lease; do not run `deploy`, `backup-exit`, or recovery automatically.
 
 ## 6. Run and validate migrations
 

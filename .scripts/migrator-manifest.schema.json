@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["service", "fromVersion", "toVersion", "timeoutSeconds"],
+  "properties": {
+    "service": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "fromVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "toVersion": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "timeoutSeconds": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

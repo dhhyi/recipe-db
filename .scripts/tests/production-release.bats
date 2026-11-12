@@ -7,7 +7,9 @@ setup() {
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/release-validation.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../migrator-manifest.schema.json" .scripts/
   cp "$BATS_TEST_DIRNAME/../sync-storage-version-templates.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../create-production-release-inventory.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-production-release.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../check-production-release.sh" .scripts/
@@ -43,8 +45,35 @@ EOF
         ;;
     esac
   done
+  mkdir authoritative
+  cat > authoritative/.project.yaml << 'EOF'
+devcontainer: {}
+---
+category: test
+backupRole: authoritative-read-only
+backupData:
+  kind: sqlite
+  file: storage.db
+storageVersion:
+  value: 1
+  file: generated/version.txt
+  template: 'version={{STORAGE_VERSION}}'
+EOF
   REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   export REVISION
+}
+
+write_valid_migrator() {
+  mkdir -p migrators/images-copy
+  cat > migrators/images-copy/migration.json << 'EOF'
+{
+  "service": "authoritative",
+  "fromVersion": 1,
+  "toVersion": 2,
+  "timeoutSeconds": 300
+}
+EOF
+  printf '%s\n' 'FROM scratch' > migrators/images-copy/Dockerfile
 }
 
 write_valid_release() {
@@ -59,6 +88,21 @@ write_valid_release() {
       }
     }
   ' > release.json
+}
+
+write_valid_release_v2() {
+  write_valid_release
+  jq \
+    --arg revision "$REVISION" \
+    '.schemaVersion = 2
+     | .migrations = [{
+         service: "authoritative",
+         fromVersion: 1,
+         toVersion: 2,
+         timeoutSeconds: 300,
+         image: "ghcr.io/dhhyi/recipe-db-migrator-images-copy@sha256:" + ("d" * 64)
+       }]' \
+    release.json > release-v2.json
 }
 
 mock_public_image_verification() {
@@ -79,7 +123,24 @@ printf '%s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
   "buildx imagetools inspect --raw "*) cat "$MOCK_INDEX" ;;
   "pull --platform "*) exit 0 ;;
-  "image inspect --format "*) printf '%s\n' "$REVISION" ;;
+  *'image inspect --format {{ index .Config.Labels "org.opencontainers.image.revision" }} '*)
+    printf '%s\n' "$REVISION"
+    ;;
+  *'image inspect --format {{ index .Config.Labels "org.opencontainers.image.source" }} '*)
+    printf '%s\n' 'https://github.com/dhhyi/recipe-db'
+    ;;
+  *'image inspect --format {{ index .Config.Labels "org.opencontainers.image.kind" }} '*)
+    printf '%s\n' migrator
+    ;;
+  *'image inspect --format {{ index .Config.Labels "io.dhhyi.recipe-db.migration.service" }} '*)
+    printf '%s\n' "${MOCK_MIGRATION_SERVICE:-authoritative}"
+    ;;
+  *'image inspect --format {{ index .Config.Labels "io.dhhyi.recipe-db.migration.from-version" }} '*)
+    printf '%s\n' "${MOCK_MIGRATION_FROM_VERSION:-1}"
+    ;;
+  *'image inspect --format {{ index .Config.Labels "io.dhhyi.recipe-db.migration.to-version" }} '*)
+    printf '%s\n' "${MOCK_MIGRATION_TO_VERSION:-2}"
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -115,6 +176,92 @@ EOF
   ' metadata.json
 }
 
+@test "build metadata discovers standalone migrators from an explicit root" {
+  MIGRATOR_ROOT="$BATS_TEST_TMPDIR/migrator-root"
+  mkdir -p "$MIGRATOR_ROOT/.scripts" "$MIGRATOR_ROOT/authoritative" "$MIGRATOR_ROOT/migrators/images-copy"
+  cp "$BATS_TEST_DIRNAME/../migrator-manifest.schema.json" "$MIGRATOR_ROOT/.scripts/"
+  printf '%s\n' '{"repository":"github:dhhyi/recipe-db"}' > "$MIGRATOR_ROOT/package.json"
+  cat > "$MIGRATOR_ROOT/authoritative/.project.yaml" << 'EOF'
+devcontainer: {}
+---
+backupRole: authoritative-read-only
+storageVersion: {value: 1}
+EOF
+  cat > "$MIGRATOR_ROOT/migrators/images-copy/migration.json" << 'EOF'
+{
+  "service": "authoritative",
+  "fromVersion": 1,
+  "toVersion": 2,
+  "timeoutSeconds": 300
+}
+EOF
+  printf '%s\n' 'FROM scratch' > "$MIGRATOR_ROOT/migrators/images-copy/Dockerfile"
+
+  run sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/arm64 metadata.json true "$MIGRATOR_ROOT"
+
+  [ "$status" -eq 0 ]
+  jq -e --arg revision "$REVISION" --arg context "$MIGRATOR_ROOT/migrators/images-copy" '
+    (.target | keys) == ["migrator-images-copy"]
+    and .target["migrator-images-copy"].context == $context
+    and .target["migrator-images-copy"].dockerfile == "Dockerfile"
+    and .target["migrator-images-copy"].tags == ["ghcr.io/dhhyi/recipe-db-migrator-images-copy:sha-" + $revision + "-arm64"]
+    and .target["migrator-images-copy"].platforms == ["linux/arm64"]
+    and .target["migrator-images-copy"].labels["org.opencontainers.image.revision"] == $revision
+    and .target["migrator-images-copy"].labels["org.opencontainers.image.source"] == "https://github.com/dhhyi/recipe-db"
+    and .target["migrator-images-copy"].labels["org.opencontainers.image.kind"] == "migrator"
+    and .target["migrator-images-copy"].labels["io.dhhyi.recipe-db.migration.service"] == "authoritative"
+    and .target["migrator-images-copy"].labels["io.dhhyi.recipe-db.migration.from-version"] == "1"
+    and .target["migrator-images-copy"].labels["io.dhhyi.recipe-db.migration.to-version"] == "2"
+    and .target["migrator-images-copy"]["cache-to"] == ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-migrator-images-copy-cache-arm64"]
+  ' metadata.json
+}
+
+@test "migrator discovery rejects unsafe paths, invalid manifests, owners and duplicate transitions" {
+  mkdir -p migrators/Unsafe
+  printf '%s\n' '{}' > migrators/Unsafe/migration.json
+  printf '%s\n' 'FROM scratch' > migrators/Unsafe/Dockerfile
+
+  run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"unsafe migrator directory name"* ]]
+
+  rm -rf migrators
+  write_valid_migrator
+  rm migrators/images-copy/Dockerfile
+  run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"regular sibling Dockerfile"* ]]
+  printf '%s\n' 'FROM scratch' > migrators/images-copy/Dockerfile
+  jq '.extra = true' migrators/images-copy/migration.json > invalid.json
+  mv invalid.json migrators/images-copy/migration.json
+  run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"invalid migrator manifest schema"* ]]
+
+  write_valid_migrator
+  jq '.service = "missing"' migrators/images-copy/migration.json > invalid.json
+  mv invalid.json migrators/images-copy/migration.json
+  run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"not an authoritative storage owner"* ]]
+
+  jq '.service = "authoritative" | .fromVersion = 1 | .toVersion = 3' migrators/images-copy/migration.json > invalid.json
+  mv invalid.json migrators/images-copy/migration.json
+  run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"advance exactly one storage version"* ]]
+
+  jq '.service = "authoritative" | .fromVersion = 2 | .toVersion = 3' migrators/images-copy/migration.json > invalid.json
+  mv invalid.json migrators/images-copy/migration.json
+  mkdir -p migrators/another-copy
+  cp migrators/images-copy/migration.json migrators/another-copy/migration.json
+  cp migrators/images-copy/Dockerfile migrators/another-copy/Dockerfile
+  run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"duplicate service/version transition"* ]]
+}
+
 @test "release validation accepts the complete category-derived inventory" {
   write_valid_release
 
@@ -123,14 +270,84 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "release validation accepts schema 2 migration inventory derived from manifests" {
+  write_valid_migrator
+  write_valid_release_v2
+
+  run sh .scripts/validate-production-release.sh release-v2.json "$REVISION" "$FIXTURE_ROOT"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "release validation accepts schema 2 inventories with no migrators" {
+  write_valid_release
+  jq '.schemaVersion = 2 | .migrations = []' release.json > release-v2.json
+
+  run sh .scripts/validate-production-release.sh release-v2.json "$REVISION" "$FIXTURE_ROOT"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "release validation rejects mismatched schema 2 migration inventory" {
+  write_valid_migrator
+  write_valid_release_v2
+  jq '.migrations[0].timeoutSeconds = 301' release-v2.json > invalid.json
+
+  run --separate-stderr sh .scripts/validate-production-release.sh invalid.json "$REVISION" "$FIXTURE_ROOT"
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"migrations do not match validated migrator manifests"* ]]
+}
+
+@test "inventory generation publishes deterministic schema 2 migration entries" {
+  write_valid_migrator
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+case "$*" in
+  *recipe-db-migrator-*) printf '%s\n' '{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}' ;;
+  *) printf '%s\n' '{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' ;;
+esac
+EOF
+  chmod +x bin/oras
+
+  run sh .scripts/create-production-release-inventory.sh "$REVISION" generated.json "$FIXTURE_ROOT"
+
+  [ "$status" -eq 0 ]
+  jq -e --arg revision "$REVISION" '
+    .schemaVersion == 2
+    and .revision == $revision
+    and (.migrations == [{
+      service: "authoritative",
+      fromVersion: 1,
+      toVersion: 2,
+      timeoutSeconds: 300,
+      image: "ghcr.io/dhhyi/recipe-db-migrator-images-copy@sha256:" + ("d" * 64)
+    }])
+    and (.images | keys | sort) == ["api", "backend", "frontend"]
+  ' generated.json
+}
+
+@test "inventory generation emits an empty migrations array when no migrators exist" {
+  cat > bin/oras << 'EOF'
+#!/bin/sh
+printf '%s\n' '{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+EOF
+  chmod +x bin/oras
+
+  run sh .scripts/create-production-release-inventory.sh "$REVISION" generated.json "$FIXTURE_ROOT"
+
+  [ "$status" -eq 0 ]
+  jq -e '.schemaVersion == 2 and .migrations == []' generated.json
+}
+
 @test "release validation rejects unsupported schema versions" {
   write_valid_release
-  jq '.schemaVersion = 2' release.json > invalid.json
+  jq '.schemaVersion = 3' release.json > invalid.json
 
   run --separate-stderr sh .scripts/validate-production-release.sh invalid.json "$REVISION"
 
   [ "$status" -eq 1 ]
-  [[ "$stderr" == *"unsupported release schemaVersion: 2"* ]]
+  [[ "$stderr" == *"unsupported release schemaVersion: 3"* ]]
 }
 
 @test "release validation rejects missing category-selected images" {
@@ -368,6 +585,23 @@ EOF
   done
   run grep -F 'pull --platform linux/amd64 ghcr.io/dhhyi/recipe-db-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' "$MOCK_LOG"
   [ "$status" -eq 1 ]
+}
+
+@test "anonymous verification checks migrator platform and OCI labels" {
+  write_valid_release_v2
+  mock_public_image_verification
+  source .scripts/lib/release-validation.sh
+
+  run verify_release_images_anonymously release-v2.json "$REVISION" "$PWD"
+
+  [ "$status" -eq 0 ]
+  for architecture in amd64 arm64; do
+    digest=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    [ "$architecture" != arm64 ] || digest=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+    image="ghcr.io/dhhyi/recipe-db-migrator-images-copy@sha256:$digest"
+    grep -Fx "pull --platform linux/$architecture $image" "$MOCK_LOG"
+    grep -Fx "image inspect --format {{ index .Config.Labels \"io.dhhyi.recipe-db.migration.service\" }} $image" "$MOCK_LOG"
+  done
 }
 
 @test "anonymous verification rejects missing platform manifest digests" {

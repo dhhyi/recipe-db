@@ -1,6 +1,6 @@
 #@ load("@ytt:data", "data")
 #@ load("@ytt:yaml", "yaml")
-#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "storage_class", "config_maps", "helm_values", "wait_for_nats", "backup_cleanup_job", "https_staging")
+#@ load("kubernetes.lib.yml", "cfg", "ns", "inventory", "metadata", "project_workload", "infrastructure", "service", "pvc", "storage_class", "config_maps", "helm_values", "wait_for_nats", "backup_cleanup_job", "migration_jobs", "https_staging")
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -97,6 +97,9 @@ spec:
               value: nats://nats:4222
           resources: #@ cfg["resources"]
 --- #@ backup_cleanup_job()
+#@ for job in migration_jobs():
+--- #@ job
+#@ end
 ---
 apiVersion: v1
 kind: Service
