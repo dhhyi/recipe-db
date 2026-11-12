@@ -283,11 +283,11 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 	})
 
 	mux.HandleFunc("/identity", func(w http.ResponseWriter, r *http.Request) {
-		client, _ := requestScopedClient(endpoint, r, w)
+		client, upstreamStatus := requestScopedClient(endpoint, r, w)
 		resp, err := gql.BrowseIdentity(r.Context(), client)
 		if err != nil {
-			log.Printf("failed to fetch browse identity: %v", err)
-			templ.Handler(components.BrowseIdentityUnavailable()).ServeHTTP(w, r)
+			log.Printf("failed to fetch browse identity (upstream status %d): %v", *upstreamStatus, err)
+			templ.Handler(components.BrowseIdentityUnavailable(googleOAuthEnabled && identityAuthenticationRejected(err, *upstreamStatus))).ServeHTTP(w, r)
 			return
 		}
 		templ.Handler(components.BrowseIdentity(resp, googleOAuthEnabled)).ServeHTTP(w, r)
