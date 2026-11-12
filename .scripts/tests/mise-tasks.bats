@@ -461,6 +461,74 @@ EOF
   done
 }
 
+@test "storage-version generation follows metadata outputs and skips unchanged inputs" {
+  cat >> example/.project.yaml << 'EOF'
+storageVersion:
+  value: 7
+  file: generated/version.ml
+  template: |
+    let value = {{STORAGE_VERSION}}
+EOF
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ "$(cat example/generated/version.ml)" = 'let value = 7' ]
+  mtime=$(stat -c %y example/generated/version.ml)
+
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [[ $output == *"skipping"* ]]
+  [ "$(stat -c %y example/generated/version.ml)" = "$mtime" ]
+
+  sed -i 's/value: 7/value: 8/' example/.project.yaml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ "$(cat example/generated/version.ml)" = 'let value = 8' ]
+
+  printf '%s\n' damaged > example/generated/version.ml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ "$(cat example/generated/version.ml)" = 'let value = 8' ]
+
+  rm example/generated/version.ml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ -s example/generated/version.ml ]
+
+  sed -i 's#generated/version.ml#other/version.ml#' example/.project.yaml
+  mkdir second
+  cp -p example/.project.yaml second/.project.yaml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ -s example/other/version.ml ]
+  [ -s second/other/version.ml ]
+
+  rm second/other/version.ml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ -s second/other/version.ml ]
+
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [[ $output == *"skipping"* ]]
+
+  rm second/.project.yaml
+  sed -i 's/value: 8/value: 0/' example/.project.yaml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -ne 0 ]
+  [[ $output == *"must be a positive integer"* ]]
+
+  sed -i 's/value: 0/value: 9/' example/.project.yaml
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [ "$(cat example/other/version.ml)" = 'let value = 9' ]
+}
+
+@test "storage-version generation supports projects without declared outputs" {
+  run mise run --raw sync-storage-version-templates
+  [ "$status" -eq 0 ]
+  [[ $output != *"WARN"* ]]
+}
+
 @test "ignore files skip unchanged inputs and repair missing outputs" {
   touch example/Dockerfile
   run mise run --raw sync-ignore-files

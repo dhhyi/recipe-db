@@ -53,6 +53,10 @@ Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project cov
 
 `mise run sync-ignore-files` skips unchanged inputs. It tracks root ignore rules, project metadata, project ignore rules, and Dockerfiles; missing generated ignore files trigger regeneration. Creating an obsolete project `.prettierignore` triggers its removal.
 
+## Generated source synchronization
+
+`mise run sync-storage-version-templates` tracks project metadata and derives its outputs from each project's `storageVersion.file`. Unchanged inputs and outputs skip generation; editing or deleting a generated source triggers repair. Adding or relocating an output requires only updating the metadata, not the Mise task.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:

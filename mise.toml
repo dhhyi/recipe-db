@@ -89,6 +89,17 @@ outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
 [tasks.sync-storage-version-templates]
 description = "Generate service source files for declared storage versions"
 file = ".scripts/sync-storage-version-templates.sh"
+sources = ["*/.project.yaml"]
+outputs = [
+  '''
+{%- set paths = exec(command="yq -r 'select(documentIndex == 1) | select(.storageVersion.value != null) | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .storageVersion.file' */.project.yaml") | split(pat="\n") -%}
+{%- if paths | length > 1 -%}
+  {{ "{" ~ paths | join(sep=",") ~ "}" }}
+{%- else -%}
+  {{ paths | first }}
+{%- endif -%}
+'''
+]
 
 [tasks.sync-vscode-settings]
 description = "Generate repository VS Code settings"
