@@ -14,6 +14,7 @@ import (
 
 	"github.com/Khan/genqlient/graphql"
 
+	"frontend/page_metadata"
 	"frontend/src/components"
 )
 
@@ -89,14 +90,16 @@ func TestOpenGraphMetadataEscapesValues(t *testing.T) {
 	}
 
 	var body bytes.Buffer
-	metadata := components.OpenGraphMetadata{
-		Title:       `<recipe> " &`,
-		Type:        "article",
-		Image:       "https://recipes.example.test/image.png?one=1&two=2",
-		URL:         "https://recipes.example.test/recipe/42",
-		Description: `<description> &`,
+	metadata := pagemetadata.PageMetadata{
+		DocumentTitle:  `<recipe> " &`,
+		OpenGraphTitle: `<recipe> " &`,
+		OpenGraphType:  "article",
+		OpenGraphImage: "https://recipes.example.test/image.png?one=1&two=2",
+		OpenGraphURL:   "https://recipes.example.test/recipe/42",
+		Description:    `<description> &`,
 	}
-	if err := components.Layout("Test", metadata).Render(context.Background(), &body); err != nil {
+	ctx := pagemetadata.WithContext(context.Background(), metadata)
+	if err := components.Layout().Render(ctx, &body); err != nil {
 		t.Fatal(err)
 	}
 	rendered := body.String()
@@ -110,11 +113,25 @@ func TestOpenGraphMetadataEscapesValues(t *testing.T) {
 			t.Errorf("escaped Open Graph value missing %q: %s", escaped, rendered)
 		}
 	}
+	if strings.Count(rendered, `content="&lt;description&gt; &amp;"`) != 2 {
+		t.Errorf("description must populate both metadata tags: %s", rendered)
+	}
+
+	body.Reset()
+	if err := components.Layout().Render(context.Background(), &body); err != nil {
+		t.Fatalf("layout without metadata context failed: %v", err)
+	}
+	if !strings.Contains(body.String(), "<title></title>") ||
+		strings.Contains(body.String(), "og:") ||
+		strings.Contains(body.String(), `name="description"`) {
+		t.Fatalf("layout without metadata context was not safely rendered: %s", body.String())
+	}
 }
 
 func TestInstallMetadata(t *testing.T) {
 	var body bytes.Buffer
-	if err := components.Layout("Test", components.OpenGraphMetadata{}).Render(context.Background(), &body); err != nil {
+	ctx := pagemetadata.WithContext(context.Background(), pagemetadata.PageMetadata{DocumentTitle: "Test"})
+	if err := components.Layout().Render(ctx, &body); err != nil {
 		t.Fatal(err)
 	}
 
@@ -348,11 +365,13 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatal("recipe update time must be displayed in German")
 	}
 	for _, markup := range []string{
+		`<title>Original | RezeptDB</title>`,
 		`property="og:title" content="Original"`,
 		`property="og:type" content="article"`,
 		`property="og:image" content="https://cdn.example.test/opaque/full-token.png?signature=abc&amp;version=two"`,
 		`property="og:url" content="https://recipes.example.test/recipe/42"`,
 		`property="og:description" content="` + siteDescription + `"`,
+		`name="description" content="` + siteDescription + `"`,
 	} {
 		if !strings.Contains(pageHTML, markup) {
 			t.Errorf("recipe Open Graph metadata missing %q", markup)

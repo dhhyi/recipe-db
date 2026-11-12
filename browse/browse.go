@@ -13,6 +13,7 @@ import (
 	"github.com/Khan/genqlient/graphql"
 	"github.com/a-h/templ"
 
+	"frontend/page_metadata"
 	"frontend/src/components"
 	gql "frontend/src/generated"
 )
@@ -283,8 +284,9 @@ func browseHandler(client graphql.Client) http.HandlerFunc {
 			status = http.StatusOK
 		} else {
 			ctx := templ.WithChildren(r.Context(), components.Browse(state))
+			ctx = pagemetadata.WithContext(ctx, browsePageMetadata(publicOrigin(), state))
 			r = r.WithContext(ctx)
-			component = components.Layout(state.Title(), overviewOpenGraphMetadata(publicOrigin()))
+			component = components.Layout()
 			if r.Header.Get("HX-History-Restore-Request") == "true" {
 				status = http.StatusOK
 			}

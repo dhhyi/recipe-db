@@ -11,6 +11,7 @@ RUN --mount=type=cache,id=browse-go-mod,target=/go/pkg/mod,sharing=locked \
   go install github.com/a-h/templ/cmd/templ@v0.3.1020
 
 COPY *.go *.templ genqlient.yaml recipe-db.graphqls operations.graphql /ws/
+COPY page_metadata /ws/page_metadata
 COPY src /ws/src
 RUN --mount=type=cache,id=browse-go-mod,target=/go/pkg/mod,sharing=locked \
   --mount=type=cache,id=browse-go-build-${TARGETARCH},target=/root/.cache/go-build,sharing=locked \

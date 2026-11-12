@@ -1,26 +1,26 @@
 package components
 
-type OpenGraphMetadata struct {
-	Title, Type, Image, URL, Description string
-}
+import "frontend/page_metadata"
 
-templ Layout(title string, metadata OpenGraphMetadata) {
+templ Layout() {
+	{{ metadata := pagemetadata.FromContext(ctx) }}
 	<!DOCTYPE html>
 	<html lang="de">
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>{ title }</title>
+			<title>{ metadata.DocumentTitle }</title>
 			<link rel="manifest" href="/pwa/manifest.webmanifest"/>
 			<link rel="apple-touch-icon" href="/pwa/icons/apple-touch-icon.png"/>
 			<meta name="theme-color" content="#014463"/>
 			<link rel="icon" type="image/png" sizes="192x192" href="/pwa/icons/chef-hat-192.png"/>
-			if metadata.Type != "" {
-				<meta property="og:title" content={ metadata.Title }/>
-				<meta property="og:type" content={ metadata.Type }/>
-				<meta property="og:image" content={ metadata.Image }/>
-				<meta property="og:url" content={ metadata.URL }/>
+			if metadata.OpenGraphType != "" {
+				<meta property="og:title" content={ metadata.OpenGraphTitle }/>
+				<meta property="og:type" content={ metadata.OpenGraphType }/>
+				<meta property="og:image" content={ metadata.OpenGraphImage }/>
+				<meta property="og:url" content={ metadata.OpenGraphURL }/>
 				<meta property="og:description" content={ metadata.Description }/>
+				<meta name="description" content={ metadata.Description }/>
 			}
 			<link rel="stylesheet" href="/design/styles.css"/>
 			<script type="module" src="/design/components.js"></script>

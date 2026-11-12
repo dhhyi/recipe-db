@@ -362,6 +362,8 @@ func TestBrowseTagFilterReachesSearchAndSurvivesPageRestoration(t *testing.T) {
 		}
 		if response.Code != http.StatusOK || !reflect.DeepEqual(pages, wantPages) ||
 			!strings.Contains(body, `<h1 id="browse-heading">Suchergebnisse für Tag „E2E Tag“</h1>`) ||
+			!strings.Contains(body, `property="og:description" content="Suchergebnisse für Tag „E2E Tag“"`) ||
+			!strings.Contains(body, `name="description" content="Suchergebnisse für Tag „E2E Tag“"`) ||
 			!strings.Contains(body, `name="q"`) || !strings.Contains(body, `value=""`) ||
 			!strings.Contains(body, `name="filter_by" value="`+filter+`"`) {
 			t.Fatalf("tag filter state was not rendered or restored: %d pages=%v %s", response.Code, pages, body)
