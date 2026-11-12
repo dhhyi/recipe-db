@@ -10,6 +10,10 @@ templ Layout() {
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ metadata.DocumentTitle }</title>
+			<link rel="manifest" href="/pwa/manifest.webmanifest"/>
+			<link rel="apple-touch-icon" href="/pwa/icons/apple-touch-icon.png"/>
+			<meta name="theme-color" content="#014463"/>
+			<link rel="icon" type="image/png" sizes="192x192" href="/pwa/icons/chef-hat-192.png"/>
 			if metadata.OpenGraphType != "" {
 				<meta property="og:title" content={ metadata.OpenGraphTitle }/>
 				<meta property="og:type" content={ metadata.OpenGraphType }/>

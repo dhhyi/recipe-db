@@ -34,6 +34,15 @@ complete_candidate_release() {
   [ "$status" -eq 0 ]
 }
 
+create_two_release_revisions() {
+  export MOCK_SOURCE_REVISION
+  MOCK_SOURCE_REVISION=$(git rev-parse HEAD)
+  git -c user.name=Test -c user.email=test@example.invalid \
+    commit --allow-empty -qm 'Candidate fixture revision'
+  export MOCK_REVISION
+  MOCK_REVISION=$(git rev-parse HEAD)
+}
+
 mock_github_release_api() {
   export MOCK_GITHUB_RELEASE_JSON="$FIXTURE_ROOT/github-release.json"
   export MOCK_CURL_FAIL=false
@@ -193,6 +202,157 @@ EOF
   run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
   [ "$status" -eq 0 ]
   [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "pinned tooling captures maintenance using the original release sources and existing guards" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/pinned-capture" old_revision holder
+  local receipt="$FIXTURE_ROOT/legacy-identities.json"
+  mkdir recipes
+  printf 'old metadata\n' > recipes/.project.yaml
+  # shellcheck disable=SC2016
+  sed -i '/^application_project_metadata_to_jsonl() {/a\  cat "$1/recipes/.project.yaml" >> "$MOCK_LOG.metadata-source"' \
+    .scripts/lib/project-metadata.sh
+  printf '*\n' > .gitignore
+  git add -f .gitignore recipes/.project.yaml .scripts/lib/project-metadata.sh
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Original fixture metadata'
+  old_revision=$(git rev-parse HEAD)
+  export MOCK_REVISION="$old_revision" MOCK_SOURCE_REVISION="$old_revision"
+
+  jq -n --slurpfile values "$VALUES" '{
+    format:"recipe-db-legacy-storage-identities",formatVersion:1,
+    recordedAt:"2000-01-01T00:00:00Z",
+    source:($values[0] | {target,cluster,context,namespace}),
+    namespaceUids:{system:"system-namespace",application:"application-namespace"},
+    pvcs:(["recipes","images","tags"] | map({
+      name:.,uid:("claim-"+.),volumeName:("pv-"+.),volumeUid:("uid-pv-"+.)}))
+  }' > "$receipt"
+  chmod 600 "$receipt"
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  jq 'del(.stateVersion) | .selectedPVCs |= map(del(.storage))' \
+    "$snapshot/backup-state.json" > legacy-state.json
+  cp legacy-state.json "$snapshot/backup-state.json"
+  printf 'new metadata\n' > recipes/.project.yaml
+  printf 'new template input\n' > message-bus/nats.conf
+  sed -i "s/a7e14347b604a35875ed0716c645d7b2436b6aac/$old_revision/" .scripts/production-k3d.sh
+  git add -f recipes/.project.yaml message-bus/nats.conf .scripts/production-k3d.sh
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'New tooling inputs'
+  MOCK_REVISION=$(git rev-parse HEAD)
+
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  printf '\n' >> .scripts/production-k3d.sh
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"require a clean tooling checkout"* ]]
+  git restore .scripts/production-k3d.sh
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"limited to render, backup-capture and guarded release operations"* ]]
+
+  cp "$snapshot/backup-state.json" original-state.json
+  jq --arg revision "$MOCK_REVISION" '.source.revision = $revision' \
+    original-state.json > "$snapshot/backup-state.json"
+  MOCK_SOURCE_REVISION=$MOCK_REVISION
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"maintenance state is not ready"* ]]
+  MOCK_SOURCE_REVISION=$old_revision
+  cp original-state.json "$snapshot/backup-state.json"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires a pre-maintenance identity receipt"* ]]
+  cp "$MOCK_LOG.lease" original-lease.json
+  jq '.spec.holderIdentity = "other-holder"' original-lease.json > "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -ne 0 ]
+  [[ $output == *"maintenance Lease does not match saved state"* ]]
+  cmp original-state.json "$snapshot/backup-state.json"
+  cp original-lease.json "$MOCK_LOG.lease"
+
+  jq '.selectedPVCs[0].pvc = "unexpected"' original-state.json > "$snapshot/backup-state.json"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -ne 0 ]
+  [[ $output == *"legacy maintenance PVC inventory does not match"* ]]
+  [ ! -e "$snapshot/manifest.json" ]
+  cp original-state.json "$snapshot/backup-state.json"
+  cp original-lease.json "$MOCK_LOG.lease"
+
+  local drift
+  for drift in MOCK_LEGACY_PVC_DRIFT MOCK_LEGACY_PV_DRIFT; do
+    export "$drift=true"
+    run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+    [ "$status" -ne 0 ]
+    [[ $output == *"PVC or PV identity changed"* ]]
+    [ ! -e "$snapshot/manifest.json" ]
+    unset "$drift"
+    cp original-state.json "$snapshot/backup-state.json"
+    cp original-lease.json "$MOCK_LOG.lease"
+  done
+  cp "$receipt" original-receipt.json
+  jq --arg time "$(jq -r .startedAt original-state.json)" '.recordedAt=$time' \
+    original-receipt.json > "$receipt"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -ne 0 ]
+  [[ $output == *"pre-maintenance time"* ]]
+  cp original-receipt.json "$receipt"
+  cp original-state.json "$snapshot/backup-state.json"
+  cp original-lease.json "$MOCK_LOG.lease"
+
+  : > "$MOCK_LOG.metadata-source"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot" "$receipt"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG.metadata-source")" = "old metadata" ]
+  jq -e --arg revision "$old_revision" --arg artifact "$ARTIFACT" '
+    .source.revision == $revision and .source.artifact == $artifact
+    and (.inventory | length) == 3
+    and all(.inventory[]; .storage.uid != null and .layout.kind != null)
+  ' "$snapshot/manifest.json" > /dev/null
+  jq -e '.stateVersion == 2 and .status == "captured" and .phase == "captured"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "captured"' "$MOCK_LOG.lease" > /dev/null
+}
+
+@test "accepted-release alignment status inspection preserves state Lease and access barrier" {
+  prepare_captured_release
+  jq --arg candidate "$CANDIDATE" --arg revision "$MOCK_REVISION" '
+    .status="release-accepted" | .phase="operator-accepted" |
+    .candidate={artifact:$candidate,revision:$revision} |
+    .websiteCheck={outcome:"passed"} |
+    .postReleaseBackup={artifact:$candidate,revision:$revision,status:"verified-upload"}
+  ' "$STATE/backup-state.json" > accepted.json
+  mv accepted.json "$STATE/backup-state.json"
+  jq '.metadata.annotations["recipe-db/phase"]="release-accepted"' \
+    "$MOCK_LOG.lease" > lease.next
+  mv lease.next "$MOCK_LOG.lease"
+  cp "$STATE/backup-state.json" before-state.json
+  cp "$MOCK_LOG.lease" before-lease.json
+  cp "$MOCK_LOG.deployments" before-deployments.json
+  : > "$MOCK_LOG"
+
+  run bash .scripts/production-k3d.sh backup-status "$VALUES" "$STATE"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | jq -e --arg candidate "$CANDIDATE" --arg holder "$HOLDER" '
+    .state.status == "release-accepted" and .state.candidate.artifact == $candidate
+    and .lease.spec.holderIdentity == $holder
+    and .lease.metadata.annotations["recipe-db/phase"] == "release-accepted"'
+  cmp "$STATE/backup-state.json" before-state.json
+  cmp "$MOCK_LOG.lease" before-lease.json
+  cmp "$MOCK_LOG.deployments" before-deployments.json
+  run grep -Eq ' (apply|patch|delete|scale|set) ' "$MOCK_LOG"
+  [ "$status" -eq 1 ]
+
+  yq -i '.timeoutSeconds = 599' "$VALUES"
+  run bash .scripts/production-k3d.sh backup-status "$VALUES" "$STATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery state does not match the explicit target and original values"* ]]
+  cmp "$STATE/backup-state.json" before-state.json
+  cmp "$MOCK_LOG.lease" before-lease.json
+  cmp "$MOCK_LOG.deployments" before-deployments.json
 }
 
 @test "forced termination prevents capture and preserves actionable recovery state" {
@@ -480,7 +640,30 @@ EOF
   [ -e "$MOCK_LOG.lease" ]
 }
 
+@test "candidate startup makes dependencies and the private projection route available before search readiness" {
+  prepare_candidate_release
+  export MOCK_SEARCH_DEPENDENCIES=true
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG.projection-port")" = 4000 ]
+  local projection_ready search_ready projection_reset
+  projection_ready=$(awk '/patch service graphql-projection .*"targetPort":4001/ {line=NR} END {print line}' "$MOCK_LOG")
+  search_ready=$(awk '/rollout status deployment\/search / {line=NR} END {print line}' "$MOCK_LOG")
+  projection_reset=$(awk '/patch service graphql-projection .*"targetPort":4000/ {line=NR} END {print line}' "$MOCK_LOG")
+  [ "$projection_ready" -lt "$search_ready" ]
+  [ "$search_ready" -lt "$projection_reset" ]
+  jq -e '.status == "release-ready" and .phase == "ready"' "$STATE/backup-state.json" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql") |
+    any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "backup")' \
+    "$MOCK_LOG.deployments" > /dev/null
+  [ -f "$MOCK_LOG.lease" ]
+}
+
 @test "candidate migration success is recorded but readiness failure retains the barrier and ownership" {
+  local workload_changes
   prepare_candidate_release
   run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
     "$CANDIDATE" migration-succeeded "RECORD-migration-succeeded-$HOLDER"
@@ -500,6 +683,125 @@ EOF
     "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -ne 0 ]
+  workload_changes=$(grep -c 'scale deployment/' "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"fallback is limited to an interrupted, no-migration candidate start"* ]]
+  [ "$(grep -c 'scale deployment/' "$MOCK_LOG")" -eq "$workload_changes" ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "marker-only fallback stages the previous release across the checkout handoff" {
+  create_two_release_revisions
+  prepare_captured_release
+  git checkout --detach "$MOCK_REVISION" > /dev/null
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+
+  for service in recipes images ratings inspirations tags; do
+    mkdir -p "$FIXTURE_ROOT/tar-data/$service"
+    printf '1\n' > "$FIXTURE_ROOT/tar-data/$service/storage-version"
+  done
+  local marker_before marker_after
+  marker_before=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=true
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "recovery-required" and .phase == "interrupted"' \
+    "$STATE/backup-state.json" > /dev/null
+  [ "$(cat "$MOCK_LOG.projection-port")" = 4001 ]
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
+
+  local workload_changes
+  workload_changes=$(grep -c 'scale deployment/' "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    "FALLBACK-$HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"fallback requires FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation"* ]]
+  [ "$(grep -c 'scale deployment/' "$MOCK_LOG")" -eq "$workload_changes" ]
+
+  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
+  [ "$status" -eq 0 ]
+  jq -e --arg old "$ARTIFACT" --arg failed "$CANDIDATE" --arg revision "$MOCK_SOURCE_REVISION" '
+    .status == "candidate-staged" and .phase == "candidate-staged"
+    and .candidate.artifact == $old and .candidate.revision == $revision
+    and .fallback.kind == "marker-only-version-1"
+    and .fallback.originalRelease == $old and .fallback.failedCandidate == $failed
+    and any(.candidateHistory[]; .postCheckDisposition.choice == "temporary-fix")
+    and .postCheckDisposition == null
+  ' "$STATE/backup-state.json" > /dev/null
+  jq -e 'all(.items[]; .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
+  jq -e --arg holder "$HOLDER" --arg old "$ARTIFACT" '
+    .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/release"] == $old
+    and .metadata.annotations["recipe-db/phase"] == "candidate-staged"
+  ' "$MOCK_LOG.lease" > /dev/null
+
+  git checkout --detach "$MOCK_SOURCE_REVISION" > /dev/null
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$ARTIFACT" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$ARTIFACT" "OPEN-$HOLDER"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "access-open" and .candidate.artifact == .source.artifact' \
+    "$STATE/backup-state.json" > /dev/null
+  marker_after=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
+  [ "$marker_after" = "$marker_before" ]
+}
+
+@test "pinned tooling continues immutable release sources without switching back to obsolete tools" {
+  create_two_release_revisions
+  prepare_captured_release
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Separate tooling revision'
+  local tooling_revision
+  tooling_revision=$(git rev-parse HEAD)
+
+  printf '\n' >> .scripts/production-k3d.sh
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -ne 0 ]
+  [[ $output == *"require a clean tooling checkout"* ]]
+  git restore .scripts/production-k3d.sh
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -eq 0 ]
+  jq -e --arg revision "$tooling_revision" '.toolingRevision == $revision' \
+    "$STATE/backup-state.json" > /dev/null
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires its pinned tooling revision"* ]]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-result \
+    "$VALUES" "$STATE" "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=true
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
+    "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-fallback-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
+  [ "$status" -eq 0 ]
+  [ "$(git rev-parse HEAD)" = "$tooling_revision" ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-result \
+    "$VALUES" "$STATE" "$ARTIFACT" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
+    "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  jq -e --arg holder "$HOLDER" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease" > /dev/null
 }
 
 @test "candidate staging interruption preserves inspectable state and the original Lease" {

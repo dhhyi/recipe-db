@@ -182,6 +182,8 @@ prepare_reattach_state() {
   ' "$ROOT/deploy/pi.yaml" > "$valid"
   run production_config "$valid" deploy
   [ "$status" -eq 0 ]
+  run production_config "$valid" release-fallback-stage
+  [ "$status" -eq 0 ]
 
   mise exec -- yq '.piStorage.expectedRootUuid = "REPLACE-WITH-VERIFIED-ROOT-UUID"' \
     "$valid" > "$placeholder"
@@ -191,6 +193,8 @@ prepare_reattach_state() {
   [ "$status" -eq 0 ]
   run production_config "$placeholder" status
   [ "$status" -eq 0 ]
+  run production_config "$placeholder" release-fallback-stage
+  [ "$status" -ne 0 ]
 
   mise exec -- yq 'del(.piStorage)' "$valid" > "$no_storage"
   run production_config "$no_storage" render

@@ -55,6 +55,27 @@ traefik:
 test: echo tested
 EOF
   done
+  mkdir pwa
+  cat > pwa/.project.yaml << 'EOF'
+devcontainer:
+  ports: [80]
+traefik:
+  labels:
+    http:
+      routers:
+        pwa:
+          rule: "PathPrefix(`/pwa`)"
+          entrypoints: web
+      services:
+        recipe-db-pwa:
+          loadBalancer:
+            healthCheck:
+              interval: 10s
+              timeout: 1s
+              path: /health
+---
+category: frontend
+EOF
   setup_browse
   setup_graphql
   setup_search
@@ -233,7 +254,7 @@ assert_compose() {
   # shellcheck disable=SC2016
   assert_compose '
     . as $root |
-    all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
+    all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","pwa","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
       . as $service | $root.services | has($service))
     and (.services.browse.environment | has("GOOGLE_OAUTH_CLIENT_ID") | not)
     and .services.browse.environment.PUBLIC_ORIGIN == "${PUBLIC_ORIGIN:-http://localhost:8080}"
@@ -431,8 +452,13 @@ assert_compose() {
     and ($maintenance_rule | contains("PathPrefix(`/`)"))
     and ($maintenance_rule | contains("Method(`GET`) || Method(`HEAD`)"))
     and ($maintenance_rule | contains("HeaderRegexp(`Accept`, `(?i)text/html`)"))
-    and all(["/graphql", "/mcp", "/public", "/images", "/edit", "/design"][];
+    and all(["/graphql", "/mcp", "/public", "/images", "/edit", "/design", "/pwa"][];
       . as $excluded_path | $maintenance_rule | contains("!PathPrefix(`" + $excluded_path + "`)"))
+    and .http.routers.pwa.rule == "PathPrefix(`/pwa`)"
+    and .http.routers.pwa.entrypoints == ["web"]
+    and .http.routers.pwa.service == "recipe-db-pwa"
+    and .http.services["recipe-db-pwa"].loadBalancer.healthCheck ==
+      {"interval": "10s", "timeout": "1s", "path": "/health"}
     and .http.middlewares["browse-unavailable"].errors.status == ["502-504"]
     and .http.middlewares["browse-unavailable"].errors.statusRewrites == {"502-504": 503}
     and .http.middlewares["browse-unavailable"].errors.service == "browse-maintenance"

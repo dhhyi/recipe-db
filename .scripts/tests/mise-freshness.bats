@@ -253,6 +253,7 @@ EOF
   run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
   [ "$status" -eq 0 ]
   [ ! -s "$DOCKER_LOG" ]
+  [[ "$output" != *".scripts/merge-graphql-schemas.sh"* ]]
   [ "$(stat -c %y .generated/graphql/recipe-db.graphqls)" = "$canonical_mtime" ]
 
   printf '%s\n' edited > mcp/recipe-db.graphqls
@@ -271,6 +272,26 @@ EOF
   run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
   [ "$status" -eq 0 ]
   cmp .generated/graphql/recipe-db.graphqls new-consumer/schema/recipe-db.graphqls
+
+  : > "$DOCKER_LOG"
+  rm new-consumer/schema/recipe-db.graphqls
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  cmp .generated/graphql/recipe-db.graphqls new-consumer/schema/recipe-db.graphqls
+  [ ! -s "$DOCKER_LOG" ]
+
+  sed -i 's/graphqlSchema: "schema"/graphqlSchema: "nested\/schema"/' new-consumer/.project.yaml
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  cmp .generated/graphql/recipe-db.graphqls new-consumer/nested/schema/recipe-db.graphqls
+  [ -s new-consumer/schema/recipe-db.graphqls ]
+
+  rm new-consumer/.project.yaml
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  run mise -C "$FIXTURE_ROOT" run --raw merge-graphql-schemas
+  [ "$status" -eq 0 ]
+  [[ "$output" != *".scripts/merge-graphql-schemas.sh"* ]]
 
   : > "$DOCKER_LOG"
   rm .generated/graphql/recipe-db.graphqls

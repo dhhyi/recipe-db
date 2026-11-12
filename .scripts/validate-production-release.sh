@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: $0 <release.json> <full-revision>" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "usage: $0 <release.json> <full-revision> [project-root]" >&2
   exit 2
 fi
 
@@ -23,8 +23,9 @@ if [ ! -f "$release_file" ]; then
   exit 1
 fi
 
-project_root=$(cd "$(dirname "$0")/.." && pwd)
-. "$project_root/.scripts/lib/project-metadata.sh"
+tool_root=$(cd "$(dirname "$0")/.." && pwd)
+project_root=${3:-$tool_root}
+. "$tool_root/.scripts/lib/project-metadata.sh"
 temporary_directory=$(mktemp -d)
 trap 'rm -rf "$temporary_directory"' EXIT
 fragments="$temporary_directory/project-fragments.jsonl"

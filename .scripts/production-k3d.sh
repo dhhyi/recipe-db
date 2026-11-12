@@ -15,16 +15,29 @@ source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
 
-[[ $# -ge 2 ]] || production_fail "usage: $0 <create|render|deploy|restore|restore-abandon|backup-run|backup-enter|backup-capture|backup-status|backup-exit|release-stage|release-migration-result|release-start|release-reopen|release-disposition|release-website-result|release-backup-capture|release-backup-verify|release-accept|release-finalize|status|delete|lock-status|lock-recover> <absolute values.yaml> [operation arguments]"
+release_sources_from_git=false
+if [[ ${1:-} == --release-sources-from-git ]]; then
+  release_sources_from_git=true
+  shift
+fi
+[[ $# -ge 2 ]] || production_fail "usage: $0 [--release-sources-from-git] <operation> <absolute values.yaml> [operation arguments]"
 command=$1
 values=$2
 shift 2
+if [[ $release_sources_from_git == true ]]; then
+  [[ $command == release-* || $command == render || $command == backup-capture ]] \
+    || production_fail "Git release sources are limited to render, backup-capture and guarded release operations"
+  tooling_revision=$(git -C "$root" rev-parse HEAD)
+  [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
+    || production_fail "Git release sources require a clean tooling checkout"
+fi
 case "$command" in
   create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
-  backup-capture) [[ $# = 1 ]] || production_fail "backup-capture requires the existing maintenance state directory" ;;
+  backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
+  release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
   release-migration-result) [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and RECORD-<outcome>-<holder> confirmation" ;;
   release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
   release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
@@ -45,6 +58,7 @@ case "$command" in
   *) production_fail "unknown command" ;;
 esac
 work=$(mktemp -d "$root/.production-k3d.XXXXXXXX")
+release_root=$root
 export TMPDIR="$work"
 locked=false
 retain_lock=false
@@ -53,6 +67,7 @@ release_lease_phase=
 barrier_touched=false
 barrier_established=false
 release_mutation_started=false
+release_fallback_mode=false
 require_storage_versions=false
 pod_watch_pid=
 cleanup() {
@@ -180,13 +195,26 @@ pull_release() {
         oauth2-proxy/oauth2-proxy.cfg design/nginx.conf ':(glob)*/.project.yaml')
       git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
         || production_fail "backup requires the release revision in the local checkout"
-      git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
-        || production_fail "backup metadata and templates must match the immutable release revision"
-      [[ -z $(git -C "$root" ls-files --others -- "${inputs[@]}") ]] \
-        || production_fail "backup refuses untracked metadata or template inputs"
+      if [[ $release_sources_from_git != true ]]; then
+        git -C "$root" diff --quiet "$revision" -- "${inputs[@]}" \
+          || production_fail "backup metadata and templates must match the immutable release revision"
+        [[ -z $(git -C "$root" ls-files --others -- "${inputs[@]}") ]] \
+          || production_fail "backup refuses untracked metadata or template inputs"
+      fi
       ;;
   esac
-  sh "$root/.scripts/validate-production-release.sh" "$work/pulled/release.json" "$revision"
+  release_root=$root
+  if [[ $release_sources_from_git == true ]]; then
+    git -C "$root" cat-file -e "$revision^{commit}" 2> /dev/null \
+      || production_fail "immutable release source revision is not available locally"
+    release_root="$work/source-$revision"
+    if [[ ! -d $release_root ]]; then
+      mkdir "$release_root"
+      git -C "$root" archive "$revision" | tar -xf - -C "$release_root" \
+        || production_fail "cannot materialize immutable release sources"
+    fi
+  fi
+  sh "$root/.scripts/validate-production-release.sh" "$work/pulled/release.json" "$revision" "$release_root"
   local image
   while IFS= read -r image; do
     oras manifest fetch "$image" > "$work/image-index.json"
@@ -195,19 +223,19 @@ pull_release() {
 }
 
 render() {
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   jq -n --slurpfile config "$work/config.json" --slurpfile projects "$work/projects.jsonl" \
     --slurpfile release "$work/pulled/release.json" --arg artifact "$artifact" \
-    --rawfile nats "$root/message-bus/nats.conf" \
-    --rawfile maintenanceNginx "$root/browse-maintenance/nginx.conf" \
-    --rawfile maintenanceHtml "$root/browse-maintenance/unavailable.html" \
-    --rawfile oauthConfig "$root/oauth2-proxy/oauth2-proxy.cfg" \
-    --rawfile designNginx "$root/design/nginx.conf" \
+    --rawfile nats "$release_root/message-bus/nats.conf" \
+    --rawfile maintenanceNginx "$release_root/browse-maintenance/nginx.conf" \
+    --rawfile maintenanceHtml "$release_root/browse-maintenance/unavailable.html" \
+    --rawfile oauthConfig "$release_root/oauth2-proxy/oauth2-proxy.cfg" \
+    --rawfile designNginx "$release_root/design/nginx.conf" \
     '{config:$config[0],projects:$projects,release:$release[0],artifact:$artifact,
       files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig,designNginx:$designNginx}}' \
     > "$work/template-values.json"
-  ytt -f "$root/.scripts/templates/kubernetes-template.yml" \
-    -f "$root/.scripts/templates/kubernetes.lib.yml" \
+  ytt -f "$release_root/.scripts/templates/kubernetes-template.yml" \
+    -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
   if [[ $command == restore ]]; then
     restore_ingress_values
@@ -252,9 +280,9 @@ annotate_credentials() {
 routes() {
   jq -n --slurpfile projects "$work/projects.jsonl" --slurpfile config "$work/config.json" \
     '{projects:$projects,googleOAuthClientId:($config[0].runtime.googleOAuthClientId // "")}' > "$work/route-values.json"
-  ytt -f "$root/.scripts/templates/traefik-template.yml" \
-    -f "$root/.scripts/templates/browse-maintenance-template.lib.yml" \
-    -f "$root/.scripts/templates/service-template.lib.yml" \
+  ytt -f "$release_root/.scripts/templates/traefik-template.yml" \
+    -f "$release_root/.scripts/templates/browse-maintenance-template.lib.yml" \
+    -f "$release_root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
   jq --arg ns "$namespace" --argjson googleEnabled "$google_enabled" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
@@ -1073,7 +1101,7 @@ backup_run() {
     esac
     production_storage_preflight
   fi
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   storage_class=$(jq -r .storageClass "$work/config.json")
   backup_role_inventory
   backup_capture_workloads "$artifact"
@@ -1151,8 +1179,58 @@ backup_write_manifest() {
     && mv "$snapshot/manifest.next" "$snapshot/manifest.json"
 }
 
+backup_validate_legacy_receipt() {
+  local receipt=$1 entry name volume
+  [[ $receipt = /* && -f $receipt && ! -L $receipt &&
+    $(realpath -e "$receipt") = "$receipt" &&
+    $(stat -c %u "$receipt") = "$EUID" ]] \
+    || production_fail "legacy capture requires an absolute, private, operator-owned identity receipt"
+  [[ $((8#$(stat -c %a "$receipt") & 077)) == 0 ]] \
+    || production_fail "legacy identity receipt must not be accessible to group or others"
+  case "$receipt" in "$snapshot"/*) production_fail "legacy identity receipt must be outside the snapshot" ;; esac
+  cp -- "$receipt" "$work/legacy-receipt.json"
+  kube get namespace kube-system -o json > "$work/legacy-system.json"
+  kube get namespace "$namespace" -o json > "$work/legacy-namespace.json"
+  jq -e --slurpfile state "$snapshot/backup-state.json" \
+    --slurpfile system "$work/legacy-system.json" \
+    --slurpfile application "$work/legacy-namespace.json" '
+    . as $receipt | .format == "recipe-db-legacy-storage-identities" and .formatVersion == 1
+    and .source == ($state[0].source | {target,cluster,context,namespace})
+    and (.recordedAt | fromdateiso8601) < ($state[0].startedAt | fromdateiso8601)
+    and (.namespaceUids.system | type == "string" and length > 0)
+    and (.namespaceUids.application | type == "string" and length > 0)
+    and .namespaceUids.system == $system[0].metadata.uid
+    and .namespaceUids.application == $application[0].metadata.uid
+    and (.pvcs | type == "array" and length > 0)
+    and ([.pvcs[].name] | sort) == ([$state[0].selectedPVCs[].pvc] | sort)
+    and ([.pvcs[].name] | unique | length) == (.pvcs | length)
+    and all(.pvcs[]; all([.name,.uid,.volumeName,.volumeUid][];
+      type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))
+  ' "$work/legacy-receipt.json" > /dev/null \
+    || production_fail "legacy identity receipt does not match the target or pre-maintenance time"
+  while IFS= read -r entry; do
+    name=$(jq -r .pvc <<< "$entry")
+    volume=$(jq -r .storage.volumeName <<< "$entry")
+    kube get pv "$volume" -o json > "$work/legacy-pv.json"
+    jq -e --arg name "$name" --arg ns "$namespace" --argjson inventory "$entry" \
+      --slurpfile pv "$work/legacy-pv.json" '
+      [.pvcs[] | select(.name == $name)] as $saved |
+      ($saved | length) == 1
+      and $saved[0].uid == $inventory.storage.uid
+      and $saved[0].volumeName == $inventory.storage.volumeName
+      and $saved[0].volumeUid == $pv[0].metadata.uid
+      and $pv[0].metadata.name == $saved[0].volumeName
+      and $pv[0].status.phase == "Bound"
+      and $pv[0].spec.claimRef.name == $name
+      and $pv[0].spec.claimRef.namespace == $ns
+      and $pv[0].spec.claimRef.uid == $saved[0].uid
+    ' "$work/legacy-receipt.json" > /dev/null \
+      || production_fail "legacy PVC or PV identity changed since the pre-maintenance receipt"
+  done < "$work/backup-pvcs.jsonl"
+}
+
 backup_capture_maintenance() {
-  local current release artifact
+  local current release artifact legacy_state=false legacy_receipt=${2:-}
   snapshot=$1
   [[ $snapshot = /* && -d $snapshot && $(realpath -e "$snapshot") = "$snapshot" &&
   -f $snapshot/backup-state.json && ! -L $snapshot/backup-state.json ]] \
@@ -1166,9 +1244,21 @@ backup_capture_maintenance() {
   render
   backup_load_state "$snapshot"
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
-  jq -e '.stateVersion == 2 and .status == "backup-mode"
-    and .phase == "maintenance-entered"' "$snapshot/backup-state.json" > /dev/null \
+  if [[ $release_sources_from_git == true &&
+    $revision == a7e14347b604a35875ed0716c645d7b2436b6aac ]] \
+    && jq -e 'has("stateVersion") | not' "$snapshot/backup-state.json" > /dev/null; then
+    legacy_state=true
+  fi
+  jq -e --argjson legacy "$legacy_state" '
+    (.stateVersion == 2 or ($legacy and (has("stateVersion") | not)))
+    and .status == "backup-mode" and .phase == "maintenance-entered"' \
+    "$snapshot/backup-state.json" > /dev/null \
     || production_fail "maintenance state is not ready for its first capture"
+  if $legacy_state; then
+    [[ -n $legacy_receipt ]] || production_fail "legacy capture requires a pre-maintenance identity receipt"
+  else
+    [[ -z $legacy_receipt ]] || production_fail "identity receipts are only supported for the exact legacy maintenance state"
+  fi
   [[ ! -e $snapshot/manifest.json && ! -L $snapshot/manifest.json ]] \
     || production_fail "maintenance snapshot was already captured"
   connect
@@ -1194,6 +1284,21 @@ backup_capture_maintenance() {
     printf 'production: maintenance workloads changed releases; retain the barrier and investigate\n' >&2
     return 1
   }
+  if $legacy_state; then
+    storage_class=$(jq -r .storageClass "$work/config.json")
+    backup_role_inventory
+    jq -s 'map(del(.storage)) | sort_by(.name)' "$work/backup-pvcs.jsonl" \
+      > "$work/legacy-inventory.json"
+    jq -e --slurpfile inventory "$work/legacy-inventory.json" '
+      (.selectedPVCs | sort_by(.name)) == $inventory[0]
+    ' "$snapshot/backup-state.json" > /dev/null \
+      || production_fail "legacy maintenance PVC inventory does not match the immutable release"
+    backup_validate_legacy_receipt "$legacy_receipt"
+    jq --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+      '.stateVersion=2 | .selectedPVCs=$pvcs' "$snapshot/backup-state.json" \
+      > "$snapshot/backup-state.next" \
+      && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json" || return 1
+  fi
   barrier_touched=true
   backup_establish_barrier || return 1
   backup_scale_zero || return 1
@@ -1286,11 +1391,20 @@ release_state_write() {
     && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
 }
 
+release_assert_tooling() {
+  if jq -e '.toolingRevision != null' "$snapshot/backup-state.json" > /dev/null; then
+    [[ $release_sources_from_git == true &&
+      $tooling_revision == "$(jq -r .toolingRevision "$snapshot/backup-state.json")" ]] \
+      || production_fail "retained release requires its pinned tooling revision and Git release sources"
+  fi
+}
+
 release_load_operation() {
   local current old_release
   snapshot=$1
   artifact=$2
   backup_load_state "$snapshot"
+  release_assert_tooling
   old_release=$(jq -er .source.artifact "$snapshot/backup-state.json") \
     || production_fail "release state has no original immutable release"
   pull_release "$old_release"
@@ -1322,18 +1436,31 @@ release_require_lease_phase() {
 }
 
 release_pull_candidate() {
-  local candidate=$1 allow_new=${2:-false} expected_revision checkout_revision untracked
+  local candidate=$1 allow_new=${2:-false} fallback_from=${3:-}
+  local expected_revision checkout_revision expected_checkout untracked
   pull_release "$candidate"
   expected_revision=$(jq -r '.candidate.revision // ""' "$snapshot/backup-state.json")
-  if [[ -n $expected_revision && $candidate == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]]; then
+  if [[ -n $fallback_from ]]; then
+    [[ $candidate == "$(jq -r .source.artifact "$snapshot/backup-state.json")" &&
+    $revision == "$(jq -r .source.revision "$snapshot/backup-state.json")" &&
+    $fallback_from == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]] \
+      || production_fail "fallback release does not match the retained original release"
+    expected_checkout=$expected_revision
+  elif [[ -n $expected_revision && $candidate == "$(jq -r '.candidate.artifact // ""' "$snapshot/backup-state.json")" ]]; then
     [[ $revision = "$expected_revision" ]] || production_fail "candidate revision changed"
+    expected_checkout=$revision
   elif [[ -n $expected_revision && $allow_new != true ]]; then
     production_fail "candidate does not match the retained staged release"
+  else
+    expected_checkout=$revision
+  fi
+  if [[ $release_sources_from_git == true ]]; then
+    return 0
   fi
   checkout_revision=$(git -C "$root" rev-parse HEAD 2> /dev/null) \
     || production_fail "candidate source checkout has no verifiable revision"
-  [[ $checkout_revision = "$revision" ]] \
-    || production_fail "candidate checkout must match the immutable candidate revision"
+  [[ $checkout_revision = "$expected_checkout" ]] \
+    || production_fail "checkout must match the immutable release revision required for this handoff"
   git -C "$root" diff --quiet HEAD -- \
     || production_fail "candidate source checkout has modified tracked files"
   untracked=$(git -C "$root" status --porcelain --untracked-files=all -- \
@@ -1454,7 +1581,11 @@ release_stage() {
     || production_fail "workloads no longer match the expected release"
   release_assert_maintenance_barrier "$work/original-deployments.json" "$current_release" "$retry"
   cp "$work/pulled/release.json" "$work/original-release.json"
-  release_pull_candidate "$candidate" true
+  if [[ $release_fallback_mode == true ]]; then
+    release_pull_candidate "$candidate" true "$previous_candidate"
+  else
+    release_pull_candidate "$candidate" true
+  fi
   cp "$work/pulled/release.json" "$work/candidate-release.json"
   render
   production_secrets
@@ -1518,6 +1649,7 @@ release_stage() {
       --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f1)" \
       --arg backupId "$backup_id" --arg backupStatus "$backup_status" --arg verifiedAt "$verified_at" \
       --argjson workloads "$candidate_workloads" --argjson natsInitJob "$nats_init_job" \
+      --arg toolingRevision "${tooling_revision:-}" \
       '{candidateHistory:(($prior[0].candidateHistory // []) +
           (if $prior[0].candidate then [{candidate:$prior[0].candidate,
             migrationResult:($prior[0].migrationResult // null),
@@ -1525,12 +1657,78 @@ release_stage() {
         candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
         migrationResult:null,postCheckDisposition:null,
         backupVerification:{backupId:$backupId,status:$backupStatus,acknowledgedAt:$verifiedAt}}
-      | .candidate.natsInitJob=$natsInitJob')" \
+      | .candidate.natsInitJob=$natsInitJob
+      | if $toolingRevision != "" then .toolingRevision=$toolingRevision else . end')" \
     || return 1
   cluster_operation_lock_update candidate-staged || return 1
   release_assert_staged_workloads
   printf 'production: candidate staged with workloads stopped; holder=%s; recovery state=%s/backup-state.json\n' \
     "$backup_id" "$snapshot"
+}
+
+release_fallback_stage() {
+  local failed_candidate=$2 original_release backup_status confirmation
+  confirmation=$3
+  release_load_operation "$1" "$failed_candidate"
+  jq -e --arg candidate "$failed_candidate" '
+    .status == "recovery-required" and .phase == "interrupted"
+    and .candidate.artifact == $candidate
+    and .migrationResult.outcome == "no-migration-required"
+    and .postCheckDisposition == null
+    and .postReleaseBackup == null
+    and (.backupVerification.status == "verified-upload"
+      or .backupVerification.status == "verified-unchanged")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "fallback is limited to an interrupted, no-migration candidate start before reopening"
+  release_require_lease_phase recovery-required
+  [[ $failed_candidate != "$(jq -r .source.artifact "$snapshot/backup-state.json")" ]] \
+    || production_fail "failed candidate must differ from the original release"
+  [[ $confirmation == "FALLBACK-$backup_id-MARKERS-1-UNCHANGED-FORMAT" ]] \
+    || production_fail "fallback requires FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation"
+  release_mutation_started=true
+  backup_reblock_graphql \
+    || production_fail "GraphQL access could not be verified closed; recovery state and Lease remain"
+  release_assert_candidate "$failed_candidate"
+  kube get deployments -o json > "$work/fallback-deployments.json" \
+    || production_fail "cannot inspect failed candidate workloads"
+  backup_validate_workload_images "$work/fallback-deployments.json" \
+    || production_fail "failed candidate workloads do not match the retained artifact"
+  jq -e --arg candidate "$failed_candidate" --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    ($actual.items | length) == ($state[0].candidate.workloads | length)
+    and all($state[0].candidate.workloads[]; . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $candidate))
+  ' "$work/fallback-deployments.json" > /dev/null \
+    || production_fail "failed candidate workloads do not match the retained artifact; keep access blocked and inspect"
+
+  jq -e 'any(.items[]; .metadata.name == "graphql"
+    and .spec.replicas > 0 and (.status.readyReplicas // 0) == .spec.replicas
+    and any(.spec.template.spec.containers[]; .name == "graphql"
+      and any(.env[]?; .name == "MODE" and .value == "backup")))' \
+    "$work/fallback-deployments.json" > /dev/null \
+    || production_fail "GraphQL is not ready behind the maintenance barrier; keep access blocked and inspect"
+  jq -c '[.items[].metadata.name | select(. != "graphql")]' \
+    "$work/fallback-deployments.json" > "$work/fallback-workloads.json" \
+    || return 1
+  backup_stop "$(< "$work/fallback-workloads.json")" || return 1
+  backup_wait_selected_pvcs_unmounted || return 1
+
+  original_release=$(jq -er .source.artifact "$snapshot/backup-state.json")
+  backup_status=$(jq -er .backupVerification.status "$snapshot/backup-state.json")
+  release_state_write post-check-disposition temporary-fix \
+    "$(jq -cn --arg old "$original_release" --arg failed "$failed_candidate" \
+      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{postCheckDisposition:{choice:"temporary-fix",reason:"approved-marker-only-fallback",
+          originalRelease:$old,failedCandidate:$failed,recordedAt:$recordedAt},
+        fallback:{kind:"marker-only-version-1",originalRelease:$old,
+          failedCandidate:$failed,recordedAt:$recordedAt}}')" \
+    || return 1
+  cluster_operation_lock_update post-check-temporary-fix || return 1
+  release_fallback_mode=true
+  release_stage "$snapshot" "$original_release" "$backup_status" \
+    "VERIFIED-$backup_id-$backup_status"
+  printf 'production: previous release staged on unchanged storage; stop here for the checkout handoff and explicit operator approval\n'
 }
 
 release_record_migration_result() {
@@ -1606,14 +1804,19 @@ release_start() {
   kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || return 1
   kube scale deployment/graphql "--replicas=$graphql_replicas" > /dev/null || return 1
   kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
+  backup_projection_route 4001 || return 1
   while IFS= read -r entry; do
     name=$(jq -r .name <<< "$entry")
     [[ $name == graphql || $name == nats ]] && continue
     replicas=$(jq -r .replicas <<< "$entry")
     ((replicas > 0)) || continue
     kube scale "deployment/$name" "--replicas=$replicas" > /dev/null || return 1
-    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
   done < <(jq -c '.candidate.workloads[]' "$snapshot/backup-state.json")
+  while IFS= read -r name; do
+    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
+  done < <(jq -r '.candidate.workloads[] |
+    select(.name != "graphql" and .name != "nats" and .replicas > 0) | .name' \
+    "$snapshot/backup-state.json")
   kube get deployments -o json > "$work/release-deployments.json" \
     || production_fail "cannot inspect candidate readiness"
   backup_validate_workload_images "$work/release-deployments.json" \
@@ -1631,6 +1834,7 @@ release_start() {
         and any(.env[]; .name == "MODE" and .value == "backup")))
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate readiness or GraphQL access barrier could not be verified"
+  backup_projection_route 4000 || return 1
   release_state_write release-ready ready \
     "$(jq -cn --arg readyAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{candidateReadyAt:$readyAt}')" \
     || return 1
@@ -1780,7 +1984,7 @@ release_backup_capture() {
   [[ ! -e $post_snapshot && ! -L $post_snapshot ]] \
     || production_fail "post-release backup destination already exists; inspect retained state"
   mkdir -m 700 -- "$post_snapshot" || production_fail "could not create post-release backup directory"
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   storage_class=$(jq -r .storageClass "$work/config.json")
   backup_role_inventory
   backup_capture_workloads "$candidate"
@@ -1931,6 +2135,7 @@ release_finalize() {
   local lease_present=false
   snapshot=$1
   backup_load_state "$snapshot"
+  release_assert_tooling
   [[ $confirmation == "PUBLISHED-$backup_id-$tag" ]] \
     || production_fail "release finalization requires PUBLISHED-<holder>-<tag> confirmation"
   [[ $tag =~ ^v[1-9][0-9]*$ ]] \
@@ -2190,7 +2395,7 @@ case "$command" in
     backup_run "$1" "$2"
     ;;
   backup-capture)
-    backup_capture_maintenance "$1"
+    backup_capture_maintenance "$@"
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
@@ -2210,6 +2415,9 @@ case "$command" in
     ;;
   release-stage)
     release_stage "$1" "$2" "$3" "$4"
+    ;;
+  release-fallback-stage)
+    release_fallback_stage "$1" "$2" "$3"
     ;;
   release-migration-result)
     release_record_migration_result "$1" "$2" "$3" "$4"

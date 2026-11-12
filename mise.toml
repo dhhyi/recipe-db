@@ -19,6 +19,9 @@ ytt = "0.55.4"
 [hooks]
 postinstall = { task = "setup" }
 
+[task_config]
+includes = [".mise/tasks/devcontainers-sync.toml"]
+
 [tasks.install-deps]
 description = "Install repository tooling dependencies from the lockfile"
 run = "pnpm install --frozen-lockfile"
@@ -70,17 +73,40 @@ description = "Verify production ingress token routing and configuration isolati
 env = { TEST_AUTH_INGRESS = "true" }
 run = "bats --print-output-on-failure .scripts/tests/traefik-ingress.bats"
 
+[tasks.check-tailwind-sources]
+description = "Validate that metadata-declared Tailwind source paths exist"
+run = "sh .scripts/sync-tailwind.sh --check-sources"
+
 [tasks.sync-tailwind]
 description = "Generate shared Tailwind sources and Docker build inputs"
+depends = ["check-tailwind-sources"]
 file = ".scripts/sync-tailwind.sh"
+sources = ["*/.project.yaml", "design/Dockerfile"]
+outputs = ["design/src/tailwind-sources.css", "design/Dockerfile"]
 
 [tasks.sync-ignore-files]
 description = "Regenerate Docker and Prettier ignore files"
 file = ".scripts/sync-ignore-files.sh"
+sources = [
+  ".gitignore",
+  "*/{.project.yaml,.gitignore,Dockerfile,.prettierignore}"
+]
+outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
 
 [tasks.sync-storage-version-templates]
 description = "Generate service source files for declared storage versions"
 file = ".scripts/sync-storage-version-templates.sh"
+sources = ["*/.project.yaml"]
+outputs = [
+  '''
+{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.storageVersion.value != null) | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .storageVersion.file' \"$@\"; fi") | split(pat="\n") -%}
+{%- if paths | length > 1 -%}
+  {{ "{" ~ paths | join(sep=",") ~ "}" }}
+{%- else -%}
+  {{ paths | first }}
+{%- endif -%}
+'''
+]
 
 [tasks.sync-vscode-settings]
 description = "Generate repository VS Code settings"
@@ -99,10 +125,6 @@ run = [
     "sync-vscode-settings"
   ] },
 ]
-
-[tasks.sync-devcontainers]
-description = "Regenerate devcontainer configuration for selected projects or all projects"
-file = ".scripts/sync-devcontainers.sh"
 
 [tasks.generate-bazel-build]
 description = "Generate Bazel build rules from project metadata and repository files"
@@ -191,6 +213,17 @@ outputs = [
 description = "Distribute the cached GraphQL SDL to metadata-declared consumers"
 depends = ["export-graphql-schema"]
 file = ".scripts/merge-graphql-schemas.sh"
+sources = [".generated/graphql/recipe-db.graphqls", "*/.project.yaml"]
+outputs = [
+  '''
+{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.graphqlSchema != null and .graphqlSchema != \"\") | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .graphqlSchema + \"/recipe-db.graphqls\"' \"$@\"; fi") | split(pat="\n") -%}
+{%- if paths | length > 1 -%}
+  {{ "{" ~ paths | join(sep=",") ~ "}" }}
+{%- else -%}
+  {{ paths | first }}
+{%- endif -%}
+'''
+]
 
 [tasks.in-devcontainer]
 description = "Run a command in a project devcontainer: [--rm | --keep-running] <project> [--rm | --keep-running] <command> [args...]; retention also via DEVCONTAINER_KEEP_RUNNING=true"
