@@ -1810,8 +1810,12 @@ release_start() {
     replicas=$(jq -r .replicas <<< "$entry")
     ((replicas > 0)) || continue
     kube scale "deployment/$name" "--replicas=$replicas" > /dev/null || return 1
-    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
   done < <(jq -c '.candidate.workloads[]' "$snapshot/backup-state.json")
+  while IFS= read -r name; do
+    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
+  done < <(jq -r '.candidate.workloads[] |
+    select(.name != "graphql" and .name != "nats" and .replicas > 0) | .name' \
+    "$snapshot/backup-state.json")
   kube get deployments -o json > "$work/release-deployments.json" \
     || production_fail "cannot inspect candidate readiness"
   backup_validate_workload_images "$work/release-deployments.json" \

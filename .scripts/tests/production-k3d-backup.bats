@@ -640,6 +640,21 @@ EOF
   [ -e "$MOCK_LOG.lease" ]
 }
 
+@test "candidate startup scales remaining dependencies before waiting for search readiness" {
+  prepare_candidate_release
+  export MOCK_SEARCH_DEPENDENCIES=true
+  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
+    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "release-ready" and .phase == "ready"' "$STATE/backup-state.json" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql") |
+    any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "backup")' \
+    "$MOCK_LOG.deployments" > /dev/null
+  [ -f "$MOCK_LOG.lease" ]
+}
+
 @test "candidate migration success is recorded but readiness failure retains the barrier and ownership" {
   local workload_changes
   prepare_candidate_release
