@@ -390,6 +390,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" rollout status deployment/search "*)
         [[ ${MOCK_PROJECTION_FAIL:-false} != true ]] || exit 1
+        if [[ ${MOCK_SEARCH_DEPENDENCIES:-false} == true ]]; then
+          jq -e '[.items[] | select(.metadata.name == "tags" or .metadata.name == "typesense")] |
+            length == 2 and all(.[]; .spec.replicas > 0)' "$MOCK_LOG.deployments" > /dev/null \
+            || exit 1
+        fi
         handled=true ;;
       *" rollout status deployment/graphql "*)
         [[ ${MOCK_RELEASE_ROLLOUT_FAIL:-false} != true ]] || exit 1
