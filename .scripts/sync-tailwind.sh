@@ -4,6 +4,14 @@ set -eu
 project_root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$project_root"
 
+case "$*" in
+  "" | --check-sources) ;;
+  *)
+    echo "usage: $0 [--check-sources]" >&2
+    exit 2
+    ;;
+esac
+
 sources_css="design/src/tailwind-sources.css"
 dockerfile="design/Dockerfile"
 start_marker="# BEGIN generated Tailwind Docker inputs"
@@ -15,38 +23,41 @@ trap 'rm -rf "$temporary_directory"' EXIT
 entries="$temporary_directory/entries"
 : > "$entries"
 
-for project_file in */.project.yaml; do
-  project=${project_file%/.project.yaml}
+# $source is a yq variable.
+# shellcheck disable=SC2016
+mise exec -- yq -N -r \
+  'select(documentIndex == 1) | .tailwindSources // [] | .[] as $source |
+    [(filename | sub("/.project.yaml$", "")), $source] | @tsv' \
+  */.project.yaml > "$temporary_directory/sources"
+while IFS="$(printf '\t')" read -r project source; do
+  [ -n "$source" ] || continue
 
-  mise exec -- yq -r \
-    'select(documentIndex == 1) | .tailwindSources // [] | .[]' \
-    "$project_file" \
-    | while IFS= read -r source; do
-      [ -n "$source" ] || continue
+  case "$source" in
+    /* | ../* | */../* | */.. | ..)
+      echo "Tailwind source $source must be inside project $project" >&2
+      exit 1
+      ;;
+  esac
 
-      case "$source" in
-        /* | ../* | */../* | */.. | ..)
-          echo "Tailwind source $source must be inside project $project" >&2
-          exit 1
-          ;;
-      esac
+  workspace_path="$project/$source"
+  if [ ! -f "$workspace_path" ] && [ ! -d "$workspace_path" ]; then
+    echo "Tailwind source $workspace_path must be an existing file or directory" >&2
+    exit 1
+  fi
 
-      workspace_path="$project/$source"
-      if [ ! -f "$workspace_path" ] && [ ! -d "$workspace_path" ]; then
-        echo "Tailwind source $workspace_path must be an existing file or directory" >&2
-        exit 1
-      fi
+  # @source paths are resolved relative to the stylesheet in design/src
+  case "$workspace_path" in
+    design/src/*) tailwind_path=${workspace_path#design/src/} ;;
+    design/*) tailwind_path="../${workspace_path#design/}" ;;
+    *) tailwind_path="../../$workspace_path" ;;
+  esac
 
-      # @source paths are resolved relative to the stylesheet in design/src
-      case "$workspace_path" in
-        design/src/*) tailwind_path=${workspace_path#design/src/} ;;
-        design/*) tailwind_path="../${workspace_path#design/}" ;;
-        *) tailwind_path="../../$workspace_path" ;;
-      esac
+  printf '%s\t%s\t%s\n' "$tailwind_path" "$project" "$workspace_path" >> "$entries"
+done < "$temporary_directory/sources"
 
-      printf '%s\t%s\t%s\n' "$tailwind_path" "$project" "$workspace_path" >> "$entries"
-    done
-done
+if [ "${1:-}" = --check-sources ]; then
+  exit 0
+fi
 
 LC_ALL=C sort -o "$entries" "$entries"
 

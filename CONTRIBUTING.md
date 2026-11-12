@@ -41,6 +41,26 @@ The Playwright screenshot baselines use Git LFS. Install Git LFS in the environm
 
 The ARM64 CI validation job downloads the baselines; jobs that do not run visual tests leave them as pointers.
 
+## Devcontainer synchronization
+
+Run `mise run sync-devcontainers` to synchronize all projects, or `mise run sync-devcontainer:graphql` for one project. Tasks skip generation when their inputs and declared outputs are unchanged. Use `mise run --force sync-devcontainer:graphql` to regenerate explicitly, including when adopting upstream generator or base-image changes that local file dependencies cannot detect.
+
+When adding, renaming, or removing a project, update its task in [.mise/tasks/devcontainers-sync.toml](.mise/tasks/devcontainers-sync.toml). Each task invokes the generator directly, reads its project's `.project.yaml`, and declares the generated devcontainer JSON, Dockerfile, and update script as outputs. Also declare `.vscode/tasks.json` for projects with editor tasks; editor settings are embedded in the devcontainer JSON. Do not declare entire output directories, which can contain runtime lock files or unrelated editor settings.
+
+Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project coverage, freshness, and failure handling.
+
+## Ignore-file synchronization
+
+`mise run sync-ignore-files` skips unchanged inputs. It tracks root ignore rules, project metadata, project ignore rules, and Dockerfiles; missing generated ignore files trigger regeneration. Creating an obsolete project `.prettierignore` triggers its removal.
+
+## Generated source synchronization
+
+`mise run sync-storage-version-templates` tracks project metadata and derives its outputs from each project's `storageVersion.file`. Unchanged inputs and outputs skip generation; editing or deleting a generated source triggers repair. Adding or relocating an output requires only updating the metadata, not the Mise task.
+
+`mise run merge-graphql-schemas` tracks the canonical cached SDL and project metadata, deriving consumer output paths from `graphqlSchema`. Distribution skips unchanged copies and repairs edited or missing copies. The schema-export prerequisite still checks whether the canonical SDL needs rebuilding before distribution can skip.
+
+`mise run sync-tailwind` tracks project metadata and the design Dockerfile, generating the shared stylesheet and Docker COPY block only when needed. Its `check-tailwind-sources` prerequisite always validates declared paths with one metadata read. Editing source contents does not regenerate the path lists; removing a declared file or directory still fails validation, even on a generation cache hit.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:

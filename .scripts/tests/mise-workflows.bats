@@ -14,6 +14,24 @@ setup() {
   setup_mock_bin
 }
 
+@test "metadata-derived task outputs support repositories without projects" {
+  for task in sync-storage-version-templates merge-graphql-schemas; do
+    run --separate-stderr mise tasks info "$task" --json
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | jq -e '(.outputs // []) | all(.[]; . == "")'
+  done
+}
+
+@test "metadata-derived task outputs still report malformed project metadata" {
+  mkdir invalid
+  printf '%s\n' '[' > invalid/.project.yaml
+  for task in sync-storage-version-templates merge-graphql-schemas; do
+    run mise tasks info "$task" --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"invalid/.project.yaml"* ]]
+  done
+}
+
 @test "production publishing continues to use build metadata without Compose tasks" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-docker-compose-prod"))] | length' "$workflow")" -eq 0 ]

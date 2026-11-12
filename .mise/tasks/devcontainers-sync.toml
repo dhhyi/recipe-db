@@ -1,0 +1,322 @@
+#:schema https://mise.jdx.dev/schema/mise-task.json
+
+[sync-devcontainers]
+description = "Synchronize all devcontainers, skipping projects already in sync"
+depends = ["sync-devcontainer:*"]
+
+["sync-devcontainer:browse"]
+description = "Synchronize the browse devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - browse/.project.yaml browse"
+sources = ["browse/.project.yaml"]
+outputs = [
+  "browse/.devcontainer/devcontainer.json",
+  "browse/.devcontainer/Dockerfile",
+  "browse/.vscode/tasks.json",
+  "browse/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:demo-data"]
+description = "Synchronize the demo-data devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - demo-data/.project.yaml demo-data"
+sources = ["demo-data/.project.yaml"]
+outputs = [
+  "demo-data/.devcontainer/devcontainer.json",
+  "demo-data/.devcontainer/Dockerfile",
+  "demo-data/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:design"]
+description = "Synchronize the design devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - design/.project.yaml design"
+sources = ["design/.project.yaml"]
+outputs = [
+  "design/.devcontainer/devcontainer.json",
+  "design/.devcontainer/Dockerfile",
+  "design/.vscode/tasks.json",
+  "design/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:e2e-test"]
+description = "Synchronize the e2e-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - e2e-test/.project.yaml e2e-test"
+sources = ["e2e-test/.project.yaml"]
+outputs = [
+  "e2e-test/.devcontainer/devcontainer.json",
+  "e2e-test/.devcontainer/Dockerfile",
+  "e2e-test/.vscode/tasks.json",
+  "e2e-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:fixtures"]
+description = "Synchronize the fixtures devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - fixtures/.project.yaml fixtures"
+sources = ["fixtures/.project.yaml"]
+outputs = [
+  "fixtures/.devcontainer/devcontainer.json",
+  "fixtures/.devcontainer/Dockerfile",
+  "fixtures/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:graphql"]
+description = "Synchronize the graphql devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - graphql/.project.yaml graphql"
+sources = ["graphql/.project.yaml"]
+outputs = [
+  "graphql/.devcontainer/devcontainer.json",
+  "graphql/.devcontainer/Dockerfile",
+  "graphql/.vscode/tasks.json",
+  "graphql/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:graphql-test"]
+description = "Synchronize the graphql-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - graphql-test/.project.yaml graphql-test"
+sources = ["graphql-test/.project.yaml"]
+outputs = [
+  "graphql-test/.devcontainer/devcontainer.json",
+  "graphql-test/.devcontainer/Dockerfile",
+  "graphql-test/.vscode/tasks.json",
+  "graphql-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:image-inline"]
+description = "Synchronize the image-inline devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - image-inline/.project.yaml image-inline"
+sources = ["image-inline/.project.yaml"]
+outputs = [
+  "image-inline/.devcontainer/devcontainer.json",
+  "image-inline/.devcontainer/Dockerfile",
+  "image-inline/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:image-inline-test"]
+description = "Synchronize the image-inline-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - image-inline-test/.project.yaml image-inline-test"
+sources = ["image-inline-test/.project.yaml"]
+outputs = [
+  "image-inline-test/.devcontainer/devcontainer.json",
+  "image-inline-test/.devcontainer/Dockerfile",
+  "image-inline-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:images"]
+description = "Synchronize the images devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - images/.project.yaml images"
+sources = ["images/.project.yaml"]
+outputs = [
+  "images/.devcontainer/devcontainer.json",
+  "images/.devcontainer/Dockerfile",
+  "images/.vscode/tasks.json",
+  "images/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:images-edit"]
+description = "Synchronize the images-edit devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - images-edit/.project.yaml images-edit"
+sources = ["images-edit/.project.yaml"]
+outputs = [
+  "images-edit/.devcontainer/devcontainer.json",
+  "images-edit/.devcontainer/Dockerfile",
+  "images-edit/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:images-test"]
+description = "Synchronize the images-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - images-test/.project.yaml images-test"
+sources = ["images-test/.project.yaml"]
+outputs = [
+  "images-test/.devcontainer/devcontainer.json",
+  "images-test/.devcontainer/Dockerfile",
+  "images-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:inspirations"]
+description = "Synchronize the inspirations devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - inspirations/.project.yaml inspirations"
+sources = ["inspirations/.project.yaml"]
+outputs = [
+  "inspirations/.devcontainer/devcontainer.json",
+  "inspirations/.devcontainer/Dockerfile",
+  "inspirations/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:inspirations-test"]
+description = "Synchronize the inspirations-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - inspirations-test/.project.yaml inspirations-test"
+sources = ["inspirations-test/.project.yaml"]
+outputs = [
+  "inspirations-test/.devcontainer/devcontainer.json",
+  "inspirations-test/.devcontainer/Dockerfile",
+  "inspirations-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:link-extract"]
+description = "Synchronize the link-extract devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - link-extract/.project.yaml link-extract"
+sources = ["link-extract/.project.yaml"]
+outputs = [
+  "link-extract/.devcontainer/devcontainer.json",
+  "link-extract/.devcontainer/Dockerfile",
+  "link-extract/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:link-extract-test"]
+description = "Synchronize the link-extract-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - link-extract-test/.project.yaml link-extract-test"
+sources = ["link-extract-test/.project.yaml"]
+outputs = [
+  "link-extract-test/.devcontainer/devcontainer.json",
+  "link-extract-test/.devcontainer/Dockerfile",
+  "link-extract-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:mcp"]
+description = "Synchronize the mcp devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - mcp/.project.yaml mcp"
+sources = ["mcp/.project.yaml"]
+outputs = [
+  "mcp/.devcontainer/devcontainer.json",
+  "mcp/.devcontainer/Dockerfile",
+  "mcp/.vscode/tasks.json",
+  "mcp/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:mcp-test"]
+description = "Synchronize the mcp-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - mcp-test/.project.yaml mcp-test"
+sources = ["mcp-test/.project.yaml"]
+outputs = [
+  "mcp-test/.devcontainer/devcontainer.json",
+  "mcp-test/.devcontainer/Dockerfile",
+  "mcp-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:provisioning"]
+description = "Synchronize the provisioning devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - provisioning/.project.yaml provisioning"
+sources = ["provisioning/.project.yaml"]
+outputs = [
+  "provisioning/.devcontainer/devcontainer.json",
+  "provisioning/.devcontainer/Dockerfile",
+  "provisioning/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:ratings"]
+description = "Synchronize the ratings devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ratings/.project.yaml ratings"
+sources = ["ratings/.project.yaml"]
+outputs = [
+  "ratings/.devcontainer/devcontainer.json",
+  "ratings/.devcontainer/Dockerfile",
+  "ratings/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:ratings-test"]
+description = "Synchronize the ratings-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - ratings-test/.project.yaml ratings-test"
+sources = ["ratings-test/.project.yaml"]
+outputs = [
+  "ratings-test/.devcontainer/devcontainer.json",
+  "ratings-test/.devcontainer/Dockerfile",
+  "ratings-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:recipes"]
+description = "Synchronize the recipes devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - recipes/.project.yaml recipes"
+sources = ["recipes/.project.yaml"]
+outputs = [
+  "recipes/.devcontainer/devcontainer.json",
+  "recipes/.devcontainer/Dockerfile",
+  "recipes/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:recipes-edit"]
+description = "Synchronize the recipes-edit devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - recipes-edit/.project.yaml recipes-edit"
+sources = ["recipes-edit/.project.yaml"]
+outputs = [
+  "recipes-edit/.devcontainer/devcontainer.json",
+  "recipes-edit/.devcontainer/Dockerfile",
+  "recipes-edit/.vscode/tasks.json",
+  "recipes-edit/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:recipes-test"]
+description = "Synchronize the recipes-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - recipes-test/.project.yaml recipes-test"
+sources = ["recipes-test/.project.yaml"]
+outputs = [
+  "recipes-test/.devcontainer/devcontainer.json",
+  "recipes-test/.devcontainer/Dockerfile",
+  "recipes-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:search"]
+description = "Synchronize the search devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - search/.project.yaml search"
+sources = ["search/.project.yaml"]
+outputs = [
+  "search/.devcontainer/devcontainer.json",
+  "search/.devcontainer/Dockerfile",
+  "search/.vscode/tasks.json",
+  "search/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:search-test"]
+description = "Synchronize the search-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - search-test/.project.yaml search-test"
+sources = ["search-test/.project.yaml"]
+outputs = [
+  "search-test/.devcontainer/devcontainer.json",
+  "search-test/.devcontainer/Dockerfile",
+  "search-test/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:tags"]
+description = "Synchronize the tags devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - tags/.project.yaml tags"
+sources = ["tags/.project.yaml"]
+outputs = [
+  "tags/.devcontainer/devcontainer.json",
+  "tags/.devcontainer/Dockerfile",
+  "tags/.update_devcontainer.sh",
+]
+
+["sync-devcontainer:tags-test"]
+description = "Synchronize the tags-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - tags-test/.project.yaml tags-test"
+sources = ["tags-test/.project.yaml"]
+outputs = [
+  "tags-test/.devcontainer/devcontainer.json",
+  "tags-test/.devcontainer/Dockerfile",
+  "tags-test/.update_devcontainer.sh",
+]
