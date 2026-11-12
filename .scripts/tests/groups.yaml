@@ -169,6 +169,7 @@ tasks:
       - .bazelversion
     .scripts/tests/mise-tasks.bats:
       - ":(glob).scripts/*.sh"
+      - .mise/tasks/devcontainers-sync.toml
       - .scripts/lib/project-metadata.sh
       - .scripts/docker-base-images.awk
       - .scripts/external-image-references.awk

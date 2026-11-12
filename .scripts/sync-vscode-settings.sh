@@ -32,7 +32,7 @@ mise exec -- jq -n --args '
       }
     ] + ($ARGS.positional | map({
       match: "/\(.)/\\.project\\.yaml$",
-      command: "cd ${workspaceFolder} && mise run sync-files && sh \(.)/.update_devcontainer.sh",
+      command: "cd ${workspaceFolder} && mise run sync-files && mise run sync-devcontainer:\(.)",
       runningStatusMessage: "\(.) devcontainer...",
       finishStatusMessage: "\(.) devcontainer ✔"
     })))

@@ -19,6 +19,9 @@ ytt = "0.55.4"
 [hooks]
 postinstall = { task = "setup" }
 
+[task_config]
+includes = [".mise/tasks/devcontainers-sync.toml"]
+
 [tasks.install-deps]
 description = "Install repository tooling dependencies from the lockfile"
 run = "pnpm install --frozen-lockfile"
@@ -99,10 +102,6 @@ run = [
     "sync-vscode-settings"
   ] },
 ]
-
-[tasks.sync-devcontainers]
-description = "Regenerate devcontainer configuration for selected projects or all projects"
-file = ".scripts/sync-devcontainers.sh"
 
 [tasks.generate-bazel-build]
 description = "Generate Bazel build rules from project metadata and repository files"

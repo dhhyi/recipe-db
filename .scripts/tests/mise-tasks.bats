@@ -10,6 +10,8 @@ setup() {
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
+  mkdir -p .mise/tasks
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/devcontainers-sync.toml" .mise/tasks/
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_CONFIG_DIR="$BATS_TEST_TMPDIR/mise-config"
@@ -75,22 +77,22 @@ EOF
 
 @test "structured tasks provide help without executing their scripts" {
   for task in integration-tests sync-devcontainers; do
-    script=$task
-    [ "$task" != integration-tests ] || script=run-integration-tests
-    printf '%s\n' 'touch executed' 'exit 19' | mock_task_body ".scripts/$script.sh"
+    if [ "$task" = integration-tests ]; then
+      printf '%s\n' 'touch executed' 'exit 19' | mock_task_body .scripts/run-integration-tests.sh
+    fi
 
     run mise run "$task" --help
 
     [ "$status" -eq 0 ]
-    [[ $output == *"Usage:"* ]]
     [[ $output == *"$task"* ]]
     [ ! -e executed ]
     case "$task" in
       integration-tests)
+        [[ $output == *"Usage:"* ]]
         [[ $output == *"--development"* ]]
         [[ $output == *"[projects]"* ]]
         ;;
-      sync-devcontainers) [[ $output == *"[projects]"* ]] ;;
+      sync-devcontainers) [[ $output == *"does not accept any arguments"* ]] ;;
     esac
   done
 }
@@ -294,31 +296,137 @@ EOF
   [[ "$output" == *"Development auth secret"* ]]
 }
 
-@test "devcontainer sync usage supports selected projects and defaults to all" {
-  mkdir second
-  cp example/.project.yaml second/.project.yaml
-  for project in example second; do
-    printf '%s\n' '#!/bin/sh' 'touch updated' > "$project/.update_devcontainer.sh"
+@test "devcontainer sync tasks cover every project with project-specific inputs and generated outputs" {
+  root=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
+  task_file="$root/.mise/tasks/devcontainers-sync.toml"
+  expected_projects=()
+  for project_file in "$root/"*/.project.yaml; do
+    project=${project_file%/.project.yaml}
+    project=${project##*/}
+    expected_projects+=("sync-devcontainer:$project")
+    task=$(project="$project" yq -p toml -o json '.["sync-devcontainer:" + strenv(project)]' "$task_file")
+    expected_outputs=(
+      "$project/.devcontainer/devcontainer.json"
+      "$project/.devcontainer/Dockerfile"
+      "$project/.update_devcontainer.sh"
+    )
+    if [ "$(yq 'select(documentIndex == 0) | .vscode.tasks | length' "$project_file")" -gt 0 ]; then
+      expected_outputs+=("$project/.vscode/tasks.json")
+    fi
+    printf '%s' "$task" | jq -e --arg project "$project" \
+      --argjson outputs "$(printf '%s\n' "${expected_outputs[@]}" | jq -Rsc 'split("\n")[:-1]')" '
+        .sources == [$project + "/.project.yaml"]
+        and (.outputs | sort) == ($outputs | sort)
+        and (.run | endswith(" | node - \($project)/.project.yaml \($project)"))
+      '
   done
+  actual_projects=$(yq -p toml -r 'keys | .[] | select(test("^sync-devcontainer:"))' "$task_file" | sort)
+  [ "$actual_projects" = "$(printf '%s\n' "${expected_projects[@]}" | sort)" ]
 
-  run mise run --raw sync-devcontainers example
+  run sh .scripts/sync-vscode-settings.sh
   [ "$status" -eq 0 ]
-  [ -f example/updated ]
-  [ ! -e second/updated ]
+  jq -e '.["runOnSave.commands"] | any(.[]; .command == "cd ${workspaceFolder} && mise run sync-files && mise run sync-devcontainer:example")' .vscode/settings.json
+}
 
-  run mise run --raw sync-devcontainers second example
-  [ "$status" -eq 0 ]
-  [ -f second/updated ]
+mock_devcontainer_generator() {
+  yq -p toml -o toml -i 'with_entries(select(
+    .key == "sync-devcontainers" or
+    .key == "sync-devcontainer:graphql" or
+    .key == "sync-devcontainer:demo-data"
+  ))' .mise/tasks/devcontainers-sync.toml
+  for project in graphql demo-data; do
+    mkdir "$project"
+    cp "$BATS_TEST_DIRNAME/../../$project/.project.yaml" "$project/"
+  done
+  export GENERATOR_LOG="$FIXTURE_ROOT/generator.log"
+  : > "$GENERATOR_LOG"
+  cat > bin/curl << 'EOF'
+#!/bin/sh
+test "$*" = "-fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js" || exit 2
+printf '%s\n' 'fixture generator'
+exit "${DOWNLOAD_STATUS:-0}"
+EOF
+  cat > bin/node << 'EOF'
+#!/bin/sh
+set -eu
+cat > /dev/null
+test "$#" -eq 3
+test "$1" = -
+project=$3
+test "$2" = "$project/.project.yaml"
+printf '%s\n' "$project" >> "$GENERATOR_LOG"
+if [ "${GENERATOR_STATUS:-0}" -ne 0 ]; then
+  echo "fixture generator failed" >&2
+  exit "$GENERATOR_STATUS"
+fi
+mkdir -p "$project/.devcontainer"
+printf '%s\n' '{}' > "$project/.devcontainer/devcontainer.json"
+printf '%s\n' 'FROM scratch' > "$project/.devcontainer/Dockerfile"
+printf '%s\n' '#!/bin/sh' > "$project/.update_devcontainer.sh"
+if [ "$(yq 'select(documentIndex == 0) | .vscode.tasks | length' "$2")" -gt 0 ]; then
+  mkdir -p "$project/.vscode"
+  printf '%s\n' '{}' > "$project/.vscode/tasks.json"
+fi
+EOF
+  chmod +x bin/curl bin/node
+}
 
-  rm example/updated second/updated
+@test "devcontainer sync skips fresh projects and regenerates only changed or incomplete projects" {
+  mock_devcontainer_generator
   run mise run --raw sync-devcontainers
   [ "$status" -eq 0 ]
-  [ -f example/updated ]
-  [ -f second/updated ]
+  [ "$(sort "$GENERATOR_LOG")" = $'demo-data\ngraphql' ]
 
-  run mise run --raw sync-devcontainers unknown
+  : > "$GENERATOR_LOG"
+  run mise run --raw sync-devcontainers
+  [ "$status" -eq 0 ]
+  [ ! -s "$GENERATOR_LOG" ]
+
+  printf '\n# changed input\n' >> graphql/.project.yaml
+  run mise run --raw sync-devcontainers
+  [ "$status" -eq 0 ]
+  [ "$(cat "$GENERATOR_LOG")" = graphql ]
+
+  for output_file in .devcontainer/devcontainer.json .devcontainer/Dockerfile .vscode/tasks.json .update_devcontainer.sh; do
+    : > "$GENERATOR_LOG"
+    rm "graphql/$output_file"
+    run mise run --raw sync-devcontainers
+    [ "$status" -eq 0 ]
+    [ "$(cat "$GENERATOR_LOG")" = graphql ]
+    [ -s "graphql/$output_file" ]
+  done
+
+  : > "$GENERATOR_LOG"
+  mkdir -p demo-data/.vscode
+  touch demo-data/.devcontainer/.lifecycle.lock demo-data/.vscode/settings.json
+  run mise run --raw sync-devcontainers
+  [ "$status" -eq 0 ]
+  [ ! -s "$GENERATOR_LOG" ]
+
+  run mise run --raw --force sync-devcontainer:graphql
+  [ "$status" -eq 0 ]
+  [ "$(cat "$GENERATOR_LOG")" = graphql ]
+}
+
+@test "devcontainer sync propagates download and generator failures without recording freshness" {
+  mock_devcontainer_generator
+  run env DOWNLOAD_STATUS=22 mise run --raw sync-devcontainer:graphql
   [ "$status" -ne 0 ]
-  [[ $output == *"unknown project: unknown"* ]]
+
+  : > "$GENERATOR_LOG"
+  run mise run --raw sync-devcontainer:graphql
+  [ "$status" -eq 0 ]
+  [ "$(cat "$GENERATOR_LOG")" = graphql ]
+
+  printf '\n# changed input\n' >> graphql/.project.yaml
+  run env GENERATOR_STATUS=23 mise run --raw sync-devcontainer:graphql
+  [ "$status" -ne 0 ]
+  [[ $output == *"fixture generator failed"* ]]
+
+  : > "$GENERATOR_LOG"
+  run mise run --raw sync-devcontainer:graphql
+  [ "$status" -eq 0 ]
+  [ "$(cat "$GENERATOR_LOG")" = graphql ]
 }
 
 @test "devcontainer passthrough forwards help and arbitrary command flags" {
@@ -437,18 +545,23 @@ EOF
 }
 
 mock_sync_steps() {
+  cat > .mise/tasks/devcontainers-sync.toml << 'EOF'
+[sync-devcontainers]
+description = "Mock devcontainer synchronization"
+run = """
+test -f sync-tailwind.done
+test -f sync-ignore-files.done
+test -f sync-vscode-settings.done
+touch sync-devcontainers.done
+"""
+EOF
   for script in check-forbidden-files sync-tailwind sync-ignore-files sync-vscode-settings \
-    sync-devcontainers export-graphql-schema merge-graphql-schemas generate-bazel-build generate-docker-compose; do
+    export-graphql-schema merge-graphql-schemas generate-bazel-build generate-docker-compose; do
     mock_task_body ".scripts/$script.sh" << 'EOF'
 set -eu
 name=$(basename "$0" .sh)
 case "$name" in
   check-forbidden-files) exit "${CHECK_STATUS:-0}" ;;
-  sync-devcontainers)
-    test -f sync-tailwind.done
-    test -f sync-ignore-files.done
-    test -f sync-vscode-settings.done
-    ;;
   merge-graphql-schemas)
     test -f sync-devcontainers.done
     test -f generate-docker-compose.done
