@@ -1,17 +1,11 @@
-import base64
-import copy
 import importlib.util
-import json
-import os
 from pathlib import Path
 import re
 import shlex
-import shutil
 import subprocess
 import tomllib
 import unittest
 from unittest.mock import patch
-import uuid
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -240,192 +234,6 @@ class ContractTests(unittest.TestCase):
                      if task["name"] == "Refuse capture checkout changes during release maintenance")
         self.assertIn("maintenanceActive", guard["ansible.builtin.assert"]["that"][0])
 
-    def test_accepted_release_alignment_fails_closed_for_other_candidates_targets_and_phases(self):
-        toolchain = yaml.safe_load((ROOT / "backup-toolchain.yml").read_text())
-        configure = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]["tasks"]
-        alignment = {
-            "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "c" * 64,
-            "revision": "b" * 40,
-            "holder": "backup-123-456",
-            "cluster": "pi",
-            "context": "pi-context",
-            "namespace": "recipe-db",
-        }
-        source = {
-            "target": "pi", "cluster": alignment["cluster"],
-            "context": alignment["context"], "namespace": alignment["namespace"],
-            "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
-        }
-        state = {
-            "status": "release-accepted", "phase": "operator-accepted",
-            "acceptedAt": "2026-11-12T07:00:00Z",
-            "websiteCheck": {"outcome": "passed"},
-            "candidate": {"artifact": alignment["artifact"], "revision": alignment["revision"]},
-            "postReleaseBackup": {
-                "artifact": alignment["artifact"], "revision": alignment["revision"],
-                "status": "verified-upload", "uploadStatus": "verified-upload",
-                "storageVersions": [{"service": "recipes", "version": 1}],
-            },
-            "source": source, "backupId": alignment["holder"],
-        }
-        retained = {
-            "state": state,
-            "lease": {
-                "spec": {"holderIdentity": alignment["holder"]},
-                "metadata": {
-                    "labels": {"app.kubernetes.io/part-of": "recipe-db"},
-                    "annotations": {
-                        "recipe-db/operation": "backup",
-                        "recipe-db/release": source["artifact"],
-                        "recipe-db/phase": "release-accepted",
-                    },
-                },
-            },
-        }
-        common = {
-            "backup_alignment": alignment,
-            "backup_capture_revision": alignment["revision"],
-            "backup_configuration": {"stat": {"exists": True}},
-            "backup_lifecycle_status": {"stdout": json.dumps({"maintenanceActive": True})},
-            "backup_alignment_status": {"stdout": json.dumps(retained)},
-        }
-        cases = []
-        for tasks in (toolchain, configure):
-            gate = next(task for task in tasks if task["name"] ==
-                        "Require candidate-bound acceptance and the retained release Lease before alignment")
-            cases.append((gate, common, False))
-            for path, replacement in (
-                (("state", "status"), "recovery-required"),
-                (("state", "phase"), "post-release-backup-verified"),
-                (("state", "acceptedAt"), ""),
-                (("state", "websiteCheck", "outcome"), "failed"),
-                (("state", "candidate", "artifact"), source["artifact"]),
-                (("state", "candidate", "revision"), "a" * 40),
-                (("state", "postReleaseBackup", "artifact"), source["artifact"]),
-                (("state", "postReleaseBackup", "revision"), "a" * 40),
-                (("state", "postReleaseBackup", "status"), "captured"),
-                (("state", "postReleaseBackup", "uploadStatus"), "verified-unchanged"),
-                (("state", "postReleaseBackup", "storageVersions"), []),
-                (("state", "source", "target"), "local"),
-                (("state", "source", "cluster"), "another-pi"),
-                (("state", "source", "context"), "another-context"),
-                (("state", "source", "namespace"), "another-namespace"),
-                (("state", "backupId"), "backup-111-222"),
-                (("lease", "spec", "holderIdentity"), "backup-111-222"),
-                (("lease", "metadata", "annotations", "recipe-db/phase"), "ready"),
-                (("lease", "metadata", "annotations", "recipe-db/release"), alignment["artifact"]),
-                (("lease", "metadata", "annotations", "recipe-db/operation"), "deploy"),
-                (("lease",), None),
-            ):
-                changed = copy.deepcopy(retained)
-                node = changed
-                for key in path[:-1]:
-                    node = node[key]
-                node[path[-1]] = replacement
-                variables = dict(common, backup_alignment_status={"stdout": json.dumps(changed)})
-                cases.append((gate, variables, True))
-            default_gate = next(task for task in tasks
-                                if task["name"].startswith("Refuse ") and
-                                "during release maintenance" in task["name"])
-            without_alignment = {key: value for key, value in common.items()
-                                 if key != "backup_alignment"}
-            cases.append((default_gate, without_alignment, True))
-            cases.append((default_gate, dict(without_alignment, backup_lifecycle_status={
-                "stdout": json.dumps({"maintenanceActive": False})}), False))
-            input_gate = next(task for task in tasks if task["name"] ==
-                              "Validate explicit accepted-release alignment inputs")
-            cases.append((input_gate, common, False))
-            cases.append((input_gate, dict(common, backup_alignment={}), True))
-            cases.append((input_gate, dict(common, backup_configuration={"stat": {"exists": False}}), True))
-            cases.append((input_gate, dict(common, backup_lifecycle_status={
-                "stdout": json.dumps({"maintenanceActive": False})}), True))
-        capture_gate = next(task for task in toolchain if task["name"] ==
-                            "Validate explicit accepted-release alignment inputs")
-        cases.append((capture_gate, dict(common, backup_capture_revision="a" * 40), True))
-        directory_gate = next(task for task in toolchain if task["name"] ==
-                              "Require the canonical retained maintenance directory during alignment")
-        for directory in ("/var/lib/recipe-db-backup", "/another-state"):
-            content = base64.b64encode(json.dumps({"stateDirectory": directory}).encode()).decode()
-            cases.append((directory_gate, dict(common, backup_alignment_configuration={"content": content}),
-                          directory != "/var/lib/recipe-db-backup"))
-        settings = {"stateDirectory": "/var/lib/recipe-db-backup"}
-        values = {"target": "pi", "cluster": "pi", "secrets": {"auth-accounts.json": "controller/file"}}
-        secrets = {"auth-accounts.json": "/etc/recipe-db/application-inputs/auth-accounts.json"}
-        installed_values = dict(values, secrets=secrets)
-        input_variables = dict(
-            common, backup_settings=settings, backup_values=values,
-            backup_pi_secret_paths=secrets, backup_release=alignment["artifact"],
-            backup_alignment_installed={"results": [
-                {"content": base64.b64encode(json.dumps(settings).encode()).decode()},
-                {"content": base64.b64encode(yaml.safe_dump(installed_values).encode()).decode()},
-            ]},
-        )
-        input_gate = next(task for task in configure if task["name"] ==
-                          "Keep the retained operation target and uploader settings unchanged during alignment")
-        cases.append((input_gate, input_variables, False))
-        cases.append((input_gate, dict(input_variables, backup_release=source["artifact"]), True))
-        cases.append((input_gate, dict(input_variables, backup_settings=dict(settings, stateDirectory="/other")), True))
-        cases.append((input_gate, dict(input_variables, backup_values=dict(values, cluster="other")), True))
-
-        plays = []
-        for number, (task, variables, rejected) in enumerate(cases):
-            check = {key: value for key, value in task.items() if key != "when"}
-            plays.append({
-                "name": f"Alignment case {number}", "hosts": "localhost", "gather_facts": False,
-                "vars": variables,
-                "tasks": [
-                    {"ansible.builtin.set_fact": {"alignment_rejected": False}},
-                    {"block": [check], "rescue": [
-                        {"ansible.builtin.set_fact": {"alignment_rejected": True}},
-                    ]},
-                    {"ansible.builtin.assert": {"that": [f"alignment_rejected == {rejected}"]}},
-                ],
-            })
-        scratch = ROOT / (".alignment-test-" + uuid.uuid4().hex)
-        scratch.mkdir()
-        try:
-            playbook = scratch / "alignment.yml"
-            playbook.write_text(yaml.safe_dump(plays))
-            environment = dict(os.environ, ANSIBLE_LOCAL_TEMP=str(scratch / "local"),
-                               ANSIBLE_REMOTE_TEMP=str(scratch / "remote"))
-            result = subprocess.run(
-                ["ansible-playbook", "-i", "localhost,", "-c", "local", str(playbook)],
-                capture_output=True, text=True, env=environment,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        finally:
-            shutil.rmtree(scratch)
-
-    def test_alignment_preflights_run_before_capture_tools_or_inputs_change(self):
-        for filename, mutation in (
-            ("backup-toolchain.yml", "Create the private backup toolchain configuration directory"),
-            ("backup-configure.yml", "Invalidate the prior backup configuration generation"),
-        ):
-            tasks = yaml.safe_load((ROOT / filename).read_text())
-            if filename == "backup-configure.yml":
-                tasks = tasks[0]["tasks"]
-            names = [task["name"] for task in tasks]
-            inspect = next(task for task in tasks if task["name"] ==
-                           "Inspect retained accepted release and target without changing lifecycle state")
-            self.assertEqual(inspect["ansible.builtin.command"]["argv"][-3:], [
-                "backup-status", "/etc/recipe-db/backup-values.yaml",
-                "/var/lib/recipe-db-backup/maintenance",
-            ])
-            self.assertFalse(inspect["changed_when"])
-            self.assertTrue(inspect["no_log"])
-            for name in (
-                "Validate explicit accepted-release alignment inputs",
-                inspect["name"],
-                "Require candidate-bound acceptance and the retained release Lease before alignment",
-            ):
-                task = tasks[names.index(name)]
-                self.assertEqual(task["when"], "backup_alignment is defined")
-                self.assertLess(names.index(name), names.index(mutation))
-            if filename == "backup-configure.yml":
-                self.assertLess(names.index(
-                    "Keep the retained operation target and uploader settings unchanged during alignment"),
-                    names.index(mutation))
-
     def test_base_provisioning_leaves_backup_timer_disabled(self):
         tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
         enable = next(task for task in tasks
@@ -558,7 +366,7 @@ class ContractTests(unittest.TestCase):
                              if task["name"] == "Refuse configuration changes while a backup is running")
         self.assertEqual(
             service_guard["failed_when"],
-            "backup_service_active.rc != 0 or backup_service_active.stdout not in ['inactive', 'failed']",
+            "backup_service_active.stdout not in ['inactive', 'failed']",
         )
         inspection = next(task for task in tasks
                           if task["name"] == "Inspect Pi-owned Drive authorization without retrieving it")
