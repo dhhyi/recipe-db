@@ -16,7 +16,13 @@ setup() {
   export SCHEMA_TEXT='type Query { fixture: Boolean! }'
   printf '%s\n' '{"repository":"github:example/fixture"}' > package.json
 
-  mkdir -p fixtures graphql/src mcp
+  git init -q
+  printf '%s\n' '*.tmp' > .gitignore
+  mkdir -p fixtures graphql/src mcp design/src
+  cat > design/Dockerfile << 'EOF'
+# BEGIN generated Tailwind Docker inputs
+# END generated Tailwind Docker inputs
+EOF
   cat > fixtures/.project.yaml << 'EOF'
 devcontainer:
   ports: [80]
