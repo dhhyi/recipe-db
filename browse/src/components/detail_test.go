@@ -22,6 +22,9 @@ func TestBringIngredientFooter(t *testing.T) {
 	}
 	publicURL := "https://recipes.example.test/recipe/42"
 	body := renderTagComponent(t, Detail(&response, publicURL))
+	if !strings.Contains(body, `class="grid grid-cols-1 gap-3 md:grid-cols-2"`) {
+		t.Errorf("recipe detail with ingredients must use two columns from md onward: %s", body)
+	}
 	for _, markup := range []string{
 		`</tbody><tfoot>`,
 		`colspan="2"`,
@@ -69,5 +72,8 @@ func TestBringIngredientFooter(t *testing.T) {
 	empty := renderTagComponent(t, Detail(&response, publicURL))
 	if strings.Contains(empty, "bring") || strings.Contains(empty, "<tfoot>") {
 		t.Fatalf("empty recipe must not offer an import: %s", empty)
+	}
+	if !strings.Contains(empty, `class="grid grid-cols-1 gap-3"`) || strings.Contains(empty, "md:grid-cols-2") {
+		t.Errorf("recipe detail without ingredients must not create an empty second column: %s", empty)
 	}
 }

@@ -17,7 +17,7 @@ templ SimilarRecipes(id string, recipes []gql.RecipeStub, remaining []string, fa
 			<h2>Ähnliche Rezepte</h2>
 			if failed {
 				if len(remaining) > 0 {
-					<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+					<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
 						@SimilarRecipesBatch(id, nil, remaining, true)
 					</div>
 				} else {
@@ -25,7 +25,7 @@ templ SimilarRecipes(id string, recipes []gql.RecipeStub, remaining []string, fa
 					<button type="button" class="outline" hx-get={ "/recipe/" + id + "/similar" } hx-target="#similar-recipes" hx-swap="outerHTML" hx-sync="#similar-recipes:drop" hx-disabled-elt="this" hx-push-url="false" hx-replace-url="false" hx-on::before-request="this.setAttribute('aria-busy', 'true')" hx-on::after-request="this.removeAttribute('aria-busy')">Erneut versuchen</button>
 				}
 			} else {
-				<div class="grid! grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
 					@SimilarRecipesBatch(id, recipes, remaining, false)
 				</div>
 			}

@@ -12,7 +12,7 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
-    "@anyblades/blades": "3.0.0-alpha.3",
+    "@anyblades/blades": "3.1.1",
     "lit": "^3.3.3",
     "lorem-ipsum": "^3.0.0",
     "postcss": "^8.5.26",

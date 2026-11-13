@@ -2,7 +2,7 @@
   "name": "recipe-db",
   "repository": "github:dhhyi/recipe-db",
   "devDependencies": {
-    "@anyblades/blades": "3.0.0-alpha.3",
+    "@anyblades/blades": "3.1.1",
     "@prettier/plugin-xml": "^3.1.1",
     "prettier": "^3.0.0",
     "prettier-plugin-sh": "^0.13.1",
