@@ -211,7 +211,9 @@ header-component > header:focus-within {
 
 :root:active-view-transition-type(tag-edit, tag-search) {
   .recipe-image,
-  .recipe-rating {
+  .recipe-rating,
+  recipe-tile-component img,
+  recipe-tile-component a[slot="rating"] {
     view-transition-name: none !important;
   }
 
