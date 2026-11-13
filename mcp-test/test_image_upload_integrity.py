@@ -63,8 +63,8 @@ async def test_recognized_broken_jpeg_preserves_real_recipe_and_existing_image()
         assert progress["receivedBytes"] == len(data)
         failed = payload(await session.call_tool("image_upload_finish", {"uploadHandle": handle}))
         assert failed["state"] == "failed"
-        assert failed["error"]["code"]
-        assert failed["error"]["code"] != "upload-integrity-failed"
+        assert failed["error"]["code"] == "invalid-image"
+        assert failed["error"]["status"] == 400
         assert payload(await session.call_tool("get_recipe", {"recipeId": recipe_id})) == before
         assert payload(await session.call_tool("image_upload_finish", {"uploadHandle": handle})) == failed
         assert payload(await session.call_tool("image_upload_status", {"uploadHandle": handle})) == failed
