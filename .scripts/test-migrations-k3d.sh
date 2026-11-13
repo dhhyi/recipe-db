@@ -3,7 +3,7 @@ set -Eeuo pipefail
 set +x
 umask 077
 
-for tool in docker jq k3d kubectl; do
+for tool in docker jq k3d kubectl yq; do
   command -v "$tool" > /dev/null || {
     printf 'Migration k3d test: required tool not found: %s\n' "$tool" >&2
     exit 1
@@ -15,7 +15,16 @@ cluster="recipe-migration-$run_id"
 context="k3d-$cluster"
 namespace=recipe-migration-test
 image="recipe-db-migration-test:$run_id"
-work=$(mktemp -d "${TMPDIR:-/tmp}/recipe-db-migration-k3d.XXXXXXXX")
+work="$(pwd -P)/.migration-k3d-$run_id"
+mkdir -m 700 "$work"
+repository_root=$(git rev-parse --show-toplevel)
+core_revision=$(git -C "$repository_root" rev-parse HEAD)
+mkdir -m 700 "$work/core"
+recovery_helper="$work/core/production-restore.sh"
+git -C "$repository_root" show "$core_revision:.scripts/lib/production-restore.sh" \
+  > "$recovery_helper"
+printf 'Fixture core snapshot: HEAD=%s production-restore.sh sha256=%s\n' \
+  "$core_revision" "$(sha256sum "$recovery_helper" | cut -d ' ' -f 1)"
 cluster_created=false
 image_built=false
 
@@ -125,7 +134,57 @@ case "$1" in
 esac
 SH
 chmod 755 "$work/image/migrate"
-printf 'FROM debian:bookworm-slim\nCOPY migrate /migrate\n' \
+cat > "$work/image/compatible.py" << 'PY'
+import http.server
+import json
+import pathlib
+import signal
+import sqlite3
+import sys
+
+
+def compatible():
+    roots = {name: pathlib.Path("/" + name) for name in ("recipes", "images")}
+    if any((root / "storage-version").read_text() != "1\n" for root in roots.values()):
+        raise ValueError("incompatible storage version")
+    with sqlite3.connect(f"file:{roots['recipes'] / 'recipes.sqlite3'}?mode=ro", uri=True) as db:
+        if db.execute("SELECT id, document FROM recipes").fetchall() != [
+            ("fixture-recipe", '{"name":"Recovery fixture recipe"}')
+        ]:
+            raise ValueError("incompatible recipe records")
+    manifest = json.loads((roots["images"] / "manifests/fixture-recipe.json").read_text())
+    for key, content in (("url", b"recovery-image-full\n"),
+                         ("thumbUrl", b"recovery-image-thumbnail\n")):
+        if (roots["images"] / manifest[key].lstrip("/")).read_bytes() != content:
+            raise ValueError("incompatible image records")
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        try:
+            compatible()
+        except (OSError, ValueError, sqlite3.Error):
+            self.send_response(503)
+        else:
+            self.send_response(204 if self.path == "/health" else 404)
+        self.end_headers()
+
+    def log_message(self, *_):
+        pass
+
+
+if sys.argv[1] == "check":
+    try:
+        compatible()
+    except (OSError, ValueError, sqlite3.Error):
+        print("Fixture previous release rejects incompatible data.")
+        sys.exit(1)
+    print("Fixture previous release verified complete coordinated records and markers.")
+else:
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    http.server.HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
+PY
+printf 'FROM python@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b\nCOPY migrate /migrate\nCOPY compatible.py /compatible.py\n' \
   > "$work/image/Dockerfile"
 run_logged image-build docker build --tag "$image" "$work/image"
 image_built=true
@@ -227,7 +286,7 @@ make_volume_pod() {
     {apiVersion:"v1",kind:"Pod",metadata:{name:$name,namespace:$namespace},
       spec:{restartPolicy:"Never",automountServiceAccountToken:false,
         containers:[{name:"fixture",image:$image,imagePullPolicy:"Never",
-          command:["sh","-ec","exec sleep 3600"],
+          command:["sh","-ec","trap \"exit 0\" TERM; while :; do sleep 1; done"],
           volumeMounts:[{name:"data",mountPath:"/data"}]}],
         volumes:[{name:"data",persistentVolumeClaim:{claimName:$claim}}]}}' \
     > "$work/$name.json"
@@ -377,6 +436,17 @@ kube delete pod migration-final-inspect --wait=true --timeout=60s \
 wait_pod_gone migration-final-inspect
 
 phase=complete-recovery-fixture
+jq '.metadata.name="recovery-unrelated"' "$work/recipes-pvc.json" \
+  > "$work/unrelated-pvc.json"
+kube apply -f "$work/unrelated-pvc.json" > "$work/unrelated-pvc-apply.log"
+make_volume_pod recovery-unrelated-seed recovery-unrelated
+kube create -f "$work/recovery-unrelated-seed.json" > "$work/unrelated-seed-create.log"
+kube wait --for=condition=Ready pod/recovery-unrelated-seed --timeout=120s \
+  > "$work/unrelated-seed-ready.log"
+kube exec recovery-unrelated-seed -- sh -ec \
+  'printf "unrelated-fixture-storage\n" > /data/sentinel'
+kube delete pod recovery-unrelated-seed --wait=true --timeout=60s \
+  > "$work/unrelated-seed-delete.log"
 mkdir -p "$work/recovery-source/recipes" \
   "$work/recovery-source/images/public" "$work/recovery-source/images/manifests" \
   "$work/restore-runtime/validated"
@@ -481,13 +551,33 @@ kube wait --for=condition=failed job/migration-recovery-later-failure \
   --timeout=60s > "$work/recovery-later-failed.log"
 delete_job_workers migration-recovery-later-failure
 assert_no_storage_pods
+jq -n --arg ns "$namespace" --arg image "$image" '{
+  apiVersion:"v1",kind:"Pod",metadata:{name:"recovery-incompatible-release",namespace:$ns},
+  spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+    containers:[{name:"previous-release",image:$image,imagePullPolicy:"Never",
+      command:["python3","/compatible.py","check"],
+      volumeMounts:[{name:"recipes",mountPath:"/recipes",readOnly:true},
+        {name:"images",mountPath:"/images",readOnly:true}]}],
+    volumes:[{name:"recipes",persistentVolumeClaim:{claimName:"recipes",readOnly:true}},
+      {name:"images",persistentVolumeClaim:{claimName:"images",readOnly:true}}]}
+}' > "$work/recovery-incompatible-release.json"
+kube create -f "$work/recovery-incompatible-release.json" > "$work/incompatible-create.log"
+kube wait --for=jsonpath='{.status.phase}'=Failed pod/recovery-incompatible-release \
+  --timeout=60s > "$work/incompatible-rejected.log"
+kube logs recovery-incompatible-release > "$work/incompatible-release.log"
+grep -q 'previous release rejects incompatible data' "$work/incompatible-release.log" \
+  || die "previous-release fixture did not reject the partially migrated dataset"
+kube delete pod recovery-incompatible-release --wait=true --timeout=60s \
+  > "$work/incompatible-delete.log"
+assert_no_storage_pods
 perform_complete_recovery() {
   local work="$restore_runtime" root="$repository_root"
   local target=local ingress_mode=loopback timeout=60
   local storage_class=recipe-db-retained lock_holder=recovery-fixture-holder
   local restore_mode=migration-recovery restore_current_phase=
   local copy_image
-  source "$root/.scripts/lib/production-restore.sh"
+  # shellcheck source=.scripts/lib/production-restore.sh
+  source "$recovery_helper"
   production_fail() {
     printf 'Migration k3d test: production recovery failed: %s\n' "$*" >&2
     exit 1
@@ -501,11 +591,351 @@ perform_complete_recovery() {
   done < <(jq -r '.volumes | keys[]' "$work/config.json")
   restore_import || production_fail "complete production restore import failed"
 }
+make_start_deployment() {
+  local name=$1
+  jq -n --arg name "$name" --arg namespace "$namespace" --arg image "$image" '
+    {apiVersion:"apps/v1",kind:"Deployment",
+      metadata:{name:$name,namespace:$namespace,
+        labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":$name}},
+      spec:{replicas:0,selector:{matchLabels:{app:$name}},
+        template:{metadata:{labels:{app:$name,
+          "app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":$name}},
+          spec:{automountServiceAccountToken:false,
+            containers:[{name:$name,image:$image,imagePullPolicy:"Never",
+              command:(if $name == "graphql" then ["python3","/compatible.py","serve"]
+                elif $name == "typesense" then ["sh","-ec",
+                  "trap \"printf stateless-terminating; sleep 5; exit 0\" TERM; while :; do sleep 1; done"]
+                else ["sh","-ec","trap \"exit 0\" TERM; while :; do sleep 1; done"] end),
+              env:(if $name == "graphql" then [{name:"MODE",value:"backup"}] else [] end)}
+              + (if $name == "graphql" then {
+                readinessProbe:{httpGet:{path:"/health",port:8000},periodSeconds:1},
+                volumeMounts:[{name:"recipes",mountPath:"/recipes",readOnly:true},
+                  {name:"images",mountPath:"/images",readOnly:true}]
+              } else {} end)],
+            volumes:(if $name == "graphql" then [
+              {name:"recipes",persistentVolumeClaim:{claimName:"recipes",readOnly:true}},
+              {name:"images",persistentVolumeClaim:{claimName:"images",readOnly:true}}
+            ] else [] end)}}}}' \
+    > "$work/start-$name.json"
+}
+perform_recovery_start() {
+  local work="$restore_runtime" root="$repository_root"
+  local restore_mode=migration-recovery timeout=60 google_enabled=false
+  local name
+  # shellcheck source=.scripts/lib/production-restore.sh
+  source "$recovery_helper"
+  backup_projection_route() {
+    kube patch service graphql-projection --type=merge \
+      -p '{"spec":{"ports":[{"name":"graphql","port":4000,"targetPort":4001,"protocol":"TCP"}]}}' \
+      > "$work/graphql-projection-patch.log"
+  }
+  backup_refresh_projections() { :; }
+
+  for name in nats typesense browse-maintenance graphql; do
+    make_start_deployment "$name"
+    kube apply -f "$work/start-$name.json" > "$work/start-$name-apply.log"
+  done
+  jq -n --arg namespace "$namespace" '{
+    apiVersion:"v1",kind:"Service",
+    metadata:{name:"graphql-projection",namespace:$namespace},
+    spec:{selector:{app:"graphql"},
+      ports:[{name:"graphql",port:4000,targetPort:4000,protocol:"TCP"}]}
+  }' > "$work/graphql-projection.json"
+  kube apply -f "$work/graphql-projection.json" > "$work/graphql-projection-apply.log"
+  jq -n --arg namespace "$namespace" --arg image "$image" '{
+    apiVersion:"batch/v1",kind:"Job",
+    metadata:{name:"nats-init",namespace:$namespace,
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"fixture-phase":"old-completed"}},
+    spec:{backoffLimit:0,activeDeadlineSeconds:60,
+      template:{spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+        containers:[{name:"init",image:$image,imagePullPolicy:"Never",
+          command:["sh","-ec","exit 0"]}]}}}
+  }' > "$work/nats-init-old.json"
+  kube create -f "$work/nats-init-old.json" > "$work/nats-init-old-create.log"
+  kube wait --for=condition=complete job/nats-init --timeout=60s \
+    > "$work/nats-init-old-complete.log"
+  jq -n --arg namespace "$namespace" --arg image "$image" '{
+    apiVersion:"batch/v1",kind:"Job",
+    metadata:{name:"nats-init",namespace:$namespace,
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"fixture-phase":"recovery-start"}},
+    spec:{backoffLimit:0,activeDeadlineSeconds:60,
+      template:{spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+        containers:[{name:"init",image:$image,imagePullPolicy:"Never",
+          command:["sh","-ec","exit 0"]}]}}}
+  }' > "$work/restore-nats-init.yml"
+  jq -n '[
+    {name:"nats"},{name:"typesense"},{name:"browse-maintenance"},{name:"graphql"}
+  ]' > "$work/prior-workloads.json"
+
+  restore_start || production_fail "previous-release recovery start failed"
+  kube get deployments -o json | jq -e '
+    all(.items[];
+      .spec.replicas == 1 and (.status.readyReplicas // 0) == 1)
+  ' > /dev/null || die "previous-release workloads did not become ready behind the recovery barrier"
+  kube exec deployment/graphql -- python3 /compatible.py check > "$work/compatible-records.log"
+  kube exec deployment/graphql -- python3 -c \
+    'import urllib.request; assert urllib.request.urlopen("http://127.0.0.1:8000/health").status == 204' \
+    > "$work/compatible-health.log"
+  kube get deployment graphql -o json | jq -e '
+    any(.spec.template.spec.containers[].env[]?;
+      .name == "MODE" and .value == "backup")
+  ' > /dev/null || die "recovery start opened the GraphQL application barrier"
+  kube get service graphql-projection -o json | jq -e '
+    any(.spec.ports[];
+      .name == "graphql" and .port == 4000 and .targetPort == 4001)
+  ' > /dev/null || die "recovery start did not retain the private GraphQL projection"
+  kube get job nats-init -o json | jq -e '
+    .metadata.annotations["fixture-phase"] == "recovery-start"
+    and any(.status.conditions[]?;
+      .type == "Complete" and .status == "True")
+  ' > /dev/null || die "recovery start did not replace and complete the existing NATS init Job"
+  kube get job migration-recovery-later-failure -o json | jq -e '
+    (.status.active // 0) == 0
+    and any(.status.conditions[]?;
+      .type == "Failed" and .status == "True")
+  ' > /dev/null || die "recovery start resumed the aborted candidate migration"
+}
+perform_abrupt_guard_loss() {
+  local work="$restore_runtime" root="$repository_root"
+  local timeout=60 backup_id="backup-20261113170000-$((16#$run_id))"
+  local restore_mode=migration-recovery guard_pid guard_name deadline pulse heartbeat_pid
+  local maintenance_image lock_holder=$backup_id workers saw_lingering=false kind moment
+  maintenance_image=$(yq -r '.infrastructure.maintenance' deploy/local.yaml)
+  # shellcheck source=.scripts/lib/production-restore.sh
+  source "$recovery_helper"
+  backup_wait_pod_gone() { wait_pod_gone "$1"; }
+  fixture_workers_gone() {
+    kube get pods -o json > "$work/fixture-worker-status.json"
+    restore_workers_terminated "$work/fixture-worker-status.json"
+  }
+  jq --arg image "$maintenance_image" '.infrastructure.maintenance=$image' \
+    "$work/config.json" > "$work/guard-config.json"
+  mv "$work/guard-config.json" "$work/config.json"
+  guard_name="recovery-guard-$backup_id"
+  jq -n --arg ns "$namespace" '{
+    apiVersion:"v1",kind:"Secret",
+    metadata:{name:"recipe-db-routes",namespace:$ns,
+      labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+    stringData:{"routes.yml":"fixture-public-access-blocked"}
+  }' > "$work/guard-barrier.json"
+  jq -n --arg holder "$backup_id" '{
+    apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+    metadata:{name:"recipe-db-deploy",namespace:"kube-system",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/operation":"backup","recipe-db/phase":"migration-recovery-start"}},
+    spec:{holderIdentity:$holder}
+  }' > "$work/guard-lease.json"
+  kube apply -f "$work/guard-barrier.json" > "$work/guard-barrier-apply.log"
+  kube --namespace kube-system apply -f "$work/guard-lease.json" > "$work/guard-lease-apply.log"
+  kube get secret recipe-db-routes -o json | jq -S '{data,metadata:{uid:.metadata.uid}}' \
+    > "$work/guard-barrier-before.json"
+  kube --namespace kube-system get lease recipe-db-deploy -o json \
+    | jq -S '{spec,metadata:{uid:.metadata.uid,annotations:.metadata.annotations}}' \
+      > "$work/guard-lease-before.json"
+  make_volume_pod restore-volume-images images
+  kube create -f "$work/restore-volume-images.json" > "$work/guard-helper-create.log"
+  kube wait --for=condition=Ready pod/restore-volume-images --timeout=60s \
+    > "$work/guard-helper-ready.log"
+  (
+    restore_guard_start
+    printf '%s\n' "$restore_guard_heartbeat_pid" > "$work/guard-heartbeat-pid"
+    touch "$work/guard-owner-ready"
+    while :; do sleep 1; done
+  ) > "$work/guard-owner.log" 2>&1 &
+  guard_pid=$!
+  deadline=$((SECONDS + 60))
+  while [[ ! -e $work/guard-owner-ready ]]; do
+    if ! kill -0 "$guard_pid" 2> /dev/null || ((SECONDS >= deadline)); then
+      cat "$work/guard-owner.log" >&2
+      kill "$guard_pid" 2> /dev/null || true
+      wait "$guard_pid" 2> /dev/null || true
+      die "real recovery guard did not become ready"
+    fi
+    sleep 1
+  done
+  heartbeat_pid=$(< "$work/guard-heartbeat-pid")
+  kill -0 "$heartbeat_pid" || die "guard heartbeat was not running"
+  kube get job "$guard_name" -o json | jq -e --arg name "$guard_name" '
+    .spec.template.spec.serviceAccountName == $name
+  ' > /dev/null || die "guard Job is not using its restricted service account"
+  restore_guard_uid=$(kube get job "$guard_name" -o jsonpath='{.metadata.uid}')
+  kill -KILL "$guard_pid"
+  wait "$guard_pid" 2> /dev/null || true
+  sleep 7
+  pulse=$(kube get configmap "$guard_name" -o jsonpath='{.data.pulse}')
+  sleep 6
+  [[ $(kube get configmap "$guard_name" -o jsonpath='{.data.pulse}') == "$pulse" ]] \
+    || die "orphaned heartbeat continued after the recovery command was killed"
+  deadline=$((SECONDS + 60))
+  while :; do
+    workers=$(kube get pods -o json)
+    if jq -e 'any(.items[];
+      .metadata.labels["app.kubernetes.io/name"] == "typesense"
+      and .metadata.deletionTimestamp != null
+      and any(.status.containerStatuses[]?; .state.running != null))' \
+      <<< "$workers" > /dev/null; then
+      saw_lingering=true
+      kube get pods -l "job-name=$guard_name" -o json | jq -e '
+        any(.items[]; .status.phase == "Running")
+      ' > /dev/null || die "recovery guard exited while a stateless worker was terminating"
+    fi
+    if kube get configmap "$guard_name" -o json \
+      | jq -e '.data.expired == "true"' > /dev/null \
+      && kube get deployments -o json | jq -e '
+        all(.items[]; .spec.replicas == 0 and (.status.replicas // 0) == 0)
+      ' > /dev/null \
+      && fixture_workers_gone; then
+      break
+    fi
+    if ((SECONDS >= deadline)); then
+      kube logs "job/$guard_name" > "$work/guard-expiry.log" 2>&1 || true
+      cat "$work/guard-expiry.log" >&2
+      die "recovery guard did not stop every writer after command loss"
+    fi
+    sleep 1
+  done
+  $saw_lingering || die "fixture did not observe the delayed stateless worker termination"
+  kube logs "job/$guard_name" > "$work/guard-expiry.log" 2>&1
+  kube get job nats-init --ignore-not-found -o json > "$work/guard-existing-init.json"
+  if [[ -s $work/guard-existing-init.json ]]; then
+    jq -e --arg ns "$namespace" '
+      .kind == "Job" and .metadata.name == "nats-init" and .metadata.namespace == $ns
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.annotations["fixture-phase"] == "recovery-start"
+      and .spec.suspend == true and (.status.active // 0) == 0
+    ' "$work/guard-existing-init.json" > /dev/null \
+      || die "recovery guard did not suspend the owned fixture initialization Job"
+    kube delete job nats-init --ignore-not-found --wait=true --timeout=60s \
+      > "$work/guard-init-delete.log"
+  fi
+  assert_no_storage_pods
+  deadline=$((SECONDS + 60))
+  until fixture_workers_gone; do
+    ((SECONDS < deadline)) \
+      || die "initialization cleanup did not verify strict worker termination"
+    sleep 1
+  done
+  kube scale deployment/graphql --replicas=1 > "$work/guard-restarted-writer.log"
+  deadline=$((SECONDS + 60))
+  while :; do
+    if kube get deployment graphql -o json | jq -e '
+      .spec.replicas == 0 and (.status.replicas // 0) == 0
+    ' > /dev/null \
+      && fixture_workers_gone; then
+      break
+    fi
+    if ((SECONDS >= deadline)); then
+      kube logs "job/$guard_name" > "$work/guard-restarted-writer-failure.log" 2>&1 || true
+      cat "$work/guard-restarted-writer-failure.log" >&2
+      die "expired recovery guard did not remain armed with NATS init absent"
+    fi
+    sleep 1
+  done
+  kube get pods -l "job-name=$guard_name" -o json | jq -e '
+    any(.items[]; .status.phase == "Running")
+  ' > /dev/null || die "expired recovery guard exited instead of remaining armed"
+  kube get configmap "$guard_name" -o json | jq -e '.data.expired == "true"' \
+    > /dev/null || die "expired recovery guard reset its terminal expiry state"
+  kube get pods -l "recipe-db/recovery-guard=$backup_id" -o json \
+    > "$work/guard-readonly-pods-before.json"
+  kube get job "$guard_name" -o json > "$work/guard-readonly-job-before.json"
+  (
+    kube() {
+      printf '%s\n' "$1" >> "$work/guard-readonly-operations.log"
+      kubectl --kubeconfig "$work/kubeconfig" --context "$context" \
+        --request-timeout=20s --namespace "$namespace" "$@"
+    }
+    restore_guard_validate_expired
+  ) || die "read-only expired guard validator rejected actual Kubernetes Job/Pod defaults"
+  [[ -s $work/guard-readonly-operations.log ]] \
+    || die "expired guard validation did not inspect the cluster"
+  if grep -qv '^get$' "$work/guard-readonly-operations.log"; then
+    die "read-only expired guard validation attempted a mutating cluster operation"
+  fi
+  kube get pods -l "recipe-db/recovery-guard=$backup_id" -o json \
+    > "$work/guard-readonly-pods-after.json"
+  kube get job "$guard_name" -o json > "$work/guard-readonly-job-after.json"
+  for kind in job pods; do
+    for moment in before after; do
+      jq -S '
+        if .kind == "Job" then [.]
+        else [.items[] | select(.kind == "Pod")] end
+        | map({metadata:{uid:.metadata.uid,generation:.metadata.generation,
+            ownerReferences:.metadata.ownerReferences},spec}) | sort_by(.metadata.uid)
+      ' "$work/guard-readonly-$kind-$moment.json" \
+        > "$work/guard-readonly-$kind-$moment-spec.json"
+    done
+    cmp "$work/guard-readonly-$kind-before-spec.json" \
+      "$work/guard-readonly-$kind-after-spec.json"
+  done
+  printf 'Real Kubernetes expired guard Job/Pod identity validated read-only without mutation.\n'
+  kube get secret recipe-db-routes -o json | jq -S '{data,metadata:{uid:.metadata.uid}}' \
+    > "$work/guard-barrier-after.json"
+  kube --namespace kube-system get lease recipe-db-deploy -o json \
+    | jq -S '{spec,metadata:{uid:.metadata.uid,annotations:.metadata.annotations}}' \
+      > "$work/guard-lease-after.json"
+  cmp "$work/guard-barrier-before.json" "$work/guard-barrier-after.json"
+  cmp "$work/guard-lease-before.json" "$work/guard-lease-after.json"
+  assert_no_storage_pods
+  fixture_workers_gone || die "non-storage application workers survived guard shutdown"
+  restore_guard_name=$guard_name
+  restore_guard_started=true
+  restore_guard_heartbeat_pid=
+  restore_guard_stop
+  printf 'Real restricted-SA guard remained armed after SIGKILL, stopped a restarted writer with NATS init absent, and retained the barrier and Lease.\n'
+  (
+    trap 'restore_stop_migration_recovery && restore_guard_stop &&
+      touch "$work/guard-owner-term-cleanup"; exit 143' TERM
+    restore_guard_start
+    touch "$work/guard-live-owner-ready"
+    while :; do sleep 1; done
+  ) > "$work/guard-live-owner.log" 2>&1 &
+  guard_pid=$!
+  deadline=$((SECONDS + 60))
+  while [[ ! -e $work/guard-live-owner-ready ]]; do
+    if ! kill -0 "$guard_pid" 2> /dev/null || ((SECONDS >= deadline)); then
+      cat "$work/guard-live-owner.log" >&2
+      kill "$guard_pid" 2> /dev/null || true
+      wait "$guard_pid" 2> /dev/null || true
+      die "live-owner recovery guard did not become ready"
+    fi
+    sleep 1
+  done
+  kube scale deployment/typesense --replicas=1 > "$work/guard-live-stateless-start.log"
+  kube rollout status deployment/typesense --timeout=60s > "$work/guard-live-stateless-ready.log"
+  kube patch configmap "$guard_name" --type=merge -p '{"data":{"expired":"true"}}' \
+    > "$work/guard-live-expired.log"
+  deadline=$((SECONDS + 45))
+  while [[ ! -e $work/guard-owner-term-cleanup ]]; do
+    if ((SECONDS >= deadline)); then
+      cat "$work/guard-live-owner.log" >&2
+      kill "$guard_pid" 2> /dev/null || true
+      wait "$guard_pid" 2> /dev/null || true
+      die "guard expiry did not terminate the live owner and execute its cleanup"
+    fi
+    sleep 1
+  done
+  if wait "$guard_pid"; then
+    die "guard expiry incorrectly reported live-owner success"
+  fi
+  fixture_workers_gone || die "live-owner cleanup left stateless or storage workers behind"
+  restore_guard_assert_absent || die "live-owner cleanup left recovery guard resources running"
+  printf 'Real guard monitor terminated the live owner on externally expired heartbeat; real recovery cleanup stopped all workers before removing the guard.\n'
+}
 restore_runtime="$work/restore-runtime"
-repository_root=$(git rev-parse --show-toplevel)
 cp "$work/kubeconfig" "$restore_runtime/kubeconfig"
 perform_complete_recovery
 assert_no_storage_pods
+make_volume_pod recovery-unrelated-verify recovery-unrelated
+kube create -f "$work/recovery-unrelated-verify.json" > "$work/unrelated-verify-create.log"
+kube wait --for=condition=Ready pod/recovery-unrelated-verify --timeout=60s \
+  > "$work/unrelated-verify-ready.log"
+[[ $(kube exec recovery-unrelated-verify -- cat /data/sentinel) == unrelated-fixture-storage ]] \
+  || die "complete recovery changed storage outside the declared application PVC roots"
+kube delete pod recovery-unrelated-verify --wait=true --timeout=60s \
+  > "$work/unrelated-verify-delete.log"
 for claim in images recipes; do
   pod="recovery-verify-$claim"
   make_volume_pod "$pod" "$claim"
@@ -540,5 +970,9 @@ PY
   wait_pod_gone "$pod"
 done
 assert_no_storage_pods
+phase=recovery-start-readiness
+perform_recovery_start
+phase=abrupt-recovery-command-loss
+perform_abrupt_guard_loss
 
-printf 'Verified read-only probe lifecycle, async sequential migrations, Kubernetes deadline, and production complete multi-service recovery after partial writes.\n'
+printf 'Verified read-only probes, sequential migrations, deadlines, complete multi-service recovery, previous-release start/readiness, NATS init recreation, and real fail-closed guard after SIGKILL with barrier and Lease retained.\n'
