@@ -18,7 +18,10 @@ import httpx
 
 class GraphQLPeer:
     def __init__(self):
-        self.permissions = {}
+        self.permissions = {
+            " ".join(("Bearer", name)): True
+            for name in ("permitted-one", "permitted-two")
+        }
         self.requests = []
         self.queries = []
         self.assignments = []
@@ -79,7 +82,7 @@ class GraphQLPeer:
             self.queries.append(operation)
             assert "myCapabilities" in operation["query"]
             assert "canManageImages" in operation["query"]
-            permission = self.permissions.get(authorization, True)
+            permission = self.permissions.get(authorization, False)
             if permission == "unavailable":
                 handler.send_response(503)
                 handler.end_headers()

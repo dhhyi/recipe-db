@@ -291,6 +291,23 @@ async def test_every_tool_permission_failure_leaves_bytes_and_state_unchanged(up
         assert not upload_server.peer.assignments
 
 
+@pytest.mark.parametrize("token", [None, "unrecognized-principal"])
+async def test_fake_capability_authority_defaults_closed(upload_server, token):
+    handle = (await upload_server.start(b"sentinel"))["uploadHandle"]
+    before = await upload_server.status(handle)
+    for name, args in (
+        ("image_upload_start", {"recipeId": "r", "byteLength": 8, "mediaType": "image/jpeg", "sha256": "0" * 64}),
+        ("image_upload_chunk", {"uploadHandle": handle, "chunkNumber": 0, "base64": base64.b64encode(b"sentinel").decode()}),
+        ("image_upload_finish", {"uploadHandle": handle}),
+        ("image_upload_status", {"uploadHandle": handle}),
+    ):
+        rejected(await upload_server.call(name, args, token), "image-permission-denied")
+        assert await upload_server.status(handle) == before
+        assert len(list(upload_server.staging.glob("*.photo"))) == 1
+        assert (upload_server.staging / (handle + ".photo")).read_bytes() == b""
+        assert not upload_server.peer.assignments
+
+
 @pytest.mark.parametrize("tool", ["image_upload_finish", "image_upload_status"])
 async def test_finished_receipts_still_require_current_permission(upload_server, tool):
     handle = await complete(upload_server, b"finished original")
