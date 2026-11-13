@@ -135,16 +135,23 @@ export class HeaderComponent extends LitElement {
       <li>
         <details class="dropdown">
           <summary aria-label="Profil">
-            <span class="profile-caption">Profil</span>
-            <span class="profile-icon" aria-hidden="true"
+            <span class="profile-caption hidden sm:inline">Profil</span>
+            <span
+              class="profile-icon inline-flex h-[1em] align-middle sm:hidden *:block *:h-full *:w-auto"
+              aria-hidden="true"
               >${unsafeSVG(profileIconSvg)}</span
             >
           </summary>
-          <ul class="profile-menu" dir="rtl">
+          <ul
+            class="profile-menu w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
+            dir="rtl"
+          >
             ${
               this.authEmail
                 ? html`<li>
-                    <small class="profile-email" dir="ltr"
+                    <small
+                      class="profile-email block wrap-anywhere text-right select-text whitespace-normal"
+                      dir="ltr"
                       >${this.authEmail}</small
                     >
                   </li>`

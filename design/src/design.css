@@ -162,60 +162,6 @@ header-component > header {
   transition: transform 150ms ease;
 }
 
-header-component .profile-icon {
-  display: inline-flex;
-  height: 1em;
-  vertical-align: middle;
-}
-
-header-component .profile-icon svg {
-  display: block;
-  height: 100%;
-  width: auto;
-}
-
-@media (width >= 576px) {
-  header-component .profile-caption {
-    display: inline;
-  }
-
-  header-component .profile-icon {
-    display: none;
-  }
-}
-
-@media (width < 576px) {
-  header-component .profile-caption {
-    display: none;
-  }
-
-  header-component .profile-icon {
-    display: inline-flex;
-  }
-}
-
-header-component details.dropdown > ul.profile-menu {
-  left: auto;
-  min-width: 0;
-  right: 0;
-  white-space: normal;
-  width: max-content;
-  max-width: calc(100vw - 3rem);
-}
-
-header-component details.dropdown > ul.profile-menu > li {
-  text-align: right;
-}
-
-header-component .profile-email {
-  display: block;
-  direction: ltr;
-  overflow-wrap: anywhere;
-  text-align: right;
-  user-select: text;
-  white-space: normal;
-}
-
 header-component > header[data-scroll-hidden]:not(:focus-within) {
   transform: translateY(calc(-100% - 20px));
 }
