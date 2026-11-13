@@ -28,37 +28,7 @@
 @import "tailwindcss" source(none);
 @import "./tailwind-sources.css";
 
-@layer utilities {
-  @media (width >= 576px) {
-    .container {
-      max-width: 510px;
-    }
-  }
-
-  @media (width >= 768px) {
-    .container {
-      max-width: 700px;
-    }
-  }
-
-  @media (width >= 1024px) {
-    .container {
-      max-width: 950px;
-    }
-  }
-
-  @media (width >= 1280px) {
-    .container {
-      max-width: 1200px;
-    }
-  }
-
-  @media (width >= 1536px) {
-    .container {
-      max-width: 1450px;
-    }
-  }
-}
+@source not inline("container");
 
 :root {
   --pico-primary: #0a750f !important;
