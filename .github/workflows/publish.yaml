@@ -64,6 +64,9 @@ jobs:
           cache: true
 
       - name: install tools and synchronize
+        # The generator's shared cache directory creation is not concurrency-safe.
+        env:
+          MISE_JOBS: "1"
         run: mise install
 
       - name: report versions
@@ -445,6 +448,8 @@ jobs:
         run: docker buildx create --use
 
       - name: install tools and synchronize
+        env:
+          MISE_JOBS: "1"
         run: mise install
 
       - name: build, publish, and verify production release
