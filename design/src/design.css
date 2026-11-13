@@ -182,7 +182,7 @@ header-component > header:focus-within {
   animation-duration: 200ms;
 }
 
-:root:active-view-transition-type(browse-results) {
+:root:active-view-transition-type(browse-results, browse-return) {
   recipe-tile-component {
     view-transition-name: var(--recipe-tile-transition-name, none);
   }
@@ -191,7 +191,9 @@ header-component > header:focus-within {
   recipe-tile-component a[slot="rating"] {
     view-transition-name: none !important;
   }
+}
 
+:root:active-view-transition-type(browse-results) {
   &::view-transition-old(root) {
     display: none;
   }
@@ -203,15 +205,45 @@ header-component > header:focus-within {
   }
 }
 
+:root:active-view-transition-type(browse-return) {
+  recipe-tile-component,
+  .recipe-image {
+    view-transition-class: recipe-return-card;
+  }
+
+  .recipe-image {
+    view-transition-name: var(--recipe-tile-transition-name, none) !important;
+  }
+
+  .recipe-rating {
+    view-transition-name: none !important;
+  }
+
+  &::view-transition-image-pair(.recipe-return-card) {
+    overflow: clip;
+    animation: recipe-return-corners 200ms ease both;
+  }
+}
+
+@keyframes recipe-return-corners {
+  from {
+    border-radius: 0;
+  }
+  to {
+    border-radius: 1rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   header-component > header {
     transition: none;
   }
 
   ::view-transition-group(*),
+  ::view-transition-image-pair(*),
   ::view-transition-old(*),
   ::view-transition-new(*) {
-    animation: none;
+    animation: none !important;
   }
 }
 

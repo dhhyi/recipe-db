@@ -155,6 +155,7 @@ export class HeaderComponent extends LitElement {
             <li>
               <a
                 href="/"
+                data-browse-home
                 hx-boost="true"
                 hx-swap="innerHTML transition:true"
                 class="align-top"

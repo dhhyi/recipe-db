@@ -83,8 +83,12 @@ func isPredefinedBrowseSort(value string) bool {
 	return false
 }
 
+func recipeTileTransitionStyle(id string) string {
+	return fmt.Sprintf("--recipe-tile-transition-name: recipe-tile-%x", id)
+}
+
 templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<recipe-tile-component itemscope itemtype="https://schema.org/Recipe" data-recipe-id={ item.Id } style={ fmt.Sprintf("--recipe-tile-transition-name: recipe-tile-%x", item.Id) }>
+	<recipe-tile-component itemscope itemtype="https://schema.org/Recipe" data-recipe-id={ item.Id } style={ recipeTileTransitionStyle(item.Id) }>
 		<a href={ "/recipe/" + item.Id } slot="title" aria-label={ recipeAccessibleLabel(item) } hx-boost="true" hx-swap="innerHTML transition:true">
 			<h2 class="recipe-tile-title" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 		</a>
