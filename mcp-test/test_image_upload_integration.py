@@ -4,10 +4,10 @@ import base64
 import hashlib
 import json
 import os
-from pathlib import Path
 
 import pytest
 
+from image_fixture import synthetic_png
 from test_mcp import FIXTURE_API, create_recipe, fixture_server_ready, mcp_session
 from upload_fixture import UploadServer, rejected
 
@@ -20,10 +20,10 @@ def payload(result):
     return json.loads(result.content[0].text)
 
 
-async def stage(session, recipe_id, data):
+async def stage(session, recipe_id, data, media_type="image/jpeg"):
     started = payload(await session.call_tool("image_upload_start", {
         "recipeId": recipe_id, "byteLength": len(data),
-        "mediaType": "image/jpeg", "sha256": hashlib.sha256(data).hexdigest(),
+        "mediaType": media_type, "sha256": hashlib.sha256(data).hexdigest(),
     }))
     handle = started["uploadHandle"]
     for number, offset in enumerate(range(0, len(data), CHUNK)):
@@ -35,22 +35,18 @@ async def stage(session, recipe_id, data):
     return handle
 
 
-async def test_original_rice_pudding_photo_and_current_single_image_replacement():
-    original = Path("/app/fixtures/rice-pudding.jpg")
-    if not original.exists():
-        original = Path("../demo-data/recipe1.jpg")
-    data = original.read_bytes()
-    assert len(data) == 1195052
-    assert hashlib.sha256(data).hexdigest() == "e09fb7cb8bf8bfc420c80b5616d4afe05edce7e539eae444e60a3e0470e2bedb"
+async def test_generated_png_and_current_single_image_replacement():
+    data = synthetic_png()
+    assert 1_190_000 < len(data) < 1_200_000
     assert len(data) > CHUNK and len(data) % CHUNK != 0
     async with mcp_session(url=UPLOAD_URL) as session:
-        recipe_id = await create_recipe(session, "Rice Pudding original-photo upload")
+        recipe_id = await create_recipe(session, "Generated PNG upload")
         first = await session.call_tool("change_recipe", {
             "recipeId": recipe_id, "recipeJson": json.dumps({"imageUrl": f"{FIXTURE_API}/test.jpg"}),
         })
         assert not first.is_error
         before = payload(await session.call_tool("get_recipe", {"recipeId": recipe_id}))
-        handle = await stage(session, recipe_id, data)
+        handle = await stage(session, recipe_id, data, "image/png")
         finished = payload(await session.call_tool("image_upload_finish", {"uploadHandle": handle}))
         assert finished["state"] == "finished"
         assert finished["source"]["byteLength"] == len(data)

@@ -33,7 +33,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 dockerContext: .
-test: pytest -p no:cacheprovider --junitxml=target/junit.xml
+test: sh run_tests.sh
 check: python3 --version
 prettier:
   ignore:

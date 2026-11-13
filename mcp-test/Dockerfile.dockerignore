@@ -15,5 +15,5 @@
 !mcp-test/pyproject.toml
 !mcp-test/test_*.py
 !mcp-test/upload_fixture.py
-!demo-data/
-!demo-data/recipe1.jpg
+!mcp-test/image_fixture.py
+!mcp-test/run_tests.sh

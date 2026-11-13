@@ -21,6 +21,5 @@ RUN ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet
 COPY --from=mcp-builder /published /app/mcp
 COPY mcp-test/requirements.txt ./
 RUN pip install --no-cache-dir --requirement requirements.txt
-COPY mcp-test/pyproject.toml mcp-test/test_*.py mcp-test/upload_fixture.py ./
-COPY demo-data/recipe1.jpg /app/fixtures/rice-pudding.jpg
+COPY mcp-test/pyproject.toml mcp-test/test_*.py mcp-test/upload_fixture.py mcp-test/image_fixture.py mcp-test/run_tests.sh ./
 CMD ["pytest", "-p", "no:cacheprovider", "--junitxml=target/junit.xml"]
