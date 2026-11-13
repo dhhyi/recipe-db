@@ -302,6 +302,136 @@ EOF
   grep -q 'guard stopped acknowledging pulses' work/restore-guard-heartbeat.log
 }
 
+@test "independent guard removes completed owned NATS workers and refuses unowned Jobs" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  cat > guard-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+namespace=fixture backup_id=backup-1
+restore_guard_manifest
+sed -e "s|/var/run/secrets/kubernetes.io/serviceaccount/token|$work/token|" \
+  -e "s|/tmp/workers.json|$work/workers.json|g" "$work/restore-guard.sh" > "$work/guard-test.sh"
+export KUBERNETES_SERVICE_HOST=fixture KUBERNETES_SERVICE_PORT=443
+export NAMESPACE=fixture GUARD=fixture HOLDER=backup-1 WORKLOADS='' HELPERS=''
+curl() {
+  local url="${*: -1}" data= argument
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  while (($#)); do
+    argument=$1
+    shift
+    if [[ $argument == --data ]]; then data=$1; shift; fi
+  done
+  case "$url" in
+    */jobs/nats-init)
+      if ! jq --argjson operations "$data" '
+        def pointer($path): $path | split("/")[1:] | map(gsub("~1";"/") | gsub("~0";"~"));
+        reduce $operations[] as $operation (.;
+          if $operation.op == "test" then
+            if getpath(pointer($operation.path)) == $operation.value then .
+            else error("ownership test failed") end
+          elif $operation.op == "add" then setpath(pointer($operation.path); $operation.value)
+          else error("unsupported patch") end)
+      ' "$FIXTURE_ROOT/work/nats-job.json" > "$FIXTURE_ROOT/work/nats-job.updated"; then
+        printf '422'
+        return 22
+      fi
+      mv "$FIXTURE_ROOT/work/nats-job.updated" "$FIXTURE_ROOT/work/nats-job.json"
+      printf '200'
+      ;;
+    *'pods?labelSelector=job-name%3Dnats-init')
+      if [[ -f $FIXTURE_ROOT/work/nats-gone ]]; then
+        printf '{"kind":"PodList","items":[]}\n'
+      else
+        printf '{"kind":"PodList","items":[{"metadata":{"name":"nats-init-worker"},"status":{"phase":"Succeeded","containerStatuses":[]}}]}\n'
+      fi
+      ;;
+    *'pods?labelSelector='*) printf '{"kind":"PodList","items":[]}\n' ;;
+    *) printf '{"data":{}}\n' ;;
+  esac
+}
+sleep() {
+  local count
+  count=$(cat "$FIXTURE_ROOT/work/loops")
+  printf '%s\n' "$((count + 1))" > "$FIXTURE_ROOT/work/loops"
+  if jq -e '.spec.suspend == true and .spec.ttlSecondsAfterFinished == 0' \
+    "$FIXTURE_ROOT/work/nats-job.json" > /dev/null; then
+    printf 'TTL controller deleted owned Job and worker\n' >> "$MOCK_LOG"
+    touch "$FIXTURE_ROOT/work/nats-gone"
+  fi
+  ((count < 1)) || exit 0
+}
+source "$work/guard-test.sh"
+EOF
+  printf 'fixture-token' > work/token
+  for ownership in recipe-db unrelated; do
+    : > "$MOCK_LOG"
+    printf '0\n' > work/loops
+    rm -f work/nats-gone
+    jq -n --arg owner "$ownership" '{metadata:{uid:"nats-job-uid",
+      labels:{"app.kubernetes.io/part-of":$owner}},spec:{}}' > work/nats-job.json
+    run bash guard-harness.sh
+    [ "$status" -eq 0 ]
+    [[ $output == *"Recovery worker shutdown incomplete"* ]]
+    if [[ $ownership == recipe-db ]]; then
+      [[ $output == *"Worker termination verified"* ]]
+      [ -f work/nats-gone ]
+      jq -e '.metadata.uid == "nats-job-uid"' work/nats-job.json > /dev/null
+    else
+      [[ $output != *"Worker termination verified"* ]]
+      [ ! -f work/nats-gone ]
+      jq -e '.spec == {}' work/nats-job.json > /dev/null
+    fi
+    grep -q 'Content-Type: application/json-patch+json' "$MOCK_LOG"
+    run ! grep -q 'DELETE' "$MOCK_LOG"
+  done
+}
+
+@test "initial and interrupted recovery preflight requires stopped proof except explicit backup GraphQL" {
+  printf '{"volumes":{}}\n' > work/config.json
+  printf '[{"name":"graphql","replicas":1}]\n' > work/prior-workloads.json
+  : > work/backup-pvcs.jsonl
+  cat > preflight-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+namespace=fixture backup_id=backup-1 target=local storage_class=local-path
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+kube() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  case "$*" in
+    "get namespace "*) printf '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}\n' ;;
+    "get deployments,statefulsets,"*) jq '{items:[.]}' "$work/preflight-pod.json" ;;
+    "get pvc "* | "get pods "*) printf '{"items":[]}\n' ;;
+    *) return 1 ;;
+  esac
+}
+restore_migration_target
+touch "$work/preflight-passed"
+EOF
+  printf '{"apiVersion":"v1","kind":"Pod","metadata":{"namespace":"fixture","name":"graphql-pod","labels":{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"graphql"}},"spec":{"containers":[{"name":"graphql","env":[{"name":"MODE","value":"backup"}]}]},"status":{"phase":"Running","containerStatuses":[{"name":"graphql","ready":true,"state":{"running":{"startedAt":"2026-11-13T18:00:00Z"}}}]}}\n' \
+    > work/backup-graphql-pod.json
+  for mutation in \
+    '.status={phase:"Failed",reason:"NodeLost"}' \
+    '.status={phase:"Succeeded",containerStatuses:[]}' \
+    '.status.containerStatuses=[]' \
+    '.spec.containers[0].env[0].value="production"'; do
+    jq "$mutation" work/backup-graphql-pod.json > work/preflight-pod.json
+    run bash preflight-harness.sh
+    [ "$status" -ne 0 ]
+    [[ $output == *"requires stopped workloads and terminated workers"* ]]
+    [ ! -e work/preflight-passed ]
+    run ! grep -q 'delete' "$MOCK_LOG"
+  done
+  cp work/backup-graphql-pod.json work/preflight-pod.json
+  run bash preflight-harness.sh
+  [ "$status" -eq 0 ]
+  [ -e work/preflight-passed ]
+}
+
 @test "interrupted cleanup keeps the guard armed while application workers remain" {
   cat > cleanup-harness.sh << 'EOF'
 #!/usr/bin/env bash

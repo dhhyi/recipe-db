@@ -2034,6 +2034,25 @@ release_migration_start_command() {
     "$(release_migration_shell_quote "$artifact")"
 }
 
+release_migration_recovery_scope() {
+  local scope
+  scope=$(jq -ce --slurpfile config "$work/config.json" '
+    select(.backupVerification.backupId == .backupId
+      and all(.selectedPVCs[]; .pvc as $pvc | $config[0].volumes | has($pvc))
+      and all(.selectedPVCs[];
+        all([.pvc,.storage.uid,.storage.volumeName][]; type == "string" and length > 0)))
+    | {target:.source.target,cluster:.source.cluster,context:.source.context,
+      namespace:.source.namespace,backupId:.backupId,
+      previousRelease:.source.artifact,previousRevision:.source.revision,
+      storage:[($config[0].volumes | keys[]) as $pvc |
+        [.selectedPVCs[] | select(.pvc == $pvc)] as $captured |
+        {pvc:$pvc,root:"/data"} + (if ($captured | length) == 1 then
+          {uid:$captured[0].storage.uid,pv:$captured[0].storage.volumeName} else {} end)]}
+  ' "$snapshot/backup-state.json") \
+    || production_fail "cannot describe the complete retained recovery storage scope"
+  printf 'Recovery approval scope: %s\n' "$scope"
+}
+
 release_migration_recovery_next_command() {
   local manifest archive candidate revision backup attempt confirmation source_flag=
   if ! jq -e '(.status == "recovery-required" and .phase == "migration-recovery-failed"
@@ -2072,6 +2091,7 @@ release_migration_recovery_next_command() {
   }
   confirmation="CLEAR-AND-RESTORE-$backup-$revision-ATTEMPT-$attempt"
   $release_sources_from_git && source_flag="--release-sources-from-git "
+  release_migration_recovery_scope
   printf 'Only after verifying all storage workers are stopped, revalidating this complete backup, and explicitly approving another full clear-and-restore:\n'
   printf '  mise run production-k3d %srelease-migration-recover %s %s %s %s %s %s %s\n' \
     "$source_flag" \
@@ -3509,6 +3529,7 @@ release_migration_status() {
       .migrationExecution.uncertainTransition.job // ""' "$snapshot/backup-state.json")
     printf 'production: migration state=%s; last confirmed progress=%s\n' \
       "$status" "$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")"
+    release_migration_recovery_scope
     release_migration_safe_inspection "$job"
     release_migration_next_command release-migration-status
     return

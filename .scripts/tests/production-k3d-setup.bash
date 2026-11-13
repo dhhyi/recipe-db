@@ -268,9 +268,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods,services,ingresses,configmaps,secrets -o json")
         if [[ -f $MOCK_LOG.expired-guard-job && -f $MOCK_LOG.expired-guard-pod ]]; then
-          jq -s '{items:.}' "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod"
+          jq -s '{items:.}' "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod" \
+            "$MOCK_LOG.restore-pods"
         elif [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
           echo '{"items":[{"kind":"Deployment","metadata":{"name":"recipes"}}]}'
+        elif [[ -f $MOCK_LOG.restore-pods ]]; then
+          jq -s '{items:.}' "$MOCK_LOG.restore-pods"
         else echo '{"items":[]}'; fi
         exit ;;
       *"get namespace recipe-db --ignore-not-found -o json")

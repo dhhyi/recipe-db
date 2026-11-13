@@ -947,6 +947,21 @@ PY
     and .migrationExecution.transitions[2].status == "failed"' \
     "$STATE/backup-state.json" > /dev/null
   touch "$MOCK_LOG.migration-worker-deleted"
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | sed -n 's/^Recovery approval scope: //p' > recovery-scope.json
+  jq -e --slurpfile state "$STATE/backup-state.json" --slurpfile config "$VALUES" '
+    $state[0] as $state |
+    .target == $state.source.target and .cluster == $state.source.cluster
+    and .context == $state.source.context and .namespace == $state.source.namespace
+    and .backupId == $state.backupVerification.backupId
+    and .previousRelease == $state.source.artifact and .previousRevision == $state.source.revision
+    and ([.storage[].pvc] | sort) == ($config[0].volumes | keys | sort)
+    and all(.storage[]; . as $entry |
+      .root == "/data" and all($state.selectedPVCs[] | select(.pvc == $entry.pvc);
+        .storage.uid == $entry.uid and .storage.volumeName == $entry.pv))
+  ' recovery-scope.json > /dev/null
+  [[ $output != *"recovery-test-token"* ]]
 
   local before_active_job active_confirmation
   before_active_job=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
@@ -982,6 +997,20 @@ PY
   revision=$(jq -er .candidate.revision "$STATE/backup-state.json")
   local credential_checksum
   credential_checksum=$(sha256sum "$STATE.previous-runtime-secret.json" | cut -d ' ' -f 1)
+  printf '{"kind":"Pod","metadata":{"name":"graphql-node-lost","namespace":"recipe-db","labels":{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"graphql"}},"spec":{"containers":[{"name":"graphql"}]},"status":{"phase":"Failed","reason":"NodeLost","containerStatuses":[]}}\n' \
+    > "$MOCK_LOG.restore-pods"
+  local node_lost_calls
+  node_lost_calls=$(wc -l < "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires stopped workloads and terminated workers"* ]]
+  jq -e '.phase == "migration-failed"' "$STATE/backup-state.json" > /dev/null
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  sed -n "$((node_lost_calls + 1)),\$p" "$MOCK_LOG" > node-lost-calls.log
+  run ! grep -Eq 'delete pod|create -f .*restore-volume-pod|exec restore-volume-' node-lost-calls.log
+  : > "$MOCK_LOG.restore-pods"
   mv "$STATE.previous-runtime-secret.json" "$STATE.previous-runtime-secret.saved"
   run bash .scripts/production-k3d.sh release-migration-recover \
     "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \

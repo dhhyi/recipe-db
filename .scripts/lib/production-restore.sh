@@ -366,10 +366,11 @@ restore_fresh_target() {
 }
 
 restore_migration_target() {
-  local name pvc graphql_replicas inspect_expired_guard=${1:-false}
+  local name pvc graphql_replicas inspect_expired_guard=${1:-false} guard_uid=
   printf '{"items":[]}\n' > "$work/restore-validated-guard.json"
   if [[ $inspect_expired_guard == true ]]; then
     restore_guard_validate_expired || return 1
+    guard_uid=$restore_expired_guard_uid
   fi
   graphql_replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
     "$work/prior-workloads.json") \
@@ -384,7 +385,26 @@ restore_migration_target() {
     or (.kind == "ConfigMap" and .metadata.name == "kube-root-ca.crt"))' \
     "$work/restore-existing.json" > /dev/null \
     || production_fail "migration recovery refuses unowned application resources"
+  jq '{items:[.items[] | select(.kind == "Pod"
+    and .metadata.deletionTimestamp == null
+    and .metadata.labels["app.kubernetes.io/name"] == "graphql"
+    and .status.phase == "Running"
+    and (.spec.containers | type == "array" and length == 1 and .[0].name == "graphql")
+    and (.spec.initContainers // []) == [] and (.spec.ephemeralContainers // []) == []
+    and any(.spec.containers[0].env[]?; .name == "MODE" and .value == "backup")
+    and (.status.containerStatuses | type == "array" and length == 1
+      and .[0].name == "graphql" and .[0].ready == true and .[0].state.running != null)
+    and all(.spec.volumes[]?; .persistentVolumeClaim == null))]}' \
+    "$work/restore-existing.json" > "$work/restore-backup-graphql-pods.json"
+  jq --slurpfile barrier "$work/restore-backup-graphql-pods.json" '
+    {items:[.items[] | select(.kind == "Pod") | . as $pod |
+      select(any($barrier[0].items[]; . == $pod) | not)]}' \
+    "$work/restore-existing.json" > "$work/restore-preflight-pods.json"
+  restore_workers_terminated "$work/restore-preflight-pods.json" "$guard_uid" \
+    || production_fail "migration recovery requires stopped workloads and terminated workers"
   jq -e --argjson graphqlReplicas "$graphql_replicas" \
+    --slurpfile barrier "$work/restore-backup-graphql-pods.json" \
+    --slurpfile stopped "$work/restore-preflight-pods.json" \
     --slurpfile guard "$work/restore-validated-guard.json" 'all(.items[];
     . as $resource |
     if any($guard[0].items[]; . == $resource) then true
@@ -411,14 +431,8 @@ restore_migration_target() {
     elif .kind == "HorizontalPodAutoscaler" then
       false
     elif .kind == "Pod" then
-      .metadata.deletionTimestamp == null and
-      ((.status.phase == "Succeeded" or .status.phase == "Failed")
-        and all(.status.containerStatuses[]?; .state.terminated != null)
-        or (.metadata.labels["app.kubernetes.io/name"] == "graphql"
-          and .status.phase == "Running"
-          and any(.status.containerStatuses[]?; .name == "graphql" and .ready == true)
-          and any(.spec.containers[]; .name == "graphql"
-            and any(.env[]?; .name == "MODE" and .value == "backup"))))
+      any($barrier[0].items[]; . == $resource)
+      or any($stopped[0].items[]; . == $resource)
     else true end)' "$work/restore-existing.json" > /dev/null \
     || production_fail "migration recovery requires stopped workloads and terminated workers"
 
@@ -586,7 +600,7 @@ patch() {
     --data "$2" "$api$1" > /dev/null
 }
 stop_patch() {
-  code=$(request -X PATCH -H 'Content-Type: application/merge-patch+json' \
+  code=$(request -X PATCH -H "Content-Type: ${3:-application/merge-patch+json}" \
     --data "$2" -o /dev/null -w '%{http_code}' "$api$1") || {
     [ "$code" = 404 ] || return 1
   }
@@ -624,8 +638,12 @@ while :; do
     stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$name/scale" \
       '{"spec":{"replicas":0}}' || failed=true
   done
+  # Suspension retains completed Pods. The TTL controller removes this owned Job and its Pods.
   stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/nats-init" \
-    '{"spec":{"suspend":true}}' || failed=true
+    '[{"op":"test","path":"/metadata/labels/app.kubernetes.io~1part-of","value":"recipe-db"},
+      {"op":"add","path":"/spec/suspend","value":true},
+      {"op":"add","path":"/spec/ttlSecondsAfterFinished","value":0}]' \
+    application/json-patch+json || failed=true
   for name in $HELPERS; do
     # A missing helper is already stopped. Never force-delete a running storage Pod.
     code=$(request -X DELETE --data '{"kind":"DeleteOptions","apiVersion":"v1"}' \

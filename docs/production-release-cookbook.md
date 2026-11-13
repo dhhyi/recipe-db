@@ -253,6 +253,15 @@ PACKAGE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
 
 Use the clean pinned tooling checkout recorded by the operation, not the candidate's templates: `--release-sources-from-git` loads each immutable release's own metadata and templates. Previous-release credentials must have been retained privately before candidate staging; missing or changed credentials cannot be reconstructed during recovery.
 
+Before requesting destructive approval, display the retained recovery scope on the Pi:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d --release-sources-from-git release-migration-status \
+  "$VALUES" "$STATE" "$RELEASE"
+```
+
+Require the `Recovery approval scope:` JSON to match the intended target, cluster/context, namespace, exact `backupId`, `previousRelease` and `previousRevision`. Its `storage` list must include **every** configured application PVC and the complete `/data` root that will be cleared inside it, including derived/cache/message storage not included in the backup inventory. Captured PVCs also report their retained UID and PV. This is the retained deletion scope, not a declaration that recovery is safe: inspect the printed worker/Lease commands and resolve every uncertainty first. The approved command validates all current PVC ownership, bound storage and captured identities, plus the retrieved package, before deletion. No credentials or application records appear in the summary.
+
 Only after reviewing the exact target, backup, previous release and complete application-data deletion scope, and receiving explicit human approval to clear and restore all application storage, run:
 
 ```sh
