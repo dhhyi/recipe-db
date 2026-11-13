@@ -56,7 +56,7 @@ var app = builder.Build();
 
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/mcp"))
+    if (enableImageUploads && context.Request.Path.StartsWithSegments("/mcp"))
     {
         const long limit = 524288;
         var bodySize = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
