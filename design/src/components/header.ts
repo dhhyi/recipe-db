@@ -141,13 +141,15 @@ export class HeaderComponent extends LitElement {
             >
           </summary>
           <ul class="profile-menu" dir="rtl">
-            ${this.authEmail
-              ? html`<li>
-                  <small class="profile-email" dir="ltr"
-                    >${this.authEmail}</small
-                  >
-                </li>`
-              : null}
+            ${
+              this.authEmail
+                ? html`<li>
+                    <small class="profile-email" dir="ltr"
+                      >${this.authEmail}</small
+                    >
+                  </li>`
+                : null
+            }
             <li><a href="/oauth2/sign_out?rd=%2F">Abmelden</a></li>
           </ul>
         </details>

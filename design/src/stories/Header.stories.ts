@@ -40,7 +40,9 @@ export const Sticky: Story = {
         args.authEnabled && !!args.authRole && args.authRole !== "anonymous",
       );
       if (dropdown) {
-        expect(dropdown.querySelector("summary")).toHaveAccessibleName("Profil");
+        expect(dropdown.querySelector("summary")).toHaveAccessibleName(
+          "Profil",
+        );
         expect(dropdown.querySelector("summary")).toHaveTextContent("Profil");
         expect(
           dropdown.querySelector('a[href="/oauth2/sign_out?rd=%2F"]'),

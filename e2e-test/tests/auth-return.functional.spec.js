@@ -217,7 +217,9 @@ test("profile menu stays accessible and contained at responsive widths", async (
         const textVisible = getComputedStyle(caption).display !== "none";
         const iconVisible = getComputedStyle(icon).display !== "none";
         const fontSize = parseFloat(getComputedStyle(trigger).fontSize);
-        const iconHeight = icon.querySelector("svg").getBoundingClientRect().height;
+        const iconHeight = icon
+          .querySelector("svg")
+          .getBoundingClientRect().height;
 
         caption.style.display = "inline";
         icon.style.display = "none";
@@ -264,10 +266,7 @@ test("profile menu stays accessible and contained at responsive widths", async (
       });
       await expect(emailText).toHaveText(email);
       await expect(emailText).toHaveAttribute("dir", "ltr");
-      await expect(signOut).toHaveAttribute(
-        "href",
-        "/oauth2/sign_out?rd=%2F",
-      );
+      await expect(signOut).toHaveAttribute("href", "/oauth2/sign_out?rd=%2F");
       const menu = await details.locator(".profile-menu").evaluate((list) => {
         const items = [...list.children];
         const email = list.querySelector(".profile-email");
