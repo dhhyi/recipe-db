@@ -207,6 +207,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"get rolebinding/recovery-guard-"*)
         exit ;;
       *"get job recovery-guard-"*"--ignore-not-found"*)
+        if [[ ${MOCK_SURVIVING_RECOVERY_GUARD:-false} == true ]]; then
+          echo '{"status":{"active":1}}'
+        fi
         exit ;;
       *"get job recovery-guard-"*"-o json")
         echo '{"status":{"active":1}}'; exit ;;
@@ -214,10 +217,17 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         cp "${*: -1}" "$MOCK_LOG.restore-guard"
         exit ;;
       *"get configmap recovery-guard-"*"-o json")
-        echo '{"data":{"ready":"true","expired":"false"}}'; exit ;;
+        if [[ ${MOCK_EXPIRED_RECOVERY_GUARD:-false} == true && -f $MOCK_LOG.guard-expired ]]; then
+          echo '{"data":{"ready":"true","expired":"true"}}'
+        else
+          echo '{"data":{"ready":"true","expired":"false"}}'
+        fi
+        exit ;;
       *"patch configmap recovery-guard-"* | *"delete job recovery-guard-"* | \
       *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
         exit ;;
+      *"get pods -l recipe-db/recovery-guard="*"-o json")
+        echo '{"items":[]}'; exit ;;
       *"get pods -l job-name=nats-init -o json")
         echo '{"items":[]}'; exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")

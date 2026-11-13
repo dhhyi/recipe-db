@@ -64,6 +64,9 @@ restore_state_write() {
 restore_phase() {
   restore_current_phase=$1
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    if [[ ${restore_guard_started:-false} == true ]]; then
+      restore_guard_check || production_fail "recovery shutdown guard or heartbeat was lost"
+    fi
     release_recovery_state_write recovery-required "migration-recovery-$1" \
       "$(jq -cn --arg phase "$1" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '{migrationRecovery:{status:"in-progress",phase:$phase,updatedAt:$updatedAt}}')" || return 1
@@ -221,6 +224,10 @@ restore_cleanup() {
   retain_lock=true
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
     failure_reason=${production_failure_reason:-"recovery command exited before recording a failure reason"}
+    if [[ -f $work/restore-guard-heartbeat.log ]] \
+      && grep -Fq 'Recovery shutdown guard or heartbeat lost' "$work/restore-guard-heartbeat.log"; then
+      failure_reason="recovery shutdown guard or heartbeat was lost"
+    fi
     failure_reason=${failure_reason:0:512}
     restore_remove_image_probes || {
       printf 'production: previous-release image probe Pods could not all be stopped\n' >&2
@@ -511,7 +518,7 @@ restore_volume_pod() {
 }
 
 restore_validate_migration_secrets() {
-  local key expected retained="$snapshot/previous-runtime-secret.json"
+  local key expected retained="$snapshot.previous-runtime-secret.json"
   [[ -f $retained && ! -L $retained && $(stat -c %u "$retained") == "$EUID" &&
   $((8#$(stat -c %a "$retained") & 077)) == 0 ]] \
     || production_fail "migration recovery requires securely retained previous-release runtime credentials"
@@ -582,6 +589,18 @@ patch() {
   request -X PATCH -H 'Content-Type: application/merge-patch+json' \
     --data "$2" "$api$1" > /dev/null
 }
+stop_patch() {
+  code=$(request -X PATCH -H 'Content-Type: application/merge-patch+json' \
+    --data "$2" -o /dev/null -w '%{http_code}' "$api$1") || {
+    [ "$code" = 404 ] || return 1
+  }
+}
+pods_gone() {
+  request "$api/api/v1/namespaces/$NAMESPACE/pods?labelSelector=$1" > /tmp/workers.json || return 1
+  # PodList metadata has no name; every listed Pod does, including terminating Pods.
+  grep -q '"kind"[[:space:]]*:[[:space:]]*"PodList"' /tmp/workers.json \
+    && ! grep -q '"name"[[:space:]]*:' /tmp/workers.json
+}
 heartbeat="/api/v1/namespaces/$NAMESPACE/configmaps/$GUARD"
 patch "$heartbeat" '{"data":{"ready":"true"}}'
 last=''
@@ -596,13 +615,17 @@ while [ "$stale" -lt 6 ]; do
   sleep 5
 done
 printf 'Recovery command heartbeat lost; stopping recovery workers. Access barrier and ownership remain.\n' >&2
+patch "$heartbeat" '{"data":{"expired":"true"}}' || {
+  printf 'Cannot record guard expiry; shutdown remains required.\n' >&2
+}
+reported=false
 while :; do
   failed=false
   for name in $WORKLOADS; do
-    patch "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$name/scale" \
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$name/scale" \
       '{"spec":{"replicas":0}}' || failed=true
   done
-  patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/nats-init" \
+  stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/nats-init" \
     '{"spec":{"suspend":true}}' || failed=true
   for name in $HELPERS; do
     # A missing helper is already stopped. Never force-delete a running storage Pod.
@@ -612,9 +635,21 @@ while :; do
       [ "$code" = 404 ] || failed=true
     }
   done
+  for name in $WORKLOADS; do
+    pods_gone "app.kubernetes.io%2Fname%3D$name" || failed=true
+  done
+  pods_gone 'job-name%3Dnats-init' || failed=true
+  pods_gone "recipe-db%2Frestore-holder%3D$HOLDER" || failed=true
   patch "$heartbeat" '{"data":{"expired":"true"}}' || failed=true
-  [ "$failed" != false ] || exit 0
-  printf 'Recovery worker shutdown incomplete; retrying shutdown only. Inspect the recovery guard.\n' >&2
+  if [ "$failed" = false ]; then
+    if [ "$reported" = false ]; then
+      printf 'Worker termination verified; shutdown guard remains armed until explicitly stopped.\n' >&2
+      reported=true
+    fi
+  else
+    printf 'Recovery worker shutdown incomplete; retrying shutdown only. Inspect terminating workers and the recovery guard.\n' >&2
+    reported=false
+  fi
   sleep 5
 done
 EOF
@@ -631,7 +666,8 @@ EOF
         {apiGroups:[""],resources:["configmaps"],resourceNames:[$name],verbs:["get","patch"]},
         {apiGroups:["apps"],resources:["deployments/scale"],resourceNames:$workloads,verbs:["patch"]},
         {apiGroups:["batch"],resources:["jobs"],resourceNames:["nats-init"],verbs:["patch"]},
-        {apiGroups:[""],resources:["pods"],resourceNames:$helpers,verbs:["delete"]}]},
+        {apiGroups:[""],resources:["pods"],resourceNames:$helpers,verbs:["delete"]},
+        {apiGroups:[""],resources:["pods"],verbs:["list"]}]},
       {apiVersion:"rbac.authorization.k8s.io/v1",kind:"RoleBinding",metadata:meta,
         roleRef:{apiGroup:"rbac.authorization.k8s.io",kind:"Role",name:$name},
         subjects:[{kind:"ServiceAccount",name:$name,namespace:$ns}]},
@@ -641,25 +677,41 @@ EOF
         spec:{restartPolicy:"Never",serviceAccountName:$name,
           containers:[{name:"guard",image:$image,command:["sh","-ec",$script],
             env:[{name:"NAMESPACE",value:$ns},{name:"GUARD",value:$name},
+              {name:"HOLDER",value:$holder},
               {name:"WORKLOADS",value:($workloads | join(" "))},
               {name:"HELPERS",value:($helpers | join(" "))}],
             resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]}' \
     > "$work/restore-guard.json" || return 1
   kube apply -f "$work/restore-guard.json" > /dev/null || return 1
   restore_guard_started=true
-  (
-    trap - EXIT INT TERM
-    while kill -0 "$parent_pid" 2> /dev/null; do
-      kube patch configmap "$restore_guard_name" --type=merge \
-        -p "{\"data\":{\"pulse\":\"$(date -u +%s%N)\"}}" > /dev/null || exit 1
-      sleep 5
-    done
-  ) > "$work/restore-guard-heartbeat.log" 2>&1 &
-  restore_guard_heartbeat_pid=$!
   while ((SECONDS < deadline)); do
     kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-status.json" || return 1
     if jq -e '.data.ready == "true" and .data.expired == "false"' \
-      "$work/restore-guard-status.json" > /dev/null; then
+      "$work/restore-guard-status.json" > /dev/null \
+      && kube get job "$restore_guard_name" -o json > "$work/restore-guard-job-status.json" \
+      && jq -e '(.status.active // 0) == 1
+        and all(.status.conditions[]?; .type != "Failed" and .type != "Complete")' \
+        "$work/restore-guard-job-status.json" > /dev/null; then
+      (
+        trap - EXIT INT TERM
+        while kill -0 "$parent_pid" 2> /dev/null; do
+          if ! kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-monitor-configmap.json" \
+            || ! jq -e '.data.ready == "true" and .data.expired == "false"' \
+              "$work/restore-guard-monitor-configmap.json" > /dev/null \
+            || ! kube get job "$restore_guard_name" -o json > "$work/restore-guard-monitor-job.json" \
+            || ! jq -e '(.status.active // 0) == 1
+              and all(.status.conditions[]?; .type != "Failed" and .type != "Complete")' \
+              "$work/restore-guard-monitor-job.json" > /dev/null \
+            || ! kube patch configmap "$restore_guard_name" --type=merge \
+              -p "{\"data\":{\"pulse\":\"$(date -u +%s%N)\"}}" > /dev/null; then
+            printf 'Recovery shutdown guard or heartbeat lost; terminating the recovery command.\n' >&2
+            kill -TERM "$parent_pid" || exit 1
+            exit 1
+          fi
+          sleep 5
+        done
+      ) > "$work/restore-guard-heartbeat.log" 2>&1 &
+      restore_guard_heartbeat_pid=$!
       return 0
     fi
     sleep 1
@@ -668,15 +720,80 @@ EOF
 }
 
 restore_guard_stop() {
+  local deadline=$((SECONDS + timeout))
   [[ ${restore_guard_started:-false} == true ]] || return 0
-  kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
   if [[ -n ${restore_guard_heartbeat_pid:-} ]]; then
     kill "$restore_guard_heartbeat_pid" 2> /dev/null || true
     wait "$restore_guard_heartbeat_pid" 2> /dev/null || true
     restore_guard_heartbeat_pid=
   fi
+  kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  while :; do
+    kube get pods -l "recipe-db/recovery-guard=$backup_id" -o json \
+      > "$work/restore-remaining-guard-pods.json" || return 1
+    if jq -e '.items | length == 0' "$work/restore-remaining-guard-pods.json" > /dev/null; then
+      break
+    fi
+    if ((SECONDS >= deadline)); then
+      printf 'production: recovery shutdown guard Pods have not terminated within the bounded wait\n' >&2
+      return 1
+    fi
+    sleep 1
+  done
   kube delete rolebinding,role,serviceaccount,configmap "$restore_guard_name" > /dev/null || return 1
   restore_guard_started=false
+}
+
+restore_guard_assert_absent() {
+  local name="recovery-guard-$backup_id"
+  kube get job "$name" --ignore-not-found -o json > "$work/restore-remaining-guard.json" || return 1
+  [[ ! -s $work/restore-remaining-guard.json ]] \
+    || {
+      printf 'production: reopening requires the recovery shutdown guard to be terminated and removed\n' >&2
+      return 1
+    }
+  kube get pods -l "recipe-db/recovery-guard=$backup_id" -o json \
+    > "$work/restore-remaining-guard-pods.json" || return 1
+  jq -e '.items | length == 0' "$work/restore-remaining-guard-pods.json" > /dev/null \
+    || {
+      printf 'production: reopening requires every recovery shutdown guard Pod to be gone\n' >&2
+      return 1
+    }
+}
+
+restore_guard_remove_expired() {
+  local name="recovery-guard-$backup_id"
+  kube get job "$name" --ignore-not-found -o json > "$work/restore-expired-guard.json" || return 1
+  [[ -s $work/restore-expired-guard.json ]] || return 0
+  kube get configmap "$name" -o json > "$work/restore-expired-guard-configmap.json" || return 1
+  jq -e --arg holder "$backup_id" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.labels["recipe-db/restore-holder"] == $holder' \
+    "$work/restore-expired-guard.json" > /dev/null \
+    || production_fail "cannot remove an unowned recovery shutdown guard"
+  jq -e --arg holder "$backup_id" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.labels["recipe-db/restore-holder"] == $holder
+    and .data.expired == "true"' "$work/restore-expired-guard-configmap.json" > /dev/null \
+    || production_fail "recovery shutdown guard is not confirmed expired"
+  kube get deployments -o json > "$work/restore-expired-guard-deployments.json" || return 1
+  jq -e 'all(.items[];
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0)' \
+    "$work/restore-expired-guard-deployments.json" > /dev/null \
+    || production_fail "expired recovery guard cannot be removed before all workloads stop"
+  kube get pods -o json > "$work/restore-expired-guard-pods.json" || return 1
+  jq -e --arg holder "$backup_id" 'all(.items[];
+    .metadata.labels["recipe-db/recovery-guard"] == $holder
+    or (.metadata.deletionTimestamp == null
+      and (.status.phase == "Succeeded" or .status.phase == "Failed")
+      and all(.status.containerStatuses[]?; .state.terminated != null)
+      and all(.spec.volumes[]?; .persistentVolumeClaim == null)))' \
+    "$work/restore-expired-guard-pods.json" > /dev/null \
+    || production_fail "expired recovery guard cannot be removed before every other worker terminates"
+  restore_guard_name=$name
+  restore_guard_started=true
+  restore_guard_stop || production_fail "could not terminate the expired recovery shutdown guard"
 }
 
 restore_guard_check() {
@@ -1339,6 +1456,8 @@ restore_run() {
     restore_fresh_target
     production_ephemeral_secrets
   else
+    release_assert_pre_reopen_recovery
+    restore_guard_remove_expired
     restore_migration_target
   fi
   routes

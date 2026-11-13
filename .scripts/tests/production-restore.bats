@@ -155,8 +155,8 @@ EOF
     --arg typesense "$(printf '%064d' 0 | tr 0 a | base64 -w0)" \
     '{source:{artifact:"previous"},data:{"auth-accounts.json":$auth,
       "graphql-ingress-secret":$graphql,"typesense-api-key":$typesense}}' \
-    > state/previous-runtime-secret.json
-  chmod 600 state/previous-runtime-secret.json
+    > state.previous-runtime-secret.json
+  chmod 600 state.previous-runtime-secret.json
   cat > credentials.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -177,10 +177,85 @@ EOF
   [ "$status" -ne 0 ]
   [[ $output == *"credentials do not match the previous-release configuration"* ]]
   [[ $output != *candidate-account-config* && $output != *original-account-config* ]]
-  rm state/previous-runtime-secret.json
+  rm state.previous-runtime-secret.json
   run bash credentials.sh
   [ "$status" -ne 0 ]
   [[ $output == *"securely retained previous-release runtime credentials"* ]]
+}
+
+@test "recovery guard loss terminates a live client before its completion check" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{"recipes":"1Gi"}}\n' > work/config.json
+  printf '[{"name":"graphql"},{"name":"recipes"}]\n' > work/prior-workloads.json
+  cat > live-client.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+namespace=fixture
+backup_id=backup-1-1
+timeout=10
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+trap 'printf "client-stopped\n" >> "$MOCK_LOG"; exit 143' TERM
+kube() {
+  case "$*" in
+    "get rolebinding/"* | "get job "*"--ignore-not-found"*) ;;
+    "get job "*"-o json") echo '{"status":{"active":1}}' ;;
+    "get configmap "*)
+      if [[ -f $MOCK_LOG.expired ]]; then
+        echo '{"data":{"ready":"true","expired":"true"}}'
+      else
+        echo '{"data":{"ready":"true","expired":"false"}}'
+      fi ;;
+    "patch configmap "*) touch "$MOCK_LOG.expired" ;;
+    "apply -f "*) ;;
+    *) return 1 ;;
+  esac
+}
+restore_guard_start
+printf 'client-active\n' >> "$MOCK_LOG"
+while :; do sleep 1; done
+EOF
+  run bash live-client.sh
+  [ "$status" -eq 143 ]
+  [ "$(cat "$MOCK_LOG")" = $'client-active\nclient-stopped' ]
+  grep -q 'guard or heartbeat lost; terminating' work/restore-guard-heartbeat.log
+}
+
+@test "recovery guard cleanup waits for terminating Pods before removing its permissions" {
+  cat > stop-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+backup_id=backup-1-1
+timeout=${STOP_TIMEOUT:-3}
+restore_guard_started=true
+restore_guard_name=recovery-guard-backup-1-1
+kube() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  case "$*" in
+    "get pods "*)
+      if [[ ! -f $MOCK_LOG.observed-terminating ]]; then
+        touch "$MOCK_LOG.observed-terminating"
+        echo '{"items":[{"metadata":{"name":"guard-worker","deletionTimestamp":"now"}}]}'
+      else
+        echo '{"items":[]}'
+      fi ;;
+  esac
+}
+restore_guard_stop
+[[ $restore_guard_started == false ]]
+EOF
+  run bash stop-guard.sh
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^get pods ' "$MOCK_LOG")" -eq 2 ]
+  grep -q '^delete rolebinding,role,serviceaccount,configmap ' "$MOCK_LOG"
+  rm "$MOCK_LOG.observed-terminating"
+  : > "$MOCK_LOG"
+  STOP_TIMEOUT=0 run bash stop-guard.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"have not terminated within the bounded wait"* ]]
+  run ! grep -q '^delete rolebinding,role,serviceaccount,configmap ' "$MOCK_LOG"
 }
 
 @test "restore read verification waits for convergence and rejects persistent failures" {

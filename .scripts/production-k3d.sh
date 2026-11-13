@@ -1484,6 +1484,24 @@ release_require_recovery_lease_phase() {
   release_require_lease_phase "$@"
 }
 
+release_assert_pre_reopen_recovery() {
+  jq -e '.accessOpenedAt == null and .publicAccessMayHaveOpenedAt == null
+    and .websiteCheck == null
+    and all(.candidateHistory[]?;
+      .postCheckDisposition == null
+      or .postCheckDisposition.reason == "approved-marker-only-fallback")' \
+    "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "complete migration recovery is forbidden after any public reopening in this operation"
+}
+
+release_require_reopen_lease_phase() {
+  case "$(jq -er .phase "$snapshot/backup-state.json")" in
+    migration-recovered) release_require_lease_phase migration-recovered ;;
+    migration-reopen-failed) release_require_lease_phase migration-recovery-failed ;;
+    *) production_fail "saved recovery state cannot authorize reopening" ;;
+  esac
+}
+
 release_assert_tooling() {
   if jq -e '.toolingRevision != null' "$snapshot/backup-state.json" > /dev/null; then
     [[ $release_sources_from_git == true &&
@@ -1747,7 +1765,7 @@ release_stage() {
   backup_validate_workload_images "$work/original-deployments.json" \
     || production_fail "workloads no longer match the expected release"
   release_assert_maintenance_barrier "$work/original-deployments.json" "$current_release" "$retry"
-  if [[ ! -e $snapshot/previous-runtime-secret.json ]]; then
+  if [[ ! -e $snapshot.previous-runtime-secret.json ]]; then
     [[ $retry == false ]] \
       || production_fail "previous-release credentials were not retained before candidate staging"
     kube get secret recipe-db-runtime -o json > "$work/previous-runtime-secret.json" \
@@ -1759,10 +1777,10 @@ release_stage() {
     if ! jq -n --slurpfile state "$snapshot/backup-state.json" \
       --slurpfile secret "$work/previous-runtime-secret.json" \
       '{source:$state[0].source,data:$secret[0].data}' \
-      > "$snapshot/previous-runtime-secret.next"; then
+      > "$snapshot.previous-runtime-secret.next"; then
       production_fail "could not securely retain previous-release credentials"
     fi
-    mv "$snapshot/previous-runtime-secret.next" "$snapshot/previous-runtime-secret.json" \
+    mv "$snapshot.previous-runtime-secret.next" "$snapshot.previous-runtime-secret.json" \
       || production_fail "could not persist securely retained previous-release credentials"
   fi
   cp "$work/pulled/release.json" "$work/original-release.json"
@@ -2189,6 +2207,7 @@ release_migration_recover_claim() {
 release_migration_recover() {
   local candidate=$2 expected=$5 confirmation=$6 candidate_revision current job state_phase attempt
   release_load_operation "$1" "$candidate"
+  release_assert_pre_reopen_recovery
   if jq -e '.status == "recovered" and .phase == "migration-recovered"
     and .migrationRecovery.status == "verified"' "$snapshot/backup-state.json" > /dev/null; then
     release_assert_candidate "$candidate"
@@ -2316,7 +2335,7 @@ release_recovery_reopen() {
     and .migrationRecovery.previousRelease == $previous
   ' "$snapshot/backup-state.json" > /dev/null \
     || production_fail "reopening requires a verified complete recovery with the candidate aborted"
-  release_require_lease_phase migration-recovered migration-recovery-failed
+  release_require_reopen_lease_phase
   revision=$(jq -er .source.revision "$snapshot/backup-state.json")
   [[ $confirmation == "OPEN-RECOVERY-$backup_id-$revision" ]] \
     || production_fail "reopening requires OPEN-RECOVERY-<backup-id>-<previous-release-revision> confirmation"
@@ -2327,7 +2346,8 @@ release_recovery_reopen() {
       or (.status == "recovery-required" and .phase == "migration-reopen-failed"))' \
     "$snapshot/backup-state.json" > /dev/null \
     || production_fail "recovery state changed while acquiring the reopening claim"
-  release_require_lease_phase migration-recovered migration-recovery-failed
+  release_require_reopen_lease_phase
+  restore_guard_assert_absent
   production_secrets
   restore_validate_migration_secrets
   kube --namespace kube-system get secret recipe-db-routes -o json \
@@ -2367,7 +2387,8 @@ release_recovery_reopen() {
   release_recovery_reopen_started=true
   release_recovery_state_write recovery-required migration-reopening \
     "$(jq -cn --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{migrationRecovery:{status:"reopening",phase:"reopening",reopeningStartedAt:$startedAt}}')" \
+      '{publicAccessMayHaveOpenedAt:$startedAt,
+        migrationRecovery:{status:"reopening",phase:"reopening",reopeningStartedAt:$startedAt}}')" \
     || production_fail "could not persist the reopening phase"
   replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
     "$work/prior-workloads.json") \
@@ -3171,6 +3192,9 @@ release_migration_status() {
       printf 'production: recovery completion phase update was interrupted; verify stopped workers and the barrier before another approved full recovery\n'
       release_migration_safe_inspection
       release_migration_recovery_next_command
+    elif ! restore_guard_assert_absent; then
+      printf 'production: the recovery shutdown guard remains; no reopening command is safe yet\n'
+      release_migration_safe_inspection "recovery-guard-$backup_id"
     else
       printf 'production: complete recovery verified; candidate remains aborted; public reopening requires separate operator approval\n'
       $release_sources_from_git && source_flag="--release-sources-from-git "
@@ -3458,6 +3482,9 @@ release_reopen() {
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate GraphQL barrier is not ready"
   release_mutation_started=true
+  release_state_write release-ready ready \
+    "$(jq -cn --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{publicAccessMayHaveOpenedAt:$startedAt}')" || return 1
   cluster_operation_lock_update reopening || return 1
   kube set env deployment/graphql MODE=production --containers=graphql > /dev/null || return 1
   if ! kube rollout status deployment/graphql --timeout="${timeout}s"; then
@@ -3820,6 +3847,8 @@ release_finalize() {
     locked=false
     retain_lock=false
   fi
+  rm -f -- "$snapshot.previous-runtime-secret.json" "$snapshot.previous-runtime-secret.next" \
+    || production_fail "published release is verified; retained credential cleanup failed"
   rm -f -- "$snapshot/backup-state.json" \
     || production_fail "published release is verified and Lease is released; retry cleanup of the remaining state file"
   rmdir -- "$snapshot" \
