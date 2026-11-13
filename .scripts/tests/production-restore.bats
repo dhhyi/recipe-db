@@ -148,12 +148,12 @@ EOF
 
 @test "recovery uses source-bound retained credentials and refuses changed operator secrets" {
   mkdir -m 700 state
-  printf '{"source":{"artifact":"previous"}}\n' > state/backup-state.json
+  printf '{"backupId":"backup-1","source":{"artifact":"previous"}}\n' > state/backup-state.json
   printf 'original-account-config' > work/auth-accounts.json
   jq -n --arg auth "$(base64 -w0 work/auth-accounts.json)" \
     --arg graphql "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
     --arg typesense "$(printf '%064d' 0 | tr 0 a | base64 -w0)" \
-    '{source:{artifact:"previous"},data:{"auth-accounts.json":$auth,
+    '{backupId:"backup-1",source:{artifact:"previous"},data:{"auth-accounts.json":$auth,
       "graphql-ingress-secret":$graphql,"typesense-api-key":$typesense}}' \
     > state.previous-runtime-secret.json
   chmod 600 state.previous-runtime-secret.json
@@ -177,6 +177,11 @@ EOF
   [ "$status" -ne 0 ]
   [[ $output == *"credentials do not match the previous-release configuration"* ]]
   [[ $output != *candidate-account-config* && $output != *original-account-config* ]]
+  jq '.backupId="another-backup"' state.previous-runtime-secret.json > changed-credentials.json
+  cat changed-credentials.json > state.previous-runtime-secret.json
+  run bash credentials.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"do not belong to this backup"* ]]
   rm state.previous-runtime-secret.json
   run bash credentials.sh
   [ "$status" -ne 0 ]
@@ -204,7 +209,7 @@ kube() {
       if [[ -f $MOCK_LOG.expired ]]; then
         echo '{"data":{"ready":"true","expired":"true"}}'
       else
-        echo '{"data":{"ready":"true","expired":"false"}}'
+        echo '{"data":{"ready":"true","expired":"false","observedPulse":"initial"}}'
       fi ;;
     "patch configmap "*) touch "$MOCK_LOG.expired" ;;
     "apply -f "*) ;;
@@ -219,6 +224,115 @@ EOF
   [ "$status" -eq 143 ]
   [ "$(cat "$MOCK_LOG")" = $'client-active\nclient-stopped' ]
   grep -q 'guard or heartbeat lost; terminating' work/restore-guard-heartbeat.log
+}
+
+@test "guard rereads a rotating token and acknowledges only the client pulse" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  cat > extract-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+namespace=fixture
+backup_id=backup-1
+timeout=1
+production_fail() { exit 1; }
+kube() { [[ $* != "apply -f "* ]]; }
+restore_guard_start
+EOF
+  run bash extract-guard.sh
+  [ "$status" -ne 0 ]
+  printf 'first-token' > work/token
+  sed "s|/var/run/secrets/kubernetes.io/serviceaccount/token|$FIXTURE_ROOT/work/token|" \
+    work/restore-guard.sh > work/guard-test.sh
+  cat > token-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+export KUBERNETES_SERVICE_HOST=fixture KUBERNETES_SERVICE_PORT=443 NAMESPACE=fixture GUARD=fixture
+curl() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  printf '{"data":{"pulse":"initial","observedPulse":"different"}}\n'
+}
+sleep() {
+  if [[ $(cat "$FIXTURE_ROOT/work/token") == first-token ]]; then
+    printf 'rotated-token' > "$FIXTURE_ROOT/work/token"
+  else
+    exit 0
+  fi
+}
+source "$FIXTURE_ROOT/work/guard-test.sh"
+EOF
+  run bash token-harness.sh
+  [ "$status" -eq 0 ]
+  grep -q 'Authorization: Bearer first-token' "$MOCK_LOG"
+  grep -q 'Authorization: Bearer rotated-token' "$MOCK_LOG"
+  grep -q '"observedPulse":"initial"' "$MOCK_LOG"
+  run ! grep -q '"observedPulse":"different"' "$MOCK_LOG"
+}
+
+@test "active but unresponsive guard terminates the live client" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  cat > stalled-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+namespace=fixture
+backup_id=backup-1
+timeout=3
+trap 'exit 143' TERM
+production_fail() { exit 1; }
+kube() {
+  case "$*" in
+    "get rolebinding/"* | "get job "*"--ignore-not-found"* | "apply -f "* | "patch configmap "*) ;;
+    "get job "*) echo '{"status":{"active":1}}' ;;
+    "get configmap "*) echo '{"data":{"ready":"true","expired":"false","observedPulse":"initial"}}' ;;
+    *) return 1 ;;
+  esac
+}
+restore_guard_start
+while :; do sleep 1; done
+EOF
+  local started=$SECONDS
+  run timeout 30 bash stalled-guard.sh
+  [ "$status" -eq 143 ]
+  [ "$((SECONDS - started))" -ge 20 ]
+  grep -q 'guard stopped acknowledging pulses' work/restore-guard-heartbeat.log
+}
+
+@test "interrupted cleanup keeps the guard armed while application workers remain" {
+  cat > cleanup-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+backup_id=backup-1
+lock_holder=backup-1
+restore_mode=migration-recovery
+timeout=1
+echo '{"volumes":{"recipes":"1Gi"}}' > "$work/config.json"
+kube() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  case "$*" in
+    "get jobs "*)
+      echo '{"items":[{"metadata":{"name":"recovery-guard-backup-1"},"spec":{}},
+        {"metadata":{"name":"nats-init"},"spec":{}}]}' ;;
+    "get pods -l job-name=nats-init"*) echo '{"items":[]}' ;;
+    "get pods -l recipe-db/restore-holder="*) echo '{"items":[]}' ;;
+    "get pods -o json")
+      echo '{"items":[{"spec":{"volumes":[{"persistentVolumeClaim":{"claimName":"recipes"}}]}}]}' ;;
+    "get "*) echo '{"items":[]}' ;;
+    *) ;;
+  esac
+}
+restore_stop_migration_recovery
+EOF
+  run bash cleanup-harness.sh
+  [ "$status" -ne 0 ]
+  grep -q '^patch job/nats-init ' "$MOCK_LOG"
+  run ! grep -q 'recovery-guard-backup-1' "$MOCK_LOG"
 }
 
 @test "recovery guard cleanup waits for terminating Pods before removing its permissions" {

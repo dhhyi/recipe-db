@@ -517,15 +517,25 @@ restore_volume_pod() {
     '{name:$name,uid:$uid}' >> "$work/restore-pvc-identities.jsonl"
 }
 
-restore_validate_migration_secrets() {
-  local key expected retained="$snapshot.previous-runtime-secret.json"
+restore_validate_retained_runtime_secret() {
+  local retained="$snapshot.previous-runtime-secret.json" parent
+  parent=$(dirname "$snapshot")
+  [[ $(stat -c %u "$parent") == "$EUID" &&
+  $((8#$(stat -c %a "$parent") & 022)) == 0 ]] \
+    || production_fail "retained credential parent must be owned by the operator and not writable by other users"
   [[ -f $retained && ! -L $retained && $(stat -c %u "$retained") == "$EUID" &&
   $((8#$(stat -c %a "$retained") & 077)) == 0 ]] \
     || production_fail "migration recovery requires securely retained previous-release runtime credentials"
   jq -e --slurpfile state "$snapshot/backup-state.json" '
-    .source == $state[0].source and (.data | type == "object" and length > 0)' \
+    (.backupId | type == "string") and .backupId == $state[0].backupId and .source == $state[0].source
+    and (.data | type == "object" and length > 0)' \
     "$retained" > /dev/null \
-    || production_fail "retained runtime credentials do not belong to the previous release"
+    || production_fail "retained runtime credentials do not belong to this backup and previous release"
+}
+
+restore_validate_migration_secrets() {
+  local key expected retained="$snapshot.previous-runtime-secret.json"
+  restore_validate_retained_runtime_secret
   for key in "${operator_secret_keys[@]}"; do
     expected=$(base64 -w0 "$work/$key") \
       || production_fail "could not validate the retained previous-release credential: $key"
@@ -578,10 +588,10 @@ restore_guard_start() {
   cat > "$work/restore-guard.sh" << 'EOF'
 set -eu
 trap 'exit 0' TERM INT QUIT
-token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
 api="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
 request() {
+  token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) || return 1
   curl -fsS --connect-timeout 3 --max-time 5 --cacert "$ca" \
     -H "Authorization: Bearer $token" "$@"
 }
@@ -602,11 +612,14 @@ pods_gone() {
     && ! grep -q '"name"[[:space:]]*:' /tmp/workers.json
 }
 heartbeat="/api/v1/namespaces/$NAMESPACE/configmaps/$GUARD"
-patch "$heartbeat" '{"data":{"ready":"true"}}'
+patch "$heartbeat" '{"data":{"ready":"true","observedPulse":"initial"}}'
 last=''
 stale=0
 while [ "$stale" -lt 6 ]; do
   if current=$(request "$api$heartbeat"); then
+    current=$(printf '%s\n' "$current" | sed -n 's/.*"pulse":[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ -n "$current" ] || break
+    patch "$heartbeat" "{\"data\":{\"observedPulse\":\"$current\"}}" || break
     if [ "$current" != "$last" ]; then stale=0; else stale=$((stale + 1)); fi
     last=$current
   else
@@ -694,10 +707,13 @@ EOF
         "$work/restore-guard-job-status.json" > /dev/null; then
       (
         trap - EXIT INT TERM
+        observed_pulse=initial
+        observed_at=$SECONDS
         while kill -0 "$parent_pid" 2> /dev/null; do
           if ! kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-monitor-configmap.json" \
             || ! jq -e '.data.ready == "true" and .data.expired == "false"' \
               "$work/restore-guard-monitor-configmap.json" > /dev/null \
+            || ! current_pulse=$(jq -er '.data.observedPulse' "$work/restore-guard-monitor-configmap.json") \
             || ! kube get job "$restore_guard_name" -o json > "$work/restore-guard-monitor-job.json" \
             || ! jq -e '(.status.active // 0) == 1
               and all(.status.conditions[]?; .type != "Failed" and .type != "Complete")' \
@@ -705,6 +721,14 @@ EOF
             || ! kube patch configmap "$restore_guard_name" --type=merge \
               -p "{\"data\":{\"pulse\":\"$(date -u +%s%N)\"}}" > /dev/null; then
             printf 'Recovery shutdown guard or heartbeat lost; terminating the recovery command.\n' >&2
+            kill -TERM "$parent_pid" || exit 1
+            exit 1
+          fi
+          if [[ $current_pulse != "$observed_pulse" ]]; then
+            observed_pulse=$current_pulse
+            observed_at=$SECONDS
+          elif ((SECONDS - observed_at >= 20)); then
+            printf 'Recovery shutdown guard or heartbeat lost: guard stopped acknowledging pulses; terminating the recovery command.\n' >&2
             kill -TERM "$parent_pid" || exit 1
             exit 1
           fi
@@ -931,7 +955,8 @@ restore_stop_migration_recovery() {
     while IFS= read -r name; do
       [[ -n $name ]] || continue
       kube patch "job/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1
-    done < <(jq -r '.items[] | select(.spec.suspend != true and
+    done < <(jq -r --arg guard "recovery-guard-$backup_id" '.items[] |
+      select(.metadata.name != $guard and .spec.suspend != true and
       ([.status.conditions[]? | select((.type == "Failed" or .type == "Complete")
         and .status == "True")] | length == 0)) | .metadata.name' \
       "$work/recovery-stop-jobs.json")
@@ -947,7 +972,8 @@ restore_stop_migration_recovery() {
         kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
         backup_wait_pod_gone "$pod" || return 1
       done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-job-pods.json")
-    done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-jobs.json")
+    done < <(jq -r --arg guard "recovery-guard-$backup_id" \
+      '.items[] | select(.metadata.name != $guard) | .metadata.name' "$work/recovery-stop-jobs.json")
   else
     return 1
   fi

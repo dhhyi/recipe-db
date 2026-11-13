@@ -1557,6 +1557,40 @@ PY
   prepare_recovery_package
   [ -s "$PACKAGE_MANIFEST" ]
   [ -s "$PACKAGE_ARCHIVE" ]
+  export MOCK_FOREIGN_HELM=false
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$STATE" "$HOLDER" "EXIT-$HOLDER"
+  [ "$status" -eq 0 ]
+  [ ! -e "$STATE.previous-runtime-secret.json" ]
+}
+
+@test "staging refuses unsafe credential parents and links without following a predictable temporary path" {
+  local parent parent_mode
+  prepare_captured_release
+  parent=$(dirname "$STATE")
+  parent_mode=$(stat -c %a "$parent")
+  printf 'unchanged' > "$FIXTURE_ROOT/credential-victim"
+  ln -s "$FIXTURE_ROOT/credential-victim" "$STATE.previous-runtime-secret.next"
+  export MOCK_FOREIGN_HELM=true
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$FIXTURE_ROOT/credential-victim")" = unchanged ]
+  [ -f "$STATE.previous-runtime-secret.json" ]
+  rm "$STATE.previous-runtime-secret.json"
+  ln -s "$FIXTURE_ROOT/credential-victim" "$STATE.previous-runtime-secret.json"
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  [ "$status" -ne 0 ]
+  [[ $output == *"securely retained previous-release runtime credentials"* ]]
+  [ "$(cat "$FIXTURE_ROOT/credential-victim")" = unchanged ]
+  rm "$STATE.previous-runtime-secret.json"
+  chmod 777 "$parent"
+  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+    verified-upload "VERIFIED-$HOLDER-verified-upload"
+  chmod "$parent_mode" "$parent"
+  [ "$status" -ne 0 ]
+  [[ $output == *"not writable by other users"* ]]
+  [ ! -e "$STATE.previous-runtime-secret.json" ]
 }
 
 @test "candidate staging creates release-specific migrator Jobs suspended without resetting them" {

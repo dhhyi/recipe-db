@@ -66,7 +66,17 @@ def lifecycle_state(snapshot):
 
 
 def safely_recovered(state):
-    return isinstance(state, dict) and (state.get("status"), state.get("phase")) in SAFE_RECOVERY_STATES
+    if not isinstance(state, dict):
+        return False
+    if (state.get("status"), state.get("phase")) in SAFE_RECOVERY_STATES:
+        return True
+    recovery = state.get("migrationRecovery")
+    return (state.get("status"), state.get("phase")) == ("recovered", "migration-reopened") \
+        and isinstance(recovery, dict) \
+        and recovery.get("status") == "reopened" \
+        and recovery.get("candidateAborted") is True \
+        and isinstance(recovery.get("ownershipReleasedAt"), str) \
+        and bool(recovery["ownershipReleasedAt"])
 
 
 def validate_timestamp(value):
@@ -440,6 +450,21 @@ def archive_recovered_maintenance(config):
     destination = history / backup_id
     if destination.exists() or destination.is_symlink():
         raise BackupError("restart-failure", "maintenance-history-collision")
+    credentials = path.with_name(path.name + ".previous-runtime-secret.json")
+    if credentials.exists() or credentials.is_symlink():
+        try:
+            retained = read_json(credentials)
+            info = credentials.stat()
+            if info.st_uid != os.geteuid() or info.st_mode & 0o077 \
+                    or retained.get("backupId") != backup_id \
+                    or retained.get("source") != state.get("source"):
+                raise ValueError("invalid retained credential identity")
+            archived_credentials = history / (backup_id + ".previous-runtime-secret.json")
+            if archived_credentials.exists() or archived_credentials.is_symlink():
+                raise ValueError("retained credential history collision")
+            os.replace(credentials, archived_credentials)
+        except (OSError, ValueError, AttributeError, json.JSONDecodeError) as error:
+            raise BackupError("restart-failure", "invalid-retained-runtime-credentials") from error
     os.replace(path, destination)
 
 

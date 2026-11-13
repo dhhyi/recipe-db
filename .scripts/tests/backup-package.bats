@@ -467,6 +467,57 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "only a completed reopened recovery permits scheduling and archives operation-bound credentials" {
+  run python3 - << 'PY'
+import importlib.util
+import json
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("upload", "provisioning/files/backup-upload.py")
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+root = Path.cwd() / "backup-state"
+root.mkdir(mode=0o700)
+maintenance = root / "maintenance"
+maintenance.mkdir(mode=0o700)
+config = {"stateDirectory": str(root)}
+state = {
+    "backupId": "recovery-1", "source": {"artifact": "previous"},
+    "status": "recovered", "phase": "migration-recovered",
+    "migrationRecovery": {"status": "verified", "candidateAborted": True},
+}
+def save():
+    (maintenance / "backup-state.json").write_text(json.dumps(state))
+save()
+assert upload.maintenance_active(config)
+state["phase"] = "migration-reopened"
+state["migrationRecovery"]["status"] = "reopened"
+save()
+assert upload.maintenance_active(config)
+state["migrationRecovery"]["ownershipReleasedAt"] = "2026-11-13T18:00:00Z"
+save()
+credentials = root / "maintenance.previous-runtime-secret.json"
+credentials.write_text(json.dumps({
+    "backupId": state["backupId"], "source": state["source"], "data": {"fixture": "secret"},
+}))
+credentials.chmod(0o600)
+assert not upload.maintenance_active(config)
+upload.archive_recovered_maintenance(config)
+assert not maintenance.exists() and not credentials.exists()
+archived = root / "maintenance-history" / state["backupId"]
+assert (archived / "backup-state.json").is_file()
+assert archived.with_name(archived.name + ".previous-runtime-secret.json").stat().st_mode & 0o777 == 0o600
+assert not (archived / "previous-runtime-secret.json").exists()
+maintenance.mkdir(mode=0o700)
+(maintenance / "backup-state.json").write_text(json.dumps({
+    "backupId": "next-operation", "status": "captured", "phase": "captured",
+}))
+assert upload.maintenance_active(config)
+assert not credentials.exists()
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "backup package stages the complete selected pair privately and prints its snapshot manifest" {
   package_cases valid
 }

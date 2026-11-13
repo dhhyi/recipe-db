@@ -1415,6 +1415,7 @@ backup_exit() {
     printf 'production: backup-exit failed; clients remain blocked and the Lease is retained\n' >&2
     return 1
   fi
+  rm -f -- "$snapshot.previous-runtime-secret.json" "$snapshot.previous-runtime-secret.next" || return 1
   retain_lock=false
   backup_state_write recovered safely-recovered || return 1
   printf 'production: production restored; recovery state retained at %s/backup-state.json\n' "$snapshot"
@@ -1726,7 +1727,7 @@ release_stage_migration_jobs() {
 
 release_stage() {
   local candidate=$2 backup_status=$3 verification=$4 current_release previous_candidate
-  local candidate_workloads nats_init_job candidate_migration_jobs verified_at retry=false
+  local candidate_workloads nats_init_job candidate_migration_jobs verified_at retry=false retained_tmp parent
   local -a secret_args=()
   release_load_operation "$1" "$candidate"
   case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
@@ -1765,7 +1766,11 @@ release_stage() {
   backup_validate_workload_images "$work/original-deployments.json" \
     || production_fail "workloads no longer match the expected release"
   release_assert_maintenance_barrier "$work/original-deployments.json" "$current_release" "$retry"
-  if [[ ! -e $snapshot.previous-runtime-secret.json ]]; then
+  parent=$(dirname "$snapshot")
+  [[ $(stat -c %u "$parent") == "$EUID" &&
+  $((8#$(stat -c %a "$parent") & 022)) == 0 ]] \
+    || production_fail "retained credential parent must be owned by the operator and not writable by other users"
+  if [[ ! -e $snapshot.previous-runtime-secret.json && ! -L $snapshot.previous-runtime-secret.json ]]; then
     [[ $retry == false ]] \
       || production_fail "previous-release credentials were not retained before candidate staging"
     kube get secret recipe-db-runtime -o json > "$work/previous-runtime-secret.json" \
@@ -1774,15 +1779,18 @@ release_stage() {
       and (.data | type == "object" and length > 0)' \
       "$work/previous-runtime-secret.json" > /dev/null \
       || production_fail "previous-release runtime Secret is absent or unowned"
+    retained_tmp=$(mktemp "$work/retained-runtime-secret.XXXXXXXX") \
+      || production_fail "could not create a private retained credential file"
     if ! jq -n --slurpfile state "$snapshot/backup-state.json" \
       --slurpfile secret "$work/previous-runtime-secret.json" \
-      '{source:$state[0].source,data:$secret[0].data}' \
-      > "$snapshot.previous-runtime-secret.next"; then
+      '{backupId:$state[0].backupId,source:$state[0].source,data:$secret[0].data}' \
+      > "$retained_tmp"; then
       production_fail "could not securely retain previous-release credentials"
     fi
-    mv "$snapshot.previous-runtime-secret.next" "$snapshot.previous-runtime-secret.json" \
+    mv -T -- "$retained_tmp" "$snapshot.previous-runtime-secret.json" \
       || production_fail "could not persist securely retained previous-release credentials"
   fi
+  restore_validate_retained_runtime_secret
   cp "$work/pulled/release.json" "$work/original-release.json"
   if [[ $release_fallback_mode == true ]]; then
     release_pull_candidate "$candidate" true "$previous_candidate"
@@ -2430,6 +2438,10 @@ release_recovery_reopen() {
   release_recovery_reopen_started=false
   locked=false
   retain_lock=false
+  release_state_write recovered migration-reopened \
+    "$(jq -cn --arg releasedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{migrationRecovery:{ownershipReleasedAt:$releasedAt}}')" \
+    || production_fail "application reopened and ownership released, but backup closeout could not be recorded"
   printf 'production: previous release reopened by operator approval; candidate remains aborted and release state is retained at %s/backup-state.json\n' \
     "$snapshot"
 }

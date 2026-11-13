@@ -220,10 +220,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         if [[ ${MOCK_EXPIRED_RECOVERY_GUARD:-false} == true && -f $MOCK_LOG.guard-expired ]]; then
           echo '{"data":{"ready":"true","expired":"true"}}'
         else
-          echo '{"data":{"ready":"true","expired":"false"}}'
+          jq -n --arg pulse "$(cat "$MOCK_LOG.guard-pulse" 2>/dev/null || printf initial)" \
+            '{data:{ready:"true",expired:"false",observedPulse:$pulse}}'
         fi
         exit ;;
-      *"patch configmap recovery-guard-"* | *"delete job recovery-guard-"* | \
+      *"patch configmap recovery-guard-"*)
+        printf '%s\n' "${*: -1}" | jq -er .data.pulse > "$MOCK_LOG.guard-pulse"
+        exit ;;
+      *"delete job recovery-guard-"* | \
       *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
         exit ;;
       *"get pods -l recipe-db/recovery-guard="*"-o json")
