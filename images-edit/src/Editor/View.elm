@@ -74,7 +74,11 @@ editorView model =
 
             Nothing ->
                 text ""
-        , p [ attribute "role" "status", attribute "aria-live" "polite", class (statusClass model) ] [ text (status model) ]
+        , if model.savedFeedback then
+            text ""
+
+          else
+            p [ attribute "role" "status", attribute "aria-live" "polite", class (statusClass model) ] [ text (status model) ]
         , case model.session of
             Just session ->
                 sourceView model session
@@ -99,6 +103,11 @@ editorView model =
             , on "change" (D.map GotFile fileDecoder)
             ]
             []
+        , if model.savedFeedback then
+            p [ attribute "role" "status", attribute "aria-live" "polite", class (statusClass model) ] [ text (status model) ]
+
+          else
+            text ""
         , if model.session /= Nothing || model.phase == Loading then
             div [ class "flex flex-wrap gap-2" ]
                 [ button
@@ -228,7 +237,7 @@ statusClass model =
 
         SavedOpen ->
             if model.savedFeedback then
-                "feedback success"
+                "feedback success save-feedback"
 
             else
                 ""

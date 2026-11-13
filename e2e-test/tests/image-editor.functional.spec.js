@@ -350,7 +350,13 @@ test("dirty comparison is exact, leave confirmation is cancellable, and minimum 
 }) => {
   await selectSource(page, demoRecipe);
   await drag(page, handle(page, "se"), -60, -45);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await saveSource(page);
+  const savedFeedback = page
+    .getByRole("status")
+    .filter({ hasText: "Bild gespeichert." });
+  await expect(savedFeedback).toHaveClass(/save-feedback/);
+  await expect(savedFeedback).toHaveCSS("animation-name", "save-feedback");
   const saved = await crop(page);
   await drag(page, selection(page), 20, 15);
   await expect(saveButton(page)).toBeEnabled();

@@ -804,9 +804,15 @@ test("create transitions to /edit/:id and second save updates without duplicate 
   await ingredientNameField(page, 0).fill("Milch");
   await methodField(page).fill("Kurz aufkochen.");
 
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await saveButton(page).click();
   await expect(page).toHaveURL(/\/edit\/[0-9a-f-]{36}$/);
   await expect(successStatus(page)).toBeVisible();
+  await expect(successStatus(page)).toHaveClass(/save-feedback/);
+  await expect(successStatus(page)).toHaveCSS(
+    "animation-name",
+    "save-feedback",
+  );
 
   const id = new URL(page.url()).pathname.split("/").at(-1);
   expect(createCount).toBe(1);

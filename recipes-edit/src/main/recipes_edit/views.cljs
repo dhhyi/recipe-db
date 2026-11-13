@@ -196,7 +196,7 @@
        [:p.feedback.warning {:role "status" :aria-live "polite"}
         "Ungespeicherte Änderungen."])
      (when (= :success (:kind feedback))
-       [:p.feedback.success {:role "status" :aria-live "polite"}
+       [:p.feedback.success.save-feedback {:role "status" :aria-live "polite"}
         (:message feedback)])
      [:div.flex.flex-wrap.gap-2
       [:button.w-auto!.max-w-full
