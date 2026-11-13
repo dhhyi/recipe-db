@@ -170,8 +170,9 @@ header-component > header:focus-within {
   transition: none;
 }
 
-::view-transition-old(root),
-::view-transition-new(root) {
+::view-transition-group(*),
+::view-transition-old(*),
+::view-transition-new(*) {
   animation-duration: 200ms;
 }
 
@@ -180,9 +181,9 @@ header-component > header:focus-within {
     transition: none;
   }
 
-  ::view-transition-group(root),
-  ::view-transition-old(root),
-  ::view-transition-new(root) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
     animation: none;
   }
 }

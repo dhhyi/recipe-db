@@ -2,7 +2,12 @@ package components
 
 import "frontend/src/generated"
 import "frontend/src/util"
+import "fmt"
 import "net/url"
+
+func recipeImageTransitionStyle(id string) string {
+	return fmt.Sprintf("view-transition-name: recipe-image-%x", id)
+}
 
 templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	if recipeEdit || (images && imageEdit) {
@@ -33,6 +38,7 @@ templ image(recipe *gql.RecipeDetail) {
 	<figure class="contents">
 		<img
 			class="recipe-image"
+			style={ recipeImageTransitionStyle(recipe.Id) }
 			src={ recipe.Image.Url }
 			alt={ recipe.Name }
 			itemprop="image"

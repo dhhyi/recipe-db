@@ -11,6 +11,36 @@ import (
 	gql "frontend/src/generated"
 )
 
+func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
+	imageTag := regexp.MustCompile(`<img\b[^>]*>`)
+	transitionStyle := regexp.MustCompile(`style="view-transition-name:\s*(recipe-image-[0-9a-f]+);?"`)
+	seen := map[string]bool{}
+	for _, id := range []string{"42", "recipe-42", "recipe_42", "ä/42", `42"; color: red; --x: "`} {
+		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{
+			Id: id, Name: "Kuchen",
+			Image: &gql.RecipeStubImageImageMetadata{ThumbUrl: "/thumb.png"},
+		}, false))
+		hero := renderTagComponent(t, image(&gql.RecipeDetail{
+			Id: id, Name: "Kuchen",
+			Image: &gql.RecipeDetailImageImageMetadata{Url: "/full.png"},
+		}))
+		thumbnailName := transitionStyle.FindStringSubmatch(imageTag.FindString(tile))
+		heroName := transitionStyle.FindStringSubmatch(imageTag.FindString(hero))
+		if len(thumbnailName) != 2 || len(heroName) != 2 || thumbnailName[1] != heroName[1] {
+			t.Fatalf("recipe %q must match its thumbnail and hero with CSS-safe names: tile=%s hero=%s", id, tile, hero)
+		}
+		if seen[thumbnailName[1]] {
+			t.Fatalf("different recipe IDs must not share transition name %q", thumbnailName[1])
+		}
+		seen[thumbnailName[1]] = true
+	}
+
+	withoutImage := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: "42", Name: "Kuchen"}, false))
+	if strings.Contains(withoutImage, "view-transition-name") {
+		t.Fatal("an imageless tile must not claim an image transition")
+	}
+}
+
 func TestBringIngredientFooter(t *testing.T) {
 	var response gql.RecipeByIdResponse
 	if err := json.Unmarshal([]byte(`{"recipe":{"id":"42","name":"Kuchen","ingredients":[

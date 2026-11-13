@@ -90,7 +90,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 		</a>
 		if item.Image != nil {
 			<a href={ "/recipe/" + item.Id } slot="image" aria-label={ "Bild von Rezept " + item.Name } hx-boost="true" hx-swap="innerHTML transition:true">
-				<img src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image"/>
+				<img src={ item.Image.ThumbUrl } alt={ item.Name } itemprop="image" style={ recipeImageTransitionStyle(item.Id) }/>
 			</a>
 		}
 		if ratingsOnline && item.Rating != nil {
