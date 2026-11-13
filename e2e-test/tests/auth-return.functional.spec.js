@@ -15,6 +15,16 @@ test("shared page shells preserve container widths and full-height layout", asyn
         await page.goto(path);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
         await expect(page.locator("footer")).toBeVisible();
+        await expect(page.locator("body")).toHaveCSS("hyphens", "auto");
+        await expect(page.locator("body")).toHaveCSS("text-wrap", "pretty");
+        await expect(page.getByRole("heading", { level: 1 })).toHaveCSS(
+          "text-wrap",
+          "balance",
+        );
+        await expect(page.locator("footer a").first()).toHaveCSS(
+          "hyphens",
+          "none",
+        );
         for (const [width, containerWidth] of [
           [390, 390],
           [576, 510],

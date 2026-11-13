@@ -37,6 +37,16 @@
   --pico-primary-focus: #12d21ca9 !important;
 }
 
+body {
+  hyphens: auto;
+  text-wrap: pretty;
+}
+
+body a,
+body table {
+  hyphens: none;
+}
+
 h1,
 h2,
 h3,
@@ -44,6 +54,7 @@ h4,
 h5,
 h6 {
   --pico-font-weight: 400;
+  text-wrap: balance;
 }
 
 h1 {
