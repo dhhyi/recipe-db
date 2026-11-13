@@ -1604,20 +1604,34 @@ release_assert_candidate() {
 }
 
 release_assert_staged_workloads() {
+  local allow_backup_graphql=${1:-false}
   kube get deployments -o json > "$work/release-deployments.json" \
     || production_fail "cannot inspect staged candidate workloads"
-  jq -e --slurpfile candidate "$snapshot/backup-state.json" '
+  jq -e --argjson allowBackupGraphql "$allow_backup_graphql" \
+    --slurpfile candidate "$snapshot/backup-state.json" '
     . as $actual |
     all($candidate[0].candidate.workloads[];
       . as $wanted |
       any($actual.items[];
         .metadata.name == $wanted.name and
         .spec.template.metadata.annotations["recipe-db/release"] == $candidate[0].candidate.artifact and
-        .spec.replicas == 0))
-    and all($actual.items[]; .spec.replicas == 0)
+        (.spec.replicas == 0 or ($allowBackupGraphql and .metadata.name == "graphql"
+          and .spec.replicas == $wanted.replicas))))
+    and all($actual.items[]; .spec.replicas == 0
+      or ($allowBackupGraphql and .metadata.name == "graphql"))
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate is not fully staged with every workload stopped"
   backup_validate_workload_images "$work/release-deployments.json"
+  if [[ $allow_backup_graphql == true ]] && jq -e 'any(.items[];
+    .metadata.name == "graphql" and .spec.replicas > 0)' "$work/release-deployments.json" > /dev/null; then
+    render
+    restore_expected_graphql
+    kube get deployments,replicasets,pods -o json > "$work/restore-existing.json"
+    restore_backup_graphql_chain
+    jq -e 'any(.items[]; .kind == "Deployment" and .metadata.name == "graphql")' \
+      "$work/restore-backup-graphql-chain.json" > /dev/null \
+      || production_fail "candidate GraphQL is not the verified controlled backup barrier"
+  fi
 }
 
 release_assert_maintenance_barrier() {
@@ -2264,7 +2278,7 @@ release_migration_recover_claim() {
     state_phase=$(jq -er .phase "$snapshot/backup-state.json")
     release_require_recovery_lease_phase "$state_phase"
   else
-    release_migration_require_staged "$candidate"
+    release_migration_require_staged "$candidate" true
   fi
   current=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
     || production_fail "cannot inspect the migration command claim"
@@ -2313,7 +2327,7 @@ release_migration_recover() {
     state_phase=$(jq -er .phase "$snapshot/backup-state.json")
     release_require_recovery_lease_phase "$state_phase"
   else
-    release_migration_require_staged "$candidate"
+    release_migration_require_staged "$candidate" true
   fi
   state_phase=$(jq -er .phase "$snapshot/backup-state.json")
   attempt=$(release_migration_recovery_next_attempt "$snapshot/backup-state.json") \
@@ -2641,7 +2655,7 @@ release_recovery_closeout_ownership() {
 }
 
 release_migration_require_staged() {
-  local candidate=$1
+  local candidate=$1 allow_backup_graphql=${2:-false}
   [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "candidate-staged/candidate-staged" ||
   $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "recovery-required/migration-failed" ||
   $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "recovery-required/migration-uncertain" ]] \
@@ -2650,7 +2664,7 @@ release_migration_require_staged() {
     "$snapshot/backup-state.json" > /dev/null \
     || production_fail "migration state is malformed"
   release_assert_candidate "$candidate"
-  release_assert_staged_workloads
+  release_assert_staged_workloads "$allow_backup_graphql"
   release_require_lease_phase candidate-staged migration-planned migration-activation-intent \
     migration-running migration-transition-recorded migration-succeeded no-migration-required \
     migration-failed migration-uncertain migration-result-recorded
@@ -3484,7 +3498,12 @@ release_migration_status() {
     release_migration_recovery_next_command
     return
   fi
-  release_migration_require_staged "$candidate"
+  if jq -e '.phase == "migration-failed" or .phase == "migration-uncertain"' \
+    "$snapshot/backup-state.json" > /dev/null; then
+    release_migration_require_staged "$candidate" true
+  else
+    release_migration_require_staged "$candidate"
+  fi
   claim=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
     || production_fail "cannot inspect the migration command claim"
   if [[ -n $claim ]]; then

@@ -366,15 +366,12 @@ restore_fresh_target() {
 }
 
 restore_migration_target() {
-  local name pvc graphql_replicas inspect_expired_guard=${1:-false} guard_uid=
+  local name pvc inspect_expired_guard=${1:-false} guard_uid=
   printf '{"items":[]}\n' > "$work/restore-validated-guard.json"
   if [[ $inspect_expired_guard == true ]]; then
     restore_guard_validate_expired || return 1
     guard_uid=$restore_expired_guard_uid
   fi
-  graphql_replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
-    "$work/prior-workloads.json") \
-    || production_fail "migration recovery has no recorded previous-release GraphQL replica count"
   kube get namespace "$namespace" --ignore-not-found -o json > "$work/restore-namespace.json"
   jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
     "$work/restore-namespace.json" > /dev/null \
@@ -385,35 +382,20 @@ restore_migration_target() {
     or (.kind == "ConfigMap" and .metadata.name == "kube-root-ca.crt"))' \
     "$work/restore-existing.json" > /dev/null \
     || production_fail "migration recovery refuses unowned application resources"
-  jq '{items:[.items[] | select(.kind == "Pod"
-    and .metadata.deletionTimestamp == null
-    and .metadata.labels["app.kubernetes.io/name"] == "graphql"
-    and .status.phase == "Running"
-    and (.spec.containers | type == "array" and length == 1 and .[0].name == "graphql")
-    and (.spec.initContainers // []) == [] and (.spec.ephemeralContainers // []) == []
-    and any(.spec.containers[0].env[]?; .name == "MODE" and .value == "backup")
-    and (.status.containerStatuses | type == "array" and length == 1
-      and .[0].name == "graphql" and .[0].ready == true and .[0].state.running != null)
-    and all(.spec.volumes[]?; .persistentVolumeClaim == null))]}' \
-    "$work/restore-existing.json" > "$work/restore-backup-graphql-pods.json"
-  jq --slurpfile barrier "$work/restore-backup-graphql-pods.json" '
+  restore_backup_graphql_chain
+  jq --slurpfile barrier "$work/restore-backup-graphql-chain.json" '
     {items:[.items[] | select(.kind == "Pod") | . as $pod |
       select(any($barrier[0].items[]; . == $pod) | not)]}' \
     "$work/restore-existing.json" > "$work/restore-preflight-pods.json"
   restore_workers_terminated "$work/restore-preflight-pods.json" "$guard_uid" \
     || production_fail "migration recovery requires stopped workloads and terminated workers"
-  jq -e --argjson graphqlReplicas "$graphql_replicas" \
-    --slurpfile barrier "$work/restore-backup-graphql-pods.json" \
+  jq -e \
+    --slurpfile barrier "$work/restore-backup-graphql-chain.json" \
     --slurpfile stopped "$work/restore-preflight-pods.json" \
     --slurpfile guard "$work/restore-validated-guard.json" 'all(.items[];
     . as $resource |
-    if any($guard[0].items[]; . == $resource) then true
-    elif .kind == "Deployment" and .metadata.name == "graphql" then
-      ((.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0)
-      or ((.spec.replicas // 0) == $graphqlReplicas
-        and (.status.readyReplicas // 0) == $graphqlReplicas
-        and any(.spec.template.spec.containers[]; .name == "graphql"
-          and any(.env[]?; .name == "MODE" and .value == "backup")))
+    if any($guard[0].items[]; . == $resource)
+      or any($barrier[0].items[]; . == $resource) then true
     elif .kind == "Deployment" or .kind == "StatefulSet" or
          .kind == "ReplicaSet" then
       (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0
@@ -492,6 +474,113 @@ restore_migration_target() {
         . as $claim | ($volumes | index($claim)) == null))
   ' "$work/restore-mounted-pods.json" > /dev/null \
     || production_fail "migration recovery requires every application storage worker to be terminated and unmounted"
+}
+
+restore_expected_graphql() {
+  yq -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "graphql")' \
+    "$work/rendered.yml" | jq -se --arg release "$artifact" \
+    --arg image "$(jq -er '.images.graphql' "$work/pulled/release.json")" '
+    if length == 1 and .[0].spec.template.metadata.annotations["recipe-db/release"] == $release
+      and .[0].spec.template.spec.containers[0].image == $image
+      and ([.[0].spec.template.spec.containers[0].env[]? | select(.name == "MODE")] |
+        length == 1 and .[0].value == "production" and .[0].valueFrom == null)
+    then .[0] | (.spec.template.spec.containers[0].env[] | select(.name == "MODE").value) = "backup"
+    else error("expected the verified release GraphQL template") end
+  ' > "$work/restore-expected-graphql.json" \
+    || production_fail "cannot verify the expected recovery GraphQL barrier template"
+}
+
+restore_backup_graphql_chain() {
+  printf '{"items":[]}\n' > "$work/restore-backup-graphql-chain.json"
+  [[ -f $work/restore-expected-graphql.json ]] || return 0
+  jq --arg ns "$namespace" \
+    --slurpfile expected "$work/restore-expected-graphql.json" '
+    def identity($kind):
+      .kind == $kind and .apiVersion == (if $kind == "Pod" then "v1" else "apps/v1" end)
+      and .metadata.namespace == $ns and .metadata.deletionTimestamp == null
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.labels["app.kubernetes.io/name"] == "graphql"
+      and (.metadata.uid | type == "string" and length > 0)
+      and (.metadata.name | type == "string" and length > 0);
+    def controller($kind; $parent):
+      [.metadata.ownerReferences[]? | select(.controller == true)] == [{
+        apiVersion:"apps/v1",kind:$kind,name:$parent.metadata.name,uid:$parent.metadata.uid,
+        controller:true,blockOwnerDeletion:true}];
+    def labels: . // {} | del(."pod-template-hash");
+    def annotations: . // {} | del(."recipe-db/secrets-checksum");
+    def probe:
+      if . == null then null else
+        .initialDelaySeconds = (.initialDelaySeconds // 0)
+        | .timeoutSeconds = (.timeoutSeconds // 1) | .periodSeconds = (.periodSeconds // 10)
+        | .successThreshold = (.successThreshold // 1) | .failureThreshold = (.failureThreshold // 3)
+        | if .httpGet then .httpGet.scheme = (.httpGet.scheme // "HTTP") else . end
+      end;
+    def container:
+      {
+        name,image,command:(.command // []),args:(.args // []),env:(.env // []),
+        envFrom:(.envFrom // []),resources:(.resources // {}),
+        securityContext:(.securityContext // {}),
+        restartPolicy:(.restartPolicy // null),lifecycle:(.lifecycle // {}),
+        readinessProbe:(.readinessProbe | probe),livenessProbe:(.livenessProbe | probe),
+        startupProbe:(.startupProbe | probe),
+        volumeMounts:[.volumeMounts[]? | select(
+          (.mountPath == "/var/run/secrets/kubernetes.io/serviceaccount"
+            and .readOnly == true and (.name | startswith("kube-api-access-"))) | not)]};
+    def spec:
+      {containers:[.containers[]? | container],
+       initContainers:[.initContainers[]? | container],ephemeralContainers:(.ephemeralContainers // []),
+       volumes:[.volumes[]? | select(
+         ((.name | startswith("kube-api-access-"))
+           and any(.projected.sources[]?; .serviceAccountToken != null)) | not) |
+         if .secret then .secret.defaultMode = (.secret.defaultMode // 420)
+         elif .configMap then .configMap.defaultMode = (.configMap.defaultMode // 420)
+         else . end],
+       serviceAccountName:(.serviceAccountName // "default"),
+       automountServiceAccountToken:(if has("automountServiceAccountToken")
+         then .automountServiceAccountToken else true end),
+       securityContext:(.securityContext // {}),hostNetwork:(.hostNetwork // false),
+       hostPID:(.hostPID // false),hostIPC:(.hostIPC // false),
+       dnsPolicy:(.dnsPolicy // "ClusterFirst"),dnsConfig:(.dnsConfig // {}),hostAliases:(.hostAliases // [])};
+    def template($wanted):
+      (.metadata.labels | labels) == ($wanted.metadata.labels | labels)
+      and (.metadata.annotations | annotations) == ($wanted.metadata.annotations | annotations)
+      and (.spec | spec) == ($wanted.spec | spec);
+    .items as $resources | $expected[0] as $wanted | ($wanted.spec.replicas // 1) as $replicas |
+    [$resources[] | select(identity("Deployment") and .metadata.name == "graphql"
+      and .metadata.name == $wanted.metadata.name and .metadata.namespace == $wanted.metadata.namespace
+      and .spec.selector == $wanted.spec.selector
+      and (.spec.template | template($wanted.spec.template))
+      and (.spec.template.spec.containers | length) == 1
+      and (.spec.template.spec.containers[0].env | map(select(.name == "MODE"))) ==
+        [{name:"MODE",value:"backup"}]
+      and (.spec.replicas // 0) == $replicas and $replicas > 0
+      and (.status.replicas // 0) == $replicas and (.status.readyReplicas // 0) == $replicas)] as $deployments |
+    if ($deployments | length) != 1 then {items:[]} else
+      $deployments[0] as $deployment |
+      [$resources[] | select(identity("ReplicaSet") and controller("Deployment"; $deployment)
+        and (.spec.template | template($deployment.spec.template))
+        and (.spec.selector.matchLabels | labels) == $deployment.spec.selector.matchLabels
+        and (.spec.selector.matchExpressions // []) == ($deployment.spec.selector.matchExpressions // [])
+        and (.spec.replicas // 0) == $replicas
+        and (.status.replicas // 0) == $replicas and (.status.readyReplicas // 0) == $replicas)] as $sets |
+      if ($sets | length) != 1 then {items:[]} else
+        $sets[0] as $set |
+        [$resources[] | select(identity("Pod") and controller("ReplicaSet"; $set)
+          and (.metadata.name | startswith($set.metadata.name + "-"))
+          and .metadata.generateName == ($set.metadata.name + "-")
+          and (.metadata.labels | labels) == ($set.spec.template.metadata.labels | labels)
+          and (.metadata.annotations | annotations) ==
+            ($set.spec.template.metadata.annotations | annotations)
+          and (.spec | spec) == ($set.spec.template.spec | spec)
+          and all(.spec.volumes[]?; .persistentVolumeClaim == null and .hostPath == null)
+          and .status.phase == "Running"
+          and (.status.containerStatuses | type == "array" and length == 1
+            and .[0].name == "graphql" and .[0].ready == true and .[0].state.running != null))] as $pods |
+        if ($pods | length) == $replicas and ([$pods[].metadata.uid] | unique | length) == $replicas
+        then {items:([$deployment,$set] + $pods)} else {items:[]} end
+      end
+    end
+  ' "$work/restore-existing.json" > "$work/restore-backup-graphql-chain.json"
 }
 
 restore_volume_pod() {
@@ -1520,6 +1609,12 @@ restore_run() {
     [[ $source_artifact == "$(jq -er .source.artifact "$state/backup-state.json")" ]] \
       || production_fail "recovery backup does not match the retained previous release"
   fi
+  if [[ $mode == migration-recovery &&
+    ($recovery_state_phase == migration-failed || $recovery_state_phase == migration-uncertain) ]]; then
+    artifact=$recovery_candidate
+    render
+    restore_expected_graphql
+  fi
   pull_release "$source_artifact"
   application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
@@ -1554,6 +1649,10 @@ restore_run() {
     || production_fail "restore verification requires an explicit owner token in auth-accounts.json"
   printf 'header = "%s: %s %s"\n' Authorization Bearer "$(cat "$work/restore-owner-token")" > "$work/restore-curl.conf"
   render
+  if [[ $mode == migration-recovery &&
+    $recovery_state_phase != migration-failed && $recovery_state_phase != migration-uncertain ]]; then
+    restore_expected_graphql
+  fi
   yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" | jq -s \
     '[.[] | {name:.metadata.name,replicas:1,release:.spec.template.metadata.annotations["recipe-db/release"]}]' \
     > "$work/prior-workloads.json"

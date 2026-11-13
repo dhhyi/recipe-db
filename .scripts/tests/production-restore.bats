@@ -404,7 +404,7 @@ kube() {
   printf '%s\n' "$*" >> "$MOCK_LOG"
   case "$*" in
     "get namespace "*) printf '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}\n' ;;
-    "get deployments,statefulsets,"*) jq '{items:[.]}' "$work/preflight-pod.json" ;;
+    "get deployments,statefulsets,"*) cat "$work/preflight-chain.json" ;;
     "get pvc "* | "get pods "*) printf '{"items":[]}\n' ;;
     *) return 1 ;;
   esac
@@ -412,21 +412,76 @@ kube() {
 restore_migration_target
 touch "$work/preflight-passed"
 EOF
-  printf '{"apiVersion":"v1","kind":"Pod","metadata":{"namespace":"fixture","name":"graphql-pod","labels":{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"graphql"}},"spec":{"containers":[{"name":"graphql","env":[{"name":"MODE","value":"backup"}]}]},"status":{"phase":"Running","containerStatuses":[{"name":"graphql","ready":true,"state":{"running":{"startedAt":"2026-11-13T18:00:00Z"}}}]}}\n' \
-    > work/backup-graphql-pod.json
+  jq -n '{apiVersion:"apps/v1",kind:"Deployment",
+    metadata:{namespace:"fixture",name:"graphql",uid:"deployment-uid",
+      labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"graphql"}},
+    spec:{replicas:1,selector:{matchLabels:{"app.kubernetes.io/name":"graphql"}},
+      template:{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"graphql"},
+        annotations:{"recipe-db/release":("ghcr.io/dhhyi/recipe-db-releases@sha256:"+("a"*64))}},
+        spec:{initContainers:[{name:"wait-for-nats",image:("nginx@sha256:"+("c"*64)),
+          command:["sh","-ec","exit 0"]}],
+          containers:[{name:"graphql",image:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("a"*64)),
+          env:[{name:"MODE",value:"backup"}],
+          volumeMounts:[{name:"runtime",mountPath:"/run/secrets",readOnly:true}]}],
+          volumes:[{name:"runtime",secret:{secretName:"recipe-db-runtime"}}]}}}}' \
+    > work/restore-expected-graphql.json
+  jq '
+    def owner($kind; $parent): [{
+      apiVersion:"apps/v1",kind:$kind,name:$parent.metadata.name,uid:$parent.metadata.uid,
+      controller:true,blockOwnerDeletion:true}];
+    .status={replicas:1,readyReplicas:1}
+    | .spec.template.metadata.annotations["recipe-db/secrets-checksum"]="observed-checksum"
+    | . as $deployment |
+    {apiVersion:"apps/v1",kind:"ReplicaSet",
+      metadata:{name:"graphql-set",namespace:"fixture",uid:"replicaset-uid",
+        labels:$deployment.metadata.labels,ownerReferences:owner("Deployment";$deployment)},
+      spec:{replicas:1,selector:$deployment.spec.selector,template:$deployment.spec.template},
+      status:{replicas:1,readyReplicas:1}}
+    | .spec.template.metadata.labels["pod-template-hash"]="fixture-hash"
+    | .spec.selector.matchLabels["pod-template-hash"]="fixture-hash"
+    | . as $set |
+    {apiVersion:"v1",kind:"Pod",
+      metadata:{name:"graphql-set-pod",generateName:"graphql-set-",namespace:"fixture",uid:"pod-uid",
+        labels:$set.spec.template.metadata.labels,annotations:$set.spec.template.metadata.annotations,
+        ownerReferences:owner("ReplicaSet";$set)},
+      spec:$set.spec.template.spec,
+      status:{phase:"Running",containerStatuses:[{name:"graphql",ready:true,
+        state:{running:{startedAt:"2026-11-13T18:00:00Z"}}}]}}
+    | .spec.volumes[0].secret.defaultMode=420
+    | .spec.initContainers[0].imagePullPolicy="IfNotPresent"
+    | .spec.volumes += [{name:"kube-api-access-fixture",projected:{
+        sources:[{serviceAccountToken:{path:"token"}}]}}]
+    | .spec.containers[0].volumeMounts += [{
+        name:"kube-api-access-fixture",mountPath:"/var/run/secrets/kubernetes.io/serviceaccount",
+        readOnly:true}]
+    | {items:[$deployment,$set,.]}
+  ' work/restore-expected-graphql.json > work/backup-graphql-chain.json
   for mutation in \
-    '.status={phase:"Failed",reason:"NodeLost"}' \
-    '.status={phase:"Succeeded",containerStatuses:[]}' \
-    '.status.containerStatuses=[]' \
-    '.spec.containers[0].env[0].value="production"'; do
-    jq "$mutation" work/backup-graphql-pod.json > work/preflight-pod.json
+    '.items[2].status={phase:"Failed",reason:"NodeLost"}' \
+    '.items[2].status={phase:"Succeeded",containerStatuses:[]}' \
+    '.items[2].status.containerStatuses=[]' \
+    '.items[2].spec.containers[0].env[0].value="production"' \
+    '.items[2].metadata.ownerReferences=[]' \
+    '.items[2].metadata.ownerReferences[0].uid="wrong-replicaset"' \
+    '.items[1].metadata.ownerReferences[0].uid="wrong-deployment"' \
+    '.items[2].metadata.namespace="another-namespace"' \
+    '.items[0].spec.selector.matchLabels={"app.kubernetes.io/name":"other"}' \
+    '.items[2].spec.containers[0].image=("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64))' \
+    '.items[0].spec.template.spec.containers[0].image=("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64))' \
+    '.items[0].spec.template.spec.containers[0].env += [{name:"MODE",value:"backup"}]' \
+    '.items[2].spec.containers[0].env += [{name:"EXTRA",value:"drift"}]' \
+    '.items += [.items[2] | .metadata.name="lookalike" | .metadata.uid="lookalike-uid" |
+      .metadata.ownerReferences=[]]' \
+    '.items += [.items[1] | .metadata.name="another-set" | .metadata.uid="another-set-uid" |
+      .metadata.ownerReferences[0].uid="another-deployment"]'; do
+    jq "$mutation" work/backup-graphql-chain.json > work/preflight-chain.json
     run bash preflight-harness.sh
     [ "$status" -ne 0 ]
     [[ $output == *"requires stopped workloads and terminated workers"* ]]
     [ ! -e work/preflight-passed ]
     run ! grep -q 'delete' "$MOCK_LOG"
   done
-  cp work/backup-graphql-pod.json work/preflight-pod.json
+  cp work/backup-graphql-chain.json work/preflight-chain.json
   run bash preflight-harness.sh
   [ "$status" -eq 0 ]
   [ -e work/preflight-passed ]
