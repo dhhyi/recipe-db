@@ -94,13 +94,15 @@ async def test_copied_photo_through_real_graphql(fixture_server_ready):
                 "tokenUsage": "unavailable", "cost": "unavailable",
             }))
         finally:
-            for handle in handles:
-                payload(await client.call_tool("discard_image_upload", {"uploadHandle": handle}))
-            async with httpx.AsyncClient() as http:
-                response = await http.post(
-                    "http://traefik/graphql",
-                    headers={"Authorization": "Bearer " + AUTH_TOKENS["owner"], "Origin": "http://traefik"},
-                    json={"query": "mutation($id: ID!) { deleteRecipe(id: $id) }", "variables": {"id": recipe_id}},
-                )
-                response.raise_for_status()
-                assert response.json().get("data", {}).get("deleteRecipe") is True
+            try:
+                for handle in handles:
+                    payload(await client.call_tool("discard_image_upload", {"uploadHandle": handle}))
+            finally:
+                async with httpx.AsyncClient() as http:
+                    response = await http.post(
+                        "http://traefik/graphql",
+                        headers={"Authorization": "Bearer " + AUTH_TOKENS["owner"], "Origin": "http://traefik"},
+                        json={"query": "mutation($id: ID!) { deleteRecipe(id: $id) }", "variables": {"id": recipe_id}},
+                    )
+                    response.raise_for_status()
+                    assert response.json().get("data", {}).get("deleteRecipe") is True
