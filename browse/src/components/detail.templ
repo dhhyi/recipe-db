@@ -2,7 +2,12 @@ package components
 
 import "frontend/src/generated"
 import "frontend/src/util"
+import "fmt"
 import "net/url"
+
+func recipeImageTransitionStyle(id string) string {
+	return fmt.Sprintf("view-transition-name: recipe-image-%x", id)
+}
 
 templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	if recipeEdit || (images && imageEdit) {
@@ -33,6 +38,7 @@ templ image(recipe *gql.RecipeDetail) {
 	<figure class="contents">
 		<img
 			class="recipe-image"
+			style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
 			src={ recipe.Image.Url }
 			alt={ recipe.Name }
 			itemprop="image"
@@ -105,8 +111,11 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 			<hgroup>
 				<h1 itemprop="name">{ recipe.Name }</h1>
 				if recipe.Rating != nil {
-					<div id={ "recipe-rating-" + recipe.Id } hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML">
-						@Rating(recipe.Rating, false, nil, nil)
+					// Keep the snapshot outside the widget replaced by its live refresh.
+					<div class="recipe-rating w-fit" style={ recipeRatingTransitionStyle(recipe.Id) }>
+						<div id={ "recipe-rating-" + recipe.Id } hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML">
+							@Rating(recipe.Rating, false, nil, nil)
+						</div>
 					</div>
 				}
 			</hgroup>
@@ -136,7 +145,7 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 		</small>
 	</p>
 	<p>
-		<a href="/">Zur Startseite</a>
+		<a href="/" data-browse-home hx-boost="true" hx-swap="innerHTML transition:true">Zur Startseite</a>
 	</p>
 	@SimilarRecipesPlaceholder(recipe.Id)
 }

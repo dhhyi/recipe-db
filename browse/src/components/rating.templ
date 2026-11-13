@@ -5,6 +5,10 @@ import (
 	"frontend/src/generated"
 )
 
+func recipeRatingTransitionStyle(id string) string {
+	return fmt.Sprintf("view-transition-name: recipe-rating-%x", id)
+}
+
 templ Rating(rating *gql.Rating, ratingPossible bool, slot *string, myRating *int) {
 	{{
 		ratingValue := ""

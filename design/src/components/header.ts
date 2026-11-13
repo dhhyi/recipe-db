@@ -153,7 +153,13 @@ export class HeaderComponent extends LitElement {
         <nav class="[--pico-nav-element-spacing-vertical:0]">
           <ul class="unlist">
             <li>
-              <a href="/" hx-boost="true" class="align-top">
+              <a
+                href="/"
+                data-browse-home
+                hx-boost="true"
+                hx-swap="innerHTML transition:true"
+                class="align-top"
+              >
                 <span style="color: var(--pico-h1-color)" class="contents *:h-8"
                   >${unsafeSVG(bannerSvg)}</span
                 >

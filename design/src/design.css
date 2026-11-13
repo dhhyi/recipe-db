@@ -90,6 +90,10 @@ ol:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
   list-style-type: decimal;
 }
 
+#recipe-tag-options > ul.markerless > li {
+  list-style-type: none;
+}
+
 a:not([role="button"]):not(:hover, :active, :focus) {
   text-decoration-line: none;
 }
@@ -170,9 +174,124 @@ header-component > header:focus-within {
   transition: none;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition {
+    navigation: auto;
+  }
+}
+
+::view-transition-group(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+  animation-duration: 200ms;
+}
+
+:root:active-view-transition-type(browse-results, browse-return) {
+  recipe-tile-component {
+    view-transition-name: var(--recipe-tile-transition-name, none);
+  }
+
+  recipe-tile-component img,
+  recipe-tile-component a[slot="rating"] {
+    view-transition-name: none !important;
+  }
+}
+
+:root:active-view-transition-type(browse-results) {
+  &::view-transition-old(root) {
+    display: none;
+  }
+
+  &::view-transition-group(root),
+  &::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+}
+
+:root:active-view-transition-type(tag-edit, tag-search) {
+  .recipe-image,
+  .recipe-rating,
+  recipe-tile-component img,
+  recipe-tile-component a[slot="rating"] {
+    view-transition-name: none !important;
+  }
+
+  #recipe-tag-options form[data-tag-mutation] {
+    view-transition-name: var(--tag-transition-name, none);
+  }
+
+  &::view-transition-old(root) {
+    display: none;
+  }
+
+  &::view-transition-group(root),
+  &::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+}
+
+:root:active-view-transition-type(tag-edit)
+  .recipe-tags-detail
+  form[data-tag-mutation] {
+  view-transition-name: var(--tag-transition-name, none);
+}
+
+:root:active-view-transition-type(browse-return) {
+  recipe-tile-component,
+  .recipe-image {
+    view-transition-class: recipe-return-card;
+  }
+
+  .recipe-image {
+    view-transition-name: var(--recipe-tile-transition-name, none) !important;
+  }
+
+  .recipe-rating {
+    view-transition-name: none !important;
+  }
+
+  &::view-transition-image-pair(.recipe-return-card) {
+    overflow: clip;
+    animation: recipe-return-corners 200ms ease both;
+  }
+}
+
+@keyframes recipe-return-corners {
+  from {
+    border-radius: 0;
+  }
+  to {
+    border-radius: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  recipe-tile-component[data-recipe-enter] {
+    animation: recipe-card-enter 200ms ease;
+  }
+}
+
+@keyframes recipe-card-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   header-component > header {
     transition: none;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-image-pair(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
   }
 }
 
@@ -201,6 +320,28 @@ header-component > header:focus-within {
 
   &.error {
     color: var(--pico-del-color);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .save-feedback {
+    transform-origin: left center;
+    animation: save-feedback 400ms ease-out;
+  }
+}
+
+@keyframes save-feedback {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.95);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0) scale(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -339,6 +480,8 @@ recipe-tile-component a[slot="image"] > img {
 rating-component[hx-post] {
   svg {
     transition: all 0.3s ease;
+    transform-origin: center;
+    transform-box: fill-box;
   }
 
   svg:has(~ svg:hover),
@@ -349,6 +492,21 @@ rating-component[hx-post] {
     .rating-outline {
       fill: #ffec17;
     }
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-rating-saved] rating-component {
+    animation: rating-saved 200ms ease;
+  }
+}
+
+@keyframes rating-saved {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
   }
 }
 

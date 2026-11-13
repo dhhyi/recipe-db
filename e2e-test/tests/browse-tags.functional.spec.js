@@ -332,6 +332,131 @@ test("detail view tags link to filtered search while edit mode remains non-navig
   await expect(page.locator("#recipe-tags [data-tag-remove]")).toHaveCount(2);
 });
 
+const transitionTest = test.extend({ viewTransitions: true });
+
+transitionTest(
+  "tag changes animate without lifting recipe images or ratings",
+  async ({ page, request, relatedDemoRecipes: { source, matches } }) => {
+    const tag = await findOrCreateTag(request, "CUISINE", "E2E Animation");
+    await graphql(
+      request,
+      "mutation($id: ID!, $rating: Int!) { rate(id: $id, rating: $rating) { average count } }",
+      { id: matches[0].id, rating: 5 },
+    );
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.addInitScript(() => {
+      window.tagTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (...args) => {
+        const transition = start(...args);
+        const run = {};
+        window.tagTransitions.push(run);
+        transition.ready.then(() => {
+          run.types = [...transition.types];
+          run.tagNames = [
+            ...document.querySelectorAll(
+              "#recipe-tags form[data-tag-mutation]",
+            ),
+          ].map((form) => getComputedStyle(form).viewTransitionName);
+          run.otherNames = [
+            ...document.querySelectorAll(".recipe-image, .recipe-rating"),
+          ].map((element) => getComputedStyle(element).viewTransitionName);
+          run.tileImageNames = [
+            ...document.querySelectorAll(
+              "#similar-recipes recipe-tile-component img",
+            ),
+          ].map((element) => getComputedStyle(element).viewTransitionName);
+          run.tileRatingNames = [
+            ...document.querySelectorAll(
+              '#similar-recipes recipe-tile-component a[slot="rating"]',
+            ),
+          ].map((element) => getComputedStyle(element).viewTransitionName);
+        });
+        transition.finished.then(() => {
+          run.finished = true;
+        });
+        return transition;
+      };
+    });
+    await page.goto(`/recipe/${source.id}`);
+    await page.locator("#similar-recipes").scrollIntoViewIfNeeded();
+    const tile = page.locator(
+      `#similar-recipes [data-recipe-id="${matches[0].id}"]`,
+    );
+    const thumbnail = tile.locator('a[slot="image"] img');
+    await waitForImageDecoded(thumbnail);
+    await expect(thumbnail).toHaveCSS("view-transition-name", /^recipe-image-/);
+    await expect(tile.locator('a[slot="rating"]')).toHaveCSS(
+      "view-transition-name",
+      /^recipe-rating-/,
+    );
+    await page.getByRole("button", { name: "Tags bearbeiten" }).click();
+    await expect(page.locator("#recipe-tag-options li").first()).toHaveCSS(
+      "list-style-type",
+      "none",
+    );
+    await page.getByRole("searchbox", { name: "Tag suchen" }).fill(tag.name);
+    await expect
+      .poll(() => page.evaluate(() => window.tagTransitions[0]?.finished))
+      .toBe(true);
+    const searchTransition = await page.evaluate(
+      () => window.tagTransitions[0],
+    );
+    expect(searchTransition.types).toEqual(["tag-search"]);
+    expect(
+      searchTransition.tagNames.some((name) =>
+        name.startsWith("recipe-tag-option-"),
+      ),
+    ).toBe(true);
+    expect(searchTransition.otherNames.length).toBeGreaterThan(0);
+    expect(searchTransition.otherNames.every((name) => name === "none")).toBe(
+      true,
+    );
+    for (const names of [
+      searchTransition.tileImageNames,
+      searchTransition.tileRatingNames,
+    ]) {
+      expect(names.length).toBeGreaterThan(0);
+      expect(names.every((name) => name === "none")).toBe(true);
+    }
+    await page
+      .locator("#recipe-tag-options")
+      .getByRole("button", { name: tag.name, exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", { name: `${tag.name} entfernen` }),
+    ).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => window.tagTransitions[1]?.finished))
+      .toBe(true);
+    const transition = await page.evaluate(() => window.tagTransitions[1]);
+    expect(transition.types).toEqual(["tag-edit"]);
+    expect(
+      transition.tagNames.some(
+        (name) =>
+          name.startsWith("recipe-tag-") &&
+          !name.startsWith("recipe-tag-option-"),
+      ),
+    ).toBe(true);
+    expect(transition.otherNames.length).toBeGreaterThan(0);
+    expect(transition.otherNames.every((name) => name === "none")).toBe(true);
+    for (const names of [
+      transition.tileImageNames,
+      transition.tileRatingNames,
+    ]) {
+      expect(names.length).toBeGreaterThan(0);
+      expect(names.every((name) => name === "none")).toBe(true);
+    }
+    await page.getByRole("button", { name: `${tag.name} entfernen` }).click();
+    await expect(
+      page.getByRole("button", { name: `${tag.name} entfernen` }),
+    ).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate(() => window.tagTransitions[2]?.finished))
+      .toBe(true);
+  },
+);
+
 test("native filters retain Typesense AND, OR, text query, and non-tag fields", async ({
   page,
   tagSearchRecipes: { tag, sameNameOtherCategory, matches, unrelated },

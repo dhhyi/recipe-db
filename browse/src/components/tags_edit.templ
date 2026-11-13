@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"net/url"
 
 	gql "frontend/src/generated"
@@ -52,7 +53,7 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 						hx-get={ recipeTagsPath(id) + "/options" }
 						hx-trigger="input[!event.isComposing] changed delay:300ms, compositionend delay:300ms, search"
 						hx-target="#recipe-tag-options"
-						hx-swap="innerHTML"
+						hx-swap="innerHTML transition:true"
 						hx-sync="this:replace"
 						hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')"
 						hx-on:compositionend="delete this.dataset.composing"
@@ -144,9 +145,11 @@ templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
 					<form
 						action={ recipeTagRemovePath(id, tag.Id) }
 						method="post"
+						data-tag-mutation
+						style={ fmt.Sprintf("--tag-transition-name: recipe-tag-%x", tag.Id) }
 						hx-post={ recipeTagRemovePath(id, tag.Id) }
 						hx-target="#recipe-tags"
-						hx-swap="outerHTML"
+						hx-swap="outerHTML transition:true"
 						hx-sync="#recipe-tags:drop"
 					>
 						<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>
@@ -185,9 +188,11 @@ templ TagOptions(id, query string, tags []gql.RecipeTag) {
 					<form
 						action={ recipeTagsPath(id) }
 						method="post"
+						data-tag-mutation
+						style={ fmt.Sprintf("--tag-transition-name: recipe-tag-option-%x", tag.Id) }
 						hx-post={ recipeTagsPath(id) }
 						hx-target="#recipe-tags"
-						hx-swap="outerHTML"
+						hx-swap="outerHTML transition:true"
 						hx-sync="#recipe-tags:drop"
 					>
 						<input type="hidden" name="tagId" value={ tag.Id }/>

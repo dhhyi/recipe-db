@@ -8,8 +8,126 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
+
 	gql "frontend/src/generated"
 )
+
+func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
+	imageTag := regexp.MustCompile(`<img\b[^>]*>`)
+	transitionStyle := regexp.MustCompile(`view-transition-name:\s*(recipe-image-[0-9a-f]+)`)
+	tileStyle := regexp.MustCompile(`--recipe-tile-transition-name:\s*(recipe-tile-[0-9a-f]+)`)
+	seen := map[string]bool{}
+	for _, id := range []string{"42", "recipe-42", "recipe_42", "ä/42", `42"; color: red; --x: "`} {
+		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{
+			Id: id, Name: "Kuchen",
+			Image: &gql.RecipeStubImageImageMetadata{ThumbUrl: "/thumb.png"},
+		}, false, false))
+		hero := renderTagComponent(t, image(&gql.RecipeDetail{
+			Id: id, Name: "Kuchen",
+			Image: &gql.RecipeDetailImageImageMetadata{Url: "/full.png"},
+		}))
+		thumbnailName := transitionStyle.FindStringSubmatch(imageTag.FindString(tile))
+		heroName := transitionStyle.FindStringSubmatch(imageTag.FindString(hero))
+		if len(thumbnailName) != 2 || len(heroName) != 2 || thumbnailName[1] != heroName[1] {
+			t.Fatalf("recipe %q must match its thumbnail and hero with CSS-safe names: tile=%s hero=%s", id, tile, hero)
+		}
+		if seen[thumbnailName[1]] {
+			t.Fatalf("different recipe IDs must not share transition name %q", thumbnailName[1])
+		}
+		tileName := tileStyle.FindStringSubmatch(tile)
+		heroTileName := tileStyle.FindStringSubmatch(hero)
+		if len(tileName) != 2 || len(heroTileName) != 2 || tileName[1] != heroTileName[1] {
+			t.Fatalf("recipe %q must match its hero to the whole card on return: tile=%s hero=%s", id, tile, hero)
+		}
+		seen[thumbnailName[1]] = true
+	}
+
+	withoutImage := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: "42", Name: "Kuchen"}, false, false))
+	if strings.Contains(withoutImage, "view-transition-name") {
+		t.Fatal("an imageless tile must not claim an image transition")
+	}
+}
+
+func TestRecipeRatingsKeepTransitionOutsideLiveWidget(t *testing.T) {
+	ratingName := regexp.MustCompile(`view-transition-name:\s*(recipe-rating-[0-9a-f]+)`)
+	seen := map[string]bool{}
+	for _, id := range []string{"42", "recipe_42", `42"; color: red; --x: "`} {
+		rating := &gql.Rating{RecipeId: id}
+		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: id, Name: "Kuchen", Rating: rating}, true, false))
+		detail := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{
+			Recipe: &gql.RecipeDetail{Id: id, Name: "Kuchen", Rating: rating},
+		}, ""))
+		widget := renderTagComponent(t, RecipeRatingWidget(id, rating, false, nil, false))
+		tileName := ratingName.FindStringSubmatch(tile)
+		detailName := ratingName.FindStringSubmatch(detail)
+		if len(tileName) != 2 || len(detailName) != 2 || tileName[1] != detailName[1] {
+			t.Fatalf("rating transition must pair tile and detail for %q", id)
+		}
+		if ratingName.MatchString(widget) {
+			t.Fatal("live widget replacement must not remove or recreate the captured transition element")
+		}
+		stableWrapper := regexp.MustCompile(`style="view-transition-name:\s*` + detailName[1] + `;?"><div id="recipe-rating-`)
+		if !stableWrapper.MatchString(detail) {
+			t.Fatal("detail rating transition must wrap, not belong to, the live widget")
+		}
+		if seen[tileName[1]] {
+			t.Fatalf("different recipes share rating transition name %q", tileName[1])
+		}
+		seen[tileName[1]] = true
+	}
+}
+
+func TestRecipeTileTransitionIdentitiesSurviveReorderingAndFiltering(t *testing.T) {
+	recipes := []gql.RecipeStub{
+		{Id: "42"}, {Id: "recipe_42"}, {Id: `42"; color: red; --x: "`},
+	}
+	tileStyle := regexp.MustCompile(`data-recipe-id="([^"]*)" style="--recipe-tile-transition-name:\s*(recipe-tile-[0-9a-f]+);?"`)
+	identities := map[string]string{}
+	seen := map[string]bool{}
+	for _, results := range [][]gql.RecipeStub{recipes, {recipes[2], recipes[0], recipes[1]}, {recipes[1]}} {
+		body := renderTagComponent(t, BrowseResults(BrowseState{Recipes: results}, true))
+		matches := tileStyle.FindAllStringSubmatch(body, -1)
+		if len(matches) != len(results) {
+			t.Fatal("every tile must provide a CSS-safe transition identity")
+		}
+		for _, match := range matches {
+			id, name := html.UnescapeString(match[1]), match[2]
+			if previous, ok := identities[id]; ok {
+				if previous != name {
+					t.Fatalf("recipe %q changed identity after reordering or filtering", id)
+				}
+			} else {
+				if seen[name] {
+					t.Fatalf("different recipes share tile transition name %q", name)
+				}
+				identities[id], seen[name] = name, true
+			}
+		}
+	}
+}
+
+func TestRecipeCardEntriesAnimateOnlyNewBatches(t *testing.T) {
+	recipes := []gql.RecipeStub{{Id: "42", Name: "Kuchen"}}
+	state := BrowseState{Recipes: recipes}
+	for _, tc := range []struct {
+		name      string
+		component templ.Component
+		enter     bool
+	}{
+		{"overview and search", BrowseResults(state, true), false},
+		{"next overview page", BrowsePage(state), true},
+		{"initial similar", SimilarRecipes("source", recipes, nil, false), true},
+		{"more similar", SimilarRecipesBatch("source", recipes, nil, false), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := renderTagComponent(t, tc.component)
+			if strings.Contains(body, "data-recipe-enter") != tc.enter {
+				t.Fatalf("entry fade must apply only to freshly appended cards: %s", body)
+			}
+		})
+	}
+}
 
 func TestBringIngredientFooter(t *testing.T) {
 	var response gql.RecipeByIdResponse

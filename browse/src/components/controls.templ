@@ -20,14 +20,14 @@ templ BrowseIdentity(resp *gql.BrowseIdentityResponse, googleOAuthEnabled bool) 
 
 templ RecipeRatingControls(id string, resp *gql.RecipeRatingResponse) {
 	if resp.Recipe != nil && resp.Recipe.Rating != nil {
-		@RecipeRatingWidget(id, &resp.Recipe.Rating.Rating, resp.MyCapabilities.CanRate, resp.Recipe.Rating.MyRating)
+		@RecipeRatingWidget(id, &resp.Recipe.Rating.Rating, resp.MyCapabilities.CanRate, resp.Recipe.Rating.MyRating, false)
 	} else {
 		@RecipeRatingUnavailable()
 	}
 }
 
-templ RecipeRatingWidget(id string, rating *gql.Rating, canRate bool, myRating *int) {
-	<div id={ "recipe-rating-" + id }>
+templ RecipeRatingWidget(id string, rating *gql.Rating, canRate bool, myRating *int, saved bool) {
+	<div id={ "recipe-rating-" + id } data-rating-saved?={ saved }>
 		@Rating(rating, canRate, nil, myRating)
 	</div>
 }
