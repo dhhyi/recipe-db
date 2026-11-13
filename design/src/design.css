@@ -119,6 +119,24 @@ footer-component {
   display: contents;
 }
 
+header-component > header {
+  transition: transform 150ms ease;
+}
+
+header-component > header[data-scroll-hidden]:not(:focus-within) {
+  transform: translateY(calc(-100% - 20px));
+}
+
+header-component > header:focus-within {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  header-component > header {
+    transition: none;
+  }
+}
+
 :root {
   --feedback-warning-color: #9a6700;
 }
