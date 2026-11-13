@@ -70,6 +70,35 @@ func TestRecipeRatingsKeepTransitionOutsideLiveWidget(t *testing.T) {
 	}
 }
 
+func TestRecipeTileTransitionIdentitiesSurviveReorderingAndFiltering(t *testing.T) {
+	recipes := []gql.RecipeStub{
+		{Id: "42"}, {Id: "recipe_42"}, {Id: `42"; color: red; --x: "`},
+	}
+	tileStyle := regexp.MustCompile(`data-recipe-id="([^"]*)" style="--recipe-tile-transition-name:\s*(recipe-tile-[0-9a-f]+);?"`)
+	identities := map[string]string{}
+	seen := map[string]bool{}
+	for _, results := range [][]gql.RecipeStub{recipes, {recipes[2], recipes[0], recipes[1]}, {recipes[1]}} {
+		body := renderTagComponent(t, BrowseResults(BrowseState{Recipes: results}, true))
+		matches := tileStyle.FindAllStringSubmatch(body, -1)
+		if len(matches) != len(results) {
+			t.Fatal("every tile must provide a CSS-safe transition identity")
+		}
+		for _, match := range matches {
+			id, name := html.UnescapeString(match[1]), match[2]
+			if previous, ok := identities[id]; ok {
+				if previous != name {
+					t.Fatalf("recipe %q changed identity after reordering or filtering", id)
+				}
+			} else {
+				if seen[name] {
+					t.Fatalf("different recipes share tile transition name %q", name)
+				}
+				identities[id], seen[name] = name, true
+			}
+		}
+	}
+}
+
 func TestBringIngredientFooter(t *testing.T) {
 	var response gql.RecipeByIdResponse
 	if err := json.Unmarshal([]byte(`{"recipe":{"id":"42","name":"Kuchen","ingredients":[

@@ -182,6 +182,27 @@ header-component > header:focus-within {
   animation-duration: 200ms;
 }
 
+:root:active-view-transition-type(browse-results) {
+  recipe-tile-component {
+    view-transition-name: var(--recipe-tile-transition-name, none);
+  }
+
+  recipe-tile-component img,
+  recipe-tile-component a[slot="rating"] {
+    view-transition-name: none !important;
+  }
+
+  &::view-transition-old(root) {
+    display: none;
+  }
+
+  &::view-transition-group(root),
+  &::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   header-component > header {
     transition: none;
