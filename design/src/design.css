@@ -170,9 +170,20 @@ header-component > header:focus-within {
   transition: none;
 }
 
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   header-component > header {
     transition: none;
+  }
+
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
   }
 }
 

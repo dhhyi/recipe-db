@@ -136,7 +136,7 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 		</small>
 	</p>
 	<p>
-		<a href="/">Zur Startseite</a>
+		<a href="/" hx-boost="true" hx-swap="innerHTML transition:true">Zur Startseite</a>
 	</p>
 	@SimilarRecipesPlaceholder(recipe.Id)
 }
