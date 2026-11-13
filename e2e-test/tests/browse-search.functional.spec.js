@@ -816,103 +816,104 @@ test("a superseded first-page response cannot replace a newer query", async ({
   await expect(search).toBeFocused();
 });
 
+const transitionTest = test.extend({ viewTransitions: true });
+
 for (const cacheSize of [10, 0]) {
-  test(`Back reconstructs loaded depth and controls with history cache size ${cacheSize}`, async ({
-    page,
-    demoRecipe,
-    authContexts,
-  }) => {
-    await manualSentinel(page);
-    await page.addInitScript(() => {
-      window.historyTransitions = [];
-      const start = document.startViewTransition.bind(document);
-      document.startViewTransition = (...args) => {
-        const transition = start(...args);
-        const record = {};
-        window.historyTransitions.push(record);
-        transition.ready.then(() => {
-          record.types = [...transition.types];
-        });
-        transition.finished.then(() => {
-          record.finished = true;
-        });
-        return transition;
-      };
-    });
-    await page.route(/\/\?[^#]*\bq=/, async (route) => {
-      const number = Number(
-        new URL(route.request().url()).searchParams.get("page") || 1,
+  transitionTest(
+    `Back reconstructs loaded depth and controls with history cache size ${cacheSize}`,
+    async ({ page, demoRecipe, authContexts }) => {
+      await manualSentinel(page);
+      await page.addInitScript(() => {
+        window.historyTransitions = [];
+        const start = document.startViewTransition.bind(document);
+        document.startViewTransition = (...args) => {
+          const transition = start(...args);
+          const record = {};
+          window.historyTransitions.push(record);
+          transition.ready.then(() => {
+            record.types = [...transition.types];
+          });
+          transition.finished.then(() => {
+            record.finished = true;
+          });
+          return transition;
+        };
+      });
+      await page.route(/\/\?[^#]*\bq=/, async (route) => {
+        const number = Number(
+          new URL(route.request().url()).searchParams.get("page") || 1,
+        );
+        const ids = Array.from(
+          { length: number * 24 },
+          (_, index) => `history-${index}`,
+        );
+        ids[0] = demoRecipe.id;
+        await fulfillBrowse(
+          route,
+          { page: number, found: 72, ids },
+          authContexts.authorizationHeader("owner"),
+        );
+      });
+      await page.goto("/");
+      const search = page.getByRole("searchbox");
+      await search.fill("boundary");
+      await search.press("Enter");
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+      await triggerSentinel(page);
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(48);
+      await triggerSentinel(page);
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
+      await page.evaluate((size) => {
+        window.htmx.config.historyCacheSize = size;
+        window.scrollTo(0, 700);
+      }, cacheSize);
+      await page
+        .locator(`[data-recipe-id="${demoRecipe.id}"]`)
+        .evaluate((link) => link.click());
+      await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+      await expect(page.locator(".recipe-image")).toBeVisible();
+      await page.evaluate(() => {
+        window.historyTransitions = [];
+      });
+      await page.goBack();
+      await expect(search).toHaveValue("boundary");
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
+      await expect(page.locator("#browse-metadata")).toHaveAttribute(
+        "data-page",
+        "3",
       );
-      const ids = Array.from(
-        { length: number * 24 },
-        (_, index) => `history-${index}`,
+      // Cache-miss navigation restores the complete listing from the server;
+      // scroll positioning is left to HTMX/browser navigation, not a controller.
+      await expect(search).toBeVisible();
+      await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+      await expect
+        .poll(() => page.evaluate(() => window.historyTransitions[0]?.finished))
+        .toBe(true);
+      expect(
+        await page.evaluate(() => window.historyTransitions[0].types),
+      ).toEqual(["browse-return"]);
+      await page.goForward();
+      await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+      await expect(page.locator(".recipe-image")).toBeVisible();
+      await expect
+        .poll(() => page.evaluate(() => window.historyTransitions[1]?.finished))
+        .toBe(true);
+      expect(
+        await page.evaluate(() => window.historyTransitions[1].types),
+      ).toEqual(["history-page"]);
+      await page.goBack();
+      await expect(search).toHaveValue("boundary");
+      await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
+      await expect
+        .poll(() => page.evaluate(() => window.historyTransitions[2]?.finished))
+        .toBe(true);
+      await page.reload();
+      await expect(page.locator("#browse-metadata")).toHaveAttribute(
+        "data-page",
+        "3",
       );
-      ids[0] = demoRecipe.id;
-      await fulfillBrowse(
-        route,
-        { page: number, found: 72, ids },
-        authContexts.authorizationHeader("owner"),
-      );
-    });
-    await page.goto("/");
-    const search = page.getByRole("searchbox");
-    await search.fill("boundary");
-    await search.press("Enter");
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
-    await triggerSentinel(page);
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(48);
-    await triggerSentinel(page);
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
-    await page.evaluate((size) => {
-      window.htmx.config.historyCacheSize = size;
-      window.scrollTo(0, 700);
-    }, cacheSize);
-    await page
-      .locator(`[data-recipe-id="${demoRecipe.id}"]`)
-      .evaluate((link) => link.click());
-    await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-    await expect(page.locator(".recipe-image")).toBeVisible();
-    await page.evaluate(() => {
-      window.historyTransitions = [];
-    });
-    await page.goBack();
-    await expect(search).toHaveValue("boundary");
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
-    await expect(page.locator("#browse-metadata")).toHaveAttribute(
-      "data-page",
-      "3",
-    );
-    // Cache-miss navigation restores the complete listing from the server;
-    // scroll positioning is left to HTMX/browser navigation, not a controller.
-    await expect(search).toBeVisible();
-    await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
-    await expect
-      .poll(() => page.evaluate(() => window.historyTransitions[0]?.finished))
-      .toBe(true);
-    expect(
-      await page.evaluate(() => window.historyTransitions[0].types),
-    ).toEqual(["browse-return"]);
-    await page.goForward();
-    await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-    await expect(page.locator(".recipe-image")).toBeVisible();
-    await expect
-      .poll(() => page.evaluate(() => window.historyTransitions[1]?.finished))
-      .toBe(true);
-    expect(
-      await page.evaluate(() => window.historyTransitions[1].types),
-    ).toEqual(["history-page"]);
-    await page.goBack();
-    await expect(search).toHaveValue("boundary");
-    await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
-    await expect
-      .poll(() => page.evaluate(() => window.historyTransitions[2]?.finished))
-      .toBe(true);
-    await page.reload();
-    await expect(page.locator("#browse-metadata")).toHaveAttribute(
-      "data-page",
-      "3",
-    );
-  });
+    },
+  );
 }
 
 for (const action of ["sort", "query"]) {

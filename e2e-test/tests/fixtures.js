@@ -308,7 +308,21 @@ async function seedRandomRecipeTags(request, recipes) {
   }
 }
 
+function disableViewTransitions() {
+  document.startViewTransition = undefined;
+}
+
 export const test = base.extend({
+  viewTransitions: [false, { option: true }],
+  configureViewTransitions: [
+    async ({ context, viewTransitions }, use) => {
+      if (!viewTransitions) {
+        await context.addInitScript(disableViewTransitions);
+      }
+      await use();
+    },
+    { auto: true },
+  ],
   authContexts: async (
     {
       browser,
@@ -322,6 +336,7 @@ export const test = base.extend({
       timezoneId,
       colorScheme,
       reducedMotion,
+      viewTransitions,
     },
     use,
   ) => {
@@ -376,8 +391,11 @@ export const test = base.extend({
         reducedMotion,
         ...contextOverrides,
         baseURL: origin,
-      }).then((context) => {
+      }).then(async (context) => {
         contexts.push(context);
+        if (!viewTransitions) {
+          await context.browserContext.addInitScript(disableViewTransitions);
+        }
         return context;
       });
     await use({
