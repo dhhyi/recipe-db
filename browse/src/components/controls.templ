@@ -11,7 +11,13 @@ templ BrowseControls(resp *gql.BrowseControlsResponse) {
 }
 
 templ BrowseIdentity(resp *gql.BrowseIdentityResponse, googleOAuthEnabled bool) {
-	if googleOAuthEnabled {
+	if resp.MyEmail != nil {
+		if googleOAuthEnabled {
+			<header-component auth-role={ resp.MyCapabilities.Role } auth-email={ *resp.MyEmail } auth-enabled></header-component>
+		} else {
+			<header-component auth-role={ resp.MyCapabilities.Role } auth-email={ *resp.MyEmail }></header-component>
+		}
+	} else if googleOAuthEnabled {
 		<header-component auth-role={ resp.MyCapabilities.Role } auth-enabled></header-component>
 	} else {
 		<header-component auth-role={ resp.MyCapabilities.Role }></header-component>

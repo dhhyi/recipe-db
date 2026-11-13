@@ -21,6 +21,7 @@ func TestIdentityLookup(t *testing.T) {
 	}{
 		{"anonymous", 200, `{"data":{"myCapabilities":{"role":"anonymous"}}}`, true, false, `<header-component auth-role="anonymous" auth-enabled></header-component>`, false},
 		{"owner", 200, `{"data":{"myCapabilities":{"role":"owner"}}}`, true, false, `<header-component auth-role="owner" auth-enabled></header-component>`, false},
+		{"owner with verified email", 200, `{"data":{"myCapabilities":{"role":"owner"},"myEmail":"owner@example.com"}}`, true, false, `<header-component auth-role="owner" auth-email="owner@example.com" auth-enabled></header-component>`, false},
 		{"disabled", 200, `{"data":{"myCapabilities":{"role":"anonymous"}}}`, false, false, `<header-component auth-role="anonymous"></header-component>`, false},
 		{"upstream 401", 401, `rejected`, true, false, `<header-component auth-role="anonymous" auth-enabled></header-component>`, true},
 		{"upstream 401 disabled", 401, `rejected`, false, false, `<header-component></header-component>`, true},

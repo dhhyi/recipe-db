@@ -908,10 +908,7 @@ mod tests {
         let policy = policy(FULL_CONFIG);
         for (headers, expected) in [
             (HeaderMap::new(), serde_json::Value::Null),
-            (
-                bearer("secret-one"),
-                serde_json::Value::Null,
-            ),
+            (bearer("secret-one"), serde_json::Value::Null),
             (
                 google_headers("owner@example.com", None),
                 serde_json::Value::Null,
@@ -927,9 +924,7 @@ mod tests {
         ] {
             let context = policy.request_context(&headers).unwrap();
             let response = schema
-                .execute(
-                    async_graphql::Request::new("{ myEmail }").data(context),
-                )
+                .execute(async_graphql::Request::new("{ myEmail }").data(context))
                 .await;
             assert!(response.errors.is_empty(), "{:?}", response.errors);
             assert_eq!(response.data.into_json().unwrap()["myEmail"], expected);
