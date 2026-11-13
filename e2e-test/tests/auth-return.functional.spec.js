@@ -188,7 +188,11 @@ test("profile menu stays accessible and contained at responsive widths", async (
     await page.goto("/");
     const header = page.locator("header-component > header");
     const details = header.locator("details");
-    const summary = page.getByRole("button", { name: "Profil", exact: true });
+    await expect(page.locator("header-component")).toHaveAttribute(
+      "auth-email",
+      email,
+    );
+    const summary = header.locator("details.dropdown > summary");
     await expect(summary).toBeVisible();
     await expect(page.getByRole("link", { name: "Anmelden" })).toHaveCount(0);
 
@@ -218,6 +222,8 @@ test("profile menu stays accessible and contained at responsive widths", async (
         icon.style.removeProperty("display");
 
         return {
+          viewportWidth: window.innerWidth,
+          wideScreen: window.matchMedia("(width >= 576px)").matches,
           textVisible,
           iconVisible,
           fontSize,
@@ -228,6 +234,8 @@ test("profile menu stays accessible and contained at responsive widths", async (
           triggerLeft: trigger.getBoundingClientRect().left,
         };
       });
+      expect(presentation.viewportWidth).toBe(width);
+      expect(presentation.wideScreen).toBe(width >= 576);
       expect(presentation.textVisible).toBe(width >= 576);
       expect(presentation.iconVisible).toBe(width < 576);
       expect(presentation.iconHeight).toBeLessThanOrEqual(

@@ -174,22 +174,33 @@ header-component .profile-icon svg {
   width: auto;
 }
 
-@media (min-width: 576px) {
+@media (width >= 576px) {
+  header-component .profile-caption {
+    display: inline;
+  }
+
   header-component .profile-icon {
     display: none;
   }
 }
 
-@media (max-width: 575.98px) {
+@media (width < 576px) {
   header-component .profile-caption {
     display: none;
+  }
+
+  header-component .profile-icon {
+    display: inline-flex;
   }
 }
 
 header-component details.dropdown > ul.profile-menu {
-  inset-inline-end: 0;
-  inset-inline-start: auto;
-  max-width: calc(100vw - 1rem);
+  left: auto;
+  min-width: 0;
+  right: 0;
+  white-space: normal;
+  width: max-content;
+  max-width: calc(100vw - 3rem);
 }
 
 header-component details.dropdown > ul.profile-menu > li {
