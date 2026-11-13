@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { allowDesignAssets } from "./browse-error.helpers.js";
 
 async function settle(page) {
   await page.evaluate(
@@ -37,6 +38,7 @@ async function expectHidden(page, hidden) {
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
   // Exercise the real shared assets without modifying application data.
+  await allowDesignAssets(page);
   await page.route("**/header-scroll-test", (route) =>
     route.fulfill({
       contentType: "text/html",
