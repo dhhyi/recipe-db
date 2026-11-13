@@ -33,6 +33,12 @@ query OnlineServices {
   onlineServices
 }
 
+query ImageUploadCapabilities {
+  myCapabilities {
+    canManageImages
+  }
+}
+
 query ListRecipes {
   recipes {
     id
