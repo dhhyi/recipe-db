@@ -70,7 +70,9 @@ test("below 10% the header remains visible and sticky", async ({ page }) => {
   await expectHidden(page, false);
 });
 
-test("at 10% direction changes require 8 cumulative CSS pixels", async ({ page }) => {
+test("at 10% direction changes require 8 cumulative CSS pixels", async ({
+  page,
+}) => {
   await scrollTo(page, 7);
   await expectHidden(page, false);
   await scrollTo(page, 8);
@@ -90,7 +92,9 @@ test("at 10% direction changes require 8 cumulative CSS pixels", async ({ page }
   await expectHidden(page, false);
 });
 
-test("viewport resizing and orientation changes recalculate the threshold", async ({ page }) => {
+test("viewport resizing and orientation changes recalculate the threshold", async ({
+  page,
+}) => {
   await scrollTo(page, 400);
   await expectHidden(page, true);
   await page.setViewportSize({ width: 600, height: 800 });
@@ -98,13 +102,17 @@ test("viewport resizing and orientation changes recalculate the threshold", asyn
   await scrollTo(page, 500);
   await expectHidden(page, false);
   await page.setViewportSize({ width: 800, height: 600 });
-  await page.evaluate(() => window.dispatchEvent(new Event("orientationchange")));
+  await page.evaluate(() =>
+    window.dispatchEvent(new Event("orientationchange")),
+  );
   await settle(page);
   await scrollTo(page, 508);
   await expectHidden(page, true);
 });
 
-test("rendered header and visual viewport size changes are observed", async ({ page }) => {
+test("rendered header and visual viewport size changes are observed", async ({
+  page,
+}) => {
   await scrollTo(page, 400);
   await expectHidden(page, true);
   await page.locator("header-component > header").evaluate((header) => {
@@ -128,7 +136,9 @@ test("rendered header and visual viewport size changes are observed", async ({ p
   await expectHidden(page, false);
 });
 
-test("keyboard navigation and focused authentication controls stay visible", async ({ page }) => {
+test("keyboard navigation and focused authentication controls stay visible", async ({
+  page,
+}) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await scrollTo(page, 400);
   await expectHidden(page, true);
@@ -151,7 +161,9 @@ test("keyboard navigation and focused authentication controls stay visible", asy
   ).toBeGreaterThanOrEqual(0);
 });
 
-test("transitions last 150ms unless reduced motion is enabled", async ({ page }) => {
+test("transitions last 150ms unless reduced motion is enabled", async ({
+  page,
+}) => {
   const header = page.locator("header-component > header");
   await page.emulateMedia({ reducedMotion: "no-preference" });
   expect(
