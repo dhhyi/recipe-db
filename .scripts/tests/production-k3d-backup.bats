@@ -24,13 +24,50 @@ prepare_candidate_release() {
 }
 
 complete_candidate_release() {
-  local outcome=$1
-  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
-    "$CANDIDATE" "$outcome" "RECORD-$outcome-$HOLDER"
+  local outcome=$1 use_git_sources=${2:-false}
+  local -a source_args=()
+  [[ $use_git_sources != true ]] || source_args=(--release-sources-from-git)
+  [ "$outcome" = no-migration-required ]
+  run bash .scripts/production-k3d.sh "${source_args[@]}" release-migration-plan \
+    "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [[ $output == *"release-migration-next"* ]]
+  run bash .scripts/production-k3d.sh "${source_args[@]}" release-migration-next \
+    "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  jq -e '.migrationResult.outcome == "no-migration-required"
+    and .migrationExecution.status == "no-migration-required"' "$STATE/backup-state.json" > /dev/null
+}
+
+complete_candidate_migration() {
+  export MOCK_MIGRATIONS=true MOCK_COMPLETED_MIGRATION=false
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"release-migration-status"* ]]
+  export MOCK_COMPLETED_MIGRATION=true
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"completion is not yet acknowledged"* ]]
+  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":2,"ratings":1,"inspirations":1,"tags":1}'
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  jq -e '.migrationResult.outcome == "migration-succeeded"
+    and .migrationExecution.status == "migration-succeeded"
+    and .migrationExecution.transitions[0].status == "completed"' "$STATE/backup-state.json" > /dev/null
+  export MOCK_COMPLETED_MIGRATION=false
+}
+
+complete_candidate_release_with_start() {
+  local use_git_sources=${1:-false}
+  local -a source_args=()
+  [[ $use_git_sources != true ]] || source_args=(--release-sources-from-git)
+  complete_candidate_release no-migration-required "$use_git_sources"
+  run bash .scripts/production-k3d.sh "${source_args[@]}" release-start \
+    "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh "${source_args[@]}" release-reopen \
+    "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -eq 0 ]
 }
 
@@ -602,10 +639,12 @@ EOF
   run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
     "$other_candidate" no-migration-required "RECORD-no-migration-required-$HOLDER"
   [ "$status" -ne 0 ]
-  [[ $output == *"does not match the retained staged release"* ]]
+  [[ $output == *"manual migration outcome assertions are disabled"* ]]
   run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
     "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
+  jq -e '.migrationResult == null' "$STATE/backup-state.json" > /dev/null
+  complete_candidate_release no-migration-required
   jq -e '.migrationResult.outcome == "no-migration-required"' "$STATE/backup-state.json" > /dev/null
   jq -e 'all(.items[]; .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
 
@@ -643,9 +682,7 @@ EOF
 @test "candidate startup makes dependencies and the private projection route available before search readiness" {
   prepare_candidate_release
   export MOCK_SEARCH_DEPENDENCIES=true
-  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
-    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
-  [ "$status" -eq 0 ]
+  complete_candidate_release no-migration-required
   run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   [ "$(cat "$MOCK_LOG.projection-port")" = 4000 ]
@@ -664,10 +701,7 @@ EOF
 
 @test "candidate migration success is recorded but readiness failure retains the barrier and ownership" {
   local workload_changes
-  prepare_candidate_release
-  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
-    "$CANDIDATE" migration-succeeded "RECORD-migration-succeeded-$HOLDER"
-  [ "$status" -eq 0 ]
+  complete_candidate_migration
   jq -e '.migrationResult.outcome == "migration-succeeded"' "$STATE/backup-state.json" > /dev/null
 
   export MOCK_RELEASE_ROLLOUT_FAIL=true
@@ -692,16 +726,295 @@ EOF
   [ -e "$MOCK_LOG.lease" ]
 }
 
+@test "migration planning deterministically reports complete adjacent paths without writing state" {
+  export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true
+  prepare_candidate_release
+  local before order
+  before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Service images: current=1 required=3"* ]]
+  [[ $output == *"Service recipes: current=1 required=2"* ]]
+  order=$(printf '%s\n' "$output" | awk '/^  [0-9]+\./ { print $1, $2, $3 }')
+  [ "$order" = "$(printf '1. images 1->2\n2. images 2->3\n3. recipes 1->2')" ]
+  [[ $output == *"release-migration-next"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
+}
+
+@test "migration planning rejects an incomplete path without recording or activating work" {
+  export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true MOCK_MISSING_MIGRATION=true
+  prepare_candidate_release
+
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"no unique migration path for images from version 2 to required version 3"* ]]
+  jq -e '.migrationExecution == null and .migrationResult == null' \
+    "$STATE/backup-state.json" > /dev/null
+  run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
+}
+
+@test "migration status is observational and leaves asynchronous execution unchanged" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"release-migration-status"* ]]
+  local before patches
+  before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  patches=$(grep -c 'patch job migration-' "$MOCK_LOG")
+
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"asynchronous execution continues in Kubernetes"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  [ "$patches" -eq "$(grep -c 'patch job migration-' "$MOCK_LOG")" ]
+}
+
+@test "migration failure records a recovery barrier and blocks retry and startup" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  export MOCK_FAILED_MIGRATION=true
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"no retry or startup is authorized"* ]]
+  jq -e '.status == "recovery-required" and .phase == "migration-failed"
+    and .migrationExecution.status == "failed"
+    and .migrationResult == null' "$STATE/backup-state.json" > /dev/null
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"migration is failed"* ]]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "migration claim contention prevents an overlapping activation" {
+  export MOCK_MIGRATIONS=true MOCK_MIGRATION_CLAIM_HELD=true
+  prepare_candidate_release
+  local before
+  before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"another migration command owns the atomic cluster claim"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  run ! grep -q 'patch job migration-' "$MOCK_LOG"
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "migration planning rejects a staged Job with parallelism greater than one" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  local job_file
+  for job_file in "$MOCK_LOG".migration-job*.json; do
+    [[ -f $job_file ]] || continue
+    jq '.spec.parallelism=2' "$job_file" > "$job_file.next"
+    mv "$job_file.next" "$job_file"
+  done
+
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"staged migration Job"* && $output == *"does not match the candidate and pinned transition"* ]]
+  run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
+}
+
+@test "migration planning rejects a staged Job with multiple completions" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  local job_file
+  for job_file in "$MOCK_LOG".migration-job*.json; do
+    [[ -f $job_file ]] || continue
+    jq '.spec.completions=2' "$job_file" > "$job_file.next"
+    mv "$job_file.next" "$job_file"
+  done
+
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"staged migration Job"* && $output == *"does not match the candidate and pinned transition"* ]]
+  run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
+}
+
+@test "migration claim recovery requires exact confirmation and does not activate a Job" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  local holder="abandoned-$HOLDER"
+  jq -n --arg candidate "$CANDIDATE" --arg holder "$holder" '{
+    apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+    metadata:{name:"recipe-db-migration",namespace:"kube-system",
+      uid:"abandoned-migration-claim",resourceVersion:"7",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/release":$candidate}},
+    spec:{holderIdentity:$holder}
+  }' > "$MOCK_LOG.migration-claim"
+
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$CANDIDATE" "$holder" "RECOVER-wrong-holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"requires the exact holder"* ]]
+  [ -f "$MOCK_LOG.migration-claim" ]
+
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$CANDIDATE" "foreign-holder" "RECOVER-foreign-holder"
+  [ "$status" -ne 0 ]
+  [[ $output == *"claim identity does not match"* ]]
+  [ -f "$MOCK_LOG.migration-claim" ]
+
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$CANDIDATE" "$holder" "RECOVER-$holder"
+  [ "$status" -eq 0 ]
+  [[ $output == *"no migration state or Job was changed"* ]]
+  [[ $output == *"release-migration-status"* ]]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  run ! grep -q 'patch job migration-' "$MOCK_LOG"
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'patch job migration-' "$MOCK_LOG")" -eq 1 ]
+}
+
+@test "recovering a claim for a running Job cannot activate another migration" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  local patches holder="abandoned-$HOLDER"
+  patches=$(grep -c 'patch job migration-' "$MOCK_LOG")
+  jq -n --arg candidate "$CANDIDATE" --arg holder "$holder" '{
+    apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+    metadata:{name:"recipe-db-migration",namespace:"kube-system",
+      uid:"abandoned-running-migration-claim",resourceVersion:"9",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},
+      annotations:{"recipe-db/release":$candidate}},
+    spec:{holderIdentity:$holder}
+  }' > "$MOCK_LOG.migration-claim"
+
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$CANDIDATE" "$holder" "RECOVER-$holder"
+  [ "$status" -eq 0 ]
+  [[ $output == *"no migration state or Job was changed"* ]]
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"no other transition was activated"* ]]
+  [ "$patches" -eq "$(grep -c 'patch job migration-' "$MOCK_LOG")" ]
+}
+
+@test "activation API uncertainty is recorded and never retried" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  export MOCK_MIGRATION_ACTIVATION_UNKNOWN=true MOCK_MIGRATION_ACTIVATION_OBSERVE_FAIL=true
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"migration execution for"* && $output == *"is uncertain"* ]]
+  jq -e '.migrationExecution.status == "uncertain" and .migrationResult == null' \
+    "$STATE/backup-state.json" > /dev/null
+  local patches
+  patches=$(grep -c 'patch job migration-' "$MOCK_LOG")
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"migration is uncertain"* ]]
+  [ "$patches" -eq "$(grep -c 'patch job migration-' "$MOCK_LOG")" ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "a missing previously activated Job records an uncertain outcome" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  local job
+  job=$(jq -r '.migrationExecution.transitions[0].job' "$STATE/backup-state.json")
+  rm -f "$MOCK_LOG.migration-job.json" "$MOCK_LOG.migration-job-$job.json"
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"previously activated Job is missing"* ]]
+  jq -e '.migrationExecution.status == "uncertain" and .migrationResult == null' \
+    "$STATE/backup-state.json" > /dev/null
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+}
+
+@test "a successful Job with a mismatched storage marker cannot record a handoff" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  export MOCK_COMPLETED_MIGRATION=true
+  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":1,"ratings":1,"inspirations":1,"tags":1}'
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"actual target storage version was not confirmed"* ]]
+  jq -e '.migrationExecution.status == "uncertain" and .migrationResult == null' \
+    "$STATE/backup-state.json" > /dev/null
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+}
+
+@test "deadline failure with a terminating worker keeps advancement blocked" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  export MOCK_FAILED_MIGRATION=true MOCK_MIGRATION_DEADLINE_EXCEEDED=true
+  export MOCK_MIGRATION_WORKER_TERMINATING=true
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"conversion may have modified data"* ]]
+  jq -e '.migrationExecution.status == "failed" and .migrationResult == null' \
+    "$STATE/backup-state.json" > /dev/null
+  run ! grep -q 'delete pods -l job-name=migration-' "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "next repairs a saved migration handoff after the Lease update fails" {
+  prepare_candidate_release
+  export MOCK_MIGRATION_HANDOFF_LEASE_UPDATE_FAIL=true
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  jq -e '.migrationResult.outcome == "no-migration-required"' \
+    "$STATE/backup-state.json" > /dev/null
+  [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" != migration-result-recorded ]
+
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Lease handoff is not recorded"* ]]
+  [[ $output == *"Next: mise run production-k3d release-migration-next"* ]]
+  [[ $output != *"Next: mise run production-k3d release-start"* ]]
+
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Lease handoff reconciled"* ]]
+  [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = migration-result-recorded ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+}
+
 @test "marker-only fallback stages the previous release across the checkout handoff" {
+  printf '*\n' > .gitignore
+  git add -f .gitignore
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Ignore generated fixture files'
   create_two_release_revisions
   prepare_captured_release
   git checkout --detach "$MOCK_REVISION" > /dev/null
-  run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" \
     verified-upload "VERIFIED-$HOLDER-verified-upload"
   [ "$status" -eq 0 ]
-  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
-    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
-  [ "$status" -eq 0 ]
+  complete_candidate_release no-migration-required true
 
   for service in recipes images ratings inspirations tags; do
     mkdir -p "$FIXTURE_ROOT/tar-data/$service"
@@ -711,7 +1024,8 @@ EOF
   marker_before=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
 
   export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=true
-  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
+    "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
   jq -e '.status == "recovery-required" and .phase == "interrupted"' \
     "$STATE/backup-state.json" > /dev/null
@@ -720,13 +1034,15 @@ EOF
 
   local workload_changes
   workload_changes=$(grep -c 'scale deployment/' "$MOCK_LOG")
-  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-fallback-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" \
     "FALLBACK-$HOLDER"
   [ "$status" -ne 0 ]
   [[ $output == *"fallback requires FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation"* ]]
   [ "$(grep -c 'scale deployment/' "$MOCK_LOG")" -eq "$workload_changes" ]
 
-  run bash .scripts/production-k3d.sh release-fallback-stage "$VALUES" "$STATE" "$CANDIDATE" \
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-fallback-stage \
+    "$VALUES" "$STATE" "$CANDIDATE" \
     "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
   [ "$status" -eq 0 ]
   jq -e --arg old "$ARTIFACT" --arg failed "$CANDIDATE" --arg revision "$MOCK_SOURCE_REVISION" '
@@ -744,14 +1060,8 @@ EOF
     and .metadata.annotations["recipe-db/phase"] == "candidate-staged"
   ' "$MOCK_LOG.lease" > /dev/null
 
-  git checkout --detach "$MOCK_SOURCE_REVISION" > /dev/null
-  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
-    "$ARTIFACT" no-migration-required "RECORD-no-migration-required-$HOLDER"
-  [ "$status" -eq 0 ]
-  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$ARTIFACT"
-  [ "$status" -eq 0 ]
-  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$ARTIFACT" "OPEN-$HOLDER"
-  [ "$status" -eq 0 ]
+  CANDIDATE=$ARTIFACT
+  complete_candidate_release_with_start true
   jq -e '.status == "access-open" and .candidate.artifact == .source.artifact' \
     "$STATE/backup-state.json" > /dev/null
   marker_after=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
@@ -779,12 +1089,14 @@ EOF
   [ "$status" -eq 0 ]
   jq -e --arg revision "$tooling_revision" '.toolingRevision == $revision' \
     "$STATE/backup-state.json" > /dev/null
-  run bash .scripts/production-k3d.sh release-migration-result "$VALUES" "$STATE" \
-    "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
   [[ $output == *"requires its pinned tooling revision"* ]]
-  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-result \
-    "$VALUES" "$STATE" "$CANDIDATE" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-plan \
+    "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-next \
+    "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=true
   run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
@@ -795,8 +1107,11 @@ EOF
     "$VALUES" "$STATE" "$CANDIDATE" "FALLBACK-$HOLDER-MARKERS-1-UNCHANGED-FORMAT"
   [ "$status" -eq 0 ]
   [ "$(git rev-parse HEAD)" = "$tooling_revision" ]
-  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-result \
-    "$VALUES" "$STATE" "$ARTIFACT" no-migration-required "RECORD-no-migration-required-$HOLDER"
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-plan \
+    "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git release-migration-next \
+    "$VALUES" "$STATE" "$ARTIFACT"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh --release-sources-from-git release-start \
     "$VALUES" "$STATE" "$ARTIFACT"
@@ -943,7 +1258,7 @@ EOF
 
 @test "temporary-fix disposition closes access and permits a guarded subsequent release" {
   prepare_candidate_release
-  complete_candidate_release no-migration-required
+  complete_candidate_release_with_start
   run bash .scripts/production-k3d.sh release-disposition "$VALUES" "$STATE" "$CANDIDATE" \
     temporary-fix "DISPOSITION-$HOLDER-temporary-fix"
   [ "$status" -eq 0 ]
@@ -968,13 +1283,13 @@ EOF
     and .migrationResult == null and .postCheckDisposition == null
   ' "$STATE/backup-state.json" > /dev/null
   CANDIDATE=$next_candidate
-  complete_candidate_release no-migration-required
+  complete_candidate_release_with_start
   jq -e '.status == "access-open" and .phase == "operator-reopened"' "$STATE/backup-state.json" > /dev/null
 }
 
 @test "operator may explicitly accept a partial failure without rollback or restore" {
   prepare_candidate_release
-  complete_candidate_release no-migration-required
+  complete_candidate_release_with_start
   run bash .scripts/production-k3d.sh release-disposition "$VALUES" "$STATE" "$CANDIDATE" \
     accept-partial-failure "DISPOSITION-$HOLDER-accept-partial-failure"
   [ "$status" -eq 0 ]
@@ -990,7 +1305,7 @@ EOF
 
 @test "website failure blocks post-release capture and keeps the release operation" {
   prepare_candidate_release
-  complete_candidate_release no-migration-required
+  complete_candidate_release_with_start
   run bash .scripts/production-k3d.sh release-website-result "$VALUES" "$STATE" \
     "$CANDIDATE" failed "Changed feature did not work" "WEBSITE-$HOLDER-failed"
   [ "$status" -eq 0 ]
@@ -1046,7 +1361,7 @@ EOF
 
 @test "changed release requires uploaded storage markers and publication before cleanup" {
   prepare_candidate_release
-  complete_candidate_release no-migration-required
+  complete_candidate_release_with_start
   printf '2\n' > "$FIXTURE_ROOT/tar-data/recipes/storage-version"
   printf '2\n' > "$FIXTURE_ROOT/tar-data/tags/storage-version"
   printf '2\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"

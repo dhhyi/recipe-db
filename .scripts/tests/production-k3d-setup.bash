@@ -29,8 +29,14 @@ setup() {
   export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_RELEASE_LIFECYCLE=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
   export MOCK_MIGRATIONS=false
+  export MOCK_MULTI_MIGRATIONS=false
+  export MOCK_MISSING_MIGRATION=false
   export MOCK_COMPLETED_MIGRATION=false
+  export MOCK_FAILED_MIGRATION=false
+  export MOCK_MIGRATION_CLAIM_HELD=false
   export MOCK_UNSAFE_MIGRATION=false
+  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":1,"ratings":1,"inspirations":1,"tags":1}'
+  export MOCK_VERSION_PROBE_FAIL=false
   export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
   export MOCK_RESTORE=false
   jq -n --arg root "$FIXTURE_ROOT" '{
@@ -52,6 +58,33 @@ setup() {
   printf 'private-oauth-client-value-for-tests' > google-oauth-client-secret
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
+  project_metadata_to_jsonl() {
+    if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+      cat << 'JSONL' > "$2"
+{"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":2}}
+{"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":3}}
+{"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
+{"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
+{"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+JSONL
+    elif [[ $MOCK_MIGRATIONS == true ]]; then
+      cat << 'JSONL' > "$2"
+  {"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":1}}
+  {"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":2}}
+  {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
+  {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
+  {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+JSONL
+    else
+      cat << 'JSONL' > "$2"
+  {"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":1}}
+  {"name":"images","backupRole":"cleanup-participant","backupData":{"kind":"images"},"storageVersion":{"value":1}}
+  {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
+  {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
+  {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+JSONL
+    fi
+  }
 application_project_metadata_to_jsonl() {
   if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true || $MOCK_RESTORE = true ]]; then
     printf '%s\n' \
@@ -130,12 +163,17 @@ default_migration_job() {
     | .spec.completions = 1
     | .spec.completionMode = "NonIndexed"
     | .spec.manualSelector = false
+    | .spec.podReplacementPolicy = "TerminatingOrFailed"
     | .spec.template.spec.dnsPolicy = "ClusterFirst"
     | .spec.template.spec.schedulerName = "default-scheduler"
     | .spec.template.spec.terminationGracePeriodSeconds = 30
     | .spec.template.spec.enableServiceLinks = true
     | .spec.template.spec.serviceAccountName = "default"
-    | .spec.template.spec.containers |= map(.imagePullPolicy = "IfNotPresent")
+    | .spec.template.spec.containers |= map(
+        .imagePullPolicy = "IfNotPresent"
+        | .terminationMessagePath = "/dev/termination-log"
+        | .terminationMessagePolicy = "File"
+      )
   ' "$input"
 }
 
@@ -297,14 +335,143 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true ]]; then
     handled=false
     case "$*" in
+      *" create -f "*migration-claim.json)
+        [[ $MOCK_MIGRATION_CLAIM_HELD != true && ! -e $MOCK_LOG.migration-claim ]] || exit 1
+        jq '.metadata.uid="migration-claim-uid" | .metadata.resourceVersion="1"' \
+          "${*: -1}" > "$MOCK_LOG.migration-claim"
+        handled=true ;;
+      *" get lease recipe-db-migration"*)
+        [[ ! -e $MOCK_LOG.migration-claim ]] || cat "$MOCK_LOG.migration-claim"
+        handled=true ;;
+      *"delete --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-migration"*)
+        jq -e --slurpfile current "$MOCK_LOG.migration-claim" '
+          .preconditions.uid == $current[0].metadata.uid and
+          .preconditions.resourceVersion == $current[0].metadata.resourceVersion
+        ' "${*: -1}" > /dev/null || exit 1
+        rm -f "$MOCK_LOG.migration-claim"
+        handled=true ;;
+      *" get jobs -l recipe-db/revision="*)
+        migration_job_files=()
+        [[ ! -f $MOCK_LOG.migration-job.json ]] || migration_job_files+=("$MOCK_LOG.migration-job.json")
+        for migration_job_file in "$MOCK_LOG".migration-job-*.json; do
+          [[ ! -f $migration_job_file ]] || migration_job_files+=("$migration_job_file")
+        done
+        if ((${#migration_job_files[@]} > 0)); then
+          jq -s --argjson activated "$([[ -e $MOCK_LOG.migration-activated ]] && echo true || echo false)" \
+            --argjson failed "$([[ $MOCK_FAILED_MIGRATION == true ]] && echo true || echo false)" \
+            --argjson completed "$([[ $MOCK_COMPLETED_MIGRATION == true ]] && echo true || echo false)" '
+            map(
+              if $activated then .spec.suspend=false else . end
+            | if $activated and $failed then
+                .status={failed:1,conditions:[{type:"Failed",status:"True",
+                  reason:(if env.MOCK_MIGRATION_DEADLINE_EXCEEDED == "true"
+                    then "DeadlineExceeded" else "BackoffLimitExceeded" end)}]}
+              elif $activated and $completed then
+                .status={succeeded:1,conditions:[{type:"Complete",status:"True"}]}
+              elif $activated then .status={active:1}
+              else . end
+            )
+            | {items:.}
+          ' "${migration_job_files[@]}"
+        else
+          echo '{"items":[]}'
+        fi
+        handled=true ;;
+      *" patch job migration-"*)
+        [[ -f $MOCK_LOG.migration-job.json ]] || exit 1
+        jq '.spec.suspend=false | .status={active:1}' "$MOCK_LOG.migration-job.json" \
+          > "$MOCK_LOG.migration-job.next"
+        mv "$MOCK_LOG.migration-job.next" "$MOCK_LOG.migration-job.json"
+        touch "$MOCK_LOG.migration-activated"
+        [[ ${MOCK_MIGRATION_ACTIVATION_UNKNOWN:-false} != true ]] || exit 1
+        handled=true ;;
+      *" get pods -l job-name=migration-"*" -o json"*)
+        if [[ -e $MOCK_LOG.migration-activated && ! -e $MOCK_LOG.migration-worker-deleted ]]; then
+          job=$(cat "$MOCK_LOG.migration-job.json")
+          if [[ ${MOCK_MIGRATION_WORKER_TERMINATING:-false} == true ]]; then
+            jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
+              --arg claim "$(jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' <<< "$job")" \
+              '{items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name},
+                deletionTimestamp:"2025-01-01T00:00:00Z"},
+                spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]},
+                status:{phase:"Running",containerStatuses:[{state:{running:{}}}]}}]}'
+          elif [[ $MOCK_COMPLETED_MIGRATION == true ]]; then
+            jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
+              --arg claim "$(jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' <<< "$job")" \
+              '{items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name}},
+                spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]},
+                status:{phase:"Succeeded",containerStatuses:[{state:{terminated:{exitCode:0}}}]}}]}'
+          else
+            jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
+              --arg claim "$(jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' <<< "$job")" \
+              '{items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name}},
+                spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]},
+                status:{phase:"Running",containerStatuses:[{state:{running:{}}}]}}]}'
+          fi
+        else
+          echo '{"items":[]}'
+        fi
+        handled=true ;;
+      *" delete pods -l job-name=migration-"*)
+        touch "$MOCK_LOG.migration-worker-deleted"
+        handled=true ;;
+      *"create -f "*migration-version-pod.json)
+        jq -e '.spec.automountServiceAccountToken == false
+          and .spec.containers[0].volumeMounts[0].readOnly == true
+          and .spec.volumes[0].persistentVolumeClaim.readOnly == true' \
+          "${*: -1}" > /dev/null || exit 1
+        cp "${*: -1}" "$MOCK_LOG.migration-version-pod.json"
+        handled=true ;;
+      *" wait --for=jsonpath={.status.phase}=Succeeded pod/migration-version-"*)
+        [[ $MOCK_VERSION_PROBE_FAIL != true ]] || exit 1
+        handled=true ;;
+      *" logs migration-version-"*)
+        service=$(jq -r '.spec.volumes[0].persistentVolumeClaim.claimName' \
+          "$MOCK_LOG.migration-version-pod.json")
+        jq -er --arg service "$service" '.[$service]' <<< "$MOCK_STORAGE_VERSIONS" \
+          || { echo MISSING; exit 0; }
+        handled=true ;;
+      *" delete pod migration-version-"*)
+        handled=true ;;
       *" get job nats-init --ignore-not-found -o json"*)
         if [[ -f $MOCK_LOG.nats-init-job ]]; then
           echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'
         fi
         handled=true ;;
       *" get job migration-"*"--ignore-not-found"*" -o json"* | \
-      *" get job migration-"*"-o json"*"--ignore-not-found"*)
-        if [[ $MOCK_COMPLETED_MIGRATION = true ]]; then
+      *" get job migration-"*"-o json"*"--ignore-not-found"* | \
+      *" get job migration-"*"-o json"*)
+        [[ ${MOCK_MIGRATION_ACTIVATION_OBSERVE_FAIL:-false} != true ]] || exit 1
+        migration_job_name=
+        expect_job_name=false
+        for argument in "$@"; do
+          if $expect_job_name; then
+            migration_job_name=$argument
+            expect_job_name=false
+          elif [[ $argument = job ]]; then
+            expect_job_name=true
+          fi
+        done
+        migration_job_file="$MOCK_LOG.migration-job-$migration_job_name.json"
+        if [[ -f $migration_job_file && $MOCK_COMPLETED_MIGRATION = true ]]; then
+          jq '.spec.suspend = false | .status={succeeded:1}' "$migration_job_file" \
+            | jq --arg unsafe "$MOCK_UNSAFE_MIGRATION" '
+                if $unsafe == "true" then
+                  .spec.template.spec.initContainers = [{name:"unexpected",image:"untrusted"}]
+                else . end
+              ' \
+            | tee "$MOCK_LOG.existing-migration-job.json"
+        elif [[ -f $migration_job_file ]]; then
+          cat "$migration_job_file"
+        elif [[ -f $MOCK_LOG.migration-job.json &&
+          $(jq -r '.metadata.name' "$MOCK_LOG.migration-job.json") = "$migration_job_name" &&
+          $MOCK_COMPLETED_MIGRATION = true ]]; then
+          jq '.spec.suspend = false | .status={succeeded:1}' "$MOCK_LOG.migration-job.json" \
+            | tee "$MOCK_LOG.existing-migration-job.json"
+        elif [[ -f $MOCK_LOG.migration-job.json &&
+          $(jq -r '.metadata.name' "$MOCK_LOG.migration-job.json") = "$migration_job_name" ]]; then
+          cat "$MOCK_LOG.migration-job.json"
+        elif [[ $MOCK_COMPLETED_MIGRATION = true ]]; then
           default_migration_job "existing-migration-uid" "$MOCK_LOG.migration-template.json" \
             | jq --arg unsafe "$MOCK_UNSAFE_MIGRATION" \
                 --arg single_selector "${MOCK_SINGLE_KEY_MIGRATION_SELECTOR:-false}" '
@@ -318,8 +485,6 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
                     else . end
               ' \
             | tee "$MOCK_LOG.existing-migration-job.json"
-        elif [[ -f $MOCK_LOG.migration-job.json ]]; then
-          cat "$MOCK_LOG.migration-job.json"
         fi
         handled=true ;;
       *" delete job nats-init "*)
@@ -338,7 +503,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *"create -f "*migration-*.json)
         last="${*: -1}"
-        cp "$last" "$MOCK_LOG.migration-job.json"
+        migration_job_name=$(jq -r '.metadata.name' "$last")
+        if [[ ! -f $MOCK_LOG.migration-job.json ]]; then
+          default_migration_job "migration-job-uid" "$last" > "$MOCK_LOG.migration-job.json"
+        else
+          default_migration_job "migration-job-uid-$migration_job_name" "$last" \
+            > "$MOCK_LOG.migration-job-$migration_job_name.json"
+        fi
         handled=true ;;
       *" wait --for=condition=complete job/nats-init "*)
         [[ ${MOCK_NATS_INIT_FAIL:-false} != true ]] || exit 1
@@ -495,6 +666,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
         handled=true ;;
       *" replace -f "*recipe-db-deploy-update.json)
+        if [[ ${MOCK_MIGRATION_HANDOFF_LEASE_UPDATE_FAIL:-false} == true &&
+          $(jq -r '.metadata.annotations["recipe-db/phase"]' "${*: -1}") == migration-result-recorded &&
+          ! -e $MOCK_LOG.migration-handoff-update-failed ]]; then
+          touch "$MOCK_LOG.migration-handoff-update-failed"
+          exit 1
+        fi
         cp "${*: -1}" "$MOCK_LOG.lease"
         handled=true ;;
       *" set env deployment/graphql MODE=production "*)
@@ -762,7 +939,26 @@ else
   [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]] || exit 1
   release=$2
   output=$4
-    if [[ $MOCK_MIGRATIONS = true ]]; then
+    if [[ $MOCK_MULTI_MIGRATIONS = true ]]; then
+      jq -n --arg revision "$(artifact_revision "$release")" \
+        --arg missing "$MOCK_MISSING_MIGRATION" '{schemaVersion:2,revision:$revision,images:{
+        recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
+        images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
+        graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
+        tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
+        search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
+        browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))},
+        migrations:[
+          {service:"recipes",fromVersion:1,toVersion:2,timeoutSeconds:300,
+            image:("ghcr.io/dhhyi/recipe-db-migrator-recipes-1-to-2@sha256:"+("e"*64))},
+          (if $missing == "true" then empty else
+            {service:"images",fromVersion:2,toVersion:3,timeoutSeconds:300,
+              image:("ghcr.io/dhhyi/recipe-db-migrator-images-2-to-3@sha256:"+("d"*64))}
+          end),
+          {service:"images",fromVersion:1,toVersion:2,timeoutSeconds:300,
+            image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))}
+        ]}' > "$output/release.json"
+    elif [[ $MOCK_MIGRATIONS = true ]]; then
       jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:2,revision:$revision,images:{
         recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
         images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
@@ -774,13 +970,13 @@ else
           image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))}]}' \
         > "$output/release.json"
     else
-      jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:1,revision:$revision,images:{
+      jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:2,revision:$revision,images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
     images:("ghcr.io/dhhyi/recipe-db-images@sha256:"+("b"*64)),
     graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
     tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
     search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
-    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))}}' > "$output/release.json"
+    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))},migrations:[]}' > "$output/release.json"
     fi
 fi
 EOF

@@ -172,21 +172,49 @@ If staging fails or is interrupted, inspect the saved state and Lease; do not ru
 
 ## 6. Run and validate migrations
 
-Migration selection, jobs, conversion, validation and determining that no migration is required are not implemented here. Stop until those decisions and mechanics are supplied by the migration work. Do not start application workloads to discover or perform migrations.
-
-When an approved migration process has completed and its result is validated, record that handoff. If the agreed determination is that this candidate needs no migration, record that explicit result instead:
+Discover the complete migration sequence against the candidate's pinned source and the actual storage-version markers. Planning is read-only; it does not change saved release progression or activate Jobs:
 
 ```sh
-KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-result \
-  "$VALUES" "$STATE" "$RELEASE" migration-succeeded \
-  "RECORD-migration-succeeded-$HOLDER"
-# Or, only after the no-migration determination has been made:
-KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-result \
-  "$VALUES" "$STATE" "$RELEASE" no-migration-required \
-  "RECORD-no-migration-required-$HOLDER"
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-plan \
+  "$VALUES" "$STATE" "$RELEASE"
 ```
 
-This command records the supplied result; it does not choose, execute or validate a migration. Either outcome leaves the candidate staged and stopped with the access barrier and Lease retained. A failure, interruption or mismatched candidate cannot authorize startup.
+Review each service's current and required versions, the ordered transitions, and the reported blockers. The command prints the next permitted invocation. Run only the recommended `release-migration-next` or `release-migration-status` command with the exact values, state directory and immutable candidate it prints:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-next \
+  "$VALUES" "$STATE" "$RELEASE"
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-status \
+  "$VALUES" "$STATE" "$RELEASE"
+```
+
+For example, planning a two-step image migration reports the complete path before any Job is activated:
+
+```text
+production: read-only migration plan for <candidate-artifact>
+Service images: current=1 required=3
+Required transitions (deterministic service/version order):
+  1. images 1->2 image=<pinned-image> Job=<release-specific-job>
+  2. images 2->3 image=<pinned-image> Job=<release-specific-job>
+Next invocation: persist intent, verify no-migration, or activate at most the first required Job.
+Next: mise run production-k3d release-migration-next '<absolute-values-file>' '<state-directory>' '<candidate-artifact>'
+```
+
+The actual command includes the full immutable candidate and shell-quotes the exact values and state paths. After activating one Job, the command returns with a `release-migration-status` recommendation; while it runs, status recommends another status check. Once the Job completes, status recommends `release-migration-next` to verify and record that transition. Only after the last transition or an explicit no-work verification does the tool recommend `release-start`.
+
+For a verified no-work outcome, `next` reports:
+
+```text
+production: explicitly verified every actual storage version and recorded no-migration-required
+The verified handoff leaves all workloads stopped and access blocked. Start is a separate guarded action.
+Next: mise run production-k3d release-start '<absolute-values-file>' '<state-directory>' '<candidate-artifact>'
+```
+
+`next` activates at most one suspended Job, or observes and acknowledges that same Job on a later invocation. Kubernetes runs an activated Job independently; disconnecting the terminal does not cancel it. `status` only observes and never records completion. Continue by following the exact command recommendation: a completed transition is validated and recorded by a separate `next`, and the following transition is never started in that same invocation. If no work is required, `next` explicitly verifies every actual version and records `no-migration-required`. Both verified outcomes keep normal workloads stopped, application access blocked and the operation Lease retained; starting the candidate is a separate guarded action.
+
+Each Job's `activeDeadlineSeconds` comes from its pinned candidate inventory and is enforced by Kubernetes without a connected operator. A failed, missing, mismatched, expired or uncertain Job, an unversioned/unsafe marker, or workers that may still use storage blocks further execution and startup. Stop and use only the private inspection commands the tool prints. Do not retry, recreate Jobs, restore, roll back, start workloads or remove the access barrier automatically; recovery requires operator assessment.
+
+If a terminal exits while holding the separate `recipe-db-migration` command claim, inspect the Lease and confirm that the original command process has stopped. Only then run the exact `release-migration-recover-claim` command printed by `release-migration-status` or `release-migration-next`. Recovery requires the exact holder and `RECOVER-<holder>` confirmation, deletes only that claim using Kubernetes UID/resource-version preconditions, and does not modify migration state or Jobs. Follow the printed status recommendation afterward; it will observe the same existing Job and will not start another transition while it is active.
 
 ## 7. Start the candidate and wait for readiness
 
