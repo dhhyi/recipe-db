@@ -2,6 +2,8 @@
 
 Shared UI component library, implemented using [Lit](https://lit.dev/) web components with [Blades CSS](https://blades.ninja/) and spacing/layout tools from [Tailwind CSS](https://tailwindcss.com/), documented in [Storybook](https://storybook.js.org/).
 
+**Contents:** [Storybook](#storybook) | [Form labels](#form-labels) | [Actions and navigation](#actions-and-navigation) | [Button styles](#button-styles) | [Links](#links) | [Feedback](#feedback) | [Loading](#loading) | [Motion](#motion) | [App-specific styles](#app-specific-styles) | [Tailwind CSS](#tailwind-css)
+
 ## Storybook
 
 Use Storybook's theme switch to review every story in light and dark mode. Do not create dedicated light/dark stories or hard-code a theme in a story; stories should describe distinct component states and follow the selected theme.
@@ -52,6 +54,15 @@ Use Storybook's theme switch to review every story in light and dark mode. Do no
 - Content that is loading, or that loads when scrolled into view, is an empty spinner placeholder in its place, with an `aria-label` describing what is loading (for example `aria-label="Rezept wird geladen"`), without an ellipsis.
 - A placeholder must handle errors: on failure, it is replaced by a `feedback error` message and an `Erneut versuchen` button, which follows the button rule above.
 - Spinner placeholders have no no-JavaScript fallback; see #150.
+
+## Motion
+
+- Use motion to clarify navigation, changes, or feedback.
+- Use browser View Transitions, CSS transitions, or CSS animations. JavaScript may trigger them but must not animate directly; the existing rating-star animation is an exception.
+- Keep transitions brief, typically 200 ms; playful feedback may take longer.
+- Respect reduced-motion preferences and provide an immediate fallback.
+- Preserve focus, scroll, and interaction; do not obscure unrelated content.
+- Animate success only after the action is confirmed.
 
 ## App-specific styles
 
