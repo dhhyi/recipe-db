@@ -11,7 +11,8 @@ public record UploadError(string Code, string Message, string? Field = null, obj
 public record UploadResult(
     string UploadHandle, string RecipeId, string State, long ReceivedBytes,
     int NextChunkNumber, int ChunkLimit, UploadSource? Source = null,
-    UploadedImage? Image = null, UploadError? Error = null, string? Recovery = null);
+    UploadedImage? Image = null, UploadError? Error = null, string? Recovery = null,
+    IReadOnlyList<UploadError>? Errors = null);
 
 // Only the files survive a container restart; recovery of metadata belongs to the lifecycle child.
 public class ImageUploadFiles(string root)
@@ -92,7 +93,11 @@ public class ImageUploadStaging
             {
                 entry.State = "failed";
                 entry.Error = new("staging-write-failed", "Could not create staged photo bytes; capacity remains reserved");
-                throw Invalid(entry.Error.Code, entry.Error.Message);
+                try { files.DeletePhoto(handle); }
+                catch { return Snapshot(entry); }
+                entries.Remove(handle);
+                reservedBytes -= byteLength;
+                throw Invalid("staging-write-failed", "Could not create staged photo bytes; cleanup was confirmed and capacity released");
             }
             return Snapshot(entry);
         }
@@ -139,7 +144,7 @@ public class ImageUploadStaging
     public async Task<UploadResult> Finish(string uploadHandle, Func<Stream, UploadSource, Task<AssignmentResult>> assign)
     {
         var entry = Find(uploadHandle);
-        Stream stream;
+        Stream? stream = null;
         lock (entry.Gate)
         {
             if (entry.State != "receiving") return Snapshot(entry);
@@ -161,6 +166,7 @@ public class ImageUploadStaging
             }
             catch
             {
+                stream?.Dispose();
                 entry.State = "failed";
                 entry.Error = new("staging-read-failed", "Could not verify staged photo bytes");
                 return Snapshot(entry);
@@ -184,6 +190,7 @@ public class ImageUploadStaging
             {
                 entry.State = assigned.Uncertain ? "uncertain" : "failed";
                 entry.Error = assigned.Error ?? new("assignment-failed", "Image assignment was rejected");
+                entry.Errors = assigned.Errors;
                 return Snapshot(entry);
             }
             entry.Image = assigned.Image;
@@ -212,7 +219,7 @@ public class ImageUploadStaging
     {
         lock (capacityLock)
         {
-            if (handle is not null && entries.TryGetValue(handle, out var entry)) return entry;
+            if (handle is { Length: 64 } && entries.TryGetValue(handle, out var entry)) return entry;
         }
         throw Invalid("unknown-upload-handle", "Upload handle is unknown or invalidated by Pod teardown");
     }
@@ -241,7 +248,8 @@ public class ImageUploadStaging
     private static UploadResult Snapshot(Entry e) => new(
         e.Handle, e.RecipeId, e.State, e.ReceivedBytes, e.NextChunkNumber, ChunkLimit,
         e.Image is null ? null : e.Source, e.Image, e.Error,
-        e.State == "uncertain" ? "Inspect the recipe through get_recipe or the normal UI before starting another upload; this mutation will never be replayed" : null);
+        e.State == "uncertain" ? "Inspect the recipe through get_recipe or the normal UI before starting another upload; this mutation will never be replayed" : null,
+        e.Errors);
     private sealed class Entry(string handle, string recipeId, UploadSource source)
     {
         public object Gate { get; } = new();
@@ -254,7 +262,10 @@ public class ImageUploadStaging
         public byte[]? LatestChunk { get; set; }
         public UploadedImage? Image { get; set; }
         public UploadError? Error { get; set; }
+        public IReadOnlyList<UploadError>? Errors { get; set; }
     }
 }
 
-public record AssignmentResult(UploadedImage? Image, UploadError? Error = null, bool Uncertain = false);
+public record AssignmentResult(
+    UploadedImage? Image, UploadError? Error = null, bool Uncertain = false,
+    IReadOnlyList<UploadError>? Errors = null);

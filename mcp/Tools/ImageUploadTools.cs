@@ -8,7 +8,8 @@ using StrawberryShake;
 namespace Mcp.Tools;
 
 [McpServerToolType]
-public class ImageUploadTools(IMcpClient client, ImageUploadStaging staging)
+public class ImageUploadTools(
+    IMcpClient client, ImageUploadStaging staging, ILogger<ImageUploadTools>? logger = null)
 {
     [McpServerTool(Name = "image_upload_start")]
     [Description("Starts an isolated image upload for a recipe. Declare the original decoded file byteLength (1–5242880), image mediaType and original-file SHA-256 (64 hex digits), not a hash of base64. Reserves capacity atomically within 104857600 staged bytes. Every call checks current GraphQL image-management permission; any permitted caller with the opaque uploadHandle can continue. No expiry; Pod teardown invalidates handles.")]
@@ -44,12 +45,16 @@ public class ImageUploadTools(IMcpClient client, ImageUploadStaging staging)
             var response = await client.SetImage.ExecuteAsync(recipeId, new Upload(stream, "image", source.MediaType));
             if (response.Errors.Count > 0)
             {
-                var error = response.Errors[0];
-                return new AssignmentResult(null, new UploadError(
-                    error.Extensions?.GetValueOrDefault("code")?.ToString() ?? "image-assignment-rejected",
+                if (response.Errors.Any(error => error.Exception is not null))
+                    return new AssignmentResult(null, new("assignment-uncertain", "Image assignment transport or response decoding failed"), true);
+                var uncertain = response.Data?.SetImage is not null
+                    || response.Errors.Any(error => error.Extensions?.GetValueOrDefault("outcome")?.ToString() is "unknown" or "partial");
+                var errors = response.Errors.Select(error => new UploadError(
+                    error.Extensions?.GetValueOrDefault("code")?.ToString() ?? error.Code ?? "image-assignment-rejected",
                     error.Message,
                     error.Extensions?.GetValueOrDefault("field")?.ToString(),
-                    error.Extensions?.GetValueOrDefault("status")));
+                    error.Extensions?.GetValueOrDefault("status"))).ToArray();
+                return new AssignmentResult(null, errors[0], uncertain, errors);
             }
             var image = response.Data?.SetImage;
             return image is null
@@ -71,7 +76,17 @@ public class ImageUploadTools(IMcpClient client, ImageUploadStaging staging)
         IOperationResult<IImageUploadCapabilitiesResult> response;
         try { response = await client.ImageUploadCapabilities.ExecuteAsync(); }
         catch (McpException) { throw; }
-        catch { throw new McpException("image-permission-unavailable: Image-management permission could not be checked"); }
+        catch (Exception error)
+        {
+            logger?.LogWarning("Image-management capability check failed ({FailureType})", error.GetType().Name);
+            throw new McpException("image-permission-unavailable: Image-management permission could not be checked");
+        }
+        if (response.Errors.Any(error => error.Exception is not null))
+        {
+            foreach (var error in response.Errors.Where(error => error.Exception is not null))
+                logger?.LogWarning("Image-management capability response failed ({FailureType})", error.Exception!.GetType().Name);
+            throw new McpException("image-permission-unavailable: Image-management permission could not be checked");
+        }
         if (response.Errors.Count > 0) throw RecipeTools.GraphQLError(response.Errors);
         if (response.Data is null) throw new McpException("image-permission-unavailable: No image-management permission data was returned");
         if (!response.Data.MyCapabilities.CanManageImages)

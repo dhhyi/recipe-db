@@ -58,7 +58,7 @@ def fixture_server_ready():
 
 
 @asynccontextmanager
-async def mcp_session(authenticated=True, account="owner"):
+async def mcp_session(authenticated=True, account="owner", url=MCP_URL):
     with anyio.fail_after(MCP_SESSION_TIMEOUT_SECONDS):
         headers = {}
         if authenticated:
@@ -72,7 +72,7 @@ async def mcp_session(authenticated=True, account="owner"):
             headers=headers, timeout=httpx2.Timeout(10, read=MCP_REQUEST_TIMEOUT)
         ) as http_client:
             async with Client(
-                streamable_http_client(MCP_URL, http_client=http_client),
+                streamable_http_client(url, http_client=http_client),
                 mode="2026-07-28",
                 read_timeout_seconds=MCP_REQUEST_TIMEOUT,
             ) as session:

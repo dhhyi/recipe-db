@@ -82,6 +82,39 @@ EOF
   setup_tags
 }
 
+@test "MCP upload verification is private, disposable, and never enabled on the normal MCP service" {
+  mkdir mcp mcp-test
+  cat > mcp/.project.yaml << 'EOF'
+devcontainer:
+  ports: [5000]
+traefik: {}
+---
+category: frontend
+EOF
+  cat > mcp-test/.project.yaml << 'EOF'
+devcontainer: {}
+traefik: {}
+---
+category: test
+test: echo tested
+EOF
+
+  run sh .scripts/generate-docker-compose.sh
+  [ "$status" -eq 0 ]
+  assert_compose '
+    .services["mcp-upload-test-api"] as $upload
+    | $upload.build == .services.mcp.build
+      and $upload.image == .services.mcp.image
+      and $upload.profiles == ["test"]
+      and $upload.networks == ["intranet"]
+      and $upload.restart == "no"
+      and $upload.environment.MODE == "testing"
+      and $upload.environment.MCP_IMAGE_UPLOAD_TESTING == "1"
+      and ($upload | has("ports") or has("labels") or has("volumes") | not)
+      and (.services.mcp.environment.MCP_IMAGE_UPLOAD_TESTING == null)
+  '
+}
+
 setup_browse() {
   mkdir browse
   cat > browse/.project.yaml << 'EOF'
