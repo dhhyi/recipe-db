@@ -1,4 +1,16 @@
-"""Opt-in protocol tests: a private mock ingress, not real-client evidence."""
+"""Opt-in protocol tests: a private mock ingress, not real-client evidence.
+
+From the repository root, create the recipe-db-upload-experiment Docker network,
+start mcp-test's devcontainer with --keep-running, and connect that container to
+the network with alias traefik. Bring up compose.upload-experiment.yaml using a
+dedicated Compose project. The fake ingress below listens only in that test
+container; do not connect application services to this mock network.
+
+Run via mise run --raw in-devcontainer mcp-test, setting MCP_UPLOAD_URL to
+http://mcp-upload-experiment:5000/mcp and invoking pytest on this file.
+Teardown the dedicated Compose project, disconnect the devcontainer from the
+experiment network, then remove that network. No shared-data resets are needed.
+"""
 
 import base64
 import hashlib
@@ -11,6 +23,7 @@ from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx2
+import httpx
 import pytest
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
@@ -44,7 +57,7 @@ def ingress():
                 file_bytes = None
             query = operations["query"]
             if "canManageImages" in query:
-                if self.headers.get("Authorization") != "******":
+                if self.headers.get("Authorization") != "Bearer " + "experiment-caller":
                     response = {"errors": [{"message": "Invalid credentials", "extensions": {"code": "invalid-credentials"}}]}
                 elif state["permission"] == "unavailable":
                     self.send_response(503)
@@ -53,7 +66,9 @@ def ingress():
                 elif state["permission"] == "error":
                     response = {"errors": [{"message": "Capability lookup unavailable", "extensions": {"code": "service-unavailable"}}]}
                 else:
-                    response = {"data": {"myCapabilities": {"canManageImages": state["permission"] == "allowed"}}}
+                    response = {"data": {"__typename": "QueryRoot", "myCapabilities": {
+                        "__typename": "MyCapabilities", "canManageImages": state["permission"] == "allowed",
+                    }}}
             else:
                 assert "setImage" in query
                 state["mutations"].append((operations["variables"]["recipeId"], file_bytes))
@@ -63,7 +78,8 @@ def ingress():
                     self.close_connection = True
                     return
                 else:
-                    response = {"data": {"setImage": {
+                    response = {"data": {"__typename": "MutationRoot", "setImage": {
+                        "__typename": "ImageMetadata",
                         "url": "/images/experiment", "thumbUrl": "/images/experiment/thumb",
                         "width": 1, "height": 1, "size": len(file_bytes),
                     }}}
@@ -84,12 +100,12 @@ def ingress():
 
 
 @asynccontextmanager
-async def session(token="experiment-caller"):
+async def session(token="experiment-caller", url=URL):
     async with httpx2.AsyncClient(
         headers={"Authorization": "Bearer " + token}, timeout=15
     ) as http:
         async with Client(
-            streamable_http_client(URL, http_client=http),
+            streamable_http_client(url, http_client=http),
             mode="2026-07-28", read_timeout_seconds=15,
         ) as client:
             yield client
@@ -242,3 +258,43 @@ async def test_final_failure_is_explicit_and_never_replayed(ingress, upstream):
             assert len(ingress["mutations"]) == 1
         finally:
             await discard(client, handle, ingress)
+
+
+async def test_maximum_file_and_request_body_limit(ingress):
+    data = b"x" * (5 * 1024 * 1024)
+    async with session() as client:
+        handle = await start(client, data)
+        try:
+            for number in range(20):
+                payload(await chunk(client, handle, number, data[number * CHUNK:(number + 1) * CHUNK]))
+            result = payload(await client.call_tool("finish_image_upload", {"uploadHandle": handle}))
+            assert result["sha256"] == hashlib.sha256(data).hexdigest()
+            assert ingress["mutations"][0][1] == data
+        finally:
+            await discard(client, handle, ingress)
+    async with httpx.AsyncClient() as http:
+        response = await http.post(URL, headers={
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-03-26",
+        }, json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "send_image_chunk", "arguments": {
+                "uploadHandle": "x" * 32, "chunkNumber": 0, "base64": "x" * 360449,
+            }},
+        })
+        assert response.status_code == 413
+    assert len(ingress["mutations"]) == 1
+
+
+@pytest.mark.parametrize("service", ["mcp-upload-backup", "mcp-upload-default", "mcp-upload-disabled"])
+async def test_experiment_unavailable_without_both_testing_and_opt_in(service):
+    url = f"http://{service}:5000/mcp"
+    async with session(url=url) as client:
+        names = {tool.name for tool in (await client.list_tools()).tools}
+        assert "list_recipes" in names
+        assert not names.intersection({
+            "start_image_upload", "send_image_chunk", "finish_image_upload", "discard_image_upload",
+        })
+        rejected(await client.call_tool("start_image_upload", start_args(b"x")), "Unknown tool")
+    async with httpx.AsyncClient() as http:
+        assert (await http.get(f"http://{service}:5000/health")).status_code == 200

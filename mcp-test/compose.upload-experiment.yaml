@@ -1,6 +1,7 @@
 # Isolated protocol-test server. Never include this override in a deployment.
 services:
   mcp-upload-experiment:
+    image: recipe-db-mcp-upload-experiment:local
     build:
       context: ../mcp
     environment:
@@ -10,6 +11,25 @@ services:
     networks:
       upload-experiment:
         aliases: [mcp-upload-experiment]
+  mcp-upload-backup:
+    image: recipe-db-mcp-upload-experiment:local
+    environment:
+      MODE: backup
+      EXPERIMENTAL_IMAGE_UPLOADS: "1"
+      ASPNETCORE_URLS: http://+:5000
+    networks: [upload-experiment]
+  mcp-upload-default:
+    image: recipe-db-mcp-upload-experiment:local
+    environment:
+      EXPERIMENTAL_IMAGE_UPLOADS: "1"
+      ASPNETCORE_URLS: http://+:5000
+    networks: [upload-experiment]
+  mcp-upload-disabled:
+    image: recipe-db-mcp-upload-experiment:local
+    environment:
+      MODE: testing
+      ASPNETCORE_URLS: http://+:5000
+    networks: [upload-experiment]
 networks:
   upload-experiment:
     external: true
