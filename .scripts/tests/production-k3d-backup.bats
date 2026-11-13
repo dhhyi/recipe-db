@@ -23,6 +23,37 @@ prepare_candidate_release() {
   [ "$status" -eq 0 ]
 }
 
+prepare_recovery_package() {
+  local package_paths
+  mkdir -p provisioning/files recovery-package
+  cp "$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" provisioning/files/
+  cp "$BATS_TEST_DIRNAME/../validate-backup-package.py" .scripts/
+  package_paths=$(
+    python3 - "$STATE" "$FIXTURE_ROOT/recovery-package" << 'PY'
+import importlib.util
+import json
+import pathlib
+import sys
+
+state = pathlib.Path(sys.argv[1])
+stage = pathlib.Path(sys.argv[2])
+module_path = pathlib.Path("provisioning/files/backup-upload.py")
+spec = importlib.util.spec_from_file_location("backup_upload", module_path)
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+manifest_path = state / "manifest.json"
+manifest = json.loads(manifest_path.read_text())
+result = upload.create_package(state, stage, manifest, "rehearsal",
+                               upload.DEFAULT_MAX_STAGING_BYTES)
+print(json.dumps({"manifest": str(stage / result["manifest"]),
+                  "archive": str(stage / result["archive"])}))
+PY
+  )
+  PACKAGE_MANIFEST=$(jq -r .manifest <<< "$package_paths")
+  PACKAGE_ARCHIVE=$(jq -r .archive <<< "$package_paths")
+  chmod 600 "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE"
+}
+
 complete_candidate_release() {
   local outcome=$1 use_git_sources=${2:-false}
   local -a source_args=()
@@ -775,6 +806,10 @@ EOF
 @test "migration failure records a recovery barrier and blocks retry and startup" {
   export MOCK_MIGRATIONS=true
   prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$STATE/manifest.json" "$STATE/recipes.tar" "$HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"CLEAR-AND-RESTORE-<backup-id>-<candidate-revision>-ATTEMPT-<number>"* ]]
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   export MOCK_FAILED_MIGRATION=true
@@ -788,11 +823,24 @@ EOF
   local revision before
   revision=$(jq -er .candidate.revision "$STATE/backup-state.json")
   before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  cp "$MOCK_LOG.lease" "$FIXTURE_ROOT/recovery-lease-before.json"
+  jq '.metadata.annotations["recipe-db/phase"]="unrelated-phase"' \
+    "$MOCK_LOG.lease" > "$MOCK_LOG.lease.next"
+  mv "$MOCK_LOG.lease.next" "$MOCK_LOG.lease"
   run bash .scripts/production-k3d.sh release-migration-recover \
     "$VALUES" "$STATE" "$CANDIDATE" "$STATE/manifest.json" "$STATE/recipes.tar" "$HOLDER" \
-    "CLEAR-AND-RESTORE-$HOLDER-$revision-wrong"
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
   [ "$status" -ne 0 ]
-  [[ $output == *"recovery requires CLEAR-AND-RESTORE"* ]]
+  [[ $output == *"release Lease phase does not match the saved lifecycle state"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  run ! grep -Eq 'delete pvc|restore-volume' "$MOCK_LOG"
+  mv "$FIXTURE_ROOT/recovery-lease-before.json" "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$STATE/manifest.json" "$STATE/recipes.tar" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1-wrong"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery requires fresh CLEAR-AND-RESTORE"* ]]
   [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
   [ ! -e "$MOCK_LOG.migration-claim" ]
   run bash .scripts/production-k3d.sh release-recovery-reopen \
@@ -806,6 +854,252 @@ EOF
   run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
   [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "complete recovery failure retains diagnostics and requires a fresh retry approval" {
+  export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true
+  set_value '.timeoutSeconds=8'
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[{"role":"owner","secret":"recovery-test-token"}],"googleAccounts":{}}\n' \
+    > auth-accounts.json
+  python3 - "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3" "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" << 'PY'
+import pathlib, sqlite3, sys
+
+for name in sys.argv[1:]:
+    pathlib.Path(name).unlink()
+with sqlite3.connect(sys.argv[1]) as database:
+    database.execute("CREATE TABLE recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)")
+    database.execute(
+        "INSERT INTO recipes VALUES (?, ?)",
+        ("fixture-recipe", '{"name":"Recovery fixture recipe"}'),
+    )
+with sqlite3.connect(sys.argv[2]) as database:
+    database.execute("CREATE TABLE tags (name TEXT PRIMARY KEY)")
+PY
+  local image_full_sha image_thumb_sha image_full_path image_thumb_path
+  printf 'recovery-image-full\n' > "$FIXTURE_ROOT/recovery-image-full"
+  printf 'recovery-image-thumbnail\n' > "$FIXTURE_ROOT/recovery-image-thumbnail"
+  image_full_sha=$(sha256sum "$FIXTURE_ROOT/recovery-image-full" | cut -d ' ' -f 1)
+  image_thumb_sha=$(sha256sum "$FIXTURE_ROOT/recovery-image-thumbnail" | cut -d ' ' -f 1)
+  image_full_path="fixture-recipe-$image_full_sha.png"
+  image_thumb_path="fixture-recipe-$image_thumb_sha-thumb.png"
+  cp "$FIXTURE_ROOT/recovery-image-full" "$FIXTURE_ROOT/tar-data/images/public/$image_full_path"
+  cp "$FIXTURE_ROOT/recovery-image-thumbnail" "$FIXTURE_ROOT/tar-data/images/public/$image_thumb_path"
+  jq -n --arg full "/public/$image_full_path" --arg thumb "/public/$image_thumb_path" \
+    --argjson size "$(stat -c '%s' "$FIXTURE_ROOT/recovery-image-full")" \
+    '{recipeId:"fixture-recipe",url:$full,thumbUrl:$thumb,size:$size}' \
+    > "$FIXTURE_ROOT/tar-data/images/manifests/fixture-recipe.json"
+  export MOCK_RESTORE_IMAGE_JSON
+  MOCK_RESTORE_IMAGE_JSON=$(jq -c '{url,thumbUrl}' \
+    "$FIXTURE_ROOT/tar-data/images/manifests/fixture-recipe.json")
+  rm -f "$FIXTURE_ROOT/tar-data/tags/tags.sqlite-wal"
+  for service in recipes images tags; do
+    printf '1\n' > "$FIXTURE_ROOT/tar-data/$service/storage-version"
+  done
+  prepare_candidate_release
+  export STATE
+  prepare_recovery_package
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  local images_first_job images_second_job recipes_job
+  images_first_job=$(jq -er '.migrationExecution.transitions[0].job' "$STATE/backup-state.json")
+  images_second_job=$(jq -er '.migrationExecution.transitions[1].job' "$STATE/backup-state.json")
+  recipes_job=$(jq -er '.migrationExecution.transitions[2].job' "$STATE/backup-state.json")
+
+  export MOCK_COMPLETED_MIGRATION=true MOCK_MIGRATION_RESULT_JOB="$images_first_job"
+  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":2,"ratings":1,"inspirations":1,"tags":1}'
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+
+  export MOCK_MIGRATION_RESULT_JOB="$images_second_job"
+  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":3,"ratings":1,"inspirations":1,"tags":1}'
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  jq -e '.migrationExecution.transitions[0].status == "completed"
+    and .migrationExecution.transitions[1].status == "completed"
+    and .migrationExecution.currentIndex == 2' \
+    "$STATE/backup-state.json" > /dev/null
+
+  export MOCK_COMPLETED_MIGRATION=false MOCK_MIGRATION_RESULT_JOB="$recipes_job"
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  export MOCK_FAILED_MIGRATION=true MOCK_MIGRATION_RESULT_JOB="$recipes_job"
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  jq -e '.migrationExecution.failedTransition.service == "recipes"
+    and .migrationExecution.transitions[0].status == "completed"
+    and .migrationExecution.transitions[1].status == "completed"
+    and .migrationExecution.transitions[2].status == "failed"' \
+    "$STATE/backup-state.json" > /dev/null
+  touch "$MOCK_LOG.migration-worker-deleted"
+
+  local before_active_job active_confirmation
+  before_active_job=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  export MOCK_FAILED_MIGRATION=false MOCK_COMPLETED_MIGRATION=false
+  active_confirmation=$(jq -er '
+    "CLEAR-AND-RESTORE-\(.backupVerification.backupId)-\(.candidate.revision)-ATTEMPT-\((((.migrationRecovery.attempts // []) | map(.number) | max) // 0) + 1)"
+  ' "$STATE/backup-state.json")
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "$active_confirmation"
+  [ "$status" -ne 0 ]
+  [[ $output == *"migration Jobs must be suspended or terminal with no active workers before recovery"* ]]
+  [ "$before_active_job" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  run ! grep -Eq 'create -f .*restore-volume-pod|exec restore-volume-|delete pvc' "$MOCK_LOG"
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  export MOCK_FAILED_MIGRATION=true
+
+  local before_missing_archive
+  before_missing_archive=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE.missing" "$HOLDER" \
+    "$active_confirmation"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery requires the verified complete backup manifest and archive"* ]]
+  [ "$before_missing_archive" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  run ! grep -Eq 'create -f .*restore-volume-pod|exec restore-volume-|delete pvc' "$MOCK_LOG"
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+
+  export MOCK_RESTORE=true MOCK_RESTORE_IMPORT_FAIL=false
+  cp "$MOCK_LOG.deployments" "$MOCK_LOG.restore-deployments"
+  : > "$MOCK_LOG.restore-pods"
+  local revision
+  revision=$(jq -er .candidate.revision "$STATE/backup-state.json")
+  export MOCK_IMAGE_INDEX_FAIL=true
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
+  [ "$status" -ne 0 ]
+  grep -q 'oras manifest fetch ghcr.io/dhhyi/recipe-db-' "$MOCK_LOG"
+  run ! grep -Eq 'delete pvc|restore-volume' "$MOCK_LOG"
+  jq -e '.phase == "migration-failed" and .migrationExecution.status == "failed"' \
+    "$STATE/backup-state.json" > /dev/null
+  export MOCK_IMAGE_INDEX_FAIL=false
+  export MOCK_RESTORE_IMAGE_PULL_FAIL=true
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"previous-release workload image could not be pulled before storage clearing"* ]]
+  run ! grep -Eq 'create -f .*restore-volume-pod|exec restore-volume-' "$MOCK_LOG"
+  jq -e '.status == "recovery-required" and .phase == "migration-recovery-failed"
+    and .migrationRecovery.attempts[-1].number == 1
+    and (.migrationRecovery.failureReason | contains("previous-release workload image"))' \
+    "$STATE/backup-state.json" > /dev/null
+  local preflight_claim_holder
+  preflight_claim_holder=$(jq -er .spec.holderIdentity "$MOCK_LOG.migration-claim")
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$CANDIDATE" "$preflight_claim_holder" "RECOVER-$preflight_claim_holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  export MOCK_RESTORE_IMAGE_PULL_FAIL=false MOCK_RESTORE_IMPORT_FAIL=true
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-2"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "recovery-required" and .phase == "migration-recovery-failed"
+    and .migrationRecovery.status == "failed"
+    and .migrationRecovery.safeToRetry == true
+    and .migrationRecovery.attempts[-1].number == 2
+    and (.migrationRecovery.failureReason | contains("complete backup import failed"))' \
+    "$STATE/backup-state.json" > /dev/null
+  jq -e 'all(.items[]; .spec.replicas == 0)' "$MOCK_LOG.restore-deployments" > /dev/null
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes" > /dev/null
+  jq -e 'any(.items[]; .metadata.name == "graphql" and
+    any(.spec.template.spec.containers[0].env[]?;
+      .name == "MODE" and .value == "backup"))' "$MOCK_LOG.restore-deployments" > /dev/null
+  [ -e "$MOCK_LOG.lease" ]
+  [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = \
+    "migration-recovery-failed" ]
+
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"a command claim remains held"* ]]
+  local claim_holder
+  claim_holder=$(jq -er .spec.holderIdentity "$MOCK_LOG.migration-claim")
+  jq '.phase = "migration-recovery-import-images"
+    | .migrationRecovery.status = "in-progress"
+    | .migrationRecovery.phase = "import-images"
+    | del(.migrationRecovery.safeToRetry, .migrationRecovery.failureReason, .migrationRecovery.failedAt)' \
+    "$STATE/backup-state.json" > "$STATE/backup-state.next"
+  mv "$STATE/backup-state.next" "$STATE/backup-state.json"
+  jq '.metadata.annotations["recipe-db/phase"] = "migration-recovery-import-images"' \
+    "$MOCK_LOG.lease" > "$MOCK_LOG.lease.next"
+  mv "$MOCK_LOG.lease.next" "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"migration recovery is still claimed by $claim_holder"* ]]
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$CANDIDATE" "$claim_holder" "RECOVER-$claim_holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"interrupted during migration-recovery-import-images"* ]]
+  [[ $output == *"CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"* ]]
+  local before
+  before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-2"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery requires fresh CLEAR-AND-RESTORE"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+
+  export MOCK_RESTORE_IMPORT_FAIL=false
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"
+  [ "$status" -eq 0 ]
+  [[ $output == *"complete recovery verified"* ]]
+  jq -e '.status == "recovered" and .phase == "migration-recovered"
+    and .migrationRecovery.status == "verified"
+    and .migrationRecovery.candidateAborted == true
+    and [.migrationRecovery.attempts[].number] == [1,2,3]' \
+    "$STATE/backup-state.json" > /dev/null
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+  [ -e "$MOCK_LOG.lease" ]
+  python3 - "$FIXTURE_ROOT/imported/recipes/recipes.sqlite3" << 'PY'
+import sqlite3, sys
+
+with sqlite3.connect(sys.argv[1]) as database:
+    assert database.execute("SELECT id, document FROM recipes").fetchone() == (
+        "fixture-recipe",
+        '{"name":"Recovery fixture recipe"}',
+    )
+PY
+  cmp "$FIXTURE_ROOT/recovery-image-full" \
+    "$FIXTURE_ROOT/imported/images/public/$image_full_path"
+  cmp "$FIXTURE_ROOT/recovery-image-thumbnail" \
+    "$FIXTURE_ROOT/imported/images/public/$image_thumb_path"
+  jq -e --arg full "/public/$image_full_path" --arg thumb "/public/$image_thumb_path" \
+    --argjson size "$(stat -c '%s' "$FIXTURE_ROOT/recovery-image-full")" '
+      .recipeId == "fixture-recipe" and .url == $full and .thumbUrl == $thumb and .size == $size
+    ' "$FIXTURE_ROOT/imported/images/manifests/fixture-recipe.json" > /dev/null
+  for service in recipes images tags; do
+    [ "$(cat "$FIXTURE_ROOT/imported/$service/storage-version")" = 1 ]
+  done
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"migration commands require a staged candidate"* ]]
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "recovered" and .phase == "migration-reopened"
+    and .migrationRecovery.status == "reopened"' "$STATE/backup-state.json" > /dev/null
+  local reopened_state
+  reopened_state=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  local reopened_call_count
+  reopened_call_count=$(wc -l < "$MOCK_LOG")
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-4"
+  [ "$status" -ne 0 ]
+  [ "$reopened_state" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  sed -n "$((reopened_call_count + 1)),\$p" "$MOCK_LOG" > "$MOCK_LOG.reopened-attempt"
+  run ! grep -Eq 'create -f .*restore-volume-pod|exec restore-volume-|delete pvc' \
+    "$MOCK_LOG.reopened-attempt"
 }
 
 @test "migration claim contention prevents an overlapping activation" {

@@ -47,6 +47,40 @@ EOF
   [[ $output == *"exactly one Traefik HelmChartConfig"* ]]
 }
 
+@test "recovery barrier removes public HTTPS previews while preserving internal routes" {
+  cat > work/config.json << 'EOF'
+{"httpsStaging":{"hostname":"restore.example.org"}}
+EOF
+  jq -n '{
+    http:{routers:{
+      graphql:{entrypoints:["web"],service:"graphql"},
+      "preview-graphql":{entrypoints:["websecure"],service:"graphql",
+        tls:{certResolver:"letsencrypt",domains:[{main:"restore.example.org"}]}},
+      "graphql-internal":{entrypoints:["rest-internal"],service:"graphql"}
+    }}
+  }' > work/routes.json
+  cat > barrier-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+namespace=recipe-db
+restore_build_public_barrier_routes work/routes.json work/barrier.json 8082
+restore_validate_public_barrier work/barrier.json
+EOF
+  run bash barrier-harness.sh
+  [ "$status" -eq 0 ]
+  jq -e '
+    .http.routers["restore-public-barrier"].entrypoints == ["web","websecure"]
+    and .http.routers["restore-public-barrier"].tls ==
+      {certResolver:"letsencrypt",domains:[{main:"restore.example.org"}]}
+    and .http.routers.graphql == null
+    and .http.routers["preview-graphql"] == null
+    and .http.routers["graphql-internal"].entrypoints == ["rest-internal"]
+    and .http.routers["restore-internal-images"].entrypoints == ["rest-internal"]
+  ' work/barrier.json
+}
+
 @test "restore startup without Google never requests an absent Redis deployment" {
   printf '[{"name":"nats"},{"name":"typesense"},{"name":"graphql"},{"name":"browse-maintenance"},{"name":"recipes"},{"name":"search"},{"name":"browse"}]\n' \
     > work/prior-workloads.json
@@ -210,6 +244,40 @@ EOF
   [[ $output == *"could not validate and mount every recovery destination"* ]]
   run ! grep -q 'rm -rf' "$MOCK_LOG"
   run ! grep -q '^all-mounted$' "$MOCK_LOG"
+}
+
+@test "migration recovery rejects a terminating non-helper Pod mounted on a destination PVC" {
+  jq '.volumes={"recipes":"1Gi"}' work/config.json > work/config.next
+  mv work/config.next work/config.json
+  cat > recovery-mount-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+lock_holder=release-holder
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+restore_verify_volume_identity() { :; }
+kube() {
+  case "$*" in
+    "get pods -o json")
+      jq -n --arg holder "$lock_holder" '{
+        items:[
+          {metadata:{name:"restore-volume-recipes",
+            labels:{"recipe-db/restore-holder":$holder}},
+            spec:{volumes:[{persistentVolumeClaim:{claimName:"recipes"}}]}},
+          {metadata:{name:"terminating-writer",deletionTimestamp:"2026-01-01T00:00:00Z"},
+            spec:{volumes:[{persistentVolumeClaim:{claimName:"recipes"}}]}}
+        ]
+      }' ;;
+    *) return 1 ;;
+  esac
+}
+restore_assert_recovery_mounts
+EOF
+  run bash recovery-mount-guard.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery helpers are not the sole owners of every application storage mount"* ]]
+  run ! grep -q 'exec .*rm -rf' "$MOCK_LOG"
 }
 
 setup() {

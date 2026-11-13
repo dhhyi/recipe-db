@@ -3,6 +3,7 @@
 # shellcheck disable=SC2034,SC2154
 
 production_fail() {
+  production_failure_reason=$*
   printf 'production: %s\n' "$*" >&2
   exit 1
 }

@@ -11,6 +11,7 @@ load production-k3d-restore-setup
   export MOCK_SERVICE_TYPE=ClusterIP
   set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
     .storageClass="recipe-db-retained" |
+    .timeoutSeconds=8 |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .origin="https://recipes.example.org" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true} |
@@ -44,6 +45,7 @@ load production-k3d-restore-setup
 
 @test "restore fully imports only after ALL volumes are empty and verifies propagation before public reopening" {
   restore_fixture
+  set_value '.timeoutSeconds=8'
   run_restore
   [ "$status" -eq 0 ]
   [[ $output == *"verified; public ingress reopened"* ]]
@@ -403,7 +405,8 @@ restore_retained_fixture() {
       labels:{"app.kubernetes.io/part-of":"recipe-db"},
       annotations:{"recipe-db/operation":"restore","recipe-db/phase":"restore-import-recipes",
         "recipe-db/release":$artifact}},spec:{holderIdentity:$holder}}' > "$MOCK_LOG.lease"
-  jq -n '{http:{routers:{"restore-public-barrier":{entrypoints:["web"],service:"restore-maintenance"}},
+  jq -n '{http:{routers:{"restore-public-barrier":{
+    rule:"PathPrefix(`/`)",priority:2147482647,entrypoints:["web"],service:"restore-maintenance"}},
     services:{"restore-maintenance":{loadBalancer:{servers:[
       {url:"http://browse-maintenance.recipe-db.svc.cluster.local:80"}]}}}}}' > "$MOCK_LOG.restore-routes"
 }

@@ -125,7 +125,7 @@ case "$1" in
 esac
 SH
 chmod 755 "$work/image/migrate"
-printf 'FROM busybox:1.36.1\nCOPY migrate /migrate\nENTRYPOINT ["/migrate"]\n' \
+printf 'FROM debian:bookworm-slim\nCOPY migrate /migrate\n' \
   > "$work/image/Dockerfile"
 run_logged image-build docker build --tag "$image" "$work/image"
 image_built=true
@@ -157,14 +157,16 @@ kubectl --kubeconfig "$work/kubeconfig" --context "$context" \
   apply -f "$work/namespace.json" > "$work/namespace-apply.log"
 jq -n '{
   apiVersion:"v1",kind:"PersistentVolumeClaim",
-  metadata:{name:"images",namespace:"recipe-migration-test"},
+  metadata:{name:"images",namespace:"recipe-migration-test",
+    labels:{"app.kubernetes.io/part-of":"recipe-db"}},
   spec:{accessModes:["ReadWriteOnce"],storageClassName:"local-path",
     resources:{requests:{storage:"128Mi"}}}
 }' > "$work/pvc.json"
 kube apply -f "$work/pvc.json" > "$work/pvc-apply.log"
 jq -n --arg namespace "$namespace" '{
   apiVersion:"v1",kind:"PersistentVolumeClaim",
-  metadata:{name:"recipes",namespace:$namespace},
+  metadata:{name:"recipes",namespace:$namespace,
+    labels:{"app.kubernetes.io/part-of":"recipe-db"}},
   spec:{accessModes:["ReadWriteOnce"],storageClassName:"local-path",
     resources:{requests:{storage:"128Mi"}}}
 }' > "$work/recipes-pvc.json"
@@ -375,7 +377,62 @@ kube delete pod migration-final-inspect --wait=true --timeout=60s \
 wait_pod_gone migration-final-inspect
 
 phase=complete-recovery-fixture
-mkdir -m 700 "$work/recovery-backup"
+mkdir -p "$work/recovery-source/recipes" \
+  "$work/recovery-source/images/public" "$work/recovery-source/images/manifests" \
+  "$work/restore-runtime/validated"
+chmod 700 "$work/recovery-source/recipes" "$work/recovery-source/images/public" \
+  "$work/recovery-source/images/manifests" "$work/restore-runtime/validated"
+printf '1\n' > "$work/recovery-source/recipes/storage-version"
+printf '1\n' > "$work/recovery-source/images/storage-version"
+python3 - "$work/recovery-source/recipes/recipes.sqlite3" << 'PY'
+import sqlite3, sys
+
+with sqlite3.connect(sys.argv[1]) as database:
+    database.execute("CREATE TABLE recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)")
+    database.execute(
+        "INSERT INTO recipes VALUES (?, ?)",
+        ("fixture-recipe", '{"name":"Recovery fixture recipe"}'),
+    )
+PY
+printf 'recovery-image-full\n' > "$work/recovery-full.png"
+printf 'recovery-image-thumbnail\n' > "$work/recovery-thumbnail.png"
+image_full_sha=$(sha256sum "$work/recovery-full.png" | cut -d ' ' -f 1)
+image_thumb_sha=$(sha256sum "$work/recovery-thumbnail.png" | cut -d ' ' -f 1)
+image_full_path="fixture-recipe-$image_full_sha.png"
+image_thumb_path="fixture-recipe-$image_thumb_sha-thumb.png"
+cp "$work/recovery-full.png" "$work/recovery-source/images/public/$image_full_path"
+cp "$work/recovery-thumbnail.png" "$work/recovery-source/images/public/$image_thumb_path"
+jq -n --arg full "/public/$image_full_path" --arg thumb "/public/$image_thumb_path" \
+  --argjson size "$(stat -c '%s' "$work/recovery-full.png")" \
+  '{recipeId:"fixture-recipe",url:$full,thumbUrl:$thumb,size:$size}' \
+  > "$work/recovery-source/images/manifests/fixture-recipe.json"
+tar -C "$work/recovery-source/recipes" -cf "$work/recovery-backup-recipes.tar" .
+tar -C "$work/recovery-source/images" \
+  -cf "$work/recovery-backup-images.tar" public manifests storage-version
+python3 .scripts/validate-backup-snapshot.py --require-storage-version \
+  "$work/recovery-backup-recipes.tar" '{"kind":"sqlite","file":"recipes.sqlite3"}' \
+  > "$work/recovery-recipes-files.json"
+python3 .scripts/validate-backup-snapshot.py --require-storage-version \
+  "$work/recovery-backup-images.tar" '{"kind":"images"}' \
+  > "$work/recovery-images-files.json"
+cp "$work/recovery-backup-recipes.tar" "$work/restore-runtime/validated/recipes.tar"
+cp "$work/recovery-backup-images.tar" "$work/restore-runtime/validated/images.tar"
+jq -cn '{name:"recipes",backupData:{kind:"sqlite",file:"recipes.sqlite3"}}' \
+  > "$work/restore-runtime/projects.jsonl"
+jq -cn '{name:"images",backupData:{kind:"images"}}' \
+  >> "$work/restore-runtime/projects.jsonl"
+jq -n --arg image "$image" '{
+  volumes:{images:"128Mi",recipes:"128Mi"},
+  resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{cpu:"100m",memory:"64Mi"}},
+  infrastructure:{maintenance:$image}
+}' > "$work/restore-runtime/config.json"
+jq -n --slurpfile recipes "$work/recovery-recipes-files.json" \
+  --slurpfile images "$work/recovery-images-files.json" '{
+    inventory:[
+      {service:"recipes",archive:"recipes.tar",files:$recipes[0]},
+      {service:"images",archive:"images.tar",files:$images[0]}
+    ]
+  }' > "$work/restore-runtime/restore-manifest.json"
 for claim in images recipes; do
   pod="recovery-baseline-$claim"
   make_volume_pod "$pod" "$claim"
@@ -386,12 +443,16 @@ for claim in images recipes; do
       > "$work/recipes-pvc-wait.log"
   fi
   kube exec "$pod" -- sh -ec \
-    "printf '1\\n' > /data/storage-version; printf 'original-$claim\\n' > /data/record" \
-    > "$work/$pod-seed.log"
-  kube exec "$pod" -- tar -C /data -cf - . > "$work/recovery-backup/$claim.tar"
+    'test -d /data && test ! -L /data &&
+     find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' \
+    > "$work/$pod-clear.log"
+  kube exec -i "$pod" -- tar -xpf - -C /data \
+    < "$work/recovery-backup-$claim.tar"
   kube delete pod "$pod" --wait=true --timeout=60s > "$work/$pod-delete.log"
   wait_pod_gone "$pod"
 done
+assert_no_storage_pods
+
 make_job migration-recovery-earlier-success 1 2 1 60
 kube create -f "$work/migration-recovery-earlier-success.json" \
   > "$work/recovery-earlier-create.log"
@@ -420,28 +481,64 @@ kube wait --for=condition=failed job/migration-recovery-later-failure \
   --timeout=60s > "$work/recovery-later-failed.log"
 delete_job_workers migration-recovery-later-failure
 assert_no_storage_pods
+perform_complete_recovery() {
+  local work="$restore_runtime" root="$repository_root"
+  local target=local ingress_mode=loopback timeout=60
+  local storage_class=recipe-db-retained lock_holder=recovery-fixture-holder
+  local restore_mode=migration-recovery restore_current_phase=
+  local copy_image
+  source "$root/.scripts/lib/production-restore.sh"
+  production_fail() {
+    printf 'Migration k3d test: production recovery failed: %s\n' "$*" >&2
+    exit 1
+  }
+  restore_phase() { restore_current_phase=$1; }
+  backup_wait_pod_gone() { wait_pod_gone "$1"; }
+  restore_clear_migration_target
+  while IFS= read -r claim; do
+    restore_volume_pod "$claim" true \
+      || production_fail "could not mount recovered PVC $claim for import"
+  done < <(jq -r '.volumes | keys[]' "$work/config.json")
+  restore_import || production_fail "complete production restore import failed"
+}
+restore_runtime="$work/restore-runtime"
+repository_root=$(git rev-parse --show-toplevel)
+cp "$work/kubeconfig" "$restore_runtime/kubeconfig"
+perform_complete_recovery
+assert_no_storage_pods
 for claim in images recipes; do
-  pod="recovery-restore-$claim"
+  pod="recovery-verify-$claim"
   make_volume_pod "$pod" "$claim"
   kube create -f "$work/$pod.json" > "$work/$pod-create.log"
   kube wait --for=condition=Ready "pod/$pod" --timeout=60s > "$work/$pod-wait.log"
-  # The quoted script runs in the Pod, so its command substitutions must remain literal here.
-  # shellcheck disable=SC2016
-  kube exec "$pod" -- sh -ec '
-    test -d /data && test ! -L /data
-    find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-    test -z "$(find /data -mindepth 1 -maxdepth 1 -print -quit)"
-  ' > "$work/$pod-clear.log"
-  kube exec -i "$pod" -- tar -xpf - -C /data \
-    < "$work/recovery-backup/$claim.tar"
-  kube exec "$pod" -- sync
   [[ $(kube exec "$pod" -- cat /data/storage-version) == 1 ]] \
-    || die "complete recovery did not restore the original $claim version marker"
-  [[ $(kube exec "$pod" -- cat /data/record) == "original-$claim" ]] \
-    || die "complete recovery did not restore the original $claim record"
+    || die "production recovery did not restore the original $claim version marker"
+  if [[ $claim == recipes ]]; then
+    kube exec "$pod" -- test ! -e /data/record \
+      || die "production recovery retained the failed migration's partial recipe data"
+    kube exec "$pod" -- cat /data/recipes.sqlite3 > "$work/recovered-recipes.sqlite3"
+    python3 - "$work/recovered-recipes.sqlite3" << 'PY'
+import sqlite3, sys
+
+with sqlite3.connect(sys.argv[1]) as database:
+    assert database.execute("SELECT id, document FROM recipes").fetchone() == (
+        "fixture-recipe",
+        '{"name":"Recovery fixture recipe"}',
+    )
+PY
+  else
+    kube exec "$pod" -- cat "/data/public/$image_full_path" > "$work/recovered-full.png"
+    kube exec "$pod" -- cat "/data/public/$image_thumb_path" > "$work/recovered-thumbnail.png"
+    cmp "$work/recovery-full.png" "$work/recovered-full.png"
+    cmp "$work/recovery-thumbnail.png" "$work/recovered-thumbnail.png"
+    jq -e --arg full "/public/$image_full_path" --arg thumb "/public/$image_thumb_path" \
+      --argjson size "$(stat -c '%s' "$work/recovery-full.png")" '
+      .recipeId == "fixture-recipe" and .url == $full and .thumbUrl == $thumb and .size == $size
+    ' < <(kube exec "$pod" -- cat /data/manifests/fixture-recipe.json) > /dev/null
+  fi
   kube delete pod "$pod" --wait=true --timeout=60s > "$work/$pod-delete.log"
   wait_pod_gone "$pod"
 done
 assert_no_storage_pods
 
-printf 'Verified read-only probe lifecycle, async sequential migrations, Kubernetes deadline, and complete multi-service recovery after partial writes.\n'
+printf 'Verified read-only probe lifecycle, async sequential migrations, Kubernetes deadline, and production complete multi-service recovery after partial writes.\n'

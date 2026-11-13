@@ -87,6 +87,7 @@ case "$query" in
     sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
     printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
     jq -r .variables.name "$file" > "$MOCK_LOG.probe-name"
+    touch "$MOCK_LOG.probe-created"
     echo '{"data":{"createRecipe":{"id":"probe"}}}' ;;
   *"updateRecipe"*)
     sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)

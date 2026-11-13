@@ -84,8 +84,133 @@ restore_routes_apply() {
   } 2> "$work/restore-route-error"
 }
 
+restore_build_public_barrier_routes() {
+  local input=$1 output=$2 image_port=$3
+  local https hostname
+  https=$(jq 'has("httpsStaging")' "$work/config.json")
+  hostname=$(jq -r '.httpsStaging.hostname // empty' "$work/config.json")
+  jq --arg ns "$namespace" --argjson port "$image_port" \
+    --argjson https "$https" --arg hostname "$hostname" '
+    .http.routers |= with_entries(select(
+      [(.value.entrypoints // ["web"])[] |
+        select(. == "web" or . == "websecure")] | length == 0)) |
+    .http.routers["restore-public-barrier"] = {
+      rule:"PathPrefix(`/`)",
+      entrypoints:(if $https then ["web","websecure"] else ["web"] end),
+      priority:2147482647,service:"restore-maintenance"
+    } |
+    if $https then .http.routers["restore-public-barrier"].tls = {
+      certResolver:"letsencrypt",domains:[{main:$hostname}]
+    } else . end |
+    .http.routers["restore-internal-images"] = {
+      rule:"PathPrefix(`/public/`)",entrypoints:["rest-internal"],service:"restore-image-static"
+    } |
+    .http.services["restore-image-static"] = {loadBalancer:{servers:[
+      {url:("http://images."+$ns+".svc.cluster.local:"+($port|tostring))}
+    ]}} |
+    .http.services["restore-maintenance"] = {loadBalancer:{servers:[
+      {url:"http://browse-maintenance.recipe-db.svc.cluster.local:80"}
+    ]}}
+  ' "$input" > "$output"
+}
+
+restore_validate_public_barrier() {
+  local routes=$1 https hostname
+  https=$(jq 'has("httpsStaging")' "$work/config.json")
+  hostname=$(jq -r '.httpsStaging.hostname // empty' "$work/config.json")
+  jq -e --arg ns "$namespace" --argjson https "$https" --arg hostname "$hostname" '
+    .http.routers["restore-public-barrier"].rule == "PathPrefix(`/`)"
+    and .http.routers["restore-public-barrier"].priority == 2147482647
+    and .http.routers["restore-public-barrier"].entrypoints ==
+      (if $https then ["web","websecure"] else ["web"] end)
+    and .http.routers["restore-public-barrier"].service == "restore-maintenance"
+    and (if $https then .http.routers["restore-public-barrier"].tls == {
+      certResolver:"letsencrypt",domains:[{main:$hostname}]
+    } else true end)
+    and .http.services["restore-maintenance"].loadBalancer.servers ==
+      [{url:"http://browse-maintenance.recipe-db.svc.cluster.local:80"}]
+    and ([.http.routers[] | select(any((.entrypoints // ["web"])[];
+      . == "web" or . == "websecure"))] | length) == 1
+    and ((.tcp.routers // {}) | length) == 0
+    and ((.udp.routers // {}) | length) == 0
+  ' "$routes" > /dev/null
+}
+
+restore_verify_installed_public_barrier() {
+  kube --namespace kube-system get secret recipe-db-routes -o json \
+    > "$work/restore-barrier-secret.json" \
+    || production_fail "cannot inspect the installed recovery public barrier"
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | type == "string")' \
+    "$work/restore-barrier-secret.json" > /dev/null \
+    || production_fail "installed recovery public barrier Secret is invalid"
+  jq -er '.data["routes.yml"] | @base64d' "$work/restore-barrier-secret.json" \
+    > "$work/restore-installed-barrier.json" \
+    || production_fail "installed recovery public barrier has no readable route configuration"
+  restore_validate_public_barrier "$work/restore-installed-barrier.json" \
+    || production_fail "installed recovery public routes are not fully blocked"
+}
+
+restore_remove_image_probes() {
+  local pod
+  kube get pods -l "recipe-db/recovery-image-probe=$lock_holder" -o json \
+    > "$work/recovery-image-probes.json" || return 1
+  while IFS= read -r pod; do
+    [[ -n $pod ]] || continue
+    kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  done < <(jq -r '.items[].metadata.name' "$work/recovery-image-probes.json")
+}
+
+restore_preflight_workload_images() {
+  local image index=0 pod deadline pulled
+  {
+    jq -r '.images[]' "$work/pulled/release.json"
+    jq -r '.infrastructure[]' "$work/config.json"
+  } | sort -u > "$work/recovery-workload-images.txt" || return 1
+  while IFS= read -r image; do
+    [[ -n $image ]] || continue
+    index=$((index + 1))
+    pod="restore-image-probe-$index"
+    jq -n --arg name "$pod" --arg ns "$namespace" --arg image "$image" \
+      --arg holder "$lock_holder" '
+      {apiVersion:"v1",kind:"Pod",
+        metadata:{name:$name,namespace:$ns,
+          labels:{"app.kubernetes.io/part-of":"recipe-db",
+            "recipe-db/recovery-image-probe":$holder}},
+        spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+          containers:[{name:"pull-probe",image:$image,imagePullPolicy:"Always",
+            command:["/dev/null"]}]}}
+    ' > "$work/recovery-image-probe.json" || return 1
+    # /dev/null cannot execute; kubelet must pull the image before attempting the command.
+    kube create -f "$work/recovery-image-probe.json" > /dev/null || return 1
+    deadline=$((SECONDS + timeout))
+    pulled=false
+    while ((SECONDS < deadline)); do
+      kube get pod "$pod" -o json > "$work/recovery-image-probe-status.json" || return 1
+      if jq -e 'any(.status.containerStatuses[]?; (.imageID // "") != "")' \
+        "$work/recovery-image-probe-status.json" > /dev/null; then
+        pulled=true
+        break
+      fi
+      if jq -e '
+        .status.phase == "Failed"
+        or any(.status.containerStatuses[]?;
+          .state.waiting.reason == "ErrImagePull"
+          or .state.waiting.reason == "ImagePullBackOff"
+          or .state.waiting.reason == "InvalidImageName")
+      ' "$work/recovery-image-probe-status.json" > /dev/null; then
+        return 1
+      fi
+      sleep 1
+    done
+    [[ $pulled == true ]] || return 1
+    kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  done < "$work/recovery-workload-images.txt"
+  restore_remove_image_probes
+}
+
 restore_cleanup() {
-  local result=$1 pid retry_safe=true
+  local result=$1 pid retry_safe=true failure_reason
   for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
     [[ -n $pid ]] || continue
     kill "$pid" 2> /dev/null || true
@@ -96,6 +221,12 @@ restore_cleanup() {
   # Never roll a partial import back by deleting data, or treat it as a resumable merge.
   retain_lock=true
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    failure_reason=${production_failure_reason:-"recovery command exited before recording a failure reason"}
+    failure_reason=${failure_reason:0:512}
+    restore_remove_image_probes || {
+      printf 'production: previous-release image probe Pods could not all be stopped\n' >&2
+      retry_safe=false
+    }
     restore_stop_migration_recovery || {
       printf 'production: recovery workers could not all be stopped; verify every storage user is terminated\n' >&2
       retry_safe=false
@@ -108,8 +239,9 @@ restore_cleanup() {
     fi
     release_state_write recovery-required migration-recovery-failed \
       "$(jq -cn --arg phase "${restore_current_phase:-interrupted}" --argjson safeToRetry "$retry_safe" \
-        --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{migrationRecovery:{status:"failed",phase:$phase,failedAt:$failedAt,safeToRetry:$safeToRetry}}')" \
+        --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg failureReason "$failure_reason" \
+        '{migrationRecovery:{status:"failed",phase:$phase,failedAt:$failedAt,
+          safeToRetry:$safeToRetry,failureReason:$failureReason}}')" \
       || printf 'production: could not update durable migration-recovery diagnostics\n' >&2
     cluster_operation_lock_update migration-recovery-failed \
       || printf 'production: could not mark the retained release Lease as requiring recovery\n' >&2
@@ -172,18 +304,14 @@ restore_abandon() {
   # Read this private Secret only into private staging; never print its contents.
   kube --namespace kube-system get secret recipe-db-routes -o json \
     > "$work/restore-isolation-routes-secret.json" 2> "$work/restore-isolation-routes-error"
-  jq -e --arg ns "$namespace" '
-    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and (.data["routes.yml"] | @base64d | fromjson |
-      .http.services["restore-maintenance"].loadBalancer.servers ==
-        [{url:("http://browse-maintenance."+$ns+".svc.cluster.local:80")}]
-      and ((.tcp.routers // {}) | length) == 0 and ((.udp.routers // {}) | length) == 0
-      and (.http.routers |
-        .["restore-public-barrier"].entrypoints == ["web"]
-        and .["restore-public-barrier"].service == "restore-maintenance"
-        and ([to_entries[] | select(.key != "restore-public-barrier") |
-          (.value.entrypoints // ["web"])[] | select(. == "web")] | length == 0)))' \
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | type == "string")' \
     "$work/restore-isolation-routes-secret.json" > /dev/null 2>&1 \
+    || production_fail "restore abandonment requires the retained public barrier; isolate ingress first"
+  jq -er '.data["routes.yml"] | @base64d' "$work/restore-isolation-routes-secret.json" \
+    > "$work/restore-isolation-routes.json" \
+    || production_fail "restore abandonment cannot read the retained public barrier"
+  restore_validate_public_barrier "$work/restore-isolation-routes.json" \
     || production_fail "restore abandonment requires the retained public barrier; isolate ingress first"
   restore_state=$state
   restore_cluster_state=true
@@ -294,7 +422,8 @@ restore_migration_target() {
     "$work/restore-existing-pvcs.json" > /dev/null \
     || production_fail "migration recovery requires exactly the configured owned, bound application PVCs"
   jq -e --arg ns "$namespace" --slurpfile expected "$work/backup-pvcs.jsonl" '
-    ([.items[] | {
+    ([.items[] | . as $pvc |
+      select(any($expected[]; .pvc == $pvc.metadata.name)) | {
       name:.metadata.name,uid:.metadata.uid,volumeName:.spec.volumeName,
       storageClassName:.spec.storageClassName,
       requestedStorage:.spec.resources.requests.storage,
@@ -393,7 +522,7 @@ restore_validate_migration_secrets() {
       || production_fail "retained runtime credentials do not match the previous-release configuration"
   done
   for key in graphql-ingress-secret typesense-api-key; do
-    jq -er --arg key "$key" '.data[$key] | @base64d' \
+    jq -jer --arg key "$key" '.data[$key] | @base64d' \
       "$work/restore-runtime-secret.json" > "$work/$key" \
       || production_fail "retained runtime Secret is missing a required previous-release credential"
   done
@@ -881,7 +1010,8 @@ restore_wait_public_routes() {
 restore_run() {
   local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5
   local mode=${6:-standalone} recovery_candidate=${7:-}
-  local parent key name image_port source_artifact source_revision current source_flag=
+  local parent key name image_port artifact source_artifact source_revision current source_flag=
+  local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
   restore_migration_candidate=$recovery_candidate
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
@@ -905,8 +1035,12 @@ restore_run() {
         .candidate.revision | select(type == "string" and test("^[0-9a-f]{40}$"))
       ' "$state/backup-state.json") \
         || production_fail "migration recovery has no exact candidate revision"
-      [[ $confirmation == "CLEAR-AND-RESTORE-$expected-$candidate_revision" ]] \
-        || production_fail "migration recovery requires CLEAR-AND-RESTORE-<backup-id>-<candidate-revision> confirmation"
+      recovery_state_phase=$(jq -er .phase "$state/backup-state.json")
+      recovery_attempt=$(release_migration_recovery_next_attempt "$state/backup-state.json") \
+        || production_fail "migration recovery attempt history is invalid"
+      recovery_attempts=$(jq -c '.migrationRecovery.attempts // []' "$state/backup-state.json")
+      [[ $confirmation == "CLEAR-AND-RESTORE-$expected-$candidate_revision-ATTEMPT-$recovery_attempt" ]] \
+        || production_fail "migration recovery requires fresh CLEAR-AND-RESTORE-<backup-id>-<candidate-revision>-ATTEMPT-<number> confirmation"
       jq -e --arg id "$expected" --arg candidate "$recovery_candidate" '
         .backupVerification.backupId == $id
         and (.backupVerification.status == "verified-upload"
@@ -914,11 +1048,16 @@ restore_run() {
         and .candidate.artifact == $candidate
         and .status == "recovery-required"
         and (.phase == "migration-failed" or .phase == "migration-uncertain"
-          or .phase == "migration-recovery-failed")
+          or (.phase | startswith("migration-recovery-")))
         and (.migrationExecution.status == "failed" or .migrationExecution.status == "uncertain")
         and .migrationResult == null and .postCheckDisposition == null
-        and (.phase != "migration-recovery-failed" or
-          (.migrationRecovery.status == "failed" and .migrationRecovery.safeToRetry == true))
+        and ((.phase == "migration-recovery-failed"
+          and .migrationRecovery.status == "failed" and .migrationRecovery.safeToRetry == true)
+          or ((.phase | startswith("migration-recovery-"))
+            and .phase != "migration-recovery-failed"
+            and (.migrationRecovery.status == "approved"
+              or .migrationRecovery.status == "in-progress"))
+          or .phase == "migration-failed" or .phase == "migration-uncertain")
       ' "$state/backup-state.json" > /dev/null \
         || production_fail "migration recovery requires the same failed step-6 operation before reopening"
       [[ -f $state/manifest.json && ! -L $state/manifest.json &&
@@ -966,7 +1105,7 @@ restore_run() {
       and .source.context == $context and .source.namespace == $namespace
       and .source.artifact == $artifact and .source.revision == $revision
       and .source == $state[0].source
-      and .snapshotManifest == $original[0]
+      and . == $original[0]
     ' "$work/restore-manifest.json" > /dev/null \
       || production_fail "complete backup does not match the retained coordinated pre-migration snapshot and previous release"
   fi
@@ -1007,13 +1146,13 @@ restore_run() {
     lock_holder=$backup_id
     cluster_operation_lock_holder=$lock_holder
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect release Lease before recovery"
-    jq -e --arg holder "$lock_holder" --arg release "$artifact" '
+    jq -e --arg holder "$lock_holder" --arg release "$artifact" \
+      --arg expectedPhase "$recovery_state_phase" '
       .spec.holderIdentity == $holder
       and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
       and .metadata.annotations["recipe-db/operation"] == "backup"
       and .metadata.annotations["recipe-db/release"] == $release
-      and (.metadata.annotations["recipe-db/phase"] == "migration-failed"
-        or .metadata.annotations["recipe-db/phase"] == "migration-uncertain")
+      and .metadata.annotations["recipe-db/phase"] == $expectedPhase
     ' <<< "$current" > /dev/null \
       || production_fail "recovery Lease does not match the failed migration operation"
     locked=true
@@ -1029,17 +1168,11 @@ restore_run() {
   routes
   cp "$work/routes.yml" "$work/restore-final-routes.json"
   image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
-  jq --argjson port "$image_port" --arg ns "$namespace" '
-    .http.routers |= with_entries(select((.value.entrypoints | index("web")) == null)) |
-    .http.routers["restore-public-barrier"]={rule:"PathPrefix(`/`)",entrypoints:["web"],
-      priority:2147482647,service:"restore-maintenance"} |
-    .http.routers["restore-internal-images"]={rule:"PathPrefix(`/public/`)",
-      entrypoints:["rest-internal"],service:"restore-image-static"} |
-    .http.services["restore-image-static"]={loadBalancer:{servers:[
-      {url:("http://images."+$ns+".svc.cluster.local:"+($port|tostring))}]}} |
-    .http.services["restore-maintenance"]={loadBalancer:{servers:[
-      {url:"http://browse-maintenance.recipe-db.svc.cluster.local:80"}]}}' \
-    "$work/routes.yml" > "$work/restore-barrier-routes.json"
+  restore_build_public_barrier_routes "$work/routes.yml" \
+    "$work/restore-barrier-routes.json" "$image_port" \
+    || production_fail "could not build the recovery public barrier"
+  restore_validate_public_barrier "$work/restore-barrier-routes.json" \
+    || production_fail "recovery public routes are not fully blocked"
   cp "$work/restore-barrier-routes.json" "$work/routes.yml"
   annotate_credentials
   if [[ $mode == standalone ]]; then
@@ -1063,11 +1196,13 @@ restore_run() {
       "$(jq -cn --arg backupId "$expected" --arg artifact "$artifact" \
         --arg revision "$source_revision" --arg candidate "$recovery_candidate" \
         --arg approvedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg confirmation "$confirmation" \
+        --argjson attempt "$recovery_attempt" --argjson attempts "$recovery_attempts" \
         --arg manifest "$manifest" --arg archive "$archive" '
         {migrationRecovery:{status:"approved",phase:"preflight",
           backupId:$backupId,previousRelease:$artifact,previousRevision:$revision,
           abortedCandidate:$candidate,confirmation:$confirmation,approvedAt:$approvedAt,
-          manifest:$manifest,archive:$archive}}')" \
+          attemptNumber:$attempt,attempts:($attempts + [{number:$attempt,approvedAt:$approvedAt,
+            confirmation:$confirmation}]),manifest:$manifest,archive:$archive}}')" \
       || production_fail "could not persist approved migration-recovery identity"
     cluster_operation_lock_update migration-recovery-preflight \
       || production_fail "could not retain release ownership before destructive recovery"
@@ -1081,6 +1216,7 @@ restore_run() {
       select(.name == "web").targetPort) = 3000' "$work/rendered.yml" > "$work/infrastructure.yml"
   restore_barrier=true
   restore_routes_apply "$work/restore-barrier-routes.json"
+  restore_verify_installed_public_barrier
   if [[ $target == pi ]]; then
     if [[ $mode == standalone ]]; then restore_phase storage-preflight; fi
     production_storage_preflight
@@ -1093,6 +1229,10 @@ restore_run() {
   restore_remove_ingress_nodeports
   guard_ingress_service
   if [[ $mode == migration-recovery ]]; then
+    restore_current_phase=preflighting-previous-release-images
+    restore_phase "$restore_current_phase"
+    restore_preflight_workload_images \
+      || production_fail "a previous-release workload image could not be pulled before storage clearing"
     restore_clear_migration_target
   else
     restore_phase checking-empty-volumes
@@ -1137,7 +1277,13 @@ restore_run() {
   restore_application_installed=true
   kube apply -f "$work/application.yml" > /dev/null
   barrier_established=true
-  restore_import
+  if [[ $mode == migration-recovery ]]; then
+    while IFS= read -r name; do
+      restore_volume_pod "$name" \
+        || production_fail "could not prepare cleared recovery destination $name for the complete import"
+    done < <(jq -r '.volumes | keys[]' "$work/config.json")
+  fi
+  restore_import || production_fail "complete backup import failed; partial data must be cleared before retry"
   restore_current_phase=rebuilding
   restore_phase "$restore_current_phase"
   restore_start
@@ -1154,7 +1300,8 @@ restore_run() {
   backup_projection_route 4000
   kube set env deployment/graphql MODE=production --containers=graphql > /dev/null
   kube rollout status deployment/graphql --timeout="${timeout}s"
-  restore_verify_propagation
+  restore_verify_propagation \
+    || production_fail "restored recipe changes did not propagate through search and browse"
   if [[ $mode == migration-recovery ]]; then
     kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null \
       || production_fail "restored previous release could not reassert the GraphQL access barrier"

@@ -235,16 +235,18 @@ Only after reviewing the exact target, backup, previous release and complete app
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-recover \
   "$VALUES" "$STATE" "$RELEASE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" \
-  "$BACKUP_ID" "CLEAR-AND-RESTORE-$BACKUP_ID-$REVISION"
+  "$BACKUP_ID" "CLEAR-AND-RESTORE-$BACKUP_ID-$REVISION-ATTEMPT-1"
 ```
 
-The command revalidates the package against the retained coordinated pre-migration snapshot, checks the previous immutable release and retained configuration/credentials, verifies all owned bound PVCs and stopped workers, then clears only their configured data roots. It restores the complete snapshot through the normal importer, rebuilds derived state and checks readiness while the barrier and Lease remain. This includes services whose migration already succeeded. Credentials, configuration, backups and private operation diagnostics are preserved. No versions are stamped and no migrator is rerun.
+The command revalidates the package against the retained coordinated pre-migration snapshot, checks the previous immutable release and retained configuration/credentials, verifies all owned bound PVCs and stopped workers, and pulls every previous-release workload/infrastructure image before clearing any data. It then clears only the configured PVC data roots and restores the complete snapshot through the normal importer, rebuilding derived state and checking readiness while the barrier and Lease remain. This includes services whose migration already succeeded. Credentials, configuration, backups and private operation diagnostics are preserved. No versions are stamped and no migrator is rerun.
 
-On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision; recovery never opens public access automatically. On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
+On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision; recovery never opens public access automatically. On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. Each approved attempt has a monotonically increasing attempt number in the retained state and requires a distinct `...-ATTEMPT-<number>` confirmation; an earlier token cannot authorize a retry. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
 
-## 7. Start the candidate and wait for readiness
+## 7. Start the candidate only after successful migration
 
-Only after recording one of the two outcomes above, start the candidate:
+This step applies only when migration succeeded or no migration was required. Complete recovery is an alternate terminal outcome: it aborts the candidate and leaves the previous release ready behind the barrier. Never start the aborted candidate after recovery; use only the separately approved `release-recovery-reopen` command printed by recovery.
+
+For an eligible candidate, start it and wait for readiness:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-start \
