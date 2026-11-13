@@ -785,6 +785,21 @@ EOF
   jq -e '.status == "recovery-required" and .phase == "migration-failed"
     and .migrationExecution.status == "failed"
     and .migrationResult == null' "$STATE/backup-state.json" > /dev/null
+  local revision before
+  revision=$(jq -er .candidate.revision "$STATE/backup-state.json")
+  before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$STATE/manifest.json" "$STATE/recipes.tar" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-wrong"
+  [ "$status" -ne 0 ]
+  [[ $output == *"recovery requires CLEAR-AND-RESTORE"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  [[ $output == *"reopening requires a verified complete recovery with the candidate aborted"* ]]
+  [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
   [[ $output == *"migration is failed"* ]]

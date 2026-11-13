@@ -216,6 +216,32 @@ Each Job's `activeDeadlineSeconds` comes from its pinned candidate inventory and
 
 If a terminal exits while holding the separate `recipe-db-migration` command claim, inspect the Lease and confirm that the original command process has stopped. Only then run the exact `release-migration-recover-claim` command printed by `release-migration-status` or `release-migration-next`. Recovery requires the exact holder and `RECOVER-<holder>` confirmation, deletes only that claim using Kubernetes UID/resource-version preconditions, and does not modify migration state or Jobs. Follow the printed status recommendation afterward; it will observe the same existing Job and will not start another transition while it is active.
 
+### Recover a failed or uncertain migration
+
+This is a destructive, operator-approved recovery for a failed or uncertain step-6 migration only. It is not a retry or rollback. The candidate is aborted; do not run `release-migration-next`, `release-start`, `release-reopen`, `backup-exit`, or ordinary deployment. An agent may prepare the command but cannot supply the human approval.
+
+First inspect the failed Job, both Leases and every worker using the private commands printed by `release-migration-status`. Confirm the old `recipe-db-deploy` Lease and access barrier remain, and that no migration Job, worker, or other storage user is running or terminating. A disconnected terminal, expired Lease or delete request is not proof of termination. If anything is active or uncertain, stop and resolve it before recovery.
+
+Retrieve the exact complete backup package and sibling manifest recorded by the retained operation's `backupVerification.backupId`, using the private read-only download procedure in [fresh-deployment restore](production-kubernetes.md#fresh-deployment-restore). Keep both files root-private on the Pi; do not use a partial snapshot, a different backup, production logs, or the candidate artifact. Define absolute paths and confirm the ID from the retained state:
+
+```sh
+BACKUP_ID=$(jq -er '.backupVerification.backupId' "$STATE/backup-state.json")
+PACKAGE_MANIFEST='/private/path/to/the-exact-backup.manifest.json'
+PACKAGE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
+```
+
+Only after reviewing the exact target, backup, previous release and complete application-data deletion scope, and receiving explicit human approval to clear and restore all application storage, run:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-recover \
+  "$VALUES" "$STATE" "$RELEASE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" \
+  "$BACKUP_ID" "CLEAR-AND-RESTORE-$BACKUP_ID-$REVISION"
+```
+
+The command revalidates the package against the retained coordinated pre-migration snapshot, checks the previous immutable release and retained configuration/credentials, verifies all owned bound PVCs and stopped workers, then clears only their configured data roots. It restores the complete snapshot through the normal importer, rebuilds derived state and checks readiness while the barrier and Lease remain. This includes services whose migration already succeeded. Credentials, configuration, backups and private operation diagnostics are preserved. No versions are stamped and no migrator is rerun.
+
+On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision; recovery never opens public access automatically. On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
+
 ## 7. Start the candidate and wait for readiness
 
 Only after recording one of the two outcomes above, start the candidate:

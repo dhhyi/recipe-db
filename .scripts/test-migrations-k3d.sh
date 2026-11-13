@@ -162,6 +162,13 @@ jq -n '{
     resources:{requests:{storage:"128Mi"}}}
 }' > "$work/pvc.json"
 kube apply -f "$work/pvc.json" > "$work/pvc-apply.log"
+jq -n --arg namespace "$namespace" '{
+  apiVersion:"v1",kind:"PersistentVolumeClaim",
+  metadata:{name:"recipes",namespace:$namespace},
+  spec:{accessModes:["ReadWriteOnce"],storageClassName:"local-path",
+    resources:{requests:{storage:"128Mi"}}}
+}' > "$work/recipes-pvc.json"
+kube apply -f "$work/recipes-pvc.json" > "$work/recipes-pvc-apply.log"
 
 make_pod() {
   local name=$1 mode=$2 expected=${3:-} read_only=${4:-false}
@@ -203,11 +210,25 @@ assert_no_storage_pods() {
   local pods offenders
   pods=$(kube get pods -o json)
   offenders=$(jq -c '[
-    .items[] |
-    select(any(.spec.volumes[]?; .persistentVolumeClaim.claimName == "images")) |
+    .items[] | select(any(.spec.volumes[]?;
+      .persistentVolumeClaim.claimName == "images"
+      or .persistentVolumeClaim.claimName == "recipes")) |
     {name:.metadata.name,phase:.status.phase,deletionTimestamp:.metadata.deletionTimestamp}
   ]' <<< "$pods")
   [[ $offenders == "[]" ]] || die "unexpected Pods still reference the test PVC: $offenders"
+}
+
+make_volume_pod() {
+  local name=$1 claim=$2
+  jq -n --arg name "$name" --arg namespace "$namespace" --arg image "$image" \
+    --arg claim "$claim" '
+    {apiVersion:"v1",kind:"Pod",metadata:{name:$name,namespace:$namespace},
+      spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+        containers:[{name:"fixture",image:$image,imagePullPolicy:"Never",
+          command:["sh","-ec","exec sleep 3600"],
+          volumeMounts:[{name:"data",mountPath:"/data"}]}],
+        volumes:[{name:"data",persistentVolumeClaim:{claimName:$claim}}]}}' \
+    > "$work/$name.json"
 }
 
 phase=read-only-probe
@@ -353,4 +374,74 @@ kube delete pod migration-final-inspect --wait=true --timeout=60s \
   > "$work/final-probe-delete.log"
 wait_pod_gone migration-final-inspect
 
-printf 'Verified read-only probe lifecycle, async Job execution, sequential suspension and Kubernetes deadline.\n'
+phase=complete-recovery-fixture
+mkdir -m 700 "$work/recovery-backup"
+for claim in images recipes; do
+  pod="recovery-baseline-$claim"
+  make_volume_pod "$pod" "$claim"
+  kube create -f "$work/$pod.json" > "$work/$pod-create.log"
+  kube wait --for=condition=Ready "pod/$pod" --timeout=60s > "$work/$pod-wait.log"
+  if [[ $claim == recipes ]]; then
+    kube wait --for=jsonpath='{.status.phase}'=Bound pvc/recipes --timeout=120s \
+      > "$work/recipes-pvc-wait.log"
+  fi
+  kube exec "$pod" -- sh -ec \
+    "printf '1\\n' > /data/storage-version; printf 'original-$claim\\n' > /data/record" \
+    > "$work/$pod-seed.log"
+  kube exec "$pod" -- tar -C /data -cf - . > "$work/recovery-backup/$claim.tar"
+  kube delete pod "$pod" --wait=true --timeout=60s > "$work/$pod-delete.log"
+  wait_pod_gone "$pod"
+done
+make_job migration-recovery-earlier-success 1 2 1 60
+kube create -f "$work/migration-recovery-earlier-success.json" \
+  > "$work/recovery-earlier-create.log"
+kube patch job migration-recovery-earlier-success --type=merge \
+  -p '{"spec":{"suspend":false}}' > "$work/recovery-earlier-activate.log"
+kube wait --for=condition=complete job/migration-recovery-earlier-success \
+  --timeout=60s > "$work/recovery-earlier-complete.log"
+delete_job_workers migration-recovery-earlier-success
+assert_no_storage_pods
+jq -n --arg name migration-recovery-later-failure --arg namespace "$namespace" \
+  --arg image "$image" '{
+    apiVersion:"batch/v1",kind:"Job",
+    metadata:{name:$name,namespace:$namespace},
+    spec:{suspend:true,activeDeadlineSeconds:60,backoffLimit:0,
+      template:{spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+        containers:[{name:"migrator",image:$image,imagePullPolicy:"Never",
+          command:["sh","-ec","printf partial > /data/record; printf 99 > /data/storage-version; exit 1"],
+          volumeMounts:[{name:"data",mountPath:"/data"}]}],
+        volumes:[{name:"data",persistentVolumeClaim:{claimName:"recipes"}}]}}}
+  }' > "$work/migration-recovery-later-failure.json"
+kube create -f "$work/migration-recovery-later-failure.json" \
+  > "$work/recovery-later-create.log"
+kube patch job migration-recovery-later-failure --type=merge \
+  -p '{"spec":{"suspend":false}}' > "$work/recovery-later-activate.log"
+kube wait --for=condition=failed job/migration-recovery-later-failure \
+  --timeout=60s > "$work/recovery-later-failed.log"
+delete_job_workers migration-recovery-later-failure
+assert_no_storage_pods
+for claim in images recipes; do
+  pod="recovery-restore-$claim"
+  make_volume_pod "$pod" "$claim"
+  kube create -f "$work/$pod.json" > "$work/$pod-create.log"
+  kube wait --for=condition=Ready "pod/$pod" --timeout=60s > "$work/$pod-wait.log"
+  # The quoted script runs in the Pod, so its command substitutions must remain literal here.
+  # shellcheck disable=SC2016
+  kube exec "$pod" -- sh -ec '
+    test -d /data && test ! -L /data
+    find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    test -z "$(find /data -mindepth 1 -maxdepth 1 -print -quit)"
+  ' > "$work/$pod-clear.log"
+  kube exec -i "$pod" -- tar -xpf - -C /data \
+    < "$work/recovery-backup/$claim.tar"
+  kube exec "$pod" -- sync
+  [[ $(kube exec "$pod" -- cat /data/storage-version) == 1 ]] \
+    || die "complete recovery did not restore the original $claim version marker"
+  [[ $(kube exec "$pod" -- cat /data/record) == "original-$claim" ]] \
+    || die "complete recovery did not restore the original $claim record"
+  kube delete pod "$pod" --wait=true --timeout=60s > "$work/$pod-delete.log"
+  wait_pod_gone "$pod"
+done
+assert_no_storage_pods
+
+printf 'Verified read-only probe lifecycle, async sequential migrations, Kubernetes deadline, and complete multi-service recovery after partial writes.\n'

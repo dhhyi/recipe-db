@@ -63,6 +63,13 @@ restore_state_write() {
 
 restore_phase() {
   restore_current_phase=$1
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    release_state_write recovery-required "migration-recovery-$1" \
+      "$(jq -cn --arg phase "$1" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{migrationRecovery:{status:"in-progress",phase:$phase,updatedAt:$updatedAt}}')" || return 1
+    cluster_operation_lock_update "migration-recovery-$1"
+    return
+  fi
   restore_state_write in-progress "$1" || return 1
   cluster_operation_lock_update "restore-$1"
 }
@@ -78,15 +85,43 @@ restore_routes_apply() {
 }
 
 restore_cleanup() {
-  local result=$1 pid
+  local result=$1 pid retry_safe=true
   for pid in "${restore_forward_pid:-}" "${restore_browse_pid:-}"; do
     [[ -n $pid ]] || continue
     kill "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
   done
-  [[ ${command:-} == restore && $result != 0 && ${restore_started:-false} == true ]] || return 0
+  [[ (${command:-} == restore || ${command:-} == release-migration-recover) &&
+    $result != 0 && ${restore_started:-false} == true ]] || return 0
   # Never roll a partial import back by deleting data, or treat it as a resumable merge.
   retain_lock=true
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    restore_stop_migration_recovery || {
+      printf 'production: recovery workers could not all be stopped; verify every storage user is terminated\n' >&2
+      retry_safe=false
+    }
+    if [[ ${restore_barrier:-false} == true ]]; then
+      restore_routes_apply "$work/restore-barrier-routes.json" || {
+        printf 'production: could not reassert recovery public barrier; isolate ingress immediately\n' >&2
+        retry_safe=false
+      }
+    fi
+    release_state_write recovery-required migration-recovery-failed \
+      "$(jq -cn --arg phase "${restore_current_phase:-interrupted}" --argjson safeToRetry "$retry_safe" \
+        --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{migrationRecovery:{status:"failed",phase:$phase,failedAt:$failedAt,safeToRetry:$safeToRetry}}')" \
+      || printf 'production: could not update durable migration-recovery diagnostics\n' >&2
+    cluster_operation_lock_update migration-recovery-failed \
+      || printf 'production: could not mark the retained release Lease as requiring recovery\n' >&2
+    printf 'production: complete migration recovery FAILED; no success or reopening was recorded; Lease holder %s retained\n' \
+      "$lock_holder" >&2
+    printf 'production: inspect private release state %s/backup-state.json and the retained operation Lease; do not retry import or reopen access\n' \
+      "$snapshot" >&2
+    if declare -F release_migration_recovery_next_command > /dev/null; then
+      release_migration_recovery_next_command >&2
+    fi
+    return 0
+  fi
   if [[ ${restore_barrier:-false} == true ]]; then
     restore_routes_apply "$work/restore-barrier-routes.json" \
       || printf 'production: could not reassert public restore barrier; isolate ingress immediately\n' >&2
@@ -192,8 +227,115 @@ restore_fresh_target() {
     || production_fail "restore refuses released or unbound retained volumes; select new empty storage"
 }
 
+restore_migration_target() {
+  local name pvc graphql_replicas
+  graphql_replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
+    "$work/prior-workloads.json") \
+    || production_fail "migration recovery has no recorded previous-release GraphQL replica count"
+  kube get namespace "$namespace" --ignore-not-found -o json > "$work/restore-namespace.json"
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+    "$work/restore-namespace.json" > /dev/null \
+    || production_fail "migration recovery requires the existing owned application namespace"
+  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods,services,ingresses,configmaps,secrets \
+    -o json > "$work/restore-existing.json"
+  jq -e 'all(.items[]; .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    or (.kind == "ConfigMap" and .metadata.name == "kube-root-ca.crt"))' \
+    "$work/restore-existing.json" > /dev/null \
+    || production_fail "migration recovery refuses unowned application resources"
+  jq -e --argjson graphqlReplicas "$graphql_replicas" 'all(.items[];
+    if .kind == "Deployment" and .metadata.name == "graphql" then
+      ((.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0)
+      or ((.spec.replicas // 0) == $graphqlReplicas
+        and (.status.readyReplicas // 0) == $graphqlReplicas
+        and any(.spec.template.spec.containers[]; .name == "graphql"
+          and any(.env[]?; .name == "MODE" and .value == "backup")))
+    elif .kind == "Deployment" or .kind == "StatefulSet" or
+         .kind == "ReplicaSet" then
+      (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0
+    elif .kind == "ReplicationController" then
+      (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0
+    elif .kind == "DaemonSet" then
+      (.status.desiredNumberScheduled // 0) == 0
+      and (.status.numberReady // 0) == 0 and (.status.numberAvailable // 0) == 0
+    elif .kind == "Job" then
+      (.status.active // 0) == 0
+      and (.spec.suspend == true or any(.status.conditions[]?;
+        (.type == "Failed" or .type == "Complete") and .status == "True"))
+    elif .kind == "CronJob" then
+      .spec.suspend == true and ((.status.active // []) | length) == 0
+    elif .kind == "HorizontalPodAutoscaler" then
+      false
+    elif .kind == "Pod" then
+      .metadata.deletionTimestamp == null and
+      ((.status.phase == "Succeeded" or .status.phase == "Failed")
+        and all(.status.containerStatuses[]?; .state.terminated != null)
+        or (.metadata.labels["app.kubernetes.io/name"] == "graphql"
+          and .status.phase == "Running"
+          and any(.status.containerStatuses[]?; .name == "graphql" and .ready == true)
+          and any(.spec.containers[]; .name == "graphql"
+            and any(.env[]?; .name == "MODE" and .value == "backup"))))
+    else true end)' "$work/restore-existing.json" > /dev/null \
+    || production_fail "migration recovery requires stopped workloads and terminated workers"
+
+  kube get pvc -o json > "$work/restore-existing-pvcs.json"
+  jq -e --arg ns "$namespace" --arg storage "$storage_class" \
+    --argjson volumes "$(jq -c '.volumes | keys' "$work/config.json")" '
+    ([.items[].metadata.name] | sort) == ($volumes | sort)
+    and all(.items[];
+      .metadata.namespace == $ns
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .status.phase == "Bound"
+      and (.spec.storageClassName == $storage or
+        ($storage == "recipe-db-retained" and .spec.storageClassName == "local-path"))
+      and .spec.accessModes == ["ReadWriteOnce"]
+      and (.spec.volumeMode // "Filesystem") == "Filesystem"
+      and .metadata.deletionTimestamp == null
+      and (.spec.volumeName | type == "string" and length > 0))' \
+    "$work/restore-existing-pvcs.json" > /dev/null \
+    || production_fail "migration recovery requires exactly the configured owned, bound application PVCs"
+  jq -e --arg ns "$namespace" --slurpfile expected "$work/backup-pvcs.jsonl" '
+    ([.items[] | {
+      name:.metadata.name,uid:.metadata.uid,volumeName:.spec.volumeName,
+      storageClassName:.spec.storageClassName,
+      requestedStorage:.spec.resources.requests.storage,
+      capacity:.status.capacity.storage,accessModes:.spec.accessModes,
+      volumeMode:(.spec.volumeMode // "Filesystem")
+    }] | sort_by(.name))
+    == ([$expected[] | {
+      name:.pvc,uid:.storage.uid,volumeName:.storage.volumeName,
+      storageClassName:.storage.storageClassName,
+      requestedStorage:.storage.requestedStorage,capacity:.storage.capacity,
+      accessModes:.storage.accessModes,volumeMode:.storage.volumeMode
+    }] | sort_by(.name))
+    and all(.items[]; .metadata.namespace == $ns)
+  ' "$work/restore-existing-pvcs.json" > /dev/null \
+    || production_fail "migration recovery PVC identities differ from the retained coordinated backup"
+  if [[ $target == pi ]]; then
+    kube get pv -o json > "$work/persistent-volumes.json" \
+      || production_fail "cannot inspect Pi persistent volumes before recovery"
+  fi
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    pvc=$(jq -ce --arg name "$name" '.items[] | select(.metadata.name == $name)' \
+      "$work/restore-existing-pvcs.json") \
+      || production_fail "migration recovery PVC is missing: $name"
+    if [[ $target == pi ]]; then
+      production_storage_validate_existing_claim "$name" "$pvc" \
+        || production_fail "migration recovery cannot verify Pi storage identity for $name"
+    fi
+  done < <(jq -r '.volumes | keys[]' "$work/config.json")
+
+  kube get pods -o json > "$work/restore-mounted-pods.json"
+  jq -e --argjson volumes "$(jq -c '.volumes | keys' "$work/config.json")" '
+    all(.items[];
+      all(.spec.volumes[]? | .persistentVolumeClaim.claimName // empty;
+        . as $claim | ($volumes | index($claim)) == null))
+  ' "$work/restore-mounted-pods.json" > /dev/null \
+    || production_fail "migration recovery requires every application storage worker to be terminated and unmounted"
+}
+
 restore_volume_pod() {
-  local name=$1 pod="restore-volume-$1"
+  local name=$1 allow_populated=${2:-false} pod="restore-volume-$1"
   jq -n --arg name "$pod" --arg ns "$namespace" --arg image "$copy_image" \
     --arg pvc "$name" --arg holder "$lock_holder" --argjson timeout "$timeout" \
     --argjson resources "$(jq -c .resources "$work/config.json")" '
@@ -221,13 +363,205 @@ restore_volume_pod() {
     kube get pv -o json > "$work/persistent-volumes.json" || return 1
     production_storage_validate_existing_claim "$name" "$(cat "$work/restore-pvc.json")" || return 1
   fi
-  # Hidden files, initialized databases and apparently disposable caches all count as data.
-  kube exec "$pod" -- sh -ec 'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit); test -z "$entries"' || {
-    printf 'production: destination volume %s is populated; NOTHING will be wiped, overwritten or merged\n' "$name" >&2
-    return 1
-  }
+  if [[ $allow_populated != true ]]; then
+    # Hidden files, initialized databases and apparently disposable caches all count as data.
+    kube exec "$pod" -- sh -ec 'test -d /data && test ! -L /data &&
+      entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit) || exit 1
+      test -z "$entries"' || {
+      printf 'production: destination volume %s is populated; NOTHING will be wiped, overwritten or merged\n' "$name" >&2
+      return 1
+    }
+  else
+    kube exec "$pod" -- sh -ec 'test -d /data && test ! -L /data' || return 1
+  fi
   jq -cn --arg name "$name" --arg uid "$(jq -r .metadata.uid "$work/restore-pvc.json")" \
     '{name:$name,uid:$uid}' >> "$work/restore-pvc-identities.jsonl"
+}
+
+restore_validate_migration_secrets() {
+  local key expected
+  kube get secret recipe-db-runtime -o json > "$work/restore-runtime-secret.json" \
+    || production_fail "migration recovery requires the retained previous-release runtime credentials"
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data | type == "object")' "$work/restore-runtime-secret.json" > /dev/null \
+    || production_fail "migration recovery refuses an absent or unowned runtime Secret"
+  for key in "${operator_secret_keys[@]}"; do
+    expected=$(base64 -w0 "$work/$key") \
+      || production_fail "could not validate the retained previous-release credential: $key"
+    jq -e --arg key "$key" --arg expected "$expected" '.data[$key] == $expected' \
+      "$work/restore-runtime-secret.json" > /dev/null \
+      || production_fail "retained runtime credentials do not match the previous-release configuration"
+  done
+  for key in graphql-ingress-secret typesense-api-key; do
+    jq -er --arg key "$key" '.data[$key] | @base64d' \
+      "$work/restore-runtime-secret.json" > "$work/$key" \
+      || production_fail "retained runtime Secret is missing a required previous-release credential"
+  done
+  jq -eRs 'test("^[A-Za-z0-9_-]{43}\\z")' "$work/graphql-ingress-secret" > /dev/null \
+    || production_fail "retained GraphQL ingress credential is invalid"
+  jq -eRs 'test("^[0-9a-f]{64}\\n?\\z")' "$work/typesense-api-key" > /dev/null \
+    || production_fail "retained Typesense credential is invalid"
+}
+
+restore_clear_migration_target() {
+  local name pod
+  copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
+  : > "$work/restore-pvc-identities.jsonl"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    restore_volume_pod "$name" true \
+      || production_fail "could not validate and mount every recovery destination before clearing storage"
+  done < <(jq -r '.volumes | keys[]' "$work/config.json")
+  restore_assert_recovery_mounts
+  restore_phase clearing-application-data
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    pod="restore-volume-$name"
+    kube exec "$pod" -- sh -ec \
+      'test -d /data && test ! -L /data && find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' \
+      || production_fail "could not clear the validated application data root for $name"
+    kube exec "$pod" -- sh -ec \
+      'test -d /data && test ! -L /data &&
+       entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit) || exit 1
+       test -z "$entries"' \
+      || production_fail "recovery destination $name is not empty after clearing"
+  done < <(jq -r '.volumes | keys[]' "$work/config.json")
+  restore_remove_recovery_helpers
+  restore_assert_empty_volumes
+  : > "$work/restore-pvc-identities.jsonl"
+}
+
+restore_assert_recovery_mounts() {
+  local name pod
+  kube get pods -o json > "$work/restore-mounted-pods.json" \
+    || production_fail "cannot verify recovery storage mounts"
+  jq -e --arg holder "$lock_holder" --argjson volumes "$(jq -c '.volumes | keys' "$work/config.json")" '
+    .items as $pods |
+    all($volumes[];
+      . as $claim |
+      [$pods[] | select(any(.spec.volumes[]?;
+        .persistentVolumeClaim.claimName == $claim))] as $mounted |
+      ($mounted | length) == 1
+      and $mounted[0].metadata.name == ("restore-volume-" + $claim)
+      and $mounted[0].metadata.labels["recipe-db/restore-holder"] == $holder)
+    and all($pods[]; . as $pod |
+      all($pod.spec.volumes[]? | .persistentVolumeClaim.claimName // empty;
+        . as $claim | ($volumes | index($claim)) == null
+          or ($pod.metadata.name == ("restore-volume-" + $claim)
+            and $pod.metadata.labels["recipe-db/restore-holder"] == $holder)))
+  ' "$work/restore-mounted-pods.json" > /dev/null \
+    || production_fail "recovery helpers are not the sole owners of every application storage mount"
+  while IFS= read -r name; do
+    restore_verify_volume_identity "$name" \
+      || production_fail "recovery destination identity changed for $name"
+  done < <(jq -r '.volumes | keys[]' "$work/config.json")
+}
+
+restore_assert_empty_volumes() {
+  local name pod
+  : > "$work/restore-empty-pods.jsonl"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    restore_volume_pod "$name" false \
+      || production_fail "cleared recovery destination $name is not empty"
+    pod="restore-volume-$name"
+    kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null \
+      || production_fail "could not unmount verified empty recovery destination $name"
+    backup_wait_pod_gone "$pod" \
+      || production_fail "empty recovery destination $name remains mounted"
+  done < <(jq -r '.volumes | keys[]' "$work/config.json")
+}
+
+restore_remove_recovery_helpers() {
+  local pod
+  kube get pods -l "recipe-db/restore-holder=$lock_holder" -o json \
+    > "$work/restore-recovery-helpers.json" \
+    || production_fail "cannot inspect recovery helper Pods before unmounting"
+  while IFS= read -r pod; do
+    [[ -n $pod ]] || continue
+    kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null \
+      || production_fail "could not stop recovery storage helper $pod"
+    backup_wait_pod_gone "$pod" \
+      || production_fail "recovery storage helper $pod may still access storage"
+  done < <(jq -r '.items[].metadata.name' "$work/restore-recovery-helpers.json")
+}
+
+restore_stop_migration_recovery() {
+  local name pod
+  [[ ${restore_mode:-standalone} == migration-recovery ]] || return 0
+  if kube get deployments -o json > "$work/recovery-stop-deployments.json"; then
+    while IFS= read -r name; do
+      [[ -n $name ]] || continue
+      kube scale "deployment/$name" --replicas=0 > /dev/null || return 1
+    done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-deployments.json")
+  else
+    return 1
+  fi
+  if kube get statefulsets -o json > "$work/recovery-stop-statefulsets.json"; then
+    while IFS= read -r name; do
+      [[ -n $name ]] || continue
+      kube scale "statefulset/$name" --replicas=0 > /dev/null || return 1
+    done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-statefulsets.json")
+  else
+    return 1
+  fi
+  if kube get replicationcontrollers -o json > "$work/recovery-stop-replicationcontrollers.json"; then
+    while IFS= read -r name; do
+      [[ -n $name ]] || continue
+      kube scale "replicationcontroller/$name" --replicas=0 > /dev/null || return 1
+    done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-replicationcontrollers.json")
+  else
+    return 1
+  fi
+  if kube get cronjobs -o json > "$work/recovery-stop-cronjobs.json"; then
+    while IFS= read -r name; do
+      [[ -n $name ]] || continue
+      kube patch "cronjob/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1
+    done < <(jq -r '.items[] | select(.spec.suspend != true) | .metadata.name' \
+      "$work/recovery-stop-cronjobs.json")
+  else
+    return 1
+  fi
+  if kube get jobs -o json > "$work/recovery-stop-jobs.json"; then
+    while IFS= read -r name; do
+      [[ -n $name ]] || continue
+      kube patch "job/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1
+    done < <(jq -r '.items[] | select(.spec.suspend != true and
+      ([.status.conditions[]? | select((.type == "Failed" or .type == "Complete")
+        and .status == "True")] | length == 0)) | .metadata.name' \
+      "$work/recovery-stop-jobs.json")
+  else
+    return 1
+  fi
+  if kube get jobs -o json > "$work/recovery-stop-jobs.json"; then
+    while IFS= read -r name; do
+      [[ -n $name ]] || continue
+      kube get pods -l "job-name=$name" -o json > "$work/recovery-stop-job-pods.json" || return 1
+      while IFS= read -r pod; do
+        [[ -n $pod ]] || continue
+        kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+        backup_wait_pod_gone "$pod" || return 1
+      done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-job-pods.json")
+    done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-jobs.json")
+  else
+    return 1
+  fi
+  if kube get pods -l "recipe-db/restore-holder=$lock_holder" -o json \
+    > "$work/recovery-stop-helpers.json"; then
+    while IFS= read -r pod; do
+      [[ -n $pod ]] || continue
+      kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+      backup_wait_pod_gone "$pod" || return 1
+    done < <(jq -r '.items[].metadata.name' "$work/recovery-stop-helpers.json")
+  else
+    return 1
+  fi
+  kube get pods -o json > "$work/recovery-stop-pods.json" || return 1
+  jq -e --argjson volumes "$(jq -c '.volumes | keys' "$work/config.json")" '
+    all(.items[];
+      all(.spec.volumes[]? | .persistentVolumeClaim.claimName // empty;
+        . as $claim | ($volumes | index($claim)) == null))
+  ' "$work/recovery-stop-pods.json" > /dev/null || return 1
 }
 
 restore_verify_volume_identity() {
@@ -256,7 +590,9 @@ restore_import() {
       and .[0].metadata.labels["app.kubernetes.io/name"] == "restore-volume"' \
       "$work/restore-mounted-pods.json" > /dev/null || return 1
     # Recheck immediately before extraction; only this helper owns the mount.
-    kube exec "$pod" -- sh -ec 'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit); test -z "$entries"' || return 1
+    kube exec "$pod" -- sh -ec \
+      'entries=$(find /data -mindepth 1 -maxdepth 1 -print -quit) || exit 1; test -z "$entries"' \
+      || return 1
     # Preserve numeric ownership and permission bits from the exact recorded release.
     kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
     kube exec "$pod" -- sync || return 1
@@ -460,9 +796,14 @@ restore_verify_propagation() {
     "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
   id=$(jq -er '.data.createRecipe.id | select(type == "string" and length > 0)' \
     "$work/restore-response.json") || return 1
-  jq --arg id "$id" '.probeRecipeId=$id' "$restore_state/restore-state.json" \
-    > "$restore_state/restore-state.next" && mv "$restore_state/restore-state.next" \
-    "$restore_state/restore-state.json" || return 1
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    release_state_write recovery-required migration-recovery-verifying-propagation \
+      "$(jq -cn --arg id "$id" '{migrationRecovery:{probeRecipeId:$id}}')" || return 1
+  else
+    jq --arg id "$id" '.probeRecipeId=$id' "$restore_state/restore-state.json" \
+      > "$restore_state/restore-state.next" && mv "$restore_state/restore-state.next" \
+      "$restore_state/restore-state.json" || return 1
+  fi
   encoded=$(jq -rn --arg id "$id" '$id | @uri')
   restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
@@ -513,8 +854,13 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
-  jq 'del(.probeRecipeId)' "$restore_state/restore-state.json" > "$restore_state/restore-state.next" \
-    && mv "$restore_state/restore-state.next" "$restore_state/restore-state.json"
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    release_state_write recovery-required migration-recovery-verifying-propagation \
+      '{"migrationRecovery":{"probeRecipeId":null}}'
+  else
+    jq 'del(.probeRecipeId)' "$restore_state/restore-state.json" > "$restore_state/restore-state.next" \
+      && mv "$restore_state/restore-state.next" "$restore_state/restore-state.json"
+  fi
 }
 
 restore_wait_public_routes() {
@@ -533,33 +879,101 @@ restore_wait_public_routes() {
 }
 
 restore_run() {
-  local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5 parent key name image_port
-  [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ && $confirmation == "RESTORE-$expected" ]] \
-    || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
+  local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5
+  local mode=${6:-standalone} recovery_candidate=${7:-}
+  local parent key name image_port source_artifact source_revision current source_flag=
+  restore_mode=$mode
+  restore_migration_candidate=$recovery_candidate
+  [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
+    || production_fail "restore requires an exact backup identity"
   for name in "$manifest" "$archive"; do
     [[ $name == /* && -f $name && ! -L $name && $(realpath -e "$name") == "$name" ]] \
       || production_fail "restore inputs must be absolute regular files without symlink traversal"
   done
-  [[ $state == /* && ! -e $state && ! -L $state ]] \
-    || production_fail "restore state must be a new absolute directory"
+  case "$mode" in
+    standalone)
+      [[ $confirmation == "RESTORE-$expected" ]] \
+        || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
+      [[ $state == /* && ! -e $state && ! -L $state ]] \
+        || production_fail "restore state must be a new absolute directory"
+      ;;
+    migration-recovery)
+      [[ $state == /* && -d $state && ! -L $state && $(realpath -e "$state") == "$state" &&
+      -f $state/backup-state.json && ! -L $state/backup-state.json ]] \
+        || production_fail "migration recovery requires the original absolute release state directory"
+      candidate_revision=$(jq -er --arg candidate "$recovery_candidate" '
+        .candidate.revision | select(type == "string" and test("^[0-9a-f]{40}$"))
+      ' "$state/backup-state.json") \
+        || production_fail "migration recovery has no exact candidate revision"
+      [[ $confirmation == "CLEAR-AND-RESTORE-$expected-$candidate_revision" ]] \
+        || production_fail "migration recovery requires CLEAR-AND-RESTORE-<backup-id>-<candidate-revision> confirmation"
+      jq -e --arg id "$expected" --arg candidate "$recovery_candidate" '
+        .backupVerification.backupId == $id
+        and (.backupVerification.status == "verified-upload"
+          or .backupVerification.status == "verified-unchanged")
+        and .candidate.artifact == $candidate
+        and .status == "recovery-required"
+        and (.phase == "migration-failed" or .phase == "migration-uncertain"
+          or .phase == "migration-recovery-failed")
+        and (.migrationExecution.status == "failed" or .migrationExecution.status == "uncertain")
+        and .migrationResult == null and .postCheckDisposition == null
+        and (.phase != "migration-recovery-failed" or
+          (.migrationRecovery.status == "failed" and .migrationRecovery.safeToRetry == true))
+      ' "$state/backup-state.json" > /dev/null \
+        || production_fail "migration recovery requires the same failed step-6 operation before reopening"
+      [[ -f $state/manifest.json && ! -L $state/manifest.json &&
+        $(stat -c %u "$state/manifest.json") == "$EUID" &&
+        $((8#$(stat -c %a "$state/manifest.json") & 077)) == 0 ]] \
+        || production_fail "migration recovery requires the retained private pre-migration snapshot manifest"
+      ;;
+    *) production_fail "unsupported restore mode" ;;
+  esac
   parent=$(dirname "$state")
-  [[ -d $parent && $(realpath -e "$parent") == "$parent" &&
-  $(basename "$state") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
+  [[ -d $parent && $(realpath -e "$parent") == "$parent" ]] \
     || production_fail "restore state parent must exist without symlink traversal"
+  if [[ $mode == standalone ]]; then
+    [[ $(basename "$state") =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]] \
+      || production_fail "restore state directory name must be a safe token"
+  fi
   case "$state/" in
     "$root/.secrets/"* | /var/lib/rancher/*) production_fail "restore state cannot be inside credentials or runtime storage" ;;
   esac
   if [[ $target == pi ]]; then
     case "$state/" in "$storage_data_root/"*) production_fail "restore state cannot be inside production data storage" ;; esac
   fi
-  application_project_metadata_to_jsonl "$root" "$work/projects.jsonl"
+  source_artifact=$(jq -er '.source.artifact |
+    select(test("^ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$"))' "$manifest") \
+    || production_fail "backup package has no valid immutable previous release"
+  if [[ $mode == migration-recovery ]]; then
+    [[ $source_artifact == "$(jq -er .source.artifact "$state/backup-state.json")" ]] \
+      || production_fail "recovery backup does not match the retained previous release"
+  fi
+  pull_release "$source_artifact"
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   python3 "$root/.scripts/validate-backup-package.py" "$manifest" "$archive" \
     "$work/validated" "$work/projects.jsonl" "$expected" > "$work/restore-manifest.json"
   artifact=$(jq -er .source.artifact "$work/restore-manifest.json")
-  pull_release "$artifact"
-  [[ $revision == "$(jq -er .source.revision "$work/restore-manifest.json")" ]] \
+  source_revision=$(jq -er .source.revision "$work/restore-manifest.json")
+  [[ $revision == "$source_revision" ]] \
     || production_fail "backup source revision differs from the immutable release artifact"
+  if [[ $mode == migration-recovery ]]; then
+    jq -e --arg id "$expected" --arg target "$target" --arg cluster "$cluster" \
+      --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
+      --arg revision "$source_revision" --slurpfile state "$state/backup-state.json" \
+      --slurpfile original "$state/manifest.json" '
+      .backupId == $id
+      and .source.target == $target and .source.cluster == $cluster
+      and .source.context == $context and .source.namespace == $namespace
+      and .source.artifact == $artifact and .source.revision == $revision
+      and .source == $state[0].source
+      and .snapshotManifest == $original[0]
+    ' "$work/restore-manifest.json" > /dev/null \
+      || production_fail "complete backup does not match the retained coordinated pre-migration snapshot and previous release"
+  fi
   production_secrets
+  if [[ $mode == migration-recovery ]]; then
+    restore_validate_migration_secrets
+  fi
   restore_prepare_expected_reads
   # A real mutation, through normal trusted GraphQL ingress, is required to prove propagation.
   jq -er '[.tokens[]? | select(.role == "owner") | .secret][0] |
@@ -581,13 +995,37 @@ restore_run() {
     "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
   jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
     .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
-  connect
-  lock_holder="restore-$expected-$$"
-  cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
-  locked=true
+  if [[ $mode == standalone ]]; then
+    connect
+    lock_holder="restore-$expected-$$"
+    cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
+    locked=true
+  else
+    snapshot=$state
+    backup_load_state "$snapshot"
+    [[ $backup_id == "$expected" ]] || production_fail "recovery backup identity changed"
+    lock_holder=$backup_id
+    cluster_operation_lock_holder=$lock_holder
+    current=$(cluster_operation_lock_status) || production_fail "cannot inspect release Lease before recovery"
+    jq -e --arg holder "$lock_holder" --arg release "$artifact" '
+      .spec.holderIdentity == $holder
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.annotations["recipe-db/operation"] == "backup"
+      and .metadata.annotations["recipe-db/release"] == $release
+      and (.metadata.annotations["recipe-db/phase"] == "migration-failed"
+        or .metadata.annotations["recipe-db/phase"] == "migration-uncertain")
+    ' <<< "$current" > /dev/null \
+      || production_fail "recovery Lease does not match the failed migration operation"
+    locked=true
+    retain_lock=true
+  fi
   guard_helm_config
-  restore_fresh_target
-  production_ephemeral_secrets
+  if [[ $mode == standalone ]]; then
+    restore_fresh_target
+    production_ephemeral_secrets
+  else
+    restore_migration_target
+  fi
   routes
   cp "$work/routes.yml" "$work/restore-final-routes.json"
   image_port=$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")
@@ -604,22 +1042,38 @@ restore_run() {
     "$work/routes.yml" > "$work/restore-barrier-routes.json"
   cp "$work/restore-barrier-routes.json" "$work/routes.yml"
   annotate_credentials
-  mkdir -m 700 "$state"
-  restore_state=$state
-  jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
-    --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" --arg artifact "$artifact" \
-    --arg revision "$revision" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
-    '{version:1,backupId:$backupId,holder:$holder,target:$target,cluster:$cluster,context:$context,
-      namespace:$ns,artifact:$artifact,revision:$revision,configSha256:$configSha256,
-      status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
-    > "$state/restore-state.json"
-  retain_lock=true
+  if [[ $mode == standalone ]]; then
+    mkdir -m 700 "$state"
+    restore_state=$state
+    jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
+      --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" --arg artifact "$artifact" \
+      --arg revision "$revision" --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+      '{version:1,backupId:$backupId,holder:$holder,target:$target,cluster:$cluster,context:$context,
+        namespace:$ns,artifact:$artifact,revision:$revision,configSha256:$configSha256,
+        status:"in-progress",phase:"prepared",recovery:"Keep ingress isolated and workers stopped; never merge or overwrite a partial import. Investigate then select a new empty target."}' \
+      > "$state/restore-state.json"
+  fi
   restore_started=true
   restore_phase preparing-target
-  ensure_namespace
-  restore_cluster_state=true
+  if [[ $mode == standalone ]]; then
+    ensure_namespace
+    restore_cluster_state=true
+  else
+    release_state_write recovery-required migration-recovery-preflight \
+      "$(jq -cn --arg backupId "$expected" --arg artifact "$artifact" \
+        --arg revision "$source_revision" --arg candidate "$recovery_candidate" \
+        --arg approvedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg confirmation "$confirmation" \
+        --arg manifest "$manifest" --arg archive "$archive" '
+        {migrationRecovery:{status:"approved",phase:"preflight",
+          backupId:$backupId,previousRelease:$artifact,previousRevision:$revision,
+          abortedCandidate:$candidate,confirmation:$confirmation,approvedAt:$approvedAt,
+          manifest:$manifest,archive:$archive}}')" \
+      || production_fail "could not persist approved migration-recovery identity"
+    cluster_operation_lock_update migration-recovery-preflight \
+      || production_fail "could not retain release ownership before destructive recovery"
+  fi
   restore_current_phase=installing-barrier
-  restore_phase "$restore_current_phase"
+  if [[ $mode == standalone ]]; then restore_phase "$restore_current_phase"; fi
   # Hold public traffic before even inspecting a data mount. If an emptiness/storage
   # check fails, this Secret remains a durable barrier without any application writer.
   yq 'select(.metadata.namespace == "kube-system") |
@@ -628,32 +1082,38 @@ restore_run() {
   restore_barrier=true
   restore_routes_apply "$work/restore-barrier-routes.json"
   if [[ $target == pi ]]; then
-    restore_phase storage-preflight
+    if [[ $mode == standalone ]]; then restore_phase storage-preflight; fi
     production_storage_preflight
     production_storage_prepare_claims "$work/rendered.yml"
   fi
-  restore_phase installing-barrier
+  if [[ $mode == standalone ]]; then restore_phase installing-barrier; fi
   apply_acme_contact
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
   restore_remove_ingress_nodeports
   guard_ingress_service
-  restore_phase checking-empty-volumes
+  if [[ $mode == migration-recovery ]]; then
+    restore_clear_migration_target
+  else
+    restore_phase checking-empty-volumes
+  fi
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
-  # Create missing claims only; never replace or resize an operator's existing claim.
-  while IFS= read -r name; do
-    kube get pvc "$name" --ignore-not-found -o json > "$work/restore-claim.json"
-    if [[ ! -s $work/restore-claim.json ]]; then
-      CLAIM="$name" yq 'select(.metadata.name == strenv(CLAIM))' \
-        "$work/restore-claims.yml" > "$work/restore-new-claim.yml"
-      kube create -f "$work/restore-new-claim.yml" > /dev/null
-    fi
-  done < <(jq -r '.volumes | keys[]' "$work/config.json")
-  : > "$work/restore-pvc-identities.jsonl"
-  while IFS= read -r name; do restore_volume_pod "$name"; done \
-    < <(jq -r '.volumes | keys[]' "$work/config.json")
-  # No application process exists, and ALL authoritative/derived/external-cache PVCs are empty.
+  if [[ $mode == standalone ]]; then
+    # Create missing claims only; never replace or resize an operator's existing claim.
+    while IFS= read -r name; do
+      kube get pvc "$name" --ignore-not-found -o json > "$work/restore-claim.json"
+      if [[ ! -s $work/restore-claim.json ]]; then
+        CLAIM="$name" yq 'select(.metadata.name == strenv(CLAIM))' \
+          "$work/restore-claims.yml" > "$work/restore-new-claim.yml"
+        kube create -f "$work/restore-new-claim.yml" > /dev/null
+      fi
+    done < <(jq -r '.volumes | keys[]' "$work/config.json")
+    : > "$work/restore-pvc-identities.jsonl"
+    while IFS= read -r name; do restore_volume_pod "$name"; done \
+      < <(jq -r '.volumes | keys[]' "$work/config.json")
+  fi
+  # Standalone restore checks empty volumes; recovery has verified every cleared destination.
   restore_current_phase=installing-stopped-workloads
   restore_phase "$restore_current_phase"
   yq '(select(.kind == "Deployment").spec.replicas) = 0 |
@@ -695,6 +1155,46 @@ restore_run() {
   kube set env deployment/graphql MODE=production --containers=graphql > /dev/null
   kube rollout status deployment/graphql --timeout="${timeout}s"
   restore_verify_propagation
+  if [[ $mode == migration-recovery ]]; then
+    kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null \
+      || production_fail "restored previous release could not reassert the GraphQL access barrier"
+    kube rollout status deployment/graphql --timeout="${timeout}s" \
+      || production_fail "previous-release GraphQL barrier did not become ready"
+    kube get deployments -o json > "$work/recovered-workloads.json" \
+      || production_fail "cannot verify restored previous-release readiness"
+    backup_validate_workload_images "$work/recovered-workloads.json" \
+      || production_fail "restored workloads do not match the previous immutable release"
+    jq -e --slurpfile workloads "$work/prior-workloads.json" '
+      . as $actual |
+      all($workloads[0][]; . as $expected |
+        any($actual.items[]; .metadata.name == $expected.name
+          and .spec.template.metadata.annotations["recipe-db/release"] == $expected.release
+          and (.status.readyReplicas // 0) == (.spec.replicas // 1)))
+      and any(.items[]; .metadata.name == "graphql"
+        and any(.spec.template.spec.containers[]; .name == "graphql"
+          and any(.env[]?; .name == "MODE" and .value == "backup")))
+    ' "$work/recovered-workloads.json" > /dev/null \
+      || production_fail "previous-release readiness or GraphQL access barrier could not be verified"
+    release_state_write recovered migration-recovered \
+      "$(jq -cn --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        {migrationRecovery:{status:"verified",phase:"complete",candidateAborted:true,
+          completedAt:$completedAt}}')" \
+      || production_fail "restore verified but migration-recovery completion could not be recorded"
+    cluster_operation_lock_update migration-recovered \
+      || production_fail "restore verified but the retained release Lease could not be updated"
+    restore_started=false
+    $release_sources_from_git && source_flag="--release-sources-from-git "
+    printf 'production: complete recovery verified; previous release %s is ready behind the access barrier; candidate %s is aborted\n' \
+      "$artifact" "$restore_migration_candidate"
+    printf 'Public reopening is separate and requires operator approval:\n'
+    printf '  mise run production-k3d %srelease-recovery-reopen %s %s %s %s\n' \
+      "$source_flag" \
+      "$(release_migration_shell_quote "$values")" \
+      "$(release_migration_shell_quote "$snapshot")" \
+      "$(release_migration_shell_quote "$artifact")" \
+      "$(release_migration_shell_quote "OPEN-RECOVERY-$backup_id-$source_revision")"
+    return 0
+  fi
   backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")"
   restore_wait_reads
   restore_current_phase=opening-public-ingress

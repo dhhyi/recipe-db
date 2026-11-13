@@ -129,6 +129,89 @@ EOF
   [ "$(cat "$MOCK_LOG")" = 'query { __typename }' ]
 }
 
+@test "migration recovery persists propagation probes in release state rather than standalone restore state" {
+  cat > recovery-probe.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+timeout=1
+restore_mode=migration-recovery
+release_state_write() { printf '%s\n' "$*" >> "$MOCK_LOG"; }
+restore_graphql() {
+  case "$1" in
+    'query { __typename }') return 0 ;;
+    *createRecipe*) printf '{"data":{"createRecipe":{"id":"recovery-probe"}}}\n' \
+      > "$work/restore-response.json" ;;
+    *) return 1 ;;
+  esac
+}
+restore_stream_sequence() { printf '4\n'; }
+restore_wait_consumers() { return 1; }
+restore_verify_propagation
+EOF
+  run bash recovery-probe.sh
+  [ "$status" -ne 0 ]
+  grep -q 'recovery-probe' "$MOCK_LOG"
+  [[ ! -e $FIXTURE_ROOT/restore-state/restore-state.json ]]
+}
+
+@test "migration recovery validates every destination before clearing only configured PVC data roots" {
+  cat > recovery-clear.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+lock_holder=release-holder
+copy_image=maintenance-image
+jq '.volumes={recipes:"1Gi",images:"1Gi",typesense:"1Gi"}' "$work/config.json" > config.next
+mv config.next "$work/config.json"
+restore_volume_pod() { printf 'mount %s\n' "$1" >> "$MOCK_LOG"; }
+restore_assert_recovery_mounts() { printf 'all-mounted\n' >> "$MOCK_LOG"; }
+restore_phase() { printf 'phase %s\n' "$1" >> "$MOCK_LOG"; }
+kube() { printf 'kube %s\n' "$*" >> "$MOCK_LOG"; }
+restore_remove_recovery_helpers() { printf 'unmount\n' >> "$MOCK_LOG"; }
+restore_assert_empty_volumes() { printf 'all-empty\n' >> "$MOCK_LOG"; }
+restore_clear_migration_target
+EOF
+  run bash recovery-clear.sh
+  [ "$status" -eq 0 ]
+  local first_clear last_mount
+  first_clear=$(awk '/kube exec .*rm -rf/ {print NR; exit}' "$MOCK_LOG")
+  last_mount=$(awk '/mount typesense/ {print NR; exit}' "$MOCK_LOG")
+  [ -n "$first_clear" ] && [ -n "$last_mount" ]
+  [ "$last_mount" -lt "$first_clear" ]
+  grep -q '^phase clearing-application-data$' "$MOCK_LOG"
+  grep -q 'find /data -mindepth 1 -maxdepth 1 -exec rm -rf' "$MOCK_LOG"
+  grep -q '^all-empty$' "$MOCK_LOG"
+  run ! grep -Eq 'rm -rf /$|rm -rf /data$|delete pvc|delete pv' "$MOCK_LOG"
+}
+
+@test "migration recovery never clears an earlier volume when a later destination cannot be mounted" {
+  cat > recovery-clear-fail.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+lock_holder=release-holder
+jq '.volumes={recipes:"1Gi",images:"1Gi",typesense:"1Gi"}' "$work/config.json" > config.next
+mv config.next "$work/config.json"
+restore_volume_pod() {
+  printf 'mount %s\n' "$1" >> "$MOCK_LOG"
+  [[ $1 != typesense ]]
+}
+restore_assert_recovery_mounts() { printf 'all-mounted\n' >> "$MOCK_LOG"; }
+kube() { printf 'kube %s\n' "$*" >> "$MOCK_LOG"; }
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+restore_clear_migration_target
+EOF
+  run bash recovery-clear-fail.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"could not validate and mount every recovery destination"* ]]
+  run ! grep -q 'rm -rf' "$MOCK_LOG"
+  run ! grep -q '^all-mounted$' "$MOCK_LOG"
+}
+
 setup() {
   setup_fixture lib/production-restore.sh
   export FIXTURE_ROOT
