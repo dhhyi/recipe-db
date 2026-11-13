@@ -11,7 +11,7 @@ const meta = {
   tags: ["autodocs"],
   args: {
     authRole: "",
-    authName: "",
+    authEmail: "",
     authEnabled: false,
   },
   argTypes: {
@@ -19,7 +19,7 @@ const meta = {
       control: "select",
       options: ["", "anonymous", "member", "owner"],
     },
-    authName: { control: "text" },
+    authEmail: { control: "text" },
     authEnabled: { control: "boolean" },
   },
 } satisfies Meta;
@@ -40,19 +40,20 @@ export const Sticky: Story = {
         args.authEnabled && !!args.authRole && args.authRole !== "anonymous",
       );
       if (dropdown) {
-        expect(dropdown.querySelector("summary")).toHaveTextContent(
-          args.authName || args.authRole,
+        expect(dropdown.querySelector("summary")).toHaveAccessibleName(
+          "Profil",
         );
+        expect(dropdown.querySelector("summary")).toHaveTextContent("Profil");
         expect(
           dropdown.querySelector('a[href="/oauth2/sign_out?rd=%2F"]'),
         ).toHaveTextContent("Abmelden");
       }
     });
   },
-  render: ({ authRole, authName, authEnabled }) => html`
+  render: ({ authRole, authEmail, authEnabled }) => html`
     <header-component
       auth-role=${authRole}
-      auth-name=${authName}
+      auth-email=${authEmail}
       ?auth-enabled=${authEnabled}
     ></header-component>
     <main style="padding: 0.5rem 0;">
@@ -77,5 +78,9 @@ export const AnonymousWithoutGoogle: Story = {
 
 export const LoggedIn: Story = {
   ...Sticky,
-  args: { authRole: "owner", authName: "Max Mustermann", authEnabled: true },
+  args: {
+    authRole: "owner",
+    authEmail: "max.mustermann@example.com",
+    authEnabled: true,
+  },
 };

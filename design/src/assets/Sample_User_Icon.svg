@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<svg version="1.1" id="svg1" width="319.00369" height="351.25961" viewBox="0 0 319.00369 351.25961" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg">
+  <defs id="defs1" />
+  <g id="layer1" transform="translate(-96.686542,-80.962413)">
+    <circle style="fill:#ffffff;fill-opacity:0;stroke:currentColor;stroke-width:30.6;stroke-dasharray:none" id="path2" cx="256.18839" cy="192.1413" r="95.878883" />
+    <path
+      style="fill:#ffffff;fill-opacity:0;stroke:currentColor;stroke-width:30.6;stroke-dasharray:none"
+      id="circle3"
+      d="M 111.98654,432.22202 A 144.20184,144.20184 0 0 1 256.18839,288.02017 144.20184,144.20184 0 0 1 400.39023,432.22202"
+    />
+  </g>
+</svg>

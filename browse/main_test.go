@@ -318,7 +318,8 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatal("add-recipe control placeholder must follow the recipe results")
 	}
 	if !strings.Contains(overviewBody, `<header-component hx-get="/identity"`) ||
-		strings.Contains(overviewBody, "auth-role") || strings.Contains(overviewBody, `id="browse-identity"`) {
+		strings.Contains(overviewBody, "auth-role") || strings.Contains(overviewBody, "auth-email") ||
+		strings.Contains(overviewBody, `id="browse-identity"`) {
 		t.Fatal("public layout must load identity into the header separately")
 	}
 	for _, role := range []string{"anonymous", "member", "owner"} {
@@ -341,6 +342,9 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatalf("detail failed: %d %s", first.Code, first.Body.String())
 	}
 	pageHTML := first.Body.String()
+	if strings.Contains(pageHTML, "auth-email") {
+		t.Fatal("cached recipe HTML must not include the current user's email")
+	}
 	for _, markup := range []string{
 		`itemscope itemtype="https://schema.org/Recipe"`,
 		`<h1 itemprop="name">Original</h1>`,

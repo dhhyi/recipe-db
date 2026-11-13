@@ -2,14 +2,15 @@ import { LitElement, html } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import bannerSvg from "../assets/banner.svg?raw";
+import profileIconSvg from "../assets/Sample_User_Icon.svg?raw";
 
 @customElement("header-component")
 export class HeaderComponent extends LitElement {
   @property({ attribute: "auth-role" })
   authRole = "";
 
-  @property({ attribute: "auth-name" })
-  authName = "";
+  @property({ attribute: "auth-email" })
+  authEmail = "";
 
   @property({ type: Boolean, attribute: "auth-enabled" })
   authEnabled = false;
@@ -133,8 +134,29 @@ export class HeaderComponent extends LitElement {
     return html`<ul class="unlist">
       <li>
         <details class="dropdown">
-          <summary>${this.authName || this.authRole}</summary>
-          <ul dir="rtl">
+          <summary aria-label="Profil">
+            <span class="profile-caption hidden sm:inline">Profil</span>
+            <span
+              class="profile-icon inline-flex h-[1em] align-middle sm:hidden *:block *:h-full *:w-auto"
+              aria-hidden="true"
+              >${unsafeSVG(profileIconSvg)}</span
+            >
+          </summary>
+          <ul
+            class="profile-menu unlist w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
+            dir="rtl"
+          >
+            ${
+              this.authEmail
+                ? html`<li>
+                    <small
+                      class="profile-email block wrap-anywhere text-right select-text whitespace-normal"
+                      dir="ltr"
+                      >${this.authEmail}</small
+                    >
+                  </li>`
+                : null
+            }
             <li><a href="/oauth2/sign_out?rd=%2F">Abmelden</a></li>
           </ul>
         </details>

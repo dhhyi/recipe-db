@@ -50,6 +50,7 @@ query BrowseIdentity {
   myCapabilities {
     role
   }
+  myEmail
 }
 
 query RatingCapabilities($id: ID!) {
