@@ -1,5 +1,5 @@
 import { LitElement, html } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import bannerSvg from "../assets/banner.svg?raw";
 
@@ -13,6 +13,90 @@ export class HeaderComponent extends LitElement {
 
   @property({ type: Boolean, attribute: "auth-enabled" })
   authEnabled = false;
+
+  @state()
+  private scrollHidden = false;
+
+  private directionalScrolling = false;
+  private previousScrollY = 0;
+  private scrollDistance = 0;
+  private resizeObserver?: ResizeObserver;
+
+  connectedCallback() {
+    super.connectedCallback();
+    void this.updateComplete.then(() => {
+      if (!this.isConnected || this.resizeObserver) return;
+      this.resizeObserver = new ResizeObserver(this.measureHeader);
+      this.resizeObserver.observe(this.querySelector("header")!);
+      window.addEventListener("scroll", this.onScroll, { passive: true });
+      window.addEventListener("resize", this.measureHeader);
+      window.addEventListener("orientationchange", this.measureHeader);
+      window.visualViewport?.addEventListener("resize", this.measureHeader);
+      this.measureHeader();
+    });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = undefined;
+    window.removeEventListener("scroll", this.onScroll);
+    window.removeEventListener("resize", this.measureHeader);
+    window.removeEventListener("orientationchange", this.measureHeader);
+    window.visualViewport?.removeEventListener("resize", this.measureHeader);
+  }
+
+  private measureHeader = () => {
+    const height = this.querySelector("header")!.getBoundingClientRect().height;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    this.directionalScrolling =
+      viewportHeight > 0 && height >= viewportHeight * 0.1;
+    this.previousScrollY = this.currentScrollY();
+    this.scrollDistance = 0;
+    if (!this.directionalScrolling || this.previousScrollY === 0) {
+      this.scrollHidden = false;
+    }
+  };
+
+  private currentScrollY() {
+    return Math.max(
+      0,
+      Math.min(
+        window.scrollY,
+        document.documentElement.scrollHeight - window.innerHeight,
+      ),
+    );
+  }
+
+  private revealForFocus() {
+    this.scrollHidden = false;
+    this.scrollDistance = 0;
+    this.previousScrollY = this.currentScrollY();
+  }
+
+  private onScroll = () => {
+    const scrollY = this.currentScrollY();
+    const delta = scrollY - this.previousScrollY;
+    this.previousScrollY = scrollY;
+    if (
+      !this.directionalScrolling ||
+      scrollY === 0 ||
+      this.contains(document.activeElement)
+    ) {
+      this.scrollHidden = false;
+      this.scrollDistance = 0;
+      return;
+    }
+    if (delta === 0) return;
+    if (Math.sign(delta) !== Math.sign(this.scrollDistance)) {
+      this.scrollDistance = 0;
+    }
+    this.scrollDistance += delta;
+    if (Math.abs(this.scrollDistance) >= 8) {
+      this.scrollHidden = this.scrollDistance > 0;
+      this.scrollDistance = 0;
+    }
+  };
 
   protected createRenderRoot() {
     // drop stale render output restored e.g. from htmx history cache
@@ -63,6 +147,8 @@ export class HeaderComponent extends LitElement {
       <header
         style="background-color: var(--pico-background-color);"
         class="px-2 py-1 sticky top-0 z-10"
+        ?data-scroll-hidden=${this.scrollHidden}
+        @focusin=${this.revealForFocus}
       >
         <nav class="[--pico-nav-element-spacing-vertical:0]">
           <ul class="unlist">
