@@ -147,11 +147,16 @@ pub enum Capability {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RequestContext {
     principal: Principal,
+    verified_email: Option<String>,
 }
 
 impl RequestContext {
     pub fn principal(&self) -> &Principal {
         &self.principal
+    }
+
+    pub fn verified_email(&self) -> Option<&str> {
+        self.verified_email.as_deref()
     }
 
     pub fn require(&self, capability: Capability) -> Result<(), AuthorizationError> {
@@ -197,6 +202,13 @@ pub struct AuthQuery;
 
 #[Object]
 impl AuthQuery {
+    async fn my_email(&self, ctx: &Context<'_>) -> Result<Option<String>, Error> {
+        Ok(ctx
+            .data::<RequestContext>()?
+            .verified_email()
+            .map(str::to_owned))
+    }
+
     async fn my_capabilities(&self, ctx: &Context<'_>) -> Result<MyCapabilities, Error> {
         let request = ctx.data::<RequestContext>()?;
         Ok(MyCapabilities {
@@ -486,6 +498,7 @@ impl AuthPolicy {
                     display_name: token.display_name.clone(),
                     source: PrincipalSource::Token,
                 },
+                verified_email: None,
             });
         }
 
@@ -497,6 +510,7 @@ impl AuthPolicy {
                     display_name: self.anonymous.display_name.clone(),
                     source: PrincipalSource::CredentialFree,
                 },
+                verified_email: None,
             });
         }
 
@@ -516,6 +530,7 @@ impl AuthPolicy {
                 display_name: None,
                 source: PrincipalSource::Google,
             },
+            verified_email: email_verified.then(|| email.to_owned()),
         })
     }
 }
@@ -852,6 +867,7 @@ mod tests {
         let guest = policy.request_context(&HeaderMap::new()).unwrap();
         assert_eq!(guest.principal().role(), Role::Anonymous);
         assert_eq!(guest.principal().display_name(), Some("Guest"));
+        assert_eq!(guest.verified_email(), None);
         assert_eq!(
             guest.principal().id().as_str(),
             policy
@@ -866,6 +882,7 @@ mod tests {
         assert_eq!(member.principal().role(), Role::Member);
         assert_eq!(member.principal().display_name(), Some("E2E"));
         assert_eq!(member.principal().id().as_str(), "token:v1:12:member-token");
+        assert_eq!(member.verified_email(), None);
 
         let owner = policy.request_context(&bearer("secret-two")).unwrap();
         assert_eq!(owner.principal().role(), Role::Owner);
@@ -874,9 +891,49 @@ mod tests {
             .request_context(&google_headers("OWNER@example.com", Some("true")))
             .unwrap();
         assert_eq!(google.principal().role(), Role::Owner);
+        assert_eq!(google.verified_email(), Some("OWNER@example.com"));
         assert!(google.principal().id().as_str().starts_with("google:v1:"));
         assert_ne!(google.principal().id(), member.principal().id());
         assert_ne!(google.principal().id(), guest.principal().id());
+    }
+
+    #[tokio::test]
+    async fn my_email_exposes_only_verified_google_context() {
+        let schema = async_graphql::Schema::build(
+            AuthQuery,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .finish();
+        let policy = policy(FULL_CONFIG);
+        for (headers, expected) in [
+            (HeaderMap::new(), serde_json::Value::Null),
+            (
+                bearer("secret-one"),
+                serde_json::Value::Null,
+            ),
+            (
+                google_headers("owner@example.com", None),
+                serde_json::Value::Null,
+            ),
+            (
+                google_headers("owner@example.com", Some("false")),
+                serde_json::Value::Null,
+            ),
+            (
+                google_headers("owner@example.com", Some("true")),
+                serde_json::json!("owner@example.com"),
+            ),
+        ] {
+            let context = policy.request_context(&headers).unwrap();
+            let response = schema
+                .execute(
+                    async_graphql::Request::new("{ myEmail }").data(context),
+                )
+                .await;
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+            assert_eq!(response.data.into_json().unwrap()["myEmail"], expected);
+        }
     }
 
     #[test]
