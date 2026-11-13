@@ -82,6 +82,7 @@ EOF
   setup_tags
 }
 
+# shellcheck disable=SC2030
 @test "MCP upload verification is private, disposable, and never enabled on the normal MCP service" {
   mkdir mcp mcp-test
   cat > mcp/.project.yaml << 'EOF'
@@ -101,6 +102,7 @@ EOF
 
   run sh .scripts/generate-docker-compose.sh
   [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
   assert_compose '
     .services["mcp-upload-test-api"] as $upload
     | $upload.build == .services.mcp.build
@@ -270,6 +272,7 @@ test: echo tested
 EOF
 }
 
+# shellcheck disable=SC2031
 assert_compose() {
   run yq -o=json '.' docker-compose.yml
   [ "$status" -eq 0 ]
