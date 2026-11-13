@@ -639,6 +639,20 @@ EOF
   run ! grep -Eq 'set env deployment/(recipes|graphql) MODE=production' "$MOCK_LOG"
 }
 
+@test "backup-exit credential unlink failure never restores public production" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/credential-cleanup-failure" holder
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -r .backupId "$snapshot/backup-state.json")
+  mkdir "$snapshot.previous-runtime-secret.json"
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq 'set env deployment/(recipes|graphql) MODE=production' "$MOCK_LOG"
+  jq -e '.status == "recovery-required"' "$snapshot/backup-state.json" > /dev/null
+}
+
 @test "candidate staging records an exact handoff and requires a separate guarded reopen" {
   local start_log nats_ready init_done graph_barrier
   prepare_candidate_release
@@ -1016,14 +1030,14 @@ PY
     "$STATE/backup-state.json" > /dev/null
   [ ! -e "$MOCK_LOG.migration-claim" ]
   [ "$credential_checksum" = "$(sha256sum "$STATE.previous-runtime-secret.json" | cut -d ' ' -f 1)" ]
-  export MOCK_RESTORE_IMAGE_PULL_FAIL=false MOCK_RESTORE_IMPORT_FAIL=true
+  export MOCK_RESTORE_IMAGE_PULL_FAIL=false MOCK_RESTORE_IMPORT_FAIL=true MOCK_RESTORE_CLEANUP_UNSAFE=true
   run bash .scripts/production-k3d.sh release-migration-recover \
     "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
     "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-2"
   [ "$status" -ne 0 ]
   jq -e '.status == "recovery-required" and .phase == "migration-recovery-failed"
     and .migrationRecovery.status == "failed"
-    and .migrationRecovery.safeToRetry == true
+    and .migrationRecovery.safeToRetry == false
     and .migrationRecovery.attempts[-1].number == 2
     and (.migrationRecovery.failureReason | contains("complete backup import failed"))' \
     "$STATE/backup-state.json" > /dev/null
@@ -1036,9 +1050,26 @@ PY
   [ "$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")" = \
     "migration-recovery-failed" ]
 
+  for worker in active terminating; do
+    printf '%s\n' "$worker" > "$MOCK_LOG.lingering-worker"
+    run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+    [ "$status" -eq 0 ]
+    [[ $output == *"A retry is not recommended"* ]]
+    [[ $output != *"CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"* ]]
+    run bash .scripts/production-k3d.sh release-migration-recover \
+      "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+      "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"
+    [ "$status" -ne 0 ]
+    [[ $output == *"requires every other worker to have terminated"* ]]
+  done
+  rm "$MOCK_LOG.lingering-worker"
+  export MOCK_RESTORE_CLEANUP_UNSAFE=false
+  cp "$STATE/backup-state.json" "$MOCK_LOG.unsafe-recovery-state"
+  cp "$MOCK_LOG.lease" "$MOCK_LOG.unsafe-recovery-lease"
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   [[ $output == *"complete migration recovery failed"* ]]
+  [[ $output == *"CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"* ]]
   local claim_holder
   claim_holder=interrupted-recovery-command
   jq -n --arg holder "$claim_holder" --arg candidate "$CANDIDATE" '{
@@ -1077,6 +1108,15 @@ PY
   [[ $output == *"recovery requires fresh CLEAR-AND-RESTORE"* ]]
   [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
 
+  cp "$MOCK_LOG.unsafe-recovery-state" "$STATE/backup-state.json"
+  cp "$MOCK_LOG.unsafe-recovery-lease" "$MOCK_LOG.lease"
+  jq '.migrationRecovery.safeToRetry = "false"' "$STATE/backup-state.json" > "$STATE/backup-state.next"
+  mv "$STATE/backup-state.next" "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"
+  [ "$status" -ne 0 ]
+  cp "$MOCK_LOG.unsafe-recovery-state" "$STATE/backup-state.json"
   export MOCK_RESTORE_IMPORT_FAIL=false
   run bash .scripts/production-k3d.sh release-migration-recover \
     "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
@@ -1124,7 +1164,7 @@ PY
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   [[ $output == *"completion phase update was interrupted"* ]]
-  [[ $output == *"ATTEMPT-4"* ]]
+  [[ $output == *"A retry is not recommended"* ]]
   [[ $output != *"Next: mise run production-k3d release-recovery-reopen"* ]]
   mv "$MOCK_LOG.recovered-lease" "$MOCK_LOG.lease"
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
@@ -1159,11 +1199,147 @@ PY
   [ "$before_reopen" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
   jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes" > /dev/null
   export MOCK_MIGRATION_CLAIM_HELD=false
+  jq '.metadata.annotations["recipe-db/phase"]="migration-reopened"' "$MOCK_LOG.lease" \
+    > "$MOCK_LOG.terminal-lease"
+  export MOCK_REOPEN_CLOSEOUT_KILL=true
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -eq 137 ]
+  kill "$(cat "$MOCK_LOG.latest-forward-pid")"
+  jq -e '.status == "recovered" and .phase == "migration-reopened"
+    and .migrationRecovery.status == "reopened"
+    and .migrationRecovery.ownershipReleasedAt == null' "$STATE/backup-state.json" > /dev/null
+  [ ! -e "$MOCK_LOG.lease" ]
+  [ -e "$MOCK_LOG.migration-claim" ]
+  export MOCK_REOPEN_CLOSEOUT_KILL=false
+  local closeout_calls closeout_holder
+  closeout_calls=$(wc -l < "$MOCK_LOG")
+  closeout_holder=$(jq -er .spec.holderIdentity "$MOCK_LOG.migration-claim")
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output == *"terminal recovery closeout is claimed"* && $output == *"RECOVER-$closeout_holder"* ]]
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  [[ $output == *"another migration command owns the atomic cluster claim"* ]]
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$ARTIFACT" "$closeout_holder" "RECOVER-wrong"
+  [ "$status" -ne 0 ]
+  [ -e "$MOCK_LOG.migration-claim" ]
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$ARTIFACT" "$closeout_holder" "RECOVER-$closeout_holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  cp "$STATE/backup-state.json" "$MOCK_LOG.interrupted-closeout-state"
+  for drift in phase holder; do
+    jq --arg drift "$drift" '
+      if $drift == "phase" then .metadata.annotations["recipe-db/phase"]="migration-reopening"
+      else .spec.holderIdentity="foreign-operation" end' \
+      "$MOCK_LOG.terminal-lease" > "$MOCK_LOG.lease"
+    run bash .scripts/production-k3d.sh release-recovery-reopen \
+      "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+    [ "$status" -ne 0 ]
+    [ -e "$MOCK_LOG.lease" ]
+    cmp "$STATE/backup-state.json" "$MOCK_LOG.interrupted-closeout-state"
+    rm "$MOCK_LOG.lease"
+  done
+  export MOCK_SURVIVING_RECOVERY_GUARD=true
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  cmp "$STATE/backup-state.json" "$MOCK_LOG.interrupted-closeout-state"
+  export MOCK_SURVIVING_RECOVERY_GUARD=false
+  cp "$MOCK_LOG.restore-deployments" "$MOCK_LOG.closeout-deployments-saved"
+  jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[].env[] |
+    select(.name == "MODE").value)="backup"' "$MOCK_LOG.restore-deployments" \
+    > "$MOCK_LOG.restore-deployments.next"
+  mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  [[ $output == *"production workloads are not compatible and ready"* ]]
+  cmp "$STATE/backup-state.json" "$MOCK_LOG.interrupted-closeout-state"
+  mv "$MOCK_LOG.closeout-deployments-saved" "$MOCK_LOG.restore-deployments"
+  cp "$MOCK_LOG.restore-routes" "$MOCK_LOG.closeout-routes-saved"
+  jq '.http.routers.graphql.rule="PathPrefix(`/drift`)"' "$MOCK_LOG.restore-routes" \
+    > "$MOCK_LOG.restore-routes.next"
+  mv "$MOCK_LOG.restore-routes.next" "$MOCK_LOG.restore-routes"
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  [[ $output == *"public routes differ from the previous release"* ]]
+  cmp "$STATE/backup-state.json" "$MOCK_LOG.interrupted-closeout-state"
+  mv "$MOCK_LOG.closeout-routes-saved" "$MOCK_LOG.restore-routes"
+  jq '.migrationRecovery.candidateAborted=false' "$STATE/backup-state.json" > "$STATE/backup-state.next"
+  mv "$STATE/backup-state.next" "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  cp "$MOCK_LOG.interrupted-closeout-state" "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output == *"reconcile already reopened ownership"* ]]
+  export MOCK_CLOSEOUT_CLAIM_KILL=true
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -eq 137 ]
+  kill "$(cat "$MOCK_LOG.latest-forward-pid")"
+  cmp "$STATE/backup-state.json" "$MOCK_LOG.interrupted-closeout-state"
+  [ -e "$MOCK_LOG.migration-claim" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  export MOCK_CLOSEOUT_CLAIM_KILL=false
+  closeout_holder=$(jq -er .spec.holderIdentity "$MOCK_LOG.migration-claim")
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [[ $output == *"RECOVER-$closeout_holder"* ]]
+  run bash .scripts/production-k3d.sh release-migration-recover-claim \
+    "$VALUES" "$STATE" "$ARTIFACT" "$closeout_holder" "RECOVER-$closeout_holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
   run bash .scripts/production-k3d.sh release-recovery-reopen \
     "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
   [ "$status" -eq 0 ]
-  jq -e '.status == "recovered" and .phase == "migration-reopened"
-    and .migrationRecovery.status == "reopened"' "$STATE/backup-state.json" > /dev/null
+  [[ $output == *"no application or storage changes were made"* ]]
+  jq -e '.migrationRecovery.ownershipReleasedAt | type == "string"' "$STATE/backup-state.json" > /dev/null
+  [ ! -e "$MOCK_LOG.lease" ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  cp "$MOCK_LOG.terminal-lease" "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  sed -n "$((closeout_calls + 1)),\$p" "$MOCK_LOG" > "$MOCK_LOG.closeout-only"
+  run ! grep -Eq 'restore-volume|delete pvc|scale deployment|set env deployment|patch service|apply -f|create secret' \
+    "$MOCK_LOG.closeout-only"
+  python3 - "$STATE" "$MOCK_LOG.interrupted-closeout-state" << 'PY'
+import importlib.util, json, pathlib, shutil, sys
+
+spec = importlib.util.spec_from_file_location("upload", "provisioning/files/backup-upload.py")
+upload = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(upload)
+state = pathlib.Path(sys.argv[1])
+directory = pathlib.Path("uploader-closeout").resolve()
+directory.mkdir(mode=0o700)
+config = {"stateDirectory": str(directory)}
+maintenance = directory / "maintenance"
+maintenance.mkdir(mode=0o700)
+shutil.copyfile(sys.argv[2], maintenance / "backup-state.json")
+assert upload.report_status(config)["maintenanceActive"] is True
+upload.archive_recovered_maintenance(config)
+assert maintenance.exists()
+shutil.copyfile(state / "backup-state.json", maintenance / "backup-state.json")
+credential = directory / "maintenance.previous-runtime-secret.json"
+shutil.copyfile(str(state) + ".previous-runtime-secret.json", credential)
+credential.chmod(0o600)
+assert upload.report_status(config)["maintenanceActive"] is False
+upload.archive_recovered_maintenance(config)
+backup_id = json.loads((state / "backup-state.json").read_text())["backupId"]
+assert not maintenance.exists()
+assert (directory / "maintenance-history" / backup_id / "backup-state.json").exists()
+assert (directory / "maintenance-history" / (backup_id + ".previous-runtime-secret.json")).exists()
+PY
   local reopened_state
   reopened_state=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
   local reopened_call_count

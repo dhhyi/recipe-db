@@ -1086,12 +1086,14 @@ def report_status(config):
     except (OSError, ValueError, json.JSONDecodeError):
         return {"format": STATUS_FORMAT, "status": "overdue", "code": "no-check-record",
                 "lastCheck": None, "lastUpload": None, "backupId": None,
-                "maintenanceActive": maintenance_active(config)}
+                "maintenanceActive": maintenance_active(config),
+                "migrationRecoveryCloseoutVersion": 1}
     if not isinstance(value, dict):
         return {"format": STATUS_FORMAT, "status": "capture-failure",
                 "code": "invalid-status-record", "lastCheck": None,
                 "lastUpload": None, "backupId": None,
-                "maintenanceActive": maintenance_active(config)}
+                "maintenanceActive": maintenance_active(config),
+                "migrationRecoveryCloseoutVersion": 1}
     if not value.get("lastCheck"):
         value["status"] = "overdue"
         value["code"] = "no-check-record"
@@ -1104,6 +1106,7 @@ def report_status(config):
             value["status"] = "capture-failure"
             value["code"] = "invalid-status-record"
     value["maintenanceActive"] = maintenance_active(config)
+    value["migrationRecoveryCloseoutVersion"] = 1
     return value
 
 

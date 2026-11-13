@@ -101,6 +101,27 @@ Expect exit status zero and `success: true` in `$RESULT/result.json`. Clusters a
 
 After testing, use an approved maintenance window. Keep the old release's matching checkout and the Pi's private backup configuration available.
 
+Before entering maintenance, install the reviewed uploader from the provisioning devcontainer on the workstation:
+
+```sh
+mise run --raw in-devcontainer provisioning \
+  ansible-playbook -i /home/vscode/.config/recipe-db/provisioning/inventory.yml \
+  backup-configure.yml --tags backup-uploader --ask-become-pass
+```
+
+Use your actual private inventory path. This supported uploader-only install requires an idle backup service and `maintenanceActive: false`; it stops and disables the timer, preserving the previous release checkout, capture wrapper, configuration-generation marker and all private capture inputs. Do not use ordinary provisioning or replace the installed script during maintenance. This is an administrative prerequisite, not a capture-source/schema upgrade. If maintenance is already active with an older uploader, stop: this guarded install cannot upgrade it in place.
+
+On the Pi, verify installation before proceeding:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+sudo systemctl show --property=ActiveState --value recipe-db-backup.service
+sudo systemctl is-enabled recipe-db-backup.timer
+sudo systemctl is-active recipe-db-backup.timer
+```
+
+Require `migrationRecoveryCloseoutVersion: 1`, `maintenanceActive: false`, service state `inactive` or `failed`, and timer `disabled` and `inactive` (the last two commands return nonzero for these deliberate states). Keep the timer disabled through maintenance and recovery.
+
 On the Pi, enter maintenance through the backup service's uploader:
 
 ```sh
@@ -243,6 +264,10 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d --release-sources-from-git rele
 The command revalidates the package against the retained coordinated pre-migration snapshot, checks the previous immutable release and retained configuration/credentials, verifies all owned bound PVCs and stopped workers, and pulls every previous-release workload/infrastructure image before clearing any data. It then clears only the configured PVC data roots and restores the complete snapshot through the normal importer, rebuilding derived state and checking readiness while the barrier and Lease remain. This includes services whose migration already succeeded. Credentials, configuration, backups and private operation diagnostics are preserved. No versions are stamped and no migrator is rerun.
 
 On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision and takes the same exclusive command claim; recovery never opens public access automatically. After reopening and recorded ownership release, the uploader reports `maintenanceActive: false` and archives the recovery state and retained credentials before the next capture. Keep the previous release's backup configuration, run and verify an explicit capture, then use the existing [backup-enable playbook](../provisioning/backup-enable.yml) to approve resuming scheduled backups; the recovery command does not enable the timer itself. During recovery an in-cluster shutdown guard monitors the command heartbeat independently of the workstation, refreshes its projected authentication token per request, and acknowledges client pulses. If the command or host disappears, the guard stops recovery workloads and storage helpers after roughly 30–60 seconds without heartbeat, leaving access blocked and ownership retained. It verifies worker termination and remains armed through cleanup until explicitly stopped; a live command also terminates when its guard or heartbeat is lost, including when an active guard stops acknowledging pulses for 20 seconds. Reopening refuses any surviving guard Job or Pod. API failures can delay shutdown: inspect the guard Job and verify worker termination rather than assuming a timeout proves it.
+
+If cleanup failed, `safeToRetry` records historical cleanup safety, not permanent authorization or prohibition. Resolve the failure and stop every worker, including stateless or terminating GraphQL Pods; the guard remains armed until they are gone. Status recommends another full recovery only after fresh ownership, complete-package, worker and barrier checks. A retry still requires the new attempt-specific `CLEAR-AND-RESTORE` approval.
+
+If reopening was durably recorded as `recovered/migration-reopened` but ownership closeout was interrupted, run `release-migration-status` with the same values, retained state and previous immutable release. A remaining command claim must first be explicitly recovered with the printed holder-bound command, only after confirming the old command stopped. Then explicitly approve the printed `release-recovery-reopen` command with `OPEN-RECOVERY-<backup-id>-<previous-revision>` again. In this exact terminal state it verifies previous-production readiness, credentials, routes and absence of the guard, then reconciles only Lease ownership and closeout metadata. It never restores, clears, changes workload modes or reopens routes; partial reopening phases cannot use this path. Require recorded `ownershipReleasedAt`, absent operation/command Leases and uploader `maintenanceActive: false` before capture.
 
 On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. Status recognizes an interrupted state/Lease phase update but never infers successful completion from it. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. The approved command can terminate an owned expired guard only after verifying that every other worker has stopped. Each approved attempt has a monotonically increasing attempt number in the retained state and requires a distinct `...-ATTEMPT-<number>` confirmation; an earlier token cannot authorize a retry. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
 

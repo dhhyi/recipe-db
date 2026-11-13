@@ -61,6 +61,15 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
 
 
 class BackupUploadTests(unittest.TestCase):
+    def test_status_reports_installed_closeout_capability_not_cached_capability(self):
+        self.assertEqual(backup.report_status(self.config)["migrationRecoveryCloseoutVersion"], 1)
+        backup.ensure_private_dir(self.state)
+        backup.atomic_json(backup.status_path(self.config), ["invalid"])
+        self.assertEqual(backup.report_status(self.config)["migrationRecoveryCloseoutVersion"], 1)
+        backup.atomic_json(backup.status_path(self.config),
+                           {"migrationRecoveryCloseoutVersion": 99})
+        self.assertEqual(backup.report_status(self.config)["migrationRecoveryCloseoutVersion"], 1)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

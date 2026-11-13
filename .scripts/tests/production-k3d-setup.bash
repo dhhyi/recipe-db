@@ -357,7 +357,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         esac
         exit ;;
       *"get pods -o json")
-        jq -s '{items:.}' "$MOCK_LOG.restore-pods"; exit ;;
+        jq -s --arg linger "$(cat "$MOCK_LOG.lingering-worker" 2>/dev/null || true)" '
+          {items:(. + (if $linger == "" then [] else [{
+            metadata:{name:"graphql-lingering",
+              deletionTimestamp:(if $linger == "terminating" then "now" else null end)},
+            status:{phase:"Running"},spec:{volumes:[]}}] end))}' "$MOCK_LOG.restore-pods"; exit ;;
       *"exec deployment/nats -- wget -qO-"*)
         if [[ -f $MOCK_LOG.probe-created ]]; then
           sequence=$(cat "$MOCK_LOG.stream-sequence")
@@ -390,7 +394,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         if [[ ${MOCK_RESTORE_NONEMPTY:-} != "" && $* == *"restore-volume-$MOCK_RESTORE_NONEMPTY "* ]]; then exit 1; fi
         exit ;;
       *"exec -i restore-volume-"*"-- tar -xpkf - --numeric-owner -C /data")
-        if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then exit 1; fi
+        if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then
+          if [[ ${MOCK_RESTORE_CLEANUP_UNSAFE:-false} == true ]]; then
+            printf 'active\n' > "$MOCK_LOG.lingering-worker"
+          fi
+          exit 1
+        fi
         name="${*: -8:1}"
         name="${name#restore-volume-}"
         mkdir -p "$FIXTURE_ROOT/imported/$name"
@@ -430,8 +439,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"get pod restore-volume-"*) exit ;;
       *"port-forward "*)
         if [[ $* == *"service/browse"* ]]; then port=18082; else port=18081; fi
+        printf '%s\n' "$BASHPID" > "$MOCK_LOG.latest-forward-pid"
         echo "Forwarding from 127.0.0.1:$port -> 3000"
-        exec sleep 600 ;;
+        exec sleep 600 3>&- ;;
       *"replace -f "*recipe-db-deploy-update.json) cp "${*: -1}" "$MOCK_LOG.lease"; exit ;;
       *"get lease recipe-db-deploy"*)
         if [[ ${MOCK_RESTORE_LOCK_DRIFT:-false} == true && -e $MOCK_LOG.imported ]]; then
@@ -444,6 +454,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         done
         echo '{"kind":"Secret"}'; exit ;;
       *"get deployments -o json") cat "$MOCK_LOG.restore-deployments"; exit ;;
+      *"get service recipe-db-internal -o json")
+        jq -n --argjson port "$(cat "$MOCK_LOG.internal-port" 2>/dev/null || printf 3000)" \
+          '{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            spec:{ports:[{port:80,targetPort:$port}]}}'; exit ;;
+      *"patch service recipe-db-internal "*)
+        printf '%s\n' "${*: -1}" | jq -r '.spec.ports[0].targetPort' > "$MOCK_LOG.internal-port"; exit ;;
       *"apply -f "*application.yml)
         yq -o=json -I=0 'select(.kind == "Deployment")' "${*: -1}" | jq -s '{items:map(. + {status:{readyReplicas:.spec.replicas}})}' \
           > "$MOCK_LOG.restore-deployments"; exit ;;
@@ -480,6 +496,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           .preconditions.uid == $current[0].metadata.uid and
           .preconditions.resourceVersion == $current[0].metadata.resourceVersion
         ' "${*: -1}" > /dev/null || exit 1
+        if [[ ${MOCK_CLOSEOUT_CLAIM_KILL:-false} == true ]]; then
+          kill -KILL "$PPID"
+          exit 1
+        fi
         rm -f "$MOCK_LOG.migration-claim"
         handled=true ;;
       *" get jobs -l recipe-db/revision="*)
@@ -1050,7 +1070,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       .preconditions.uid == $current[0].metadata.uid and
       .preconditions.resourceVersion == $current[0].metadata.resourceVersion
     ' "${*: -1}" > /dev/null || exit 1
-    rm -f "$MOCK_LOG.lease" ;;
+    phase=$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")
+    rm -f "$MOCK_LOG.lease"
+    if [[ ${MOCK_REOPEN_CLOSEOUT_KILL:-false} == true && $phase == migration-reopened ]]; then
+      kill -KILL "$PPID"
+    fi ;;
   *"rollout status "*) [[ $MOCK_ROLLOUT != true ]] ;;
   *"create secret generic recipe-db-routes"*)
     for argument in "$@"; do
@@ -1222,7 +1246,8 @@ if jq -e 'has("config")' "$2" > /dev/null; then
       (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"] +
         (if .config.runtime.googleOAuthClientId then ["redis","oauth2-proxy"] else [] end))[] |
       . as $name | select($name != (env.MOCK_RESTORE_MISSING_WORKLOAD // "")) |
-      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
+      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db",
+        labels:{"app.kubernetes.io/part-of":"recipe-db"}},
       spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
       spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
         env:([{name:"MODE",value:"production"}] +

@@ -807,13 +807,7 @@ restore_guard_remove_expired() {
     "$work/restore-expired-guard-deployments.json" > /dev/null \
     || production_fail "expired recovery guard cannot be removed before all workloads stop"
   kube get pods -o json > "$work/restore-expired-guard-pods.json" || return 1
-  jq -e --arg holder "$backup_id" 'all(.items[];
-    .metadata.labels["recipe-db/recovery-guard"] == $holder
-    or (.metadata.deletionTimestamp == null
-      and (.status.phase == "Succeeded" or .status.phase == "Failed")
-      and all(.status.containerStatuses[]?; .state.terminated != null)
-      and all(.spec.volumes[]?; .persistentVolumeClaim == null)))' \
-    "$work/restore-expired-guard-pods.json" > /dev/null \
+  restore_workers_terminated "$work/restore-expired-guard-pods.json" \
     || production_fail "expired recovery guard cannot be removed before every other worker terminates"
   restore_guard_name=$name
   restore_guard_started=true
@@ -987,12 +981,26 @@ restore_stop_migration_recovery() {
   else
     return 1
   fi
-  kube get pods -o json > "$work/recovery-stop-pods.json" || return 1
-  jq -e --argjson volumes "$(jq -c '.volumes | keys' "$work/config.json")" '
-    all(.items[];
-      all(.spec.volumes[]? | .persistentVolumeClaim.claimName // empty;
-        . as $claim | ($volumes | index($claim)) == null))
-  ' "$work/recovery-stop-pods.json" > /dev/null || return 1
+  local deadline=$((SECONDS + timeout))
+  while :; do
+    kube get pods -o json > "$work/recovery-stop-pods.json" || return 1
+    if restore_workers_terminated "$work/recovery-stop-pods.json"; then return 0; fi
+    ((SECONDS < deadline)) || return 1
+    sleep 1
+  done
+}
+
+restore_workers_terminated() {
+  jq -e --arg holder "$backup_id" 'all(.items[];
+    (.metadata.labels["recipe-db/recovery-guard"] == $holder
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and any(.metadata.ownerReferences[]?;
+        .kind == "Job" and .name == ("recovery-guard-" + $holder) and .controller == true))
+    or (.metadata.deletionTimestamp == null
+      and (.status.phase == "Succeeded" or .status.phase == "Failed")
+      and all((.status.containerStatuses[]?, .status.initContainerStatuses[]?,
+        .status.ephemeralContainerStatuses[]?); .state.terminated != null)
+      and all(.spec.volumes[]?; .persistentVolumeClaim == null)))' "$1" > /dev/null
 }
 
 restore_verify_volume_identity() {
@@ -1367,7 +1375,7 @@ restore_run() {
         and (.migrationExecution.status == "failed" or .migrationExecution.status == "uncertain")
         and .migrationResult == null and .postCheckDisposition == null
         and ((.phase == "migration-recovery-failed"
-          and .migrationRecovery.status == "failed" and .migrationRecovery.safeToRetry == true)
+          and .migrationRecovery.status == "failed" and (.migrationRecovery.safeToRetry | type) == "boolean")
           or ((.phase | startswith("migration-recovery-"))
             and .phase != "migration-recovery-failed"
             and (.migrationRecovery.status == "approved"

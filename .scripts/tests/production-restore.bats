@@ -372,6 +372,51 @@ EOF
   run ! grep -q '^delete rolebinding,role,serviceaccount,configmap ' "$MOCK_LOG"
 }
 
+@test "migration cleanup preserves its guard until stateless workers actually terminate" {
+  cat > stateless-cleanup.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+backup_id=backup-1
+lock_holder=backup-1
+restore_mode=migration-recovery
+timeout=${CLEANUP_TIMEOUT:-0}
+kube() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  case "$*" in
+    "get pods -o json")
+      local state=$WORKER_STATE
+      if [[ $state == converging && -f $MOCK_LOG.poll ]]; then state=terminal; fi
+      touch "$MOCK_LOG.poll"
+      jq -n --arg state "$state" '{
+        items:[{metadata:{name:"guard",labels:{"app.kubernetes.io/part-of":"recipe-db",
+          "recipe-db/recovery-guard":"backup-1"},
+          ownerReferences:[{kind:"Job",name:"recovery-guard-backup-1",controller:true}]},
+          status:{phase:"Running"},spec:{volumes:[]}},
+          {metadata:{name:"graphql",deletionTimestamp:(if $state == "terminating" then "now" else null end)},
+            status:{phase:(if $state == "terminal" then "Succeeded" else "Running" end),
+              containerStatuses:[{state:(if $state == "terminal" then {terminated:{exitCode:0}} else {running:{}} end)}]},
+            spec:{volumes:[]}}]}' ;;
+    "get "*) echo '{"items":[]}' ;;
+  esac
+}
+restore_guard_stop() { echo guard-stopped >> "$MOCK_LOG"; }
+restore_stop_migration_recovery
+restore_guard_stop
+EOF
+  for state in active terminating; do
+    WORKER_STATE=$state run bash stateless-cleanup.sh
+    [ "$status" -ne 0 ]
+    run ! grep -q guard-stopped "$MOCK_LOG"
+  done
+  rm "$MOCK_LOG.poll"
+  WORKER_STATE=converging CLEANUP_TIMEOUT=3 run bash stateless-cleanup.sh
+  [ "$status" -eq 0 ]
+  grep -q guard-stopped "$MOCK_LOG"
+  [ "$(grep -c '^get pods -o json' "$MOCK_LOG")" -eq 4 ]
+}
+
 @test "restore read verification waits for convergence and rejects persistent failures" {
   cat > read-gate.sh << 'EOF'
 #!/usr/bin/env bash
