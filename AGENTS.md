@@ -8,6 +8,12 @@ Do not add new content to README.md files unless the user explicitly asks for it
 
 Follow the [documentation guidelines in CONTRIBUTING.md](CONTRIBUTING.md#documentation) when writing or revising documentation.
 
+## Local demo Compose cluster
+
+- The local development/demo Docker Compose project is disposable: agents may independently reset, destroy, and [reseed its demo data](demo-data/README.md), which can be reconstructed.
+- Agents may independently change its credential-free default role to `anonymous`, `member`, or `owner`; see [local identity configuration](docs/browser-authentication.md#local-credential-free-and-token-identities).
+- Verify the target is the intended local demo Compose project before acting; avoid affecting other users or unrelated data. This permission excludes production, shared, and other environments. Preserve secrets and do not weaken production defaults.
+
 ## Dependency coverage for new projects
 
 When adding a project or dependency manifest, update [.github/dependabot.yml](.github/dependabot.yml) in the same change for every source supported by Dependabot security updates. Preserve the security-only policy (`open-pull-requests-limit: 0`). If introducing another supported ecosystem or manifest layout, extend discovery and Bazel inputs for [.scripts/tests/dependabot.bats](.scripts/tests/dependabot.bats) so future omissions fail CI. For unsupported sources, document the coverage gap in [CONTRIBUTING.md](CONTRIBUTING.md#dependency-security-updates); do not claim they are scanned or enable routine version updates without approval.
