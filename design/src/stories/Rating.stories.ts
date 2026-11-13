@@ -39,13 +39,19 @@ export const Feedback: Story = {
     });
     args.onRated.mockClear();
     if (args.myRating !== undefined) {
-      fireEvent.click(stars.querySelectorAll("svg")[args.myRating - 1]);
+      const currentStar = stars.querySelectorAll("svg")[args.myRating - 1];
+      fireEvent.click(currentStar);
       expect(args.onRated).not.toHaveBeenCalled();
+      expect(currentStar.getAnimations()).toHaveLength(0);
     }
     const changedRating = args.myRating === 1 ? 2 : 1;
-    fireEvent.click(stars.querySelectorAll("svg")[changedRating - 1]);
+    const changedStar = stars.querySelectorAll("svg")[changedRating - 1];
+    fireEvent.click(changedStar);
     expect(args.onRated).toHaveBeenCalledTimes(1);
     expect(args.onRated).toHaveBeenCalledWith(changedRating);
+    expect(changedStar.getAnimations()).toHaveLength(
+      matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1,
+    );
   },
   args: {
     rating: 3.5,
@@ -75,6 +81,16 @@ export const NoOwnVote: Story = {
 };
 
 export const Static: Story = {
+  play: async ({ canvasElement }) => {
+    await waitFor(() => {
+      expect(
+        canvasElement.querySelectorAll("rating-component svg"),
+      ).toHaveLength(5);
+    });
+    const star = canvasElement.querySelector("rating-component svg")!;
+    fireEvent.click(star);
+    expect(star.getAnimations()).toHaveLength(0);
+  },
   args: {
     rating: 3.5,
     count: 10,

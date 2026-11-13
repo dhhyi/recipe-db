@@ -425,6 +425,8 @@ recipe-tile-component a[slot="image"] > img {
 rating-component[hx-post] {
   svg {
     transition: all 0.3s ease;
+    transform-origin: center;
+    transform-box: fill-box;
   }
 
   svg:has(~ svg:hover),
@@ -435,6 +437,21 @@ rating-component[hx-post] {
     .rating-outline {
       fill: #ffec17;
     }
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-rating-saved] rating-component {
+    animation: rating-saved 200ms ease;
+  }
+}
+
+@keyframes rating-saved {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
   }
 }
 

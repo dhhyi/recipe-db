@@ -450,7 +450,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	if body := ratingWidget.Body.String(); ratingWidget.Code != http.StatusOK ||
 		strings.Count(body, "<rating-component") != 1 ||
 		!strings.Contains(body, `rating="5"`) || !strings.Contains(body, `my-rating="3"`) ||
-		strings.Contains(body, "Deine Bewertung") ||
+		strings.Contains(body, "Deine Bewertung") || strings.Contains(body, "data-rating-saved") ||
 		!strings.Contains(body, `hx-target="#recipe-rating-42"`) {
 		t.Fatalf("personalized rating must combine public and own values in one widget: %s", body)
 	}
@@ -458,14 +458,15 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	publicRating := request("GET", "/recipe/42/rating", "")
 	if body := publicRating.Body.String(); publicRating.Code != http.StatusOK ||
 		strings.Count(body, "<rating-component") != 1 || !strings.Contains(body, `rating="5"`) ||
-		strings.Contains(body, "my-rating") || strings.Contains(body, "hx-post") {
+		strings.Contains(body, "my-rating") || strings.Contains(body, "hx-post") || strings.Contains(body, "data-rating-saved") {
 		t.Fatalf("public rating must retain one non-editable aggregate widget: %s", body)
 	}
 	canRate.Store(true)
 	if health := request("GET", "/health", ""); health.Code != 200 || health.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("health check must stay uncached")
 	}
-	if rating := request("POST", "/recipe/42/rate", ""); rating.Code != 200 || rating.Header().Get("Cache-Control") != "no-store" {
+	if rating := request("POST", "/recipe/42/rate", ""); rating.Code != 200 || rating.Header().Get("Cache-Control") != "no-store" ||
+		!strings.Contains(rating.Body.String(), "data-rating-saved") {
 		t.Fatal("rating submission failed")
 	}
 	updated := request("GET", "/recipe/42", etag)

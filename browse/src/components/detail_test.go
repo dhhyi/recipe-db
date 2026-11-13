@@ -58,7 +58,7 @@ func TestRecipeRatingsKeepTransitionOutsideLiveWidget(t *testing.T) {
 		detail := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{
 			Recipe: &gql.RecipeDetail{Id: id, Name: "Kuchen", Rating: rating},
 		}, ""))
-		widget := renderTagComponent(t, RecipeRatingWidget(id, rating, false, nil))
+		widget := renderTagComponent(t, RecipeRatingWidget(id, rating, false, nil, false))
 		tileName := ratingName.FindStringSubmatch(tile)
 		detailName := ratingName.FindStringSubmatch(detail)
 		if len(tileName) != 2 || len(detailName) != 2 || tileName[1] != detailName[1] {
