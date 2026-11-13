@@ -80,6 +80,8 @@ production_config() {
         or $action == "backup-capture" or $action == "backup-exit"
         or $action == "release-stage" or $action == "release-fallback-stage"
         or $action == "release-migration-result"
+        or $action == "release-migration-plan" or $action == "release-migration-next"
+        or $action == "release-migration-status" or $action == "release-migration-recover-claim"
         or $action == "release-start" or $action == "release-reopen"
         or $action == "release-disposition" or $action == "restore" or $action == "storage-reattach")
       then has("piStorage")

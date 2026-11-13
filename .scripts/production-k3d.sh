@@ -38,7 +38,15 @@ case "$command" in
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
   release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
-  release-migration-result) [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and RECORD-<outcome>-<holder> confirmation" ;;
+  release-migration-plan | release-migration-next | release-migration-status)
+    [[ $# = 2 ]] || production_fail "$command requires the maintenance state directory and candidate artifact"
+    ;;
+  release-migration-recover-claim)
+    [[ $# = 4 ]] || production_fail "release-migration-recover-claim requires the maintenance state directory, candidate artifact, exact abandoned claim holder, and RECOVER-<holder> confirmation"
+    ;;
+  release-migration-result)
+    [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and confirmation"
+    ;;
   release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
   release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
   release-disposition) [[ $# = 4 ]] || production_fail "release-disposition requires the maintenance state directory, candidate artifact, disposition and DISPOSITION-<holder>-<choice> confirmation" ;;
@@ -69,16 +77,25 @@ barrier_established=false
 release_mutation_started=false
 release_fallback_mode=false
 require_storage_versions=false
+release_migration_claimed=false
+release_migration_claim_holder=
 pod_watch_pid=
 cleanup() {
   local result=$?
   trap - EXIT
   restore_cleanup "$result"
+  if $release_migration_claimed; then
+    if ! release_migration_release_claim; then
+      printf 'production: could not safely release migration command claim; inspect it before continuing\n' >&2
+      [[ $result -ne 0 ]] || result=1
+    fi
+  fi
   if [[ -n $pod_watch_pid ]]; then
     kill "$pod_watch_pid" 2> /dev/null || true
     wait "$pod_watch_pid" 2> /dev/null || true
   fi
   if [[ $result -ne 0 ]] && $locked && $retain_lock \
+    && [[ $command != release-migration-* ]] \
     && ([[ $command != release-* ]] || $release_mutation_started) \
     && [[ -n ${snapshot:-} && -f $snapshot/backup-state.json ]] \
     && [[ $(jq -r .status "$snapshot/backup-state.json") != recovery-required ]]; then
@@ -1386,7 +1403,15 @@ release_state_write() {
   local status=$1 phase=$2 fields=$3
   jq --arg status "$status" --arg phase "$phase" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson fields "$fields" \
-    '. + $fields | .status=$status | .phase=$phase | .updatedAt=$updatedAt' \
+    '. as $current
+     | . + ($fields | del(.migrationExecution))
+     | if ($fields | has("migrationExecution")) then
+         .migrationExecution =
+           (if ($fields.migrationExecution | type) == "object"
+            then (($current.migrationExecution // {}) + $fields.migrationExecution)
+            else $fields.migrationExecution end)
+       else . end
+     | .status=$status | .phase=$phase | .updatedAt=$updatedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
     && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
 }
@@ -1770,7 +1795,7 @@ release_stage() {
             migrationResult:($prior[0].migrationResult // null),
             postCheckDisposition:($prior[0].postCheckDisposition // null)}] else [] end)),
         candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
-        migrationResult:null,postCheckDisposition:null,
+        migrationResult:null,migrationExecution:null,postCheckDisposition:null,
         backupVerification:{backupId:$backupId,status:$backupStatus,acknowledgedAt:$verifiedAt}}
       | .candidate.natsInitJob=$natsInitJob
       | if $toolingRevision != "" then .toolingRevision=$toolingRevision else . end')" \
@@ -1846,28 +1871,1008 @@ release_fallback_stage() {
   printf 'production: previous release staged on unchanged storage; stop here for the checkout handoff and explicit operator approval\n'
 }
 
-release_record_migration_result() {
-  local candidate=$2 outcome=$3 confirmation=$4
+release_migration_shell_quote() {
+  local value=$1
+  printf "'"
+  printf '%s' "$value" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
+release_migration_next_command() {
+  local action=$1 source_flag=
+  $release_sources_from_git && source_flag="--release-sources-from-git "
+  printf 'Next: mise run production-k3d %s%s %s %s %s\n' \
+    "$source_flag" "$action" \
+    "$(release_migration_shell_quote "$values")" \
+    "$(release_migration_shell_quote "$snapshot")" \
+    "$(release_migration_shell_quote "$artifact")"
+}
+
+release_migration_claim_recovery_command() {
+  local holder=$1 source_flag=
+  $release_sources_from_git && source_flag="--release-sources-from-git "
+  printf 'Only after confirming the prior command stopped, recover this claim with:\n'
+  printf '  mise run production-k3d %srelease-migration-recover-claim %s %s %s %s %s\n' \
+    "$source_flag" \
+    "$(release_migration_shell_quote "$values")" \
+    "$(release_migration_shell_quote "$snapshot")" \
+    "$(release_migration_shell_quote "$artifact")" \
+    "$(release_migration_shell_quote "$holder")" \
+    "$(release_migration_shell_quote "RECOVER-$holder")"
+}
+
+release_migration_start_command() {
+  local source_flag=
+  $release_sources_from_git && source_flag="--release-sources-from-git "
+  printf 'Next: mise run production-k3d %srelease-start %s %s %s\n' \
+    "$source_flag" \
+    "$(release_migration_shell_quote "$values")" \
+    "$(release_migration_shell_quote "$snapshot")" \
+    "$(release_migration_shell_quote "$artifact")"
+}
+
+release_migration_safe_inspection() {
+  local job=${1:-}
+  printf 'Safe inspection only; do not retry, restore, start workloads, or remove the access barrier.\n' >&2
+  printf '  kubectl --context %s --namespace kube-system get lease recipe-db-deploy -o yaml\n' \
+    "$(release_migration_shell_quote "$context")" >&2
+  printf '  kubectl --context %s --namespace kube-system get lease recipe-db-migration -o yaml\n' \
+    "$(release_migration_shell_quote "$context")" >&2
+  if [[ -n $job ]]; then
+    printf '  kubectl --context %s --namespace %s describe job %s\n' \
+      "$(release_migration_shell_quote "$context")" \
+      "$(release_migration_shell_quote "$namespace")" \
+      "$(release_migration_shell_quote "$job")" >&2
+    printf '  kubectl --context %s --namespace %s get pods -l job-name=%s -o wide\n' \
+      "$(release_migration_shell_quote "$context")" \
+      "$(release_migration_shell_quote "$namespace")" \
+      "$(release_migration_shell_quote "$job")" >&2
+    printf '  kubectl --context %s --namespace %s logs job/%s\n' \
+      "$(release_migration_shell_quote "$context")" \
+      "$(release_migration_shell_quote "$namespace")" \
+      "$(release_migration_shell_quote "$job")" >&2
+  fi
+}
+
+release_migration_claim_acquire() {
+  local current holder
+  release_migration_claim_holder="$backup_id-$BASHPID-$RANDOM"
+  jq -n --arg holder "$release_migration_claim_holder" --arg candidate "$artifact" \
+    '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+      metadata:{name:"recipe-db-migration",namespace:"kube-system",
+        labels:{"app.kubernetes.io/part-of":"recipe-db"},
+        annotations:{"recipe-db/release":$candidate}},
+      spec:{holderIdentity:$holder}}' > "$work/migration-claim.json"
+  if ! cluster_operation_lock_kubectl create -f "$work/migration-claim.json" > /dev/null 2>&1; then
+    printf 'production: another migration command owns the atomic cluster claim\n' >&2
+    if current=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+      && [[ -n $current ]] \
+      && jq -e --arg candidate "$artifact" '
+        .metadata.namespace == "kube-system" and .metadata.name == "recipe-db-migration"
+        and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+        and .metadata.annotations["recipe-db/release"] == $candidate
+        and (.spec.holderIdentity | type == "string" and length > 0)
+      ' <<< "$current" > /dev/null; then
+      holder=$(jq -r '.spec.holderIdentity' <<< "$current")
+      printf 'The claim may be recovered only after confirming its command process has stopped.\n' >&2
+      release_migration_claim_recovery_command "$holder" >&2
+    fi
+    release_migration_safe_inspection
+    production_fail "inspect the recipe-db-migration Lease; do not recover it while its command process is active"
+  fi
+  release_migration_claimed=true
+}
+
+release_migration_release_claim() {
+  local expected=${1:-$release_migration_claim_holder}
+  local expected_uid=${2:-} expected_resource_version=${3:-} current
+  current=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+    || return 1
+  if [[ -z $current ]]; then
+    release_migration_claimed=false
+    return 0
+  fi
+  jq -e --arg holder "$expected" --arg artifact "$artifact" \
+    --arg expectedUid "$expected_uid" --arg expectedResourceVersion "$expected_resource_version" '
+    .metadata.namespace == "kube-system" and .metadata.name == "recipe-db-migration"
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/release"] == $artifact
+    and .spec.holderIdentity == $holder
+    and ($expectedUid == "" or .metadata.uid == $expectedUid)
+    and ($expectedResourceVersion == "" or .metadata.resourceVersion == $expectedResourceVersion)
+    and (.metadata.uid | type == "string" and length > 0)
+    and (.metadata.resourceVersion | type == "string" and length > 0)
+  ' <<< "$current" > /dev/null || return 1
+  jq '{apiVersion:"v1",kind:"DeleteOptions",
+    preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' \
+    <<< "$current" > "$work/migration-claim-delete.json" || return 1
+  cluster_operation_lock_kubectl delete \
+    --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-migration \
+    -f "$work/migration-claim-delete.json" > /dev/null || return 1
+  release_migration_claimed=false
+}
+
+release_migration_recover_claim() {
+  local candidate=$2 expected_holder=$3 confirmation=$4 current
+  [[ -n $expected_holder && $confirmation == "RECOVER-$expected_holder" ]] \
+    || production_fail "migration claim recovery requires the exact holder and RECOVER-<holder> confirmation"
   release_load_operation "$1" "$candidate"
-  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "candidate-staged/candidate-staged" ]] \
-    || production_fail "migration handoff requires the staged candidate"
-  release_require_lease_phase candidate-staged
-  jq -e '.migrationResult == null' "$snapshot/backup-state.json" > /dev/null \
-    || production_fail "a migration result is already recorded and cannot be replaced"
-  [[ $outcome == migration-succeeded || $outcome == no-migration-required ]] \
-    || production_fail "migration outcome must be migration-succeeded or no-migration-required"
-  [[ $confirmation == "RECORD-$outcome-$backup_id" ]] \
-    || production_fail "migration handoff requires RECORD-<outcome>-<holder> confirmation"
+  release_migration_require_staged "$candidate"
+  current=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+    || production_fail "cannot inspect the migration command claim"
+  [[ -n $current ]] || production_fail "no migration command claim exists"
+  jq -e --arg holder "$expected_holder" --arg candidate "$candidate" '
+    .metadata.namespace == "kube-system" and .metadata.name == "recipe-db-migration"
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/release"] == $candidate
+    and .spec.holderIdentity == $holder
+    and (.metadata.uid | type == "string" and length > 0)
+    and (.metadata.resourceVersion | type == "string" and length > 0)
+  ' <<< "$current" > /dev/null \
+    || production_fail "migration command claim identity does not match the confirmed holder and candidate"
+  release_migration_claim_holder=$expected_holder
+  release_migration_release_claim "$expected_holder" \
+    "$(jq -r '.metadata.uid' <<< "$current")" \
+    "$(jq -r '.metadata.resourceVersion' <<< "$current")" \
+    || production_fail "could not safely recover the migration command claim"
+  printf 'production: abandoned migration command claim recovered; no migration state or Job was changed\n'
+  release_migration_next_command release-migration-status
+}
+
+release_migration_require_staged() {
+  local candidate=$1
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "candidate-staged/candidate-staged" ||
+  $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "recovery-required/migration-failed" ||
+  $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "recovery-required/migration-uncertain" ]] \
+    || production_fail "migration commands require a staged candidate with stopped workloads"
+  jq -e '.migrationResult == null or .migrationResult.artifact != null' \
+    "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "migration state is malformed"
   release_assert_candidate "$candidate"
   release_assert_staged_workloads
+  release_require_lease_phase candidate-staged migration-planned migration-activation-intent \
+    migration-running migration-transition-recorded migration-succeeded no-migration-required \
+    migration-failed migration-uncertain migration-result-recorded
+}
+
+release_migration_load_metadata() {
+  local candidate=$1
+  jq -e '.schemaVersion == 2 and (.migrations | type == "array")' \
+    "$work/pulled/release.json" > /dev/null \
+    || production_fail "migration execution requires schema-2 candidate metadata; missing migration metadata cannot prove no work is required"
+  project_metadata_to_jsonl "$release_root" "$work/migration-projects.jsonl" \
+    || production_fail "candidate storage-version requirements cannot be read from its pinned source"
+  jq -s -e '
+    [.[] | select(.backupRole == "authoritative-read-only" or .backupRole == "cleanup-participant")] as $owners
+    | ($owners | length) > 0
+      and all($owners[];
+        (.storageVersion.value | type == "number" and floor == . and . > 0)
+        and (.backupData | type == "object")
+        and (.name | type == "string" and test("^[a-z][a-z0-9-]*$")))
+      and ([$owners[].name] | unique | length) == ($owners | length)
+  ' "$work/migration-projects.jsonl" > /dev/null \
+    || production_fail "candidate is missing a valid storage-version requirement for a stateful service"
+  jq -cs '
+    [.[] | select(.backupRole == "authoritative-read-only" or .backupRole == "cleanup-participant")
+      | {service:.name,role:.backupRole,requiredVersion:.storageVersion.value}]
+    | sort_by(.service)
+  ' "$work/migration-projects.jsonl" > "$work/migration-owners.json"
+  [[ -s $work/migration-owners.json ]] \
+    || production_fail "candidate has no declared stateful storage owners"
+}
+
+release_migration_assert_no_storage_pods() {
+  kube get pods -o json > "$work/migration-pods.json" \
+    || production_fail "cannot inspect storage mounts before migration access"
+  jq -e --slurpfile owners "$work/migration-owners.json" '
+    all(.items[];
+      all(.spec.volumes[]?;
+        .persistentVolumeClaim.claimName as $claim
+        | any($owners[0][]; .service == $claim) | not))
+  ' "$work/migration-pods.json" > /dev/null \
+    || production_fail "a worker still mounts service storage; refuse inspection or migration access"
+}
+
+release_migration_read_version() {
+  local service=$1 pod output probe_error='' created=false
+  pod="migration-version-$$-$RANDOM"
+  # shellcheck disable=SC2016
+  local probe_command='
+    if [ -L /data/storage-version ]; then echo "invalid storage-version marker" >&2; exit 2; fi
+    if [ ! -e /data/storage-version ]; then printf "MISSING\n"; exit 0; fi
+    if [ ! -f /data/storage-version ]; then echo "invalid storage-version marker" >&2; exit 2; fi
+    version=$(cat /data/storage-version)
+    [ "$(wc -l < /data/storage-version)" -eq 1 ] || { echo "invalid storage-version marker" >&2; exit 2; }
+    case "$version" in ""|0|0*|*[!0-9]*) echo "invalid storage-version marker" >&2; exit 2 ;; esac
+    printf "%s\n" "$version"
+  '
+  jq -n --arg name "$pod" --arg namespace "$namespace" --arg service "$service" \
+    --arg image "$(jq -r '.infrastructure.maintenance' "$work/config.json")" \
+    --arg command "$probe_command" --argjson deadline "$timeout" \
+    --argjson resources "$(jq -c '.resources' "$work/config.json")" '
+    {
+      apiVersion:"v1",kind:"Pod",
+      metadata:{name:$name,namespace:$namespace,
+        labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"migration-inspection"}},
+      spec:{
+        restartPolicy:"Never",activeDeadlineSeconds:$deadline,automountServiceAccountToken:false,
+        containers:[{name:"inspect-version",image:$image,imagePullPolicy:"IfNotPresent",
+          command:["/bin/sh","-ec",$command],resources:$resources,
+          volumeMounts:[{name:"data",mountPath:"/data",readOnly:true}],
+          securityContext:{readOnlyRootFilesystem:true}}],
+        volumes:[{name:"data",persistentVolumeClaim:{claimName:$service,readOnly:true}}]
+      }
+    }' > "$work/migration-version-pod.json"
+  release_migration_assert_no_storage_pods
+  if ! kube create -f "$work/migration-version-pod.json" > /dev/null; then
+    printf 'production: could not create read-only storage-version inspection Pod for %s\n' "$service" >&2
+    release_migration_safe_inspection
+    return 1
+  fi
+  created=true
+  if ! kube wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" \
+    --timeout="${timeout}s" > /dev/null; then
+    probe_error="read-only storage-version probe failed or timed out for $service"
+  else
+    output=$(kube logs "$pod" 2> "$work/migration-version-logs-error") \
+      || probe_error="could not read the private storage-version probe result for $service"
+  fi
+  if $created; then
+    kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null \
+      || probe_error="could not terminate the storage-version inspection Pod for $service"
+    backup_wait_pod_gone "$pod" \
+      || probe_error="storage-version inspection Pod for $service may still mount storage"
+  fi
+  if [[ -n $probe_error ]]; then
+    printf 'production: %s\n' "$probe_error" >&2
+    release_migration_safe_inspection
+    return 1
+  fi
+  if [[ $output == MISSING ]]; then
+    printf 'production: %s storage has no version marker; no-migration outcome is not established\n' "$service" >&2
+    release_migration_safe_inspection
+    return 1
+  fi
+  [[ $output =~ ^[1-9][0-9]*$ ]] || {
+    printf 'production: %s storage-version marker is malformed or unreadable\n' "$service" >&2
+    release_migration_safe_inspection
+    return 1
+  }
+  printf '%s\n' "$output"
+}
+
+release_migration_read_versions() {
+  local service version
+  : > "$work/migration-versions.jsonl"
+  while IFS= read -r service; do
+    version=$(release_migration_read_version "$service") \
+      || production_fail "could not safely inspect actual storage version for $service"
+    jq -cn --arg service "$service" --argjson version "$version" \
+      '{service:$service,currentVersion:$version}' >> "$work/migration-versions.jsonl"
+  done < <(jq -r '.[].service' "$work/migration-owners.json")
+  jq -s '.' "$work/migration-versions.jsonl" > "$work/migration-versions.json"
+}
+
+release_migration_load_jobs() {
+  local migration name matches allow_missing=${1:-false}
+  kube get jobs -l "recipe-db/revision=$revision,recipe-db/migration=staged" -o json \
+    > "$work/migration-jobs.json" \
+    || production_fail "cannot inspect staged candidate migration Jobs"
+  while IFS= read -r migration; do
+    name="migration-${revision:0:12}-$(jq -r '.image[-40:]' <<< "$migration")"
+    matches=$(jq -c --arg name "$name" '[.items[] | select(.metadata.name == $name)]' \
+      "$work/migration-jobs.json")
+    if [[ $(jq 'length' <<< "$matches") == 0 && $allow_missing == true ]]; then
+      continue
+    fi
+    jq -e --arg name "$name" --arg artifact "$artifact" --arg revision "$revision" \
+      --arg namespace "$namespace" --argjson migration "$migration" \
+      --argjson resources "$(jq -c '.resources' "$work/config.json")" '
+      def expected_labels: {
+        "app.kubernetes.io/part-of":"recipe-db",
+        "app.kubernetes.io/name":"migration",
+        "recipe-db/migration":"staged",
+        "recipe-db/revision":$revision
+      };
+      def generated_job_selector:
+        . as $job
+        | ($job.metadata.uid | type == "string" and length > 0) as $has_uid
+        | (.spec.selector.matchLabels // {}) as $selector
+        | ($has_uid and ($selector | type == "object" and length > 0)
+          and (all($selector | to_entries[];
+            ((.key == "batch.kubernetes.io/controller-uid" or .key == "controller-uid")
+              and .value == $job.metadata.uid)
+            or ((.key == "batch.kubernetes.io/job-name" or .key == "job-name")
+              and .value == $job.metadata.name)))
+          and any($selector | keys[];
+            . == "batch.kubernetes.io/controller-uid" or . == "controller-uid")
+          and all($selector | to_entries[];
+            .value == $job.spec.template.metadata.labels[.key]));
+      def normalized_spec:
+        del(.suspend,.selector,.parallelism,.completions,.completionMode,.manualSelector,
+          .podReplacementPolicy)
+        | .template.metadata.labels |= del(
+            ."batch.kubernetes.io/controller-uid",
+            ."batch.kubernetes.io/job-name",
+            ."controller-uid",
+            ."job-name"
+          )
+        | .template.spec |= del(
+            .serviceAccountName,.dnsPolicy,.schedulerName,
+            .terminationGracePeriodSeconds,.enableServiceLinks
+          )
+        | .template.spec.containers |= map(del(
+            .imagePullPolicy,.terminationMessagePath,.terminationMessagePolicy
+          ));
+      length == 1
+      and .[0].metadata.name == $name
+      and .[0].metadata.namespace == $namespace
+      and .[0].metadata.labels == expected_labels
+      and .[0].metadata.annotations == {
+        "recipe-db/release":$artifact,
+        "recipe-db/revision":$revision,
+        "recipe-db/migration-service":$migration.service,
+        "recipe-db/migration-from-version":($migration.fromVersion | tostring),
+        "recipe-db/migration-to-version":($migration.toVersion | tostring)
+      }
+      and (.[0] | generated_job_selector)
+      and .[0].spec.activeDeadlineSeconds == $migration.timeoutSeconds
+      and .[0].spec.backoffLimit == 0
+      and ((.[0].spec.parallelism // 1) == 1)
+      and ((.[0].spec.completions // 1) == 1)
+      and ((.[0].spec.completionMode // "NonIndexed") == "NonIndexed")
+      and ((.[0].spec.manualSelector // false) == false)
+      and (.[0].spec.podReplacementPolicy == null
+        or .[0].spec.podReplacementPolicy == "TerminatingOrFailed"
+        or .[0].spec.podReplacementPolicy == "Failed")
+      and (. [0].spec.suspend == true or .[0].spec.suspend == false)
+      and (. [0].spec.template.spec.serviceAccountName == null
+        or .[0].spec.template.spec.serviceAccountName == "default")
+      and (. [0].spec.template.spec.dnsPolicy == null
+        or .[0].spec.template.spec.dnsPolicy == "ClusterFirst")
+      and (. [0].spec.template.spec.schedulerName == null
+        or .[0].spec.template.spec.schedulerName == "default-scheduler")
+      and (. [0].spec.template.spec.terminationGracePeriodSeconds == null
+        or .[0].spec.template.spec.terminationGracePeriodSeconds == 30)
+      and (. [0].spec.template.spec.enableServiceLinks == null
+        or .[0].spec.template.spec.enableServiceLinks == true)
+      and all(. [0].spec.template.spec.containers[];
+        (.imagePullPolicy == null or .imagePullPolicy == "IfNotPresent")
+        and (.terminationMessagePath == null or .terminationMessagePath == "/dev/termination-log")
+        and (.terminationMessagePolicy == null or .terminationMessagePolicy == "File"))
+      and (.[0].spec | normalized_spec) == {
+        activeDeadlineSeconds:$migration.timeoutSeconds,
+        backoffLimit:0,
+        template:{
+          metadata:{labels:expected_labels},
+          spec:{
+            restartPolicy:"Never",
+            automountServiceAccountToken:false,
+            containers:[{
+              name:"migration",image:$migration.image,resources:$resources,
+              volumeMounts:[{name:"data",mountPath:"/data"}]
+            }],
+            volumes:[{name:"data",persistentVolumeClaim:{claimName:$migration.service}}]
+          }
+        }
+      }
+    ' <<< "$matches" > /dev/null \
+      || production_fail "staged migration Job $name does not match the candidate and pinned transition"
+  done < <(jq -c '.migrations[]' "$work/pulled/release.json")
+}
+
+release_migration_discover() {
+  local owner service role required current from matches migration image job
+  release_migration_load_metadata "$artifact"
+  release_migration_assert_no_storage_pods
+  release_migration_read_versions
+  release_migration_load_jobs
+  jq -e --argjson migrations "$(jq -c '.migrations' "$work/pulled/release.json")" '
+    (.items | length) == ($migrations | length)
+  ' "$work/migration-jobs.json" > /dev/null \
+    || production_fail "staged migration Jobs do not exactly match the candidate inventory"
+  : > "$work/migration-plan.jsonl"
+  while IFS= read -r owner; do
+    service=$(jq -r .service <<< "$owner")
+    role=$(jq -r .role <<< "$owner")
+    required=$(jq -r .requiredVersion <<< "$owner")
+    current=$(jq -er --arg service "$service" \
+      '.[] | select(.service == $service) | .currentVersion' "$work/migration-versions.json")
+    if ((current > required)); then
+      production_fail "$service storage version $current is newer than candidate requirement $required; downgrade is unsupported"
+    fi
+    from=$current
+    while ((from < required)); do
+      matches=$(jq -c --arg service "$service" --argjson from "$from" \
+        '[.migrations[] | select(.service == $service and .fromVersion == $from)]' \
+        "$work/pulled/release.json")
+      [[ $(jq 'length' <<< "$matches") == 1 ]] \
+        || production_fail "candidate has no unique migration path for $service from version $from to required version $required"
+      migration=$(jq -c '.[0]' <<< "$matches")
+      [[ $(jq -r .toVersion <<< "$migration") == "$((from + 1))" ]] \
+        || production_fail "candidate migration for $service is not an adjacent version transition"
+      (($(jq -r .toVersion <<< "$migration") <= required)) \
+        || production_fail "candidate migration for $service overshoots required version $required"
+      [[ $role == authoritative-read-only ]] \
+        || production_fail "$service requires a migration but is not an authoritative storage owner"
+      image=$(jq -r .image <<< "$migration")
+      job="migration-${revision:0:12}-${image: -40}"
+      jq -cn --arg service "$service" --arg image "$image" --arg job "$job" \
+        --argjson from "$from" --argjson to "$(jq -r .toVersion <<< "$migration")" \
+        '{service:$service,fromVersion:$from,toVersion:$to,image:$image,job:$job,status:"planned"}' \
+        >> "$work/migration-plan.jsonl"
+      from=$(jq -r .toVersion <<< "$migration")
+    done
+  done < <(jq -c '.[]' "$work/migration-owners.json")
+  jq -s '.' "$work/migration-plan.jsonl" > "$work/migration-plan.json"
+  jq -n --slurpfile versions "$work/migration-versions.json" \
+    --slurpfile owners "$work/migration-owners.json" \
+    --slurpfile transitions "$work/migration-plan.json" '
+    {versions:[$owners[0][] as $owner |
+      ($versions[0][] | select(.service == $owner.service)) as $actual |
+      {service:$owner.service,currentVersion:$actual.currentVersion,
+       requiredVersion:$owner.requiredVersion}],
+     transitions:$transitions[0]}
+  ' > "$work/migration-discovery.json"
+}
+
+release_migration_verify_handoff() {
+  local candidate=$1
+  jq -e --arg candidate "$candidate" '
+    .migrationResult.artifact == $candidate
+    and .migrationExecution.candidate == $candidate
+    and ((.migrationResult.outcome == "migration-succeeded"
+        and .migrationExecution.status == "migration-succeeded")
+      or (.migrationResult.outcome == "no-migration-required"
+        and .migrationExecution.status == "no-migration-required"))
+    and all(.migrationExecution.transitions[]; .status == "completed")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "saved migration handoff is incomplete or does not match the candidate"
+  release_migration_discover
+  jq -e '.transitions | length == 0' "$work/migration-discovery.json" > /dev/null \
+    || production_fail "actual storage versions do not match the saved migration handoff"
+}
+
+release_migration_show_plan() {
+  local i=0 entry
+  while IFS= read -r entry; do
+    printf 'Service %s: current=%s required=%s\n' \
+      "$(jq -r .service <<< "$entry")" \
+      "$(jq -r .currentVersion <<< "$entry")" \
+      "$(jq -r .requiredVersion <<< "$entry")"
+  done < <(jq -c '.versions[]' "$work/migration-discovery.json")
+  if [[ $(jq '.transitions | length' "$work/migration-discovery.json") == 0 ]]; then
+    printf 'Required transitions: none\n'
+  else
+    printf 'Required transitions (deterministic service/version order):\n'
+    while IFS= read -r entry; do
+      printf '  %d. %s %s->%s image=%s Job=%s\n' "$((i + 1))" \
+        "$(jq -r .service <<< "$entry")" \
+        "$(jq -r .fromVersion <<< "$entry")" \
+        "$(jq -r .toVersion <<< "$entry")" \
+        "$(jq -r .image <<< "$entry")" \
+        "$(jq -r .job <<< "$entry")"
+      ((i += 1))
+    done < <(jq -c '.transitions[]' "$work/migration-discovery.json")
+  fi
+}
+
+release_migration_plan() {
+  local candidate=$2
+  release_load_operation "$1" "$candidate"
+  release_migration_require_staged "$candidate"
+  if jq -e '.migrationExecution != null' "$snapshot/backup-state.json" > /dev/null \
+    || jq -e '.migrationResult != null' "$snapshot/backup-state.json" > /dev/null; then
+    printf 'production: migration execution already exists; plan is read-only and will not replace it\n'
+    release_migration_status "$1" "$candidate"
+    return
+  fi
+  release_migration_discover
+  printf 'production: read-only migration plan for %s\n' "$candidate"
+  release_migration_show_plan
+  printf 'Next invocation: persist intent, verify no-migration, or activate at most the first required Job.\n'
+  release_migration_next_command release-migration-next
+}
+
+release_migration_find_job() {
+  jq -ce --arg name "$1" '[.items[] | select(.metadata.name == $name)]
+    | if length == 1 then .[0] else error("expected exactly one candidate Job") end' \
+    "$work/migration-jobs.json"
+}
+
+release_migration_job_is_suspended() {
+  [[ $(jq -r '.spec.suspend' <<< "$1") == true ]]
+}
+
+release_migration_job_condition() {
+  jq -r '
+    if (.status.failed // 0) > 0
+      or any(.status.conditions[]?; .type == "Failed" and .status == "True") then "failed"
+    elif (.status.succeeded // 0) > 0
+      or any(.status.conditions[]?; .type == "Complete" and .status == "True") then "complete"
+    elif (.status.active // 0) > 0 then "running"
+    else "pending"
+    end
+  ' <<< "$1"
+}
+
+release_migration_worker_pods() {
+  kube get pods -l "job-name=$1" -o json > "$work/migration-worker-pods.json" \
+    || production_fail "cannot inspect migration worker Pods for Job $1"
+}
+
+release_migration_wait_workers_gone() {
+  local job=$1 deadline=$((SECONDS + timeout))
+  while ((SECONDS < deadline)); do
+    release_migration_worker_pods "$job"
+    if jq -e '(.items | length) == 0' "$work/migration-worker-pods.json" > /dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  printf 'production: migration worker Pods for %s may still access storage\n' "$job" >&2
+  return 1
+}
+
+release_migration_remove_completed_workers() {
+  local job=$1
+  release_migration_worker_pods "$job"
+  jq -e 'all(.items[]; .status.phase == "Succeeded"
+    and all(.status.containerStatuses[]?; .state.terminated != null))' \
+    "$work/migration-worker-pods.json" > /dev/null \
+    || production_fail "migration Job $job completed but a worker may still be using storage"
+  if jq -e '(.items | length) > 0' "$work/migration-worker-pods.json" > /dev/null; then
+    kube delete pods -l "job-name=$job" --wait=true --timeout="${timeout}s" > /dev/null \
+      || production_fail "could not remove terminated workers for completed Job $job"
+  fi
+  release_migration_wait_workers_gone "$job" \
+    || production_fail "completed migration Job $job still has storage-using workers"
+}
+
+release_migration_record_failure() {
+  local job=$1 service=$2 from=$3 to=$4 detail=$5
+  release_mutation_started=true
+  release_state_write recovery-required migration-failed \
+    "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+      --arg job "$job" --arg service "$service" --arg detail "$detail" \
+      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --argjson from "$from" --argjson to "$to" \
+      --argjson index "$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")" '
+      {migrationExecution:{
+        status:"failed",failedTransition:{service:$service,fromVersion:$from,toVersion:$to,job:$job},
+        transitions:[$state[0].migrationExecution.transitions | to_entries[] |
+          if .key == $index then .value + {status:"failed"} else .value end],
+        failureDetail:$detail,failedAt:$recordedAt}}')" \
+    || printf 'production: could not persist migration failure details\n' >&2
+  cluster_operation_lock_update migration-failed \
+    || printf 'production: could not mark the retained Lease as migration-failed\n' >&2
+  printf 'production: migration halted for %s %s->%s; Job=%s; reason=%s; conversion may have modified data; no retry or startup is authorized\n' \
+    "$service" "$from" "$to" "$job" "$detail" >&2
+  release_migration_safe_inspection "$job"
+}
+
+release_migration_record_uncertain() {
+  local job=$1 service=$2 from=$3 to=$4 detail=$5
+  release_mutation_started=true
+  release_state_write recovery-required migration-uncertain \
+    "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+      --arg job "$job" --arg service "$service" --arg detail "$detail" \
+      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --argjson from "$from" --argjson to "$to" \
+      --argjson index "$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")" '
+      {migrationExecution:{
+        status:"uncertain",uncertainTransition:{service:$service,fromVersion:$from,toVersion:$to,job:$job},
+        transitions:[$state[0].migrationExecution.transitions | to_entries[] |
+          if .key == $index then .value + {status:"uncertain"} else .value end],
+        failureDetail:$detail,observedAt:$recordedAt}}')" \
+    || printf 'production: could not persist migration uncertainty details\n' >&2
+  cluster_operation_lock_update migration-uncertain \
+    || printf 'production: could not mark the retained Lease as migration-uncertain\n' >&2
+  printf 'production: migration execution for %s %s->%s is uncertain; Job=%s; reason=%s; data may have changed; do not retry, restore, or start workloads\n' \
+    "$service" "$from" "$to" "$job" "$detail" >&2
+  release_migration_safe_inspection "$job"
+}
+
+release_migration_save_execution() {
+  local candidate=$1
+  release_state_write candidate-staged candidate-staged \
+    "$(jq -cn --slurpfile discovery "$work/migration-discovery.json" \
+      --arg candidate "$candidate" --arg revision "$revision" \
+      --arg plannedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+      {migrationExecution:{
+        candidate:$candidate,revision:$revision,plannedAt:$plannedAt,
+        versions:$discovery[0].versions,transitions:$discovery[0].transitions,
+        currentIndex:0,
+        status:(if ($discovery[0].transitions | length) == 0
+          then "no-migration-required" else "planned" end)}}')" \
+    || return 1
+  cluster_operation_lock_update migration-planned || return 1
+}
+
+release_migration_recommend_after_action() {
+  local remaining=$1
+  printf 'production: %s\n' "$2"
+  if ((remaining > 0)); then
+    printf 'The next invocation will reconcile or start at most one transition; no automatic continuation is running.\n'
+    release_migration_next_command release-migration-next
+  else
+    printf 'The verified handoff leaves all workloads stopped and access blocked. Start is a separate guarded action.\n'
+    release_migration_start_command
+  fi
+}
+
+release_migration_recommend_status() {
+  printf 'production: %s\n' "$1"
+  printf 'Kubernetes continues the same Job independently; status is observational and does not acknowledge completion.\n'
+  release_migration_next_command release-migration-status
+}
+
+release_migration_compare_remaining_plan() {
+  local start=$1 saved live
+  saved=$(jq -c --argjson start "$start" \
+    '[.migrationExecution.transitions[$start:][] |
+      {service,fromVersion,toVersion,image,job}]' "$snapshot/backup-state.json")
+  live=$(jq -c '[.transitions[] | {service,fromVersion,toVersion,image,job}]' \
+    "$work/migration-discovery.json")
+  [[ $saved == "$live" ]] \
+    || production_fail "actual storage versions no longer match the saved migration plan; refusing to create a new execution path"
+}
+
+release_migration_activate() {
+  local index=$1 transition=$2 job=$3 job_json pods
+  local service from to
+  service=$(jq -r .service <<< "$transition")
+  from=$(jq -r .fromVersion <<< "$transition")
+  to=$(jq -r .toVersion <<< "$transition")
+  release_assert_staged_workloads
+  release_migration_assert_no_storage_pods
+  release_migration_worker_pods "$job"
+  [[ $(jq '.items | length' "$work/migration-worker-pods.json") == 0 ]] \
+    || production_fail "migration Job $job already has worker Pods; refusing a second activation"
+  release_migration_job_is_suspended "$(release_migration_find_job "$job")" \
+    || production_fail "migration Job $job is not suspended before activation"
+
   release_mutation_started=true
   release_state_write candidate-staged candidate-staged \
-    "$(jq -cn --arg outcome "$outcome" --arg artifact "$candidate" \
-      --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{migrationResult:{outcome:$outcome,artifact:$artifact,recordedAt:$recordedAt}}')" \
+    "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+      --argjson index "$index" --arg job "$job" \
+      --arg intentAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+      {migrationExecution:{
+        status:"activation-intent",currentIndex:$index,
+        activationIntent:{job:$job,recordedAt:$intentAt},
+        transitions:[$state[0].migrationExecution.transitions | to_entries[] |
+          if .key == $index then .value + {status:"activation-intent"} else .value end]}}')" \
     || return 1
-  cluster_operation_lock_update migration-result-recorded || return 1
-  printf 'production: migration handoff recorded as %s; candidate remains stopped and access remains blocked\n' "$outcome"
+  cluster_operation_lock_update migration-activation-intent || return 1
+  jq --argjson index "$index" '.migrationExecution.transitions[$index]' \
+    "$snapshot/backup-state.json" > "$work/migration-current-transition.json"
+  if kube patch job "$job" --type=merge -p '{"spec":{"suspend":false}}' > /dev/null; then
+    cluster_operation_lock_update migration-running || return 1
+    release_migration_recommend_status \
+      "activated only $service $from->$to as Job $job"
+    return 0
+  fi
+
+  if ! kube get job "$job" -o json > "$work/migration-activation-observed.json"; then
+    release_migration_record_uncertain "$job" "$service" "$from" "$to" \
+      "activation API result and Job state could not be reconciled"
+    return 1
+  fi
+  job_json=$(< "$work/migration-activation-observed.json")
+  if ! release_migration_job_is_suspended "$job_json"; then
+    cluster_operation_lock_update migration-running || return 1
+    release_migration_recommend_status \
+      "activation response was uncertain, but the same Job $job is unsuspended; no other Job was activated"
+    return 0
+  fi
+  release_migration_worker_pods "$job"
+  pods=$(jq '.items | length' "$work/migration-worker-pods.json")
+  if [[ $pods == 0 ]] && [[ $(release_migration_job_condition "$job_json") == pending ]]; then
+    printf 'production: Job %s is confirmed still suspended with no workers; activation did not start and may be retried by the next command\n' \
+      "$job" >&2
+    release_migration_safe_inspection "$job"
+    return 1
+  fi
+  release_migration_record_uncertain "$job" "$service" "$from" "$to" \
+    "activation failed and Kubernetes state does not prove execution never started"
+  return 1
+}
+
+release_migration_acknowledge_success() {
+  local index=$1 transition=$2 job service from to outcome
+  service=$(jq -r .service <<< "$transition")
+  from=$(jq -r .fromVersion <<< "$transition")
+  to=$(jq -r .toVersion <<< "$transition")
+  job=$(jq -r .job <<< "$transition")
+  release_migration_remove_completed_workers "$job"
+  release_migration_discover
+  jq -e --arg service "$service" --argjson to "$to" '
+    any(.versions[]; .service == $service and .currentVersion == $to
+      and .requiredVersion >= $to)
+  ' "$work/migration-discovery.json" > /dev/null \
+    || {
+      release_migration_record_uncertain "$job" "$service" "$from" "$to" \
+        "Job reported success but the actual target storage version was not confirmed"
+      return 1
+    }
+  release_migration_compare_remaining_plan "$((index + 1))"
+  if ((index + 1 == $(jq '.migrationExecution.transitions | length' "$snapshot/backup-state.json"))); then
+    jq -e '(.versions | length) > 0 and
+      all(.versions[]; .currentVersion == .requiredVersion)
+    ' "$work/migration-discovery.json" > /dev/null \
+      || {
+        release_migration_record_uncertain "$job" "$service" "$from" "$to" \
+          "final Job succeeded but not every required storage version was confirmed"
+        return 1
+      }
+    outcome='migration-succeeded'
+    release_state_write candidate-staged candidate-staged \
+      "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+        --argjson index "$((index + 1))" --arg outcome "$outcome" --arg artifact "$artifact" \
+        --arg job "$job" --arg service "$service" \
+        --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson from "$from" --argjson to "$to" '
+        {migrationExecution:{status:"migration-succeeded",currentIndex:$index,
+          transitions:[$state[0].migrationExecution.transitions | to_entries[] |
+            .value + {status:"completed"}],
+          completedAt:$recordedAt},
+         migrationResult:{outcome:$outcome,artifact:$artifact,recordedAt:$recordedAt,
+          lastJob:{job:$job,service:$service,fromVersion:$from,toVersion:$to}}}')" \
+      || return 1
+    cluster_operation_lock_update migration-result-recorded || return 1
+    release_migration_recommend_after_action 0 \
+      "verified Job $job completion, terminated workers, and every candidate storage version; recorded migration-succeeded"
+    return 0
+  fi
+  release_state_write candidate-staged candidate-staged \
+    "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+      --argjson index "$((index + 1))" --argjson completedIndex "$index" --arg job "$job" \
+      --arg service "$service" --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --argjson from "$from" --argjson to "$to" '
+      {migrationExecution:{
+        currentIndex:$index,status:"transition-recorded",
+        transitions:[$state[0].migrationExecution.transitions | to_entries[] |
+          if .key == $completedIndex then .value + {status:"completed"} else .value end],
+        lastCompleted:{job:$job,service:$service,fromVersion:$from,toVersion:$to,
+          recordedAt:$recordedAt}}}')" \
+    || return 1
+  cluster_operation_lock_update migration-transition-recorded || return 1
+  release_migration_recommend_after_action 1 \
+    "verified and recorded only $service $from->$to; no following Job was started"
+}
+
+release_migration_next() {
+  local candidate=$2 execution_status index transition job job_json condition
+  local service from to count
+  release_load_operation "$1" "$candidate"
+  release_migration_require_staged "$candidate"
+  release_migration_claim_acquire
+
+  if jq -e '.migrationResult != null' "$snapshot/backup-state.json" > /dev/null; then
+    release_migration_verify_handoff "$candidate"
+    cluster_operation_lock_update migration-result-recorded \
+      || production_fail "saved migration outcome is verified but the Lease update failed; rerun next to reconcile it"
+    release_migration_recommend_after_action 0 \
+      "existing verified outcome $(jq -r .migrationResult.outcome "$snapshot/backup-state.json") was revalidated and the Lease handoff reconciled; no migration will be rerun"
+    return
+  fi
+
+  execution_status=$(jq -r '.migrationExecution.status // ""' "$snapshot/backup-state.json")
+  if [[ -z $execution_status ]]; then
+    release_migration_discover
+    release_migration_save_execution "$candidate"
+    execution_status=$(jq -r .migrationExecution.status "$snapshot/backup-state.json")
+    if [[ $execution_status == no-migration-required ]]; then
+      jq -e 'all(.versions[]; .currentVersion == .requiredVersion)' \
+        "$work/migration-discovery.json" > /dev/null \
+        || production_fail "no-migration outcome could not be explicitly verified"
+      release_state_write candidate-staged candidate-staged \
+        "$(jq -cn --arg candidate "$candidate" \
+          --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+          {migrationExecution:{status:"no-migration-required",verifiedAt:$recordedAt},
+           migrationResult:{outcome:"no-migration-required",artifact:$candidate,recordedAt:$recordedAt}}')" \
+        || return 1
+      cluster_operation_lock_update migration-result-recorded || return 1
+      release_migration_recommend_after_action 0 \
+        "explicitly verified every actual storage version and recorded no-migration-required"
+      return
+    fi
+  fi
+  if [[ -n $execution_status ]]; then
+    release_migration_load_metadata "$candidate"
+    release_migration_load_jobs true
+  fi
+
+  [[ $execution_status != failed && $execution_status != uncertain ]] \
+    || production_fail "migration is $execution_status; inspect the retained Job and recovery state; no retry or advancement is permitted"
+  if [[ $execution_status == no-migration-required ]]; then
+    release_migration_discover
+    jq -e '.transitions | length == 0 and
+      all(.versions[]; .currentVersion == .requiredVersion)' \
+      "$work/migration-discovery.json" > /dev/null \
+      || production_fail "saved no-migration plan no longer matches actual storage versions"
+    release_state_write candidate-staged candidate-staged \
+      "$(jq -cn --arg candidate "$candidate" \
+        --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        {migrationExecution:{status:"no-migration-required",verifiedAt:$recordedAt},
+         migrationResult:{outcome:"no-migration-required",artifact:$candidate,recordedAt:$recordedAt}}')" \
+      || return 1
+    cluster_operation_lock_update migration-result-recorded || return 1
+    release_migration_recommend_after_action 0 \
+      "reconnected, reverified every actual storage version, and recorded no-migration-required"
+    return
+  fi
+  index=$(jq -er '.migrationExecution.currentIndex' "$snapshot/backup-state.json")
+  count=$(jq '.migrationExecution.transitions | length' "$snapshot/backup-state.json")
+  if ((index >= count)); then
+    production_fail "migration state has no verified handoff; inspect the retained state and Lease"
+  fi
+  transition=$(jq -ce --argjson index "$index" \
+    '.migrationExecution.transitions[$index]' "$snapshot/backup-state.json")
+  service=$(jq -r .service <<< "$transition")
+  from=$(jq -r .fromVersion <<< "$transition")
+  to=$(jq -r .toVersion <<< "$transition")
+  job=$(jq -r .job <<< "$transition")
+  if ! job_json=$(release_migration_find_job "$job" 2> /dev/null); then
+    if [[ $(jq -r '.status' <<< "$transition") == planned ]]; then
+      release_migration_safe_inspection "$job"
+      production_fail "planned Job $job is missing; inspect staging and do not recreate it automatically"
+    fi
+    release_migration_record_uncertain "$job" "$service" "$from" "$to" \
+      "previously activated Job is missing; Jobs are never recreated after activation intent"
+    return 1
+  fi
+
+  condition=$(release_migration_job_condition "$job_json")
+  if [[ $(jq -r '.status' <<< "$transition") == planned &&
+  ($(jq -r '.spec.suspend' <<< "$job_json") != true ||
+  $condition != pending ||
+  $(jq -r '(.status.active // 0) + (.status.failed // 0) + (.status.succeeded // 0)' <<< "$job_json") != 0) ]]; then
+    release_migration_record_uncertain "$job" "$service" "$from" "$to" \
+      "Job state changed without a persisted activation intent"
+    return 1
+  fi
+
+  if [[ $condition == failed ]]; then
+    release_migration_record_failure "$job" "$service" "$from" "$to" \
+      "Kubernetes reports Job failure or activeDeadlineSeconds expiry; inspect worker termination before any recovery"
+    return 1
+  fi
+  if [[ $condition == complete ]]; then
+    jq -e 'any(.status.conditions[]?; .type == "Complete" and .status == "True")' \
+      <<< "$job_json" > /dev/null \
+      || production_fail "Job $job completion is not confirmed by Kubernetes"
+    release_migration_acknowledge_success "$index" "$transition"
+    return
+  fi
+
+  if [[ $(jq -r '.status' <<< "$transition") == planned ]]; then
+    release_migration_discover
+    release_migration_compare_remaining_plan "$index"
+    release_migration_activate "$index" "$transition" "$job"
+    return
+  fi
+
+  if [[ $(jq -r '.spec.suspend' <<< "$job_json") == true ]]; then
+    [[ $(jq -r '.status' <<< "$transition") == activation-intent ]] \
+      || production_fail "Job $job is suspended after a recorded activation; inspect rather than reactivating"
+    release_migration_discover
+    release_migration_compare_remaining_plan "$index"
+    release_migration_activate "$index" "$transition" "$job"
+    return
+  fi
+  release_migration_recommend_status \
+    "the same Job $job is $condition; no other transition was activated"
+}
+
+release_migration_status() {
+  local candidate=$2 status index count transition job job_json condition service from to claim
+  release_load_operation "$1" "$candidate"
+  release_migration_require_staged "$candidate"
+  claim=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+    || production_fail "cannot inspect the migration command claim"
+  if [[ -n $claim ]]; then
+    printf 'production: a migration command claim is held by %s; status will not recommend advancement\n' \
+      "$(jq -r '.spec.holderIdentity // "<unknown>"' <<< "$claim")"
+    if jq -e --arg candidate "$candidate" '
+      .metadata.namespace == "kube-system" and .metadata.name == "recipe-db-migration"
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.annotations["recipe-db/release"] == $candidate
+      and (.spec.holderIdentity | type == "string" and length > 0)
+    ' <<< "$claim" > /dev/null; then
+      release_migration_claim_recovery_command "$(jq -r .spec.holderIdentity <<< "$claim")"
+    fi
+    printf 'Safe inspection: kubectl --context %s --namespace kube-system get lease recipe-db-migration -o yaml\n' \
+      "$(release_migration_shell_quote "$context")"
+    return
+  fi
+  release_migration_load_metadata "$candidate"
+  release_migration_load_jobs true
+
+  if jq -e '.migrationResult != null' "$snapshot/backup-state.json" > /dev/null; then
+    release_migration_verify_handoff "$candidate"
+    printf 'production: recorded outcome=%s; all actual candidate storage versions still match\n' \
+      "$(jq -r .migrationResult.outcome "$snapshot/backup-state.json")"
+    if [[ $release_lease_phase == migration-result-recorded ]]; then
+      release_migration_recommend_after_action 0 "migration handoff is already recorded; no Job will be changed"
+    else
+      release_migration_recommend_after_action 1 \
+        "saved outcome is verified but the Lease handoff is not recorded; next will reconcile the Lease without changing a Job"
+    fi
+    return
+  fi
+  status=$(jq -r '.migrationExecution.status // ""' "$snapshot/backup-state.json")
+  if [[ -z $status ]]; then
+    printf 'production: no migration plan or execution is recorded; Jobs remain staged and suspended\n'
+    release_migration_next_command release-migration-plan
+    return
+  fi
+  if [[ $status == failed || $status == uncertain || $status == migration-failed ||
+    $status == migration-uncertain ]]; then
+    job=$(jq -r '.migrationExecution.failedTransition.job //
+      .migrationExecution.uncertainTransition.job // ""' "$snapshot/backup-state.json")
+    printf 'production: migration state=%s; last confirmed progress=%s\n' \
+      "$status" "$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")"
+    release_migration_safe_inspection "$job"
+    return
+  fi
+  index=$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")
+  count=$(jq '.migrationExecution.transitions | length' "$snapshot/backup-state.json")
+  printf 'production: plan status=%s; confirmed transitions=%s/%s\n' "$status" "$index" "$count"
+  if ((index >= count)); then
+    if [[ $status == no-migration-required ]]; then
+      printf 'production: explicit no-migration verification is not yet recorded\n'
+    else
+      printf 'production: no unrecorded transition remains; inspect the retained migration result\n'
+    fi
+    release_migration_next_command release-migration-next
+    return
+  fi
+  transition=$(jq -c --argjson index "$index" \
+    '.migrationExecution.transitions[$index]' "$snapshot/backup-state.json")
+  service=$(jq -r .service <<< "$transition")
+  from=$(jq -r .fromVersion <<< "$transition")
+  to=$(jq -r .toVersion <<< "$transition")
+  job=$(jq -r .job <<< "$transition")
+  if ! job_json=$(release_migration_find_job "$job" 2> /dev/null); then
+    printf 'production: planned Job %s is missing; execution state is not safe to advance\n' "$job"
+    release_migration_safe_inspection "$job"
+    return
+  fi
+  condition=$(release_migration_job_condition "$job_json")
+  printf 'production: current transition %s %s->%s Job=%s observed=%s status=%s\n' \
+    "$service" "$from" "$to" "$job" "$condition" \
+    "$(jq -r '.status' <<< "$transition")"
+  case "$condition" in
+    failed)
+      release_migration_safe_inspection "$job"
+      ;;
+    complete)
+      printf 'production: completion is not yet acknowledged; next will verify the marker and record only this transition\n'
+      release_migration_next_command release-migration-next
+      ;;
+    running | pending)
+      if [[ $(jq -r '.spec.suspend' <<< "$job_json") == true ]]; then
+        case "$status" in
+          planned | no-migration-required | transition-recorded | activation-intent)
+            printf 'production: Job %s is confirmed suspended; next may start only this transition\n' "$job"
+            release_migration_next_command release-migration-next
+            ;;
+          *)
+            printf 'production: unexpected suspended Job state; no advancement is safe\n'
+            release_migration_safe_inspection "$job"
+            ;;
+        esac
+      else
+        release_migration_recommend_status \
+          "asynchronous execution continues in Kubernetes; confirmed progress remains $index/$count"
+      fi
+      ;;
+  esac
+}
+
+release_record_migration_result() {
+  production_fail "manual migration outcome assertions are disabled; use release-migration-plan, release-migration-next, and release-migration-status"
 }
 
 release_start() {
@@ -1884,6 +2889,7 @@ release_start() {
     || production_fail "candidate startup requires a recorded migration or no-migration outcome"
   release_assert_candidate "$candidate"
   release_assert_staged_workloads
+  release_migration_verify_handoff "$candidate"
   nats_replicas=$(jq -er '.candidate.workloads[] | select(.name == "nats") | .replicas' \
     "$snapshot/backup-state.json") || production_fail "candidate lacks its NATS workload"
   ((nats_replicas > 0)) || production_fail "candidate NATS workload must have at least one replica"
@@ -2533,6 +3539,18 @@ case "$command" in
     ;;
   release-fallback-stage)
     release_fallback_stage "$1" "$2" "$3"
+    ;;
+  release-migration-plan)
+    release_migration_plan "$1" "$2"
+    ;;
+  release-migration-next)
+    release_migration_next "$1" "$2"
+    ;;
+  release-migration-recover-claim)
+    release_migration_recover_claim "$1" "$2" "$3" "$4"
+    ;;
+  release-migration-status)
+    release_migration_status "$1" "$2"
     ;;
   release-migration-result)
     release_record_migration_result "$1" "$2" "$3" "$4"

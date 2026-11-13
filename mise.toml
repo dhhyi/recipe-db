@@ -57,6 +57,10 @@ run = "sh .scripts/test-message-bus.sh"
 description = "Build and externally verify the synthetic migrator image and release packaging"
 run = "sh .scripts/test-migrator-packaging.sh"
 
+[tasks.test-migrations-k3d]
+description = "Verify asynchronous migration Job behavior in a disposable k3d cluster"
+run = "bash .scripts/test-migrations-k3d.sh"
+
 [tasks.production-k3d]
 description = "Manage guarded production releases and rehearsals"
 run = "bash .scripts/production-k3d.sh"
