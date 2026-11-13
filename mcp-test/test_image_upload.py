@@ -20,7 +20,7 @@ TOOLS = {
 
 
 @pytest.fixture
-def upload_server(request):
+def upload_server():
     # Keep scratch files inside the project, including when pytest's default base temp is external.
     root = Path("target") / ("upload-" + uuid.uuid4().hex)
     root.mkdir(parents=True)
@@ -201,6 +201,28 @@ async def test_exact_file_limit_assembles_twenty_full_chunks(upload_server):
     assert upload_server.peer.assignments[0][1] == data
 
 
+async def test_capacity_one_byte_boundary_and_exact_successful_release(upload_server):
+    data = b"a" * FILE
+    handle = await complete(upload_server, data)
+    for _ in range(18):
+        await upload_server.start(b"", byteLength=FILE)
+    await upload_server.start(b"", byteLength=FILE - 1)
+    last = await upload_server.start(b"a")
+    assert last["state"] == "receiving"
+    rejected(await upload_server.call("image_upload_start", {
+        "recipeId": "r", "byteLength": 1, "mediaType": "image/jpeg", "sha256": "0" * 64,
+    }), "upload-capacity-exceeded")
+    assert (await upload_server.status(handle))["receivedBytes"] == FILE
+    assert (await upload_server.finish(handle))["state"] == "finished"
+    assert not (upload_server.staging / (handle + ".photo")).exists()
+    await upload_server.start(b"", byteLength=FILE)
+    rejected(await upload_server.call("image_upload_start", {
+        "recipeId": "r", "byteLength": 1, "mediaType": "image/jpeg", "sha256": "0" * 64,
+    }), "upload-capacity-exceeded")
+    assert (await upload_server.status(last["uploadHandle"]))["state"] == "receiving"
+    assert len(upload_server.peer.assignments) == 1
+
+
 async def test_http_input_is_bounded_before_upstream_or_staging(upload_server):
     async with httpx.AsyncClient() as client:
         response = await client.post(upload_server.url, headers={
@@ -242,8 +264,11 @@ async def test_integrity_and_incomplete_fail_before_mutation(upload_server):
 
 @pytest.mark.parametrize("permission,code", [
     (False, "image-permission-denied"),
-    ("unavailable", "503"),
+    ("unavailable", "image-permission-unavailable"),
     ("invalid", "invalid-credentials"),
+    ("null", "image-permission-unavailable"),
+    ("missing", "image-permission-unavailable"),
+    ("error", "capability-check-failed"),
 ])
 async def test_every_tool_permission_failure_leaves_bytes_and_state_unchanged(upload_server, permission, code):
     data = b"x" * CHUNK + b"tail"
@@ -266,6 +291,21 @@ async def test_every_tool_permission_failure_leaves_bytes_and_state_unchanged(up
         assert not upload_server.peer.assignments
 
 
+@pytest.mark.parametrize("tool", ["image_upload_finish", "image_upload_status"])
+async def test_finished_receipts_still_require_current_permission(upload_server, tool):
+    handle = await complete(upload_server, b"finished original")
+    finished = await upload_server.finish(handle)
+    assert finished["state"] == "finished"
+    receipt = (upload_server.staging / (handle + ".receipt.json")).read_bytes()
+    upload_server.peer.permissions[" ".join(("Bearer", "restricted"))] = False
+    rejected(await upload_server.call(tool, {"uploadHandle": handle}, "restricted"), "image-permission-denied")
+    assert await upload_server.status(handle) == finished
+    assert await upload_server.finish(handle) == finished
+    assert (upload_server.staging / (handle + ".receipt.json")).read_bytes() == receipt
+    assert not list(upload_server.staging.glob("*.photo"))
+    assert len(upload_server.peer.assignments) == 1
+
+
 @pytest.mark.parametrize("tool", sorted(TOOLS - {"image_upload_start"}))
 async def test_unknown_handles_fail_explicitly(upload_server, tool):
     args = {"uploadHandle": "unknown"}
@@ -274,7 +314,10 @@ async def test_unknown_handles_fail_explicitly(upload_server, tool):
     rejected(await upload_server.call(tool, args), "unknown-upload-handle")
 
 
-@pytest.mark.parametrize("outcome,state", [("disconnect", "uncertain"), ("rejected", "failed")])
+@pytest.mark.parametrize("outcome,state", [
+    ("disconnect", "uncertain"), ("rejected", "failed"), ("unknown", "uncertain"),
+    ("http500", "uncertain"), ("malformed", "uncertain"),
+])
 async def test_attempted_assignment_never_replays_transport_or_rejection(upload_server, outcome, state):
     handle = await complete(upload_server, b"image content")
     upload_server.peer.outcome = outcome
@@ -292,9 +335,12 @@ async def test_attempted_assignment_never_replays_transport_or_rejection(upload_
         }
     else:
         assert result["recovery"]
+        if outcome == "unknown":
+            assert result["error"]["code"] == "image-assignment-unknown"
+            assert result["error"]["status"] == 502
 
 
-@pytest.mark.parametrize("outcome", ["disconnect", "rejected"])
+@pytest.mark.parametrize("outcome", ["disconnect", "rejected", "unknown", "http500", "malformed"])
 async def test_failed_and_uncertain_reservations_are_not_reclaimed(upload_server, outcome):
     handle = await complete(upload_server, b"a" * FILE)
     upload_server.peer.outcome = outcome

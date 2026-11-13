@@ -4,8 +4,8 @@ import base64
 import hashlib
 import json
 import os
+from pathlib import Path
 
-import httpx
 import pytest
 
 from test_mcp import FIXTURE_API, create_recipe, fixture_server_ready, mcp_session
@@ -36,10 +36,10 @@ async def stage(session, recipe_id, data):
 
 
 async def test_original_rice_pudding_photo_and_current_single_image_replacement():
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{FIXTURE_API}/rice-pudding.jpg")
-        response.raise_for_status()
-        data = response.content
+    original = Path("/app/fixtures/rice-pudding.jpg")
+    if not original.exists():
+        original = Path("../demo-data/recipe1.jpg")
+    data = original.read_bytes()
     assert len(data) == 1195052
     assert hashlib.sha256(data).hexdigest() == "e09fb7cb8bf8bfc420c80b5616d4afe05edce7e539eae444e60a3e0470e2bedb"
     assert len(data) > CHUNK and len(data) % CHUNK != 0

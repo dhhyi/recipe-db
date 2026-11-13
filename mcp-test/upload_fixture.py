@@ -50,10 +50,23 @@ class GraphQLPeer:
                 handler.connection.shutdown(socket.SHUT_RDWR)
                 handler.connection.close()
                 return
-            if self.outcome == "rejected":
-                result = {"data": {"setImage": None}, "errors": [{
-                    "message": "Actual image content was rejected",
-                    "extensions": {"code": "unsupported-image", "field": "file", "status": 415},
+            if self.outcome in ("http500", "malformed"):
+                handler.send_response(500 if self.outcome == "http500" else 200)
+                handler.send_header("Content-Type", "application/json")
+                handler.send_header("Content-Length", "1")
+                handler.end_headers()
+                handler.wfile.write(b"{")
+                return
+            if self.outcome in ("rejected", "unknown"):
+                extensions = {"code": "unsupported-image", "field": "file", "status": 415}
+                if self.outcome == "unknown":
+                    extensions = {"code": "image-assignment-unknown", "status": 502, "outcome": "unknown"}
+                result = {"data": None, "errors": [{
+                    "message": (
+                        "Assignment outcome could not be confirmed"
+                        if self.outcome == "unknown" else "Actual image content was rejected"
+                    ),
+                    "extensions": extensions,
                 }]}
             else:
                 result = {"data": {"__typename": "MutationRoot", "setImage": {
@@ -75,6 +88,15 @@ class GraphQLPeer:
                 result = {"errors": [{"message": "Invalid credentials", "extensions": {
                     "code": "invalid-credentials", "status": 401,
                 }}]}
+            elif permission == "null":
+                result = {"data": None}
+            elif permission == "missing":
+                result = {"data": {"__typename": "QueryRoot"}}
+            elif permission == "error":
+                result = {"data": None, "errors": [{
+                    "message": "Capability lookup failed",
+                    "extensions": {"code": "capability-check-failed", "status": 503},
+                }]}
             else:
                 result = {"data": {
                     "__typename": "QueryRoot",
@@ -212,3 +234,5 @@ def disposable_server(work, mode="testing", enabled=True):
             upstream.shutdown()
             upstream.server_close()
             thread.join(timeout=5)
+            log.seek(0)
+            print(log.read()[-6000:])

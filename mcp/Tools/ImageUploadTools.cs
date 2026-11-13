@@ -47,9 +47,16 @@ public class ImageUploadTools(
             {
                 if (response.Errors.Any(error => error.Exception is not null))
                     return new AssignmentResult(null, new("assignment-uncertain", "Image assignment transport or response decoding failed"), true);
+                // The HTTP transport can synthesize message-only errors without attaching its exception.
+                var confirmedErrors = response.Errors
+                    .Where(error => !string.IsNullOrWhiteSpace(error.Extensions?.GetValueOrDefault("code")?.ToString()))
+                    .ToArray();
+                if (confirmedErrors.Length == 0)
+                    return new AssignmentResult(null, new("assignment-uncertain", "No confirmed image assignment response was received"), true);
                 var uncertain = response.Data?.SetImage is not null
+                    || confirmedErrors.Length != response.Errors.Count
                     || response.Errors.Any(error => error.Extensions?.GetValueOrDefault("outcome")?.ToString() is "unknown" or "partial");
-                var errors = response.Errors.Select(error => new UploadError(
+                var errors = confirmedErrors.Select(error => new UploadError(
                     error.Extensions?.GetValueOrDefault("code")?.ToString() ?? error.Code ?? "image-assignment-rejected",
                     error.Message,
                     error.Extensions?.GetValueOrDefault("field")?.ToString(),
@@ -87,6 +94,8 @@ public class ImageUploadTools(
                 logger?.LogWarning("Image-management capability response failed ({FailureType})", error.Exception!.GetType().Name);
             throw new McpException("image-permission-unavailable: Image-management permission could not be checked");
         }
+        if (response.Errors.Any(error => string.IsNullOrWhiteSpace(error.Extensions?.GetValueOrDefault("code")?.ToString())))
+            throw new McpException("image-permission-unavailable: No confirmed image-management permission response was received");
         if (response.Errors.Count > 0) throw RecipeTools.GraphQLError(response.Errors);
         if (response.Data is null) throw new McpException("image-permission-unavailable: No image-management permission data was returned");
         if (!response.Data.MyCapabilities.CanManageImages)

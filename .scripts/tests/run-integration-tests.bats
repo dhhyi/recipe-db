@@ -175,6 +175,12 @@ EOF
   mapfile -t commands < "$MOCK_LOG"
   [ "${commands[-2]}" = "docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api" ]
   [ "${commands[-1]}" = "docker compose --profile test stop fixtures" ]
+
+  : > "$MOCK_LOG"
+  run bash .scripts/run-integration-tests.sh --development tags-test mcp-test
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test build mcp-upload-test-api' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test rm -sf mcp-upload-test-api' "$MOCK_LOG"
 }
 
 @test "browser tests wait for the full frontend stack before running" {
