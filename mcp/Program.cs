@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using ModelContextProtocol;
 using ModelContextProtocol.AspNetCore;
+using Mcp.Tools;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,9 +23,21 @@ builder.Services.AddMcpClient()
             )
     );
 
-builder.Services.AddMcpServer()
+var experimentalUploads = builder.Configuration["EXPERIMENTAL_IMAGE_UPLOADS"] == "1"
+    && builder.Configuration["MODE"] == "testing";
+if (experimentalUploads)
+{
+    builder.Services.AddSingleton<ExperimentalUploadStore>();
+    builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 360_448);
+}
+
+var mcp = builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.SessionMode = HttpServerSessionMode.Stateless)
-    .WithToolsFromAssembly();
+    .WithTools<RecipeTools>();
+if (experimentalUploads)
+{
+    mcp.WithTools<ExperimentalImageUploadTools>();
+}
 
 var app = builder.Build();
 
