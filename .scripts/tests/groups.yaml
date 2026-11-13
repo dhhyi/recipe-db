@@ -76,6 +76,7 @@ deploy:
       - .scripts/validate-production-release.sh
       - .scripts/validate-backup-snapshot.py
       - .scripts/validate-backup-package.py
+      - provisioning/files/backup-upload.py
       - .scripts/templates/**
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"

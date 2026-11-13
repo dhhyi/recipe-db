@@ -44,6 +44,12 @@ case "$command" in
   release-migration-recover-claim)
     [[ $# = 4 ]] || production_fail "release-migration-recover-claim requires the maintenance state directory, candidate artifact, exact abandoned claim holder, and RECOVER-<holder> confirmation"
     ;;
+  release-migration-recover)
+    [[ $# = 6 ]] || production_fail "release-migration-recover requires the maintenance state directory, candidate artifact, verified backup manifest, archive, exact backup ID and CLEAR-AND-RESTORE-<backup-id>-<candidate-revision>-ATTEMPT-<number> confirmation"
+    ;;
+  release-recovery-reopen)
+    [[ $# = 3 ]] || production_fail "release-recovery-reopen requires the maintenance state directory, previous immutable release artifact and OPEN-RECOVERY-<backup-id>-<revision> confirmation"
+    ;;
   release-migration-result)
     [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and confirmation"
     ;;
@@ -72,6 +78,7 @@ locked=false
 retain_lock=false
 lock_holder=
 release_lease_phase=
+production_failure_reason=
 barrier_touched=false
 barrier_established=false
 release_mutation_started=false
@@ -79,11 +86,16 @@ release_fallback_mode=false
 require_storage_versions=false
 release_migration_claimed=false
 release_migration_claim_holder=
+release_migration_claim_artifact=
+release_recovery_reopen_started=false
 pod_watch_pid=
 cleanup() {
   local result=$?
   trap - EXIT
   restore_cleanup "$result"
+  if ! release_recovery_reopen_cleanup "$result"; then
+    result=1
+  fi
   if $release_migration_claimed; then
     if ! release_migration_release_claim; then
       printf 'production: could not safely release migration command claim; inspect it before continuing\n' >&2
@@ -96,6 +108,7 @@ cleanup() {
   fi
   if [[ $result -ne 0 ]] && $locked && $retain_lock \
     && [[ $command != release-migration-* ]] \
+    && [[ $command != release-recovery-reopen ]] \
     && ([[ $command != release-* ]] || $release_mutation_started) \
     && [[ -n ${snapshot:-} && -f $snapshot/backup-state.json ]] \
     && [[ $(jq -r .status "$snapshot/backup-state.json") != recovery-required ]]; then
@@ -203,7 +216,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | backup-exit | restore)
+    backup-run | backup-enter | backup-capture | backup-exit | restore | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
@@ -254,7 +267,7 @@ render() {
   ytt -f "$release_root/.scripts/templates/kubernetes-template.yml" \
     -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
-  if [[ $command == restore ]]; then
+  if [[ $command == restore || $command == release-migration-recover ]]; then
     restore_ingress_values
   fi
   yq '(select(.kind == "HelmChartConfig").metadata.labels."app.kubernetes.io/part-of") = "recipe-db"' \
@@ -954,7 +967,11 @@ backup_projection_route() {
 
 backup_refresh_projections() {
   local name replicas refresh_replicas
-  cluster_operation_lock_update projection-refresh || return 1
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    restore_phase projection-refresh || return 1
+  else
+    cluster_operation_lock_update projection-refresh || return 1
+  fi
   backup_projection_route 4001 || return 1
   for name in search browse; do
     replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
@@ -972,7 +989,11 @@ backup_refresh_projections() {
       backup_stop "$(jq -cn --arg name "$name" '[$name]')" || return 1
     fi
   done
-  backup_state_write recovering projections-ready || return 1
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    restore_phase projections-ready || return 1
+  else
+    backup_state_write recovering projections-ready || return 1
+  fi
 }
 
 backup_verify_recovered_workloads() {
@@ -1388,6 +1409,7 @@ backup_exit() {
     return 1
   }
   backup_establish_barrier || return 1
+  rm -f -- "$snapshot.previous-runtime-secret.json" "$snapshot.previous-runtime-secret.next" || return 1
   if ! backup_restore_production; then
     backup_state_write recovery-required recovery-required \
       || printf 'production: could not persist recovery failure\n' >&2
@@ -1411,9 +1433,74 @@ release_state_write() {
             then (($current.migrationExecution // {}) + $fields.migrationExecution)
             else $fields.migrationExecution end)
        else . end
+     | if ($fields | has("migrationRecovery")) then
+         .migrationRecovery =
+           (if ($fields.migrationRecovery | type) == "object"
+            then (($current.migrationRecovery // {}) + $fields.migrationRecovery)
+            else $fields.migrationRecovery end)
+       else . end
      | .status=$status | .phase=$phase | .updatedAt=$updatedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
     && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
+}
+
+release_recovery_state_write() {
+  local status=$1 phase=$2 fields=$3 lease_phase=${4:-$2} current
+  current=$(cluster_operation_lock_status) || return 1
+  jq -e --arg holder "$backup_id" --slurpfile state "$snapshot/backup-state.json" '
+    .spec.holderIdentity == $holder
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/release"] == $state[0].source.artifact
+  ' <<< "$current" > /dev/null || return 1
+  fields=$(jq -c --arg from "$(jq -er '.metadata.annotations["recipe-db/phase"]' <<< "$current")" \
+    --arg to "$lease_phase" '
+    .migrationRecovery.leaseTransition = {from:$from,to:$to}' <<< "$fields") || return 1
+  release_state_write "$status" "$phase" "$fields" || return 1
+  cluster_operation_lock_update "$lease_phase"
+}
+
+release_require_recovery_lease_phase() {
+  local state_phase transition_from transition_to
+  state_phase=$(jq -er .phase "$snapshot/backup-state.json") || return 1
+  case "$state_phase" in
+    migration-recovery-* | migration-recovered | migration-reopen-failed | migration-reopening) ;;
+    *)
+      release_require_lease_phase "$@"
+      return
+      ;;
+  esac
+  transition_from=$(jq -r '.migrationRecovery.leaseTransition.from // empty' "$snapshot/backup-state.json")
+  transition_to=$(jq -r '.migrationRecovery.leaseTransition.to // empty' "$snapshot/backup-state.json")
+  if [[ -n $transition_from && $release_lease_phase == "$transition_from" ]]; then
+    local accepted
+    for accepted in "$@"; do
+      if [[ $accepted == "$transition_to" ]]; then
+        printf 'production: interrupted recovery phase update: saved=%s, Lease=%s; no completion is inferred\n' \
+          "$state_phase" "$release_lease_phase" >&2
+        return 0
+      fi
+    done
+  fi
+  release_require_lease_phase "$@"
+}
+
+release_assert_pre_reopen_recovery() {
+  jq -e '.accessOpenedAt == null and .publicAccessMayHaveOpenedAt == null
+    and .websiteCheck == null
+    and all(.candidateHistory[]?;
+      .postCheckDisposition == null
+      or .postCheckDisposition.reason == "approved-marker-only-fallback")' \
+    "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "complete migration recovery is forbidden after any public reopening in this operation"
+}
+
+release_require_reopen_lease_phase() {
+  case "$(jq -er .phase "$snapshot/backup-state.json")" in
+    migration-recovered) release_require_lease_phase migration-recovered ;;
+    migration-reopen-failed) release_require_lease_phase migration-recovery-failed ;;
+    *) production_fail "saved recovery state cannot authorize reopening" ;;
+  esac
 }
 
 release_assert_tooling() {
@@ -1425,7 +1512,7 @@ release_assert_tooling() {
 }
 
 release_load_operation() {
-  local current old_release
+  local current old_release terminal_closeout=${3:-false}
   snapshot=$1
   artifact=$2
   backup_load_state "$snapshot"
@@ -1437,6 +1524,17 @@ release_load_operation() {
     || production_fail "original release revision changed"
   connect
   current=$(cluster_operation_lock_status) || production_fail "cannot inspect release Lease"
+  if [[ $terminal_closeout == true ]] && release_recovery_is_reopened; then
+    if [[ -z $current ]]; then
+      release_lease_phase=
+      locked=false
+      retain_lock=true
+      if [[ $target = pi ]]; then production_storage_preflight; fi
+      return
+    fi
+    [[ $(jq -r '.metadata.annotations["recipe-db/phase"]' <<< "$current") == migration-reopened ]] \
+      || production_fail "terminal recovery closeout refuses another Lease phase"
+  fi
   jq -e --arg holder "$backup_id" --arg release "$old_release" '
     .spec.holderIdentity == $holder
     and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -1506,20 +1604,34 @@ release_assert_candidate() {
 }
 
 release_assert_staged_workloads() {
+  local allow_backup_graphql=${1:-false}
   kube get deployments -o json > "$work/release-deployments.json" \
     || production_fail "cannot inspect staged candidate workloads"
-  jq -e --slurpfile candidate "$snapshot/backup-state.json" '
+  jq -e --argjson allowBackupGraphql "$allow_backup_graphql" \
+    --slurpfile candidate "$snapshot/backup-state.json" '
     . as $actual |
     all($candidate[0].candidate.workloads[];
       . as $wanted |
       any($actual.items[];
         .metadata.name == $wanted.name and
         .spec.template.metadata.annotations["recipe-db/release"] == $candidate[0].candidate.artifact and
-        .spec.replicas == 0))
-    and all($actual.items[]; .spec.replicas == 0)
+        (.spec.replicas == 0 or ($allowBackupGraphql and .metadata.name == "graphql"
+          and .spec.replicas == $wanted.replicas))))
+    and all($actual.items[]; .spec.replicas == 0
+      or ($allowBackupGraphql and .metadata.name == "graphql"))
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate is not fully staged with every workload stopped"
   backup_validate_workload_images "$work/release-deployments.json"
+  if [[ $allow_backup_graphql == true ]] && jq -e 'any(.items[];
+    .metadata.name == "graphql" and .spec.replicas > 0)' "$work/release-deployments.json" > /dev/null; then
+    render
+    restore_expected_graphql
+    kube get deployments,replicasets,pods -o json > "$work/restore-existing.json"
+    restore_backup_graphql_chain
+    jq -e 'any(.items[]; .kind == "Deployment" and .metadata.name == "graphql")' \
+      "$work/restore-backup-graphql-chain.json" > /dev/null \
+      || production_fail "candidate GraphQL is not the verified controlled backup barrier"
+  fi
 }
 
 release_assert_maintenance_barrier() {
@@ -1640,7 +1752,7 @@ release_stage_migration_jobs() {
 
 release_stage() {
   local candidate=$2 backup_status=$3 verification=$4 current_release previous_candidate
-  local candidate_workloads nats_init_job candidate_migration_jobs verified_at retry=false
+  local candidate_workloads nats_init_job candidate_migration_jobs verified_at retry=false retained_tmp parent
   local -a secret_args=()
   release_load_operation "$1" "$candidate"
   case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
@@ -1679,6 +1791,31 @@ release_stage() {
   backup_validate_workload_images "$work/original-deployments.json" \
     || production_fail "workloads no longer match the expected release"
   release_assert_maintenance_barrier "$work/original-deployments.json" "$current_release" "$retry"
+  parent=$(dirname "$snapshot")
+  [[ $(stat -c %u "$parent") == "$EUID" &&
+  $((8#$(stat -c %a "$parent") & 022)) == 0 ]] \
+    || production_fail "retained credential parent must be owned by the operator and not writable by other users"
+  if [[ ! -e $snapshot.previous-runtime-secret.json && ! -L $snapshot.previous-runtime-secret.json ]]; then
+    [[ $retry == false ]] \
+      || production_fail "previous-release credentials were not retained before candidate staging"
+    kube get secret recipe-db-runtime -o json > "$work/previous-runtime-secret.json" \
+      || production_fail "cannot retain previous-release credentials before candidate staging"
+    jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and (.data | type == "object" and length > 0)' \
+      "$work/previous-runtime-secret.json" > /dev/null \
+      || production_fail "previous-release runtime Secret is absent or unowned"
+    retained_tmp=$(mktemp "$work/retained-runtime-secret.XXXXXXXX") \
+      || production_fail "could not create a private retained credential file"
+    if ! jq -n --slurpfile state "$snapshot/backup-state.json" \
+      --slurpfile secret "$work/previous-runtime-secret.json" \
+      '{backupId:$state[0].backupId,source:$state[0].source,data:$secret[0].data}' \
+      > "$retained_tmp"; then
+      production_fail "could not securely retain previous-release credentials"
+    fi
+    mv -T -- "$retained_tmp" "$snapshot.previous-runtime-secret.json" \
+      || production_fail "could not persist securely retained previous-release credentials"
+  fi
+  restore_validate_retained_runtime_secret
   cp "$work/pulled/release.json" "$work/original-release.json"
   if [[ $release_fallback_mode == true ]]; then
     release_pull_candidate "$candidate" true "$previous_candidate"
@@ -1911,6 +2048,123 @@ release_migration_start_command() {
     "$(release_migration_shell_quote "$artifact")"
 }
 
+release_migration_recovery_scope() {
+  local scope
+  scope=$(jq -ce --slurpfile config "$work/config.json" '
+    select(.backupVerification.backupId == .backupId
+      and all(.selectedPVCs[]; .pvc as $pvc | $config[0].volumes | has($pvc))
+      and all(.selectedPVCs[];
+        all([.pvc,.storage.uid,.storage.volumeName][]; type == "string" and length > 0)))
+    | {target:.source.target,cluster:.source.cluster,context:.source.context,
+      namespace:.source.namespace,backupId:.backupId,
+      previousRelease:.source.artifact,previousRevision:.source.revision,
+      storage:[($config[0].volumes | keys[]) as $pvc |
+        [.selectedPVCs[] | select(.pvc == $pvc)] as $captured |
+        {pvc:$pvc,root:"/data"} + (if ($captured | length) == 1 then
+          {uid:$captured[0].storage.uid,pv:$captured[0].storage.volumeName} else {} end)]}
+  ' "$snapshot/backup-state.json") \
+    || production_fail "cannot describe the complete retained recovery storage scope"
+  printf 'Recovery approval scope: %s\n' "$scope"
+}
+
+release_migration_recovery_next_command() {
+  local manifest archive candidate revision backup attempt confirmation source_flag=
+  if ! jq -e '(.status == "recovery-required" and .phase == "migration-recovery-failed"
+      and .migrationRecovery.status == "failed" and (.migrationRecovery.safeToRetry | type) == "boolean")
+    or (.status == "recovered" and .phase == "migration-recovered"
+      and .migrationRecovery.status == "verified")
+    or (.status == "recovery-required"
+      and (.phase | startswith("migration-recovery-"))
+      and .phase != "migration-recovery-failed"
+      and (.migrationRecovery.status == "approved"
+        or .migrationRecovery.status == "in-progress"))' \
+    "$snapshot/backup-state.json" > /dev/null; then
+    printf 'A retry is not recommended: first stop every storage worker and restore the access barrier, then inspect state and Lease ownership.\n'
+    return 0
+  fi
+  manifest=$(jq -er '.migrationRecovery.manifest |
+    select(type == "string" and startswith("/"))' "$snapshot/backup-state.json") || {
+    printf 'No recovery package paths were retained; locate and revalidate the complete backup before requesting another explicit recovery.\n'
+    return 0
+  }
+  archive=$(jq -er '.migrationRecovery.archive |
+    select(type == "string" and startswith("/"))' "$snapshot/backup-state.json") || {
+    printf 'No recovery package paths were retained; locate and revalidate the complete backup before requesting another explicit recovery.\n'
+    return 0
+  }
+  if ! (release_migration_recovery_retry_ready "$manifest" "$archive"); then
+    printf 'A retry is not recommended: current ownership, complete package, stopped workers or access barrier could not be verified.\n'
+    return 0
+  fi
+  candidate=$(jq -er '.candidate.artifact' "$snapshot/backup-state.json")
+  revision=$(jq -er '.candidate.revision' "$snapshot/backup-state.json")
+  backup=$(jq -er '.backupVerification.backupId' "$snapshot/backup-state.json")
+  attempt=$(release_migration_recovery_next_attempt "$snapshot/backup-state.json") || {
+    printf 'Recovery attempt history is invalid; inspect the retained state before proceeding.\n'
+    return 0
+  }
+  confirmation="CLEAR-AND-RESTORE-$backup-$revision-ATTEMPT-$attempt"
+  $release_sources_from_git && source_flag="--release-sources-from-git "
+  release_migration_recovery_scope
+  printf 'Only after verifying all storage workers are stopped, revalidating this complete backup, and explicitly approving another full clear-and-restore:\n'
+  printf '  mise run production-k3d %srelease-migration-recover %s %s %s %s %s %s %s\n' \
+    "$source_flag" \
+    "$(release_migration_shell_quote "$values")" \
+    "$(release_migration_shell_quote "$snapshot")" \
+    "$(release_migration_shell_quote "$candidate")" \
+    "$(release_migration_shell_quote "$manifest")" \
+    "$(release_migration_shell_quote "$archive")" \
+    "$(release_migration_shell_quote "$backup")" \
+    "$(release_migration_shell_quote "$confirmation")"
+}
+
+release_migration_recovery_retry_ready() {
+  local input current
+  release_assert_pre_reopen_recovery
+  for input in "$1" "$2"; do
+    [[ $input == /* && -f $input && ! -L $input && $(realpath -e "$input") == "$input" &&
+    $(stat -c %u "$input") == "$EUID" && $((8#$(stat -c %a "$input") & 077)) == 0 ]] || return 1
+  done
+  application_project_metadata_to_jsonl "$release_root" "$work/retry-projects.jsonl" || return 1
+  python3 "$root/.scripts/validate-backup-package.py" "$1" "$2" \
+    "$work/retry-validated" "$work/retry-projects.jsonl" "$backup_id" \
+    > "$work/retry-manifest.json" || return 1
+  jq -e --slurpfile original "$snapshot/manifest.json" \
+    --slurpfile state "$snapshot/backup-state.json" \
+    '. == $original[0] and .source == $state[0].source' \
+    "$work/retry-manifest.json" > /dev/null || return 1
+  restore_migration_target true
+  kube get pods -o json > "$work/retry-pods.json" || return 1
+  restore_workers_terminated "$work/retry-pods.json" "$restore_expired_guard_uid" || return 1
+  kube get deployments -o json > "$work/retry-deployments.json" || return 1
+  jq -e 'all(.items[]; .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0)
+    and any(.items[]; .metadata.name == "graphql"
+      and any(.spec.template.spec.containers[]; .name == "graphql"
+        and [.env[]? | select(.name == "MODE") | .value] == ["backup"]))' \
+    "$work/retry-deployments.json" > /dev/null || return 1
+  restore_verify_installed_public_barrier
+  current=$(cluster_operation_lock_status) || return 1
+  jq -e --arg holder "$backup_id" --arg phase "$release_lease_phase" \
+    --slurpfile state "$snapshot/backup-state.json" '
+    .spec.holderIdentity == $holder
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/release"] == $state[0].source.artifact
+    and .metadata.annotations["recipe-db/phase"] == $phase' <<< "$current" > /dev/null
+}
+
+release_migration_recovery_next_attempt() {
+  jq -er '
+    (.migrationRecovery.attempts // []) as $attempts
+    | if ($attempts | type) != "array"
+      or any($attempts[]; (.number | type != "number" or . < 1 or . != floor))
+      then error("invalid migration recovery attempts")
+      elif ($attempts | length) == 0 then 1
+      else ([$attempts[].number] | max) + 1 end
+  ' "$1"
+}
+
 release_migration_safe_inspection() {
   local job=${1:-}
   printf 'Safe inspection only; do not retry, restore, start workloads, or remove the access barrier.\n' >&2
@@ -1936,6 +2190,7 @@ release_migration_safe_inspection() {
 
 release_migration_claim_acquire() {
   local current holder
+  release_migration_claim_artifact=$artifact
   release_migration_claim_holder="$backup_id-$BASHPID-$RANDOM"
   jq -n --arg holder "$release_migration_claim_holder" --arg candidate "$artifact" \
     '{apiVersion:"coordination.k8s.io/v1",kind:"Lease",
@@ -1972,7 +2227,7 @@ release_migration_release_claim() {
     release_migration_claimed=false
     return 0
   fi
-  jq -e --arg holder "$expected" --arg artifact "$artifact" \
+  jq -e --arg holder "$expected" --arg artifact "${release_migration_claim_artifact:-$artifact}" \
     --arg expectedUid "$expected_uid" --arg expectedResourceVersion "$expected_resource_version" '
     .metadata.namespace == "kube-system" and .metadata.name == "recipe-db-migration"
     and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -1993,11 +2248,38 @@ release_migration_release_claim() {
 }
 
 release_migration_recover_claim() {
-  local candidate=$2 expected_holder=$3 confirmation=$4 current
+  local candidate=$2 expected_holder=$3 confirmation=$4 current state_phase
   [[ -n $expected_holder && $confirmation == "RECOVER-$expected_holder" ]] \
     || production_fail "migration claim recovery requires the exact holder and RECOVER-<holder> confirmation"
-  release_load_operation "$1" "$candidate"
-  release_migration_require_staged "$candidate"
+  release_load_operation "$1" "$candidate" true
+  if release_recovery_is_reopened; then
+    [[ $candidate == "$(jq -er .source.artifact "$snapshot/backup-state.json")" ]] \
+      || production_fail "terminal recovery claim must identify the previous release"
+    release_recovery_validate_closeout
+  elif jq -e '(.status == "recovery-required" and
+      ((.phase == "migration-recovery-failed" and .migrationRecovery.status == "failed")
+        or .phase == "migration-reopen-failed"))
+    or (.status == "recovered" and .phase == "migration-recovered")' \
+    "$snapshot/backup-state.json" > /dev/null; then
+    if [[ $candidate == "$(jq -er .source.artifact "$snapshot/backup-state.json")" &&
+    $(jq -r '.migrationRecovery.status' "$snapshot/backup-state.json") == verified ]]; then
+      :
+    else
+      release_assert_candidate "$candidate"
+    fi
+    release_require_recovery_lease_phase migration-recovery-failed migration-recovered
+  elif jq -e '.status == "recovery-required"
+    and (.phase | startswith("migration-recovery-"))
+    and .phase != "migration-recovery-failed"
+    and (.migrationRecovery.status == "approved"
+      or .migrationRecovery.status == "in-progress")' \
+    "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    state_phase=$(jq -er .phase "$snapshot/backup-state.json")
+    release_require_recovery_lease_phase "$state_phase"
+  else
+    release_migration_require_staged "$candidate" true
+  fi
   current=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
     || production_fail "cannot inspect the migration command claim"
   [[ -n $current ]] || production_fail "no migration command claim exists"
@@ -2011,6 +2293,7 @@ release_migration_recover_claim() {
   ' <<< "$current" > /dev/null \
     || production_fail "migration command claim identity does not match the confirmed holder and candidate"
   release_migration_claim_holder=$expected_holder
+  release_migration_claim_artifact=$candidate
   release_migration_release_claim "$expected_holder" \
     "$(jq -r '.metadata.uid' <<< "$current")" \
     "$(jq -r '.metadata.resourceVersion' <<< "$current")" \
@@ -2019,8 +2302,360 @@ release_migration_recover_claim() {
   release_migration_next_command release-migration-status
 }
 
+release_migration_recover() {
+  local candidate=$2 expected=$5 confirmation=$6 candidate_revision current job state_phase attempt
+  release_load_operation "$1" "$candidate"
+  release_assert_pre_reopen_recovery
+  if jq -e '.status == "recovered" and .phase == "migration-recovered"
+    and .migrationRecovery.status == "verified"' "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    release_require_recovery_lease_phase migration-recovered
+  elif jq -e '
+    .status == "recovery-required" and .phase == "migration-recovery-failed"
+    and .migrationRecovery.status == "failed" and (.migrationRecovery.safeToRetry | type) == "boolean"
+  ' "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    release_require_recovery_lease_phase migration-recovery-failed
+  elif jq -e '
+    .status == "recovery-required"
+    and (.phase | startswith("migration-recovery-"))
+    and .phase != "migration-recovery-failed"
+    and (.migrationRecovery.status == "approved"
+      or .migrationRecovery.status == "in-progress")
+  ' "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    state_phase=$(jq -er .phase "$snapshot/backup-state.json")
+    release_require_recovery_lease_phase "$state_phase"
+  else
+    release_migration_require_staged "$candidate" true
+  fi
+  state_phase=$(jq -er .phase "$snapshot/backup-state.json")
+  attempt=$(release_migration_recovery_next_attempt "$snapshot/backup-state.json") \
+    || production_fail "migration recovery attempt history is invalid"
+  candidate_revision=$(jq -er '.candidate.revision |
+    select(type == "string" and test("^[0-9a-f]{40}$"))' "$snapshot/backup-state.json") \
+    || production_fail "failed migration state has no exact candidate revision"
+  [[ $confirmation == "CLEAR-AND-RESTORE-$expected-$candidate_revision-ATTEMPT-$attempt" ]] \
+    || production_fail "recovery requires fresh CLEAR-AND-RESTORE-<backup-id>-<candidate-revision>-ATTEMPT-<number> confirmation"
+  jq -e --arg candidate "$candidate" --arg expected "$expected" '
+    (.status == "recovery-required" or (.status == "recovered" and .phase == "migration-recovered"))
+    and (.phase == "migration-failed" or .phase == "migration-uncertain"
+      or (.phase | startswith("migration-recovery-")) or .phase == "migration-recovered")
+    and .candidate.artifact == $candidate
+    and (.migrationExecution.status == "failed" or .migrationExecution.status == "uncertain")
+    and (.migrationExecution.transitions | type == "array" and length > 0)
+    and .migrationExecution.currentIndex < (.migrationExecution.transitions | length)
+    and (.migrationResult == null)
+    and (.postCheckDisposition == null)
+    and ((.phase == "migration-recovery-failed"
+      and .migrationRecovery.status == "failed" and (.migrationRecovery.safeToRetry | type) == "boolean")
+      or ((.phase | startswith("migration-recovery-"))
+        and .phase != "migration-recovery-failed"
+        and (.migrationRecovery.status == "approved"
+          or .migrationRecovery.status == "in-progress"))
+      or .phase == "migration-failed" or .phase == "migration-uncertain"
+      or (.phase == "migration-recovered" and .migrationRecovery.status == "verified"))
+    and .backupVerification.backupId == $expected
+    and (.backupVerification.status == "verified-upload"
+      or .backupVerification.status == "verified-unchanged")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "recovery is limited to this failed step-6 attempt before reopening and requires its verified complete backup"
+  if [[ $state_phase == migration-recovered ]]; then
+    release_require_recovery_lease_phase migration-recovered
+  elif [[ $state_phase == migration-recovery-failed ]]; then
+    release_require_recovery_lease_phase migration-recovery-failed
+  elif [[ $state_phase == migration-recovery-* ]]; then
+    release_require_recovery_lease_phase "$state_phase"
+  else
+    release_require_lease_phase migration-failed migration-uncertain
+  fi
+  release_migration_claim_acquire
+  release_migration_load_metadata "$candidate"
+  release_migration_load_jobs true
+  jq -e '
+    all(.items[];
+      if .spec.suspend == true then (.status.active // 0) == 0
+      else
+        (.status.active // 0) == 0
+        and any(.status.conditions[]?;
+          (.type == "Failed" or .type == "Complete") and .status == "True")
+      end)
+  ' "$work/migration-jobs.json" > /dev/null \
+    || production_fail "migration Jobs must be suspended or terminal with no active workers before recovery"
+  release_migration_assert_no_storage_pods
+  if [[ $state_phase == migration-recovery-failed ]]; then
+    restore_guard_validate_expired
+    restore_workers_terminated "$work/migration-pods.json" "$restore_expired_guard_uid" \
+      || production_fail "failed recovery retry requires every other worker to have terminated"
+  fi
+  for job in $(jq -r '.migrationExecution.transitions[].job' "$snapshot/backup-state.json" | sort -u); do
+    current=$(release_migration_find_job "$job" 2> /dev/null || true)
+    [[ -z $current ]] && continue
+    [[ $(jq -r '(.status.active // 0)' <<< "$current") == 0 ]] \
+      || production_fail "migration Job $job may still be running; do not clear storage"
+  done
+  [[ -f $3 && -f $4 ]] \
+    || production_fail "recovery requires the verified complete backup manifest and archive"
+  restore_run "$3" "$4" "$expected" "$snapshot" "$confirmation" migration-recovery "$candidate"
+}
+
+release_recovery_reopen_cleanup() {
+  local result=$1 failed=false
+  [[ ${command:-} == release-recovery-reopen &&
+    $result != 0 && $release_recovery_reopen_started == true ]] || return 0
+  restore_routes_apply "$work/recovery-existing-barrier.yml" || {
+    printf 'production: could not restore the public recovery barrier after reopening failure\n' >&2
+    failed=true
+  }
+  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
+    -p '{"spec":{"ports":[{"port":80,"targetPort":3000}]}}' > /dev/null || {
+    printf 'production: could not restore the internal GraphQL barrier target after reopening failure\n' >&2
+    failed=true
+  }
+  backup_reblock_graphql || failed=true
+  release_recovery_state_write recovery-required migration-reopen-failed \
+    "$(jq -cn --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{migrationRecovery:{status:"verified",phase:"complete",reopenFailedAt:$failedAt}}')" \
+    migration-recovery-failed || {
+    printf 'production: could not persist the failed recovery-reopen phase\n' >&2
+    failed=true
+  }
+  printf 'production: recovery reopening failed; attempted to restore the public and GraphQL barriers; inspect state and Lease before retrying\n' >&2
+  release_recovery_reopen_started=false
+  [[ $failed == false ]]
+}
+
+release_recovery_reopen() {
+  local previous=$2 confirmation=$3 revision replicas
+  release_load_operation "$1" "$previous" true
+  [[ $previous == "$(jq -er .source.artifact "$snapshot/backup-state.json")" ]] \
+    || production_fail "recovery can reopen only the matching previous immutable release"
+  revision=$(jq -er .source.revision "$snapshot/backup-state.json")
+  if release_recovery_is_reopened; then
+    [[ $confirmation == "OPEN-RECOVERY-$backup_id-$revision" ]] \
+      || production_fail "reopening requires OPEN-RECOVERY-<backup-id>-<previous-release-revision> confirmation"
+    release_migration_claim_acquire
+    release_load_operation "$1" "$previous" true
+    release_recovery_is_reopened \
+      || production_fail "durable reopened recovery state changed while claiming closeout"
+    release_recovery_validate_closeout
+    release_recovery_closeout_ownership
+    printf 'production: already reopened recovery ownership reconciled; no application or storage changes were made\n'
+    return
+  fi
+  jq -e --arg previous "$previous" '
+    ((.status == "recovered" and .phase == "migration-recovered")
+      or (.status == "recovery-required" and .phase == "migration-reopen-failed"))
+    and .migrationRecovery.status == "verified"
+    and .migrationRecovery.candidateAborted == true
+    and .migrationRecovery.previousRelease == $previous
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "reopening requires a verified complete recovery with the candidate aborted"
+  release_require_reopen_lease_phase
+  [[ $confirmation == "OPEN-RECOVERY-$backup_id-$revision" ]] \
+    || production_fail "reopening requires OPEN-RECOVERY-<backup-id>-<previous-release-revision> confirmation"
+  release_migration_claim_acquire
+  release_load_operation "$1" "$previous"
+  jq -e '.migrationRecovery.status == "verified"
+    and ((.status == "recovered" and .phase == "migration-recovered")
+      or (.status == "recovery-required" and .phase == "migration-reopen-failed"))' \
+    "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "recovery state changed while acquiring the reopening claim"
+  release_require_reopen_lease_phase
+  restore_guard_assert_absent
+  production_secrets
+  restore_validate_migration_secrets
+  kube --namespace kube-system get secret recipe-db-routes -o json \
+    > "$work/recovery-existing-barrier.json" \
+    || production_fail "cannot inspect the retained recovery access barrier"
+  jq -er '.data["routes.yml"] | @base64d' "$work/recovery-existing-barrier.json" \
+    > "$work/recovery-existing-barrier.yml" \
+    || production_fail "recovery access barrier has no readable route configuration"
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | type == "string")' \
+    "$work/recovery-existing-barrier.json" > /dev/null \
+    || production_fail "recovery access barrier is missing or has drifted; do not reopen"
+  restore_validate_public_barrier "$work/recovery-existing-barrier.yml" \
+    || production_fail "recovery access barrier is missing or has drifted; do not reopen"
+  render
+  routes
+  annotate_credentials
+  yq 'select(.metadata.namespace == "kube-system")' \
+    "$work/rendered.yml" > "$work/infrastructure.yml"
+  kube get deployments -o json > "$work/recovery-deployments.json" \
+    || production_fail "cannot inspect previous-release workloads before reopening"
+  backup_validate_workload_images "$work/recovery-deployments.json" \
+    || production_fail "restored workloads no longer match the previous immutable release"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    all($state[0].priorWorkloads[]; . as $expected |
+      any($actual.items[]; .metadata.name == $expected.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $expected.release
+        and (.spec.replicas // 0) == $expected.replicas
+        and (.status.readyReplicas // 0) == $expected.replicas))
+    and any(.items[]; .metadata.name == "graphql"
+      and any(.spec.template.spec.containers[]; .name == "graphql"
+        and any(.env[]?; .name == "MODE" and .value == "backup")))
+  ' "$work/recovery-deployments.json" > /dev/null \
+    || production_fail "previous release is not ready behind the access barrier"
+  release_mutation_started=true
+  release_recovery_reopen_started=true
+  release_recovery_state_write recovery-required migration-reopening \
+    "$(jq -cn --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{publicAccessMayHaveOpenedAt:$startedAt,
+        migrationRecovery:{status:"reopening",phase:"reopening",reopeningStartedAt:$startedAt}}')" \
+    || production_fail "could not persist the reopening phase"
+  replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
+    "$work/prior-workloads.json") \
+    || production_fail "retained release state has no GraphQL replica count"
+  kube set env deployment/graphql MODE=production --containers=graphql > /dev/null \
+    || production_fail "previous-release GraphQL could not leave backup mode; recovery barrier and Lease remain"
+  kube scale deployment/graphql "--replicas=$replicas" > /dev/null \
+    || production_fail "previous-release GraphQL could not be scaled for reopening; recovery barrier and Lease remain"
+  kube rollout status deployment/graphql --timeout="${timeout}s" \
+    || production_fail "previous-release GraphQL did not become ready; recovery barrier and Lease remain"
+  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
+    -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null \
+    || production_fail "normal ingress could not be restored; recovery barrier and Lease remain"
+  if ! {
+    kube --namespace kube-system create secret generic recipe-db-routes \
+      "--from-file=routes.yml=$work/routes.yml" --dry-run=client -o json \
+      | jq '.metadata.labels["app.kubernetes.io/part-of"]="recipe-db"' \
+      | kube --namespace kube-system apply -f - > /dev/null
+  } 2> "$work/recovery-route-error"; then
+    production_fail "previous release is ready but public route reopening failed; barrier and Lease are retained"
+  fi
+  apply_acme_contact
+  kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null \
+    || production_fail "previous release ingress configuration could not be restored; barrier and Lease are retained"
+  wait_traefik \
+    || production_fail "public recovery routes could not be verified; access barrier and Lease are retained"
+  restore_forward deployment/traefik 3000 "$work/recovery-route-forward.log" \
+    > "$work/recovery-route-port" \
+    || production_fail "could not inspect public route convergence; recovery remains blocked"
+  restore_graphql_port=$(cat "$work/recovery-route-port")
+  restore_wait_public_routes \
+    || production_fail "public recovery routes did not converge; access barrier and Lease are retained"
+  release_recovery_state_write recovered migration-reopened \
+    "$(jq -cn --arg reopenedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{migrationRecovery:{status:"reopened",phase:"reopened",reopenedAt:$reopenedAt}}')" \
+    || production_fail "application reopened but the recovery result could not be persisted"
+  release_recovery_reopen_started=false
+  release_recovery_closeout_ownership
+  printf 'production: previous release reopened by operator approval; candidate remains aborted and release state is retained at %s/backup-state.json\n' \
+    "$snapshot"
+}
+
+release_recovery_is_reopened() {
+  jq -e '.status == "recovered" and .phase == "migration-reopened"
+    and .migrationRecovery.status == "reopened" and .migrationRecovery.phase == "reopened"
+    and .migrationRecovery.candidateAborted == true
+    and .migrationRecovery.backupId == .backupId
+    and (.candidate.artifact | type == "string"
+      and test("^ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$"))
+    and (.candidate.revision | type == "string" and test("^[0-9a-f]{40}$"))
+    and .migrationRecovery.abortedCandidate == .candidate.artifact
+    and .migrationRecovery.previousRelease == .source.artifact
+    and .migrationRecovery.previousRevision == .source.revision
+    and (.migrationRecovery.reopenedAt | type == "string" and length > 0)
+    and (.publicAccessMayHaveOpenedAt | type == "string" and length > 0)
+    and (.migrationRecovery.ownershipReleasedAt == null
+      or (.migrationRecovery.ownershipReleasedAt | type == "string" and length > 0))
+    and (.source.revision | type == "string" and test("^[0-9a-f]{40}$"))' \
+    "$snapshot/backup-state.json" > /dev/null
+}
+
+release_recovery_validate_closeout() {
+  restore_guard_assert_absent
+  production_secrets
+  restore_validate_migration_secrets
+  kube get secret recipe-db-runtime -o json > "$work/closeout-runtime.json" \
+    || production_fail "cannot inspect already reopened credentials"
+  jq -e --slurpfile retained "$snapshot.previous-runtime-secret.json" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db" and .data == $retained[0].data' \
+    "$work/closeout-runtime.json" > /dev/null \
+    || production_fail "already reopened credentials differ from the previous release"
+  application_project_metadata_to_jsonl "$release_root" "$work/closeout-projects.jsonl"
+  render
+  routes
+  annotate_credentials
+  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" \
+    | jq -s '.' > "$work/closeout-expected-deployments.json"
+  kube get deployments -o json > "$work/closeout-deployments.json" \
+    || production_fail "cannot inspect already reopened workloads"
+  backup_validate_workload_images "$work/closeout-deployments.json" \
+    || production_fail "already reopened workload images differ from the previous release"
+  jq -e --slurpfile state "$snapshot/backup-state.json" \
+    --slurpfile projects "$work/closeout-projects.jsonl" \
+    --slurpfile expected "$work/closeout-expected-deployments.json" '
+    . as $actual |
+    ([.items[].metadata.name] | sort) == ([$expected[0][].metadata.name] | sort)
+    and all(.items[];
+      .metadata.deletionTimestamp == null
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.template.metadata.annotations["recipe-db/release"] == $state[0].source.artifact
+      and (.status.readyReplicas // 0) == (.spec.replicas // 0))
+    and all($state[0].priorWorkloads[]; . as $expected |
+      any($actual.items[]; .metadata.name == $expected.name
+        and (.spec.replicas // 0) == $expected.replicas
+        and (.status.readyReplicas // 0) == $expected.replicas))
+    and any(.items[]; .metadata.name == "graphql" and (.spec.replicas // 0) > 0
+      and any(.spec.template.spec.containers[]; .name == "graphql"
+        and [.env[]? | select(.name == "MODE") | .value] == ["production"]))
+    and all($projects[] | select(.category == "api" or .category == "backend"); . as $project |
+      any($actual.items[]; .metadata.name == $project.name
+        and [.spec.template.spec.containers[] | select(.name == $project.name) |
+          .env[]? | select(.name == "MODE") | .value] == ["production"]))
+  ' "$work/closeout-deployments.json" > /dev/null \
+    || production_fail "already reopened previous production workloads are not compatible and ready"
+  kube --namespace kube-system get secret recipe-db-routes -o json > "$work/closeout-routes.json" \
+    || production_fail "cannot inspect already reopened routes"
+  jq -e --slurpfile expected "$work/routes.yml" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and (.data["routes.yml"] | @base64d | fromjson) == $expected[0]' \
+    "$work/closeout-routes.json" > /dev/null \
+    || production_fail "already reopened public routes differ from the previous release"
+  kube --namespace kube-system get service recipe-db-internal -o json > "$work/closeout-internal.json" \
+    || production_fail "cannot inspect already reopened internal ingress"
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and any(.spec.ports[]; .port == 80 and .targetPort == 8000)' \
+    "$work/closeout-internal.json" > /dev/null \
+    || production_fail "already reopened internal ingress is not in production"
+  wait_traefik || production_fail "already reopened ingress configuration is not ready"
+  restore_forward deployment/traefik 3000 "$work/closeout-route-forward.log" \
+    > "$work/closeout-route-port" || production_fail "cannot inspect already reopened route convergence"
+  restore_graphql_port=$(cat "$work/closeout-route-port")
+  restore_wait_public_routes || production_fail "already reopened public routes have not converged"
+}
+
+release_recovery_closeout_ownership() {
+  local current
+  release_recovery_is_reopened || production_fail "ownership closeout requires fully durable reopened recovery"
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect terminal recovery Lease"
+  if [[ -n $current ]]; then
+    jq -e --arg holder "$backup_id" --slurpfile state "$snapshot/backup-state.json" '
+      .spec.holderIdentity == $holder
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .metadata.annotations["recipe-db/operation"] == "backup"
+      and .metadata.annotations["recipe-db/release"] == $state[0].source.artifact
+      and .metadata.annotations["recipe-db/phase"] == "migration-reopened"' \
+      <<< "$current" > /dev/null || production_fail "terminal recovery Lease identity or phase changed"
+    cluster_operation_lock_delete "$current" \
+      || production_fail "application already reopened; terminal recovery Lease could not be safely released"
+  fi
+  locked=false
+  retain_lock=false
+  # Do not let the uploader archive recovery state while an abandoned command claim can remain.
+  release_migration_release_claim \
+    || production_fail "application reopened, but terminal command ownership could not be released"
+  release_state_write recovered migration-reopened \
+    "$(jq -cn --arg releasedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{migrationRecovery:{ownershipReleasedAt:$releasedAt}}')" \
+    || production_fail "application reopened and ownership released, but backup closeout could not be recorded"
+}
+
 release_migration_require_staged() {
-  local candidate=$1
+  local candidate=$1 allow_backup_graphql=${2:-false}
   [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "candidate-staged/candidate-staged" ||
   $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "recovery-required/migration-failed" ||
   $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "recovery-required/migration-uncertain" ]] \
@@ -2029,7 +2664,7 @@ release_migration_require_staged() {
     "$snapshot/backup-state.json" > /dev/null \
     || production_fail "migration state is malformed"
   release_assert_candidate "$candidate"
-  release_assert_staged_workloads
+  release_assert_staged_workloads "$allow_backup_graphql"
   release_require_lease_phase candidate-staged migration-planned migration-activation-intent \
     migration-running migration-transition-recorded migration-succeeded no-migration-required \
     migration-failed migration-uncertain migration-result-recorded
@@ -2767,8 +3402,108 @@ release_migration_next() {
 
 release_migration_status() {
   local candidate=$2 status index count transition job job_json condition service from to claim
-  release_load_operation "$1" "$candidate"
-  release_migration_require_staged "$candidate"
+  local recovery_phase failure_reason source_flag=
+  release_load_operation "$1" "$candidate" true
+  if release_recovery_is_reopened; then
+    artifact=$(jq -er .source.artifact "$snapshot/backup-state.json")
+    claim=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+      || production_fail "cannot inspect terminal recovery command claim"
+    if [[ -n $claim ]]; then
+      printf 'production: terminal recovery closeout is claimed; confirm the prior command stopped before explicit claim recovery\n'
+      release_migration_claim_recovery_command "$(jq -r '.spec.holderIdentity // "<unknown>"' <<< "$claim")"
+    elif [[ $(jq -r '.migrationRecovery.ownershipReleasedAt // empty' "$snapshot/backup-state.json") != "" &&
+    -z $release_lease_phase ]]; then
+      printf 'production: complete recovery already reopened and ownership release recorded\n'
+    else
+      release_recovery_validate_closeout
+      $release_sources_from_git && source_flag="--release-sources-from-git "
+      printf 'Only after explicit approval, reconcile already reopened ownership (no application or storage changes):\n'
+      printf '  mise run production-k3d %srelease-recovery-reopen %s %s %s %s\n' \
+        "$source_flag" "$(release_migration_shell_quote "$values")" \
+        "$(release_migration_shell_quote "$snapshot")" "$(release_migration_shell_quote "$artifact")" \
+        "$(release_migration_shell_quote "OPEN-RECOVERY-$backup_id-$(jq -er .source.revision "$snapshot/backup-state.json")")"
+    fi
+    return
+  fi
+  if jq -e '.status == "recovered" and .phase == "migration-recovered"
+    and .migrationRecovery.status == "verified"' "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    release_require_recovery_lease_phase migration-recovered
+    if [[ $release_lease_phase != migration-recovered ]]; then
+      printf 'production: recovery completion phase update was interrupted; verify stopped workers and the barrier before another approved full recovery\n'
+      release_migration_safe_inspection
+      release_migration_recovery_next_command
+    elif ! restore_guard_assert_absent; then
+      printf 'production: the recovery shutdown guard remains; no reopening command is safe yet\n'
+      release_migration_safe_inspection "recovery-guard-$backup_id"
+    else
+      printf 'production: complete recovery verified; candidate remains aborted; public reopening requires separate operator approval\n'
+      $release_sources_from_git && source_flag="--release-sources-from-git "
+      printf 'Next: mise run production-k3d %srelease-recovery-reopen %s %s %s %s\n' \
+        "$source_flag" \
+        "$(release_migration_shell_quote "$values")" \
+        "$(release_migration_shell_quote "$snapshot")" \
+        "$(release_migration_shell_quote "$(jq -er .source.artifact "$snapshot/backup-state.json")")" \
+        "$(release_migration_shell_quote "OPEN-RECOVERY-$backup_id-$(jq -er .source.revision "$snapshot/backup-state.json")")"
+    fi
+    return
+  fi
+  if jq -e '.status == "recovery-required"
+    and (.phase | startswith("migration-recovery-"))
+    and .phase != "migration-recovery-failed"
+    and (.migrationRecovery.status == "approved"
+      or .migrationRecovery.status == "in-progress")' \
+    "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    recovery_phase=$(jq -er .phase "$snapshot/backup-state.json")
+    release_require_recovery_lease_phase "$recovery_phase"
+    claim=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+      || production_fail "cannot inspect the migration recovery command claim"
+    if [[ -n $claim ]]; then
+      printf 'production: migration recovery is still claimed by %s; status will not recommend another recovery\n' \
+        "$(jq -r '.spec.holderIdentity // "<unknown>"' <<< "$claim")"
+      release_migration_safe_inspection
+      release_migration_claim_recovery_command "$(jq -r '.spec.holderIdentity // "<unknown>"' <<< "$claim")"
+      return
+    fi
+    printf 'production: migration recovery was interrupted during %s; the data state is uncertain and no success was recorded\n' \
+      "$recovery_phase"
+    printf 'Do not resume or import over partial data. Verify the public and GraphQL barriers, stop every application and storage worker, and inspect the private recovery state and Lease before requesting a fresh full recovery approval.\n'
+    release_migration_safe_inspection
+    release_migration_recovery_next_command
+    return
+  fi
+  if jq -e '.status == "recovery-required" and .phase == "migration-recovery-failed"
+    and .migrationRecovery.status == "failed"' "$snapshot/backup-state.json" > /dev/null; then
+    release_assert_candidate "$candidate"
+    release_require_recovery_lease_phase migration-recovery-failed
+    claim=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
+      || production_fail "cannot inspect the migration command claim"
+    if [[ -n $claim ]]; then
+      printf 'production: migration recovery failed and a command claim remains held by %s\n' \
+        "$(jq -r '.spec.holderIdentity // "<unknown>"' <<< "$claim")"
+      release_migration_safe_inspection
+      release_migration_claim_recovery_command "$(jq -r '.spec.holderIdentity // "<unknown>"' <<< "$claim")"
+      return
+    fi
+    printf 'production: complete migration recovery failed in phase %s; access remains blocked and candidate %s remains aborted\n' \
+      "$(jq -r '.migrationRecovery.phase // "unknown"' "$snapshot/backup-state.json")" "$candidate"
+    failure_reason=$(jq -r '.migrationRecovery.failureReason // empty' "$snapshot/backup-state.json")
+    [[ -z $failure_reason ]] || printf 'Recovery failure: %s\n' "$failure_reason"
+    printf 'Inspect the private state at %s/backup-state.json and verify that every worker is stopped before any new destructive approval.\n' \
+      "$(release_migration_shell_quote "$snapshot")"
+    printf 'Next: mise run production-k3d backup-status %s %s\n' \
+      "$(release_migration_shell_quote "$values")" \
+      "$(release_migration_shell_quote "$snapshot")"
+    release_migration_recovery_next_command
+    return
+  fi
+  if jq -e '.phase == "migration-failed" or .phase == "migration-uncertain"' \
+    "$snapshot/backup-state.json" > /dev/null; then
+    release_migration_require_staged "$candidate" true
+  else
+    release_migration_require_staged "$candidate"
+  fi
   claim=$(cluster_operation_lock_kubectl get lease recipe-db-migration --ignore-not-found -o json) \
     || production_fail "cannot inspect the migration command claim"
   if [[ -n $claim ]]; then
@@ -2813,7 +3548,9 @@ release_migration_status() {
       .migrationExecution.uncertainTransition.job // ""' "$snapshot/backup-state.json")
     printf 'production: migration state=%s; last confirmed progress=%s\n' \
       "$status" "$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")"
+    release_migration_recovery_scope
     release_migration_safe_inspection "$job"
+    release_migration_next_command release-migration-status
     return
   fi
   index=$(jq -r '.migrationExecution.currentIndex // 0' "$snapshot/backup-state.json")
@@ -2992,6 +3729,9 @@ release_reopen() {
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate GraphQL barrier is not ready"
   release_mutation_started=true
+  release_state_write release-ready ready \
+    "$(jq -cn --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{publicAccessMayHaveOpenedAt:$startedAt}')" || return 1
   cluster_operation_lock_update reopening || return 1
   kube set env deployment/graphql MODE=production --containers=graphql > /dev/null || return 1
   if ! kube rollout status deployment/graphql --timeout="${timeout}s"; then
@@ -3354,6 +4094,8 @@ release_finalize() {
     locked=false
     retain_lock=false
   fi
+  rm -f -- "$snapshot.previous-runtime-secret.json" "$snapshot.previous-runtime-secret.next" \
+    || production_fail "published release is verified; retained credential cleanup failed"
   rm -f -- "$snapshot/backup-state.json" \
     || production_fail "published release is verified and Lease is released; retry cleanup of the remaining state file"
   rmdir -- "$snapshot" \
@@ -3549,6 +4291,9 @@ case "$command" in
   release-migration-recover-claim)
     release_migration_recover_claim "$1" "$2" "$3" "$4"
     ;;
+  release-migration-recover)
+    release_migration_recover "$1" "$2" "$3" "$4" "$5" "$6"
+    ;;
   release-migration-status)
     release_migration_status "$1" "$2"
     ;;
@@ -3557,6 +4302,9 @@ case "$command" in
     ;;
   release-start)
     release_start "$1" "$2"
+    ;;
+  release-recovery-reopen)
+    release_recovery_reopen "$1" "$2" "$3"
     ;;
   release-reopen)
     release_reopen "$1" "$2" "$3"

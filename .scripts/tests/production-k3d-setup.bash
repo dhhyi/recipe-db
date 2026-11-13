@@ -33,12 +33,15 @@ setup() {
   export MOCK_MISSING_MIGRATION=false
   export MOCK_COMPLETED_MIGRATION=false
   export MOCK_FAILED_MIGRATION=false
+  export MOCK_MIGRATION_RESULT_JOB=
   export MOCK_MIGRATION_CLAIM_HELD=false
   export MOCK_UNSAFE_MIGRATION=false
   export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":1,"ratings":1,"inspirations":1,"tags":1}'
   export MOCK_VERSION_PROBE_FAIL=false
   export MOCK_RELEASE_RECIPES_ROLLOUT_FAIL=false
   export MOCK_RESTORE=false
+  export MOCK_RESTORE_IMAGE_JSON=
+  export MOCK_RESTORE_IMAGE_PULL_FAIL=false
   jq -n --arg root "$FIXTURE_ROOT" '{
     target:"local",cluster:"recipe-db-rehearsal",context:"k3d-recipe-db-rehearsal",
     namespace:"recipe-db",origin:"http://127.0.0.1:8080",httpPort:8080,apiPort:6445,
@@ -201,6 +204,45 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   esac
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
+      *"get rolebinding/recovery-guard-"*)
+        exit ;;
+      *"get job recovery-guard-"*"--ignore-not-found"*)
+        if [[ -f $MOCK_LOG.expired-guard-job ]]; then
+          cat "$MOCK_LOG.expired-guard-job"
+        elif [[ ${MOCK_SURVIVING_RECOVERY_GUARD:-false} == true ]]; then
+          echo '{"status":{"active":1}}'
+        fi
+        exit ;;
+      *"get job recovery-guard-"*"-o json")
+        echo '{"metadata":{"uid":"guard-job-uid"},"status":{"active":1}}'; exit ;;
+      *"apply -f "*restore-guard.json)
+        cp "${*: -1}" "$MOCK_LOG.restore-guard"
+        exit ;;
+      *"get configmap recovery-guard-"*"-o json")
+        if [[ -f $MOCK_LOG.expired-guard-configmap ]]; then
+          cat "$MOCK_LOG.expired-guard-configmap"
+        elif [[ ${MOCK_EXPIRED_RECOVERY_GUARD:-false} == true && -f $MOCK_LOG.guard-expired ]]; then
+          echo '{"data":{"ready":"true","expired":"true"}}'
+        else
+          jq -n --arg pulse "$(cat "$MOCK_LOG.guard-pulse" 2>/dev/null || printf initial)" \
+            '{data:{ready:"true",expired:"false",observedPulse:$pulse}}'
+        fi
+        exit ;;
+      *"patch configmap recovery-guard-"*)
+        printf '%s\n' "${*: -1}" | jq -er .data.pulse > "$MOCK_LOG.guard-pulse"
+        exit ;;
+      *"delete job recovery-guard-"* | \
+      *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
+        rm -f "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod" \
+          "$MOCK_LOG.expired-guard-configmap"
+        exit ;;
+      *"get pods -l recipe-db/recovery-guard="*"-o json")
+        if [[ -f $MOCK_LOG.expired-guard-pod ]]; then
+          jq '{items:[.]}' "$MOCK_LOG.expired-guard-pod"
+        else echo '{"items":[]}'; fi
+        exit ;;
+      *"get pods -l job-name=nats-init -o json")
+        echo '{"items":[]}'; exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
         if [[ ${MOCK_ABANDON_WORKER:-false} == true ]]; then
           echo '{"items":[{"kind":"Pod","metadata":{"name":"restore-volume-recipes"}}]}'
@@ -225,20 +267,84 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         cp "${*: -1}" "$MOCK_LOG.cluster-restore-state"
         exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods,services,ingresses,configmaps,secrets -o json")
-        if [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
+        if [[ -f $MOCK_LOG.expired-guard-job && -f $MOCK_LOG.expired-guard-pod ]]; then
+          jq -s '{items:.}' "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod" \
+            "$MOCK_LOG.restore-pods"
+        elif [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
           echo '{"items":[{"kind":"Deployment","metadata":{"name":"recipes"}}]}'
+        elif [[ -f $MOCK_LOG.restore-pods ]]; then
+          jq -s '{items:.}' "$MOCK_LOG.restore-pods"
         else echo '{"items":[]}'; fi
         exit ;;
       *"get namespace recipe-db --ignore-not-found -o json")
         echo '{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}}}'; exit ;;
-      *"get pvc -o json") echo '{"items":[]}'; exit ;;
+      *"get deployment traefik -o json")
+        if [[ ${MOCK_HELM_PENDING:-false} == true ]]; then echo '{}'; exit; fi
+        if [[ ${MOCK_HELM_DELAYED:-false} == true && ! -f ${MOCK_LOG%/*}/helm-observed ]]; then
+          touch "${MOCK_LOG%/*}/helm-observed"
+          echo '{}'
+          exit
+        fi
+        jq -n --arg checksum "$(cat "$MOCK_LOG.route-checksum")" \
+          --arg image "$(jq -r '.infrastructure.traefik' "$VALUES")" \
+          --argjson https "$(jq 'has("httpsStaging")' "$VALUES")" '{
+          spec:{template:{metadata:{annotations:{"recipe-db/routes-checksum":$checksum}},
+            spec:{containers:[{name:"traefik",image:$image,
+              args:["--providers.file.filename=/etc/recipe-db/routes.yml"],
+              ports:[{containerPort:3000}],volumeMounts:[{mountPath:"/etc/recipe-db"}]}],
+              volumes:[{name:"recipe-db-routes",secret:{secretName:"recipe-db-routes"}}]}}}}
+          | if $https then
+              .spec.template.spec.containers[0].args +=
+                ["--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)"]
+              | .spec.template.spec.containers[0].env = [{name:"ACME_ACCOUNT_EMAIL",
+                  valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
+            else . end'
+        exit ;;
+      *"get pvc -o json")
+        if [[ -f ${STATE:-}/backup-state.json ]] && jq -e \
+          '.selectedPVCs | type == "array" and length > 0' "$STATE/backup-state.json" > /dev/null; then
+          jq -n --slurpfile state "$STATE/backup-state.json" --slurpfile values "$VALUES" '
+            {items:[$values[0].volumes | to_entries[] | . as $entry |
+              ($entry.key) as $name |
+              ([$state[0].selectedPVCs[]? | select(.pvc == $name)][0] // {}) as $selected |
+              ($selected.storage.requestedStorage // $entry.value) as $requested |
+              {metadata:{name:$name,namespace:"recipe-db",
+                  uid:($selected.storage.uid // ("claim-"+$name)),
+                  labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+                spec:{storageClassName:($selected.storage.storageClassName // "local-path"),
+                  accessModes:($selected.storage.accessModes // ["ReadWriteOnce"]),
+                  volumeMode:($selected.storage.volumeMode // "Filesystem"),
+                  volumeName:($selected.storage.volumeName // ("pv-"+$name)),
+                  resources:{requests:{storage:$requested}}},
+                status:{phase:"Bound",
+                  capacity:{storage:($selected.storage.capacity // $requested)}}}]}'
+        else echo '{"items":[]}'; fi
+        exit ;;
       *"get pvc "*"-o json")
         name="${*: -3:1}"
         if [[ $* == *"--ignore-not-found"* && ! -e $MOCK_LOG.claims ]]; then exit; fi
+        if [[ -f ${STATE:-}/backup-state.json ]]; then
+          jq -n --arg name "$name" --arg drift "${MOCK_RESTORE_PVC_DRIFT:-false}" \
+            --slurpfile state "$STATE/backup-state.json" --slurpfile values "$VALUES" '
+            ([$state[0].selectedPVCs[]? | select(.pvc == $name)][0] // {}) as $selected |
+            ($selected.storage.requestedStorage // $values[0].volumes[$name] // "1Gi") as $requested |
+            {metadata:{name:$name,namespace:"recipe-db",
+                uid:(if $drift == "true" then "changed" else
+                  ($selected.storage.uid // ("claim-"+$name)) end),
+                labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+              spec:{storageClassName:($selected.storage.storageClassName // "local-path"),
+                accessModes:($selected.storage.accessModes // ["ReadWriteOnce"]),
+                volumeMode:($selected.storage.volumeMode // "Filesystem"),
+                volumeName:($selected.storage.volumeName // ("pv-"+$name)),
+                resources:{requests:{storage:$requested}}},
+              status:{phase:"Bound",
+                capacity:{storage:($selected.storage.capacity // $requested)}}}'
+        else
         jq -n --arg name "$name" --arg drift "${MOCK_RESTORE_PVC_DRIFT:-false}" '
           {metadata:{name:$name,namespace:"recipe-db",uid:(if $drift == "true" then "changed" else $name end),
             labels:{"app.kubernetes.io/part-of":"recipe-db"}},
             spec:{storageClassName:"local-path",accessModes:["ReadWriteOnce"]},status:{phase:"Bound"}}'
+        fi
         exit ;;
       *"get pv -o json")
         if [[ ${MOCK_RESTORE_RELEASED:-false} == true ]]; then
@@ -246,12 +352,41 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         else echo '{"items":[]}'; fi
         exit ;;
       *"create -f "*restore-new-claim.yml) touch "$MOCK_LOG.claims"; exit ;;
+      *"create -f "*recovery-image-probe.json)
+        jq -c . "${*: -1}" >> "$MOCK_LOG.restore-pods"; exit ;;
       *"create -f "*restore-volume-pod.json)
         jq -c . "${*: -1}" >> "$MOCK_LOG.restore-pods"; exit ;;
+      *"get pods -l "*"-o json")
+        selector="${*: -3:1}"
+        case "$selector" in
+          recipe-db/restore-holder=*)
+            jq -s --arg holder "${selector#*=}" \
+              '{items:[.[] | select(.metadata.labels["recipe-db/restore-holder"] == $holder)]}' \
+              "$MOCK_LOG.restore-pods" ;;
+          recipe-db/recovery-image-probe=*)
+            jq -s --arg holder "${selector#*=}" \
+              '{items:[.[] | select(.metadata.labels["recipe-db/recovery-image-probe"] == $holder)]}' \
+              "$MOCK_LOG.restore-pods" ;;
+          *) echo '{"items":[]}' ;;
+        esac
+        exit ;;
       *"get pods -o json")
-        jq -s '{items:.}' "$MOCK_LOG.restore-pods"; exit ;;
+        guard_pod='[]'
+        if [[ -f $MOCK_LOG.expired-guard-pod ]]; then
+          guard_pod=$(jq -c '[.]' "$MOCK_LOG.expired-guard-pod")
+        fi
+        jq -s --argjson guardPod "$guard_pod" \
+          --arg linger "$(cat "$MOCK_LOG.lingering-worker" 2>/dev/null || true)" '
+          {items:(. + $guardPod + (if $linger == "" then [] else [{
+            metadata:{name:"graphql-lingering",
+              deletionTimestamp:(if $linger == "terminating" then "now" else null end)},
+            status:{phase:"Running"},spec:{volumes:[]}}] end))}' "$MOCK_LOG.restore-pods"; exit ;;
       *"exec deployment/nats -- wget -qO-"*)
-        sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
+        if [[ -f $MOCK_LOG.probe-created ]]; then
+          sequence=$(cat "$MOCK_LOG.stream-sequence")
+        else
+          sequence=0
+        fi
         config_requested=false
         [[ $* == *"config=true"* ]] && config_requested=true
         jq -n --argjson sequence "$sequence" --argjson config_requested "$config_requested" '{
@@ -278,7 +413,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         if [[ ${MOCK_RESTORE_NONEMPTY:-} != "" && $* == *"restore-volume-$MOCK_RESTORE_NONEMPTY "* ]]; then exit 1; fi
         exit ;;
       *"exec -i restore-volume-"*"-- tar -xpkf - --numeric-owner -C /data")
-        if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then exit 1; fi
+        if [[ ${MOCK_RESTORE_IMPORT_FAIL:-false} == true ]]; then
+          if [[ ${MOCK_RESTORE_CLEANUP_UNSAFE:-false} == true ]]; then
+            printf 'active\n' > "$MOCK_LOG.lingering-worker"
+          fi
+          exit 1
+        fi
         name="${*: -8:1}"
         name="${name#restore-volume-}"
         mkdir -p "$FIXTURE_ROOT/imported/$name"
@@ -291,15 +431,36 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         tar -C "$FIXTURE_ROOT/imported/$name" -cf - .
         exit ;;
       *"exec restore-volume-"*"-- sync") exit ;;
+      *"delete pod restore-image-probe-"*)
+        jq -s --arg name "${*: -3:1}" '.[] | select(.metadata.name != $name)' "$MOCK_LOG.restore-pods" \
+          > "$MOCK_LOG.restore-pods.next"
+        mv "$MOCK_LOG.restore-pods.next" "$MOCK_LOG.restore-pods"; exit ;;
       *"delete pod restore-volume-"*)
         jq -s --arg name "${*: -3:1}" '.[] | select(.metadata.name != $name)' "$MOCK_LOG.restore-pods" \
           > "$MOCK_LOG.restore-pods.next"
         mv "$MOCK_LOG.restore-pods.next" "$MOCK_LOG.restore-pods"; exit ;;
+      *"get pod restore-image-probe-"*"-o json")
+        name="${*: -3:1}"
+        if [[ ${MOCK_RESTORE_IMAGE_PULL_FAIL:-false} == true ]]; then
+          jq -n --arg name "$name" '{
+            metadata:{name:$name},status:{phase:"Pending",containerStatuses:[{
+              name:"pull-probe",imageID:"",
+              state:{waiting:{reason:"ImagePullBackOff"}}
+            }]}}'
+        else
+          jq -n --arg name "$name" '{
+            metadata:{name:$name},status:{phase:"Failed",containerStatuses:[{
+              name:"pull-probe",imageID:"containerd://sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              state:{terminated:{reason:"ContainerCannotRun",exitCode:1}}
+            }]}}'
+        fi
+        exit ;;
       *"get pod restore-volume-"*) exit ;;
       *"port-forward "*)
         if [[ $* == *"service/browse"* ]]; then port=18082; else port=18081; fi
+        printf '%s\n' "$BASHPID" > "$MOCK_LOG.latest-forward-pid"
         echo "Forwarding from 127.0.0.1:$port -> 3000"
-        exec sleep 600 ;;
+        exec sleep 600 3>&- ;;
       *"replace -f "*recipe-db-deploy-update.json) cp "${*: -1}" "$MOCK_LOG.lease"; exit ;;
       *"get lease recipe-db-deploy"*)
         if [[ ${MOCK_RESTORE_LOCK_DRIFT:-false} == true && -e $MOCK_LOG.imported ]]; then
@@ -312,6 +473,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         done
         echo '{"kind":"Secret"}'; exit ;;
       *"get deployments -o json") cat "$MOCK_LOG.restore-deployments"; exit ;;
+      *"get service recipe-db-internal -o json")
+        jq -n --argjson port "$(cat "$MOCK_LOG.internal-port" 2>/dev/null || printf 3000)" \
+          '{metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+            spec:{ports:[{port:80,targetPort:$port}]}}'; exit ;;
+      *"patch service recipe-db-internal "*)
+        printf '%s\n' "${*: -1}" | jq -r '.spec.ports[0].targetPort' > "$MOCK_LOG.internal-port"; exit ;;
       *"apply -f "*application.yml)
         yq -o=json -I=0 'select(.kind == "Deployment")' "${*: -1}" | jq -s '{items:map(. + {status:{readyReplicas:.spec.replicas}})}' \
           > "$MOCK_LOG.restore-deployments"; exit ;;
@@ -348,6 +515,10 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           .preconditions.uid == $current[0].metadata.uid and
           .preconditions.resourceVersion == $current[0].metadata.resourceVersion
         ' "${*: -1}" > /dev/null || exit 1
+        if [[ ${MOCK_CLOSEOUT_CLAIM_KILL:-false} == true ]]; then
+          kill -KILL "$PPID"
+          exit 1
+        fi
         rm -f "$MOCK_LOG.migration-claim"
         handled=true ;;
       *" get jobs -l recipe-db/revision="*)
@@ -357,36 +528,119 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           [[ ! -f $migration_job_file ]] || migration_job_files+=("$migration_job_file")
         done
         if ((${#migration_job_files[@]} > 0)); then
-          jq -s --argjson activated "$([[ -e $MOCK_LOG.migration-activated ]] && echo true || echo false)" \
-            --argjson failed "$([[ $MOCK_FAILED_MIGRATION == true ]] && echo true || echo false)" \
-            --argjson completed "$([[ $MOCK_COMPLETED_MIGRATION == true ]] && echo true || echo false)" '
-            map(
-              if $activated then .spec.suspend=false else . end
-            | if $activated and $failed then
-                .status={failed:1,conditions:[{type:"Failed",status:"True",
-                  reason:(if env.MOCK_MIGRATION_DEADLINE_EXCEEDED == "true"
-                    then "DeadlineExceeded" else "BackoffLimitExceeded" end)}]}
-              elif $activated and $completed then
-                .status={succeeded:1,conditions:[{type:"Complete",status:"True"}]}
-              elif $activated then .status={active:1}
-              else . end
-            )
-            | {items:.}
-          ' "${migration_job_files[@]}"
+          if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+            for migration_job_file in "${migration_job_files[@]}"; do
+              migration_job_name=$(jq -r '.metadata.name' "$migration_job_file")
+              if [[ -e $MOCK_LOG.migration-activated-$migration_job_name ]] &&
+                [[ -z $MOCK_MIGRATION_RESULT_JOB || $MOCK_MIGRATION_RESULT_JOB == "$migration_job_name" ]]; then
+                if [[ $MOCK_FAILED_MIGRATION == true ]]; then
+                  jq --arg reason "$([[ ${MOCK_MIGRATION_DEADLINE_EXCEEDED:-false} == true \
+                    ]] && echo DeadlineExceeded || echo BackoffLimitExceeded)" \
+                    '.spec.suspend=false | .status={failed:1,conditions:[{type:"Failed",status:"True",reason:$reason}]}' \
+                    "$migration_job_file" > "$migration_job_file.next"
+                elif [[ $MOCK_COMPLETED_MIGRATION == true ]]; then
+                  jq '.spec.suspend=false | .status={succeeded:1,conditions:[{type:"Complete",status:"True"}]}' \
+                    "$migration_job_file" > "$migration_job_file.next"
+                else
+                  jq '.spec.suspend=false | .status={active:1}' \
+                    "$migration_job_file" > "$migration_job_file.next"
+                fi
+                mv "$migration_job_file.next" "$migration_job_file"
+              fi
+            done
+            jq -s '{items:.}' "${migration_job_files[@]}"
+          else
+            jq -s --argjson activated "$([[ -e $MOCK_LOG.migration-activated ]] && echo true || echo false)" \
+              --argjson failed "$([[ $MOCK_FAILED_MIGRATION == true ]] && echo true || echo false)" \
+              --argjson completed "$([[ $MOCK_COMPLETED_MIGRATION == true ]] && echo true || echo false)" '
+              map(
+                if $activated then .spec.suspend=false else . end
+              | if $activated and $failed then
+                  .status={failed:1,conditions:[{type:"Failed",status:"True",
+                    reason:(if env.MOCK_MIGRATION_DEADLINE_EXCEEDED == "true"
+                      then "DeadlineExceeded" else "BackoffLimitExceeded" end)}]}
+                elif $activated and $completed then
+                  .status={succeeded:1,conditions:[{type:"Complete",status:"True"}]}
+                elif $activated then .status={active:1}
+                else . end
+              )
+              | {items:.}
+            ' "${migration_job_files[@]}"
+          fi
         else
           echo '{"items":[]}'
         fi
         handled=true ;;
       *" patch job migration-"*)
-        [[ -f $MOCK_LOG.migration-job.json ]] || exit 1
-        jq '.spec.suspend=false | .status={active:1}' "$MOCK_LOG.migration-job.json" \
-          > "$MOCK_LOG.migration-job.next"
-        mv "$MOCK_LOG.migration-job.next" "$MOCK_LOG.migration-job.json"
+        if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+          migration_job_name=
+          expect_job_name=false
+          for argument in "$@"; do
+            if $expect_job_name; then
+              migration_job_name=$argument
+              expect_job_name=false
+            elif [[ $argument == job ]]; then
+              expect_job_name=true
+            fi
+          done
+          migration_job_file="$MOCK_LOG.migration-job-$migration_job_name.json"
+          if [[ ! -f $migration_job_file && -f $MOCK_LOG.migration-job.json ]] &&
+            [[ $(jq -r '.metadata.name' "$MOCK_LOG.migration-job.json") == "$migration_job_name" ]]; then
+            migration_job_file="$MOCK_LOG.migration-job.json"
+          fi
+          [[ -f $migration_job_file ]] || exit 1
+          jq '.spec.suspend=false | .status={active:1}' "$migration_job_file" \
+            > "$migration_job_file.next"
+          mv "$migration_job_file.next" "$migration_job_file"
+          touch "$MOCK_LOG.migration-activated-$migration_job_name"
+        else
+          [[ -f $MOCK_LOG.migration-job.json ]] || exit 1
+          jq '.spec.suspend=false | .status={active:1}' "$MOCK_LOG.migration-job.json" \
+            > "$MOCK_LOG.migration-job.next"
+          mv "$MOCK_LOG.migration-job.next" "$MOCK_LOG.migration-job.json"
+        fi
         touch "$MOCK_LOG.migration-activated"
         [[ ${MOCK_MIGRATION_ACTIVATION_UNKNOWN:-false} != true ]] || exit 1
         handled=true ;;
       *" get pods -l job-name=migration-"*" -o json"*)
-        if [[ -e $MOCK_LOG.migration-activated && ! -e $MOCK_LOG.migration-worker-deleted ]]; then
+        if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+          migration_job_name=
+          for argument in "$@"; do
+            [[ $argument == job-name=* ]] && migration_job_name=${argument#job-name=}
+          done
+          migration_job_file="$MOCK_LOG.migration-job-$migration_job_name.json"
+          if [[ ! -f $migration_job_file && -f $MOCK_LOG.migration-job.json ]] &&
+            [[ $(jq -r '.metadata.name' "$MOCK_LOG.migration-job.json") == "$migration_job_name" ]]; then
+            migration_job_file="$MOCK_LOG.migration-job.json"
+          fi
+          if [[ -e $MOCK_LOG.migration-activated-$migration_job_name &&
+            ! -e $MOCK_LOG.migration-worker-deleted &&
+            ! -e $MOCK_LOG.migration-worker-deleted-$migration_job_name ]]; then
+            job=$(cat "$migration_job_file")
+            if [[ ${MOCK_MIGRATION_WORKER_TERMINATING:-false} == true ]]; then
+              jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
+                --arg claim "$(jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' <<< "$job")" \
+                '{items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name},
+                  deletionTimestamp:"2025-01-01T00:00:00Z"},
+                  spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]},
+                  status:{phase:"Running",containerStatuses:[{state:{running:{}}}]}}]}'
+            elif [[ $(jq -r '(.status.succeeded // 0)' <<< "$job") == 1 ]]; then
+              jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
+                --arg claim "$(jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' <<< "$job")" \
+                '{items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name}},
+                  spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]},
+                  status:{phase:"Succeeded",containerStatuses:[{state:{terminated:{exitCode:0}}}]}}]}'
+            else
+              jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
+                --arg claim "$(jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName' <<< "$job")" \
+                '{items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name}},
+                  spec:{volumes:[{persistentVolumeClaim:{claimName:$claim}}]},
+                  status:{phase:"Running",containerStatuses:[{state:{running:{}}}]}}]}'
+            fi
+          else
+            echo '{"items":[]}'
+          fi
+        elif [[ -e $MOCK_LOG.migration-activated && ! -e $MOCK_LOG.migration-worker-deleted ]]; then
           job=$(cat "$MOCK_LOG.migration-job.json")
           if [[ ${MOCK_MIGRATION_WORKER_TERMINATING:-false} == true ]]; then
             jq -n --arg name "$(jq -r '.metadata.name' <<< "$job")" \
@@ -413,6 +667,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         fi
         handled=true ;;
       *" delete pods -l job-name=migration-"*)
+        if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+          migration_job_name=
+          for argument in "$@"; do
+            [[ $argument == job-name=* ]] && migration_job_name=${argument#job-name=}
+          done
+          touch "$MOCK_LOG.migration-worker-deleted-$migration_job_name"
+        fi
         touch "$MOCK_LOG.migration-worker-deleted"
         handled=true ;;
       *"create -f "*migration-version-pod.json)
@@ -545,9 +806,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           '{data:{artifact:$artifact,revision:$revision}}'
         handled=true ;;
       *" get secret recipe-db-runtime -o json"*)
-        jq -n '{metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
-          data:{"auth-accounts.json":"e30=","graphql-ingress-secret":"YQ==",
-            "typesense-api-key":"YQ==","google-oauth-client-secret":"YQ==","oauth2-cookie-secret":"YQ=="}}'
+        jq -n --arg auth "$(base64 -w0 auth-accounts.json)" \
+          --arg google "$(base64 -w0 google-oauth-client-secret)" \
+          --arg cookie "$(tr '/+' '_-' < oauth2-cookie-secret | tr -d '=' | base64 -w0)" \
+          --arg graphql "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
+          --arg typesense "$(printf '%064d' 0 | tr 0 a | base64 -w0)" '{
+          metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+          data:{"auth-accounts.json":$auth,"graphql-ingress-secret":$graphql,
+            "typesense-api-key":$typesense,"google-oauth-client-secret":$google,
+            "oauth2-cookie-secret":$cookie}}'
         handled=true ;;
       *" get service graphql-projection -o json"*)
         echo '{"spec":{"type":"ClusterIP","selector":{"app.kubernetes.io/name":"graphql"},"ports":[{"name":"graphql","port":4000,"targetPort":4000,"protocol":"TCP"}]}}'
@@ -822,7 +1089,11 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       .preconditions.uid == $current[0].metadata.uid and
       .preconditions.resourceVersion == $current[0].metadata.resourceVersion
     ' "${*: -1}" > /dev/null || exit 1
-    rm -f "$MOCK_LOG.lease" ;;
+    phase=$(jq -r '.metadata.annotations["recipe-db/phase"]' "$MOCK_LOG.lease")
+    rm -f "$MOCK_LOG.lease"
+    if [[ ${MOCK_REOPEN_CLOSEOUT_KILL:-false} == true && $phase == migration-reopened ]]; then
+      kill -KILL "$PPID"
+    fi ;;
   *"rollout status "*) [[ $MOCK_ROLLOUT != true ]] ;;
   *"create secret generic recipe-db-routes"*)
     for argument in "$@"; do
@@ -921,6 +1192,8 @@ printf 'oras %s\n' "$*" >> "$MOCK_LOG"
     esac
   }
   if [[ $1 = manifest ]]; then
+    [[ ${MOCK_IMAGE_INDEX_FAIL:-false} != true ||
+      $3 == ghcr.io/dhhyi/recipe-db-releases@* ]] || exit 1
     if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
       jq -n --arg shape "$MOCK_SHAPE" --arg revision "$(artifact_revision "$3")" '{
       schemaVersion:2,artifactType:"application/vnd.dhhyi.recipe-db.release.v1+json",
@@ -992,7 +1265,8 @@ if jq -e 'has("config")' "$2" > /dev/null; then
       (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"] +
         (if .config.runtime.googleOAuthClientId then ["redis","oauth2-proxy"] else [] end))[] |
       . as $name | select($name != (env.MOCK_RESTORE_MISSING_WORKLOAD // "")) |
-      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
+      {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db",
+        labels:{"app.kubernetes.io/part-of":"recipe-db"}},
       spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
       spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
         env:([{name:"MODE",value:"production"}] +
@@ -1175,6 +1449,80 @@ http:
         servers:
           - url: http://recipes:4000
 YAML
+fi
+EOF
+  cat > bin/curl << 'EOF'
+#!/usr/bin/env bash
+if [[ ${MOCK_RESTORE:-false} != true ]]; then
+  exec /usr/bin/curl "$@"
+fi
+request_file=
+url=
+while (($#)); do
+  case "$1" in
+    --data-binary) request_file=${2#@}; shift ;;
+    http://*) url=$1 ;;
+  esac
+  shift
+done
+restore_image_json=${MOCK_RESTORE_IMAGE_JSON:-null}
+restore_image_url=$(jq -r '.url // empty' <<< "$restore_image_json")
+restore_image_thumb_url=$(jq -r '.thumbUrl // empty' <<< "$restore_image_json")
+if [[ $url == */api/http/routers ]]; then
+  echo '[{"name":"graphql@file","status":"enabled"}]'
+elif [[ $url == */graphql ]]; then
+  query=$(jq -r .query "$request_file")
+  case "$query" in
+    *"createRecipe"*)
+      jq -r .variables.name "$request_file" > "$MOCK_LOG.probe-name"
+      touch "$MOCK_LOG.probe-created"
+      sequence=$(cat "$MOCK_LOG.stream-sequence" 2>/dev/null || echo 0)
+      printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
+      echo '{"data":{"createRecipe":{"id":"recovery-probe"}}}' ;;
+    *"updateRecipe"*)
+      jq -r .variables.name "$request_file" > "$MOCK_LOG.probe-name"
+      sequence=$(cat "$MOCK_LOG.stream-sequence")
+      printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
+      jq -n '{"data":{"updateRecipe":{"id":"recovery-probe"}}}' ;;
+    *"deleteRecipe"*)
+      sequence=$(cat "$MOCK_LOG.stream-sequence")
+      printf '%s\n' "$((sequence + 1))" > "$MOCK_LOG.stream-sequence"
+      rm -f "$MOCK_LOG.probe-name"
+      echo '{"data":{"deleteRecipe":true}}' ;;
+    *"searchRecipes"*)
+      search=$(jq -r '.variables.options.q' "$request_file")
+      if [[ $search == '*' ]]; then
+        echo '{"data":{"searchRecipes":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}],"found":1}}}'
+      elif [[ -f $MOCK_LOG.probe-name && $search == "$(cat "$MOCK_LOG.probe-name")" ]]; then
+        jq -n --arg name "$search" \
+          '{"data":{"searchRecipes":{"recipes":[{"id":"recovery-probe","name":$name}],"found":1}}}'
+      else
+        echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
+      fi ;;
+    *"recipe(id:"*)
+      if [[ $restore_image_json != null ]]; then
+        jq -cn --argjson image "$restore_image_json" \
+          '{data:{recipe:{id:"fixture-recipe",name:"Recovery fixture recipe",image:$image,rating:{count:0}}}}'
+      else
+        echo '{"data":{"recipe":{"id":"fixture-recipe","name":"Recovery fixture recipe","image":null,"rating":{"count":0}}}}'
+      fi ;;
+    *"recipes {"*)
+      echo '{"data":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}]}}' ;;
+    *) echo '{"data":{"__typename":"Query"}}' ;;
+  esac
+elif [[ $url == */recipe/recovery-probe && ! -f $MOCK_LOG.probe-name ]]; then
+  printf '404'
+elif [[ $url == */recipe/* && -f $MOCK_LOG.probe-name ]]; then
+  cat "$MOCK_LOG.probe-name"
+elif [[ -n $restore_image_url && $url == *"$restore_image_url" ]]; then
+  cat "$FIXTURE_ROOT/recovery-image-full"
+elif [[ -n $restore_image_thumb_url && $url == *"$restore_image_thumb_url" ]]; then
+  cat "$FIXTURE_ROOT/recovery-image-thumbnail"
+elif [[ $url == */recipe/* ]]; then
+  echo 'Recovery fixture recipe'
+else
+  printf 'unsupported restore curl request: %s\n' "$url" >&2
+  exit 1
 fi
 EOF
   chmod +x bin/*

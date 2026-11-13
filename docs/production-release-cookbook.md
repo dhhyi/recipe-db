@@ -101,6 +101,27 @@ Expect exit status zero and `success: true` in `$RESULT/result.json`. Clusters a
 
 After testing, use an approved maintenance window. Keep the old release's matching checkout and the Pi's private backup configuration available.
 
+Before entering maintenance, install the reviewed uploader from the provisioning devcontainer on the workstation:
+
+```sh
+mise run --raw in-devcontainer provisioning \
+  ansible-playbook -i /home/vscode/.config/recipe-db/provisioning/inventory.yml \
+  backup-configure.yml --tags backup-uploader --ask-become-pass
+```
+
+Use your actual private inventory path. This supported uploader-only install requires an idle backup service and `maintenanceActive: false`; it stops and disables the timer, preserving the previous release checkout, capture wrapper, configuration-generation marker and all private capture inputs. Do not use ordinary provisioning or replace the installed script during maintenance. This is an administrative prerequisite, not a capture-source/schema upgrade. If maintenance is already active with an older uploader, stop: this guarded install cannot upgrade it in place.
+
+On the Pi, verify installation before proceeding:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+sudo systemctl show --property=ActiveState --value recipe-db-backup.service
+sudo systemctl is-enabled recipe-db-backup.timer
+sudo systemctl is-active recipe-db-backup.timer
+```
+
+Require `migrationRecoveryCloseoutVersion: 1`, `maintenanceActive: false`, service state `inactive` or `failed`, and timer `disabled` and `inactive` (the last two commands return nonzero for these deliberate states). Keep the timer disabled through maintenance and recovery.
+
 On the Pi, enter maintenance through the backup service's uploader:
 
 ```sh
@@ -216,9 +237,54 @@ Each Job's `activeDeadlineSeconds` comes from its pinned candidate inventory and
 
 If a terminal exits while holding the separate `recipe-db-migration` command claim, inspect the Lease and confirm that the original command process has stopped. Only then run the exact `release-migration-recover-claim` command printed by `release-migration-status` or `release-migration-next`. Recovery requires the exact holder and `RECOVER-<holder>` confirmation, deletes only that claim using Kubernetes UID/resource-version preconditions, and does not modify migration state or Jobs. Follow the printed status recommendation afterward; it will observe the same existing Job and will not start another transition while it is active.
 
-## 7. Start the candidate and wait for readiness
+### Recover a failed or uncertain migration
 
-Only after recording one of the two outcomes above, start the candidate:
+This is a destructive, operator-approved recovery for a failed or uncertain step-6 migration only. It is not a retry or rollback. It is forbidden once public access may have opened during this retained operation, including after a temporary-fix restaging: the original backup cannot safely discard subsequent public writes. The candidate is aborted; do not run `release-migration-next`, `release-start`, `release-reopen`, `backup-exit`, or ordinary deployment. An agent may prepare the command but cannot supply the human approval.
+
+First inspect the failed Job, both Leases and every worker using the private commands printed by `release-migration-status`. Confirm the old `recipe-db-deploy` Lease and access barrier remain, and that no migration Job, worker, or other storage user is running or terminating. A disconnected terminal, expired Lease or delete request is not proof of termination. If anything is active or uncertain, stop and resolve it before recovery.
+
+Retrieve the exact complete backup package and sibling manifest recorded by the retained operation's `backupVerification.backupId`, using the private read-only download procedure in [fresh-deployment restore](production-kubernetes.md#fresh-deployment-restore). Keep both files root-private on the Pi; do not use a partial snapshot, a different backup, production logs, or the candidate artifact. Define absolute paths and confirm the ID from the retained state:
+
+```sh
+BACKUP_ID=$(jq -er '.backupVerification.backupId' "$STATE/backup-state.json")
+PACKAGE_MANIFEST='/private/path/to/the-exact-backup.manifest.json'
+PACKAGE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
+```
+
+Use the clean pinned tooling checkout recorded by the operation, not the candidate's templates: `--release-sources-from-git` loads each immutable release's own metadata and templates. Previous-release credentials must have been retained privately before candidate staging; missing or changed credentials cannot be reconstructed during recovery.
+
+Before requesting destructive approval, display the retained recovery scope on the Pi:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d --release-sources-from-git release-migration-status \
+  "$VALUES" "$STATE" "$RELEASE"
+```
+
+Require the `Recovery approval scope:` JSON to match the intended target, cluster/context, namespace, exact `backupId`, `previousRelease` and `previousRevision`. Its `storage` list must include **every** configured application PVC and the complete `/data` root that will be cleared inside it, including derived/cache/message storage not included in the backup inventory. Captured PVCs also report their retained UID and PV. This is the retained deletion scope, not a declaration that recovery is safe: inspect the printed worker/Lease commands and resolve every uncertainty first. The approved command validates all current PVC ownership, bound storage and captured identities, plus the retrieved package, before deletion. No credentials or application records appear in the summary.
+
+Only after reviewing the exact target, backup, previous release and complete application-data deletion scope, and receiving explicit human approval to clear and restore all application storage, run:
+
+```sh
+KUBECONFIG="$KUBECONFIG" mise run production-k3d --release-sources-from-git release-migration-recover \
+  "$VALUES" "$STATE" "$RELEASE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" \
+  "$BACKUP_ID" "CLEAR-AND-RESTORE-$BACKUP_ID-$REVISION-ATTEMPT-1"
+```
+
+The command revalidates the package against the retained coordinated pre-migration snapshot, checks the previous immutable release and retained configuration/credentials, verifies all owned bound PVCs and stopped workers, and pulls every previous-release workload/infrastructure image before clearing any data. It then clears only the configured PVC data roots and restores the complete snapshot through the normal importer, rebuilding derived state and checking readiness while the barrier and Lease remain. This includes services whose migration already succeeded. Credentials, configuration, backups and private operation diagnostics are preserved. No versions are stamped and no migrator is rerun.
+
+On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision and takes the same exclusive command claim; recovery never opens public access automatically. After reopening and recorded ownership release, the uploader reports `maintenanceActive: false` and archives the recovery state and retained credentials before the next capture. Keep the previous release's backup configuration, run and verify an explicit capture, then use the existing [backup-enable playbook](../provisioning/backup-enable.yml) to approve resuming scheduled backups; the recovery command does not enable the timer itself. During recovery an in-cluster shutdown guard monitors the command heartbeat independently of the workstation, refreshes its projected authentication token per request, and acknowledges client pulses. If the command or host disappears, the guard stops recovery workloads and storage helpers after roughly 30–60 seconds without heartbeat, leaving access blocked and ownership retained. It verifies worker termination and remains armed through cleanup until explicitly stopped; a live command also terminates when its guard or heartbeat is lost, including when an active guard stops acknowledging pulses for 20 seconds. Reopening refuses any surviving guard Job or Pod. API failures can delay shutdown: inspect the guard Job and verify worker termination rather than assuming a timeout proves it.
+
+If cleanup failed, `safeToRetry` records historical cleanup safety, not permanent authorization or prohibition. Resolve the failure and stop every worker, including stateless or terminating GraphQL Pods; the guard remains armed until they are gone. Status recommends another full recovery only after fresh ownership, complete-package, worker and barrier checks. A retry still requires the new attempt-specific `CLEAR-AND-RESTORE` approval.
+
+If reopening was durably recorded as `recovered/migration-reopened` but ownership closeout was interrupted, run `release-migration-status` with the same values, retained state and previous immutable release. A remaining command claim must first be explicitly recovered with the printed holder-bound command, only after confirming the old command stopped. Then explicitly approve the printed `release-recovery-reopen` command with `OPEN-RECOVERY-<backup-id>-<previous-revision>` again. In this exact terminal state it verifies previous-production readiness, credentials, routes and absence of the guard, then reconciles only Lease ownership and closeout metadata. It never restores, clears, changes workload modes or reopens routes; partial reopening phases cannot use this path. Require recorded `ownershipReleasedAt`, absent operation/command Leases and uploader `maintenanceActive: false` before capture.
+
+On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. Status recognizes an interrupted state/Lease phase update but never infers successful completion from it. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. The approved command can terminate an owned expired guard only after verifying that every other worker has stopped. Each approved attempt has a monotonically increasing attempt number in the retained state and requires a distinct `...-ATTEMPT-<number>` confirmation; an earlier token cannot authorize a retry. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
+
+## 7. Start the candidate only after successful migration
+
+This step applies only when migration succeeded or no migration was required. Complete recovery is an alternate terminal outcome: it aborts the candidate and leaves the previous release ready behind the barrier. Never start the aborted candidate after recovery; use only the separately approved `release-recovery-reopen` command printed by recovery.
+
+For an eligible candidate, start it and wait for readiness:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-start \

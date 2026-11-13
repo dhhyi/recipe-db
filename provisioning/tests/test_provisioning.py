@@ -82,6 +82,30 @@ class NetworkTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_uploader_only_install_preserves_pinned_capture_inputs_and_checks_closeout(self):
+        tasks = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]["tasks"]
+        selected = [task for task in tasks if task.get("tags") == "backup-uploader"]
+        installer = next(task for task in selected if "ansible.builtin.copy" in task)
+        self.assertEqual(installer["ansible.builtin.copy"]["dest"],
+                         "/usr/local/sbin/recipe-db-backup-upload")
+        self.assertEqual(installer["ansible.builtin.copy"]["src"], "files/backup-upload.py")
+        self.assertFalse(any("ansible.builtin.file" in task or
+                             "ansible.builtin.import_tasks" in task for task in selected))
+        self.assertEqual([task["ansible.builtin.copy"]["dest"] for task in selected
+                          if "ansible.builtin.copy" in task],
+                         ["/usr/local/sbin/recipe-db-backup-upload"])
+        guards = ("Refuse configuration changes while a backup is running",
+                  "Refuse backup input changes during release maintenance",
+                  "Refuse configuration without checking an existing maintenance operation")
+        for name in guards:
+            guard = next(task for task in selected if task["name"] == name)
+            self.assertLess(selected.index(guard), selected.index(installer))
+        timer = selected[0]["ansible.builtin.systemd_service"]
+        self.assertEqual(timer, {"name": "recipe-db-backup.timer", "enabled": False, "state": "stopped"})
+        capability = selected[-1]["ansible.builtin.assert"]["that"]
+        self.assertIn("migrationRecoveryCloseoutVersion == 1", capability[0])
+        self.assertIn("maintenanceActive == false", capability[1])
+
     def setUp(self):
         self.play = yaml.safe_load((ROOT / "site.yml").read_text())[0]
         self.defaults = yaml.safe_load((ROOT / "group_vars/pi.yml").read_text())
