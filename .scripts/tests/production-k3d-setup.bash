@@ -204,6 +204,22 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   esac
   if [[ $MOCK_RESTORE == true ]]; then
     case "$*" in
+      *"get rolebinding/recovery-guard-"*)
+        exit ;;
+      *"get job recovery-guard-"*"--ignore-not-found"*)
+        exit ;;
+      *"get job recovery-guard-"*"-o json")
+        echo '{"status":{"active":1}}'; exit ;;
+      *"apply -f "*restore-guard.json)
+        cp "${*: -1}" "$MOCK_LOG.restore-guard"
+        exit ;;
+      *"get configmap recovery-guard-"*"-o json")
+        echo '{"data":{"ready":"true","expired":"false"}}'; exit ;;
+      *"patch configmap recovery-guard-"* | *"delete job recovery-guard-"* | \
+      *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
+        exit ;;
+      *"get pods -l job-name=nats-init -o json")
+        echo '{"items":[]}'; exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
         if [[ ${MOCK_ABANDON_WORKER:-false} == true ]]; then
           echo '{"items":[{"kind":"Pod","metadata":{"name":"restore-volume-recipes"}}]}'

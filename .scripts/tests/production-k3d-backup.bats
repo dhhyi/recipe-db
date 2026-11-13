@@ -966,6 +966,33 @@ PY
   : > "$MOCK_LOG.restore-pods"
   local revision
   revision=$(jq -er .candidate.revision "$STATE/backup-state.json")
+  local credential_checksum
+  credential_checksum=$(sha256sum "$STATE/previous-runtime-secret.json" | cut -d ' ' -f 1)
+  mv "$STATE/previous-runtime-secret.json" "$STATE/previous-runtime-secret.saved"
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"securely retained previous-release runtime credentials"* ]]
+  mv "$STATE/previous-runtime-secret.saved" "$STATE/previous-runtime-secret.json"
+  cp auth-accounts.json auth-accounts.saved
+  printf '{"anonymous":{"role":"anonymous"},"tokens":[{"role":"owner","secret":"changed-test-token"}],"googleAccounts":{}}\n' \
+    > auth-accounts.json
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"credentials do not match the previous-release configuration"* ]]
+  mv auth-accounts.saved auth-accounts.json
+  cp "$PACKAGE_ARCHIVE" "$PACKAGE_ARCHIVE.saved"
+  printf 'not a complete backup archive\n' > "$PACKAGE_ARCHIVE"
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-1"
+  [ "$status" -ne 0 ]
+  mv "$PACKAGE_ARCHIVE.saved" "$PACKAGE_ARCHIVE"
+  run ! grep -Eq 'create -f .*restore-volume-pod|exec restore-volume-|delete pvc' "$MOCK_LOG"
+  jq -e '.phase == "migration-failed"' "$STATE/backup-state.json" > /dev/null
   export MOCK_IMAGE_INDEX_FAIL=true
   run bash .scripts/production-k3d.sh release-migration-recover \
     "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
@@ -987,12 +1014,8 @@ PY
     and .migrationRecovery.attempts[-1].number == 1
     and (.migrationRecovery.failureReason | contains("previous-release workload image"))' \
     "$STATE/backup-state.json" > /dev/null
-  local preflight_claim_holder
-  preflight_claim_holder=$(jq -er .spec.holderIdentity "$MOCK_LOG.migration-claim")
-  run bash .scripts/production-k3d.sh release-migration-recover-claim \
-    "$VALUES" "$STATE" "$CANDIDATE" "$preflight_claim_holder" "RECOVER-$preflight_claim_holder"
-  [ "$status" -eq 0 ]
   [ ! -e "$MOCK_LOG.migration-claim" ]
+  [ "$credential_checksum" = "$(sha256sum "$STATE/previous-runtime-secret.json" | cut -d ' ' -f 1)" ]
   export MOCK_RESTORE_IMAGE_PULL_FAIL=false MOCK_RESTORE_IMPORT_FAIL=true
   run bash .scripts/production-k3d.sh release-migration-recover \
     "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
@@ -1015,16 +1038,22 @@ PY
 
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  [[ $output == *"a command claim remains held"* ]]
+  [[ $output == *"complete migration recovery failed"* ]]
   local claim_holder
-  claim_holder=$(jq -er .spec.holderIdentity "$MOCK_LOG.migration-claim")
+  claim_holder=interrupted-recovery-command
+  jq -n --arg holder "$claim_holder" --arg candidate "$CANDIDATE" '{
+    metadata:{name:"recipe-db-migration",namespace:"kube-system",uid:"claim-uid",resourceVersion:"1",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"},annotations:{"recipe-db/release":$candidate}},
+    spec:{holderIdentity:$holder}}' > "$MOCK_LOG.migration-claim"
   jq '.phase = "migration-recovery-import-images"
     | .migrationRecovery.status = "in-progress"
     | .migrationRecovery.phase = "import-images"
+    | .migrationRecovery.leaseTransition = {
+        from:"migration-recovery-clearing-application-data",to:"migration-recovery-import-images"}
     | del(.migrationRecovery.safeToRetry, .migrationRecovery.failureReason, .migrationRecovery.failedAt)' \
     "$STATE/backup-state.json" > "$STATE/backup-state.next"
   mv "$STATE/backup-state.next" "$STATE/backup-state.json"
-  jq '.metadata.annotations["recipe-db/phase"] = "migration-recovery-import-images"' \
+  jq '.metadata.annotations["recipe-db/phase"] = "migration-recovery-clearing-application-data"' \
     "$MOCK_LOG.lease" > "$MOCK_LOG.lease.next"
   mv "$MOCK_LOG.lease.next" "$MOCK_LOG.lease"
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
@@ -1037,6 +1066,7 @@ PY
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   [[ $output == *"interrupted during migration-recovery-import-images"* ]]
+  [[ $output == *"interrupted recovery phase update"* ]]
   [[ $output == *"CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"* ]]
   local before
   before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
@@ -1059,6 +1089,11 @@ PY
     and [.migrationRecovery.attempts[].number] == [1,2,3]' \
     "$STATE/backup-state.json" > /dev/null
   jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes"
+  [ ! -e "$MOCK_LOG.migration-claim" ]
+  jq -e '.items[] | select(.kind == "Role") |
+    all(.rules[]; (.verbs | index("create")) == null and (.resources | index("secrets")) == null)
+    and any(.rules[]; .resources == ["deployments/scale"] and (.resourceNames | index("graphql")) != null)' \
+    "$MOCK_LOG.restore-guard" > /dev/null
   [ -e "$MOCK_LOG.lease" ]
   python3 - "$FIXTURE_ROOT/imported/recipes/recipes.sqlite3" << 'PY'
 import sqlite3, sys
@@ -1083,6 +1118,16 @@ PY
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
   [[ $output == *"migration commands require a staged candidate"* ]]
+  local before_reopen
+  before_reopen=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  export MOCK_MIGRATION_CLAIM_HELD=true
+  run bash .scripts/production-k3d.sh release-recovery-reopen \
+    "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
+  [ "$status" -ne 0 ]
+  [[ $output == *"another migration command owns the atomic cluster claim"* ]]
+  [ "$before_reopen" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
+  jq -e '.http.routers["restore-public-barrier"] != null' "$MOCK_LOG.restore-routes" > /dev/null
+  export MOCK_MIGRATION_CLAIM_HELD=false
   run bash .scripts/production-k3d.sh release-recovery-reopen \
     "$VALUES" "$STATE" "$ARTIFACT" "OPEN-RECOVERY-$HOLDER-$revision"
   [ "$status" -eq 0 ]

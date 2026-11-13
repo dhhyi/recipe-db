@@ -230,17 +230,21 @@ PACKAGE_MANIFEST='/private/path/to/the-exact-backup.manifest.json'
 PACKAGE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
 ```
 
+Use the clean pinned tooling checkout recorded by the operation, not the candidate's templates: `--release-sources-from-git` loads each immutable release's own metadata and templates. Previous-release credentials must have been retained privately before candidate staging; missing or changed credentials cannot be reconstructed during recovery.
+
 Only after reviewing the exact target, backup, previous release and complete application-data deletion scope, and receiving explicit human approval to clear and restore all application storage, run:
 
 ```sh
-KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-recover \
+KUBECONFIG="$KUBECONFIG" mise run production-k3d --release-sources-from-git release-migration-recover \
   "$VALUES" "$STATE" "$RELEASE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" \
   "$BACKUP_ID" "CLEAR-AND-RESTORE-$BACKUP_ID-$REVISION-ATTEMPT-1"
 ```
 
 The command revalidates the package against the retained coordinated pre-migration snapshot, checks the previous immutable release and retained configuration/credentials, verifies all owned bound PVCs and stopped workers, and pulls every previous-release workload/infrastructure image before clearing any data. It then clears only the configured PVC data roots and restores the complete snapshot through the normal importer, rebuilding derived state and checking readiness while the barrier and Lease remain. This includes services whose migration already succeeded. Credentials, configuration, backups and private operation diagnostics are preserved. No versions are stamped and no migrator is rerun.
 
-On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision; recovery never opens public access automatically. On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. Each approved attempt has a monotonically increasing attempt number in the retained state and requires a distinct `...-ATTEMPT-<number>` confirmation; an earlier token cannot authorize a retry. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
+On verified success, the candidate is recorded as aborted and the command prints a separate exact `release-recovery-reopen` command. Reopening requires a second explicit operator decision and takes the same exclusive command claim; recovery never opens public access automatically. During recovery an in-cluster shutdown guard monitors the command heartbeat independently of the workstation. If the command or host disappears, the guard stops recovery workloads and storage helpers after roughly 30–60 seconds without heartbeat, leaving access blocked and ownership retained. API failures can delay shutdown: inspect the guard Job and verify worker termination rather than assuming a timeout proves it.
+
+On failure or interruption, inspect the phase and Leases, confirm workers are stopped, and keep the barrier. Status recognizes an interrupted state/Lease phase update but never infers successful completion from it. A partial import is never merged or resumed. Another attempt requires fresh review, complete package revalidation and explicit approval to clear all application storage again; use only the safe command printed by status after its worker checks pass. Each approved attempt has a monotonically increasing attempt number in the retained state and requires a distinct `...-ATTEMPT-<number>` confirmation; an earlier token cannot authorize a retry. If workers cannot be stopped or the barrier cannot be maintained, do not retry or reopen.
 
 ## 7. Start the candidate only after successful migration
 

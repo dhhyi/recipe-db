@@ -64,10 +64,9 @@ restore_state_write() {
 restore_phase() {
   restore_current_phase=$1
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
-    release_state_write recovery-required "migration-recovery-$1" \
+    release_recovery_state_write recovery-required "migration-recovery-$1" \
       "$(jq -cn --arg phase "$1" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '{migrationRecovery:{status:"in-progress",phase:$phase,updatedAt:$updatedAt}}')" || return 1
-    cluster_operation_lock_update "migration-recovery-$1"
     return
   fi
   restore_state_write in-progress "$1" || return 1
@@ -231,20 +230,24 @@ restore_cleanup() {
       printf 'production: recovery workers could not all be stopped; verify every storage user is terminated\n' >&2
       retry_safe=false
     }
+    if [[ $retry_safe == true ]]; then
+      restore_guard_stop || {
+        printf 'production: recovery shutdown guard could not be removed; inspect it before another attempt\n' >&2
+        retry_safe=false
+      }
+    fi
     if [[ ${restore_barrier:-false} == true ]]; then
       restore_routes_apply "$work/restore-barrier-routes.json" || {
         printf 'production: could not reassert recovery public barrier; isolate ingress immediately\n' >&2
         retry_safe=false
       }
     fi
-    release_state_write recovery-required migration-recovery-failed \
+    release_recovery_state_write recovery-required migration-recovery-failed \
       "$(jq -cn --arg phase "${restore_current_phase:-interrupted}" --argjson safeToRetry "$retry_safe" \
         --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg failureReason "$failure_reason" \
         '{migrationRecovery:{status:"failed",phase:$phase,failedAt:$failedAt,
           safeToRetry:$safeToRetry,failureReason:$failureReason}}')" \
       || printf 'production: could not update durable migration-recovery diagnostics\n' >&2
-    cluster_operation_lock_update migration-recovery-failed \
-      || printf 'production: could not mark the retained release Lease as requiring recovery\n' >&2
     printf 'production: complete migration recovery FAILED; no success or reopening was recorded; Lease holder %s retained\n' \
       "$lock_holder" >&2
     printf 'production: inspect private release state %s/backup-state.json and the retained operation Lease; do not retry import or reopen access\n' \
@@ -508,28 +511,184 @@ restore_volume_pod() {
 }
 
 restore_validate_migration_secrets() {
-  local key expected
-  kube get secret recipe-db-runtime -o json > "$work/restore-runtime-secret.json" \
-    || production_fail "migration recovery requires the retained previous-release runtime credentials"
-  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and (.data | type == "object")' "$work/restore-runtime-secret.json" > /dev/null \
-    || production_fail "migration recovery refuses an absent or unowned runtime Secret"
+  local key expected retained="$snapshot/previous-runtime-secret.json"
+  [[ -f $retained && ! -L $retained && $(stat -c %u "$retained") == "$EUID" &&
+  $((8#$(stat -c %a "$retained") & 077)) == 0 ]] \
+    || production_fail "migration recovery requires securely retained previous-release runtime credentials"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    .source == $state[0].source and (.data | type == "object" and length > 0)' \
+    "$retained" > /dev/null \
+    || production_fail "retained runtime credentials do not belong to the previous release"
   for key in "${operator_secret_keys[@]}"; do
     expected=$(base64 -w0 "$work/$key") \
       || production_fail "could not validate the retained previous-release credential: $key"
     jq -e --arg key "$key" --arg expected "$expected" '.data[$key] == $expected' \
-      "$work/restore-runtime-secret.json" > /dev/null \
+      "$retained" > /dev/null \
       || production_fail "retained runtime credentials do not match the previous-release configuration"
   done
   for key in graphql-ingress-secret typesense-api-key; do
     jq -jer --arg key "$key" '.data[$key] | @base64d' \
-      "$work/restore-runtime-secret.json" > "$work/$key" \
+      "$retained" > "$work/$key" \
       || production_fail "retained runtime Secret is missing a required previous-release credential"
   done
   jq -eRs 'test("^[A-Za-z0-9_-]{43}\\z")' "$work/graphql-ingress-secret" > /dev/null \
     || production_fail "retained GraphQL ingress credential is invalid"
   jq -eRs 'test("^[0-9a-f]{64}\\n?\\z")' "$work/typesense-api-key" > /dev/null \
     || production_fail "retained Typesense credential is invalid"
+  if [[ $command == release-recovery-reopen ]]; then
+    kube get secret recipe-db-runtime -o json > "$work/restore-runtime-secret.json" \
+      || production_fail "cannot verify restored runtime credentials before reopening"
+    jq -e --slurpfile retained "$retained" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .data == $retained[0].data' "$work/restore-runtime-secret.json" > /dev/null \
+      || production_fail "restored runtime credentials differ from the retained previous release"
+  fi
+}
+
+restore_guard_start() {
+  local parent_pid=$BASHPID deadline=$((SECONDS + timeout))
+  restore_guard_name="recovery-guard-$backup_id"
+  kube get "rolebinding/$restore_guard_name" "role/$restore_guard_name" \
+    "serviceaccount/$restore_guard_name" "configmap/$restore_guard_name" \
+    --ignore-not-found -o json > "$work/restore-existing-guard-resources.json" || return 1
+  if [[ ! -s $work/restore-existing-guard-resources.json ]]; then
+    printf '{"items":[]}\n' > "$work/restore-existing-guard-resources.json"
+  fi
+  jq -e --arg holder "$backup_id" 'all(.items[];
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.labels["recipe-db/restore-holder"] == $holder)' \
+    "$work/restore-existing-guard-resources.json" > /dev/null \
+    || production_fail "recovery guard resources have drifted"
+  kube get job "$restore_guard_name" --ignore-not-found -o json > "$work/restore-old-guard.json" || return 1
+  if [[ -s $work/restore-old-guard.json ]]; then
+    jq -e --arg holder "$backup_id" '
+      .metadata.labels["recipe-db/restore-holder"] == $holder
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and (.status.active // 0) == 0' "$work/restore-old-guard.json" > /dev/null \
+      || production_fail "an existing recovery guard is unowned or still active"
+    kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  fi
+  cat > "$work/restore-guard.sh" << 'EOF'
+set -eu
+trap 'exit 0' TERM INT QUIT
+token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+api="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
+request() {
+  curl -fsS --connect-timeout 3 --max-time 5 --cacert "$ca" \
+    -H "Authorization: Bearer $token" "$@"
+}
+patch() {
+  request -X PATCH -H 'Content-Type: application/merge-patch+json' \
+    --data "$2" "$api$1" > /dev/null
+}
+heartbeat="/api/v1/namespaces/$NAMESPACE/configmaps/$GUARD"
+patch "$heartbeat" '{"data":{"ready":"true"}}'
+last=''
+stale=0
+while [ "$stale" -lt 6 ]; do
+  if current=$(request "$api$heartbeat"); then
+    if [ "$current" != "$last" ]; then stale=0; else stale=$((stale + 1)); fi
+    last=$current
+  else
+    break
+  fi
+  sleep 5
+done
+printf 'Recovery command heartbeat lost; stopping recovery workers. Access barrier and ownership remain.\n' >&2
+while :; do
+  failed=false
+  for name in $WORKLOADS; do
+    patch "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/nats-init" \
+    '{"spec":{"suspend":true}}' || failed=true
+  for name in $HELPERS; do
+    # A missing helper is already stopped. Never force-delete a running storage Pod.
+    code=$(request -X DELETE --data '{"kind":"DeleteOptions","apiVersion":"v1"}' \
+      -H 'Content-Type: application/json' -o /dev/null -w '%{http_code}' \
+      "$api/api/v1/namespaces/$NAMESPACE/pods/$name") || {
+      [ "$code" = 404 ] || failed=true
+    }
+  done
+  patch "$heartbeat" '{"data":{"expired":"true"}}' || failed=true
+  [ "$failed" != false ] || exit 0
+  printf 'Recovery worker shutdown incomplete; retrying shutdown only. Inspect the recovery guard.\n' >&2
+  sleep 5
+done
+EOF
+  jq -n --arg ns "$namespace" --arg name "$restore_guard_name" --arg holder "$backup_id" \
+    --arg image "$(jq -r '.infrastructure.maintenance' "$work/config.json")" \
+    --argjson workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" \
+    --argjson helpers "$(jq -c '[.volumes | keys[] | "restore-volume-" + .]' "$work/config.json")" \
+    --rawfile script "$work/restore-guard.sh" '
+    def meta: {name:$name,namespace:$ns,labels:{"app.kubernetes.io/part-of":"recipe-db",
+      "recipe-db/restore-holder":$holder}};
+    {apiVersion:"v1",kind:"List",items:[
+      {apiVersion:"v1",kind:"ServiceAccount",metadata:meta},
+      {apiVersion:"rbac.authorization.k8s.io/v1",kind:"Role",metadata:meta,rules:[
+        {apiGroups:[""],resources:["configmaps"],resourceNames:[$name],verbs:["get","patch"]},
+        {apiGroups:["apps"],resources:["deployments/scale"],resourceNames:$workloads,verbs:["patch"]},
+        {apiGroups:["batch"],resources:["jobs"],resourceNames:["nats-init"],verbs:["patch"]},
+        {apiGroups:[""],resources:["pods"],resourceNames:$helpers,verbs:["delete"]}]},
+      {apiVersion:"rbac.authorization.k8s.io/v1",kind:"RoleBinding",metadata:meta,
+        roleRef:{apiGroup:"rbac.authorization.k8s.io",kind:"Role",name:$name},
+        subjects:[{kind:"ServiceAccount",name:$name,namespace:$ns}]},
+      {apiVersion:"v1",kind:"ConfigMap",metadata:meta,data:{ready:"false",expired:"false",pulse:"initial"}},
+      {apiVersion:"batch/v1",kind:"Job",metadata:meta,spec:{backoffLimit:0,template:{
+        metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db","recipe-db/recovery-guard":$holder}},
+        spec:{restartPolicy:"Never",serviceAccountName:$name,
+          containers:[{name:"guard",image:$image,command:["sh","-ec",$script],
+            env:[{name:"NAMESPACE",value:$ns},{name:"GUARD",value:$name},
+              {name:"WORKLOADS",value:($workloads | join(" "))},
+              {name:"HELPERS",value:($helpers | join(" "))}],
+            resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]}' \
+    > "$work/restore-guard.json" || return 1
+  kube apply -f "$work/restore-guard.json" > /dev/null || return 1
+  restore_guard_started=true
+  (
+    trap - EXIT INT TERM
+    while kill -0 "$parent_pid" 2> /dev/null; do
+      kube patch configmap "$restore_guard_name" --type=merge \
+        -p "{\"data\":{\"pulse\":\"$(date -u +%s%N)\"}}" > /dev/null || exit 1
+      sleep 5
+    done
+  ) > "$work/restore-guard-heartbeat.log" 2>&1 &
+  restore_guard_heartbeat_pid=$!
+  while ((SECONDS < deadline)); do
+    kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-status.json" || return 1
+    if jq -e '.data.ready == "true" and .data.expired == "false"' \
+      "$work/restore-guard-status.json" > /dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  production_fail "recovery shutdown guard did not become ready; storage has not been cleared"
+}
+
+restore_guard_stop() {
+  [[ ${restore_guard_started:-false} == true ]] || return 0
+  kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  if [[ -n ${restore_guard_heartbeat_pid:-} ]]; then
+    kill "$restore_guard_heartbeat_pid" 2> /dev/null || true
+    wait "$restore_guard_heartbeat_pid" 2> /dev/null || true
+    restore_guard_heartbeat_pid=
+  fi
+  kube delete rolebinding,role,serviceaccount,configmap "$restore_guard_name" > /dev/null || return 1
+  restore_guard_started=false
+}
+
+restore_guard_check() {
+  [[ ${restore_guard_started:-false} == true ]] || return 1
+  kill -0 "$restore_guard_heartbeat_pid" 2> /dev/null || return 1
+  kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-status.json" || return 1
+  jq -e '.data.ready == "true" and .data.expired == "false"' \
+    "$work/restore-guard-status.json" > /dev/null || return 1
+  kube get job "$restore_guard_name" -o json > "$work/restore-guard-job-status.json" || return 1
+  jq -e '(.status.active // 0) == 1
+    and all(.status.conditions[]?; .type != "Failed" and .type != "Complete")' \
+    "$work/restore-guard-job-status.json" > /dev/null
 }
 
 restore_clear_migration_target() {
@@ -748,6 +907,18 @@ restore_start() {
   infrastructure+=(browse-maintenance)
   kube scale deployment/nats --replicas=1 > /dev/null || return 1
   kube rollout status deployment/nats --timeout="${timeout}s" || return 1
+  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+    kube get job nats-init --ignore-not-found -o json > "$work/restore-existing-nats-init.json" || return 1
+    if [[ -s $work/restore-existing-nats-init.json ]]; then
+      jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+        and (.status.active // 0) == 0' "$work/restore-existing-nats-init.json" > /dev/null \
+        || production_fail "recovery refuses an unowned or active NATS initialization Job"
+      kube delete job nats-init --wait=true --timeout="${timeout}s" > /dev/null || return 1
+      kube get pods -l job-name=nats-init -o json > "$work/restore-nats-init-pods.json" || return 1
+      jq -e '.items | length == 0' "$work/restore-nats-init-pods.json" > /dev/null \
+        || production_fail "previous NATS initialization workers have not terminated"
+    fi
+  fi
   kube apply -f "$work/restore-nats-init.yml" > /dev/null || return 1
   kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" || return 1
   for name in "${infrastructure[@]}"; do
@@ -1046,9 +1217,10 @@ restore_run() {
         and (.backupVerification.status == "verified-upload"
           or .backupVerification.status == "verified-unchanged")
         and .candidate.artifact == $candidate
-        and .status == "recovery-required"
+        and (.status == "recovery-required"
+          or (.status == "recovered" and .phase == "migration-recovered"))
         and (.phase == "migration-failed" or .phase == "migration-uncertain"
-          or (.phase | startswith("migration-recovery-")))
+          or (.phase | startswith("migration-recovery-")) or .phase == "migration-recovered")
         and (.migrationExecution.status == "failed" or .migrationExecution.status == "uncertain")
         and .migrationResult == null and .postCheckDisposition == null
         and ((.phase == "migration-recovery-failed"
@@ -1057,7 +1229,8 @@ restore_run() {
             and .phase != "migration-recovery-failed"
             and (.migrationRecovery.status == "approved"
               or .migrationRecovery.status == "in-progress"))
-          or .phase == "migration-failed" or .phase == "migration-uncertain")
+          or .phase == "migration-failed" or .phase == "migration-uncertain"
+          or (.phase == "migration-recovered" and .migrationRecovery.status == "verified"))
       ' "$state/backup-state.json" > /dev/null \
         || production_fail "migration recovery requires the same failed step-6 operation before reopening"
       [[ -f $state/manifest.json && ! -L $state/manifest.json &&
@@ -1147,12 +1320,15 @@ restore_run() {
     cluster_operation_lock_holder=$lock_holder
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect release Lease before recovery"
     jq -e --arg holder "$lock_holder" --arg release "$artifact" \
-      --arg expectedPhase "$recovery_state_phase" '
+      --arg expectedPhase "$recovery_state_phase" \
+      --slurpfile state "$state/backup-state.json" '
       .spec.holderIdentity == $holder
       and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
       and .metadata.annotations["recipe-db/operation"] == "backup"
       and .metadata.annotations["recipe-db/release"] == $release
-      and .metadata.annotations["recipe-db/phase"] == $expectedPhase
+      and (.metadata.annotations["recipe-db/phase"] == $expectedPhase
+        or ($state[0].migrationRecovery.leaseTransition.to == $expectedPhase
+          and .metadata.annotations["recipe-db/phase"] == $state[0].migrationRecovery.leaseTransition.from))
     ' <<< "$current" > /dev/null \
       || production_fail "recovery Lease does not match the failed migration operation"
     locked=true
@@ -1192,7 +1368,7 @@ restore_run() {
     ensure_namespace
     restore_cluster_state=true
   else
-    release_state_write recovery-required migration-recovery-preflight \
+    release_recovery_state_write recovery-required migration-recovery-preflight \
       "$(jq -cn --arg backupId "$expected" --arg artifact "$artifact" \
         --arg revision "$source_revision" --arg candidate "$recovery_candidate" \
         --arg approvedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg confirmation "$confirmation" \
@@ -1204,8 +1380,6 @@ restore_run() {
           attemptNumber:$attempt,attempts:($attempts + [{number:$attempt,approvedAt:$approvedAt,
             confirmation:$confirmation}]),manifest:$manifest,archive:$archive}}')" \
       || production_fail "could not persist approved migration-recovery identity"
-    cluster_operation_lock_update migration-recovery-preflight \
-      || production_fail "could not retain release ownership before destructive recovery"
   fi
   restore_current_phase=installing-barrier
   if [[ $mode == standalone ]]; then restore_phase "$restore_current_phase"; fi
@@ -1233,6 +1407,8 @@ restore_run() {
     restore_phase "$restore_current_phase"
     restore_preflight_workload_images \
       || production_fail "a previous-release workload image could not be pulled before storage clearing"
+    restore_guard_start \
+      || production_fail "recovery shutdown guard could not be installed before storage clearing"
     restore_clear_migration_target
   else
     restore_phase checking-empty-volumes
@@ -1322,13 +1498,15 @@ restore_run() {
           and any(.env[]?; .name == "MODE" and .value == "backup")))
     ' "$work/recovered-workloads.json" > /dev/null \
       || production_fail "previous-release readiness or GraphQL access barrier could not be verified"
-    release_state_write recovered migration-recovered \
+    restore_guard_check \
+      || production_fail "recovery shutdown guard or heartbeat was lost; previous-release readiness is uncertain"
+    release_recovery_state_write recovered migration-recovered \
       "$(jq -cn --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
         {migrationRecovery:{status:"verified",phase:"complete",candidateAborted:true,
           completedAt:$completedAt}}')" \
       || production_fail "restore verified but migration-recovery completion could not be recorded"
-    cluster_operation_lock_update migration-recovered \
-      || production_fail "restore verified but the retained release Lease could not be updated"
+    restore_guard_stop \
+      || production_fail "restore verified but the recovery shutdown guard could not be removed"
     restore_started=false
     $release_sources_from_git && source_flag="--release-sources-from-git "
     printf 'production: complete recovery verified; previous release %s is ready behind the access barrier; candidate %s is aborted\n' \

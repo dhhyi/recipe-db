@@ -107,6 +107,82 @@ EOF
   run ! grep -q deployment/redis "$MOCK_LOG"
 }
 
+@test "recovery recreates an owned completed NATS initializer after clearing stream storage" {
+  printf '[{"name":"nats"},{"name":"typesense"},{"name":"graphql"},{"name":"browse-maintenance"},{"name":"search"},{"name":"browse"}]\n' \
+    > work/prior-workloads.json
+  cat > recovery-start.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+timeout=3
+google_enabled=false
+restore_mode=migration-recovery
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+kube() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  case "$*" in
+    'get job nats-init --ignore-not-found -o json')
+      jq -n --arg owner "${OWNER:-recipe-db}" \
+        '{metadata:{labels:{"app.kubernetes.io/part-of":$owner}},status:{succeeded:1}}' ;;
+    'get pods -l job-name=nats-init -o json') echo '{"items":[]}' ;;
+    *restore-nats-init.yml) grep -q '^delete job nats-init ' "$MOCK_LOG" ;;
+  esac
+}
+backup_projection_route() { :; }
+backup_refresh_projections() { :; }
+restore_start
+EOF
+  run bash recovery-start.sh
+  [ "$status" -eq 0 ]
+  local removed applied
+  removed=$(awk '/^delete job nats-init / {print NR; exit}' "$MOCK_LOG")
+  applied=$(awk '/^apply .*restore-nats-init.yml/ {print NR; exit}' "$MOCK_LOG")
+  [ "$removed" -lt "$applied" ]
+  : > "$MOCK_LOG"
+  OWNER=foreign run bash recovery-start.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"unowned or active NATS initialization Job"* ]]
+  run ! grep -Eq '^(delete|apply) ' "$MOCK_LOG"
+}
+
+@test "recovery uses source-bound retained credentials and refuses changed operator secrets" {
+  mkdir -m 700 state
+  printf '{"source":{"artifact":"previous"}}\n' > state/backup-state.json
+  printf 'original-account-config' > work/auth-accounts.json
+  jq -n --arg auth "$(base64 -w0 work/auth-accounts.json)" \
+    --arg graphql "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
+    --arg typesense "$(printf '%064d' 0 | tr 0 a | base64 -w0)" \
+    '{source:{artifact:"previous"},data:{"auth-accounts.json":$auth,
+      "graphql-ingress-secret":$graphql,"typesense-api-key":$typesense}}' \
+    > state/previous-runtime-secret.json
+  chmod 600 state/previous-runtime-secret.json
+  cat > credentials.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+snapshot="$FIXTURE_ROOT/state"
+command=release-migration-recover
+operator_secret_keys=(auth-accounts.json)
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+kube() { printf 'unexpected current-secret read\n' >&2; exit 1; }
+restore_validate_migration_secrets
+EOF
+  run bash credentials.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat work/graphql-ingress-secret)" = "$(printf '%043d' 0 | tr 0 a)" ]
+  printf 'candidate-account-config' > work/auth-accounts.json
+  run bash credentials.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"credentials do not match the previous-release configuration"* ]]
+  [[ $output != *candidate-account-config* && $output != *original-account-config* ]]
+  rm state/previous-runtime-secret.json
+  run bash credentials.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"securely retained previous-release runtime credentials"* ]]
+}
+
 @test "restore read verification waits for convergence and rejects persistent failures" {
   cat > read-gate.sh << 'EOF'
 #!/usr/bin/env bash
