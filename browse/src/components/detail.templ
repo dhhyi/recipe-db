@@ -100,10 +100,6 @@ templ method(recipe *gql.RecipeDetail) {
 
 templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 	{{ recipe := resp.Recipe }}
-	{{ detailGridClass := "grid grid-cols-1 gap-3" }}
-	if len(recipe.Ingredients) > 0 {
-		{{ detailGridClass += " md:grid-cols-2" }}
-	}
 	<div itemscope itemtype="https://schema.org/Recipe" class="contents" hx-history="false">
 		<div class="flex flex-col sm:flex-row pt-1">
 			<hgroup>
@@ -116,7 +112,7 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 			</hgroup>
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
-		<section class={ detailGridClass }>
+		<section class="grid grid-cols-1 gap-3 md:grid-cols-2">
 			if recipe.Image != nil {
 				<div class="flex flex-col gap-2">
 					@image(recipe)
