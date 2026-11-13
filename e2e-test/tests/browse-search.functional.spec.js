@@ -823,6 +823,22 @@ for (const cacheSize of [10, 0]) {
     authContexts,
   }) => {
     await manualSentinel(page);
+    await page.addInitScript(() => {
+      window.historyTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (...args) => {
+        const transition = start(...args);
+        const record = {};
+        window.historyTransitions.push(record);
+        transition.ready.then(() => {
+          record.types = [...transition.types];
+        });
+        transition.finished.then(() => {
+          record.finished = true;
+        });
+        return transition;
+      };
+    });
     await page.route(/\/\?[^#]*\bq=/, async (route) => {
       const number = Number(
         new URL(route.request().url()).searchParams.get("page") || 1,
@@ -855,6 +871,10 @@ for (const cacheSize of [10, 0]) {
       .locator(`[data-recipe-id="${demoRecipe.id}"]`)
       .evaluate((link) => link.click());
     await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+    await expect(page.locator(".recipe-image")).toBeVisible();
+    await page.evaluate(() => {
+      window.historyTransitions = [];
+    });
     await page.goBack();
     await expect(search).toHaveValue("boundary");
     await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
@@ -866,6 +886,27 @@ for (const cacheSize of [10, 0]) {
     // scroll positioning is left to HTMX/browser navigation, not a controller.
     await expect(search).toBeVisible();
     await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
+    await expect
+      .poll(() => page.evaluate(() => window.historyTransitions[0]?.finished))
+      .toBe(true);
+    expect(
+      await page.evaluate(() => window.historyTransitions[0].types),
+    ).toEqual(["browse-return"]);
+    await page.goForward();
+    await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+    await expect(page.locator(".recipe-image")).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => window.historyTransitions[1]?.finished))
+      .toBe(true);
+    expect(
+      await page.evaluate(() => window.historyTransitions[1].types),
+    ).toEqual(["history-page"]);
+    await page.goBack();
+    await expect(search).toHaveValue("boundary");
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
+    await expect
+      .poll(() => page.evaluate(() => window.historyTransitions[2]?.finished))
+      .toBe(true);
     await page.reload();
     await expect(page.locator("#browse-metadata")).toHaveAttribute(
       "data-page",
