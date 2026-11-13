@@ -152,6 +152,32 @@ func TestTagOptionsUseOneContinuousListAndEmptyInventoryIsExplicit(t *testing.T)
 	}
 }
 
+func TestTagEditTransitionsUseSafeDistinctNames(t *testing.T) {
+	tags := []gql.RecipeTag{
+		{Id: "a", Category: gql.TagCategoryCuisine, Name: "A"},
+		{Id: `a"; color: red`, Category: gql.TagCategoryCuisine, Name: "B"},
+	}
+	edit := renderTagComponent(t, RecipeTagsWidget("42", tags, true, true, "", false))
+	if !strings.Contains(edit, "--tag-transition-name: recipe-tag-61") ||
+		!strings.Contains(edit, "--tag-transition-name: recipe-tag-61223b20636f6c6f723a20726564") ||
+		strings.Count(edit, `hx-swap="outerHTML transition:true"`) != len(tags) {
+		t.Fatalf("editable tags need distinct, safe transition names: %s", edit)
+	}
+	read := renderTagComponent(t, RecipeTagsWidget("42", tags, true, false, "", false))
+	if strings.Contains(read, "--tag-transition-name") || strings.Contains(read, "transition:true") {
+		t.Fatalf("read-only tags must not use tag-edit transitions: %s", read)
+	}
+	options := renderTagComponent(t, TagOptions("42", "", tags))
+	if strings.Count(options, `hx-swap="outerHTML transition:true"`) != len(tags) ||
+		!strings.Contains(options, "--tag-transition-name: recipe-tag-option-61") ||
+		!strings.Contains(options, "--tag-transition-name: recipe-tag-option-61223b20636f6c6f723a20726564") {
+		t.Fatalf("tag additions need distinct transition names: %s", options)
+	}
+	if !strings.Contains(edit, `hx-swap="innerHTML transition:true"`) {
+		t.Fatalf("tag searches must start a transition: %s", edit)
+	}
+}
+
 func TestTagOptionsPreserveAndEscapeSearchForEnterGuard(t *testing.T) {
 	body := renderTagComponent(t, TagOptions("42", ` Vegan "& `, []gql.RecipeTag{
 		{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},

@@ -90,6 +90,10 @@ ol:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
   list-style-type: decimal;
 }
 
+#recipe-tag-options > ul.markerless > li {
+  list-style-type: none;
+}
+
 a:not([role="button"]):not(:hover, :active, :focus) {
   text-decoration-line: none;
 }
@@ -203,6 +207,33 @@ header-component > header:focus-within {
     animation: none;
     mix-blend-mode: normal;
   }
+}
+
+:root:active-view-transition-type(tag-edit, tag-search) {
+  .recipe-image,
+  .recipe-rating {
+    view-transition-name: none !important;
+  }
+
+  #recipe-tag-options form[data-tag-mutation] {
+    view-transition-name: var(--tag-transition-name, none);
+  }
+
+  &::view-transition-old(root) {
+    display: none;
+  }
+
+  &::view-transition-group(root),
+  &::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+  }
+}
+
+:root:active-view-transition-type(tag-edit)
+  .recipe-tags-detail
+  form[data-tag-mutation] {
+  view-transition-name: var(--tag-transition-name, none);
 }
 
 :root:active-view-transition-type(browse-return) {

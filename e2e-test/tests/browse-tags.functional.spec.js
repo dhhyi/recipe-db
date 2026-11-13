@@ -332,6 +332,82 @@ test("detail view tags link to filtered search while edit mode remains non-navig
   await expect(page.locator("#recipe-tags [data-tag-remove]")).toHaveCount(2);
 });
 
+test("tag changes animate without lifting the image or rating", async ({
+  page,
+  request,
+  taggedDemoRecipe,
+}) => {
+  const tag = await findOrCreateTag(request, "CUISINE", "E2E Animation");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.addInitScript(() => {
+    window.tagTransitions = [];
+    const start = document.startViewTransition.bind(document);
+    document.startViewTransition = (...args) => {
+      const transition = start(...args);
+      const run = {};
+      window.tagTransitions.push(run);
+      transition.ready.then(() => {
+        run.types = [...transition.types];
+        run.tagNames = [
+          ...document.querySelectorAll("#recipe-tags form[data-tag-mutation]"),
+        ].map((form) => getComputedStyle(form).viewTransitionName);
+        run.otherNames = [
+          ...document.querySelectorAll(".recipe-image, .recipe-rating"),
+        ].map((element) => getComputedStyle(element).viewTransitionName);
+      });
+      transition.finished.then(() => {
+        run.finished = true;
+      });
+      return transition;
+    };
+  });
+  await page.goto(`/recipe/${taggedDemoRecipe.id}`);
+  await page.getByRole("button", { name: "Tags bearbeiten" }).click();
+  await expect(page.locator("#recipe-tag-options li").first()).toHaveCSS(
+    "list-style-type",
+    "none",
+  );
+  await page.getByRole("searchbox", { name: "Tag suchen" }).fill(tag.name);
+  await expect
+    .poll(() => page.evaluate(() => window.tagTransitions[0]?.finished))
+    .toBe(true);
+  const searchTransition = await page.evaluate(() => window.tagTransitions[0]);
+  expect(searchTransition.types).toEqual(["tag-search"]);
+  expect(
+    searchTransition.tagNames.some((name) =>
+      name.startsWith("recipe-tag-option-"),
+    ),
+  ).toBe(true);
+  await page
+    .locator("#recipe-tag-options")
+    .getByRole("button", { name: tag.name, exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: `${tag.name} entfernen` }),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.tagTransitions[1]?.finished))
+    .toBe(true);
+  const transition = await page.evaluate(() => window.tagTransitions[1]);
+  expect(transition.types).toEqual(["tag-edit"]);
+  expect(
+    transition.tagNames.some(
+      (name) =>
+        name.startsWith("recipe-tag-") &&
+        !name.startsWith("recipe-tag-option-"),
+    ),
+  ).toBe(true);
+  expect(transition.otherNames.length).toBeGreaterThan(0);
+  expect(transition.otherNames.every((name) => name === "none")).toBe(true);
+  await page.getByRole("button", { name: `${tag.name} entfernen` }).click();
+  await expect(
+    page.getByRole("button", { name: `${tag.name} entfernen` }),
+  ).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => window.tagTransitions[2]?.finished))
+    .toBe(true);
+});
+
 test("native filters retain Typesense AND, OR, text query, and non-tag fields", async ({
   page,
   tagSearchRecipes: { tag, sameNameOtherCategory, matches, unrelated },
