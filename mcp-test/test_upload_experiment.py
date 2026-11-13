@@ -27,6 +27,7 @@ import httpx
 import pytest
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import MCPError
 
 URL = os.environ.get("MCP_UPLOAD_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="isolated upload experiment not enabled")
@@ -295,6 +296,7 @@ async def test_experiment_unavailable_without_both_testing_and_opt_in(service):
         assert not names.intersection({
             "start_image_upload", "send_image_chunk", "finish_image_upload", "discard_image_upload",
         })
-        rejected(await client.call_tool("start_image_upload", start_args(b"x")), "Unknown tool")
+        with pytest.raises(MCPError, match="Unknown tool"):
+            await client.call_tool("start_image_upload", start_args(b"x"))
     async with httpx.AsyncClient() as http:
         assert (await http.get(f"http://{service}:5000/health")).status_code == 200
