@@ -139,14 +139,21 @@ test("all headers replace stale identity using the shared HTMX fragment", async 
             element.setAttribute("auth-email", "stale@example.com");
             element.setAttribute("auth-enabled", "");
           });
+          await expect(header.locator(".profile-email")).toHaveText(
+            "stale@example.com",
+          );
           release();
           if (scenario.name === "authenticated") {
             await expect(header).toHaveAttribute(
               "auth-email",
               "owner@example.com",
             );
+            await expect(header.locator(".profile-email")).toHaveText(
+              "owner@example.com",
+            );
           } else {
             await expect(header).not.toHaveAttribute("auth-email");
+            await expect(header.locator(".profile-email")).toHaveCount(0);
           }
           if (scenario.role)
             await expect(header).toHaveAttribute("auth-role", scenario.role);
