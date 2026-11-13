@@ -1,12 +1,50 @@
-@import "@anyblades/blades";
+@layer theme, base, blades, components, utilities;
+
+@import "@anyblades/blades/variables";
+@import "@anyblades/blades/layout/document";
+@import "@anyblades/blades/layout/landmarks";
+@import "@anyblades/blades/layout/section";
+@import "@anyblades/blades/layout/container";
+@import "@anyblades/blades/layout/overflow-auto";
+@import "@anyblades/blades/content/typography";
+@import "@anyblades/blades/content/link";
+@import "@anyblades/blades/content/button";
+@import "@anyblades/blades/content/table";
+@import "@anyblades/blades/content/embedded-content";
+@import "@anyblades/blades/content/code";
+@import "@anyblades/blades/content/figure";
+@import "@anyblades/blades/content/misc";
+@import "@anyblades/blades/forms/basics";
+@import "@anyblades/blades/forms/input-file";
+@import "@anyblades/blades/forms/input-search";
+@import "@anyblades/blades/components/accordion";
+@import "@anyblades/blades/components/card";
+@import "@anyblades/blades/components/dropdown";
+@import "@anyblades/blades/components/group";
+@import "@anyblades/blades/components/loading";
+@import "@anyblades/blades/components/nav";
+@import "@anyblades/blades/utilities";
+@import "@anyblades/blades/variables-blades";
 @import "tailwindcss" source(none);
 @import "./tailwind-sources.css";
+
+@source not inline("container");
 
 :root {
   --pico-primary: #0a750f !important;
   --pico-primary-background: #0a750f !important;
   --pico-primary-hover-background: #12c01b !important;
   --pico-primary-focus: #12d21ca9 !important;
+}
+
+body {
+  hyphens: auto;
+  text-wrap: pretty;
+}
+
+body a,
+body table {
+  hyphens: none;
 }
 
 h1,
@@ -16,6 +54,7 @@ h4,
 h5,
 h6 {
   --pico-font-weight: 400;
+  text-wrap: balance;
 }
 
 h1 {

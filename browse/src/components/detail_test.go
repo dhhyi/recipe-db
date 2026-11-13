@@ -22,6 +22,9 @@ func TestBringIngredientFooter(t *testing.T) {
 	}
 	publicURL := "https://recipes.example.test/recipe/42"
 	body := renderTagComponent(t, Detail(&response, publicURL))
+	if !strings.Contains(body, `class="grid grid-cols-1 gap-3 md:grid-cols-2"`) {
+		t.Errorf("recipe detail with ingredients must use two columns from md onward: %s", body)
+	}
 	for _, markup := range []string{
 		`</tbody><tfoot>`,
 		`colspan="2"`,

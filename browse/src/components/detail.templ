@@ -30,7 +30,7 @@ templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
 }
 
 templ image(recipe *gql.RecipeDetail) {
-	<figure class="contents!">
+	<figure class="contents">
 		<img
 			class="recipe-image"
 			src={ recipe.Image.Url }
@@ -45,7 +45,7 @@ templ ingredients(recipe *gql.RecipeDetail, publicURL string) {
 		<header>
 			<h2>Zutaten</h2>
 		</header>
-		<table class="mb-0!">
+		<table class="mb-0">
 			<thead>
 				<tr>
 					<th>Anzahl</th>
@@ -112,7 +112,7 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 			</hgroup>
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
-		<section class="grid">
+		<section class="grid grid-cols-1 gap-3 md:grid-cols-2">
 			if recipe.Image != nil {
 				<div class="flex flex-col gap-2">
 					@image(recipe)
