@@ -286,6 +286,7 @@ test("profile menu stays accessible and contained at responsive widths", async (
           emailLineHeight: parseFloat(getComputedStyle(email).lineHeight),
           emailRight: emailLines[0].right,
           emailBoxRight: email.getBoundingClientRect().right,
+          paddingRight: getComputedStyle(list).paddingRight,
           left: list.getBoundingClientRect().left,
           right: list.getBoundingClientRect().right,
           pageWidth: document.documentElement.scrollWidth,
@@ -299,6 +300,7 @@ test("profile menu stays accessible and contained at responsive widths", async (
       expect(menu.emailDirection).toBe("ltr");
       expect(menu.emailUserSelect).not.toBe("none");
       expect(menu.emailRight).toBeCloseTo(menu.emailBoxRight, 0);
+      expect(menu.paddingRight).toBe("0px");
       expect(menu.left).toBeGreaterThanOrEqual(0);
       expect(menu.right).toBeLessThanOrEqual(width);
       expect(menu.pageWidth).toBeLessThanOrEqual(width);

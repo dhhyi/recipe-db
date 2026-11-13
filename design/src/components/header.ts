@@ -143,7 +143,7 @@ export class HeaderComponent extends LitElement {
             >
           </summary>
           <ul
-            class="profile-menu w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
+            class="profile-menu unlist w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
             dir="rtl"
           >
             ${
