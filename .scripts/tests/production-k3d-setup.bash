@@ -207,17 +207,21 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"get rolebinding/recovery-guard-"*)
         exit ;;
       *"get job recovery-guard-"*"--ignore-not-found"*)
-        if [[ ${MOCK_SURVIVING_RECOVERY_GUARD:-false} == true ]]; then
+        if [[ -f $MOCK_LOG.expired-guard-job ]]; then
+          cat "$MOCK_LOG.expired-guard-job"
+        elif [[ ${MOCK_SURVIVING_RECOVERY_GUARD:-false} == true ]]; then
           echo '{"status":{"active":1}}'
         fi
         exit ;;
       *"get job recovery-guard-"*"-o json")
-        echo '{"status":{"active":1}}'; exit ;;
+        echo '{"metadata":{"uid":"guard-job-uid"},"status":{"active":1}}'; exit ;;
       *"apply -f "*restore-guard.json)
         cp "${*: -1}" "$MOCK_LOG.restore-guard"
         exit ;;
       *"get configmap recovery-guard-"*"-o json")
-        if [[ ${MOCK_EXPIRED_RECOVERY_GUARD:-false} == true && -f $MOCK_LOG.guard-expired ]]; then
+        if [[ -f $MOCK_LOG.expired-guard-configmap ]]; then
+          cat "$MOCK_LOG.expired-guard-configmap"
+        elif [[ ${MOCK_EXPIRED_RECOVERY_GUARD:-false} == true && -f $MOCK_LOG.guard-expired ]]; then
           echo '{"data":{"ready":"true","expired":"true"}}'
         else
           jq -n --arg pulse "$(cat "$MOCK_LOG.guard-pulse" 2>/dev/null || printf initial)" \
@@ -229,9 +233,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"delete job recovery-guard-"* | \
       *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
+        rm -f "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod" \
+          "$MOCK_LOG.expired-guard-configmap"
         exit ;;
       *"get pods -l recipe-db/recovery-guard="*"-o json")
-        echo '{"items":[]}'; exit ;;
+        if [[ -f $MOCK_LOG.expired-guard-pod ]]; then
+          jq '{items:[.]}' "$MOCK_LOG.expired-guard-pod"
+        else echo '{"items":[]}'; fi
+        exit ;;
       *"get pods -l job-name=nats-init -o json")
         echo '{"items":[]}'; exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json")
@@ -258,7 +267,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         cp "${*: -1}" "$MOCK_LOG.cluster-restore-state"
         exit ;;
       *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods,services,ingresses,configmaps,secrets -o json")
-        if [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
+        if [[ -f $MOCK_LOG.expired-guard-job && -f $MOCK_LOG.expired-guard-pod ]]; then
+          jq -s '{items:.}' "$MOCK_LOG.expired-guard-job" "$MOCK_LOG.expired-guard-pod"
+        elif [[ ${MOCK_RESTORE_EXISTING:-false} == true ]]; then
           echo '{"items":[{"kind":"Deployment","metadata":{"name":"recipes"}}]}'
         else echo '{"items":[]}'; fi
         exit ;;
@@ -357,8 +368,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         esac
         exit ;;
       *"get pods -o json")
-        jq -s --arg linger "$(cat "$MOCK_LOG.lingering-worker" 2>/dev/null || true)" '
-          {items:(. + (if $linger == "" then [] else [{
+        guard_pod='[]'
+        if [[ -f $MOCK_LOG.expired-guard-pod ]]; then
+          guard_pod=$(jq -c '[.]' "$MOCK_LOG.expired-guard-pod")
+        fi
+        jq -s --argjson guardPod "$guard_pod" \
+          --arg linger "$(cat "$MOCK_LOG.lingering-worker" 2>/dev/null || true)" '
+          {items:(. + $guardPod + (if $linger == "" then [] else [{
             metadata:{name:"graphql-lingering",
               deletionTimestamp:(if $linger == "terminating" then "now" else null end)},
             status:{phase:"Running"},spec:{volumes:[]}}] end))}' "$MOCK_LOG.restore-pods"; exit ;;

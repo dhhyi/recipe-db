@@ -2099,9 +2099,9 @@ release_migration_recovery_retry_ready() {
     --slurpfile state "$snapshot/backup-state.json" \
     '. == $original[0] and .source == $state[0].source' \
     "$work/retry-manifest.json" > /dev/null || return 1
-  restore_migration_target
+  restore_migration_target true
   kube get pods -o json > "$work/retry-pods.json" || return 1
-  restore_workers_terminated "$work/retry-pods.json" || return 1
+  restore_workers_terminated "$work/retry-pods.json" "$restore_expired_guard_uid" || return 1
   kube get deployments -o json > "$work/retry-deployments.json" || return 1
   jq -e 'all(.items[]; .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
       and (.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0)
@@ -2350,7 +2350,8 @@ release_migration_recover() {
     || production_fail "migration Jobs must be suspended or terminal with no active workers before recovery"
   release_migration_assert_no_storage_pods
   if [[ $state_phase == migration-recovery-failed ]]; then
-    restore_workers_terminated "$work/migration-pods.json" \
+    restore_guard_validate_expired
+    restore_workers_terminated "$work/migration-pods.json" "$restore_expired_guard_uid" \
       || production_fail "failed recovery retry requires every other worker to have terminated"
   fi
   for job in $(jq -r '.migrationExecution.transitions[].job' "$snapshot/backup-state.json" | sort -u); do

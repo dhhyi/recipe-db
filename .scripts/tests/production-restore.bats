@@ -204,7 +204,7 @@ trap 'printf "client-stopped\n" >> "$MOCK_LOG"; exit 143' TERM
 kube() {
   case "$*" in
     "get rolebinding/"* | "get job "*"--ignore-not-found"*) ;;
-    "get job "*"-o json") echo '{"status":{"active":1}}' ;;
+    "get job "*"-o json") echo '{"metadata":{"uid":"guard-job-uid"},"status":{"active":1}}' ;;
     "get configmap "*)
       if [[ -f $MOCK_LOG.expired ]]; then
         echo '{"data":{"ready":"true","expired":"true"}}'
@@ -287,7 +287,7 @@ production_fail() { exit 1; }
 kube() {
   case "$*" in
     "get rolebinding/"* | "get job "*"--ignore-not-found"* | "apply -f "* | "patch configmap "*) ;;
-    "get job "*) echo '{"status":{"active":1}}' ;;
+    "get job "*) echo '{"metadata":{"uid":"guard-job-uid"},"status":{"active":1}}' ;;
     "get configmap "*) echo '{"data":{"ready":"true","expired":"false","observedPulse":"initial"}}' ;;
     *) return 1 ;;
   esac
@@ -312,6 +312,7 @@ backup_id=backup-1
 lock_holder=backup-1
 restore_mode=migration-recovery
 timeout=1
+namespace=recipe-db
 echo '{"volumes":{"recipes":"1Gi"}}' > "$work/config.json"
 kube() {
   printf '%s\n' "$*" >> "$MOCK_LOG"
@@ -380,6 +381,8 @@ source "$FIXTURE_ROOT/.scripts/production-restore.sh"
 work="$FIXTURE_ROOT/work"
 backup_id=backup-1
 lock_holder=backup-1
+namespace=recipe-db
+restore_guard_uid=guard-job-uid
 restore_mode=migration-recovery
 timeout=${CLEANUP_TIMEOUT:-0}
 kube() {
@@ -390,14 +393,17 @@ kube() {
       if [[ $state == converging && -f $MOCK_LOG.poll ]]; then state=terminal; fi
       touch "$MOCK_LOG.poll"
       jq -n --arg state "$state" '{
-        items:[{metadata:{name:"guard",labels:{"app.kubernetes.io/part-of":"recipe-db",
+        items:[{metadata:{name:"guard",namespace:"recipe-db",uid:"guard-pod-uid",
+          labels:{"app.kubernetes.io/part-of":"recipe-db",
           "recipe-db/recovery-guard":"backup-1"},
-          ownerReferences:[{kind:"Job",name:"recovery-guard-backup-1",controller:true}]},
-          status:{phase:"Running"},spec:{volumes:[]}},
+          ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:"recovery-guard-backup-1",
+            uid:"guard-job-uid",controller:true}]},
+          status:{phase:"Running"},spec:{containers:[{name:"guard"}],volumes:[]}},
           {metadata:{name:"graphql",deletionTimestamp:(if $state == "terminating" then "now" else null end)},
             status:{phase:(if $state == "terminal" then "Succeeded" else "Running" end),
-              containerStatuses:[{state:(if $state == "terminal" then {terminated:{exitCode:0}} else {running:{}} end)}]},
-            spec:{volumes:[]}}]}' ;;
+              containerStatuses:[{name:"graphql",state:(if $state == "terminal" then
+                {terminated:{exitCode:0,finishedAt:"2026-11-13T18:00:00Z"}} else {running:{}} end)}]},
+            spec:{containers:[{name:"graphql"}],volumes:[]}}]}' ;;
     "get "*) echo '{"items":[]}' ;;
   esac
 }
@@ -415,6 +421,61 @@ EOF
   [ "$status" -eq 0 ]
   grep -q guard-stopped "$MOCK_LOG"
   [ "$(grep -c '^get pods -o json' "$MOCK_LOG")" -eq 4 ]
+}
+
+@test "worker termination requires named completed evidence for every specified container" {
+  cat > terminated-workers.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+backup_id=backup-1
+namespace=recipe-db
+restore_guard_uid=guard-job-uid
+restore_workers_terminated "$1"
+EOF
+  jq -n '{
+    items:[{metadata:{name:"worker"},spec:{
+      containers:[{name:"worker"},{name:"sidecar"}],
+      initContainers:[{name:"init"}],ephemeralContainers:[{name:"debug"}],volumes:[]},
+      status:{phase:"Failed",
+        containerStatuses:[{name:"worker"},{name:"sidecar"}],
+        initContainerStatuses:[{name:"init"}],ephemeralContainerStatuses:[{name:"debug"}]}}]}
+    | (.items[].status | .containerStatuses[], .initContainerStatuses[],
+        .ephemeralContainerStatuses[]) +=
+      {state:{terminated:{exitCode:1,finishedAt:"2026-11-13T18:00:00.123Z"}}}' \
+    > work/terminated-workers.json
+  run bash terminated-workers.sh work/terminated-workers.json
+  [ "$status" -eq 0 ]
+  for invalid in \
+    'del(.items[0].status.containerStatuses)' \
+    'del(.items[0].status.initContainerStatuses)' \
+    'del(.items[0].status.ephemeralContainerStatuses)' \
+    '.items[0].status.containerStatuses[0].name="unknown"' \
+    '.items[0].status.containerStatuses[0].state.terminated={}' \
+    '.items[0].status.containerStatuses[0].state.terminated.finishedAt=""' \
+    '.items[0].status.containerStatuses[0].state.terminated.finishedAt="2026-02-31T18:00:00Z"' \
+    'del(.items[0].spec.containers)' \
+    '.items[0].spec.containers=[] | .items[0].status.containerStatuses=[]' \
+    '.items[0].status={phase:"Failed",reason:"NodeLost"}'; do
+    jq "$invalid" work/terminated-workers.json > work/invalid-workers.json
+    run bash terminated-workers.sh work/invalid-workers.json
+    [ "$status" -ne 0 ]
+  done
+  jq -n '{items:[{metadata:{name:"guard",namespace:"recipe-db",uid:"guard-pod-uid",
+    labels:{"app.kubernetes.io/part-of":"recipe-db","recipe-db/recovery-guard":"backup-1"},
+    ownerReferences:[{apiVersion:"batch/v1",kind:"Job",name:"recovery-guard-backup-1",
+      uid:"guard-job-uid",controller:true}]},
+    spec:{containers:[{name:"guard"}],volumes:[]},status:{phase:"Running"}}]}' \
+    > work/guard-worker.json
+  run bash terminated-workers.sh work/guard-worker.json
+  [ "$status" -eq 0 ]
+  for invalid in \
+    '.items[0].metadata.ownerReferences[0].uid="other-job"' \
+    '.items[0].spec.volumes=[{persistentVolumeClaim:{claimName:"recipes"}}]'; do
+    jq "$invalid" work/guard-worker.json > work/invalid-workers.json
+    run bash terminated-workers.sh work/invalid-workers.json
+    [ "$status" -ne 0 ]
+  done
 }
 
 @test "restore read verification waits for convergence and rejects persistent failures" {

@@ -1066,10 +1066,78 @@ PY
   export MOCK_RESTORE_CLEANUP_UNSAFE=false
   cp "$STATE/backup-state.json" "$MOCK_LOG.unsafe-recovery-state"
   cp "$MOCK_LOG.lease" "$MOCK_LOG.unsafe-recovery-lease"
+  jq '.items[] | select(.kind == "Job")
+    | .metadata.uid="guard-job-uid" | .metadata.resourceVersion="7"
+    | .status={active:1}' "$MOCK_LOG.restore-guard" > "$MOCK_LOG.expired-guard-job"
+  jq '{apiVersion:"v1",kind:"Pod",metadata:{
+      name:(.metadata.name + "-pod"),namespace:.metadata.namespace,uid:"guard-pod-uid",
+      labels:.spec.template.metadata.labels,ownerReferences:[{
+        apiVersion:"batch/v1",kind:"Job",name:.metadata.name,uid:.metadata.uid,controller:true}]},
+      spec:.spec.template.spec,status:{phase:"Running"}}' \
+    "$MOCK_LOG.expired-guard-job" > "$MOCK_LOG.expired-guard-pod"
+  jq '.items[] | select(.kind == "ConfigMap") | .data.ready="true" | .data.expired="true"' \
+    "$MOCK_LOG.restore-guard" > "$MOCK_LOG.expired-guard-configmap"
+  for resource in job pod configmap; do
+    cp "$MOCK_LOG.expired-guard-$resource" "$MOCK_LOG.expired-guard-$resource.saved"
+  done
+  local guard_status_calls
+  guard_status_calls=$(wc -l < "$MOCK_LOG")
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   [[ $output == *"complete migration recovery failed"* ]]
   [[ $output == *"CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"* ]]
+  [ -f "$MOCK_LOG.expired-guard-job" ]
+  jq -e '.status.active == 1' "$MOCK_LOG.expired-guard-job" > /dev/null
+  for bad_guard in unowned unexpired job-drift pod-drift wrong-job pvc active terminating node-lost; do
+    case "$bad_guard" in
+      unowned)
+        jq '.metadata.labels["recipe-db/restore-holder"]="other-backup"' \
+          "$MOCK_LOG.expired-guard-job.saved" > "$MOCK_LOG.expired-guard-job"
+        ;;
+      unexpired)
+        jq '.data.expired="false"' "$MOCK_LOG.expired-guard-configmap.saved" \
+          > "$MOCK_LOG.expired-guard-configmap"
+        ;;
+      job-drift)
+        jq '.spec.template.spec.containers[0].command=["sh","-ec","exit 0"]' \
+          "$MOCK_LOG.expired-guard-job.saved" > "$MOCK_LOG.expired-guard-job"
+        ;;
+      pod-drift)
+        jq '.spec.containers[0].command=["sh","-ec","exit 0"]' \
+          "$MOCK_LOG.expired-guard-pod.saved" > "$MOCK_LOG.expired-guard-pod"
+        ;;
+      wrong-job)
+        jq '.metadata.ownerReferences[0].uid="other-job-uid"' \
+          "$MOCK_LOG.expired-guard-pod.saved" > "$MOCK_LOG.expired-guard-pod"
+        ;;
+      pvc)
+        jq '.spec.volumes=[{persistentVolumeClaim:{claimName:"recipes"}}]' \
+          "$MOCK_LOG.expired-guard-pod.saved" > "$MOCK_LOG.expired-guard-pod"
+        ;;
+      active | terminating) printf '%s\n' "$bad_guard" > "$MOCK_LOG.lingering-worker" ;;
+      node-lost)
+        printf '{"metadata":{"name":"lost-worker"},"spec":{"containers":[{"name":"worker"}]},"status":{"phase":"Failed","reason":"NodeLost"}}\n' \
+          >> "$MOCK_LOG.restore-pods"
+        ;;
+    esac
+    run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+    [ "$status" -eq 0 ]
+    [[ $output == *"A retry is not recommended"* ]]
+    [[ $output != *"CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"* ]]
+    for resource in job pod configmap; do
+      cp "$MOCK_LOG.expired-guard-$resource.saved" "$MOCK_LOG.expired-guard-$resource"
+    done
+    rm -f "$MOCK_LOG.lingering-worker"
+    : > "$MOCK_LOG.restore-pods"
+  done
+  sed -n "$((guard_status_calls + 1)),\$p" "$MOCK_LOG" > "$MOCK_LOG.expired-guard-status"
+  run ! grep -Eq ' (apply|delete|patch|scale|set|create) ' "$MOCK_LOG.expired-guard-status"
+  run bash .scripts/production-k3d.sh release-migration-recover \
+    "$VALUES" "$STATE" "$CANDIDATE" "$PACKAGE_MANIFEST" "$PACKAGE_ARCHIVE" "$HOLDER" \
+    "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-2"
+  [ "$status" -ne 0 ]
+  [ -f "$MOCK_LOG.expired-guard-job" ]
+  cmp "$STATE/backup-state.json" "$MOCK_LOG.unsafe-recovery-state"
   local claim_holder
   claim_holder=interrupted-recovery-command
   jq -n --arg holder "$claim_holder" --arg candidate "$CANDIDATE" '{
@@ -1123,6 +1191,8 @@ PY
     "CLEAR-AND-RESTORE-$HOLDER-$revision-ATTEMPT-3"
   [ "$status" -eq 0 ]
   [[ $output == *"complete recovery verified"* ]]
+  [ ! -e "$MOCK_LOG.expired-guard-job" ]
+  [ ! -e "$MOCK_LOG.expired-guard-pod" ]
   jq -e '.status == "recovered" and .phase == "migration-recovered"
     and .migrationRecovery.status == "verified"
     and .migrationRecovery.candidateAborted == true

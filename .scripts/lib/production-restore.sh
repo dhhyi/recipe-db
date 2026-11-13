@@ -366,7 +366,11 @@ restore_fresh_target() {
 }
 
 restore_migration_target() {
-  local name pvc graphql_replicas
+  local name pvc graphql_replicas inspect_expired_guard=${1:-false}
+  printf '{"items":[]}\n' > "$work/restore-validated-guard.json"
+  if [[ $inspect_expired_guard == true ]]; then
+    restore_guard_validate_expired || return 1
+  fi
   graphql_replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
     "$work/prior-workloads.json") \
     || production_fail "migration recovery has no recorded previous-release GraphQL replica count"
@@ -380,8 +384,11 @@ restore_migration_target() {
     or (.kind == "ConfigMap" and .metadata.name == "kube-root-ca.crt"))' \
     "$work/restore-existing.json" > /dev/null \
     || production_fail "migration recovery refuses unowned application resources"
-  jq -e --argjson graphqlReplicas "$graphql_replicas" 'all(.items[];
-    if .kind == "Deployment" and .metadata.name == "graphql" then
+  jq -e --argjson graphqlReplicas "$graphql_replicas" \
+    --slurpfile guard "$work/restore-validated-guard.json" 'all(.items[];
+    . as $resource |
+    if any($guard[0].items[]; . == $resource) then true
+    elif .kind == "Deployment" and .metadata.name == "graphql" then
       ((.spec.replicas // 0) == 0 and (.status.replicas // 0) == 0)
       or ((.spec.replicas // 0) == $graphqlReplicas
         and (.status.readyReplicas // 0) == $graphqlReplicas
@@ -562,29 +569,8 @@ restore_validate_migration_secrets() {
   fi
 }
 
-restore_guard_start() {
-  local parent_pid=$BASHPID deadline=$((SECONDS + timeout))
-  restore_guard_name="recovery-guard-$backup_id"
-  kube get "rolebinding/$restore_guard_name" "role/$restore_guard_name" \
-    "serviceaccount/$restore_guard_name" "configmap/$restore_guard_name" \
-    --ignore-not-found -o json > "$work/restore-existing-guard-resources.json" || return 1
-  if [[ ! -s $work/restore-existing-guard-resources.json ]]; then
-    printf '{"items":[]}\n' > "$work/restore-existing-guard-resources.json"
-  fi
-  jq -e --arg holder "$backup_id" 'all(.items[];
-    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and .metadata.labels["recipe-db/restore-holder"] == $holder)' \
-    "$work/restore-existing-guard-resources.json" > /dev/null \
-    || production_fail "recovery guard resources have drifted"
-  kube get job "$restore_guard_name" --ignore-not-found -o json > "$work/restore-old-guard.json" || return 1
-  if [[ -s $work/restore-old-guard.json ]]; then
-    jq -e --arg holder "$backup_id" '
-      .metadata.labels["recipe-db/restore-holder"] == $holder
-      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-      and (.status.active // 0) == 0' "$work/restore-old-guard.json" > /dev/null \
-      || production_fail "an existing recovery guard is unowned or still active"
-    kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
-  fi
+restore_guard_manifest() {
+  local name="recovery-guard-$backup_id"
   cat > "$work/restore-guard.sh" << 'EOF'
 set -eu
 trap 'exit 0' TERM INT QUIT
@@ -666,7 +652,7 @@ while :; do
   sleep 5
 done
 EOF
-  jq -n --arg ns "$namespace" --arg name "$restore_guard_name" --arg holder "$backup_id" \
+  jq -n --arg ns "$namespace" --arg name "$name" --arg holder "$backup_id" \
     --arg image "$(jq -r '.infrastructure.maintenance' "$work/config.json")" \
     --argjson workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" \
     --argjson helpers "$(jq -c '[.volumes | keys[] | "restore-volume-" + .]' "$work/config.json")" \
@@ -695,6 +681,32 @@ EOF
               {name:"HELPERS",value:($helpers | join(" "))}],
             resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]}' \
     > "$work/restore-guard.json" || return 1
+}
+
+restore_guard_start() {
+  local parent_pid=$BASHPID deadline=$((SECONDS + timeout))
+  restore_guard_name="recovery-guard-$backup_id"
+  kube get "rolebinding/$restore_guard_name" "role/$restore_guard_name" \
+    "serviceaccount/$restore_guard_name" "configmap/$restore_guard_name" \
+    --ignore-not-found -o json > "$work/restore-existing-guard-resources.json" || return 1
+  if [[ ! -s $work/restore-existing-guard-resources.json ]]; then
+    printf '{"items":[]}\n' > "$work/restore-existing-guard-resources.json"
+  fi
+  jq -e --arg holder "$backup_id" 'all(.items[];
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.labels["recipe-db/restore-holder"] == $holder)' \
+    "$work/restore-existing-guard-resources.json" > /dev/null \
+    || production_fail "recovery guard resources have drifted"
+  kube get job "$restore_guard_name" --ignore-not-found -o json > "$work/restore-old-guard.json" || return 1
+  if [[ -s $work/restore-old-guard.json ]]; then
+    jq -e --arg holder "$backup_id" '
+      .metadata.labels["recipe-db/restore-holder"] == $holder
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and (.status.active // 0) == 0' "$work/restore-old-guard.json" > /dev/null \
+      || production_fail "an existing recovery guard is unowned or still active"
+    kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
+  fi
+  restore_guard_manifest || return 1
   kube apply -f "$work/restore-guard.json" > /dev/null || return 1
   restore_guard_started=true
   while ((SECONDS < deadline)); do
@@ -705,6 +717,8 @@ EOF
       && jq -e '(.status.active // 0) == 1
         and all(.status.conditions[]?; .type != "Failed" and .type != "Complete")' \
         "$work/restore-guard-job-status.json" > /dev/null; then
+      restore_guard_uid=$(jq -er '.metadata.uid | select(type == "string" and length > 0)' \
+        "$work/restore-guard-job-status.json") || return 1
       (
         trap - EXIT INT TERM
         observed_pulse=initial
@@ -785,21 +799,48 @@ restore_guard_assert_absent() {
     }
 }
 
-restore_guard_remove_expired() {
+restore_guard_validate_expired() {
   local name="recovery-guard-$backup_id"
+  restore_expired_guard_uid=
+  printf '{"items":[]}\n' > "$work/restore-validated-guard.json"
   kube get job "$name" --ignore-not-found -o json > "$work/restore-expired-guard.json" || return 1
   [[ -s $work/restore-expired-guard.json ]] || return 0
+  restore_guard_manifest || return 1
   kube get configmap "$name" -o json > "$work/restore-expired-guard-configmap.json" || return 1
-  jq -e --arg holder "$backup_id" '
-    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and .metadata.labels["recipe-db/restore-holder"] == $holder' \
-    "$work/restore-expired-guard.json" > /dev/null \
-    || production_fail "cannot remove an unowned recovery shutdown guard"
-  jq -e --arg holder "$backup_id" '
-    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+  jq -e --arg holder "$backup_id" --arg name "$name" --arg ns "$namespace" \
+    --slurpfile expected "$work/restore-guard.json" '
+    .apiVersion == "batch/v1" and .kind == "Job"
+    and .metadata.name == $name and .metadata.namespace == $ns and .metadata.deletionTimestamp == null
+    and (.metadata.uid | type == "string" and length > 0)
+    and (.metadata.resourceVersion | type == "string" and length > 0)
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
     and .metadata.labels["recipe-db/restore-holder"] == $holder
-    and .data.expired == "true"' "$work/restore-expired-guard-configmap.json" > /dev/null \
-    || production_fail "recovery shutdown guard is not confirmed expired"
+    and (.spec.parallelism // 1) == 1 and (.spec.completions // 1) == 1
+    and .spec.backoffLimit == 0 and (.spec.suspend // false) == false
+    and ((.status.active // 0) | type == "number" and . >= 0 and . <= 1 and . == floor)
+    and .spec.template.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .spec.template.metadata.labels["recipe-db/recovery-guard"] == $holder
+    and (.spec.template.spec as $actual |
+      [$expected[0].items[] | select(.kind == "Job")][0].spec.template.spec as $wanted |
+      $actual.serviceAccountName == $wanted.serviceAccountName
+      and $actual.restartPolicy == $wanted.restartPolicy
+      and ($actual.initContainers // []) == [] and ($actual.ephemeralContainers // []) == []
+      and ($actual.hostNetwork // false) == false and ($actual.hostPID // false) == false
+      and ($actual.hostIPC // false) == false
+      and all($actual.volumes[]?; .persistentVolumeClaim == null and .hostPath == null)
+      and [$actual.containers[] | {name,image,command,env,resources}] == $wanted.containers
+      and all($actual.containers[]; (.args // []) == [] and (.envFrom // []) == []
+        and (.securityContext // {}) == {}))
+  ' "$work/restore-expired-guard.json" > /dev/null \
+    || production_fail "recovery shutdown guard identity or specification has drifted"
+  jq -e --arg holder "$backup_id" --arg name "$name" --arg ns "$namespace" '
+    .metadata.name == $name and .metadata.namespace == $ns and .metadata.deletionTimestamp == null
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.labels["recipe-db/restore-holder"] == $holder
+    and .data.ready == "true" and .data.expired == "true"
+  ' "$work/restore-expired-guard-configmap.json" > /dev/null \
+    || production_fail "recovery shutdown guard is not confirmed owned and expired"
+  restore_expired_guard_uid=$(jq -er .metadata.uid "$work/restore-expired-guard.json") || return 1
   kube get deployments -o json > "$work/restore-expired-guard-deployments.json" || return 1
   jq -e 'all(.items[];
     .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -807,8 +848,32 @@ restore_guard_remove_expired() {
     "$work/restore-expired-guard-deployments.json" > /dev/null \
     || production_fail "expired recovery guard cannot be removed before all workloads stop"
   kube get pods -o json > "$work/restore-expired-guard-pods.json" || return 1
-  restore_workers_terminated "$work/restore-expired-guard-pods.json" \
+  restore_workers_terminated "$work/restore-expired-guard-pods.json" "$restore_expired_guard_uid" \
     || production_fail "expired recovery guard cannot be removed before every other worker terminates"
+  jq -e --slurpfile guard "$work/restore-expired-guard.json" '
+    all(.items[] | select(any(.metadata.ownerReferences[]?; .uid == $guard[0].metadata.uid));
+      .kind == "Pod" and .apiVersion == "v1"
+      and .spec.serviceAccountName == $guard[0].spec.template.spec.serviceAccountName
+      and .spec.restartPolicy == $guard[0].spec.template.spec.restartPolicy
+      and (.spec.hostNetwork // false) == false and (.spec.hostPID // false) == false
+      and (.spec.hostIPC // false) == false
+      and all(.spec.volumes[]?; .persistentVolumeClaim == null and .hostPath == null)
+      and [.spec.containers[] | {name,image,command,env,resources}] ==
+        [$guard[0].spec.template.spec.containers[] | {name,image,command,env,resources}]
+      and all(.spec.containers[]; (.args // []) == [] and (.envFrom // []) == []
+        and (.securityContext // {}) == {}))
+  ' "$work/restore-expired-guard-pods.json" > /dev/null \
+    || production_fail "expired recovery shutdown guard Pods have drifted"
+  jq --slurpfile guard "$work/restore-expired-guard.json" '
+    {items:([$guard[0]] + [.items[] |
+      select(any(.metadata.ownerReferences[]?; .uid == $guard[0].metadata.uid))])}
+  ' "$work/restore-expired-guard-pods.json" > "$work/restore-validated-guard.json"
+}
+
+restore_guard_remove_expired() {
+  restore_guard_validate_expired || return 1
+  [[ -n $restore_expired_guard_uid ]] || return 0
+  local name="recovery-guard-$backup_id"
   restore_guard_name=$name
   restore_guard_started=true
   restore_guard_stop || production_fail "could not terminate the expired recovery shutdown guard"
@@ -991,15 +1056,41 @@ restore_stop_migration_recovery() {
 }
 
 restore_workers_terminated() {
-  jq -e --arg holder "$backup_id" 'all(.items[];
-    (.metadata.labels["recipe-db/recovery-guard"] == $holder
+  jq -e --arg holder "$backup_id" --arg ns "$namespace" \
+    --arg guardUid "${2-${restore_guard_uid:-}}" '
+    def stopped($spec; $statuses):
+      ($spec | type) == "array" and ($statuses | type) == "array"
+      and ($spec | length) == ($statuses | length)
+      and ([$spec[].name] | unique | length) == ($spec | length)
+      and all($spec[]; .name as $name |
+        ($name | type == "string" and length > 0)
+        and ([$statuses[] | select(.name == $name)] as $matches |
+          ($matches | length) == 1
+          and ($matches[0].state.terminated as $terminated |
+            ($terminated | type) == "object"
+            and ($terminated.exitCode | type == "number" and . >= 0 and . == floor)
+            and ($terminated.finishedAt | type == "string"
+              and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?Z$")
+              and . != "0001-01-01T00:00:00Z"
+              and (sub("[.][0-9]+Z$"; "Z") as $finished |
+                (try ($finished | fromdateiso8601 | todateiso8601) catch "") == $finished)))));
+    all(.items[];
+    ($guardUid != "" and .metadata.namespace == $ns and .metadata.deletionTimestamp == null
+      and (.metadata.uid | type == "string" and length > 0)
+      and .metadata.labels["recipe-db/recovery-guard"] == $holder
       and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and (.spec.containers | type == "array" and length == 1 and .[0].name == "guard")
+      and (.spec.initContainers // []) == [] and (.spec.ephemeralContainers // []) == []
+      and all(.spec.volumes[]?; .persistentVolumeClaim == null)
       and any(.metadata.ownerReferences[]?;
-        .kind == "Job" and .name == ("recovery-guard-" + $holder) and .controller == true))
+        .apiVersion == "batch/v1" and .kind == "Job"
+        and .name == ("recovery-guard-" + $holder) and .uid == $guardUid and .controller == true))
     or (.metadata.deletionTimestamp == null
       and (.status.phase == "Succeeded" or .status.phase == "Failed")
-      and all((.status.containerStatuses[]?, .status.initContainerStatuses[]?,
-        .status.ephemeralContainerStatuses[]?); .state.terminated != null)
+      and (.spec.containers | type == "array" and length > 0)
+      and stopped(.spec.containers; (.status.containerStatuses // []))
+      and stopped((.spec.initContainers // []); (.status.initContainerStatuses // []))
+      and stopped((.spec.ephemeralContainers // []); (.status.ephemeralContainerStatuses // []))
       and all(.spec.volumes[]?; .persistentVolumeClaim == null)))' "$1" > /dev/null
 }
 
