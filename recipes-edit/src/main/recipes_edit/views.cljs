@@ -28,7 +28,37 @@
       (fn [props]
         [:textarea (assoc props :ref #(reset! textarea %))])})))
 
-(defn- ingredient-row [index ingredient]
+(defn- animate-ingredient! [element frames]
+  (when (and (fn? (.-animate element))
+             (not (.. js/window (matchMedia "(prefers-reduced-motion: reduce)") -matches)))
+    (.animate element (clj->js frames) #js {:duration 200 :easing "ease-out"})))
+
+(defn- remove-ingredient! [event index ingredient]
+  (when-not (model/blank-ingredient? ingredient)
+    (let [row (.. event -currentTarget -parentElement)
+          rect (.getBoundingClientRect row)
+          ghost (.cloneNode row true)]
+      (when (and (fn? (.-animate ghost))
+                 (not (.. js/window (matchMedia "(prefers-reduced-motion: reduce)") -matches)))
+        (doseq [[source target] (map vector
+                                     (array-seq (.querySelectorAll row "input"))
+                                     (array-seq (.querySelectorAll ghost "input")))]
+          (set! (.-value target) (.-value source))
+          (.removeAttribute target "id"))
+        (.setAttribute ghost "aria-hidden" "true")
+        (.setAttribute ghost "inert" "")
+        (set! (.-cssText (.-style ghost))
+              (str "position:fixed;pointer-events:none;z-index:10;margin:0;"
+                   "left:" (.-left rect) "px;top:" (.-top rect) "px;width:" (.-width rect) "px"))
+        (.appendChild (.-body js/document) ghost)
+        (let [animation (animate-ingredient! ghost [{:opacity 1 :transform "translateX(0)"}
+                                                    {:opacity 0 :transform "translateX(-12px)"}])
+              cleanup #(.remove ghost)]
+          (set! (.-onfinish animation) cleanup)
+          (set! (.-oncancel animation) cleanup)))))
+  (rf/dispatch [::events/remove-ingredient index]))
+
+(defn- ingredient-row [index ingredient on-remove]
   [:div.flex.flex-row.gap-1.items-center {:key index}
    [:input.min-w-0
     {:type "text"
@@ -48,8 +78,63 @@
     {:type "button"
      :aria-label "Zutat entfernen"
      :title "Zutat entfernen"
-     :on-click #(rf/dispatch [::events/remove-ingredient index])}
+     :on-click #(on-remove % index ingredient)}
     "-"]])
+
+(defn- ingredient-list []
+  (let [container (atom nil)
+        observer (atom nil)
+        removing (atom nil)]
+    (r/create-class
+     {:component-did-mount
+      (fn [_]
+        (when (exists? js/MutationObserver)
+          (let [watcher (js/MutationObserver.
+                         (fn [records]
+                           (when (and @removing
+                                      (some #(pos? (.-length (.-removedNodes %))) (array-seq records)))
+                             (let [{:keys [index tops following]} @removing]
+                               (doseq [[position node] (map-indexed vector (array-seq (.-children @container)))
+                                       :when (and (>= position index) (< (inc position) (count tops)))]
+                                 (let [offset (- (nth tops (inc position)) (.-top (.getBoundingClientRect node)))]
+                                   (animate-ingredient! node [{:transform (str "translateY(" offset "px)")}
+                                                              {:transform "translateY(0)"}])))
+                               (doseq [[node top] following
+                                       :when (.-isConnected node)]
+                                 (let [offset (- top (.-top (.getBoundingClientRect node)))]
+                                   (animate-ingredient! node [{:transform (str "translateY(" offset "px)")}
+                                                              {:transform "translateY(0)"}]))))
+                             (reset! removing nil))
+                           (doseq [record (array-seq records)
+                                   node (array-seq (.-addedNodes record))]
+                             (when (= 1 (.-nodeType node))
+                               (animate-ingredient! node [{:opacity 0 :transform "translateY(-8px)"}
+                                                          {:opacity 1 :transform "translateY(0)"}])))))]
+            (.observe watcher @container #js {:childList true})
+            (reset! observer watcher))))
+      :component-will-unmount
+      (fn [_] (when @observer (.disconnect @observer)))
+      :reagent-render
+      (fn [ingredients]
+        [:div {:ref #(reset! container %)}
+         (doall
+          (map-indexed
+           (fn [index ingredient]
+             (ingredient-row index ingredient
+                             (fn [event index ingredient]
+                               (when-not (model/blank-ingredient? ingredient)
+                                 (reset! removing
+                                         {:index index
+                                          :tops (mapv #(.-top (.getBoundingClientRect %))
+                                                      (array-seq (.-children @container)))
+                                          :following (loop [node (.-nextElementSibling @container)
+                                                            result []]
+                                                       (if node
+                                                         (recur (.-nextElementSibling node)
+                                                                (conj result [node (.-top (.getBoundingClientRect node))]))
+                                                         result))}))
+                               (remove-ingredient! event index ingredient))))
+           ingredients))])})))
 
 (defn- return-action [{:keys [route status]}]
   [:a
@@ -78,7 +163,7 @@
       (when name-error?
         [:small#name-helper {:role "alert"} "Name darf nicht leer sein."])
       [:h2 "Zutaten"]
-      (doall (map-indexed ingredient-row (:ingredients form)))
+      [ingredient-list (:ingredients form)]
       [:h2 "Zubereitung"]
       [auto-sizing-textarea
        {:id "method"
