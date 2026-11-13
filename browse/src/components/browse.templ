@@ -94,7 +94,7 @@ templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
 			</a>
 		}
 		if ratingsOnline && item.Rating != nil {
-			<a href={ "/recipe/" + item.Id } slot="rating" aria-label={ "Bewertung von Rezept " + item.Name } hx-boost="true" hx-swap="innerHTML transition:true">
+			<a href={ "/recipe/" + item.Id } slot="rating" class="block" style={ recipeRatingTransitionStyle(item.Id) } aria-label={ "Bewertung von Rezept " + item.Name } hx-boost="true" hx-swap="innerHTML transition:true">
 				@Rating(item.Rating, false, nil, nil)
 			</a>
 		}

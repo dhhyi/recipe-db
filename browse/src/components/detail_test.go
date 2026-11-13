@@ -41,6 +41,35 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 	}
 }
 
+func TestRecipeRatingsKeepTransitionOutsideLiveWidget(t *testing.T) {
+	ratingName := regexp.MustCompile(`view-transition-name:\s*(recipe-rating-[0-9a-f]+)`)
+	seen := map[string]bool{}
+	for _, id := range []string{"42", "recipe_42", `42"; color: red; --x: "`} {
+		rating := &gql.Rating{RecipeId: id}
+		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: id, Name: "Kuchen", Rating: rating}, true))
+		detail := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{
+			Recipe: &gql.RecipeDetail{Id: id, Name: "Kuchen", Rating: rating},
+		}, ""))
+		widget := renderTagComponent(t, RecipeRatingWidget(id, rating, false, nil))
+		tileName := ratingName.FindStringSubmatch(tile)
+		detailName := ratingName.FindStringSubmatch(detail)
+		if len(tileName) != 2 || len(detailName) != 2 || tileName[1] != detailName[1] {
+			t.Fatalf("rating transition must pair tile and detail for %q", id)
+		}
+		if ratingName.MatchString(widget) {
+			t.Fatal("live widget replacement must not remove or recreate the captured transition element")
+		}
+		stableWrapper := regexp.MustCompile(`style="view-transition-name:\s*` + detailName[1] + `;?"><div id="recipe-rating-`)
+		if !stableWrapper.MatchString(detail) {
+			t.Fatal("detail rating transition must wrap, not belong to, the live widget")
+		}
+		if seen[tileName[1]] {
+			t.Fatalf("different recipes share rating transition name %q", tileName[1])
+		}
+		seen[tileName[1]] = true
+	}
+}
+
 func TestBringIngredientFooter(t *testing.T) {
 	var response gql.RecipeByIdResponse
 	if err := json.Unmarshal([]byte(`{"recipe":{"id":"42","name":"Kuchen","ingredients":[

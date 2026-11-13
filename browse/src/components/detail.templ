@@ -111,8 +111,11 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 			<hgroup>
 				<h1 itemprop="name">{ recipe.Name }</h1>
 				if recipe.Rating != nil {
-					<div id={ "recipe-rating-" + recipe.Id } hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML">
-						@Rating(recipe.Rating, false, nil, nil)
+					// Keep the snapshot outside the widget replaced by its live refresh.
+					<div class="w-fit" style={ recipeRatingTransitionStyle(recipe.Id) }>
+						<div id={ "recipe-rating-" + recipe.Id } hx-get={ "/recipe/" + recipe.Id + "/rating" } hx-trigger="load" hx-swap="outerHTML">
+							@Rating(recipe.Rating, false, nil, nil)
+						</div>
 					</div>
 				}
 			</hgroup>
