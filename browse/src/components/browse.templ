@@ -87,8 +87,8 @@ func recipeTileTransitionStyle(id string) string {
 	return fmt.Sprintf("--recipe-tile-transition-name: recipe-tile-%x", id)
 }
 
-templ recipeTile(item gql.RecipeStub, ratingsOnline bool) {
-	<recipe-tile-component itemscope itemtype="https://schema.org/Recipe" data-recipe-id={ item.Id } style={ recipeTileTransitionStyle(item.Id) }>
+templ recipeTile(item gql.RecipeStub, ratingsOnline bool, enter bool) {
+	<recipe-tile-component itemscope itemtype="https://schema.org/Recipe" data-recipe-enter?={ enter } data-recipe-id={ item.Id } style={ recipeTileTransitionStyle(item.Id) }>
 		<a href={ "/recipe/" + item.Id } slot="title" aria-label={ recipeAccessibleLabel(item) } hx-boost="true" hx-swap="innerHTML transition:true">
 			<h2 class="recipe-tile-title" itemprop="name" title={ item.Name }>{ item.Name }</h2>
 		</a>
@@ -160,7 +160,7 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 		<div data-browse-grid class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 mx-auto max-w-[350px] sm:max-w-none">
 			<div data-recipe-list class="contents">
 				for _, recipe := range state.Recipes {
-					@recipeTile(recipe, state.RatingsOnline)
+					@recipeTile(recipe, state.RatingsOnline, false)
 				}
 				@browsePagination(state)
 			</div>
@@ -170,7 +170,7 @@ templ BrowseResults(state BrowseState, includeStatus bool) {
 
 templ browsePagination(state BrowseState) {
 	if state.NextURL != "" {
-		<div id="browse-pagination" class="contents" hx-get={ templ.SafeURL(state.NextURL) } hx-vals={ state.PaginationValues() } hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort">
+		<div id="browse-pagination" class="col-span-full order-1" hx-get={ templ.SafeURL(state.NextURL) } hx-vals={ state.PaginationValues() } hx-trigger="intersect once" hx-target="this" hx-swap="outerHTML show:none" hx-sync="#browse-form:abort">
 			<nav aria-label="Weitere Rezepte" class="justify-center col-span-full order-1">
 				<div data-pagination-spinner aria-busy="true" aria-label="Weitere Rezepte werden geladen"></div>
 				<p data-pagination-error hidden role="alert" class="feedback error">Weitere Rezepte konnten nicht geladen werden.</p>
@@ -198,7 +198,7 @@ templ BrowsePage(state BrowseState) {
 	@browseHeading(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	@browseStatus(state, templ.Attributes{"hx-swap-oob": "outerHTML"})
 	for _, recipe := range state.Recipes {
-		@recipeTile(recipe, state.RatingsOnline)
+		@recipeTile(recipe, state.RatingsOnline, true)
 	}
 	@browsePagination(state)
 }

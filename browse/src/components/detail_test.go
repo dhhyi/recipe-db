@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
+
 	gql "frontend/src/generated"
 )
 
@@ -20,7 +22,7 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{
 			Id: id, Name: "Kuchen",
 			Image: &gql.RecipeStubImageImageMetadata{ThumbUrl: "/thumb.png"},
-		}, false))
+		}, false, false))
 		hero := renderTagComponent(t, image(&gql.RecipeDetail{
 			Id: id, Name: "Kuchen",
 			Image: &gql.RecipeDetailImageImageMetadata{Url: "/full.png"},
@@ -41,7 +43,7 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 		seen[thumbnailName[1]] = true
 	}
 
-	withoutImage := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: "42", Name: "Kuchen"}, false))
+	withoutImage := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: "42", Name: "Kuchen"}, false, false))
 	if strings.Contains(withoutImage, "view-transition-name") {
 		t.Fatal("an imageless tile must not claim an image transition")
 	}
@@ -52,7 +54,7 @@ func TestRecipeRatingsKeepTransitionOutsideLiveWidget(t *testing.T) {
 	seen := map[string]bool{}
 	for _, id := range []string{"42", "recipe_42", `42"; color: red; --x: "`} {
 		rating := &gql.Rating{RecipeId: id}
-		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: id, Name: "Kuchen", Rating: rating}, true))
+		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: id, Name: "Kuchen", Rating: rating}, true, false))
 		detail := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{
 			Recipe: &gql.RecipeDetail{Id: id, Name: "Kuchen", Rating: rating},
 		}, ""))
@@ -102,6 +104,28 @@ func TestRecipeTileTransitionIdentitiesSurviveReorderingAndFiltering(t *testing.
 				identities[id], seen[name] = name, true
 			}
 		}
+	}
+}
+
+func TestRecipeCardEntriesAnimateOnlyNewBatches(t *testing.T) {
+	recipes := []gql.RecipeStub{{Id: "42", Name: "Kuchen"}}
+	state := BrowseState{Recipes: recipes}
+	for _, tc := range []struct {
+		name      string
+		component templ.Component
+		enter     bool
+	}{
+		{"overview and search", BrowseResults(state, true), false},
+		{"next overview page", BrowsePage(state), true},
+		{"initial similar", SimilarRecipes("source", recipes, nil, false), true},
+		{"more similar", SimilarRecipesBatch("source", recipes, nil, false), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := renderTagComponent(t, tc.component)
+			if strings.Contains(body, "data-recipe-enter") != tc.enter {
+				t.Fatalf("entry fade must apply only to freshly appended cards: %s", body)
+			}
+		})
 	}
 }
 

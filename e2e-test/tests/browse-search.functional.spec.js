@@ -1165,6 +1165,20 @@ for (const failure of ["network", "502"]) {
 }
 
 test.describe("pagination", () => {
+  test("scrolling into the loading placeholder requests the next page", async ({
+    page,
+    searchRecipes,
+  }) => {
+    await page.goto(`/?q=${encodeURIComponent("E2E Suchrezept")}`);
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(24);
+    await page.locator("#browse-pagination nav").scrollIntoViewIfNeeded();
+    await expect(page.locator("[data-recipe-id]")).toHaveCount(25);
+    await expect(page.locator("#browse-metadata")).toHaveAttribute(
+      "data-page",
+      "2",
+    );
+  });
+
   test("HTMX inserts the next server page without replacing earlier tiles", async ({
     page,
     searchRecipes,

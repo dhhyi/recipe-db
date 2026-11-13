@@ -234,6 +234,21 @@ header-component > header:focus-within {
   }
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  recipe-tile-component[data-recipe-enter] {
+    animation: recipe-card-enter 200ms ease;
+  }
+}
+
+@keyframes recipe-card-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   header-component > header {
     transition: none;

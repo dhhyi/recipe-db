@@ -37,7 +37,7 @@ templ SimilarRecipes(id string, recipes []gql.RecipeStub, remaining []string, fa
 
 templ SimilarRecipesBatch(id string, recipes []gql.RecipeStub, remaining []string, failed bool) {
 	for _, recipe := range recipes {
-		@recipeTile(recipe, true)
+		@recipeTile(recipe, true, true)
 	}
 	if len(remaining) > 0 {
 		<form id="similar-recipes-more" method="post" action={ "/recipe/" + id + "/similar/more" } hx-post={ "/recipe/" + id + "/similar/more" } hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-disabled-elt="find button" hx-push-url="false" hx-replace-url="false" hx-history="false" hx-on::before-request="this.querySelector('button[type=submit]')?.setAttribute('aria-busy', 'true')" hx-on::after-request="this.querySelector('button[type=submit]')?.removeAttribute('aria-busy')" hx-on::send-error="htmx.trigger(this, 'similar-error')" hx-on::response-error="htmx.trigger(this, 'similar-error')" hx-on::timeout="htmx.trigger(this, 'similar-error')" hx-on:similar-error="this.querySelector('[data-similar-error]').hidden = false; this.querySelector('button').textContent = 'Erneut versuchen'; this.querySelector('[data-similar-error]').classList.add('feedback', 'error')" class="col-span-full">
