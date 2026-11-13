@@ -90,7 +90,7 @@ async def test_copied_photo_through_real_graphql(fixture_server_ready):
                 "transport": "scripted Python MCP SDK (not model-mediated)",
                 "sourceBytes": len(photo), "sourceSha256": digest,
                 "uploadCalls": 7, "deliberateRetryCalls": 1, "chunkArgumentBytes": argument_sizes,
-                "elapsedSecondsIncludingReadAndInvalidImageCheck": round(time.monotonic() - started, 3),
+                "elapsedSecondsAfterSourceReadIncludingInvalidImageCheck": round(time.monotonic() - started, 3),
                 "tokenUsage": "unavailable", "cost": "unavailable",
             }))
         finally:
