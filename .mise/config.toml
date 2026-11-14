@@ -10,4 +10,3 @@ shellcheck = "latest"
 yq = "latest"
 ytt = "0.55.4"
 "aqua:bazelbuild/bazelisk" = "latest"
-

@@ -2,4 +2,3 @@
 description = "Run repository script regression tests with Bats"
 run = "bash .scripts/test-scripts.sh"
 raw_args = true
-

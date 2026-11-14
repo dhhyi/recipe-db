@@ -6,4 +6,3 @@ file = ".scripts/run-integration-tests.sh"
 description = "Refresh external Docker image digests from their registries"
 file = ".scripts/update-docker-image-digests.sh"
 raw_args = true
-

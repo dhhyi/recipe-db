@@ -117,4 +117,3 @@ file = ".scripts/seed-demodata.sh"
 [start-test-fixtures]
 description = "Start the shared integration-test fixture service"
 run = "docker compose --profile test up -d fixtures"
-

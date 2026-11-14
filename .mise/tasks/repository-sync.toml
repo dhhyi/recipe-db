@@ -69,4 +69,3 @@ description = "Generate repository VS Code settings"
 file = ".scripts/sync-vscode-settings.sh"
 sources = [".scripts/sync-vscode-settings.sh", "*/.project.yaml"]
 outputs = [".vscode/settings.json"]
-

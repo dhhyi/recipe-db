@@ -2,4 +2,3 @@
 description = "Run a command in a project devcontainer: [--rm | --keep-running] <project> [--rm | --keep-running] <command> [args...]; retention also via DEVCONTAINER_KEEP_RUNNING=true"
 file = ".scripts/run-in-devcontainer.sh"
 raw_args = true
-

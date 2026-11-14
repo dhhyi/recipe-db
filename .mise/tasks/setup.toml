@@ -10,4 +10,3 @@ file = ".scripts/install-precommit.sh"
 description = "Install dependencies and hooks, then synchronize repository configuration"
 depends = ["install-deps", "install-precommit"]
 run = [{ task = "sync" }]
-

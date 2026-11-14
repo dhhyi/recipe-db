@@ -6,4 +6,3 @@ raw_args = true
 [generate-bazel-build]
 description = "Generate Bazel build rules from project metadata and repository files"
 file = ".scripts/generate-bazel-build.sh"
-
