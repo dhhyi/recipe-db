@@ -183,19 +183,10 @@
 #@         env["GOOGLE_OAUTH_CLIENT_ID"] = cfg["runtime"]["googleOAuthClientId"]
 #@       end
 #@       init = [wait_for_nats()]
-#@     else:
-#@       env["MCP_IMAGE_UPLOAD_DIRECTORY"] = "/upload-staging"
 #@     end
 #@   end
-#@   mounts = []
-#@   volumes = []
-#@   if name == "mcp":
-#@     mounts.append({"name": "upload-staging", "mountPath": "/upload-staging"})
-#@     volumes.append({"name": "upload-staging", "emptyDir": {"medium": "Memory", "sizeLimit": "128Mi"}})
-#@   elif name == "design":
-#@     mounts.append(config_mount("design-config", "/etc/nginx/conf.d"))
-#@     volumes.append(config_volume("design-config"))
-#@   end
+#@   mounts = [config_mount("design-config", "/etc/nginx/conf.d")] if name == "design" else []
+#@   volumes = [config_volume("design-config")] if name == "design" else []
 #@   result = deployment(name, inventory["images"][name], port, env, durable, secrets=secrets, init=init, mounts=mounts, volumes=volumes)
 #@   if p["category"] in ["backend", "api"]:
 #@     result["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 120

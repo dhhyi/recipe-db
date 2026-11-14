@@ -254,7 +254,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         return (response.Data?.OnlineServices ?? []).ToHashSet();
     }
 
-    internal static McpException GraphQLError(IReadOnlyList<IClientError> errors)
+    private static McpException GraphQLError(IReadOnlyList<IClientError> errors)
     {
         return new McpException(string.Join("; ", errors.Select(error =>
         {
