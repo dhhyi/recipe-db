@@ -29,7 +29,7 @@ project_metadata_to_jsonl() {
             end
           ),
           args: ((.devcontainer.build.args // {}) | with_entries(.value |= tostring)),
-          cacheRepository: "ghcr.io/dhhyi/recipe-db-" + .name + "-cache"
+          cacheRepository: ("ghcr.io/dhhyi/recipe-db-" + .name + "-cache")
         }
       ' >> "$project_metadata_output"
   done

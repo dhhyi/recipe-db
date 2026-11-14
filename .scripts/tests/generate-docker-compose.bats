@@ -9,6 +9,10 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../refresh-render-inputs.sh" .scripts/
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   use_mise_tools
+  mkdir -p .mise/tasks
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/compose.toml" .mise/tasks/
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/repository-sync.toml" .mise/tasks/
+  cp "$BATS_TEST_DIRNAME/../../.mise/config.toml" .mise/
   unset CI REGISTRY_CACHE_SUFFIX GOOGLE_OAUTH_CLIENT_ID \
     GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE
   setup_mock_bin
@@ -427,6 +431,7 @@ assert_compose() {
 @test "production route template retains production authentication and administrative protections" {
   . .scripts/lib/project-metadata.sh
   project_metadata_to_jsonl "$PWD" projects.jsonl
+  jq -e 'select(.name == "backend" and .buildInputs.cacheRepository == "ghcr.io/dhhyi/recipe-db-backend-cache")' projects.jsonl
   jq -n --arg id "test.apps.googleusercontent.com" --slurpfile projects projects.jsonl \
     '{projects:$projects,googleOAuthClientId:$id}' > route-values.json
 
