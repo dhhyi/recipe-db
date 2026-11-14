@@ -20,6 +20,20 @@ public enum TagCategoryChoice
 [McpServerToolType]
 public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory)
 {
+    private const string ImageUrlGuidance =
+        " Call 'get_recipe_schema' first. 'imageUrl' must be a direct image URL reachable by this server " +
+        "without browser authentication, not a local path or sharing page. For local/private photos, " +
+        "use client file/browser access and HTTP upload, or ask the user for a hosted URL if unavailable. " +
+        "Do not invent missing capabilities or claim success from hosting alone. " +
+        "Get user permission and confirm rights to share before external hosting; unlisted URLs are not private. " +
+        "Send only the selected image, never browser cookies, MCP credentials or unrelated content. Any suitable host works. " +
+        "Optional anonymous Tmpfiles (no account/API key): POST https://tmpfiles.org/api/v1/upload with " +
+        "multipart 'file' and 'expire=3600'; read the returned sharing page and extract its actual download " +
+        "link, including any token. Never guess a '/dl/' transformation. See https://tmpfiles.org/api and " +
+        "https://tmpfiles.org/tos for current limits/terms. Import before expiry; successful imports are " +
+        "stored locally and survive source expiry. Verify with 'get_recipe' and load its image URL; report " +
+        "hosting/fetch/permission/assignment failures and check state before retrying uncertain outcomes.";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -30,7 +44,8 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     [Description(
         "Returns the current JSON Schema for the recipe JSON accepted by 'add_recipe' and 'change_recipe' " +
         "- call this first to discover the shape of recipe data, since optional fields (e.g. " +
-        "'inspirations', 'imageUrl') only appear while their backend service is online."
+        "'inspirations', 'imageUrl') only appear while their backend service is online. " +
+        "See those tools' descriptions for image hosting/import instructions."
     )]
     public async Task<string> GetRecipeSchema()
     {
@@ -45,10 +60,13 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         "Creates a recipe from JSON (name required; method, ingredients optional). The " +
         "'inspirations' field (array of URLs) and 'imageUrl' field are only accepted while the " +
         "inspirations/images services (respectively) are online; if 'imageUrl' is given, the server " +
-        "fetches it and attaches it to the new recipe."
+        "fetches it and attaches it to the new recipe." + ImageUrlGuidance
     )]
     public async Task<string> AddRecipe(
-        [Description("Recipe JSON object")] string recipeJson
+        [Description(
+            "Recipe JSON object matching 'get_recipe_schema'; optional 'imageUrl' is a direct image " +
+            "download URL, not a local path or sharing page."
+        )] string recipeJson
     )
     {
         JsonElement element;
@@ -181,11 +199,14 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         "Patches an existing recipe from JSON; only fields present in the JSON are changed, omitted " +
         "fields are left untouched. The 'inspirations' field (array of URLs) and 'imageUrl' field are " +
         "only accepted while the inspirations/images services (respectively) are online; if 'imageUrl' " +
-        "is given, the server fetches it and replaces the recipe's image."
+        "is given, the server fetches it and replaces the recipe's image." + ImageUrlGuidance
     )]
     public async Task<string> ChangeRecipe(
         [Description("Recipe id")] string recipeId,
-        [Description("Partial recipe JSON object; only included fields are changed")] string recipeJson
+        [Description(
+            "Partial recipe JSON object matching 'get_recipe_schema'; only included fields change. " +
+            "'imageUrl' alone replaces the image using a direct download URL, not a local path or sharing page."
+        )] string recipeJson
     )
     {
         JsonElement element;

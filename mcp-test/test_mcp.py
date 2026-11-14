@@ -132,6 +132,37 @@ async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
         }
 
 
+@pytest.mark.parametrize("tool_name", ["add_recipe", "change_recipe"])
+async def test_image_import_guidance_is_available_in_tool_discovery(tool_name):
+    async with mcp_session(authenticated=False) as session:
+        tools = {tool.name: tool for tool in (await session.list_tools()).tools}
+        tool = tools[tool_name]
+        description = tool.description.lower()
+        for guidance in (
+            "direct image url",
+            "without browser authentication",
+            "file/browser access and http upload",
+            "do not invent missing capabilities",
+            "claim success from hosting alone",
+            "user permission",
+            "rights to share",
+            "unlisted urls are not private",
+            "never browser cookies, mcp credentials",
+            "https://tmpfiles.org/api/v1/upload",
+            "multipart 'file' and 'expire=3600'",
+            "actual download link",
+            "never guess a '/dl/'",
+            "verify with 'get_recipe'",
+            "check state before retrying",
+        ):
+            assert guidance in description
+        parameter = tool.input_schema["properties"]["recipeJson"]["description"]
+        assert "get_recipe_schema" in parameter
+        assert "not a local path or sharing page" in parameter
+        if tool_name == "change_recipe":
+            assert "replaces the recipe's image" in description
+
+
 async def test_tag_tools_describe_categories_and_optional_bulk_lists():
     async with mcp_session() as session:
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
