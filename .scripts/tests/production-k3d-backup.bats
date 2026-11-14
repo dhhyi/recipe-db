@@ -139,6 +139,7 @@ EOF
   jq -e --arg artifact "$ARTIFACT" --arg revision "$MOCK_REVISION" '
     .format == "recipe-db-pvc-snapshot" and .formatVersion == 1
     and .source.artifact == $artifact and .source.revision == $revision
+    and all(.inventory[]; .service != "mcp")
     and any(.inventory[]; .service == "tags" and .role == "cleanup-participant")
     and all(.inventory[]; (.sha256 | test("^[0-9a-f]{64}$")) and .sizeBytes > 0)
   ' "$snapshot/manifest.json" > /dev/null
@@ -148,16 +149,31 @@ EOF
   barrier=$(grep -n 'set env deployment/graphql MODE=backup' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
   scale_normal=$(grep -n 'scale deployment/recipes --replicas=0' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
   backup_mode=$(grep -n 'set env deployment/recipes MODE=backup' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
-  last_normal_stop=$(awk -v limit="$backup_mode" 'NR < limit && /scale deployment\/(recipes|images|tags) --replicas=0/ {line=NR} END {print line}' "$MOCK_LOG")
+  last_normal_stop=$(awk -v limit="$backup_mode" 'NR < limit && /scale deployment\/(recipes|images|tags|mcp) --replicas=0/ {line=NR} END {print line}' "$MOCK_LOG")
   cleanup=$(grep -n 'wait --for=condition=complete job/backup-cleanup' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
   copy=$(grep -n 'create -f .*copy-pod.json' "$MOCK_LOG" | head -n 1 | cut -d: -f1)
   [ "$barrier" -lt "$scale_normal" ]
   [ "$last_normal_stop" -lt "$backup_mode" ]
   [ "$backup_mode" -lt "$cleanup" ]
   [ "$cleanup" -lt "$copy" ]
+  grep -q 'scale deployment/mcp --replicas=0' "$MOCK_LOG"
+  grep -q 'scale deployment/mcp --replicas=1' "$MOCK_LOG"
   [ "$(grep -c 'create -f .*copy-pod.json' "$MOCK_LOG")" -eq 3 ]
   [ "$(grep -c ' MODE=production ' "$MOCK_LOG")" -ge 4 ]
   grep -q 'scale deployment/recipes --replicas=1' "$MOCK_LOG"
+}
+
+@test "backup refuses multiple MCP replicas with independent staging volumes" {
+  export MOCK_BACKUP=true
+  jq '.items |= map(if .metadata.name == "mcp" then
+    .spec.replicas=2 | .status.readyReplicas=2 else . end)' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/mcp-scaled"
+  [ "$status" -ne 0 ]
+  [[ $output == *"MCP upload staging requires exactly one ready replica"* ]]
+  run ! grep -Eq 'set env|scale deployment' "$MOCK_LOG"
 }
 
 @test "backup refuses deployment contention before changing GraphQL or backends" {

@@ -231,6 +231,29 @@ render() {
   ' manifests.json
 }
 
+@test "MCP uses one memory-backed staging volume outside backup snapshots" {
+  render values.json
+  jq -e '
+    [.items[] | select(.kind == "Deployment" and .metadata.name == "mcp")] as $mcp |
+    [.items[] | select(.kind == "PersistentVolumeClaim" and .metadata.name == "mcp")] as $claims |
+    [.items[] | select(.kind == "Job" and .metadata.name == "backup-cleanup")] as $cleanup |
+    ($mcp | length) == 1
+    and $mcp[0].spec.replicas == 1
+    and $mcp[0].spec.strategy.type == "Recreate"
+    and any($mcp[0].spec.template.spec.containers[0].env[];
+      .name == "MCP_IMAGE_UPLOAD_DIRECTORY" and .value == "/upload-staging")
+    and any($mcp[0].spec.template.spec.containers[0].volumeMounts[];
+      .name == "upload-staging" and .mountPath == "/upload-staging")
+    and any($mcp[0].spec.template.spec.volumes[];
+      .name == "upload-staging" and .emptyDir.medium == "Memory" and .emptyDir.sizeLimit == "128Mi")
+    and ($mcp[0].spec.template.spec.volumes | all(.[];
+      .persistentVolumeClaim == null))
+    and ($claims | length) == 0
+    and ($cleanup[0].spec.template.spec.containers[0].env[]
+      | select(.name == "BACKUP_PARTICIPANTS").value | contains("mcp|") | not)
+  ' manifests.json
+}
+
 @test "renewal rehearsal enlarges only the test CA renewal window and retains normal production settings" {
   jq '.config.target="pi" |
     .config.runtime.ingressMode="private-lan" |

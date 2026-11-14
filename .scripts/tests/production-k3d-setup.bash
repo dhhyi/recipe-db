@@ -96,6 +96,7 @@ application_project_metadata_to_jsonl() {
       '{"name":"tags","category":"backend","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"devcontainer":{"ports":[8090],"environment":{}}}' \
       '{"name":"search","category":"backend","backupRole":"derived-stateless","devcontainer":{"ports":[3000],"environment":{}}}' \
       '{"name":"browse","category":"frontend","devcontainer":{"ports":[3000],"environment":{}}}' \
+      '{"name":"mcp","category":"frontend","devcontainer":{"ports":[5000],"environment":{}}}' \
       > "$2"
     return
   fi
@@ -1262,7 +1263,7 @@ if jq -e 'has("config")' "$2" > /dev/null; then
     and (.files | keys) == ["designNginx","maintenanceHtml","maintenanceNginx","nats","oauthConfig"]' "$2" > /dev/null || exit 1
   if [[ $MOCK_RESTORE == true ]]; then
     jq -c '. as $input |
-      (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"] +
+      (["graphql","recipes","images","tags","search","browse","mcp","nats","typesense","browse-maintenance"] +
         (if .config.runtime.googleOAuthClientId then ["redis","oauth2-proxy"] else [] end))[] |
       . as $name | select($name != (env.MOCK_RESTORE_MISSING_WORKLOAD // "")) |
       {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db",
@@ -1282,7 +1283,7 @@ if jq -e 'has("config")' "$2" > /dev/null; then
     printf 'apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: nats-init\n  namespace: recipe-db\n  labels:\n    app.kubernetes.io/part-of: recipe-db\nspec:\n  template:\n    spec:\n      containers:\n        - name: provision\n          image: ghcr.io/dhhyi/recipe-db-graphql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n          args: [provision-events]\n      volumes: []\n---\n'
   elif [[ $MOCK_RELEASE_LIFECYCLE = true ]]; then
     jq -c '. as $input |
-      (["graphql","recipes","images","tags","search","browse","nats","typesense","browse-maintenance"])[] |
+      (["graphql","recipes","images","tags","search","browse","mcp","nats","typesense","browse-maintenance"])[] |
       . as $name | ($input.config.volumes | has($name)) as $durable |
       {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db"},
         spec:{replicas:1,template:{
@@ -1534,7 +1535,7 @@ EOF
   jq -n --arg artifact "$ARTIFACT" '{
     items: [{name:"graphql",claim:null},{name:"recipes",claim:"recipes"},
       {name:"images",claim:"images"},{name:"tags",claim:"tags"},
-      {name:"search",claim:null},{name:"browse",claim:null}] | map({
+      {name:"search",claim:null},{name:"browse",claim:null},{name:"mcp",claim:null}] | map({
       metadata:{name:.name},generation:1,spec:{replicas:1,template:{
         metadata:{annotations:{"recipe-db/release":$artifact}},spec:{
           containers:[{name:.name,image:("ghcr.io/dhhyi/recipe-db-"+.name+"@sha256:"+("b"*64)),
