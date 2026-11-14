@@ -1,0 +1,72 @@
+[check-forbidden-files]
+description = "Check tracked files for forbidden ignore-file locations"
+file = ".scripts/check-forbidden-files.sh"
+
+[check-tailwind-sources]
+description = "Validate that metadata-declared Tailwind source paths exist"
+run = "sh .scripts/sync-tailwind.sh --check-sources"
+
+[sync]
+description = "Synchronize shared files, devcontainers, GraphQL schemas and Bazel rules"
+depends = [
+  "create-intranet",
+  "create-search-key",
+  "create-auth-test-fixture",
+  "create-oauth-secrets",
+]
+run = [
+  { task = "sync-files" },
+  { task = "sync-devcontainers" },
+  { task = "merge-graphql-schemas" },
+  { task = "generate-bazel-build" },
+]
+
+[sync-files]
+description = "Validate file layout and synchronize shared generated files"
+depends = ["check-forbidden-files"]
+run = [
+  { tasks = [
+    "sync-tailwind",
+    "sync-ignore-files",
+    "sync-storage-version-templates",
+    "sync-vscode-settings"
+  ] },
+]
+
+[sync-ignore-files]
+description = "Regenerate Docker and Prettier ignore files"
+file = ".scripts/sync-ignore-files.sh"
+sources = [
+  ".gitignore",
+  "*/{.project.yaml,.gitignore,Dockerfile,.prettierignore}"
+]
+outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
+
+[sync-storage-version-templates]
+description = "Generate service source files for declared storage versions"
+file = ".scripts/sync-storage-version-templates.sh"
+sources = ["*/.project.yaml"]
+outputs = [
+  '''
+{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.storageVersion.value != null) | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .storageVersion.file' \"$@\"; fi") | split(pat="\n") -%}
+{%- if paths | length > 1 -%}
+  {{ "{" ~ paths | join(sep=",") ~ "}" }}
+{%- else -%}
+  {{ paths | first }}
+{%- endif -%}
+'''
+]
+
+[sync-tailwind]
+description = "Generate shared Tailwind sources and Docker build inputs"
+depends = ["check-tailwind-sources"]
+file = ".scripts/sync-tailwind.sh"
+sources = ["*/.project.yaml", "design/Dockerfile"]
+outputs = ["design/src/tailwind-sources.css", "design/Dockerfile"]
+
+[sync-vscode-settings]
+description = "Generate repository VS Code settings"
+file = ".scripts/sync-vscode-settings.sh"
+sources = [".scripts/sync-vscode-settings.sh", "*/.project.yaml"]
+outputs = [".vscode/settings.json"]
+

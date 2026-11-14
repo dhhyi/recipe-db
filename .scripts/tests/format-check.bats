@@ -115,7 +115,7 @@ setup_bazel_fixture() {
   cp "$BATS_TEST_DIRNAME/../"{generate-bazel-build,format-files,format-bazel,run-in-devcontainer,bazel}.sh .scripts/
   cp "$BATS_TEST_DIRNAME/../../.bazelversion" .
   printf '%s\n' 'module(name = "format_fixture")' > MODULE.bazel
-  mkdir -p .scripts/tests example other
+  mkdir -p .scripts/tests .mise/tasks example other
   touch .scripts/tests/example.bats .scripts/tests/test_helper.bash .scripts/test-scripts.sh
   cat > .scripts/tests/groups.yaml << 'EOF'
 tooling:
@@ -123,7 +123,10 @@ tooling:
   suite_inputs:
     .scripts/tests/example.bats: [.scripts/format-check.sh]
 EOF
-  printf '%s\n' '# formatter tool identity' > mise.toml
+  printf '%s\n' '[task_config]' 'includes = [".mise/tasks/*.toml"]' > mise.toml
+  printf '%s\n' '[tools]' 'formatter = "1"' > .mise/config.toml
+  printf '%s\n' '[in-devcontainer]' 'file = ".scripts/run-in-devcontainer.sh"' > .mise/tasks/project-actions.toml
+  printf '%s\n' '[test-scripts]' 'run = "bash .scripts/test-scripts.sh"' > .mise/tasks/script-tests.toml
   for project in example other; do
     cat > "$project/.project.yaml" << 'EOF'
 name: example
@@ -147,6 +150,9 @@ case "$*" in
     shift 2
     exec "$@"
     ;;
+  'run --raw test-scripts '*)
+    printf '%s\n' "$4" >> "$root/test-calls.log"
+    ;;
   'run --raw in-devcontainer '*)
     project=$4
     printf 'check:%s\n' "$project" >> "$root/check-calls.log"
@@ -169,6 +175,48 @@ format_build() {
     --action_env=PATH --jobs=1 "$@" //:example_format_check //:other_format_check
 }
 
+script_test_build() {
+  bash .scripts/generate-bazel-build.sh
+  bash .scripts/bazel.sh --batch --output_base="$BATS_TEST_TMPDIR/bazel" build \
+    --action_env=PATH --jobs=1 //:test_scripts_suite_example
+}
+
+@test "Bazel script-test actions cache unrelated tasks and track their task tool and suite inputs" {
+  setup_bazel_fixture
+
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 1 ]
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 1 ]
+
+  printf '%s\n' '[unrelated]' 'run = "true"' > .mise/tasks/unrelated.toml
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 1 ]
+
+  printf '%s\n' '# unrelated task changed' >> .mise/tasks/project-actions.toml
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 1 ]
+
+  printf '%s\n' '# task changed' >> .mise/tasks/script-tests.toml
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 2 ]
+
+  printf '%s\n' 'formatter = "2"' >> .mise/config.toml
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 3 ]
+
+  printf '%s\n' '# suite input changed' >> .scripts/format-check.sh
+  run script_test_build
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < test-calls.log)" -eq 4 ]
+}
+
 @test "Bazel caches read-only checks and invalidates only affected project inputs" {
   setup_bazel_fixture
   run format_build
@@ -183,7 +231,7 @@ format_build() {
   [ "$status" -eq 0 ]
   [ "$(grep -c '^check:' check-calls.log)" -eq 2 ]
 
-  for change in source addition removal config command tool; do
+  for change in source addition removal config command tool unrelated_task unrelated_task_change relevant_task tool_config; do
     case "$change" in
       source) printf '%s\n' 'formatted source change' > example/main.txt ;;
       addition) printf '%s\n' formatted > example/new.txt ;;
@@ -191,15 +239,45 @@ format_build() {
       config) printf '%s\n' changed > example/formatter.conf ;;
       command) sed -i 's/apply: format/apply: format # changed command/' example/.project.yaml ;;
       tool) printf '%s\n' 'FROM formatter:2' > example/Dockerfile ;;
+      unrelated_task) printf '%s\n' '[unrelated]' 'run = "true"' > .mise/tasks/unrelated.toml ;;
+      unrelated_task_change) printf '%s\n' '# unrelated task changed' >> .mise/tasks/script-tests.toml ;;
+      relevant_task) printf '%s\n' '# changed' >> .mise/tasks/project-actions.toml ;;
+      tool_config) printf '%s\n' 'formatter = "2"' >> .mise/config.toml ;;
     esac
-    before=$(grep -c '^check:example' check-calls.log)
+    before_example=$(grep -c '^check:example' check-calls.log)
+    before_other=$(grep -c '^check:other' check-calls.log)
     run format_build
     [ "$status" -eq 0 ]
-    [ "$(grep -c '^check:example' check-calls.log)" -eq "$((before + 1))" ]
-    [ "$(grep -c '^check:other' check-calls.log)" -eq 1 ]
+    case "$change" in
+      unrelated_task | unrelated_task_change)
+        [ "$(grep -c '^check:example' check-calls.log)" -eq "$before_example" ]
+        [ "$(grep -c '^check:other' check-calls.log)" -eq "$before_other" ]
+        ;;
+      relevant_task | tool_config)
+        [ "$(grep -c '^check:example' check-calls.log)" -eq "$((before_example + 1))" ]
+        [ "$(grep -c '^check:other' check-calls.log)" -eq "$((before_other + 1))" ]
+        ;;
+      *)
+        [ "$(grep -c '^check:example' check-calls.log)" -eq "$((before_example + 1))" ]
+        [ "$(grep -c '^check:other' check-calls.log)" -eq "$before_other" ]
+        ;;
+    esac
     run format_build
     [ "$status" -eq 0 ]
-    [ "$(grep -c '^check:example' check-calls.log)" -eq "$((before + 1))" ]
+    case "$change" in
+      unrelated_task | unrelated_task_change)
+        [ "$(grep -c '^check:example' check-calls.log)" -eq "$before_example" ]
+        [ "$(grep -c '^check:other' check-calls.log)" -eq "$before_other" ]
+        ;;
+      relevant_task | tool_config)
+        [ "$(grep -c '^check:example' check-calls.log)" -eq "$((before_example + 1))" ]
+        [ "$(grep -c '^check:other' check-calls.log)" -eq "$((before_other + 1))" ]
+        ;;
+      *)
+        [ "$(grep -c '^check:example' check-calls.log)" -eq "$((before_example + 1))" ]
+        [ "$(grep -c '^check:other' check-calls.log)" -eq "$before_other" ]
+        ;;
+    esac
   done
 }
 

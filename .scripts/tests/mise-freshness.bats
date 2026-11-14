@@ -10,6 +10,9 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   yq -p toml -o toml 'del(.hooks)' "$root/mise.toml" > mise.toml
+  mkdir -p .mise/tasks
+  cp "$root/.mise/tasks/"*.toml .mise/tasks/
+  cp "$root/.mise/config.toml" .mise/
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$root"
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_TASK_RUN_AUTO_INSTALL=false

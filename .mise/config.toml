@@ -1,0 +1,13 @@
+[tools]
+"aqua:bats-core/bats-core" = "1.13.0"
+"aqua:oras-project/oras" = "1.3.6"
+"aqua:k3d-io/k3d" = "5.8.3"
+"aqua:kubernetes/kubernetes/kubectl" = "1.35.5"
+jq = "latest"
+node = "26"
+"npm:@devcontainers/cli" = "latest"
+shellcheck = "latest"
+yq = "latest"
+ytt = "0.55.4"
+"aqua:bazelbuild/bazelisk" = "latest"
+

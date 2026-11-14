@@ -11,7 +11,8 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
   mkdir -p .mise/tasks
-  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/devcontainers-sync.toml" .mise/tasks/
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/"*.toml .mise/tasks/
+  cp "$BATS_TEST_DIRNAME/../../.mise/config.toml" .mise/
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_CONFIG_DIR="$BATS_TEST_TMPDIR/mise-config"
@@ -55,6 +56,26 @@ mock_task_body() {
   run mise tasks --json
   [ "$status" -eq 0 ]
   printf '%s' "$output" | jq -e 'all(.[]; .description | length > 0)'
+}
+
+@test "root tasks are wildcard-discovered from separate task files" {
+  root="$BATS_TEST_DIRNAME/../../mise.toml"
+  run yq -p toml -e 'has("tasks") | not' "$root"
+  [ "$status" -eq 0 ]
+  [ "$(yq -p toml -r '.task_config.includes | join(",")' "$root")" = ".mise/tasks/*.toml" ]
+  cat > .mise/tasks/discovered-task.toml << 'EOF'
+[discovered-task]
+description = "Discovered without a root config change"
+run = "true"
+EOF
+
+  run mise tasks --json
+
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e 'any(.[]; .name == "discovered-task" and .description == "Discovered without a root config change")'
+  run mise config ls
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$FIXTURE_ROOT/.mise/config.toml"* ]]
 }
 
 @test "file tasks forward arguments and preserve their interpreter and exit status" {

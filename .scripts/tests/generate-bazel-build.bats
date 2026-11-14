@@ -5,7 +5,7 @@ load test_helper
 setup() {
   setup_fixture generate-bazel-build.sh
   git init -q
-  mkdir -p example deploy .scripts/tests .scripts/templates
+  mkdir -p example deploy .scripts/tests .scripts/templates .mise/tasks
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
@@ -18,7 +18,8 @@ EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
-  touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml
+  touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
+    .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml
   cat > .scripts/tests/groups.yaml << 'EOF'
 compose:
   tests:
@@ -47,7 +48,7 @@ EOF
     grep -Fx "        \"$file\"," test-rule
   done
   [ "$(grep -c '^        "' test-rule)" -eq 5 ]
-  grep -Fx '    tools = ["mise.toml", ".bazelversion"],' test-rule
+  grep -Fx '    tools = ["mise.toml", ".mise/config.toml", ".mise/tasks/script-tests.toml", ".bazelversion"],' test-rule
   grep -Fx '    outs = ["test-scripts-test_scripts_suite_example.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts .scripts/tests/example.bats && touch $@",' test-rule
   grep -Fx '    tags = ["no-sandbox", "no-remote"],' test-rule
@@ -85,6 +86,7 @@ EOF
 
   sed -n '/name = "shellcheck"/,/^)/p' BUILD.bazel > lint-rule
   grep -Fx '        ".scripts/tests/example.bats",' lint-rule
+  grep -Fx '    tools = ["mise.toml", ".mise/config.toml"],' lint-rule
 }
 
 @test "all rules allow disk caching while disabling sandboxing and remote execution" {
@@ -168,6 +170,8 @@ EOF
 
 @test "mise test-scripts runs all suites, a group or a suite and propagates failures" {
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
+  mkdir -p .mise/tasks
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/script-tests.toml" .mise/tasks/
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_TASK_RUN_AUTO_INSTALL=false
@@ -248,7 +252,8 @@ EOF
   sed -n '/name = "other_format_check"/,/^)/p' BUILD.bazel > original-other
   for input in example/main.txt example/.project.yaml example/Dockerfile example/formatter.conf \
     example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile \
-    .scripts/format-files.sh .scripts/format-check.sh .scripts/run-in-devcontainer.sh mise.toml; do
+    .scripts/format-files.sh .scripts/format-check.sh .scripts/run-in-devcontainer.sh mise.toml \
+    .mise/config.toml .mise/tasks/project-actions.toml; do
     grep -Fx "        \"$input\"," original-example
   done
   run -1 grep -E 'tar|:example_generate|:example_format"' original-example

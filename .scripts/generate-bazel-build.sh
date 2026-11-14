@@ -36,6 +36,8 @@ emit_rule() {
       printf '        %s,\n' "$(quote .scripts/format-check.sh)"
     fi
     printf '        %s,\n' "$(quote mise.toml)"
+    printf '        %s,\n' "$(quote .mise/config.toml)"
+    printf '        %s,\n' "$(quote .mise/tasks/project-actions.toml)"
     printf '    ],\n'
     printf '    outs = ["%s"],\n' "$archive"
     printf '    cmd = "sh %s %s %s' "\$(location $script)" "$project" "\$@"
@@ -161,7 +163,7 @@ done
     printf '        %s,\n' "$(quote "$file")"
   done < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '*.bash' '*.bats' | sort -zu)
   printf '    ],\n'
-  printf '    tools = ["mise.toml"],\n'
+  printf '    tools = ["mise.toml", ".mise/config.toml"],\n'
   printf '    outs = ["shellcheck.ok"],\n'
   printf '    cmd = "mise exec -- shellcheck %s && touch %s",\n' "\$(SRCS)" "\$@"
   printf '    tags = ["no-sandbox", "no-remote"],\n'
@@ -239,7 +241,7 @@ for group in $(jq -r 'keys[]' <<< "$group_specs"); do
         printf '        %s,\n' "$(quote "$file")"
       done < <(printf '%s\n' "${!suite_files[@]}" | sort)
       printf '    ],\n'
-      printf '    tools = ["mise.toml", ".bazelversion"],\n'
+      printf '    tools = ["mise.toml", ".mise/config.toml", ".mise/tasks/script-tests.toml", ".bazelversion"],\n'
       printf '    outs = ["%s"],\n' "test-scripts-$suite_target.ok"
       printf '    cmd = "mise run --raw test-scripts %s && touch %s",\n' "$test_file" "\$@"
       printf '    tags = ["no-sandbox", "no-remote"],\n'
