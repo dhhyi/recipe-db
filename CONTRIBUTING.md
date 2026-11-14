@@ -144,7 +144,8 @@ Solid arrows change issue type; dashed arrows create children or reference contr
 - Model dependencies with GitHub's native **blocked by** relationships, not labels or diagrams alone. These may cross umbrella boundaries or involve standalone ideas and specs.
 - When asked to relate issues that are not blockers or parent/child, create GitHub's native **Relates to** relationship. A prose or Markdown reference alone does not establish this relationship; keep references in descriptions when useful for context.
 - Every umbrella includes a Mermaid `flowchart TD` of its direct children:
-  - Node labels contain only the issue number, current title and ` (closed)` when applicable.
+  - Node labels contain only the issue number and current title.
+  - Color closed issue nodes using `classDef closedIssue fill:#e6d9f7,stroke:#8250df,color:#1f2328` and assign them the class, for example `class I123,I456 closedIssue`. Leave open issue nodes unstyled and omit a legend.
   - Each issue node links to its GitHub URL with a `click` directive.
   - Arrows run prerequisite-to-dependent and match native blockers; contract references are not automatically blockers.
   - Document external dependencies separately. No PR references or other metadata belong in the diagram.
