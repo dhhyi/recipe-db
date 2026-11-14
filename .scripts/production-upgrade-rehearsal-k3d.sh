@@ -687,6 +687,7 @@ successful_migration_outcome_is_valid() {
     .migrationResult.artifact == $candidate
     and (.migrationResult.outcome == "no-migration-required"
       or .migrationResult.outcome == "migration-succeeded")
+    and (.migrationExecution.versions | type == "array" and length > 0)
     and all(.migrationExecution.versions[];
       .currentVersion == .requiredVersion)
   ' "$state" > /dev/null

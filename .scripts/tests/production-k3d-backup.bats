@@ -693,6 +693,10 @@ EOF
   jq -e '.migrationResult == null' "$STATE/backup-state.json" > /dev/null
   complete_candidate_release no-migration-required
   jq -e '.migrationResult.outcome == "no-migration-required"' "$STATE/backup-state.json" > /dev/null
+  jq -e '.migrationExecution.status == "no-migration-required"
+    and (.migrationExecution.versions | type == "array" and length == 5)
+    and all(.migrationExecution.versions[]; .currentVersion == .requiredVersion)' \
+    "$STATE/backup-state.json" > /dev/null
   jq -e 'all(.items[]; .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
 
   start_log=$(wc -l < "$MOCK_LOG")

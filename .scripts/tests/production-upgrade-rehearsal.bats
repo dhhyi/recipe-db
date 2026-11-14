@@ -354,6 +354,20 @@ YAML
     successful_migration_outcome_is_valid "$state" "$candidate"
   done
 
+  jq '.migrationExecution.versions = []' "$state" > "$state.next"
+  mv "$state.next" "$state"
+  run successful_migration_outcome_is_valid "$state" "$candidate"
+  [ "$status" -ne 0 ]
+
+  jq 'del(.migrationExecution.versions)' "$state" > "$state.next"
+  mv "$state.next" "$state"
+  run successful_migration_outcome_is_valid "$state" "$candidate"
+  [ "$status" -ne 0 ]
+
+  jq -n --arg candidate "$candidate" '
+    {migrationResult:{artifact:$candidate,outcome:"no-migration-required"},
+      migrationExecution:{versions:[{service:"recipes",currentVersion:1,requiredVersion:1}]}}
+  ' > "$state"
   jq '.migrationExecution.versions[0].currentVersion = 0' "$state" > "$state.next"
   mv "$state.next" "$state"
   run successful_migration_outcome_is_valid "$state" "$candidate"
