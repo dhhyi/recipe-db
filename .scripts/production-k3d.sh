@@ -830,17 +830,19 @@ backup_start_modes() {
 
 backup_copy_pvc() {
   local name=$1 pvc=$2 role=$3 layout=$4 pod archive size sha files storage
+  local helper_command="trap 'exit 0' TERM QUIT; while :; do sleep 1; done"
   storage=$(jq -ce --arg name "$name" 'select(.name == $name) | .storage' \
     "$work/backup-pvcs.jsonl") || return 1
   pod="backup-copy-${name}-${backup_id##*-}"
   archive="$snapshot/$name.tar"
   jq -n --arg name "$pod" --arg namespace "$namespace" --arg image "$copy_image" \
-    --arg pvc "$pvc" --arg id "$backup_id" --argjson resources "$(jq -c .resources "$work/config.json")" '
+    --arg pvc "$pvc" --arg id "$backup_id" --arg command "$helper_command" \
+    --argjson resources "$(jq -c .resources "$work/config.json")" '
     {apiVersion:"v1",kind:"Pod",metadata:{name:$name,namespace:$namespace,
       labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"backup-copy",
         "recipe-db/backup-id":$id}},
      spec:{restartPolicy:"Never",automountServiceAccountToken:false,
-       containers:[{name:"copy",image:$image,command:["sh","-ec","exec sleep 3600"],
+       containers:[{name:"copy",image:$image,command:["sh","-ec",$command],
          resources:$resources,volumeMounts:[{name:"data",mountPath:"/data",readOnly:true}]}],
        volumes:[{name:"data",persistentVolumeClaim:{claimName:$pvc,readOnly:true}}]}}
   ' > "$work/copy-pod.json" || return 1

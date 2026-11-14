@@ -357,6 +357,9 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       *"create -f "*recovery-image-probe.json)
         jq -c . "${*: -1}" >> "$MOCK_LOG.restore-pods"; exit ;;
       *"create -f "*restore-volume-pod.json)
+        jq -e --arg command "trap 'exit 0' TERM QUIT; while :; do sleep 1; done" \
+          '.spec.containers[0].command == ["sh","-ec",$command]' \
+          "${*: -1}" > /dev/null || exit 1
         jq -c . "${*: -1}" >> "$MOCK_LOG.restore-pods"; exit ;;
       *"get pods -l "*"-o json")
         selector="${*: -3:1}"
@@ -963,9 +966,12 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         handled=true ;;
       *" create -f "*copy-pod.json)
         pod_file="${*: -1}"
-        jq -e '.spec.volumes[0].persistentVolumeClaim.readOnly == true and
+        jq -e --arg command "trap 'exit 0' TERM QUIT; while :; do sleep 1; done" \
+          '.spec.volumes[0].persistentVolumeClaim.readOnly == true and
           .spec.containers[0].volumeMounts[0].readOnly == true and
-          .spec.automountServiceAccountToken == false' "$pod_file" > /dev/null || exit 1
+          .spec.automountServiceAccountToken == false and
+          .spec.containers[0].command == ["sh","-ec",$command]' \
+          "$pod_file" > /dev/null || exit 1
         handled=true ;;
       *" exec backup-copy-"*"sh -ec"*)
         if [[ -n ${MOCK_ARCHIVE_BYTES:-} ]]; then
