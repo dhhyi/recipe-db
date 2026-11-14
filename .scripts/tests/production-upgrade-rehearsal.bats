@@ -102,7 +102,8 @@ load_scenario_functions() {
     deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
     run_migration_sequence successful_migration_outcome_is_valid \
-    complete_recovery_state_is_verified delete_scenario_cluster run_scenario; do
+    complete_recovery_state_is_verified delete_scenario_cluster run_scenario \
+    run_rehearsal_scenarios; do
     sed -n "/^${function_name}() {/,/^}/p" \
       .scripts/production-upgrade-rehearsal-k3d.sh >> "$FIXTURE_ROOT/scenario-functions.sh"
   done
@@ -752,9 +753,9 @@ YAML
         if [[ " $* " == *" get deployments "* ]]; then
           printf '{"items":[]}\n'
         elif [[ " $* " == *" get lease recipe-db-deploy "* ]]; then
-          jq -n --arg holder "$package_id" --arg candidate "$candidate" --arg phase "$lease_phase" '
+          jq -n --arg holder "$package_id" --arg source "$source_release" --arg phase "$lease_phase" '
             {spec:{holderIdentity:$holder},
-             metadata:{annotations:{"recipe-db/release":$candidate,"recipe-db/phase":$phase}}}
+             metadata:{annotations:{"recipe-db/release":$source,"recipe-db/phase":$phase}}}
           '
         elif [[ " $* " == *" replace -f "* ]]; then
           lease_phase=$(jq -r '.metadata.annotations["recipe-db/phase"]' "$6")
@@ -771,7 +772,7 @@ YAML
   }
 
   : > "$scenario_lifecycle_log"
-  run_scenario successful-upgrade s "$source_values" "$candidate_values" "$source_values"
+  run_scenario successful-upgrade "$source_values" "$candidate_values"
   [ "$migration_outcome" = no-migration-required ]
   [ "$success_upgrade_status" = passed ]
   [ "$(cat "$candidate_worktree/.scripts/smoke-production-k3d.sh")" = 'pinned smoke script' ]
@@ -783,7 +784,7 @@ YAML
 
   : > "$scenario_lifecycle_log"
   scenario_label=failure-recovery
-  run_scenario failure-recovery f "$source_values" "$candidate_values" "$source_values"
+  run_scenario failure-recovery "$source_values" "$candidate_values"
   [ "$failure_recovery_status" = passed ]
   [ "$cluster" = '' ]
   [ "$cluster_created" = false ]
@@ -931,7 +932,7 @@ YAML
     esac
   }
   : > "$scenario_lifecycle_log"
-  run_scenario successful-upgrade s "$source_values" "$candidate_values" "$source_values"
+  run_scenario successful-upgrade "$source_values" "$candidate_values"
   [ "$migration_outcome" = migration-succeeded ]
   [ "$success_upgrade_status" = passed ]
   [ "$(cat "$candidate_worktree/.scripts/smoke-production-k3d.sh")" = 'pinned smoke script' ]
@@ -963,4 +964,62 @@ YAML
   [ "$cluster" = recipe-db-rehearsal-test-s ]
   [ "$cluster_created" = true ]
   [ "${#deleted_clusters[@]}" -eq 0 ]
+}
+
+@test "lifecycle uses current tooling and immutable Git sources for old release operations" {
+  local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work"
+  local cluster_created=true cluster_check_count=0 cluster_values=cluster.yaml
+  mkdir -p "$work/logs"
+  sed -n '/^lifecycle() {/,/^}/p' \
+    .scripts/production-upgrade-rehearsal-k3d.sh > lifecycle-function.sh
+  # shellcheck disable=SC1091
+  source lifecycle-function.sh
+  mise() { printf '%s %s\n' "$PWD" "$*" >> "$work/calls"; }
+  die() { return 1; }
+
+  lifecycle /nonexistent/old-source false restore source.yaml
+  lifecycle /nonexistent/old-source false backup-enter source.yaml
+  lifecycle /nonexistent/old-source false backup-capture source.yaml
+  lifecycle /nonexistent/old-candidate true release-stage candidate.yaml
+  [ "$cluster_check_count" -eq 4 ]
+  [ "$(grep -c 'production-k3d verify cluster.yaml' "$work/calls")" -eq 4 ]
+  for operation in restore backup-enter backup-capture release-stage; do
+    grep -Fq "$root run --raw production-k3d --release-sources-from-git $operation" "$work/calls"
+  done
+  mise() { return 1; }
+  run lifecycle /nonexistent/old-source false restore source.yaml
+  [ "$status" -ne 0 ]
+}
+
+@test "one cluster restores once then recovers reopens upgrades and deletes in order" {
+  local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work"
+  local backup_id=backup-123-456 source_revision="$SOURCE_REVISION"
+  local source_release="$SOURCE_RELEASE" candidate="$CANDIDATE_RELEASE"
+  local manifest=manifest.json archive=archive.tar.gz phase=''
+  mkdir -p "$work/logs" "$work/state/failure-recovery"
+  printf '{"backupId":"backup-789-123"}\n' > "$work/state/failure-recovery/backup-state.json"
+  load_scenario_functions
+  new_cluster() { printf 'create %s\n' "$*" >> "$work/steps"; }
+  run_logged() {
+    shift
+    "$@"
+  }
+  lifecycle() {
+    shift 2
+    printf '%s\n' "$*" >> "$work/steps"
+  }
+  mark() { :; }
+  run_scenario() { printf 'scenario %s\n' "$*" >> "$work/steps"; }
+  verify_sample() { printf 'verify %s\n' "$*" >> "$work/steps"; }
+  delete_scenario_cluster() { printf 'delete\n' >> "$work/steps"; }
+
+  run_rehearsal_scenarios source.yaml candidate.yaml cluster.yaml
+  [ "$(sed -n '1p' "$work/steps")" = 'create r cluster.yaml' ]
+  grep -Fq "restore source.yaml manifest.json archive.tar.gz $backup_id $work/state/restore RESTORE-$backup_id" "$work/steps"
+  [ "$(sed -n '3p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
+  grep -Fq "release-recovery-reopen source.yaml $work/state/failure-recovery $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
+  [ "$(sed -n '5p' "$work/steps")" = 'verify source.yaml recovered-source' ]
+  [ "$(sed -n '6p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
+  [ "$(sed -n '7p' "$work/steps")" = delete ]
+  [ "$(grep -c '^restore ' "$work/steps")" -eq 1 ]
 }

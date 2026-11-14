@@ -25,8 +25,9 @@ command=$1
 values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
-  [[ $command == release-* || $command == render || $command == backup-capture ]] \
-    || production_fail "Git release sources are limited to render, backup-capture and guarded release operations"
+  [[ $command == release-* || $command == render || $command == backup-enter ||
+    $command == backup-capture || $command == restore ]] \
+    || production_fail "Git release sources are limited to render, backup-enter, backup-capture, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
     || production_fail "Git release sources require a clean tooling checkout"

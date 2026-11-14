@@ -417,12 +417,16 @@ run_logged() {
 lifecycle() {
   local checkout=$1 from_git=$2
   shift 2
-  if $cluster_created && [[ $checkout != "$root" ]]; then
+  if $cluster_created; then
     cluster_check_count=$((cluster_check_count + 1))
     if ! (cd "$root" && mise run --raw production-k3d verify "$cluster_values") \
       > "$work/logs/cluster-ownership-$cluster_check_count.log" 2>&1; then
       die "owned rehearsal cluster identity changed before $*; no further operation was attempted"
     fi
+    checkout=$root
+    case "$1" in
+      restore | backup-enter | backup-capture) from_git=true ;;
+    esac
   fi
   if [[ $from_git == true ]]; then
     (cd "$checkout" && mise run --raw production-k3d --release-sources-from-git "$@")
@@ -722,17 +726,11 @@ delete_scenario_cluster() {
 }
 
 run_scenario() {
-  local label=$1 suffix=$2 source_values=$3 candidate_values=$4 cluster_values=$5
-  local state restore_state package_id smoke_script_backup
+  local label=$1 source_values=$2 candidate_values=$3
+  local state package_id smoke_script_backup
   local package_manifest package_archive migration_digest migration_image job lease transition
   state="$work/state/$label"
-  restore_state="$work/state/$label-restore"
-  phase="$label-restore-production-backup"
-  new_cluster "$suffix" "$cluster_values"
-  run_logged "$work/logs/$label-restore.log" lifecycle "$source_worktree" false \
-    restore "$source_values" "$manifest" "$archive" "$backup_id" "$restore_state" "RESTORE-$backup_id"
   take_sample "$source_values"
-  mark
 
   phase="$label-capture-maintenance-snapshot"
   run_logged "$work/logs/$label-maintenance-enter.log" lifecycle "$source_worktree" false \
@@ -843,9 +841,9 @@ run_scenario() {
     lease="$work/$label-deploy-lease.json"
     lifecycle "$candidate_worktree" false kubectl "$candidate_values" \
       --namespace kube-system get lease recipe-db-deploy -o json > "$lease"
-    jq -e --arg holder "$package_id" --arg candidate "$candidate" '
+    jq -e --arg holder "$package_id" --arg source "$source_release" '
       .spec.holderIdentity == $holder
-      and .metadata.annotations["recipe-db/release"] == $candidate
+      and .metadata.annotations["recipe-db/release"] == $source
       and .metadata.annotations["recipe-db/phase"] == "candidate-staged"
     ' "$lease" > /dev/null || die 'failure injection found an unexpected operation Lease'
     if ((candidate_migration_count > 0)); then
@@ -895,7 +893,27 @@ run_scenario() {
     mark
   fi
 
-  delete_scenario_cluster "$label" || die "$failure_reason"
+}
+
+run_rehearsal_scenarios() {
+  local source_values=$1 candidate_values=$2 values=$3 package_id
+  phase=restore-production-backup
+  new_cluster r "$values"
+  run_logged "$work/logs/restore.log" lifecycle "$root" true \
+    restore "$source_values" "$manifest" "$archive" "$backup_id" "$work/state/restore" "RESTORE-$backup_id"
+  mark
+
+  run_scenario failure-recovery "$source_values" "$candidate_values"
+  phase=reopen-recovered-source
+  package_id=$(jq -er .backupId "$work/state/failure-recovery/backup-state.json")
+  run_logged "$work/logs/recovery-reopen.log" lifecycle "$root" true \
+    release-recovery-reopen "$source_values" "$work/state/failure-recovery" "$source_release" \
+    "OPEN-RECOVERY-$package_id-$source_revision"
+  verify_sample "$source_values" recovered-source
+  mark
+
+  run_scenario successful-upgrade "$source_values" "$candidate_values"
+  delete_scenario_cluster complete || die "$failure_reason"
 }
 
 phase=release-and-package-preflight
@@ -1048,7 +1066,7 @@ chmod 600 "$owner_token" "$accounts_file" "$curl_config"
 mark
 
 phase=ports-and-values-preflight
-python3 - "$http_port" "$((http_port + 1))" "$api_port" "$((api_port + 1))" << 'PY'
+python3 - "$http_port" "$api_port" << 'PY'
 import socket
 import sys
 
@@ -1063,28 +1081,15 @@ PY
 success_source_values="$work/success-source-values.yaml"
 success_candidate_values="$work/success-candidate-values.yaml"
 success_cluster_values="$work/success-cluster-values.yaml"
-failure_source_values="$work/failure-source-values.yaml"
-failure_candidate_values="$work/failure-candidate-values.yaml"
-failure_cluster_values="$work/failure-cluster-values.yaml"
-write_values "$source_worktree" "$(rehearsal_cluster_name "$run_id" s)" \
+write_values "$source_worktree" "$(rehearsal_cluster_name "$run_id" r)" \
   "$http_port" "$success_source_values"
 write_cluster_values "$success_source_values" "$success_cluster_values"
-write_values "$candidate_worktree" "$(rehearsal_cluster_name "$run_id" s)" \
+write_values "$candidate_worktree" "$(rehearsal_cluster_name "$run_id" r)" \
   "$http_port" "$success_candidate_values"
-write_values "$source_worktree" "$(rehearsal_cluster_name "$run_id" f)" \
-  "$((http_port + 1))" "$failure_source_values"
-write_cluster_values "$failure_source_values" "$failure_cluster_values"
-write_values "$candidate_worktree" "$(rehearsal_cluster_name "$run_id" f)" \
-  "$((http_port + 1))" "$failure_candidate_values"
 mark
 
-phase=successful-upgrade
-run_scenario successful-upgrade s "$success_source_values" "$success_candidate_values" \
+run_rehearsal_scenarios "$success_source_values" "$success_candidate_values" \
   "$success_cluster_values"
-
-phase=uncertain-migration-recovery
-run_scenario failure-recovery f "$failure_source_values" "$failure_candidate_values" \
-  "$failure_cluster_values"
 
 phase=complete
 available_disk_bytes_after=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}')

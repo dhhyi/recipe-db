@@ -5,6 +5,26 @@
 load production-k3d-setup
 load production-k3d-restore-setup
 
+@test "current tooling restores immutable older release sources without changing checkout" {
+  restore_fixture
+  export MOCK_SOURCE_REVISION="$MOCK_REVISION"
+  printf '*\n' > .gitignore
+  printf 'new tooling input\n' > message-bus/nats.conf
+  git add -f .gitignore message-bus/nats.conf
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Separate tooling inputs'
+  local tooling_revision
+  tooling_revision=$(git rev-parse HEAD)
+
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  run bash .scripts/production-k3d.sh --release-sources-from-git restore "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
+  [ "$status" -eq 0 ]
+  [ "$(git rev-parse HEAD)" = "$tooling_revision" ]
+  jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
+}
+
 @test "fresh Pi HTTPS restore creates retained storage before applying Traefik certificate infrastructure" {
   restore_fixture
   export MOCK_PI=true MOCK_LAN=true MOCK_HTTPS=true MOCK_RETAINED_CLASS_MISSING=true

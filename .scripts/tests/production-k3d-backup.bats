@@ -319,9 +319,9 @@ EOF
   [ "$status" -ne 0 ]
   [[ $output == *"require a clean tooling checkout"* ]]
   git restore .scripts/production-k3d.sh
-  run bash .scripts/production-k3d.sh --release-sources-from-git backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
-  [[ $output == *"limited to render, backup-capture and guarded release operations"* ]]
+  [[ $output == *"Git release sources are limited"* ]]
 
   cp "$snapshot/backup-state.json" original-state.json
   jq --arg revision "$MOCK_REVISION" '.source.revision = $revision' \
@@ -1734,6 +1734,24 @@ PY
     "$STATE/backup-state.json" > /dev/null
   marker_after=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
   [ "$marker_after" = "$marker_before" ]
+}
+
+@test "current tooling enters and captures backup from immutable older release sources" {
+  export MOCK_BACKUP=true MOCK_RELEASE_LIFECYCLE=false MOCK_SOURCE_REVISION="$MOCK_REVISION"
+  local snapshot="$FIXTURE_ROOT/backups/git-source"
+  printf '*\n' > .gitignore
+  printf 'new tooling input\n' > message-bus/nats.conf
+  git add -f .gitignore message-bus/nats.conf
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Separate tooling inputs'
+
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e --arg revision "$MOCK_SOURCE_REVISION" '.source.revision == $revision' "$snapshot/manifest.json"
 }
 
 @test "pinned tooling continues immutable release sources without switching back to obsolete tools" {
