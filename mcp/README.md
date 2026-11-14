@@ -15,9 +15,9 @@ There is intentionally no tool for deleting recipes.
 
 ## Image URL imports
 
-The MCP tool descriptions carry the client instructions. Discover the schema first; supply a direct image URL reachable by the server without browser authentication. For local/private photos, the client needs file/browser access and HTTP upload, or the user must provide a hosted URL. Obtain permission before external hosting; unlisted URLs are not private, and browser cookies/MCP credentials must not be forwarded.
+The MCP tool descriptions carry the client instructions. Discover the schema first; supply a direct image URL reachable by the server without browser authentication. Already-public image URLs work. For local/private photos, the client needs file/browser access and HTTP upload, or the user must provide a hosted URL. Obtain permission and confirm rights to share before external hosting; unlisted URLs are not private, and browser cookies/MCP credentials must not be forwarded.
 
-Any suitable host works. For example, anonymously upload to [Tmpfiles](https://tmpfiles.org/api):
+Any suitable host works. For example, upload to [Tmpfiles](https://tmpfiles.org/api) without an account or API key:
 
 ```sh
 curl -F "file=@photo.jpg" -F "expire=3600" https://tmpfiles.org/api/v1/upload

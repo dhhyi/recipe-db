@@ -24,8 +24,9 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         " Call 'get_recipe_schema' first. 'imageUrl' must be a direct image URL reachable by this server " +
         "without browser authentication, not a local path or sharing page. For local/private photos, " +
         "use client file/browser access and HTTP upload, or ask the user for a hosted URL if unavailable. " +
-        "Get user permission before external hosting; unlisted URLs are not private. Send only the selected " +
-        "image, never browser cookies, MCP credentials or unrelated content. Any suitable host works. " +
+        "Do not invent missing capabilities or claim success from hosting alone. " +
+        "Get user permission and confirm rights to share before external hosting; unlisted URLs are not private. " +
+        "Send only the selected image, never browser cookies, MCP credentials or unrelated content. Any suitable host works. " +
         "Optional anonymous Tmpfiles (no account/API key): POST https://tmpfiles.org/api/v1/upload with " +
         "multipart 'file' and 'expire=3600'; read the returned sharing page and extract its actual download " +
         "link, including any token. Never guess a '/dl/' transformation. See https://tmpfiles.org/api and " +
