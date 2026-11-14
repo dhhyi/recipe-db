@@ -58,13 +58,15 @@ def fixture_server_ready():
 
 
 @asynccontextmanager
-async def mcp_session(authenticated=True, account="owner", url=MCP_URL):
+async def mcp_session(authenticated=True, account="owner", url=MCP_URL, bearer_token=None):
     with anyio.fail_after(MCP_SESSION_TIMEOUT_SECONDS):
         headers = {}
         if authenticated:
-            token = AUTH_TOKENS.get(account)
-            if not token and account == "owner":
-                token = MCP_API_TOKEN
+            token = bearer_token
+            if token is None:
+                token = AUTH_TOKENS.get(account)
+                if not token and account == "owner":
+                    token = MCP_API_TOKEN
             if not token:
                 pytest.fail("E2E_AUTH_TOKENS with owner/memberOne/memberTwo is required")
             headers["Authorization"] = "Bearer " + token

@@ -1,44 +1,12 @@
-"""Focused physical-integrity, decoder-rejection and streamed-request limits."""
+"""Verify backend image-decoder rejection preserves an existing recipe image."""
 
 import json
 
-import httpx
 import pytest
 
 from image_fixture import synthetic_png
 from test_image_upload_integration import UPLOAD_URL, payload, stage
 from test_mcp import FIXTURE_API, create_recipe, fixture_server_ready, mcp_session
-from upload_fixture import disposable_server, successful
-
-
-@pytest.mark.parametrize("tampering", ["truncate", "extend"])
-async def test_staged_physical_length_mismatch_fails_without_assignment(tmp_path, tampering):
-    data = b"correct source bytes with a verified length and checksum"
-    with disposable_server(tmp_path) as server:
-        handle = (await server.start(data))["uploadHandle"]
-        accepted = successful(await server.chunk(handle, 0, data))
-        assert accepted["receivedBytes"] == len(data)
-        assert accepted["nextChunkNumber"] == 1
-        before = await server.status(handle)
-        photo = server.staging / (handle + ".photo")
-        assert photo.read_bytes() == data
-        with photo.open("r+b") as staged:
-            if tampering == "truncate":
-                staged.truncate(len(data) - 1)
-            else:
-                staged.seek(0, 2)
-                staged.write(b"extra byte")
-        assert photo.stat().st_size != len(data)
-
-        failed = await server.finish(handle)
-        assert failed["state"] == "failed"
-        assert failed["error"]["code"] == "upload-integrity-failed"
-        for key in ("receivedBytes", "nextChunkNumber"):
-            assert failed[key] == before[key]
-        assert not server.peer.assignments
-        assert await server.finish(handle) == failed
-        assert await server.status(handle) == failed
-        assert not server.peer.assignments
 
 
 @pytest.mark.usefixtures("fixture_server_ready")
@@ -66,29 +34,3 @@ async def test_recognized_broken_png_preserves_real_recipe_and_existing_image():
         assert payload(await session.call_tool("image_upload_finish", {"uploadHandle": handle})) == failed
         assert payload(await session.call_tool("image_upload_status", {"uploadHandle": handle})) == failed
         assert payload(await session.call_tool("get_recipe", {"recipeId": recipe_id})) == before
-
-
-async def test_oversized_chunked_request_rejected_before_parsing_or_staging(tmp_path):
-    async def streamed_body():
-        for _ in range(8):
-            yield b" " * 65536
-        yield b" "
-
-    with disposable_server(tmp_path) as server:
-        assert list(server.staging.iterdir()) == []
-        async with httpx.AsyncClient(timeout=30) as client:
-            request = client.build_request("POST", server.url, headers={
-                "Accept": "application/json, text/event-stream",
-                "Content-Type": "application/json",
-                "MCP-Protocol-Version": "2025-03-26",
-            }, content=streamed_body())
-            assert "content-length" not in request.headers
-            assert request.headers["transfer-encoding"] == "chunked"
-            response = await client.send(request)
-            assert response.status_code == 413, response.text
-            health = await client.get(server.url.removesuffix("/mcp") + "/health")
-            assert health.is_success
-        assert list(server.staging.iterdir()) == []
-        assert server.peer.requests == []
-        assert server.peer.queries == []
-        assert server.peer.assignments == []

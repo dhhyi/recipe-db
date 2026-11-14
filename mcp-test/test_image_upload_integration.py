@@ -1,4 +1,4 @@
-"""Real GraphQL/backend checks; protocol/fault cases live in test_image_upload.py."""
+"""Exercise image uploads through the testing-mode MCP service and real backends."""
 
 import base64
 import hashlib
@@ -9,7 +9,6 @@ import pytest
 
 from image_fixture import synthetic_png
 from test_mcp import FIXTURE_API, create_recipe, fixture_server_ready, mcp_session
-from upload_fixture import UploadServer, rejected
 
 UPLOAD_URL = os.environ.get("MCP_UPLOAD_URL", "http://mcp-upload-test-api:5000/mcp")
 CHUNK = 262144
@@ -110,13 +109,15 @@ async def test_real_invalid_credentials_leave_upload_and_recipe_unchanged():
         }))["uploadHandle"]
         before = payload(await owner.call_tool("get_recipe", {"recipeId": recipe_id}))
         status = payload(await owner.call_tool("image_upload_status", {"uploadHandle": handle}))
-        transport = UploadServer(UPLOAD_URL, None, None)
-        for tool, args in (
-            ("image_upload_start", {"recipeId": recipe_id, "byteLength": 1, "mediaType": "image/jpeg", "sha256": "0" * 64}),
-            ("image_upload_chunk", {"uploadHandle": handle, "chunkNumber": 0, "base64": "eA=="}),
-            ("image_upload_finish", {"uploadHandle": handle}),
-            ("image_upload_status", {"uploadHandle": handle}),
-        ):
-            rejected(await transport.call(tool, args, "invalid-token"), "invalid-credentials")
+        async with mcp_session(url=UPLOAD_URL, bearer_token="invalid-token") as invalid:
+            for tool, args in (
+                ("image_upload_start", {"recipeId": recipe_id, "byteLength": 1, "mediaType": "image/jpeg", "sha256": "0" * 64}),
+                ("image_upload_chunk", {"uploadHandle": handle, "chunkNumber": 0, "base64": "eA=="}),
+                ("image_upload_finish", {"uploadHandle": handle}),
+                ("image_upload_status", {"uploadHandle": handle}),
+            ):
+                result = await invalid.call_tool(tool, args)
+                assert result.is_error
+                assert "invalid-credentials" in result.content[0].text
         assert payload(await owner.call_tool("image_upload_status", {"uploadHandle": handle})) == status
         assert payload(await owner.call_tool("get_recipe", {"recipeId": recipe_id})) == before
