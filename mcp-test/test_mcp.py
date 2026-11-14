@@ -131,6 +131,10 @@ async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
             "create_tag",
             "delete_tag",
             "change_recipe_tags",
+            "image_upload_start",
+            "image_upload_chunk",
+            "image_upload_finish",
+            "image_upload_status",
         }
 
 
