@@ -778,9 +778,9 @@ run_scenario() {
       release-reopen "$candidate_values" "$state" "$candidate" "OPEN-$package_id"
     verify_sample "$candidate_values" successful-upgrade
     run_logged "$work/logs/success-smoke.log" \
-      bash -c 'cd "$1" && mise run --raw production-smoke "$2" "$3" "$4" "$5"' \
+      bash -c 'cd "$1" && mise run --raw production-smoke "$2" "$3" "$4" "$5" --release-state "$6"' \
       _ "$candidate_worktree" "$candidate_values" "$candidate" "$owner_token" \
-      "$work/success-smoke-result.json"
+      "$work/success-smoke-result.json" "$state"
     jq -e --arg artifact "$candidate" \
       '.success == true and .artifact == $artifact' "$work/success-smoke-result.json" > /dev/null \
       || die 'local candidate route and production smoke checks did not pass'
