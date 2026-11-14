@@ -86,7 +86,7 @@ Synthetic fixtures remain part of automated tooling regressions; they are not an
 
 ### Rehearse the deployed backup upgrade
 
-Before production maintenance, rehearse the exact deployed release, latest remotely verified backup and candidate on isolated local clusters. This command makes only read-only Pi API requests; it never deploys to or changes the Pi. It creates two disposable local clusters: one for a successful upgrade and one for complete recovery from an injected migration-uncertain state. The injection uses a deliberately missing Job after activation intent; no migration is allowed to execute.
+Before production maintenance, rehearse the exact deployed release, latest remotely verified backup and candidate on one isolated local cluster. This command makes only read-only Pi API requests; it never deploys to or changes the Pi. It first verifies complete recovery from an injected migration-uncertain state, then exercises a successful upgrade on the recovered cluster. The injection uses a deliberately missing Job after activation intent; no migration is allowed to execute during that scenario.
 
 This is a required process step, not a machine-enforced maintenance gate. An operator may exceptionally proceed without a passing rehearsal when urgency warrants it, but must record that decision and the failed, interrupted or skipped outcome accurately. That discretion never waives storage, ordering, ownership, stopped-worker or migration-validation guards, and does not permit changing or bypassing them.
 
@@ -103,8 +103,13 @@ Use the read-only status and baseline records on the Pi:
 
 ```sh
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
-sudo jq -er '{backupId,archive,manifest,archiveSha256,manifestSha256}' \
-  /var/lib/recipe-db-backup/baseline.json
+sudo python3 -c '
+import json
+with open("/var/lib/recipe-db-backup/baseline.json") as source:
+    baseline = json.load(source)
+print(json.dumps({key: baseline[key] for key in
+    ("backupId", "archive", "manifest", "archiveSha256", "manifestSha256")}))
+'
 ```
 
 The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It adapts the private values for local use while preserving storage sizing, resource limits and timeouts; Pi storage identities, production integrations and credentials are not copied. It reads the live release ConfigMap and Deployment annotations, verifies the live image digests against the source OCI inventory, and requires every stateful workload to be ready on that release. It directly compares all package storage markers with the source release's declared versions. Ready workloads on those exact images provide indirect evidence that live markers passed startup validation; the result explicitly records that live marker files were not directly read. No marker is read by an extra production Pod or process. If any preflight fails, investigate; do not override the check.

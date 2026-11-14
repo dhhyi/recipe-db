@@ -915,6 +915,16 @@ PY
   for service in recipes images tags; do
     printf '1\n' > "$FIXTURE_ROOT/tar-data/$service/storage-version"
   done
+  # Match the source workloads created by the recovery renderer.
+  jq '
+    ([.items[] | select(.metadata.name == "graphql")][0]) as $template |
+    .items += (["nats", "typesense", "browse-maintenance", "redis", "oauth2-proxy"] |
+      map(. as $name | $template |
+        .metadata.name = $name |
+        .spec.template.spec.containers[0].name = $name |
+        .spec.template.spec.containers[0].image = "infrastructure"))
+  ' "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
+  mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
   prepare_candidate_release
   export STATE
   prepare_recovery_package
