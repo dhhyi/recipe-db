@@ -1023,3 +1023,78 @@ YAML
   [ "$(sed -n '7p' "$work/steps")" = delete ]
   [ "$(grep -c '^restore ' "$work/steps")" -eq 1 ]
 }
+
+@test "recovery removes only stopped candidate-only Deployments with server preconditions" {
+  local work="$FIXTURE_ROOT/work" snapshot="$FIXTURE_ROOT/state"
+  local namespace=recipe-db timeout=5
+  mkdir -p "$work" "$snapshot"
+  sed -n '/^release_recovery_remove_candidate_only_deployments() {/,/^}/p' \
+    "$BATS_TEST_DIRNAME/../production-k3d.sh" > cleanup-function.sh
+  # shellcheck disable=SC1091
+  source cleanup-function.sh
+  jq -n --arg candidate "$CANDIDATE_RELEASE" '{
+    priorWorkloads:[{name:"graphql"}],
+    candidate:{artifact:$candidate,workloads:[{name:"graphql"},{name:"pwa"}]}
+  }' > "$snapshot/backup-state.json"
+  jq -n --arg candidate "$CANDIDATE_RELEASE" '{items:[
+    {metadata:{name:"graphql"}},
+    {metadata:{name:"pwa",uid:"pwa-uid",resourceVersion:"123",
+      labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+     spec:{replicas:0,template:{metadata:{annotations:{"recipe-db/release":$candidate}}}},
+     status:{replicas:0,readyReplicas:0}}
+  ]}' > "$work/live.json"
+  production_fail() {
+    printf '%s\n' "$*" >&2
+    exit 1
+  }
+  backup_wait_pods_gone() {
+    printf 'workers-gone %s\n' "$1" >> "$work/calls"
+    [[ ${workers_present:-false} != true ]]
+  }
+  kube() {
+    printf '%s\n' "$*" >> "$work/calls"
+    case "$1" in
+      get) cat "$work/live.json" ;;
+      delete)
+        jq -e '.preconditions == {uid:"pwa-uid",resourceVersion:"123"}' "$5" > /dev/null
+        [[ ${delete_conflict:-false} != true ]]
+        ;;
+      wait) return 0 ;;
+      *) return 97 ;;
+    esac
+  }
+
+  release_recovery_remove_candidate_only_deployments
+  grep -Fq 'delete --raw /apis/apps/v1/namespaces/recipe-db/deployments/pwa' "$work/calls"
+  grep -Fq 'wait --for=delete deployment/pwa --timeout=5s' "$work/calls"
+  [ "$(sed -n '2p' "$work/calls")" = 'workers-gone pwa' ]
+  run grep -F 'deployment/graphql' "$work/calls"
+  [ "$status" -ne 0 ]
+
+  cp "$work/live.json" "$work/original.json"
+  for change in '.items[1].spec.replicas=1' '.items[1].status.replicas=1' \
+    '.items[1].metadata.labels["app.kubernetes.io/part-of"]="foreign"' \
+    '.items[1].spec.template.metadata.annotations["recipe-db/release"]="other"' \
+    '.items[1].metadata.name="untracked"' '.items[1].metadata.uid=""'; do
+    jq "$change" "$work/original.json" > "$work/live.json"
+    : > "$work/calls"
+    run release_recovery_remove_candidate_only_deployments
+    [ "$status" -ne 0 ]
+    run grep -E '^delete|^wait' "$work/calls"
+    [ "$status" -ne 0 ]
+  done
+  cp "$work/original.json" "$work/live.json"
+  workers_present=true
+  : > "$work/calls"
+  run release_recovery_remove_candidate_only_deployments
+  [ "$status" -ne 0 ]
+  run grep '^delete' "$work/calls"
+  [ "$status" -ne 0 ]
+  workers_present=false
+  delete_conflict=true
+  : > "$work/calls"
+  run release_recovery_remove_candidate_only_deployments
+  [ "$status" -ne 0 ]
+  run grep '^wait' "$work/calls"
+  [ "$status" -ne 0 ]
+}

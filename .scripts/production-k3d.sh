@@ -2430,6 +2430,44 @@ release_recovery_reopen_cleanup() {
   [[ $failed == false ]]
 }
 
+release_recovery_remove_candidate_only_deployments() {
+  local entry name
+  kube get deployments -o json > "$work/recovery-cleanup-deployments.json" \
+    || production_fail "cannot inspect candidate-only recovery workloads"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    [$state[0].priorWorkloads[].name] as $previous |
+    [.items[] | select(.metadata.name as $name | $previous | index($name) | not)] as $extra |
+    all($extra[]; . as $deployment |
+      any($state[0].candidate.workloads[]; .name == $deployment.metadata.name)
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.template.metadata.annotations["recipe-db/release"] == $state[0].candidate.artifact
+      and .metadata.deletionTimestamp == null
+      and (.metadata.uid | type == "string" and length > 0)
+      and (.metadata.resourceVersion | type == "string" and length > 0)
+      and (.spec.replicas // 1) == 0
+      and (.status.replicas // 0) == 0
+      and (.status.readyReplicas // 0) == 0)
+  ' "$work/recovery-cleanup-deployments.json" > /dev/null \
+    || production_fail "candidate-only recovery workloads are unowned, changed or still running; keep access blocked"
+  jq -c --slurpfile state "$snapshot/backup-state.json" '
+    [$state[0].priorWorkloads[].name] as $previous |
+    .items[] | select(.metadata.name as $name | $previous | index($name) | not)
+  ' "$work/recovery-cleanup-deployments.json" > "$work/recovery-cleanup-deployments.jsonl"
+  while IFS= read -r entry; do
+    name=$(jq -er .metadata.name <<< "$entry")
+    backup_wait_pods_gone "$name" \
+      || production_fail "candidate-only recovery workers remain; keep access blocked"
+    jq '{apiVersion:"v1",kind:"DeleteOptions",
+      preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' \
+      <<< "$entry" > "$work/recovery-cleanup-delete.json"
+    kube delete --raw "/apis/apps/v1/namespaces/$namespace/deployments/$name" \
+      -f "$work/recovery-cleanup-delete.json" > /dev/null \
+      || production_fail "candidate-only recovery workload changed before deletion; keep access blocked"
+    kube wait --for=delete "deployment/$name" "--timeout=${timeout}s" > /dev/null \
+      || production_fail "candidate-only recovery workload did not disappear; keep access blocked"
+  done < "$work/recovery-cleanup-deployments.jsonl"
+}
+
 release_recovery_reopen() {
   local previous=$2 confirmation=$3 revision replicas
   release_load_operation "$1" "$previous" true
@@ -2504,6 +2542,7 @@ release_recovery_reopen() {
   ' "$work/recovery-deployments.json" > /dev/null \
     || production_fail "previous release is not ready behind the access barrier"
   release_mutation_started=true
+  release_recovery_remove_candidate_only_deployments
   release_recovery_reopen_started=true
   release_recovery_state_write recovery-required migration-reopening \
     "$(jq -cn --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
