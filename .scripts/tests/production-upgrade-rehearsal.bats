@@ -697,7 +697,13 @@ YAML
         [ ! -e "$3" ] || return 96
         mkdir -m 700 -- "$3"
         ;;
-      release-migration-plan | release-reopen | delete)
+      release-migration-plan | delete)
+        return 0
+        ;;
+      release-reopen)
+        jq '.status="access-open" | .phase="operator-reopened"' "$2/backup-state.json" \
+          > "$2/backup-state.next"
+        mv "$2/backup-state.next" "$2/backup-state.json"
         return 0
         ;;
       backup-capture)
@@ -874,7 +880,13 @@ YAML
         [ ! -e "$3" ] || return 96
         mkdir -m 700 -- "$3"
         ;;
-      release-migration-plan | release-reopen | delete)
+      release-migration-plan | delete)
+        return 0
+        ;;
+      release-reopen)
+        jq '.status="access-open" | .phase="operator-reopened"' "$2/backup-state.json" \
+          > "$2/backup-state.next"
+        mv "$2/backup-state.next" "$2/backup-state.json"
         return 0
         ;;
       backup-capture)

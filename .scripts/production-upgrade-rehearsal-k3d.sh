@@ -789,7 +789,8 @@ run_scenario() {
     verify_sample "$candidate_values" successful-upgrade-after-smoke
     jq -e '(.migrationResult.outcome == "no-migration-required"
       or .migrationResult.outcome == "migration-succeeded")
-      and .status == "release-ready"' "$state/backup-state.json" > /dev/null \
+      and .status == "access-open" and .phase == "operator-reopened"' \
+      "$state/backup-state.json" > /dev/null \
       || die 'successful local route checks changed the recorded release outcome'
     success_upgrade_status=passed
     mark
