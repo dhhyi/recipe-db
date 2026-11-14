@@ -36,6 +36,7 @@ compose:
 release:
   tests:
     - .scripts/tests/production-release.bats
+    - .scripts/tests/production-upgrade-rehearsal.bats
   suite_inputs:
     .scripts/tests/production-release.bats:
       - .scripts/lib/project-metadata.sh
@@ -49,6 +50,29 @@ release:
       - .scripts/smoke-production-image.sh
       - .scripts/generate-production-build-metadata.sh
       - .scripts/sync-storage-version-templates.sh
+      - package.json
+    .scripts/tests/production-upgrade-rehearsal.bats:
+      - .scripts/production-upgrade-rehearsal-k3d.sh
+      - .scripts/lib/project-metadata.sh
+      - .scripts/lib/rehearsal-k3d.sh
+      - .scripts/tests/production-upgrade-rehearsal.bats
+      - .scripts/tests/test_helper.bash
+      - .scripts/validate-backup-package.py
+      - .scripts/validate-backup-snapshot.py
+      - .scripts/validate-production-release.sh
+      - .scripts/validate-production-image-index.sh
+      - .scripts/migrator-manifest.schema.json
+      - .scripts/production-k3d.sh
+      - .scripts/smoke-production-k3d.sh
+      - .scripts/lib/production-config.sh
+      - .scripts/lib/cluster-operation-lock.sh
+      - .scripts/lib/production-storage.sh
+      - .scripts/lib/production-restore.sh
+      - .scripts/templates/**
+      - provisioning/files/backup-upload.py
+      - .scripts/tests/fixtures/rclone-local
+      - deploy/**
+      - ":(glob)*/.project.yaml"
       - package.json
 deploy:
   tests:
@@ -123,6 +147,7 @@ backup:
     .scripts/tests/backup-recovery-k3d.bats:
       - .scripts/backup-recovery-k3d.sh
       - .scripts/lib/production-config.sh
+      - .scripts/lib/rehearsal-k3d.sh
       - .scripts/tests/fixtures/rclone-local
       - deploy/local.yaml
     .scripts/tests/backup-snapshot.bats:

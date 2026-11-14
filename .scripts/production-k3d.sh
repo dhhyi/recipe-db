@@ -32,7 +32,7 @@ if [[ $release_sources_from_git == true ]]; then
     || production_fail "Git release sources require a clean tooling checkout"
 fi
 case "$command" in
-  create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
+  create | create-new | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
@@ -154,9 +154,11 @@ local_identity() {
     and .[0].serversCount == 1 and .[0].agentsCount == 0
   ' "$work/clusters.json" > /dev/null || production_fail "expected exactly one server and no agents"
   docker inspect "k3d-$cluster-server-0" "k3d-$cluster-serverlb" > "$work/containers.json"
-  jq -e --arg cluster "$cluster" --arg http "$http_port" --arg api "$api_port" '
+  jq -e --arg cluster "$cluster" --arg http "$http_port" --arg api "$api_port" \
+    --arg rehearsalId "${rehearsal_id:-}" '
     length == 2
     and .[0].Config.Labels["recipe-db.managed"] == "rehearsal"
+    and ($rehearsalId == "" or .[0].Config.Labels["recipe-db.rehearsal-id"] == $rehearsalId)
     and .[0].Config.Labels["k3d.cluster"] == $cluster
     and .[0].Config.Labels["k3d.role"] == "server"
     and .[0].Config.Image == "rancher/k3s:v1.35.5-k3s1"
@@ -4134,7 +4136,7 @@ backup_run_locked() {
 }
 
 case "$command" in
-  create)
+  create | create-new)
     [[ $target = local ]] || production_fail "Pi cluster lifecycle is never managed"
     [[ $(uname -m) = x86_64 ]] || production_fail "local rehearsal requires x86_64"
     [[ $(k3d version | head -n 1) = "k3d version v5.8.3" ]] || production_fail "k3d v5.8.3 is required"
@@ -4143,6 +4145,8 @@ case "$command" in
       || production_fail "Docker must have more than 8 GiB RAM"
     k3d cluster list -o json > "$work/clusters.json"
     if jq -e --arg cluster "$cluster" 'any(.[]; .name == $cluster)' "$work/clusters.json" > /dev/null; then
+      [[ $command != create-new ]] \
+        || production_fail "fresh rehearsal creation refuses a pre-existing cluster"
       local_identity
     else
       # Reserved container names must also be unused, including stopped foreign containers.
@@ -4151,12 +4155,16 @@ case "$command" in
           production_fail "reserved cluster container already exists"
         fi
       done
-      k3d cluster create "$cluster" --image rancher/k3s:v1.35.5-k3s1 \
-        --servers 1 --agents 0 --api-port "127.0.0.1:$api_port" \
-        --port "127.0.0.1:$http_port:80@loadbalancer" \
-        --runtime-label 'recipe-db.managed=rehearsal@server:0' \
-        --kubeconfig-update-default=false --kubeconfig-switch-context=false \
-        --wait --timeout "${timeout}s"
+      create_args=(--image rancher/k3s:v1.35.5-k3s1
+        --servers 1 --agents 0 --api-port "127.0.0.1:$api_port"
+        --port "127.0.0.1:$http_port:80@loadbalancer"
+        --runtime-label 'recipe-db.managed=rehearsal@server:0'
+        --kubeconfig-update-default=false --kubeconfig-switch-context=false
+        --wait --timeout "${timeout}s")
+      if [[ -n ${rehearsal_id:-} ]]; then
+        create_args+=(--runtime-label "recipe-db.rehearsal-id=$rehearsal_id@server:0")
+      fi
+      k3d cluster create "$cluster" "${create_args[@]}"
       local_identity
     fi
     ;;

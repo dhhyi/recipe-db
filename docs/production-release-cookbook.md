@@ -4,7 +4,7 @@ This cookbook is for operators releasing Recipe DB to the Pi, with AI help where
 
 The [production image releases guide](production-releases.md) explains the release artifact and registry requirements. The [production configuration guide](production-configuration.md) is authoritative for private inputs and their contents.
 
-**The complete release procedure is not available yet.** Stop at an open step; do not combine standalone commands to work around it.
+The cookbook now includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; keep the Pi unchanged until the rehearsal and all later step conditions are satisfied.
 
 For current capabilities and limits, see the [release capability overview](production-kubernetes.md#release-capability-inventory). The agreed sequence and remaining work are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143).
 
@@ -76,26 +76,93 @@ The tunnel command must remain running. If the Pi hostname or SSH user differs, 
 
 **Success:** the candidate digest, revision, matching checkout and Pi connection are ready. Nothing has been deployed.
 
-**Open / stop:** services now enforce their declared storage version, but this implementation does not stamp existing production storage. Existing unversioned production data will cause startup to fail; do not deploy these builds until [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260) has completed controlled initialization and verified the backup. There is no deployment-time bypass. Migration artifacts and execution remain separate work; see [#262: Discover and execute release migrations sequentially](https://github.com/dhhyi/recipe-db/issues/262).
-
-The one-time version-1 rollout is not a routine release. Stop here: no live rollout is authorized until [#265: Prepare and rehearse the one-time storage-version rollout](https://github.com/dhhyi/recipe-db/issues/265) is complete and [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260) has an updated readiness assessment and exact runbook reflecting the proven single-checkout handoff and recovery path. The approved marker-only fallback is the exact previous immutable release on the unchanged storage, with markers retained, as recorded in [#278: Use the previous release as the version-1 rollout fallback](https://github.com/dhhyi/recipe-db/issues/278); do not use it until the rehearsal proves a supported guarded handoff. Do not begin marker writes or use the candidate worktree procedure below for that rollout.
+The one-time version-1 rollout and first versioned production backup are complete in [#265: Prepare and rehearse the one-time storage-version rollout](https://github.com/dhhyi/recipe-db/issues/265) and [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260). Do not repeat marker initialization as part of a routine release. The narrow marker-only fallback in [#278: Use the previous release as the version-1 rollout fallback](https://github.com/dhhyi/recipe-db/issues/278) applies only to unchanged formats with its retained-operation guards; it is not a rollback for data-format migrations. There is no deployment-time bypass. Follow the sequential migration and complete-recovery procedures below for actual migrations.
 
 ## 2. Finish testing and upgrade rehearsals
 
 Test the candidate website on demo data. Before production maintenance, rehearse restoring old data, migrating it and running the candidate on isolated storage.
 
-The existing rehearsal tests only same-release backup and recovery. From a matching checkout on a workstation with the [k3d prerequisites](production-kubernetes.md#prerequisites-and-boundaries):
+Synthetic fixtures remain part of automated tooling regressions; they are not an additional required release rehearsal. See the [rehearsal reference](production-kubernetes.md#end-to-end-backup-and-recovery-rehearsal) for the synthetic test boundary.
+
+### Rehearse the deployed backup upgrade
+
+Before production maintenance, rehearse the exact deployed release, latest remotely verified backup and candidate on isolated local clusters. This command makes only read-only Pi API requests; it never deploys to or changes the Pi. It creates two disposable local clusters: one for a successful upgrade and one for complete recovery from an injected migration-uncertain state. The injection uses a deliberately missing Job after activation intent; no migration is allowed to execute.
+
+This is a required process step, not a machine-enforced maintenance gate. An operator may exceptionally proceed without a passing rehearsal when urgency warrants it, but must record that decision and the failed, interrupted or skipped outcome accurately. That discretion never waives storage, ordering, ownership, stopped-worker or migration-validation guards, and does not permit changing or bypassing them.
+
+The supplied backup is production data and may predate today's records; this step does not capture a fresh backup. Its `capturedAt` is recorded in the result. Keep its manifest, archive, rehearsal directory and result private. Use an already verified local copy, such as the pair provided for this rehearsal. Do not retrieve it from the Pi as part of this verification: the separate fresh-deployment restore procedure writes temporary files on the Pi, outside this rehearsal's read-only boundary. If no verified local copy is available, stop and obtain one through an explicitly authorized process; do not use a partial download or Pi-side retrieval as a workaround.
+
+Before running the command, confirm on the Pi that the latest uploader status is `verified-upload` or `verified-unchanged`, is not overdue, and that the remote baseline is the exact supplied package:
+
+- The package manifest's `backupId` must match the Pi baseline's `backupId`.
+- For `verified-upload`, the status report's `backupId` must also match the package.
+- For `verified-unchanged`, the status report may name a newer local capture; compare the Pi baseline's archive and manifest names, SHA-256 values and `backupId` with the supplied pair instead.
+- Stop for any other status or any identity/hash mismatch. The required confirmation token attests that you checked the current status and exact remote baseline; its result records the attested baseline ID and explicitly says the remote status was not independently verified.
+
+Use the read-only status and baseline records on the Pi:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+sudo jq -er '{backupId,archive,manifest,archiveSha256,manifestSha256}' \
+  /var/lib/recipe-db-backup/baseline.json
+```
+
+The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It adapts the private values for local use while preserving storage sizing, resource limits and timeouts; Pi storage identities, production integrations and credentials are not copied. It reads the live release ConfigMap and Deployment annotations, verifies the live image digests against the source OCI inventory, and requires every stateful workload to be ready on that release. It directly compares all package storage markers with the source release's declared versions. Ready workloads on those exact images provide indirect evidence that live markers passed startup validation; the result explicitly records that live marker files were not directly read. No marker is read by an extra production Pod or process. If any preflight fails, investigate; do not override the check.
+
+From the candidate checkout, set the exact published digest and private package paths. Use a new private directory outside the checkout for each run:
 
 ```sh
 umask 077
-mkdir -p "$PWD/.backups"
-RESULT="$PWD/.backups/backup-recovery-$(date -u +%Y%m%dT%H%M%SZ)"
-mise run production-backup-recovery-k3d "$RELEASE" "$RESULT"
+RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+SOURCE_MANIFEST='/private/path/to/the-exact-backup.manifest.json'
+SOURCE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
+BACKUP_STATUS='<verified-upload-or-verified-unchanged-from-the-Pi>'
+REHEARSAL_ROOT="$HOME/.local/share/recipe-db/rehearsals"
+mkdir -p "$REHEARSAL_ROOT"
+RUN_DIRECTORY=$(mktemp -d "$REHEARSAL_ROOT/issue-251.XXXXXXXX")
+cp -- "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RUN_DIRECTORY/"
+chmod 600 "$RUN_DIRECTORY"/*
+MANIFEST="$RUN_DIRECTORY/$(basename "$SOURCE_MANIFEST")"
+ARCHIVE="$RUN_DIRECTORY/$(basename "$SOURCE_ARCHIVE")"
+BACKUP_ID=$(jq -er .backupId "$MANIFEST")
+BACKUP_CONFIRMATION="VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
+RESULT="$RUN_DIRECTORY/result"
+mise run production-upgrade-rehearsal-k3d \
+  "$MANIFEST" "$ARCHIVE" "$BACKUP_STATUS" "$BACKUP_CONFIRMATION" "$RELEASE" "$RESULT"
 ```
 
-Expect exit status zero and `success: true` in `$RESULT/result.json`. Clusters and private diagnostics remain for inspection; follow the [rehearsal reference](production-kubernetes.md#end-to-end-backup-and-recovery-rehearsal) for cleanup. This uses synthetic data and a fake remote, not production credentials.
+The checkout must contain both the package's source revision and the candidate revision. The runner creates clean worktrees at those exact commits, installs their pinned tools, validates the package against the source release, then runs the guarded restore, migration/no-migration, startup, local route and smoke checks. It separately injects a missing-Job uncertainty after activation intent and verifies guarded complete clear-and-restore recovery. The recovery scenario does not run a migration Job; if the candidate declares none, the uncertain transition is synthetic because no candidate migration Job exists. No production credentials are copied into the rehearsal.
 
-**Open / stop:** upgrade rehearsals and release gates are not implemented. This baseline does not prove upgrade safety. Real-backup rehearsals require approval and private handling; any rehearsal of step 4's fresh backup must follow its capture.
+Continue only when the command exits zero and the private result confirms both scenarios and cleanup:
+
+```sh
+jq -e --arg release "$RELEASE" '
+  .status == "passed"
+  and .candidate.artifact == $release
+  and .deployedIdentity.matchesBackupSource == true
+  and .deployedIdentity.imagesMatchSourceArtifact == true
+  and .storageVersionEvidence.backupMatchesSourceRequirements == true
+  and .storageVersionEvidence.liveStatefulWorkloadsReadyAtSourceRelease == true
+  and .successfulUpgrade.status == "passed"
+  and (.successfulUpgrade.migrationOutcome == "no-migration-required"
+    or .successfulUpgrade.migrationOutcome == "migration-succeeded")
+  and .successfulUpgrade.representativeRecipeLinkedDataVerified == true
+  and (.successfulUpgrade.actualStorageVersions | length) > 0
+  and all(.successfulUpgrade.actualStorageVersions[];
+    .currentVersion == .requiredVersion)
+  and .failureRecovery.status == "passed"
+  and .cleanup.status == "passed"
+  and .cleanup.activeCluster == ""
+  and .cleanup.privateDataRemoved == true
+  and .cleanup.inputCopiesRemoved == true
+' "$RESULT/result.json"
+```
+
+The linked-data check proves compatibility for one restored recipe with populated image, rating, inspiration and tag relations. It is representative evidence, not proof that every record or every migration-specific reference was exercised; review service-specific migration requirements separately.
+
+On success, the runner removes the two input copies, both rehearsal clusters, pinned worktrees and temporary credentials/data, leaving only the private `result.json` in `RESULT`; the original source files are unchanged. Preserve the result with the release record; do not upload the backup, result or logs to CI. On failure or interruption, it retains private diagnostics, the input copies and any surviving cluster/worktree, and prints exact target-bound inspection and cleanup commands. `failed`, `interrupted` and `cleanup-failed` results are not passes; no result means the rehearsal was skipped or never completed. Inspect evidence and use only the printed commands; never delete an unrelated cluster or worktree.
+
+**Success:** the exact backup-to-candidate transition, route checks and complete-recovery path passed, and both local targets were removed. A passing code test or a rehearsal of a different backup/candidate is not a substitute for this result.
 
 ## 3. Block application access and enter maintenance
 
