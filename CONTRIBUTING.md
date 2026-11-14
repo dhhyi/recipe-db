@@ -100,6 +100,8 @@ For pnpm 12 two-document lockfiles, GitHub fixed application dependency detectio
 
 Use issues to capture and refine future work. Every issue in this process has exactly one workflow label: `idea`, `umbrella`, `spec`, `manual`, or `decision`. Other metadata labels may coexist. Labels describe issue type; open/closed state tracks completion.
 
+In GitHub issue descriptions, reference issues using GitHub's autolink syntax (`#123` in this repository, `owner/repo#123` elsewhere) instead of manually titled Markdown links. In lists, GitHub can show the current title and state. Mermaid diagrams are excluded; follow the diagram rules below.
+
 - **`idea`:** Problem or wish, context and desired outcome. Research and unresolved requirements stay ideas; implementation hints are optional.
 - **`umbrella`:** Overall outcome, scope, completion criteria, native children, base-contract decisions and dependency diagram.
 - **`spec`:** Settled scope, behavior, constraints, dependencies and verifiable acceptance criteria for autonomous implementation. Minor implementation choices remain open.
