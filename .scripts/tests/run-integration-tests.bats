@@ -175,6 +175,12 @@ EOF
   mapfile -t commands < "$MOCK_LOG"
   [ "${commands[-2]}" = "docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api" ]
   [ "${commands[-1]}" = "docker compose --profile test stop fixtures" ]
+
+  : > "$MOCK_LOG"
+  run bash .scripts/run-integration-tests.sh --development tags-test mcp-test
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test build mcp-upload-test-api' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test rm -sf mcp-upload-test-api' "$MOCK_LOG"
 }
 
 @test "browser tests wait for the full frontend stack before running" {
@@ -213,6 +219,19 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS mcp-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test build mcp-upload-test-api' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test up -d --force-recreate mcp-upload-test-api' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test rm -sf mcp-upload-test-api' "$MOCK_LOG"
+}
+
+@test "MCP upload service removal failures fail successful runs and preserve test failures" {
+  run env RM_STATUS=1 bash .scripts/run-integration-tests.sh --development mcp-test
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Failed to remove the disposable MCP upload integration-test service."* ]]
+
+  run env RM_STATUS=1 RUN_STATUS=7 bash .scripts/run-integration-tests.sh --development mcp-test
+  [ "$status" -eq 7 ]
+  grep -Fx 'docker compose --profile test rm -sf mcp-upload-test-api' "$MOCK_LOG"
 }
 
 @test "browser tests require generated auth client inputs" {

@@ -68,9 +68,16 @@ echo "WARNING: integration tests may modify application data. e2e-test deletes a
 
 fixture_started=false
 tags_test_instances_started=false
+mcp_upload_instance_started=false
 group_open=false
 cleanup() {
   local status=$?
+  if [[ $mcp_upload_instance_started == true ]]; then
+    if ! docker compose --profile test rm -sf mcp-upload-test-api; then
+      echo "Failed to remove the disposable MCP upload integration-test service." >&2
+      ((status == 0)) && status=1
+    fi
+  fi
   if [[ $tags_test_instances_started == true ]]; then
     if ! docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api; then
       echo "Failed to stop the disposable tags integration-test services." >&2
@@ -99,9 +106,11 @@ done
 
 docker compose --profile test build fixtures "${projects[@]}"
 for project in "${projects[@]}"; do
+  if [[ $project == mcp-test ]]; then
+    docker compose --profile test build mcp-upload-test-api
+  fi
   if [[ $project == tags-test ]]; then
     docker compose --profile test build tags-test-api tags-production-test-api tags-recipes-test-api
-    break
   fi
 done
 
@@ -229,6 +238,10 @@ for project in "${projects[@]}"; do
 done
 
 for project in "${projects[@]}"; do
+  if [[ $project == mcp-test ]]; then
+    mcp_upload_instance_started=true
+    docker compose --profile test up -d --force-recreate mcp-upload-test-api
+  fi
   if [[ $project == tags-test ]]; then
     tags_test_instances_started=true
     docker compose --profile test up -d --force-recreate tags-test-api tags-production-test-api tags-recipes-test-api

@@ -279,6 +279,7 @@ jobs:
           docker buildx inspect --bootstrap
           mise run --raw sync-files
           mise run --raw generate-docker-compose
+          mise run --raw merge-graphql-schemas
           mise run create-intranet
           echo "::endgroup::"
 
