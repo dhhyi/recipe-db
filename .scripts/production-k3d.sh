@@ -3245,11 +3245,13 @@ release_migration_acknowledge_success() {
     outcome='migration-succeeded'
     release_state_write candidate-staged candidate-staged \
       "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+        --slurpfile discovery "$work/migration-discovery.json" \
         --argjson index "$((index + 1))" --arg outcome "$outcome" --arg artifact "$artifact" \
         --arg job "$job" --arg service "$service" \
         --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --argjson from "$from" --argjson to "$to" '
         {migrationExecution:{status:"migration-succeeded",currentIndex:$index,
+          versions:$discovery[0].versions,
           transitions:[$state[0].migrationExecution.transitions | to_entries[] |
             .value + {status:"completed"}],
           completedAt:$recordedAt},
@@ -3263,10 +3265,12 @@ release_migration_acknowledge_success() {
   fi
   release_state_write candidate-staged candidate-staged \
     "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+      --slurpfile discovery "$work/migration-discovery.json" \
       --argjson index "$((index + 1))" --argjson completedIndex "$index" --arg job "$job" \
       --arg service "$service" --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --argjson from "$from" --argjson to "$to" '
       {migrationExecution:{
+        versions:$discovery[0].versions,
         currentIndex:$index,status:"transition-recorded",
         transitions:[$state[0].migrationExecution.transitions | to_entries[] |
           if .key == $completedIndex then .value + {status:"completed"} else .value end],

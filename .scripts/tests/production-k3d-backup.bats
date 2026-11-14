@@ -85,7 +85,9 @@ complete_candidate_migration() {
   [ "$status" -eq 0 ]
   jq -e '.migrationResult.outcome == "migration-succeeded"
     and .migrationExecution.status == "migration-succeeded"
-    and .migrationExecution.transitions[0].status == "completed"' "$STATE/backup-state.json" > /dev/null
+    and .migrationExecution.transitions[0].status == "completed"
+    and all(.migrationExecution.versions[]; .currentVersion == .requiredVersion)' \
+    "$STATE/backup-state.json" > /dev/null
   export MOCK_COMPLETED_MIGRATION=false
 }
 
@@ -932,7 +934,9 @@ PY
   [ "$status" -eq 0 ]
   jq -e '.migrationExecution.transitions[0].status == "completed"
     and .migrationExecution.transitions[1].status == "completed"
-    and .migrationExecution.currentIndex == 2' \
+    and .migrationExecution.currentIndex == 2
+    and any(.migrationExecution.versions[];
+      .service == "images" and .currentVersion == 3 and .requiredVersion == 3)' \
     "$STATE/backup-state.json" > /dev/null
 
   export MOCK_COMPLETED_MIGRATION=false MOCK_MIGRATION_RESULT_JOB="$recipes_job"

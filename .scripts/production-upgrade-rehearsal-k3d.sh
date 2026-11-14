@@ -587,9 +587,14 @@ write_cluster_values() {
   chmod 600 "$output"
 }
 
+rehearsal_cluster_name() {
+  local rehearsal_id=$1 suffix=$2
+  printf 'recipe-db-rehearsal-%s-%s' "${rehearsal_id:0:10}" "$suffix"
+}
+
 new_cluster() {
   local suffix=$1 values=$2 expected_cluster
-  cluster="recipe-db-rehearsal-${run_id}-${suffix}"
+  cluster=$(rehearsal_cluster_name "$run_id" "$suffix")
   expected_cluster=$cluster
   cluster_driver=$root
   cluster_values=$values
@@ -1038,12 +1043,16 @@ success_cluster_values="$work/success-cluster-values.yaml"
 failure_source_values="$work/failure-source-values.yaml"
 failure_candidate_values="$work/failure-candidate-values.yaml"
 failure_cluster_values="$work/failure-cluster-values.yaml"
-write_values "$source_worktree" "recipe-db-rehearsal-${run_id}-s" "$http_port" "$success_source_values"
+write_values "$source_worktree" "$(rehearsal_cluster_name "$run_id" s)" \
+  "$http_port" "$success_source_values"
 write_cluster_values "$success_source_values" "$success_cluster_values"
-write_values "$candidate_worktree" "recipe-db-rehearsal-${run_id}-s" "$http_port" "$success_candidate_values"
-write_values "$source_worktree" "recipe-db-rehearsal-${run_id}-f" "$((http_port + 1))" "$failure_source_values"
+write_values "$candidate_worktree" "$(rehearsal_cluster_name "$run_id" s)" \
+  "$http_port" "$success_candidate_values"
+write_values "$source_worktree" "$(rehearsal_cluster_name "$run_id" f)" \
+  "$((http_port + 1))" "$failure_source_values"
 write_cluster_values "$failure_source_values" "$failure_cluster_values"
-write_values "$candidate_worktree" "recipe-db-rehearsal-${run_id}-f" "$((http_port + 1))" "$failure_candidate_values"
+write_values "$candidate_worktree" "$(rehearsal_cluster_name "$run_id" f)" \
+  "$((http_port + 1))" "$failure_candidate_values"
 mark
 
 phase=successful-upgrade

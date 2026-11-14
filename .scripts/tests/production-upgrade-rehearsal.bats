@@ -98,6 +98,7 @@ load_scenario_functions() {
   local function_name
   : > "$FIXTURE_ROOT/scenario-functions.sh"
   for function_name in validate_release_inventory backup_storage_versions_from_manifest \
+    rehearsal_cluster_name \
     deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
     run_migration_sequence successful_migration_outcome_is_valid \
@@ -157,6 +158,18 @@ SH
 
   versions=$(backup_storage_versions_from_manifest "$manifest")
   [ "$versions" = '[{"service":"images","version":1},{"service":"recipes","version":2}]' ]
+}
+
+@test "isolated rehearsal cluster names fit k3d limits and remain suffix-distinct" {
+  load_scenario_functions
+  local success_cluster failure_cluster
+  success_cluster=$(rehearsal_cluster_name 0123456789abcdef s)
+  failure_cluster=$(rehearsal_cluster_name 0123456789abcdef f)
+
+  [ "$success_cluster" = recipe-db-rehearsal-0123456789-s ]
+  [ "$failure_cluster" = recipe-db-rehearsal-0123456789-f ]
+  [ "${#success_cluster}" -eq 32 ]
+  [ "${#failure_cluster}" -eq 32 ]
 }
 
 @test "live Deployment inventory rejects unaccounted regular and init containers" {
@@ -621,7 +634,7 @@ YAML
     return 1
   }
   new_cluster() {
-    cluster="recipe-db-rehearsal-$run_id-$1"
+    cluster=$(rehearsal_cluster_name "$run_id" "$1")
     cluster_driver="$root"
     cluster_values="$2"
     cluster_created=true
@@ -803,7 +816,7 @@ YAML
     return 1
   }
   new_cluster() {
-    cluster="recipe-db-rehearsal-$run_id-$1"
+    cluster=$(rehearsal_cluster_name "$run_id" "$1")
     cluster_driver="$root"
     cluster_values="$2"
     cluster_created=true
