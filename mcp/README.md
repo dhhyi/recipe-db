@@ -12,3 +12,15 @@ Tools:
 - `add_rating` rates an existing recipe.
 
 There is intentionally no tool for deleting recipes.
+
+## Image URL imports
+
+The MCP tool descriptions carry the client instructions. Discover the schema first; supply a direct image URL reachable by the server without browser authentication. For local/private photos, the client needs file/browser access and HTTP upload, or the user must provide a hosted URL. Obtain permission before external hosting; unlisted URLs are not private, and browser cookies/MCP credentials must not be forwarded.
+
+Any suitable host works. For example, anonymously upload to [Tmpfiles](https://tmpfiles.org/api):
+
+```sh
+curl -F "file=@photo.jpg" -F "expire=3600" https://tmpfiles.org/api/v1/upload
+```
+
+Read the returned sharing page and extract its actual download link, including any token; do not guess a `/dl/` transformation. Check current [terms](https://tmpfiles.org/tos). Before expiry, pass that URL as `imageUrl` to `add_recipe`, or to `change_recipe` to replace an existing image. Verify with `get_recipe` and its image URL; successful imports are stored locally and survive source expiry. Report failures and check state before retrying uncertain outcomes.
