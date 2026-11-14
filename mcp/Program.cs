@@ -10,10 +10,11 @@ if (mode is not ("production" or "testing" or "backup"))
 {
     throw new InvalidOperationException("MODE must be production, testing, or backup");
 }
-var enableImageUploads = mode == "testing"
-    && Environment.GetEnvironmentVariable("MCP_IMAGE_UPLOAD_TESTING") == "1";
+var enableImageUploads = McpRuntime.ImageUploadsEnabled(
+    mode, Environment.GetEnvironmentVariable("MCP_IMAGE_UPLOAD_TESTING"));
 var graphQlUri = new Uri("http://traefik/graphql");
-if (enableImageUploads && Environment.GetEnvironmentVariable("GRAPHQL_URL") is { } testingGraphQlUrl)
+if (mode == "testing" && enableImageUploads
+    && Environment.GetEnvironmentVariable("GRAPHQL_URL") is { } testingGraphQlUrl)
 {
     if (!Uri.TryCreate(testingGraphQlUrl, UriKind.Absolute, out var uri)
         || uri.Scheme is not ("http" or "https") || !string.IsNullOrEmpty(uri.UserInfo))
@@ -53,6 +54,16 @@ if (enableImageUploads)
 }
 
 var app = builder.Build();
+if (enableImageUploads)
+{
+    var staging = app.Services.GetRequiredService<ImageUploadStaging>();
+    app.Lifetime.ApplicationStopping.Register(() =>
+    {
+        try { staging.Flush(); }
+        catch (IOException error) { app.Logger.LogError(error, "Image upload staging could not be reconciled during shutdown"); }
+        catch (UnauthorizedAccessException error) { app.Logger.LogError(error, "Image upload staging could not be reconciled during shutdown"); }
+    });
+}
 
 app.Use(async (context, next) =>
 {

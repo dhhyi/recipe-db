@@ -12,7 +12,7 @@ public class ImageUploadTools(
     IMcpClient client, ImageUploadStaging staging, ILogger<ImageUploadTools>? logger = null)
 {
     [McpServerTool(Name = "image_upload_start")]
-    [Description("Starts an isolated image upload for a recipe. Declare the original decoded file byteLength (1–5242880), image mediaType and original-file SHA-256 (64 hex digits), not a hash of base64. Reserves capacity atomically within 104857600 staged bytes. Every call checks current GraphQL image-management permission; any permitted caller with the opaque uploadHandle can continue. No expiry; Pod teardown invalidates handles.")]
+    [Description("Starts an upload for a recipe in production or explicitly enabled isolated testing; unavailable in backup mode. Declare the original decoded file byteLength (1–5242880), image mediaType and original-file SHA-256 (64 hex digits), not a hash of base64. Reserves capacity atomically within 104857600 staged bytes. Every call checks current GraphQL image-management permission; any permitted caller with the opaque uploadHandle can continue. Same-Pod container restarts preserve uploads; Pod replacement invalidates handles.")]
     public async Task<string> Start(
         [Description("Recipe ID whose current single image will be replaced on finish")] string recipeId,
         [Description("Original decoded file byte length, maximum 5242880")] long byteLength,
@@ -71,7 +71,7 @@ public class ImageUploadTools(
     }
 
     [McpServerTool(Name = "image_upload_status")]
-    [Description("Checks current image-management permission and reports uploadHandle, receivedBytes, nextChunkNumber and receiving/assigning/finished/failed/uncertain state. Finished includes saved original-source verification and image metadata. Use this after interruption or lost replies; assigning/failed/uncertain must never be replayed. Unknown or Pod-invalidated handles fail explicitly. No caller/session binding or expiry; restart recovery is deferred.")]
+    [Description("Checks current image-management permission and reports uploadHandle, receivedBytes, nextChunkNumber and receiving/assigning/finished/failed/uncertain state. Finished includes saved original-source verification and image metadata. Use this after interruption or lost replies; assigning/failed/uncertain must never be replayed. Partial uploads and saved results survive a container restart in the same Pod. Pod replacement invalidates handles; inspect the recipe before deciding on another upload. No caller/session binding, expiry or guaranteed daily cleanup.")]
     public async Task<string> Status([Description("Opaque uploadHandle returned by start")] string uploadHandle)
     {
         await CheckPermission();

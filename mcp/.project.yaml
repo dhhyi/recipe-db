@@ -58,6 +58,7 @@ format:
 check: |
   dotnet --version
   dotnet build
+test: dotnet run --property:StagingTests=true
 prettier:
   ignore:
     - "*.cs"

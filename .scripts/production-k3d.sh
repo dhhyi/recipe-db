@@ -659,6 +659,10 @@ backup_capture_workloads() {
           select(.name == "MODE") | .value] == ["production"])))
   ' "$work/deployments.json" > /dev/null \
     || production_fail "all workloads must be production mode at the requested immutable release"
+  jq -e 'any(.items[]; .metadata.name == "mcp"
+    and (.spec.replicas // 1) == 1
+    and (.status.readyReplicas // 0) == 1)' "$work/deployments.json" > /dev/null \
+    || production_fail "MCP upload staging requires exactly one ready replica"
   jq -c '[.items[] | {
     name:.metadata.name,
     replicas:(.spec.replicas // 1),

@@ -7,10 +7,21 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(StagingTests)' == 'true'">
+    <StartupObject>Mcp.ImageUploadStagingTests</StartupObject>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageReference Include="JsonSchema.Net" Version="9.4.0" />
     <PackageReference Include="StrawberryShake.Server" Version="16.6.6" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(StagingTests)' == 'true'">
+    <Compile Remove="Program.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(StagingTests)' != 'true'">
+    <Compile Remove="ImageUploadStagingTests.cs" />
   </ItemGroup>
 
   <ItemGroup>

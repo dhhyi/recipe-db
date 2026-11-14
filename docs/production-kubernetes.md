@@ -8,6 +8,7 @@ This guide is the technical reference for maintainers and operators using Recipe
 - [Prerequisites and boundaries](#prerequisites-and-boundaries)
   - [End-to-end backup and recovery rehearsal](#end-to-end-backup-and-recovery-rehearsal)
   - [Runtime mode](#runtime-mode)
+  - [Disposable MCP upload staging](#disposable-mcp-upload-staging)
   - [Backup cleanup Job](#backup-cleanup-job)
   - [Backup-participant development checklist](#backup-participant-development-checklist)
   - [Snapshot capture](#snapshot-capture)
@@ -123,6 +124,14 @@ The runner preserves both clusters and private diagnostics on success and failur
 ### Runtime mode
 
 Production workloads set `MODE=production`. An absent `MODE` defaults to production; empty or unsupported values fail startup. `testing` enables isolated test resets. `backup` keeps production ingress protections, blocks application requests and writes, and enables private maintenance APIs.
+
+### Disposable MCP upload staging
+
+The MCP Deployment runs one replica with a `Recreate` strategy. Its image-upload tools are available in production, may be enabled explicitly for isolated testing, and are unavailable in backup mode. Staged photo bytes, upload metadata and small success receipts share a dedicated 128 MiB memory-backed `emptyDir` at `/upload-staging`. The MCP container's 512 MiB memory limit leaves headroom for the application and image-processing buffers. This volume has no PVC and is not included in application snapshot selection.
+
+A container restart in the same Pod reuses the `emptyDir`. Startup reloads metadata, reconciles bytes written beyond the last saved chunk, and refuses readiness if recovered metadata cannot safely describe the files. A process interrupted during assignment without a saved success receipt recovers as `uncertain`; MCP never repeats that GraphQL mutation automatically. On confirmed success, MCP records the image result before deleting the staged photo; it releases the staged-byte reservation only after deletion is confirmed. The receipt contains no photo bytes and remains available through the Pod's lifetime.
+
+The normal backup lifecycle includes MCP in its workload drain: it scales the Deployment to zero and verifies termination of the old Pod before capture. Recovery restores the single replica with a fresh `emptyDir`, so unfinished handles and saved receipts from the old Pod are invalidated. Committed images remain in the Images service's captured storage. No special MCP cleanup endpoint or independent daily expiry is used; when the normal backup lifecycle is disabled or fails, staging remains until Pod teardown.
 
 ### Backup cleanup Job
 
