@@ -163,19 +163,6 @@ EOF
   grep -q 'scale deployment/recipes --replicas=1' "$MOCK_LOG"
 }
 
-@test "backup refuses multiple MCP replicas with independent staging volumes" {
-  export MOCK_BACKUP=true
-  jq '.items |= map(if .metadata.name == "mcp" then
-    .spec.replicas=2 | .status.readyReplicas=2 else . end)' \
-    "$MOCK_LOG.deployments" > deployments.next
-  mv deployments.next "$MOCK_LOG.deployments"
-
-  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/backups/mcp-scaled"
-  [ "$status" -ne 0 ]
-  [[ $output == *"MCP upload staging requires exactly one ready replica"* ]]
-  run ! grep -Eq 'set env|scale deployment' "$MOCK_LOG"
-}
-
 @test "backup refuses deployment contention before changing GraphQL or backends" {
   export MOCK_BACKUP=true MOCK_LOCK=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-locked"

@@ -10,7 +10,6 @@ case "$1" in
   ps) printf '%s' "${RUNNING_FIXTURES:-}" ;;
   up) exit "${UP_STATUS:-0}" ;;
   stop) exit "${STOP_STATUS:-0}" ;;
-  rm) exit "${RM_STATUS:-0}" ;;
   run)
     project=${!#}
     printf '%s\n' "test stdout: $project"

@@ -38,16 +38,6 @@
 #@     services.update(service(project, options, projects))
 #@   end
 #@   services.update(nats_services())
-#@   if "mcp" in services and "mcp-test" in services:
-#@     services["mcp-upload-test-api"] = {
-#@       "build": services["mcp"]["build"],
-#@       "image": services["mcp"]["image"],
-#@       "networks": ["intranet"],
-#@       "profiles": ["test"],
-#@       "restart": "no",
-#@       "environment": {"MODE": "testing", "MCP_IMAGE_UPLOAD_TESTING": "1"},
-#@     }
-#@   end
 #@   if "search" in services:
 #@     services["typesense"] = {
 #@       "image": "typesense/typesense:29.0@sha256:316b7e71c21f7e5e5caa8daa150e1b3f2be8c876081ee1f77bc2d92cd7f137d0",
