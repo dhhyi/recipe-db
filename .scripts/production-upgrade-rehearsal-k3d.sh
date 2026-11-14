@@ -723,7 +723,7 @@ delete_scenario_cluster() {
 
 run_scenario() {
   local label=$1 suffix=$2 source_values=$3 candidate_values=$4 cluster_values=$5
-  local state restore_state package_id
+  local state restore_state package_id smoke_script_backup
   local package_manifest package_archive migration_digest migration_image job lease transition
   state="$work/state/$label"
   restore_state="$work/state/$label-restore"
@@ -778,11 +778,31 @@ run_scenario() {
     run_logged "$work/logs/success-reopen.log" lifecycle "$candidate_worktree" true \
       release-reopen "$candidate_values" "$state" "$candidate" "OPEN-$package_id"
     verify_sample "$candidate_values" successful-upgrade
-    run_logged "$work/logs/success-smoke.log" \
-      bash -c 'cd "$1" && cp "$7/.scripts/smoke-production-k3d.sh" .scripts/smoke-production-k3d.sh \
-        && mise run --raw production-smoke "$2" "$3" "$4" "$5" --release-state "$6"' \
+    smoke_script_backup="$work/$label-smoke-script.original"
+    cp --preserve=mode "$candidate_worktree/.scripts/smoke-production-k3d.sh" \
+      "$smoke_script_backup"
+    # Use the current harness without leaving the pinned candidate worktree dirty.
+    if ! cp --preserve=mode "$root/.scripts/smoke-production-k3d.sh" \
+      "$candidate_worktree/.scripts/smoke-production-k3d.sh"; then
+      cp --preserve=mode "$smoke_script_backup" \
+        "$candidate_worktree/.scripts/smoke-production-k3d.sh" \
+        || die 'could not restore the pinned candidate smoke harness'
+      die 'could not stage the current smoke harness in the candidate worktree'
+    fi
+    if ! run_logged "$work/logs/success-smoke.log" \
+      bash -c 'cd "$1" && mise run --raw production-smoke "$2" "$3" "$4" "$5" --release-state "$6"' \
       _ "$candidate_worktree" "$candidate_values" "$candidate" "$owner_token" \
-      "$work/success-smoke-result.json" "$state" "$root"
+      "$work/success-smoke-result.json" "$state"; then
+      cp --preserve=mode "$smoke_script_backup" \
+        "$candidate_worktree/.scripts/smoke-production-k3d.sh" \
+        || die 'could not restore the pinned candidate smoke harness after failure'
+      rm -f -- "$smoke_script_backup"
+      return 1
+    fi
+    cp --preserve=mode "$smoke_script_backup" \
+      "$candidate_worktree/.scripts/smoke-production-k3d.sh" \
+      || die 'could not restore the pinned candidate smoke harness'
+    rm -f -- "$smoke_script_backup"
     jq -e --arg artifact "$candidate" \
       '.success == true and .artifact == $artifact' "$work/success-smoke-result.json" > /dev/null \
       || die 'local candidate route and production smoke checks did not pass'

@@ -610,6 +610,9 @@ YAML
   jq -n '{schemaVersion:2,migrations:[]}' > "$work/candidate-artifact/release.json"
   source_worktree="$FIXTURE_ROOT/source"
   candidate_worktree="$FIXTURE_ROOT/candidate"
+  mkdir -p "$root/.scripts" "$candidate_worktree/.scripts"
+  printf 'current smoke script\n' > "$root/.scripts/smoke-production-k3d.sh"
+  printf 'pinned smoke script\n' > "$candidate_worktree/.scripts/smoke-production-k3d.sh"
   candidate_revision=cccccccccccccccccccccccccccccccccccccccc
   candidate='ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
   source_release="$SOURCE_RELEASE"
@@ -771,6 +774,7 @@ YAML
   run_scenario successful-upgrade s "$source_values" "$candidate_values" "$source_values"
   [ "$migration_outcome" = no-migration-required ]
   [ "$success_upgrade_status" = passed ]
+  [ "$(cat "$candidate_worktree/.scripts/smoke-production-k3d.sh")" = 'pinned smoke script' ]
   [ "$cluster" = '' ]
   [ "$cluster_created" = false ]
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
@@ -800,6 +804,9 @@ YAML
     > "$work/candidate-artifact/release.json"
   source_worktree="$FIXTURE_ROOT/source"
   candidate_worktree="$FIXTURE_ROOT/candidate"
+  mkdir -p "$root/.scripts" "$candidate_worktree/.scripts"
+  printf 'current smoke script\n' > "$root/.scripts/smoke-production-k3d.sh"
+  printf 'pinned smoke script\n' > "$candidate_worktree/.scripts/smoke-production-k3d.sh"
   candidate_revision=cccccccccccccccccccccccccccccccccccccccc
   candidate='ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
   source_release="$SOURCE_RELEASE"
@@ -927,6 +934,7 @@ YAML
   run_scenario successful-upgrade s "$source_values" "$candidate_values" "$source_values"
   [ "$migration_outcome" = migration-succeeded ]
   [ "$success_upgrade_status" = passed ]
+  [ "$(cat "$candidate_worktree/.scripts/smoke-production-k3d.sh")" = 'pinned smoke script' ]
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
