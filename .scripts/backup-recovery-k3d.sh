@@ -8,6 +8,8 @@ umask 077
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 driver="$root/.scripts/production-k3d.sh"
 upload="$root/provisioning/files/backup-upload.py"
+# shellcheck source=.scripts/lib/rehearsal-k3d.sh
+source "$root/.scripts/lib/rehearsal-k3d.sh"
 result_directory=${2:-}
 release=${1:-}
 
@@ -149,17 +151,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$(cat "$owner_token_file")" > "$
 chmod 600 "$result_directory/secrets/"*
 
 write_values() {
-  local cluster=$1 http_port=$2 api_port=$3 output=$4
-  local context="k3d-$cluster"
-  yq -o=json '.' "$root/deploy/local.yaml" \
-    | jq --arg cluster "$cluster" --arg context "$context" --arg origin "http://127.0.0.1:$http_port" \
-      --argjson httpPort "$http_port" --argjson apiPort "$api_port" \
-      --arg accounts "$accounts_file" '
-      .cluster=$cluster | .context=$context | .origin=$origin | .httpPort=$httpPort | .apiPort=$apiPort |
-      .secrets={"auth-accounts.json":$accounts}' > "$result_directory/values.json"
-  yq -P '.' "$result_directory/values.json" > "$output"
-  rm "$result_directory/values.json"
-  chmod 600 "$output"
+  rehearsal_write_values "$root" "$1" "$2" "$3" "$accounts_file" "$4"
 }
 case "$result_directory/" in
   "$root/.secrets/"* | /var/lib/rancher/*) die 'results cannot be inside credentials or runtime storage' ;;

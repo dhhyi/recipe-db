@@ -12,8 +12,13 @@ die() {
   printf 'Production smoke: %s\n' "$*" >&2
   exit 1
 }
-[[ $# == 4 ]] || die 'usage: smoke-production-k3d.sh <absolute values.yaml> <release-artifact@sha256:digest> <absolute bearer-token-file> <absolute result.json>'
+[[ $# == 4 || $# == 6 ]] || die 'usage: smoke-production-k3d.sh <absolute values.yaml> <release-artifact@sha256:digest> <absolute bearer-token-file> <absolute result.json> [--release-state <state-directory>]'
 values=$1 artifact=$2 token_file=$3 result=$4
+release_state=
+if [[ $# == 6 ]]; then
+  [[ $5 == --release-state ]] || die 'optional release state must use --release-state'
+  release_state=$6
+fi
 for path in "$values" "$token_file" "$result"; do
   [[ $path == /* ]] || die 'all file arguments must be absolute paths'
 done
@@ -21,6 +26,18 @@ done
 [[ $artifact =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]] || die 'release artifact must be pinned by SHA-256 digest'
 [[ $result != "$values" && $result != "$token_file" && ! -L $result ]] || die 'result must be a separate, non-symlink file'
 [[ ! $result -ef $values && ! $result -ef $token_file ]] || die 'result must not alias an input file'
+if [[ -n $release_state ]]; then
+  [[ $release_state == /* && -d $release_state && ! -L $release_state &&
+    -r $release_state/backup-state.json && ! -L $release_state/backup-state.json ]] \
+    || die 'release state must be an absolute, private state directory'
+  jq -e --arg artifact "$artifact" '
+    .status == "access-open" and .phase == "operator-reopened"
+    and .candidate.artifact == $artifact
+    and (.backupId | type == "string" and length > 0)
+    and (.source.artifact | type == "string" and length > 0)
+  ' "$release_state/backup-state.json" > /dev/null \
+    || die 'release state must describe this reopened candidate and its operation holder'
+fi
 for tool in jq yq curl sha256sum cmp; do
   command -v "$tool" > /dev/null || die "required tool not found: $tool"
 done
@@ -43,9 +60,27 @@ started=$(date -u +%FT%TZ)
 phase=initialization
 recipe_id='' created_recipe_id='' browse_name='' browse_replicas='' browse_scaled=false
 revision='' image_url='' image_sha='' cleanup_ok=true
+reapply_mode=not-run
 printf '[]\n' > "$work/checks.json"
 printf '{}\n' > "$work/versions.json"
 kube() { bash "$driver" kubectl "$values" "$@"; }
+verify_release_operation() {
+  [[ -n $release_state ]] || return 0
+  local holder source_release lease
+  holder=$(jq -er .backupId "$release_state/backup-state.json")
+  source_release=$(jq -er .source.artifact "$release_state/backup-state.json")
+  lease=$(bash "$driver" lock-status "$values") \
+    || die 'could not inspect the release operation lock'
+  jq -e --arg holder "$holder" --arg release "$source_release" '
+    .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.name == "recipe-db-deploy"
+    and .metadata.namespace == "kube-system"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/phase"] == "operator-reopened"
+    and .metadata.annotations["recipe-db/release"] == $release
+    and .spec.holderIdentity == $holder
+  ' <<< "$lease" > /dev/null || die 'release operation lock no longer matches the reopened state'
+}
 mark() {
   jq --arg check "$phase" '. + [$check]' "$work/checks.json" > "$work/checks.next"
   mv "$work/checks.next" "$work/checks.json"
@@ -112,12 +147,14 @@ finish() {
     --arg started "$started" --arg finished "$(date -u +%FT%TZ)" \
     --arg recipeId "$created_recipe_id" --arg imageUrl "$image_url" --arg imageSha256 "$image_sha" \
     --argjson success "$([[ $exit_code == 0 ]] && echo true || echo false)" \
+    --arg reapplyMode "$reapply_mode" \
     --argjson cleanupSucceeded "$cleanup_ok" --slurpfile checks "$work/checks.json" \
     --slurpfile versions "$work/versions.json" \
     '{schemaVersion:1, success:$success, artifact:$artifact, revision:$revision,
       phase:$phase, startedAt:$started, finishedAt:$finished, checks:$checks[0],
       recipeId:$recipeId, imageUrl:$imageUrl, imageSha256:$imageSha256,
-      cleanupSucceeded:$cleanupSucceeded, toolVersions:$versions[0]}' > "$result"
+      reapplyMode:$reapplyMode, cleanupSucceeded:$cleanupSucceeded,
+      toolVersions:$versions[0]}' > "$result"
   local write_status=$?
   rm -rf -- "$work"
   ((write_status == 0)) || exit_code=1
@@ -128,6 +165,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'printf "Production smoke: command failed at line %s (caller %s) during %s\n" "$LINENO" "${BASH_LINENO[0]:-0}" "$phase" >&2' ERR
 
+verify_release_operation
 token=$(cat "$token_file")
 [[ $token =~ ^[A-Za-z0-9._~+/-]+=*$ ]] || die 'bearer token is not a single valid token'
 printf 'header = "%s: %s %s"\n' Authorization Bearer "$token" > "$work/curl.conf"
@@ -356,14 +394,24 @@ restore_browse
 frontend
 mark
 
-phase=persistent-rollout-and-reapply
+if [[ -n $release_state ]]; then
+  phase=persistent-rollout-and-release-lock-check
+else
+  phase=persistent-rollout-and-reapply
+fi
 jq -er '[.items[] | select(any(.spec.template.spec.volumes[]?; .persistentVolumeClaim != null)) |
   .metadata.name] | select(length > 0) | .[]' "$work/deployments.json" > "$work/persistent.txt"
 while IFS= read -r deployment; do
   kube rollout restart "deployment/$deployment" > /dev/null
   kube rollout status "deployment/$deployment" "--timeout=${timeout}s" > /dev/null
 done < "$work/persistent.txt"
-bash "$driver" deploy "$values" "$artifact"
+if [[ -n $release_state ]]; then
+  verify_release_operation
+  reapply_mode=release-lock-preserved
+else
+  bash "$driver" deploy "$values" "$artifact"
+  reapply_mode=identical-deploy
+fi
 kube get configmap recipe-db-release -o json > "$work/reapplied.json"
 jq -e --arg artifact "$artifact" --arg revision "$revision" \
   '.data.artifact == $artifact and .data.revision == $revision' "$work/reapplied.json" > /dev/null
@@ -374,6 +422,7 @@ request "$image_url"
 expect_status 200
 [[ $(sha256sum "$work/body" | cut -d ' ' -f 1) == "$image_sha" ]]
 eventual_search
+verify_release_operation
 mark
 
 phase=recipe-delete

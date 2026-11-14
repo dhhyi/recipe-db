@@ -85,7 +85,9 @@ complete_candidate_migration() {
   [ "$status" -eq 0 ]
   jq -e '.migrationResult.outcome == "migration-succeeded"
     and .migrationExecution.status == "migration-succeeded"
-    and .migrationExecution.transitions[0].status == "completed"' "$STATE/backup-state.json" > /dev/null
+    and .migrationExecution.transitions[0].status == "completed"
+    and all(.migrationExecution.versions[]; .currentVersion == .requiredVersion)' \
+    "$STATE/backup-state.json" > /dev/null
   export MOCK_COMPLETED_MIGRATION=false
 }
 
@@ -317,9 +319,9 @@ EOF
   [ "$status" -ne 0 ]
   [[ $output == *"require a clean tooling checkout"* ]]
   git restore .scripts/production-k3d.sh
-  run bash .scripts/production-k3d.sh --release-sources-from-git backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -ne 0 ]
-  [[ $output == *"limited to render, backup-capture and guarded release operations"* ]]
+  [[ $output == *"Git release sources are limited"* ]]
 
   cp "$snapshot/backup-state.json" original-state.json
   jq --arg revision "$MOCK_REVISION" '.source.revision = $revision' \
@@ -691,6 +693,10 @@ EOF
   jq -e '.migrationResult == null' "$STATE/backup-state.json" > /dev/null
   complete_candidate_release no-migration-required
   jq -e '.migrationResult.outcome == "no-migration-required"' "$STATE/backup-state.json" > /dev/null
+  jq -e '.migrationExecution.status == "no-migration-required"
+    and (.migrationExecution.versions | type == "array" and length == 5)
+    and all(.migrationExecution.versions[]; .currentVersion == .requiredVersion)' \
+    "$STATE/backup-state.json" > /dev/null
   jq -e 'all(.items[]; .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
 
   start_log=$(wc -l < "$MOCK_LOG")
@@ -909,6 +915,16 @@ PY
   for service in recipes images tags; do
     printf '1\n' > "$FIXTURE_ROOT/tar-data/$service/storage-version"
   done
+  # Match the source workloads created by the recovery renderer.
+  jq '
+    ([.items[] | select(.metadata.name == "graphql")][0]) as $template |
+    .items += (["nats", "typesense", "browse-maintenance", "redis", "oauth2-proxy"] |
+      map(. as $name | $template |
+        .metadata.name = $name |
+        .spec.template.spec.containers[0].name = $name |
+        .spec.template.spec.containers[0].image = "infrastructure"))
+  ' "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
+  mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
   prepare_candidate_release
   export STATE
   prepare_recovery_package
@@ -932,7 +948,9 @@ PY
   [ "$status" -eq 0 ]
   jq -e '.migrationExecution.transitions[0].status == "completed"
     and .migrationExecution.transitions[1].status == "completed"
-    and .migrationExecution.currentIndex == 2' \
+    and .migrationExecution.currentIndex == 2
+    and any(.migrationExecution.versions[];
+      .service == "images" and .currentVersion == 3 and .requiredVersion == 3)' \
     "$STATE/backup-state.json" > /dev/null
 
   export MOCK_COMPLETED_MIGRATION=false MOCK_MIGRATION_RESULT_JOB="$recipes_job"
@@ -1726,6 +1744,24 @@ PY
     "$STATE/backup-state.json" > /dev/null
   marker_after=$(find "$FIXTURE_ROOT/tar-data" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)
   [ "$marker_after" = "$marker_before" ]
+}
+
+@test "current tooling enters and captures backup from immutable older release sources" {
+  export MOCK_BACKUP=true MOCK_RELEASE_LIFECYCLE=false MOCK_SOURCE_REVISION="$MOCK_REVISION"
+  local snapshot="$FIXTURE_ROOT/backups/git-source"
+  printf '*\n' > .gitignore
+  printf 'new tooling input\n' > message-bus/nats.conf
+  git add -f .gitignore message-bus/nats.conf
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Separate tooling inputs'
+
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh --release-sources-from-git backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e --arg revision "$MOCK_SOURCE_REVISION" '.source.revision == $revision' "$snapshot/manifest.json"
 }
 
 @test "pinned tooling continues immutable release sources without switching back to obsolete tools" {

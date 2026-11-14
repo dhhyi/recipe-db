@@ -585,8 +585,10 @@ restore_backup_graphql_chain() {
 
 restore_volume_pod() {
   local name=$1 allow_populated=${2:-false} pod="restore-volume-$1"
+  local helper_command="trap 'exit 0' TERM QUIT; while :; do sleep 1; done"
   jq -n --arg name "$pod" --arg ns "$namespace" --arg image "$copy_image" \
     --arg pvc "$name" --arg holder "$lock_holder" --argjson timeout "$timeout" \
+    --arg command "$helper_command" \
     --argjson resources "$(jq -c .resources "$work/config.json")" '
     {apiVersion:"v1",kind:"Pod",metadata:{name:$name,namespace:$ns,
       labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"restore-volume",
@@ -594,7 +596,7 @@ restore_volume_pod() {
       spec:{restartPolicy:"Never",automountServiceAccountToken:false,
         activeDeadlineSeconds:($timeout * 10),
         securityContext:{runAsUser:0,runAsGroup:0},
-        containers:[{name:"restore",image:$image,command:["sh","-ec","exec sleep 86400"],
+        containers:[{name:"restore",image:$image,command:["sh","-ec",$command],
           resources:$resources,volumeMounts:[{name:"data",mountPath:"/data"}]}],
         volumes:[{name:"data",persistentVolumeClaim:{claimName:$pvc}}]}}' \
     > "$work/restore-volume-pod.json" || return 1

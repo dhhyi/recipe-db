@@ -516,6 +516,24 @@ legacy_pi_claims() {
   grep -q -- '--kubeconfig-update-default=false --kubeconfig-switch-context=false' "$MOCK_LOG"
 }
 
+@test "create-new records and verifies per-run ownership on the server container" {
+  export MOCK_ABSENT=true MOCK_REHEARSAL_ID=0123456789abcdef
+  set_value '.rehearsalId="0123456789abcdef"'
+  run bash .scripts/production-k3d.sh create-new "$VALUES"
+  [ "$status" -eq 0 ]
+  grep -q -- '--runtime-label recipe-db.rehearsal-id=0123456789abcdef@server:0' "$MOCK_LOG"
+}
+
+@test "create-new refuses a pre-existing cluster instead of adopting it" {
+  export MOCK_FOREIGN=true
+  set_value '.rehearsalId="0123456789abcdef"'
+  run bash .scripts/production-k3d.sh create-new "$VALUES"
+  [ "$status" -ne 0 ]
+  [[ $output == *"fresh rehearsal creation refuses a pre-existing cluster"* ]]
+  run ! grep -q 'cluster create' "$MOCK_LOG"
+  run ! grep -q 'cluster delete' "$MOCK_LOG"
+}
+
 @test "create refuses insufficient Docker memory before creating cluster" {
   export MOCK_ABSENT=true MOCK_MEMORY=8589934592
   run bash .scripts/production-k3d.sh create "$VALUES"

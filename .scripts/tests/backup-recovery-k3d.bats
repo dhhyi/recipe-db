@@ -6,6 +6,8 @@ load test_helper
 
 setup() {
   setup_fixture backup-recovery-k3d.sh
+  mkdir -p .scripts/lib
+  cp "$BATS_TEST_DIRNAME/../lib/rehearsal-k3d.sh" .scripts/lib/
   export FAKE_RCLONE_ROOT="$FIXTURE_ROOT/fake-remote"
   export result_directory="$FIXTURE_ROOT/results"
 }
@@ -30,13 +32,13 @@ setup() {
   export oauth_cookie_secret="$FIXTURE_ROOT/secrets/oauth2-cookie-secret"
   # shellcheck source=/dev/null
   source .scripts/production-config.sh
-  sed -n '/^write_values() {/,/^}/p' .scripts/backup-recovery-k3d.sh > write-values.sh
-  # shellcheck source=/dev/null
-  source ./write-values.sh
+  # shellcheck source=.scripts/lib/rehearsal-k3d.sh
+  source .scripts/lib/rehearsal-k3d.sh
   local side values
   for side in s t; do
     values="$FIXTURE_ROOT/$side.yaml"
-    write_values "recipe-db-rehearsal-regression-$side" 22001 32001 "$values"
+    rehearsal_write_values "$FIXTURE_ROOT" "recipe-db-rehearsal-regression-$side" \
+      22001 32001 "$accounts_file" "$values"
     run production_config "$values" restore
     [ "$status" -eq 0 ]
     jq -e '.runtime.googleOAuthClientId == null and

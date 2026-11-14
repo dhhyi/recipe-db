@@ -5,7 +5,8 @@ load test_helper
 setup() {
   unset FAIL_VERIFY FAIL_DEPLOY FAIL_SEARCH FAIL_RELEASE FAIL_MAINTENANCE FAIL_HTMX FAIL_STORYBOOK \
     FAIL_STORYBOOK_ASSET \
-    FAIL_BACKEND_EXPOSURE FAIL_MCP_MAINTENANCE FAIL_WRONG_MAINTENANCE FAIL_DELETE FAIL_INIT DELAY_BROWSE_RESTORE
+    FAIL_BACKEND_EXPOSURE FAIL_MCP_MAINTENANCE FAIL_WRONG_MAINTENANCE FAIL_DELETE FAIL_INIT \
+    FAIL_RELEASE_LOCK DELAY_BROWSE_RESTORE
   setup_fixture smoke-production-k3d.sh
   FIXTURE_ROOT=$(pwd -P)
   setup_mock_bin
@@ -35,6 +36,20 @@ case "$command" in
   verify) [[ ${FAIL_VERIFY:-false} != true ]] ;;
   status) printf 'safe resource summary\n' ;;
   deploy) [[ ${FAIL_DEPLOY:-false} != true ]] ;;
+  lock-status)
+    if [[ ${FAIL_RELEASE_LOCK:-false} == true ]]; then
+      printf '{}\n'
+    else
+      jq -nc --arg holder "${SMOKE_HOLDER:-smoke-holder}" \
+        --arg release "${SMOKE_SOURCE_ARTIFACT:-$ARTIFACT}" '{
+        metadata:{name:"recipe-db-deploy",namespace:"kube-system",
+          labels:{"app.kubernetes.io/part-of":"recipe-db"},
+          annotations:{"recipe-db/operation":"backup","recipe-db/phase":"operator-reopened",
+            "recipe-db/release":$release}},
+        spec:{holderIdentity:$holder}
+      }'
+    fi
+    ;;
   kubectl)
     case "$*" in
       'get configmap recipe-db-release -o json')
@@ -215,6 +230,22 @@ run_smoke() {
     "$FIXTURE_ROOT/.secrets/token" "$FIXTURE_ROOT/result.json"
 }
 
+run_release_smoke() {
+  run bash .scripts/smoke-production-k3d.sh "$FIXTURE_ROOT/values.yaml" "$ARTIFACT" \
+    "$FIXTURE_ROOT/.secrets/token" "$FIXTURE_ROOT/result.json" \
+    --release-state "$FIXTURE_ROOT/release-state"
+}
+
+prepare_release_state() {
+  mkdir -p "$FIXTURE_ROOT/release-state"
+  export SMOKE_HOLDER=backup-20261114165719-1965145
+  export SMOKE_SOURCE_ARTIFACT="ghcr.io/example/source@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  jq -n --arg holder "$SMOKE_HOLDER" --arg source "$SMOKE_SOURCE_ARTIFACT" --arg artifact "$ARTIFACT" \
+    '{backupId:$holder,status:"access-open",phase:"operator-reopened",
+      source:{artifact:$source},candidate:{artifact:$artifact}}' \
+    > "$FIXTURE_ROOT/release-state/backup-state.json"
+}
+
 @test "smoke verifies cluster first and covers protocols, PVC restarts and identical redeploy" {
   run_smoke
   [ "$status" -eq 0 ]
@@ -235,13 +266,38 @@ run_smoke() {
   [ -f restored ]
   [ -f deleted ]
   jq -e --arg artifact "$ARTIFACT" --arg revision "$REVISION" \
-    '.success and .cleanupSucceeded and .artifact == $artifact and .revision == $revision
+    '.success and .cleanupSucceeded and .reapplyMode == "identical-deploy"
+      and .artifact == $artifact and .revision == $revision
       and (.checks | length == 11) and (.toolVersions.curl | contains("mock"))' result.json
   run grep -qF "$(cat .secrets/token)" "$MOCK_LOG" result.json
   [ "$status" -eq 1 ]
   run grep -qF smoke-session "$MOCK_LOG" result.json
   [ "$status" -eq 1 ]
   [ -z "$(find .secrets -maxdepth 1 -name 'production-smoke-*' -print)" ]
+}
+
+@test "release smoke preserves its exact operation lock instead of acquiring a second deploy lock" {
+  prepare_release_state
+  run_release_smoke
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^driver lock-status ' "$MOCK_LOG")" -eq 3 ]
+  run grep -q '^driver deploy ' "$MOCK_LOG"
+  [ "$status" -eq 1 ]
+  [ -f restored ]
+  [ -f deleted ]
+  jq -e '.success and .cleanupSucceeded
+    and .reapplyMode == "release-lock-preserved"
+    and .phase == "complete"' result.json
+}
+
+@test "release smoke refuses a missing or mismatched operation lock before HTTP requests" {
+  prepare_release_state
+  export FAIL_RELEASE_LOCK=true
+  run_release_smoke
+  [ "$status" -ne 0 ]
+  [ "$(grep -c '^curl .*http://' "$MOCK_LOG")" -eq 0 ]
+  [ ! -e recipe.json ]
+  jq -e '.success == false and .phase == "initialization"' result.json
 }
 
 @test "an unmanaged cluster is refused before any HTTP request or mutation" {

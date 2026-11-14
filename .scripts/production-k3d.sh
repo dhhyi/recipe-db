@@ -25,14 +25,15 @@ command=$1
 values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
-  [[ $command == release-* || $command == render || $command == backup-capture ]] \
-    || production_fail "Git release sources are limited to render, backup-capture and guarded release operations"
+  [[ $command == release-* || $command == render || $command == backup-enter ||
+    $command == backup-capture || $command == restore ]] \
+    || production_fail "Git release sources are limited to render, backup-enter, backup-capture, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
     || production_fail "Git release sources require a clean tooling checkout"
 fi
 case "$command" in
-  create | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
+  create | create-new | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
@@ -154,9 +155,11 @@ local_identity() {
     and .[0].serversCount == 1 and .[0].agentsCount == 0
   ' "$work/clusters.json" > /dev/null || production_fail "expected exactly one server and no agents"
   docker inspect "k3d-$cluster-server-0" "k3d-$cluster-serverlb" > "$work/containers.json"
-  jq -e --arg cluster "$cluster" --arg http "$http_port" --arg api "$api_port" '
+  jq -e --arg cluster "$cluster" --arg http "$http_port" --arg api "$api_port" \
+    --arg rehearsalId "${rehearsal_id:-}" '
     length == 2
     and .[0].Config.Labels["recipe-db.managed"] == "rehearsal"
+    and ($rehearsalId == "" or .[0].Config.Labels["recipe-db.rehearsal-id"] == $rehearsalId)
     and .[0].Config.Labels["k3d.cluster"] == $cluster
     and .[0].Config.Labels["k3d.role"] == "server"
     and .[0].Config.Image == "rancher/k3s:v1.35.5-k3s1"
@@ -828,17 +831,19 @@ backup_start_modes() {
 
 backup_copy_pvc() {
   local name=$1 pvc=$2 role=$3 layout=$4 pod archive size sha files storage
+  local helper_command="trap 'exit 0' TERM QUIT; while :; do sleep 1; done"
   storage=$(jq -ce --arg name "$name" 'select(.name == $name) | .storage' \
     "$work/backup-pvcs.jsonl") || return 1
   pod="backup-copy-${name}-${backup_id##*-}"
   archive="$snapshot/$name.tar"
   jq -n --arg name "$pod" --arg namespace "$namespace" --arg image "$copy_image" \
-    --arg pvc "$pvc" --arg id "$backup_id" --argjson resources "$(jq -c .resources "$work/config.json")" '
+    --arg pvc "$pvc" --arg id "$backup_id" --arg command "$helper_command" \
+    --argjson resources "$(jq -c .resources "$work/config.json")" '
     {apiVersion:"v1",kind:"Pod",metadata:{name:$name,namespace:$namespace,
       labels:{"app.kubernetes.io/part-of":"recipe-db","app.kubernetes.io/name":"backup-copy",
         "recipe-db/backup-id":$id}},
      spec:{restartPolicy:"Never",automountServiceAccountToken:false,
-       containers:[{name:"copy",image:$image,command:["sh","-ec","exec sleep 3600"],
+       containers:[{name:"copy",image:$image,command:["sh","-ec",$command],
          resources:$resources,volumeMounts:[{name:"data",mountPath:"/data",readOnly:true}]}],
        volumes:[{name:"data",persistentVolumeClaim:{claimName:$pvc,readOnly:true}}]}}
   ' > "$work/copy-pod.json" || return 1
@@ -2425,6 +2430,44 @@ release_recovery_reopen_cleanup() {
   [[ $failed == false ]]
 }
 
+release_recovery_remove_candidate_only_deployments() {
+  local entry name
+  kube get deployments -o json > "$work/recovery-cleanup-deployments.json" \
+    || production_fail "cannot inspect candidate-only recovery workloads"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    [$state[0].priorWorkloads[].name] as $previous |
+    [.items[] | select(.metadata.name as $name | $previous | index($name) | not)] as $extra |
+    all($extra[]; . as $deployment |
+      any($state[0].candidate.workloads[]; .name == $deployment.metadata.name)
+      and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.template.metadata.annotations["recipe-db/release"] == $state[0].candidate.artifact
+      and .metadata.deletionTimestamp == null
+      and (.metadata.uid | type == "string" and length > 0)
+      and (.metadata.resourceVersion | type == "string" and length > 0)
+      and (.spec.replicas // 1) == 0
+      and (.status.replicas // 0) == 0
+      and (.status.readyReplicas // 0) == 0)
+  ' "$work/recovery-cleanup-deployments.json" > /dev/null \
+    || production_fail "candidate-only recovery workloads are unowned, changed or still running; keep access blocked"
+  jq -c --slurpfile state "$snapshot/backup-state.json" '
+    [$state[0].priorWorkloads[].name] as $previous |
+    .items[] | select(.metadata.name as $name | $previous | index($name) | not)
+  ' "$work/recovery-cleanup-deployments.json" > "$work/recovery-cleanup-deployments.jsonl"
+  while IFS= read -r entry; do
+    name=$(jq -er .metadata.name <<< "$entry")
+    backup_wait_pods_gone "$name" \
+      || production_fail "candidate-only recovery workers remain; keep access blocked"
+    jq '{apiVersion:"v1",kind:"DeleteOptions",
+      preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' \
+      <<< "$entry" > "$work/recovery-cleanup-delete.json"
+    kube delete --raw "/apis/apps/v1/namespaces/$namespace/deployments/$name" \
+      -f "$work/recovery-cleanup-delete.json" > /dev/null \
+      || production_fail "candidate-only recovery workload changed before deletion; keep access blocked"
+    kube wait --for=delete "deployment/$name" "--timeout=${timeout}s" > /dev/null \
+      || production_fail "candidate-only recovery workload did not disappear; keep access blocked"
+  done < "$work/recovery-cleanup-deployments.jsonl"
+}
+
 release_recovery_reopen() {
   local previous=$2 confirmation=$3 revision replicas
   release_load_operation "$1" "$previous" true
@@ -2499,6 +2542,7 @@ release_recovery_reopen() {
   ' "$work/recovery-deployments.json" > /dev/null \
     || production_fail "previous release is not ready behind the access barrier"
   release_mutation_started=true
+  release_recovery_remove_candidate_only_deployments
   release_recovery_reopen_started=true
   release_recovery_state_write recovery-required migration-reopening \
     "$(jq -cn --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -3243,11 +3287,13 @@ release_migration_acknowledge_success() {
     outcome='migration-succeeded'
     release_state_write candidate-staged candidate-staged \
       "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+        --slurpfile discovery "$work/migration-discovery.json" \
         --argjson index "$((index + 1))" --arg outcome "$outcome" --arg artifact "$artifact" \
         --arg job "$job" --arg service "$service" \
         --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --argjson from "$from" --argjson to "$to" '
         {migrationExecution:{status:"migration-succeeded",currentIndex:$index,
+          versions:$discovery[0].versions,
           transitions:[$state[0].migrationExecution.transitions | to_entries[] |
             .value + {status:"completed"}],
           completedAt:$recordedAt},
@@ -3261,10 +3307,12 @@ release_migration_acknowledge_success() {
   fi
   release_state_write candidate-staged candidate-staged \
     "$(jq -cn --slurpfile state "$snapshot/backup-state.json" \
+      --slurpfile discovery "$work/migration-discovery.json" \
       --argjson index "$((index + 1))" --argjson completedIndex "$index" --arg job "$job" \
       --arg service "$service" --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       --argjson from "$from" --argjson to "$to" '
       {migrationExecution:{
+        versions:$discovery[0].versions,
         currentIndex:$index,status:"transition-recorded",
         transitions:[$state[0].migrationExecution.transitions | to_entries[] |
           if .key == $completedIndex then .value + {status:"completed"} else .value end],
@@ -4134,7 +4182,7 @@ backup_run_locked() {
 }
 
 case "$command" in
-  create)
+  create | create-new)
     [[ $target = local ]] || production_fail "Pi cluster lifecycle is never managed"
     [[ $(uname -m) = x86_64 ]] || production_fail "local rehearsal requires x86_64"
     [[ $(k3d version | head -n 1) = "k3d version v5.8.3" ]] || production_fail "k3d v5.8.3 is required"
@@ -4143,6 +4191,8 @@ case "$command" in
       || production_fail "Docker must have more than 8 GiB RAM"
     k3d cluster list -o json > "$work/clusters.json"
     if jq -e --arg cluster "$cluster" 'any(.[]; .name == $cluster)' "$work/clusters.json" > /dev/null; then
+      [[ $command != create-new ]] \
+        || production_fail "fresh rehearsal creation refuses a pre-existing cluster"
       local_identity
     else
       # Reserved container names must also be unused, including stopped foreign containers.
@@ -4151,12 +4201,16 @@ case "$command" in
           production_fail "reserved cluster container already exists"
         fi
       done
-      k3d cluster create "$cluster" --image rancher/k3s:v1.35.5-k3s1 \
-        --servers 1 --agents 0 --api-port "127.0.0.1:$api_port" \
-        --port "127.0.0.1:$http_port:80@loadbalancer" \
-        --runtime-label 'recipe-db.managed=rehearsal@server:0' \
-        --kubeconfig-update-default=false --kubeconfig-switch-context=false \
-        --wait --timeout "${timeout}s"
+      create_args=(--image rancher/k3s:v1.35.5-k3s1
+        --servers 1 --agents 0 --api-port "127.0.0.1:$api_port"
+        --port "127.0.0.1:$http_port:80@loadbalancer"
+        --runtime-label 'recipe-db.managed=rehearsal@server:0'
+        --kubeconfig-update-default=false --kubeconfig-switch-context=false
+        --wait --timeout "${timeout}s")
+      if [[ -n ${rehearsal_id:-} ]]; then
+        create_args+=(--runtime-label "recipe-db.rehearsal-id=$rehearsal_id@server:0")
+      fi
+      k3d cluster create "$cluster" "${create_args[@]}"
       local_identity
     fi
     ;;

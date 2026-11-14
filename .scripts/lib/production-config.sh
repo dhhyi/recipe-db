@@ -52,11 +52,15 @@ production_config() {
           (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"] +
+      (if has("rehearsalId") then ["rehearsalId"] else [] end) +
       (if has("piStorage") then ["piStorage"] else [] end) +
       (if has("httpsStaging") then ["httpsStaging"] else [] end))
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
     and (.target == "local" or .target == "pi")
     and (.cluster | name) and (.namespace == "recipe-db")
+    and (if has("rehearsalId") then
+      .target == "local" and (.rehearsalId | type == "string" and test("^[a-f0-9]{16}$"))
+      else true end)
     and (.context | nonempty) and (.storageClass | name)
     and (.httpPort | type == "number" and floor == . and . > 1024 and . <= 65535)
     and (.apiPort | type == "number" and floor == . and . > 1024 and . <= 65535)
@@ -158,6 +162,7 @@ production_config() {
   storage_node=$(jq -r '.piStorage.node // empty' "$work/config.json")
   storage_root_uuid=$(jq -r '.piStorage.expectedRootUuid // empty' "$work/config.json" | tr '[:upper:]' '[:lower:]')
   storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
+  rehearsal_id=$(jq -r '.rehearsalId // ""' "$work/config.json")
   ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
   acme_email_path=$(jq -r '.secrets["acme-account-email"] // empty' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
