@@ -97,7 +97,8 @@ SH
 load_scenario_functions() {
   local function_name
   : > "$FIXTURE_ROOT/scenario-functions.sh"
-  for function_name in validate_release_inventory deployed_release_images_match_inventory \
+  for function_name in validate_release_inventory backup_storage_versions_from_manifest \
+    deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
     run_migration_sequence successful_migration_outcome_is_valid \
     complete_recovery_state_is_verified delete_scenario_cluster run_scenario; do
@@ -136,6 +137,26 @@ SH
   [ "$(sed -n '2p' "$VALIDATOR_ARGS_LOG")" = "$release" ]
   [ "$(sed -n '3p' "$VALIDATOR_ARGS_LOG")" = "$SOURCE_REVISION" ]
   [ "$(sed -n '4p' "$VALIDATOR_ARGS_LOG")" = "$checkout" ]
+}
+
+@test "reads storage markers from the embedded snapshot manifest" {
+  local manifest="$FIXTURE_ROOT/package.manifest.json" versions
+  jq -n '{
+    backupId:"backup-123-456",
+    snapshotManifest:{inventory:[
+      {service:"recipes",files:[
+        {path:"storage-version",storageVersion:2},
+        {path:"recipes.sqlite3"}
+      ]},
+      {service:"images",files:[
+        {path:"storage-version",storageVersion:1}
+      ]}
+    ]}
+  }' > "$manifest"
+  load_scenario_functions
+
+  versions=$(backup_storage_versions_from_manifest "$manifest")
+  [ "$versions" = '[{"service":"images","version":1},{"service":"recipes","version":2}]' ]
 }
 
 @test "live Deployment inventory rejects unaccounted regular and init containers" {

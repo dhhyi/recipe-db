@@ -465,6 +465,15 @@ validate_release_inventory() {
   esac
 }
 
+backup_storage_versions_from_manifest() {
+  local manifest=$1
+  jq -c '
+    [.snapshotManifest.inventory[] as $pvc | $pvc.files[]
+      | select(.path == "storage-version")
+      | {service:$pvc.service,version:.storageVersion}] | sort_by(.service)
+  ' "$manifest"
+}
+
 deployed_release_images_match_inventory() {
   local deployments=$1 release_file=$2
   jq -e --slurpfile release "$release_file" '
@@ -974,11 +983,7 @@ source_storage_versions=$(jq -sc '
   [.[] | select(.storageVersion != null)
     | {service:.name,version:.storageVersion.value}] | sort_by(.service)
 ' "$work/source-projects.jsonl")
-backup_storage_versions=$(jq -c '
-  [.inventory[] as $pvc | $pvc.files[]
-    | select(.path == "storage-version")
-    | {service:$pvc.service,version:.storageVersion}] | sort_by(.service)
-' "$manifest")
+backup_storage_versions=$(backup_storage_versions_from_manifest "$manifest")
 jq -e --argjson source "$source_storage_versions" \
   --argjson backup "$backup_storage_versions" '
   ($source | length) > 0 and $backup == $source
