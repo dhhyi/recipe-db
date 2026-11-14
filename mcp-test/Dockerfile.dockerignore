@@ -1,7 +1,0 @@
-**
-!Dockerfile
-!Dockerfile.dockerignore
-!requirements.txt
-!pyproject.toml
-!test_*.py
-!image_fixture.py
