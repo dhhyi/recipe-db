@@ -22,7 +22,8 @@ EOF
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
     .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml \
     .mise/tasks/validation.toml .mise/tasks/development.toml .mise/tasks/compose.toml \
-    .scripts/run-in-devcontainer.sh .scripts/test-message-bus.sh .scripts/test-migrator-packaging.sh \
+    .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
+    .scripts/test-message-bus.sh .scripts/test-migrator-packaging.sh \
     message-bus/nats.conf graphql/.project.yaml graphql/.devcontainer/devcontainer.json \
     graphql/.devcontainer/Dockerfile graphql/Cargo.toml graphql/Cargo.lock graphql/src/main.rs \
     graphql/testdata/events.json .scripts/generate-production-build-metadata.sh \
@@ -125,17 +126,17 @@ EOF
   for file in .scripts/test-message-bus.sh deploy/local.yaml message-bus/nats.conf \
     graphql/.project.yaml graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
     graphql/Cargo.toml graphql/Cargo.lock graphql/src/main.rs graphql/testdata/events.json \
-    .scripts/run-in-devcontainer.sh .mise/tasks/validation.toml; do
+    .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh .mise/tasks/validation.toml; do
     grep -Fx "        \"$file\"," message-bus-rule
   done
   for file in .scripts/test-migrator-packaging.sh .scripts/templates/kubernetes.lib.yml \
     .scripts/templates/kubernetes-migration-job-test.yml \
     .scripts/tests/fixtures/migrator-packaging/fixture.json \
-    .scripts/migrator-manifest.schema.json; do
+    .scripts/migrator-manifest.schema.json .scripts/run-bazel-validation.sh; do
     grep -Fx "        \"$file\"," migrator-rule
   done
-  grep -Fx '    cmd = "mise run --raw test-message-bus && touch $@",' message-bus-rule
-  grep -Fx '    cmd = "mise run --raw test-migrator-packaging && touch $@",' migrator-rule
+  grep -Fx '    cmd = "sh .scripts/run-bazel-validation.sh test-message-bus && touch $@",' message-bus-rule
+  grep -Fx '    cmd = "sh .scripts/run-bazel-validation.sh test-migrator-packaging && touch $@",' migrator-rule
   ! grep -F 'README.md' message-bus-rule migrator-rule
 
   touch graphql/src/new-test.rs

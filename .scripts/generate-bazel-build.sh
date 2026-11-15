@@ -80,7 +80,7 @@ emit_cacheable_validation_rule() {
     done < <(printf '%s\n' "${!validation_files[@]}" | sort)
     printf '    ],\n'
     printf '    outs = ["%s.ok"],\n' "$name"
-    printf '    cmd = "mise run --raw %s && touch $@",\n' "$task"
+    printf '    cmd = "sh .scripts/run-bazel-validation.sh %s && touch $@",\n' "$task"
     printf '    tags = ["no-sandbox", "no-remote"],\n'
     printf ')\n'
   } >> "$output"
@@ -310,13 +310,15 @@ done
 
 emit_cacheable_validation_rule message_bus_validation test-message-bus \
   mise.toml .mise/config.toml .mise/tasks/validation.toml .mise/tasks/development.toml \
-  .mise/tasks/compose.toml .scripts/run-in-devcontainer.sh .scripts/test-message-bus.sh \
+  .mise/tasks/compose.toml .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
+  .scripts/test-message-bus.sh \
   deploy/local.yaml message-bus/nats.conf graphql/.project.yaml \
   graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
   graphql/Cargo.toml graphql/Cargo.lock 'graphql/src/**' 'graphql/testdata/**'
 
 emit_cacheable_validation_rule migrator_packaging_validation test-migrator-packaging \
-  mise.toml .mise/config.toml .mise/tasks/validation.toml .scripts/test-migrator-packaging.sh \
+  mise.toml .mise/config.toml .mise/tasks/validation.toml .scripts/run-bazel-validation.sh \
+  .scripts/test-migrator-packaging.sh \
   .scripts/generate-production-build-metadata.sh .scripts/create-production-release-inventory.sh \
   .scripts/validate-production-release.sh .scripts/lib/project-metadata.sh \
   .scripts/migrator-manifest.schema.json .scripts/templates/kubernetes.lib.yml \
