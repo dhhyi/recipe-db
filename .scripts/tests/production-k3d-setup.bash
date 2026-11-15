@@ -68,7 +68,7 @@ setup() {
 {"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":3}}
 {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
 {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-{"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+{"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":2}}
 JSONL
     elif [[ $MOCK_MIGRATIONS == true ]]; then
       cat << 'JSONL' > "$2"
@@ -1237,7 +1237,9 @@ else
               image:("ghcr.io/dhhyi/recipe-db-migrator-images-2-to-3@sha256:"+("d"*64))}
           end),
           {service:"images",fromVersion:1,toVersion:2,timeoutSeconds:300,
-            image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))}
+            image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))},
+          {service:"tags",fromVersion:1,toVersion:2,timeoutSeconds:300,
+            image:("ghcr.io/dhhyi/recipe-db-migrator-tags-1-to-2@sha256:"+("f"*64))}
         ]}' > "$output/release.json"
     elif [[ $MOCK_MIGRATIONS = true ]]; then
       jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:2,revision:$revision,images:{

@@ -216,6 +216,42 @@ EOF
   ' metadata.json
 }
 
+@test "build metadata allows migrators for versioned cleanup participants" {
+  mkdir cleanup
+  cat > cleanup/.project.yaml << 'EOF'
+devcontainer: {}
+---
+category: backend
+backupRole: cleanup-participant
+backupData:
+  kind: sqlite
+  file: storage.db
+storageVersion:
+  value: 1
+  file: generated/version.txt
+  template: 'version={{STORAGE_VERSION}}'
+EOF
+  mkdir -p migrators/tags-1-to-2
+  cat > migrators/tags-1-to-2/migration.json << 'EOF'
+{
+  "service": "cleanup",
+  "fromVersion": 1,
+  "toVersion": 2,
+  "timeoutSeconds": 300
+}
+EOF
+  printf '%s\n' 'FROM scratch' > migrators/tags-1-to-2/Dockerfile
+
+  run sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    .target["migrator-tags-1-to-2"].labels["io.dhhyi.recipe-db.migration.service"] == "cleanup"
+    and .target["migrator-tags-1-to-2"].labels["io.dhhyi.recipe-db.migration.from-version"] == "1"
+    and .target["migrator-tags-1-to-2"].labels["io.dhhyi.recipe-db.migration.to-version"] == "2"
+  ' metadata.json
+}
+
 @test "migrator discovery rejects unsafe paths, invalid manifests, owners and duplicate transitions" {
   mkdir -p migrators/Unsafe
   printf '%s\n' '{}' > migrators/Unsafe/migration.json
@@ -244,7 +280,7 @@ EOF
   mv invalid.json migrators/images-copy/migration.json
   run --separate-stderr sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/amd64 metadata.json false "$FIXTURE_ROOT"
   [ "$status" -eq 1 ]
-  [[ "$stderr" == *"not an authoritative storage owner"* ]]
+  [[ "$stderr" == *"not a versioned storage owner"* ]]
 
   jq '.service = "authoritative" | .fromVersion = 1 | .toVersion = 3' migrators/images-copy/migration.json > invalid.json
   mv invalid.json migrators/images-copy/migration.json

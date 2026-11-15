@@ -787,8 +787,9 @@ EOF
   [ "$status" -eq 0 ]
   [[ $output == *"Service images: current=1 required=3"* ]]
   [[ $output == *"Service recipes: current=1 required=2"* ]]
+  [[ $output == *"Service tags: current=1 required=2"* ]]
   order=$(printf '%s\n' "$output" | awk '/^  [0-9]+\./ { print $1, $2, $3 }')
-  [ "$order" = "$(printf '1. images 1->2\n2. images 2->3\n3. recipes 1->2')" ]
+  [ "$order" = "$(printf '1. images 1->2\n2. images 2->3\n3. recipes 1->2\n4. tags 1->2')" ]
   [[ $output == *"release-migration-next"* ]]
   [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
   run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
