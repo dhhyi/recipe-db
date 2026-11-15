@@ -63,6 +63,9 @@ jobs:
           install: false
           cache: true
 
+      - name: install fish for shell compatibility tests
+        run: sudo apt-get update && sudo apt-get install -y fish
+
       - name: install tools and synchronize
         # The generator's shared cache directory creation is not concurrency-safe.
         env:
