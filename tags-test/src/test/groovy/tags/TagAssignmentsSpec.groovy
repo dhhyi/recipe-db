@@ -77,6 +77,22 @@ class TagAssignmentsSpec extends TagsApiSpec {
 		missing.jsonPath().getString('field') == 'tagId'
 	}
 
+	def 'OTHER tags can be assigned and returned for recipes'() {
+		given:
+		def tag = create('other', 'General').jsonPath().getMap('')
+		String path = "${api}/tags/recipes/other-category"
+
+		when:
+		def assigned = http('PUT', "${path}/assignments/${tag.id}")
+		def recipeTags = http('GET', path)
+
+		then:
+		assigned.statusCode() == 204
+		recipeTags.statusCode() == 200
+		recipeTags.jsonPath().getList('id') == [tag.id]
+		recipeTags.jsonPath().getString('category[0]') == 'other'
+	}
+
 	def 'bulk deltas are deduplicated atomic and return the full assignment set'() {
 		given:
 		def one = create('course', 'First').jsonPath().getMap('')

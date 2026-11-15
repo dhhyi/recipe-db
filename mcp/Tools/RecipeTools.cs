@@ -15,6 +15,7 @@ public enum TagCategoryChoice
     CUISINE,
     DIETARY_STYLE,
     COURSE,
+    OTHER,
 }
 
 [McpServerToolType]
@@ -302,9 +303,9 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     }
 
     [McpServerTool(Name = "list_tags")]
-    [Description("Lists the fresh tag inventory. Optional category is exactly one of CUISINE, DIETARY_STYLE, or COURSE; omit it to list every category.")]
+    [Description("Lists the fresh tag inventory. Optional category is exactly one of CUISINE, DIETARY_STYLE, COURSE, or OTHER; omit it to list every category.")]
     public async Task<string> ListTags(
-        [Description("Optional category: CUISINE, DIETARY_STYLE, or COURSE")] TagCategoryChoice? category = null
+        [Description("Optional category: CUISINE, DIETARY_STYLE, COURSE, or OTHER")] TagCategoryChoice? category = null
     )
     {
         var response = await client.ListTags.ExecuteAsync(category is null ? null : ToGraphQlCategory(category.Value));
@@ -314,11 +315,11 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
 
     [McpServerTool(Name = "create_tag")]
     [Description(
-        "Creates a tag in CUISINE, DIETARY_STYLE, or COURSE. The first creation fixes display spelling. " +
+        "Creates a tag in CUISINE, DIETARY_STYLE, COURSE, or OTHER. The first creation fixes display spelling. " +
         "Any later creation producing the same normalized ID, including identical spelling or punctuation/accent variants, fails with tag-collision (409); it never reuses or selects an existing tag."
     )]
     public async Task<string> CreateTag(
-        [Description("Category: CUISINE, DIETARY_STYLE, or COURSE")] TagCategoryChoice category,
+        [Description("Category: CUISINE, DIETARY_STYLE, COURSE, or OTHER")] TagCategoryChoice category,
         [Description("Tag display name")] string name
     )
     {
@@ -363,6 +364,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         TagCategoryChoice.CUISINE => Mcp.GraphQL.TagCategory.Cuisine,
         TagCategoryChoice.DIETARY_STYLE => Mcp.GraphQL.TagCategory.DietaryStyle,
         TagCategoryChoice.COURSE => Mcp.GraphQL.TagCategory.Course,
+        TagCategoryChoice.OTHER => Mcp.GraphQL.TagCategory.Other,
         _ => throw new ArgumentOutOfRangeException(nameof(category)),
     };
 

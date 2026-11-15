@@ -64,7 +64,10 @@ let test_creation_and_collisions () =
         "collision must not create or rename an inventory entry";
       let other_category = Tags.create_tag database Tags.Course "Gluten-free" in
       check (other_category.id = "course-glutenfree")
-        "same key is allowed in another category")
+        "same key is allowed in another category";
+      let uncategorized = Tags.create_tag database Tags.Other "Gluten-free" in
+      check (uncategorized.id = "other-glutenfree")
+        "other category uses its own stable ID prefix")
 
 let test_deterministic_ordering () =
   with_database (fun database ->
@@ -72,10 +75,11 @@ let test_deterministic_ordering () =
       ignore (Tags.create_tag database Tags.Course "A!z");
       ignore (Tags.create_tag database Tags.Cuisine "Soup");
       ignore (Tags.create_tag database Tags.Dietary_style "vegan");
+      ignore (Tags.create_tag database Tags.Other "General");
       check
         (Tags.select_tags database ()
          |> List.map (fun (tag : Tags.tag) -> tag.name)
-        = [ "Soup"; "vegan"; "A!z"; "A-y" ])
+        = [ "Soup"; "vegan"; "A!z"; "A-y"; "General" ])
         "category order and display-name ordering")
 
 let test_assignments_and_atomic_rollback () =
@@ -206,12 +210,12 @@ let test_storage_version_startup_gates () =
   Sys.remove database_path;
   let database = Tags.open_database (Some root) in
   Tags.publish_storage_version (Some root);
-  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
+  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
     "marker is published after database initialization";
   check (not (Tags.check_storage_version (Some root) Tags.Production))
     "versioned database starts";
   Tags.reset_database database;
-  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
+  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
     "reset preserves marker";
   Tags.close_database database;
   let sidecar_root = Filename.concat root "sidecar-only" in
@@ -223,7 +227,7 @@ let test_storage_version_startup_gates () =
     output_string channel content;
     close_out channel
   in
-  write sidecar_marker "1\n";
+  write sidecar_marker "2\n";
   write (sidecar_database ^ "-wal") "";
   let missing_database_rejected =
     try
@@ -241,17 +245,17 @@ let test_storage_version_startup_gates () =
   (match Tags.publish_storage_version (Some root) with
   | () -> fail "existing marker was overwritten"
   | exception Failure _ -> ());
-  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
+  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
     "failed publication preserves marker";
   let channel = open_out_bin marker in
-  output_string channel "2\n";
+  output_string channel "1\n";
   close_out channel;
   (match Tags.check_storage_version (Some root) Tags.Testing with
   | _ -> fail "mismatched marker was accepted"
   | exception Failure message ->
-      check (String.ends_with ~suffix:"actual 2" message)
+      check (String.ends_with ~suffix:"actual 1" message)
         "mismatch reports actual version");
-  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
+  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
     "mismatched marker remains unchanged";
   cleanup ()
 
@@ -379,6 +383,52 @@ let test_http_errors_and_rollback () =
       check (List.map (fun (t : Tags.tag) -> t.id) (Tags.assigned_tags db "recipe") = [ tag.id ])
         "failed HTTP bulk change retains assignments")
 
+let test_http_other_category_flow () =
+  with_database (fun db ->
+      let created =
+        request ~method_:`POST
+          ~body:{|{"category":"other","name":"General"}|}
+          db "/tags"
+      in
+      assert_status 201 created;
+      let created_json =
+        Lwt_main.run (Dream.body created) |> Yojson.Basic.from_string
+      in
+      let open Yojson.Basic.Util in
+      let tag_id = created_json |> member "id" |> to_string in
+      check (tag_id = "other-general") "OTHER tag ID";
+      check (created_json |> member "category" |> to_string = "other")
+        "OTHER category returned from creation";
+      let filtered = request db "/tags?category=other" in
+      let filtered_json =
+        Lwt_main.run (Dream.body filtered) |> Yojson.Basic.from_string
+      in
+      check
+        (filtered_json |> to_list |> List.length = 1)
+        "OTHER category filter returns the tag";
+      let cuisine = request db "/tags?category=cuisine" in
+      let cuisine_json =
+        Lwt_main.run (Dream.body cuisine) |> Yojson.Basic.from_string
+      in
+      check (cuisine_json |> to_list = []) "category filter excludes OTHER";
+      let changed =
+        request ~method_:`PATCH
+          ~body:(Printf.sprintf {|{"addTagIds":["%s"]}|} tag_id)
+          db "/tags/recipes/recipe"
+      in
+      assert_status 200 changed;
+      let assignments = request db "/tags/recipes/recipe" in
+      let assignments_json =
+        Lwt_main.run (Dream.body assignments) |> Yojson.Basic.from_string
+      in
+      check
+        (assignments_json |> to_list |> List.length = 1)
+        "recipe assignment returns the OTHER tag";
+      check
+        (assignments_json |> to_list |> List.hd |> member "category" |> to_string
+        = "other")
+        "recipe assignment preserves OTHER category")
+
 let () =
   test_identity_and_validation ();
   test_creation_and_collisions ();
@@ -389,4 +439,5 @@ let () =
   test_reset_is_complete_and_transactional ();
   test_storage_version_startup_gates ();
   test_runtime_modes_and_http_reset ();
-  test_http_errors_and_rollback ()
+  test_http_errors_and_rollback ();
+  test_http_other_category_flow ();

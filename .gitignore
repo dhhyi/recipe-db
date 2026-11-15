@@ -43,3 +43,4 @@ oauth2-proxy-alpha.yml
 /e2e-test/.secrets
 /provisioning/.private/
 /provisioning/**/__pycache__/
+/migrators/**/__pycache__/

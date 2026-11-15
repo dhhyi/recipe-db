@@ -2972,8 +2972,8 @@ release_migration_discover() {
         || production_fail "candidate migration for $service is not an adjacent version transition"
       (($(jq -r .toVersion <<< "$migration") <= required)) \
         || production_fail "candidate migration for $service overshoots required version $required"
-      [[ $role == authoritative-read-only ]] \
-        || production_fail "$service requires a migration but is not an authoritative storage owner"
+      [[ $role == authoritative-read-only || $role == cleanup-participant ]] \
+        || production_fail "$service requires a migration but is not a versioned storage owner"
       image=$(jq -r .image <<< "$migration")
       job="migration-${revision:0:12}-${image: -40}"
       jq -cn --arg service "$service" --arg image "$image" --arg job "$job" \

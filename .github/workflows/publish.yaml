@@ -279,6 +279,9 @@ jobs:
       - name: build development and standalone test images
         run: docker compose --progress plain --profile development --profile test build
 
+      - name: test migrators
+        run: bash .scripts/run-migrator-tests.sh
+
       - name: verify production ingress trust
         run: mise run test-auth-ingress
 

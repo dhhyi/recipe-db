@@ -146,13 +146,13 @@ migrator_metadata_to_jsonl() {
       [ -f "$migrator_project_file" ] || continue
       migrator_project_name=$(basename "$(dirname "$migrator_project_file")")
       if [ "$migrator_project_name" = "$migrator_service" ] \
-        && mise exec -- yq eval-all -e 'select(documentIndex == 1) | .backupRole == "authoritative-read-only" and (.storageVersion != null)' "$migrator_project_file" > /dev/null; then
+        && mise exec -- yq eval-all -e 'select(documentIndex == 1) | (.backupRole == "authoritative-read-only" or .backupRole == "cleanup-participant") and (.storageVersion != null)' "$migrator_project_file" > /dev/null; then
         migrator_owner_found=true
         break
       fi
     done
     if [ "$migrator_owner_found" != true ]; then
-      echo "migrator $migrator_metadata_name service '$migrator_service' is not an authoritative storage owner" >&2
+      echo "migrator $migrator_metadata_name service '$migrator_service' is not a versioned storage owner" >&2
       return 1
     fi
 

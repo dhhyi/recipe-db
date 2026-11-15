@@ -11,6 +11,7 @@ pub enum TagCategory {
     #[graphql(name = "DIETARY_STYLE")]
     DietaryStyle,
     Course,
+    Other,
 }
 
 impl TagCategory {
@@ -19,6 +20,7 @@ impl TagCategory {
             Self::Cuisine => "cuisine",
             Self::DietaryStyle => "dietary-style",
             Self::Course => "course",
+            Self::Other => "other",
         }
     }
 
@@ -27,6 +29,7 @@ impl TagCategory {
             "cuisine" => Some(Self::Cuisine),
             "dietary-style" => Some(Self::DietaryStyle),
             "course" => Some(Self::Course),
+            "other" => Some(Self::Other),
             _ => None,
         }
     }
@@ -403,6 +406,8 @@ mod tests {
         assert_eq!(TagCategory::Cuisine.slug(), "cuisine");
         assert_eq!(TagCategory::DietaryStyle.slug(), "dietary-style");
         assert_eq!(TagCategory::Course.slug(), "course");
+        assert_eq!(TagCategory::Other.slug(), "other");
+        assert_eq!(TagCategory::from_slug("other"), Some(TagCategory::Other));
     }
 
     #[test]
