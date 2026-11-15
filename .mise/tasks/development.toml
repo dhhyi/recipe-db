@@ -1,0 +1,8 @@
+[integration-tests]
+description = "Run destructive integration tests against the development stack"
+file = ".scripts/run-integration-tests.sh"
+
+[update-docker-image-digests]
+description = "Refresh external Docker image digests from their registries"
+file = ".scripts/update-docker-image-digests.sh"
+raw_args = true

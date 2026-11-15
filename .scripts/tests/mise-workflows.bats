@@ -7,7 +7,13 @@ setup() {
   for script in create-auth-accounts create-auth-test-fixture create-oauth-secrets create-search-key; do
     cp "$BATS_TEST_DIRNAME/../$script.sh" .scripts/
   done
+  for script in merge-graphql-schemas sync-storage-version-templates; do
+    cp "$BATS_TEST_DIRNAME/../$script.sh" .scripts/
+  done
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
+  mkdir -p .mise/tasks
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/"*.toml .mise/tasks/
+  cp "$BATS_TEST_DIRNAME/../../.mise/config.toml" .mise/
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_TASK_RUN_AUTO_INSTALL=false
@@ -25,8 +31,14 @@ setup() {
 @test "metadata-derived task outputs still report malformed project metadata" {
   mkdir invalid
   printf '%s\n' '[' > invalid/.project.yaml
+  mkdir -p .generated/graphql
+  printf '%s\n' 'type Query { fixture: Boolean! }' > .generated/graphql/recipe-db.graphqls
   for task in sync-storage-version-templates merge-graphql-schemas; do
     run mise tasks info "$task" --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Error: bad file 'invalid/.project.yaml'"* ]]
+
+    run mise run --skip-deps --raw "$task"
     [ "$status" -ne 0 ]
     [[ "$output" == *"invalid/.project.yaml"* ]]
   done
@@ -114,7 +126,7 @@ EOF
   while IFS= read -r task; do
     run mise run --raw "$task"
     [ "$status" -eq 0 ]
-  done < <(yq -p toml -r '.tasks.sync.depends[] | select(test("^create-"))' mise.toml)
+  done < <(yq -p toml -r '.sync.depends[] | select(test("^create-"))' .mise/tasks/repository-sync.toml)
 
   for file in auth-accounts.json typesense-api-key google-oauth-client-secret oauth2-cookie-secret graphql-ingress-secret; do
     if [[ $file == google-oauth-client-secret || $file == oauth2-cookie-secret ]]; then

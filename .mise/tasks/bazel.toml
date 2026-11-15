@@ -1,0 +1,8 @@
+[bazel]
+description = "Run Bazel with a stable Mise and system tool PATH"
+run = "bash .scripts/bazel.sh"
+raw_args = true
+
+[generate-bazel-build]
+description = "Generate Bazel build rules from project metadata and repository files"
+file = ".scripts/generate-bazel-build.sh"

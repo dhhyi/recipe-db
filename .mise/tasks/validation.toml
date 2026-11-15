@@ -1,0 +1,36 @@
+[production-backup-recovery-k3d]
+description = "Run a complete synthetic backup and fresh-target recovery rehearsal in k3d"
+run = "bash .scripts/backup-recovery-k3d.sh"
+raw_args = true
+
+[production-k3d]
+description = "Manage guarded production releases and rehearsals"
+run = "bash .scripts/production-k3d.sh"
+raw_args = true
+
+[production-smoke]
+description = "Run protocol and persistence checks against a guarded local production rehearsal"
+run = "bash .scripts/smoke-production-k3d.sh"
+raw_args = true
+
+[production-upgrade-rehearsal-k3d]
+description = "Rehearse a production backup upgrade and complete recovery in isolated k3d clusters"
+run = "bash .scripts/production-upgrade-rehearsal-k3d.sh"
+raw_args = true
+
+[test-auth-ingress]
+description = "Verify production ingress token routing and configuration isolation with real Traefik"
+env = { TEST_AUTH_INGRESS = "true" }
+run = "bats --print-output-on-failure .scripts/tests/traefik-ingress.bats"
+
+[test-message-bus]
+description = "Validate GraphQL events, fan-out, outages and broker restart against an isolated JetStream broker"
+run = "sh .scripts/test-message-bus.sh"
+
+[test-migrations-k3d]
+description = "Verify asynchronous migration Job behavior in a disposable k3d cluster"
+run = "bash .scripts/test-migrations-k3d.sh"
+
+[test-migrator-packaging]
+description = "Build and externally verify the synthetic migrator image and release packaging"
+run = "sh .scripts/test-migrator-packaging.sh"

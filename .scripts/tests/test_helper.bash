@@ -9,6 +9,8 @@ setup_fixture() {
 
 use_mise_tools() {
   ln -s "$BATS_TEST_DIRNAME/../../mise.toml" mise.toml
+  mkdir -p .mise
+  cp "$BATS_TEST_DIRNAME/../../.mise/config.toml" .mise/
 }
 
 setup_mock_bin() {

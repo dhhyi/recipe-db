@@ -1,0 +1,119 @@
+[create-auth-accounts]
+description = "Create the ignored development auth accounts file without replacing an existing file"
+file = ".scripts/create-auth-accounts.sh"
+
+[create-auth-test-fixture]
+description = "Generate ephemeral isolated GraphQL token principals for E2E auth tests"
+file = ".scripts/create-auth-test-fixture.sh"
+depends = ["create-auth-accounts"]
+
+[create-intranet]
+description = "Create the shared Docker network if it does not exist"
+run = "docker network inspect intranet >/dev/null 2>&1 || docker network create intranet"
+
+[create-oauth-secrets]
+description = "Create private development cookie and ingress secrets and validate configured Google credentials"
+file = ".scripts/create-oauth-secrets.sh"
+
+[create-search-key]
+description = "Create the ignored development Typesense key without replacing an existing key"
+file = ".scripts/create-search-key.sh"
+
+[dev-down]
+description = "Stop the development stack and delete its volumes and orphan containers; accepts extra Compose down arguments"
+run = "docker compose down --volumes --remove-orphans"
+raw_args = true
+
+[dev-up]
+description = "Start the development stack detached and wait for readiness; accepts extra Compose up arguments"
+depends = ["generate-docker-compose"]
+run = "docker compose up -d --wait"
+raw_args = true
+
+[export-graphql-schema]
+description = "Build the GraphQL application image and cache its canonical SDL"
+depends = ["refresh-graphql-inputs"]
+file = ".scripts/export-graphql-schema.sh"
+sources = [
+  "mise.toml",
+  ".scripts/export-graphql-schema.sh",
+  ".scripts/refresh-render-inputs.sh",
+  "docker-compose.yml",
+  "graphql/.project.yaml",
+  "graphql/Dockerfile",
+  "graphql/.dockerignore",
+  "graphql/Cargo.toml",
+  "graphql/Cargo.lock",
+  "graphql/src/**",
+  ".generated/graphql-inputs.json",
+]
+outputs = [
+  ".generated/graphql/recipe-db.graphqls",
+  ".generated/graphql-source-fingerprint"
+]
+
+[generate-docker-compose]
+description = "Generate the development Compose configuration"
+depends = [
+  "sync-files",
+  "create-intranet",
+  "create-search-key",
+  "create-auth-test-fixture",
+  "create-oauth-secrets",
+  "refresh-render-inputs",
+]
+sources = [
+  "mise.toml",
+  ".scripts/generate-docker-compose.sh",
+  ".scripts/lib/project-metadata.sh",
+  ".scripts/refresh-render-inputs.sh",
+  "package.json",
+  "*/.project.yaml",
+  ".scripts/templates/docker-compose-template.yml",
+  ".scripts/templates/oauth2-proxy-alpha-template.yml",
+  ".scripts/templates/service-template.lib.yml",
+  ".scripts/templates/fixtures-service-template.lib.yml",
+  ".scripts/templates/traefik-service-template.lib.yml",
+  ".scripts/templates/nats-service-template.lib.yml",
+  ".scripts/templates/browse-maintenance-template.lib.yml",
+  ".generated/compose-inputs.json",
+]
+outputs = [
+  "docker-compose.yml",
+  "oauth2-proxy-alpha.yml",
+  ".generated/compose-source-fingerprint"
+]
+file = ".scripts/generate-docker-compose.sh"
+
+[merge-graphql-schemas]
+description = "Distribute the cached GraphQL SDL to metadata-declared consumers"
+depends = ["export-graphql-schema"]
+file = ".scripts/merge-graphql-schemas.sh"
+sources = [".generated/graphql/recipe-db.graphqls", "*/.project.yaml"]
+outputs = [
+  '''
+{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.graphqlSchema != null and .graphqlSchema != \"\") | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .graphqlSchema + \"/recipe-db.graphqls\"' \"$@\"; fi") | split(pat="\n") -%}
+{%- if paths | length > 1 -%}
+  {{ "{" ~ paths | join(sep=",") ~ "}" }}
+{%- else -%}
+  {{ paths | first }}
+{%- endif -%}
+'''
+]
+
+[refresh-graphql-inputs]
+description = "Refresh effective GraphQL build inputs after Compose generation"
+depends = ["generate-docker-compose"]
+run = "bash .scripts/refresh-render-inputs.sh graphql"
+
+[refresh-render-inputs]
+description = "Refresh effective Compose inputs and source fingerprint"
+run = "bash .scripts/refresh-render-inputs.sh"
+
+[seed-demodata]
+description = "Generate demo data against the development stack"
+file = ".scripts/seed-demodata.sh"
+
+[start-test-fixtures]
+description = "Start the shared integration-test fixture service"
+run = "docker compose --profile test up -d fixtures"

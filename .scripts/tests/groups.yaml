@@ -14,6 +14,9 @@ compose:
       - graphql/.project.yaml
       - search/.project.yaml
       - package.json
+      - .mise/config.toml
+      - .mise/tasks/compose.toml
+      - .mise/tasks/repository-sync.toml
     .scripts/tests/traefik-ingress.bats:
       - .scripts/traefik-ingress-entrypoint.sh
       - .scripts/templates/traefik-template.yml
@@ -196,7 +199,8 @@ tasks:
       - .bazelversion
     .scripts/tests/mise-tasks.bats:
       - ":(glob).scripts/*.sh"
-      - .mise/tasks/devcontainers-sync.toml
+      - .mise/tasks/**
+      - .mise/config.toml
       - .scripts/lib/project-metadata.sh
       - .scripts/docker-base-images.awk
       - .scripts/external-image-references.awk
@@ -215,12 +219,15 @@ tasks:
       - .scripts/seed-demodata.sh
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"
+      - .mise/tasks/compose.toml
+      - .mise/config.toml
       - mise.toml
     .scripts/tests/update-docker-image-digests.bats:
       - .scripts/update-docker-image-digests.sh
       - .scripts/docker-base-images.awk
       - .scripts/update-image-references.awk
       - .scripts/templates/**
+      - .mise/tasks/development.toml
       - deploy/local.yaml
       - deploy/pi.yaml
 workflows:
@@ -246,6 +253,10 @@ workflows:
     .scripts/tests/mise-workflows.bats:
       - .github/workflows/publish.yaml
       - mise.toml
+      - .mise/config.toml
+      - .mise/tasks/setup.toml
+      - .mise/tasks/repository-sync.toml
+      - .mise/tasks/compose.toml
       - .scripts/create-auth-accounts.sh
       - .scripts/create-auth-test-fixture.sh
       - .scripts/create-oauth-secrets.sh
@@ -263,6 +274,10 @@ precommit:
       - .scripts/tests/groups.yaml
       - .scripts/tests/mocks/precommit-*
       - .scripts/templates/**
+      - .mise/tasks/bazel.toml
+      - .mise/tasks/project-actions.toml
+      - .mise/tasks/compose.toml
+      - .mise/config.toml
       - mise.toml
       - ":(glob)*/.project.yaml"
 freshness:
@@ -275,6 +290,9 @@ freshness:
       - .scripts/lib/project-metadata.sh
       - .scripts/refresh-render-inputs.sh
       - .scripts/generate-docker-compose.sh
+      - .mise/tasks/compose.toml
+      - .mise/tasks/repository-sync.toml
+      - .mise/config.toml
       - mise.toml
       - package.json
       - ":(glob)*/.project.yaml"
@@ -300,6 +318,8 @@ formatting:
       - .scripts/format-files.sh
       - .scripts/generate-bazel-build.sh
       - .scripts/tests/groups.yaml
+      - .mise/tasks/project-actions.toml
+      - .mise/config.toml
       - mise.toml
       - ":(glob)*/.project.yaml"
 tooling:
@@ -328,6 +348,9 @@ tooling:
       - deploy/local.yaml
       - deploy/pi.yaml
       - mise.toml
+      - .mise/config.toml
+      - .mise/tasks/project-actions.toml
+      - .mise/tasks/script-tests.toml
     .scripts/tests/merge-graphql-schemas.bats:
       - .scripts/merge-graphql-schemas.sh
       - .scripts/lib/project-metadata.sh
@@ -343,6 +366,8 @@ tooling:
     .scripts/tests/sync-storage-version-templates.bats:
       - .scripts/sync-storage-version-templates.sh
       - .scripts/tests/groups.yaml
+      - .mise/tasks/repository-sync.toml
+      - .mise/config.toml
       - mise.toml
       - ":(glob)*/.project.yaml"
     .scripts/tests/sync-tailwind.bats:

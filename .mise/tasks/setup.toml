@@ -1,0 +1,12 @@
+[install-deps]
+description = "Install repository tooling dependencies from the lockfile"
+run = "pnpm install --frozen-lockfile"
+
+[install-precommit]
+description = "Install the repository precommit hook"
+file = ".scripts/install-precommit.sh"
+
+[setup]
+description = "Install dependencies and hooks, then synchronize repository configuration"
+depends = ["install-deps", "install-precommit"]
+run = [{ task = "sync" }]
