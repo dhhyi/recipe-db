@@ -81,6 +81,11 @@ assert args[-2] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
 command = shlex.split(args[-1])
 assert command[:4] == ["sudo", "-n", "python3", "-c"]
 assert len(command) in (6, 7)
+if os.environ.get("REQUIRE_TERMINAL") == "1":
+    with open("/dev/tty", "rb+", buffering=0) as terminal:
+        assert os.tcgetpgrp(terminal.fileno()) == os.getpgrp()
+        terminal.write(b"Test SSH passphrase: ")
+        assert terminal.readline().strip() == b"fixture-passphrase"
 root = Path(os.environ["REMOTE_ROOT"])
 with open(os.environ["MOCK_LOG"], "a") as log:
     log.write(json.dumps(command[5:]) + "\n")
@@ -171,10 +176,64 @@ PY
 @test "streams the verified baseline privately with no Pi staging or credential transfer" {
   # Fish expands its own argv, not the surrounding Bash shell.
   # shellcheck disable=SC2016
-  run --separate-stderr fish -c 'mise run --raw retrieve-verified-backup "$argv[1]"' -- "$DESTINATION"
+  run --separate-stderr fish -c 'mise run retrieve-verified-backup "$argv[1]"' -- "$DESTINATION"
   assert_private_success
   [ "$(wc -l < "$MOCK_LOG")" -eq 4 ]
   [[ $output != *private-authorization* ]]
+}
+
+@test "documented task keeps SSH passphrase prompts in the terminal foreground" {
+  export REQUIRE_TERMINAL=1
+  run python3 - << 'PY'
+import errno
+import os
+import pty
+import select
+import signal
+import time
+
+pid, terminal = pty.fork()
+if pid == 0:
+    os.execlp("fish", "fish", "-c",
+              'mise run --output prefix retrieve-verified-backup "$DESTINATION"')
+content = bytearray()
+pending = bytearray()
+finished = False
+try:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if not select.select([terminal], [], [], 0.1)[0]:
+            continue
+        try:
+            block = os.read(terminal, 65536)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+        if not block:
+            break
+        content.extend(block)
+        pending.extend(block)
+        prompt = b"Test SSH passphrase: "
+        while prompt in pending:
+            _, _, pending = pending.partition(prompt)
+            os.write(terminal, b"fixture-passphrase\n")
+    else:
+        raise AssertionError("task did not finish; terminal output: " + repr(content))
+    _, status = os.waitpid(pid, 0)
+    finished = True
+    assert os.waitstatus_to_exitcode(status) == 0, repr(content)
+    assert content.count(b"Test SSH passphrase: ") == 4, repr(content)
+    for line in content.decode().splitlines():
+        if line.startswith('{"archive":'):
+            print(line)
+finally:
+    if not finished:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+    os.close(terminal)
+PY
+  assert_private_success
 }
 
 @test "verified-unchanged retrieves the baseline rather than the newer local capture" {
