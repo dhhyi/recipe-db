@@ -59,12 +59,15 @@ setup() {
   [[ "$script" == *" //:all"* ]]
 }
 
-@test "CI runs migrator validations through cacheable checks" {
+@test "CI runs cacheable validations and explicitly tests each migrator" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   validation=$(grep -n '^      - name: Bazel precommit checks, unit tests, and cacheable validations$' "$workflow" | cut -d: -f1)
+  migrator_tests=$(grep -n '^      - name: test migrators$' "$workflow" | cut -d: -f1)
   snapshot=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
-  [ "$validation" -lt "$snapshot" ]
-  [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | test("mise run test-(message-bus|migrator-packaging)|run-migrator-tests.sh"))] | length' "$workflow")" -eq 0 ]
+  [ "$validation" -lt "$migrator_tests" ]
+  [ "$migrator_tests" -lt "$snapshot" ]
+  [ "$(yq '[.jobs.quality-checks.steps[] | select(.name == "test migrators" and .run == "bash .scripts/run-migrator-tests.sh")] | length' "$workflow")" -eq 1 ]
+  [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | test("mise run test-(message-bus|migrator-packaging)"))] | length' "$workflow")" -eq 0 ]
   run ! grep -q '^\[test-tags-migrator\]' "$BATS_TEST_DIRNAME/../../.mise/tasks/validation.toml"
   [ "$(yq -r '.workflows.suite_inputs[".scripts/tests/mise-workflows.bats"][] | select(. == "migrators/**")' "$BATS_TEST_DIRNAME/groups.yaml")" = "migrators/**" ]
 }
