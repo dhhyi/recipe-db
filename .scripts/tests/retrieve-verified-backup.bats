@@ -68,30 +68,68 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
+import socket
 import subprocess
 import sys
 
 args = sys.argv[1:]
 home = Path.home() / ".config/recipe-db/ssh"
-assert args[:-2] == [
+options = [
     "-T", "-i", str(home / "recipe-db-pi"),
     "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
     "-o", "UserKnownHostsFile=" + str(home / "known_hosts"),
     "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=3",
 ]
-assert args[-2] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
+assert args[:len(options)] == options
+args = args[len(options):]
+root = Path(os.environ["REMOTE_ROOT"])
+if args[:2] == ["-M", "-N"]:
+    assert args[:3] == ["-M", "-N", "-S"]
+    assert args[4:6] == ["-o", "ControlPersist=no"]
+    assert args[6] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
+    control = Path(args[3])
+    assert control.parent.stat().st_mode & 0o777 == 0o700
+    (root / "connection.json").write_text(json.dumps({
+        "pid": os.getpid(), "control": str(control), "closed": False,
+    }))
+    if os.environ.get("REQUIRE_TERMINAL") == "1":
+        with open("/dev/tty", "rb+", buffering=0) as terminal:
+            assert os.tcgetpgrp(terminal.fileno()) == os.getpgrp()
+            terminal.write(b"Test SSH passphrase: ")
+            assert terminal.readline().strip() == b"fixture-passphrase"
+    connection = socket.socket(socket.AF_UNIX)
+    connection.bind(str(control))
+    connection.listen()
+
+    def close(signum, frame):
+        connection.close()
+        control.unlink()
+        (root / "connection.json").write_text(json.dumps({
+            "pid": os.getpid(), "control": str(control), "closed": True,
+        }))
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, close)
+    while True:
+        signal.pause()
+assert args[0] == "-S"
+assert args[2:8] == [
+    "-o", "ControlMaster=no", "-o", "BatchMode=yes", "-o", "ProxyCommand=false",
+]
+connection = json.loads((root / "connection.json").read_text())
+assert args[1] == connection["control"] and Path(args[1]).is_socket()
+assert not connection["closed"]
+args = args[8:]
+assert args[0] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
+assert len(args) == 2
 command = shlex.split(args[-1])
 if command[-1:] == ["2>&1"]:
     command.pop()
     assert command.pop(0) == "LC_ALL=C"
     assert command == ["sudo", "-n", "-k", "python3", "-c", "pass"]
 password_auth = os.environ.get("REQUIRE_SUDO_PASSWORD") == "1"
-if os.environ.get("REQUIRE_TERMINAL") == "1":
-    with open("/dev/tty", "rb+", buffering=0) as terminal:
-        assert os.tcgetpgrp(terminal.fileno()) == os.getpgrp()
-        terminal.write(b"Test SSH passphrase: ")
-        assert terminal.readline().strip() == b"fixture-passphrase"
 if command == ["sudo", "-n", "-k", "python3", "-c", "pass"]:
     if os.environ.get("DENY_SUDO") == "1":
         print("sudo: piadmin is not allowed to execute python3 as root")
@@ -112,7 +150,6 @@ else:
     assert command[:5] == ["sudo", "-n", "-k", "python3", "-c"]
     code_index = 5
 assert len(command) in (code_index + 2, code_index + 3)
-root = Path(os.environ["REMOTE_ROOT"])
 with open(os.environ["MOCK_LOG"], "a") as log:
     log.write(json.dumps(command[code_index + 1:]) + "\n")
 code = command[code_index].replace("/usr/local/sbin/recipe-db-backup-upload", os.environ["UPLOADER"])
@@ -198,6 +235,20 @@ for field in ("archive", "manifest"):
 assert not (root / "must-not-be-created").exists()
 assert (root / "rclone.conf").read_text() == "private-authorization-must-not-leak"
 PY
+  assert_connection_closed
+}
+
+assert_connection_closed() {
+  python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["REMOTE_ROOT"])
+connection = json.loads((root / "connection.json").read_text())
+assert connection["closed"]
+assert not Path(connection["control"]).parent.exists()
+PY
 }
 
 @test "streams the verified baseline privately with no Pi staging or credential transfer" {
@@ -262,7 +313,7 @@ try:
         print("authentication rejected")
         raise SystemExit(0)
     assert os.waitstatus_to_exitcode(status) == 0, repr(content)
-    assert content.count(b"Test SSH passphrase: ") == 5, repr(content)
+    assert content.count(b"Test SSH passphrase: ") == 1, repr(content)
     text = content.decode()
     start = text.find('{"archive":')
     assert start >= 0, repr(content)
@@ -374,6 +425,7 @@ PY
     [ "$status" -ne 0 ]
     [ ! -e "$DESTINATION" ]
     [[ $output != *private-authorization* ]]
+    assert_connection_closed
   done
 }
 

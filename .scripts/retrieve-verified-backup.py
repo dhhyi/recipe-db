@@ -13,6 +13,8 @@ import runpy
 import shlex
 import subprocess
 import sys
+import tempfile
+import time
 import warnings
 
 
@@ -75,15 +77,23 @@ def parse_json(content):
     return json.loads(content, object_pairs_hook=unique)
 
 
-def ssh_command(args, command):
+def ssh_options():
     home = Path.home() / ".config/recipe-db/ssh"
     return [
         "ssh", "-T", "-i", str(home / "recipe-db-pi"),
         "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
         "-o", f"UserKnownHostsFile={home / 'known_hosts'}",
         "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=3", args.pi,
-        shlex.join(command),
+        "-o", "ServerAliveCountMax=3",
+    ]
+
+
+def ssh_command(args, command):
+    return [
+        *ssh_options(), "-S", args.control_path,
+        "-o", "ControlMaster=no", "-o", "BatchMode=yes",
+        # A lost master must fail, not create another authenticated connection.
+        "-o", "ProxyCommand=false", args.pi, shlex.join(command),
     ]
 
 
@@ -262,11 +272,30 @@ def main():
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi):
         parser.error("--pi must be an SSH user@hostname")
     os.umask(0o077)
-    authenticate(args)
-    try:
-        retrieve(args)
-    finally:
-        args.sudo_password = None
+    with tempfile.TemporaryDirectory(prefix="recipe-db-ssh-", dir="/tmp") as directory:
+        args.control_path = str(Path(directory) / "connection")
+        with subprocess.Popen(
+            [*ssh_options(), "-M", "-N", "-S", args.control_path,
+             "-o", "ControlPersist=no", args.pi],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        ) as connection:
+            try:
+                while not Path(args.control_path).is_socket():
+                    if connection.poll() is not None:
+                        raise AuthenticationError("SSH connection setup failed")
+                    time.sleep(0.1)
+                authenticate(args)
+                retrieve(args)
+            finally:
+                args.sudo_password = None
+                if connection.poll() is None:
+                    connection.terminate()
+                    try:
+                        connection.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        connection.kill()
+                        connection.wait()
+                        raise AuthenticationError("SSH connection cleanup timed out")
 
 
 if __name__ == "__main__":
