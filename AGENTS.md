@@ -84,6 +84,10 @@ For a single topic group, use `mise run test-scripts <group>` or `mise run --raw
 
 Project generator, format, and check commands invoked by Bazel must still run in their respective devcontainers.
 
+## Standalone migrator tests
+
+Keep `mise run test-migrator-packaging` focused on the general migrator manifest, image, and release-packaging contract using its synthetic fixture. Put behavior and image tests for a particular migrator in a separate migrator-specific task and script, and run that task separately in CI.
+
 ## Committing during autonomous implementation
 
 Unless the user asks to leave changes uncommitted, commit each self-contained implementation step before moving to the next instead of waiting until the whole task is done. Sessions can time out and lose uncommitted work.

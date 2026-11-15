@@ -9,17 +9,12 @@ test_id="recipe-db-migrator-packaging-$$"
 image="$test_id"
 work=$(mktemp -d "${TMPDIR:-/tmp}/$test_id.XXXXXX")
 image_built=false
-tags_image="$test_id-tags"
-tags_image_built=false
 
 cleanup() {
   status=$?
   trap - 0
   if [ "$image_built" = true ]; then
     docker image rm "$image" > /dev/null 2>&1 || status=1
-  fi
-  if [ "$tags_image_built" = true ]; then
-    docker image rm "$tags_image" > /dev/null 2>&1 || status=1
   fi
   if [ "$status" -eq 0 ]; then
     rm -rf "$work" || status=1
@@ -36,7 +31,7 @@ if docker image inspect "$image" > /dev/null 2>&1; then
   printf 'Refusing to reuse existing test image: %s\n' "$image" >&2
   exit 1
 fi
-for container in "$test_id-success" "$test_id-rejected" "$test_id-tags"; do
+for container in "$test_id-success" "$test_id-rejected"; do
   if docker container inspect "$container" > /dev/null 2>&1; then
     printf 'Refusing to reuse existing test container: %s\n' "$container" >&2
     exit 1
@@ -77,19 +72,6 @@ grep -q 'invalid version-1 recipe' "$work/rejected-output.log" \
   }
 cmp "$fixture_root/rejected/recipe.json" "$rejected_data/recipe.json"
 cmp "$fixture_root/input/storage-version" "$rejected_data/storage-version"
-
-tags_migrator="$project_root/migrators/tags-1-to-2"
-tags_data="$work/tags-data"
-mkdir "$tags_data"
-python3 "$tags_migrator/test_migration.py" --create-fixture "$tags_data"
-tags_image_built=true
-docker build --tag "$tags_image" "$tags_migrator"
-docker run --rm --name "$test_id-tags" \
-  --user "$(id -u):$(id -g)" \
-  --network none \
-  --mount "type=bind,src=$tags_data,dst=/data" "$tags_image"
-python3 "$tags_migrator/test_migration.py" --verify "$tags_data"
-python3 -m unittest discover -s "$tags_migrator" -p 'test_*.py'
 
 test_release_packaging() {
   test_revision=$(git -C "$project_root" rev-parse HEAD)

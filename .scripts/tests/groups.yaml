@@ -252,6 +252,7 @@ workflows:
       - .github/workflows/bazel-cache-cleanup.yaml
     .scripts/tests/mise-workflows.bats:
       - .github/workflows/publish.yaml
+      - .mise/tasks/validation.toml
       - mise.toml
       - .mise/config.toml
       - .mise/tasks/setup.toml
@@ -261,6 +262,7 @@ workflows:
       - .scripts/create-auth-test-fixture.sh
       - .scripts/create-oauth-secrets.sh
       - .scripts/create-search-key.sh
+      - .scripts/test-tags-migrator.sh
 precommit:
   tests:
     - .scripts/tests/precommit.bats
