@@ -114,7 +114,7 @@ jobs:
             --execution_log_json_file="$RUNNER_TEMP/bazel-format-execution.json" \
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
 
-      - name: Bazel precommit checks and unit tests
+      - name: Bazel precommit checks, unit tests, and cacheable validations
         env:
           BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
         run: |
@@ -172,12 +172,6 @@ jobs:
             ${{ runner.temp }}/bazel-cache/manifest.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}
-
-      - name: validate message bus integration and recovery
-        run: mise run test-message-bus
-
-      - name: test migrator packaging
-        run: mise run test-migrator-packaging
 
       - name: build and validate production AMD64 images for pull requests
         if: github.event_name == 'pull_request'

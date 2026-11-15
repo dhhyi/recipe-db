@@ -225,8 +225,10 @@ tasks:
     .scripts/tests/update-docker-image-digests.bats:
       - .scripts/update-docker-image-digests.sh
       - .scripts/docker-base-images.awk
+      - .scripts/external-image-references.awk
       - .scripts/update-image-references.awk
       - .scripts/templates/**
+      - ":(glob).scripts/tests/fixtures/**/Dockerfile"
       - .mise/tasks/development.toml
       - deploy/local.yaml
       - deploy/pi.yaml

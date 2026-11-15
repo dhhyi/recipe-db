@@ -10,7 +10,7 @@ This guide describes the Bazel disk-cache artifact lifecycle for maintainers of 
 - [Rebuild diagnostics](#rebuild-diagnostics)
 - [Trust and evidence boundary](#trust-and-evidence-boundary)
 
-The Publish `quality-checks` job uses completed Bazel disk-cache snapshots as workflow artifacts. This replaces only the Bazel `actions/cache` step. Mise tool caching, the quality gates, WIP handling, integration/image jobs, and other workflow artifacts are unchanged.
+The Publish `quality-checks` job uses completed Bazel disk-cache snapshots as workflow artifacts. This replaces only the Bazel `actions/cache` step. Mise tool caching, the quality gates, WIP handling, integration/image jobs, and other workflow artifacts are unchanged. The `//:all` validation runs before snapshot preparation and upload, so successful message-bus and migrator-packaging actions can be reused by later builds without starting their test containers.
 
 ## Contract
 
@@ -63,6 +63,14 @@ The shared `mise run --raw bazel build ...` wrapper enables `--subcommands`, `--
 Each diagnostics-enabled invocation retains a unique timestamped explanation log under `BAZEL_DIAGNOSTICS_DIR`. CI uses the runner's temporary diagnostics directory and uploads its logs as `bazel-rebuild-explanations` with seven-day retention even if a build fails. Non-build commands and invocations with Bazel startup options before `build` pass through unchanged.
 
 Explanations can identify changed inputs or action commands when the local action cache has prior state. CI restores only the disk cache, not the output base/local action cache, so a fresh runner may report missing prior action state rather than a specific changed file. Combine the explanations with the existing execution-log cache-hit counts and snapshot restore diagnostics; a missing local action record alone does not prove a disk-cache miss.
+
+## Cacheable integration validations
+
+The generated Bazel targets `//:message_bus_validation` and `//:migrator_packaging_validation` wrap the existing Mise validation commands. `//:all` runs both in the Publish quality-checks job, before cache snapshot preparation. Execution-log reporting distinguishes an executed action from a successful disk-cache hit; on a hit, Bazel reuses the result without starting the validation's test containers. The existing Mise commands remain available for direct use.
+
+The message-bus target declares the GraphQL compilation sources, tests, manifests and lockfile, project/devcontainer configuration and task mapping, runner helpers, NATS configuration, and the pinned NATS image reference as inputs. The migrator-packaging target declares its release-metadata scripts, manifest schema, fixtures, and shared migration-Job template/helper inputs. Generated source discovery includes additions and removals, so those alter the relevant target's inputs; the targets do not use the Git revision or unrelated repository files as cache keys. Their dependency sets are independent.
+
+The workflow execution log distinguishes a cache hit from an executed action. A hit reuses the successful validation result without starting its test containers; a miss runs the validation, and either test or cleanup failures remain build failures.
 
 ## Trust and evidence boundary
 
