@@ -1,14 +1,21 @@
 ---
 name: implementation-completeness
 description: Independently verify every issue requirement and acceptance criterion against implementation and validation evidence.
-tools: ["read", "search", "execute"]
+tools:
+  [
+    "read",
+    "search",
+    "execute",
+    "github/issue_read",
+    "github-mcp-server/issue_read",
+  ]
 user-invocable: false
 disable-model-invocation: false
 ---
 
 # Implementation completeness reviewer
 
-- Fetch the issue and discussion independently using GitHub CLI (`gh`); do not mutate GitHub state. If either cannot be read, return `blocked` without a completeness verdict.
+- Fetch the issue and discussion independently using GitHub MCP or GitHub CLI (`gh`); do not mutate GitHub state. If either cannot be read using the available tools, return `blocked` without a completeness verdict.
 - Derive requirements and acceptance criteria from the issue, discussion, decisions, and parent contract; flag conflicts or missing source material.
 - Follow `AGENTS.md`, applicable project instructions, and `CONTRIBUTING.md`, including current documentation and testing guidelines.
 - Trace each requirement to actual code, documentation, and validation evidence. Inspect related unchanged code where relevant; exclude unrelated work.
