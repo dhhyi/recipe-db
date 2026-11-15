@@ -597,13 +597,262 @@ class CacheArtifactTests(unittest.TestCase):
             restored = CACHE.restore_scope(
                 SimpleNamespace(run_number=10),
                 "https://api.github.com/repos/owner/repo", "token", "pr", 17,
-                {}, self.root / "cache",
+                {}, self.root / "cache", head_branch="feature",
             )
 
         self.assertFalse(restored)
         self.assertEqual(
             requests, [("workflow_runs", CACHE.WORKFLOW_RUNS_PAGE_SIZE)]
         )
+
+    def test_discovery_stops_on_recent_snapshot_and_filters_workflow_and_branch(self):
+        requests = []
+        runs = [
+            {"id": number, "run_number": number, "head_sha": "head",
+             "event": "pull_request", "conclusion": "failure"}
+            for number in range(40, 0, -1)
+        ]
+
+        def request(url, token):
+            requests.append(url)
+            self.assertNotIn("&page=2", url)
+            return {"workflow_runs": runs[:20]}
+
+        args = SimpleNamespace(run_number=100, run_id="100", run_attempt="1",
+                               repository="owner/repo")
+        artifact = {"name": "bazel-cache-v2-pr-17-r40-a1"}
+        output = io.StringIO()
+        with patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", return_value=[artifact]) as listing, \
+                patch.object(CACHE, "download_candidate", return_value=None), \
+                redirect_stdout(output):
+            self.assertTrue(CACHE.restore_scope(
+                args, "https://api.github.com/repos/owner/repo", "token", "pr", 17,
+                {}, self.root / "cache", head_branch="feature/one",
+            ))
+        self.assertEqual(len(requests), 1)
+        self.assertIn("/actions/workflows/.github%2Fworkflows%2Fpublish.yaml/runs?", requests[0])
+        self.assertIn("event=pull_request&branch=feature%2Fone", requests[0])
+        self.assertEqual(listing.call_count, 1)
+        self.assertIn("inspected-runs=20 attempted-candidates=1 reason=restored snapshot",
+                      output.getvalue())
+
+    def test_pr_run_limit_skips_skipped_runs_and_falls_back_to_main(self):
+        event_path = self.root / "event.json"
+        event_path.write_text(json.dumps({
+            "pull_request": {"base": {"sha": "base"}, "head": {"ref": "feature"}}
+        }))
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="pull_request",
+            pr_number="17", run_id="999", run_number=999, run_attempt="1", commit="head",
+            cache=str(self.root / "cache"),
+        )
+        requests = []
+        pr_runs = [
+            {"id": number, "run_number": number, "head_sha": "head", "event": "pull_request",
+             "conclusion": "skipped" if number % 2 else "success"}
+            for number in range(120, 0, -1)
+        ]
+        main_run = {"id": 200, "run_number": 200, "head_sha": "base",
+                    "event": "push", "head_branch": "main", "conclusion": "cancelled"}
+
+        def request(url, token):
+            requests.append(url)
+            if "event=pull_request" in url:
+                page = int(url.rsplit("page=", 1)[1])
+                return {"workflow_runs": pr_runs[(page - 1) * 20:page * 20]}
+            return {"workflow_runs": [main_run]}
+
+        def artifacts(base, token, run):
+            if run["id"] == 200:
+                return [{"name": "bazel-cache-v2-main-r200-a1"}]
+            self.assertNotEqual(run["conclusion"], "skipped")
+            return []
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={"base": 0}), \
+                patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", side_effect=artifacts) as listing, \
+                patch.object(CACHE, "download_candidate", return_value=None), \
+                redirect_stdout(output):
+            CACHE.discover_and_restore(args)
+        self.assertEqual(len(requests), 6)
+        self.assertTrue(all("/actions/workflows/.github%2Fworkflows%2Fpublish.yaml/runs?" in url
+                            for url in requests))
+        self.assertIn("event=push&branch=main", requests[-1])
+        self.assertEqual(listing.call_count, 51)
+        self.assertIn("source=pr inspected-runs=100 attempted-candidates=0 reason=run limit",
+                      output.getvalue())
+        self.assertIn("source=main inspected-runs=1 attempted-candidates=1 reason=restored snapshot",
+                      output.getvalue())
+
+    def test_pr_candidate_limit_counts_rejections_not_artifactless_runs(self):
+        runs = [
+            {"id": number, "run_number": number, "head_sha": "head", "event": "pull_request"}
+            for number in range(80, 0, -1)
+        ]
+        requests = []
+
+        def request(url, token):
+            requests.append(url)
+            page = int(url.rsplit("page=", 1)[1])
+            return {"workflow_runs": runs[(page - 1) * 20:page * 20]}
+
+        def artifacts(base, token, run):
+            if run["id"] > 70:
+                return []
+            return [{"name": f"bazel-cache-v2-pr-17-r{run['id']}-a1"}]
+
+        args = SimpleNamespace(run_number=999, run_id="999", run_attempt="1",
+                               repository="owner/repo")
+        output = io.StringIO()
+        with patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", side_effect=artifacts) as listing, \
+                patch.object(CACHE, "download_candidate", side_effect=CACHE.Invalid("bad")) as download, \
+                redirect_stdout(output):
+            self.assertFalse(CACHE.restore_scope(
+                args, "https://api.github.com/repos/owner/repo", "token", "pr", 17,
+                {}, self.root / "cache", head_branch="feature",
+            ))
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(listing.call_count, 30)
+        self.assertEqual(download.call_count, 20)
+        self.assertIn("inspected-runs=40 attempted-candidates=20 reason=candidate limit",
+                      output.getvalue())
+
+    def test_main_window_is_independent_and_stops_before_older_history(self):
+        requests = []
+        runs = [
+            {"id": number, "run_number": number, "head_sha": f"sha-{number}",
+             "event": "push", "head_branch": "main"}
+            for number in range(40, 0, -1)
+        ]
+
+        def request(url, token):
+            requests.append(url)
+            self.assertNotIn("&page=2", url)
+            return {"workflow_runs": runs[:20]}
+
+        args = SimpleNamespace(run_number=999, run_id="999", run_attempt="1",
+                               repository="owner/repo")
+        output = io.StringIO()
+        with patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", return_value=[]) as listing, \
+                redirect_stdout(output):
+            self.assertFalse(CACHE.restore_scope(
+                args, "https://api.github.com/repos/owner/repo", "token", "main", None,
+                {run["head_sha"]: index for index, run in enumerate(runs)},
+                self.root / "cache",
+            ))
+        self.assertEqual(len(requests), 1)
+        self.assertIn("event=push&branch=main", requests[0])
+        self.assertEqual(listing.call_count, 20)
+        self.assertFalse((self.root / "cache").exists())
+        self.assertIn("inspected-runs=20 attempted-candidates=0 reason=run limit", output.getvalue())
+
+    def test_discovery_reports_exhaustion_and_api_failure(self):
+        args = SimpleNamespace(run_number=999, run_id="999", run_attempt="1",
+                               repository="owner/repo")
+        for result, reason in (({"workflow_runs": []}, "exhausted history"),
+                               (CACHE.ApiFailure("denied"), "API failure")):
+            output = io.StringIO()
+            with self.subTest(reason=reason), \
+                    patch.object(CACHE, "request_json", side_effect=[result]), \
+                    redirect_stdout(output), redirect_stderr(io.StringIO()):
+                self.assertFalse(CACHE.restore_scope(
+                    args, "https://api.github.com/repos/owner/repo", "token", "main", None,
+                    {}, self.root / "cache",
+                ))
+            self.assertIn(f"inspected-runs=0 attempted-candidates=0 reason={reason}",
+                          output.getvalue())
+
+    def test_candidate_limit_independently_falls_back_to_main(self):
+        event_path = self.root / "event.json"
+        event_path.write_text(json.dumps({
+            "pull_request": {"base": {"sha": "base"}, "head": {"ref": "feature"}}
+        }))
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="pull_request",
+            pr_number="17", run_id="999", run_number=999, run_attempt="1", commit="head",
+            cache=str(self.root / "cache"),
+        )
+        pr_run = {"id": 1, "run_number": 1, "head_sha": "head", "event": "pull_request"}
+        main_run = {"id": 2, "run_number": 2, "head_sha": "base",
+                    "event": "push", "head_branch": "main"}
+
+        def request(url, token):
+            return {"workflow_runs": [pr_run] if "event=pull_request" in url else [main_run]}
+
+        def artifacts(base, token, run):
+            if run["id"] == 1:
+                return [{"name": f"bazel-cache-v2-pr-17-r1-a{attempt}"}
+                        for attempt in range(25, 0, -1)]
+            return [{"name": "bazel-cache-v2-main-r2-a1"}]
+
+        def download(base, token, artifact, destination, repository, run, scope, pr_number):
+            if scope == "pr":
+                raise CACHE.Invalid("bad snapshot")
+            return None
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={"base": 0}), \
+                patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", side_effect=artifacts), \
+                patch.object(CACHE, "download_candidate", side_effect=download) as attempts, \
+                redirect_stdout(output):
+            CACHE.discover_and_restore(args)
+        self.assertEqual(attempts.call_count, 21)
+        self.assertIn("source=pr inspected-runs=1 attempted-candidates=20 reason=candidate limit",
+                      output.getvalue())
+        self.assertIn("source=main inspected-runs=1 attempted-candidates=1 reason=restored snapshot",
+                      output.getvalue())
+
+    def test_squash_discovery_filters_both_sources_and_requires_final_head(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        final_head = "b" * 40
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="999", run_number=999, run_attempt="1", commit=squash_sha,
+            cache=str(self.root / "cache"),
+        )
+        pull = {"number": 17, "head": {"sha": final_head, "ref": "feature/merged"}}
+        main_run = {"id": 1, "run_number": 1, "head_sha": "base", "event": "push",
+                    "head_branch": "main", "conclusion": "failure"}
+        old_run = {"id": 3, "run_number": 3, "head_sha": "old", "event": "pull_request"}
+        pr_run = {"id": 2, "run_number": 2, "head_sha": final_head, "event": "pull_request",
+                  "conclusion": "cancelled"}
+        requests = []
+
+        def request(url, token):
+            requests.append(url)
+            return {"workflow_runs": [old_run, pr_run] if "event=pull_request" in url else [main_run]}
+
+        def artifacts(base, token, run):
+            scope = "main" if run["id"] == 1 else "pr-17"
+            return [{"name": f"bazel-cache-v2-{scope}-r{run['id']}-a1"}]
+
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={squash_sha: 0, "base": 1}), \
+                patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", side_effect=artifacts) as listing, \
+                patch.object(CACHE, "download_candidate", return_value=None) as download, \
+                patch.object(CACHE, "union_caches") as union, \
+                redirect_stdout(io.StringIO()):
+            CACHE.discover_and_restore(args)
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(all("/actions/workflows/.github%2Fworkflows%2Fpublish.yaml/runs?" in url
+                            for url in requests))
+        self.assertIn("event=push&branch=main", requests[0])
+        self.assertIn("event=pull_request&branch=feature%2Fmerged", requests[1])
+        self.assertEqual([call.args[2]["id"] for call in listing.call_args_list], [1, 2])
+        self.assertEqual(download.call_args.kwargs,
+                         {"expected_head": final_head, "require_trusted_writer": True})
+        union.assert_called_once()
 
     def test_round_trip_validates_action_references_and_excludes_temporary_files(self):
         source = self.root / "source"
@@ -1244,7 +1493,7 @@ class CacheArtifactTests(unittest.TestCase):
                 redirect_stdout(output):
             restored = CACHE.restore_scope(
                 args, "https://api.github.com/repos/owner/repo", "token",
-                "pr", 17, {}, self.root / "cache",
+                "pr", 17, {}, self.root / "cache", head_branch="feature",
             )
         self.assertFalse(restored)
         download.assert_not_called()
@@ -1270,7 +1519,7 @@ class CacheArtifactTests(unittest.TestCase):
             "number": 17, "state": "closed", "merged_at": "2026-11-03T00:00:00Z",
             "merge_commit_sha": commit,
             "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
-            "head": {"sha": final_head, "repo": {"full_name": "owner/repo"}},
+            "head": {"sha": final_head, "ref": "feature", "repo": {"full_name": "owner/repo"}},
         }
         with patch.object(CACHE, "request_json", return_value=[pull]):
             selected = CACHE.squash_pull_request(
@@ -1453,7 +1702,7 @@ class CacheArtifactTests(unittest.TestCase):
         event_path.write_text("{}")
         squash_sha = "a" * 40
         final_head = "b" * 40
-        pull = {"number": 17, "head": {"sha": final_head}}
+        pull = {"number": 17, "head": {"sha": final_head, "ref": "feature"}}
         args = SimpleNamespace(
             repository="owner/repo", event_path=str(event_path), event_name="push",
             pr_number="", run_id="99", run_number=50, run_attempt="1",
@@ -1464,7 +1713,7 @@ class CacheArtifactTests(unittest.TestCase):
         results = {"main": True, "pr": True}
 
         def fake_restore(args, base, token, scope, pr_number, revisions, destination,
-                         expected_head=None, require_trusted_writer=False):
+                         expected_head=None, require_trusted_writer=False, head_branch=None):
             restored.append((scope, pr_number, dict(revisions), expected_head, require_trusted_writer))
             if results[scope]:
                 Path(destination).mkdir(parents=True)
@@ -1490,7 +1739,7 @@ class CacheArtifactTests(unittest.TestCase):
         event_path = self.root / "event.json"
         event_path.write_text("{}")
         squash_sha = "a" * 40
-        pull = {"number": 17, "head": {"sha": "b" * 40}}
+        pull = {"number": 17, "head": {"sha": "b" * 40, "ref": "feature"}}
         args = SimpleNamespace(
             repository="owner/repo", event_path=str(event_path), event_name="push",
             pr_number="", run_id="99", run_number=50, run_attempt="1",
@@ -1506,7 +1755,7 @@ class CacheArtifactTests(unittest.TestCase):
                 restored = []
 
                 def fake_restore(args, base, token, scope, pr_number, history, destination,
-                                 expected_head=None, require_trusted_writer=False):
+                                 expected_head=None, require_trusted_writer=False, head_branch=None):
                     restored.append(scope)
                     if results[scope]:
                         Path(destination).mkdir(parents=True)
@@ -1540,7 +1789,7 @@ class CacheArtifactTests(unittest.TestCase):
         )
 
         def fake_restore(args, base, token, scope, pr_number, history, destination,
-                         expected_head=None, require_trusted_writer=False):
+                         expected_head=None, require_trusted_writer=False, head_branch=None):
             Path(destination).mkdir(parents=True)
             return True
 
@@ -1548,7 +1797,7 @@ class CacheArtifactTests(unittest.TestCase):
         with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
                 patch.object(CACHE, "run_history", return_value={squash_sha: 0, "prev": 1}), \
                 patch.object(CACHE, "squash_pull_request", return_value={
-                    "number": 17, "head": {"sha": "b" * 40},
+                    "number": 17, "head": {"sha": "b" * 40, "ref": "feature"},
                 }), \
                 patch.object(CACHE, "restore_scope", side_effect=fake_restore), \
                 patch.object(CACHE, "union_caches", side_effect=CACHE.Invalid("union limit")), \
@@ -1570,13 +1819,13 @@ class CacheArtifactTests(unittest.TestCase):
             commit=squash_sha, cache=str(self.root / "cache"),
         )
         for pull, expected_scopes, expected_log in (
-            ({"number": 17, "head": {"sha": "b" * 40}}, ["main", "pr"], "cold build"),
+            ({"number": 17, "head": {"sha": "b" * 40, "ref": "feature"}}, ["main", "pr"], "cold build"),
             (False, ["main"], "using main-only snapshot"),
         ):
             restored = []
 
             def fake_restore(args, base, token, scope, pr_number, history, destination,
-                             expected_head=None, require_trusted_writer=False):
+                             expected_head=None, require_trusted_writer=False, head_branch=None):
                 restored.append((scope, dict(history)))
                 return False
 
@@ -1594,7 +1843,7 @@ class CacheArtifactTests(unittest.TestCase):
 
     def test_pr_selection_falls_back_to_an_older_same_pr_artifact(self):
         event_path = self.root / "event.json"
-        event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}}}))
+        event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}, "head": {"ref": "feature"}}}))
         runs = [
             {"id": 2, "run_number": 20, "run_attempt": 1, "head_sha": "new",
              "event": "pull_request", "pull_requests": [{"number": 17}]},
@@ -1632,7 +1881,7 @@ class CacheArtifactTests(unittest.TestCase):
 
     def test_pr_without_own_artifact_falls_back_to_ancestor_main(self):
         event_path = self.root / "event.json"
-        event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}}}))
+        event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}, "head": {"ref": "feature"}}}))
         pr_run = {"id": 1, "run_number": 4, "run_attempt": 1, "head_sha": "pr",
                   "event": "pull_request", "pull_requests": [{"number": 17}]}
         main_run = {"id": 2, "run_number": 5, "run_attempt": 1, "head_sha": "base",

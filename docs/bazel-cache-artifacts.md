@@ -27,8 +27,8 @@ Compatibility requires the same cache format, `.bazelversion`, OS, architecture,
 
 Restore uses one snapshot at a time and completes before Bazel starts:
 
-- PR builds prefer the newest earlier compatible artifact for that same PR, ordered by run number and attempt, without requiring ancestry after a force push. If none is usable, they try trusted main snapshots.
-- Main builds consider only main push artifacts whose revisions occur on the built revision's first-parent history. The closest revision wins, with run number and attempt breaking ties.
+- PR builds prefer the newest earlier compatible artifact for that same PR, ordered by run number and attempt, without requiring ancestry after a force push. Discovery queries only Publish pull-request runs on the PR head branch and inspects at most 100 runs and attempts at most 20 candidates. If none is usable, they independently try trusted main snapshots.
+- Main builds consider only the latest 20 Publish push runs on `main` whose revisions occur on the built revision's first-parent history. The closest revision wins, with run number and attempt breaking ties. If none is usable, the build starts cold.
 - A main revision associated by GitHub commit/PR metadata with exactly one squash-merged PR on `main` attempts a two-source restore. The PR snapshot must be for the PR's final head, not its synthetic CI merge revision or the resulting squash commit. Its paired main snapshot must precede the squash commit on first-parent history. Other main revisions use the incremental-main path.
 - An artifact from the current in-progress attempt is excluded. A prior attempt of the same run can be considered.
 
@@ -54,7 +54,7 @@ The limits are an 8 GiB downloaded workflow ZIP and snapshot tar, 12 GiB expande
 
 Missing, expired, or concurrently deleted artifacts are ordinary misses: the selector tries another eligible candidate and ultimately runs Bazel cold if needed. Legacy v1 PR snapshots are explicitly skipped during migration; v1 main snapshots also produce a migration diagnostic and are not interpreted as v2. API authorization, service, and download errors are logged separately from misses. Safe read requests use bounded retries for transient connection failures; deletion outcomes are confirmed or reported incomplete. Cache lookup and snapshot-preparation errors do not skip quality checks or convert their result to success; an upload-action failure is non-blocking.
 
-The workflow log reports each selected producer run/attempt and built revision, PR head/base and squash revision, compatibility and writer-trust decisions, action-key conflicts, fallback/rejection reason, cache action hits and executions from Bazel execution logs, snapshot preparation/restore/union times, archive and expanded sizes, and helper peak resident memory. The upload-artifact step's duration and transfer diagnostics are available in the Actions job log.
+The workflow log reports inspected-run and attempted-candidate counts and the stop reason for each discovery, each selected producer run/attempt and built revision, PR head/base and squash revision, compatibility and writer-trust decisions, action-key conflicts, fallback/rejection reason, cache action hits and executions from Bazel execution logs, snapshot preparation/restore/union times, archive and expanded sizes, and helper peak resident memory. The upload-artifact step's duration and transfer diagnostics are available in the Actions job log.
 
 ## Rebuild diagnostics
 
