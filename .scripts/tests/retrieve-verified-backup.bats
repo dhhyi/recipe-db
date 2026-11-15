@@ -194,7 +194,7 @@ import time
 
 pid, terminal = pty.fork()
 if pid == 0:
-    os.execlp("fish", "fish", "-c",
+    os.execlp("fish", "fish", "--interactive", "--no-config", "-c",
               'mise run --output prefix retrieve-verified-backup "$DESTINATION"')
 content = bytearray()
 pending = bytearray()
