@@ -20,6 +20,11 @@ ROOT = Path(__file__).resolve().parent.parent
 upload = runpy.run_path(str(ROOT / "provisioning/files/backup-upload.py"))
 MAX_METADATA = upload["MAX_MANIFEST_BYTES"]
 
+
+class AuthenticationError(Exception):
+    pass
+
+
 # Execute installed tooling, not a Pi checkout. Only selected metadata leaves the Pi.
 REMOTE = """
 import json, runpy, subprocess, sys
@@ -84,17 +89,17 @@ def ssh_command(args, command):
 
 def authenticate(args):
     command = ssh_command(args, ["sudo", "-n", "-k", "python3", "-c", "pass"])
-    command[-1] += " 2>/dev/null"
+    command[-1] = "LC_ALL=C " + command[-1] + " 2>&1"
     result = subprocess.run(
-        command, stdin=subprocess.DEVNULL,
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True,
     )
     args.sudo_password = None
-    if result.returncode == 1:
+    if result.returncode == 1 and "sudo: a password is required" in result.stdout.splitlines():
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
             args.sudo_password = getpass.getpass("Pi sudo password (not SSH key passphrase): ")
     elif result.returncode != 0:
-        raise ValueError("SSH or sudo authentication check failed")
+        raise AuthenticationError("SSH connection or Pi sudo permission/policy check failed")
 
 
 def receive(args, remote_args, limit, destination=None):
@@ -267,6 +272,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except AuthenticationError as error:
+        print(f"backup retrieval: {error}", file=sys.stderr)
+        sys.exit(1)
     except (getpass.GetPassWarning, EOFError):
         print("backup retrieval: sudo authentication requires an interactive terminal; "
               "run mise run --raw retrieve-verified-backup DESTINATION", file=sys.stderr)

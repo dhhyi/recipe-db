@@ -82,8 +82,9 @@ assert args[:-2] == [
 ]
 assert args[-2] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
 command = shlex.split(args[-1])
-if command[-1:] == ["2>/dev/null"]:
+if command[-1:] == ["2>&1"]:
     command.pop()
+    assert command.pop(0) == "LC_ALL=C"
     assert command == ["sudo", "-n", "-k", "python3", "-c", "pass"]
 password_auth = os.environ.get("REQUIRE_SUDO_PASSWORD") == "1"
 if os.environ.get("REQUIRE_TERMINAL") == "1":
@@ -92,6 +93,11 @@ if os.environ.get("REQUIRE_TERMINAL") == "1":
         terminal.write(b"Test SSH passphrase: ")
         assert terminal.readline().strip() == b"fixture-passphrase"
 if command == ["sudo", "-n", "-k", "python3", "-c", "pass"]:
+    if os.environ.get("DENY_SUDO") == "1":
+        print("sudo: piadmin is not allowed to execute python3 as root")
+        sys.exit(1)
+    if password_auth:
+        print("sudo: a password is required")
     sys.exit(1 if password_auth else 0)
 if password_auth:
     assert command[:7] == ["sudo", "-S", "-k", "-p", "", "python3", "-c"]
@@ -293,6 +299,17 @@ PY
   [ "$status" -ne 0 ]
   [[ $output == *"sudo authentication requires an interactive terminal"* ]]
   [ ! -e "$DESTINATION" ]
+}
+
+@test "sudo permission denial fails without requesting a password" {
+  export DENY_SUDO=1
+  run python3 .scripts/retrieve-verified-backup.py "$DESTINATION" < /dev/null
+  [ "$status" -ne 0 ]
+  [[ $output == *"Pi sudo permission/policy check failed"* ]]
+  [[ $output != *"Pi sudo password"* ]]
+  [[ $output != *"requires an interactive terminal"* ]]
+  [ ! -e "$DESTINATION" ]
+  [ ! -s "$MOCK_LOG" ]
 }
 
 @test "verified-unchanged retrieves the baseline rather than the newer local capture" {
