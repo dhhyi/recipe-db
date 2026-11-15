@@ -351,6 +351,24 @@ done
   printf ')\n'
 } >> "$output"
 
+migrator_tests_files=(.scripts/run-migrator-tests.sh)
+while IFS= read -r -d '' file; do
+  migrator_tests_files+=("$file")
+done < <(git ls-files --cached --others --exclude-standard -z -- 'migrators/**')
+{
+  printf '\ngenrule(\n'
+  printf '    name = "migrator_tests_validation",\n'
+  printf '    srcs = [\n'
+  while IFS= read -r file; do
+    printf '        %s,\n' "$(quote "$file")"
+  done < <(printf '%s\n' "${migrator_tests_files[@]}" | sort -u)
+  printf '    ],\n'
+  printf '    outs = ["migrator_tests_validation.ok"],\n'
+  printf '    cmd = "bash .scripts/run-migrator-tests.sh && touch $@",\n'
+  printf '    tags = ["no-sandbox", "no-remote"],\n'
+  printf ')\n'
+} >> "$output"
+
 if ! cmp -s "$output" BUILD.bazel; then
   mv "$output" BUILD.bazel
 fi

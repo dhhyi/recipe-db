@@ -173,18 +173,6 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}
 
-<<<<<<< HEAD
-      - name: validate message bus integration and recovery
-        run: mise run test-message-bus
-
-      - name: test migrator packaging
-        run: mise run test-migrator-packaging
-
-      - name: test migrators
-        run: bash .scripts/run-migrator-tests.sh
-
-=======
->>>>>>> origin/main
       - name: build and validate production AMD64 images for pull requests
         if: github.event_name == 'pull_request'
         run: |

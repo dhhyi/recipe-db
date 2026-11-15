@@ -6,7 +6,8 @@ setup() {
   setup_fixture generate-bazel-build.sh
   git init -q
   mkdir -p example deploy .scripts/tests .scripts/templates .scripts/lib .mise/tasks message-bus \
-    graphql/src graphql/testdata graphql/.devcontainer .scripts/tests/fixtures/migrator-packaging
+    graphql/src graphql/testdata graphql/.devcontainer .scripts/tests/fixtures/migrator-packaging \
+    migrators/tags-1-to-2
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
@@ -31,6 +32,7 @@ EOF
     .scripts/lib/project-metadata.sh .scripts/migrator-manifest.schema.json \
     .scripts/templates/kubernetes.lib.yml .scripts/templates/kubernetes-migration-job-test.yml \
     .scripts/tests/fixtures/migrator-packaging/fixture.json
+  touch .scripts/run-migrator-tests.sh migrators/tags-1-to-2/test-migrator.sh
   cat > .scripts/tests/groups.yaml << 'EOF'
 compose:
   tests:
@@ -120,8 +122,10 @@ EOF
   [ "$status" -eq 0 ]
   sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
   sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  sed -n '/name = "migrator_tests_validation"/,/^)/p' BUILD.bazel > migrator-tests-rule
   cp message-bus-rule original-message-bus-rule
   cp migrator-rule original-migrator-rule
+  cp migrator-tests-rule original-migrator-tests-rule
 
   for file in .scripts/test-message-bus.sh deploy/local.yaml message-bus/nats.conf \
     graphql/.project.yaml graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
@@ -138,15 +142,29 @@ EOF
   done
   grep -Fx '    cmd = "sh .scripts/run-bazel-validation.sh test-message-bus && touch $@",' message-bus-rule
   grep -Fx '    cmd = "sh .scripts/run-bazel-validation.sh test-migrator-packaging && touch $@",' migrator-rule
+  grep -Fx '        ".scripts/run-migrator-tests.sh",' migrator-tests-rule
+  grep -Fx '        "migrators/tags-1-to-2/test-migrator.sh",' migrator-tests-rule
+  grep -Fx '    cmd = "bash .scripts/run-migrator-tests.sh && touch $@",' migrator-tests-rule
   run -1 grep -F 'README.md' message-bus-rule migrator-rule
+
+  touch migrators/tags-1-to-2/new-file.py
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "migrator_tests_validation"/,/^)/p' BUILD.bazel > migrator-tests-rule
+  grep -Fx '        "migrators/tags-1-to-2/new-file.py",' migrator-tests-rule
+  rm migrators/tags-1-to-2/new-file.py
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
 
   touch graphql/src/new-test.rs
   run bash .scripts/generate-bazel-build.sh
   [ "$status" -eq 0 ]
   sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
   sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  sed -n '/name = "migrator_tests_validation"/,/^)/p' BUILD.bazel > migrator-tests-rule
   grep -Fx '        "graphql/src/new-test.rs",' message-bus-rule
   cmp original-migrator-rule migrator-rule
+  cmp original-migrator-tests-rule migrator-tests-rule
   rm graphql/src/new-test.rs
   run bash .scripts/generate-bazel-build.sh
   [ "$status" -eq 0 ]
@@ -158,6 +176,7 @@ EOF
   [ "$status" -eq 0 ]
   sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
   sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  sed -n '/name = "migrator_tests_validation"/,/^)/p' BUILD.bazel > migrator-tests-rule
   cmp original-message-bus-rule message-bus-rule
   grep -Fx '        ".scripts/tests/fixtures/migrator-packaging/new-fixture.json",' migrator-rule
   rm .scripts/tests/fixtures/migrator-packaging/new-fixture.json

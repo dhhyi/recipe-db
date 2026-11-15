@@ -59,11 +59,12 @@ setup() {
   [[ "$script" == *" //:all"* ]]
 }
 
-<<<<<<< HEAD
-@test "CI runs generic migrator packaging and discovers per-migrator tests" {
+@test "CI runs migrator validations through cacheable checks" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrator packaging") | .run' "$workflow")" = "mise run test-migrator-packaging" ]
-  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrators") | .run' "$workflow")" = "bash .scripts/run-migrator-tests.sh" ]
+  validation=$(grep -n '^      - name: Bazel precommit checks, unit tests, and cacheable validations$' "$workflow" | cut -d: -f1)
+  snapshot=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
+  [ "$validation" -lt "$snapshot" ]
+  [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | test("mise run test-(message-bus|migrator-packaging)|run-migrator-tests.sh"))] | length' "$workflow")" -eq 0 ]
   ! grep -q '^\[test-tags-migrator\]' "$BATS_TEST_DIRNAME/../../.mise/tasks/validation.toml"
   [ "$(yq -r '.workflows.suite_inputs[".scripts/tests/mise-workflows.bats"][] | select(. == "migrators/**")' "$BATS_TEST_DIRNAME/groups.yaml")" = "migrators/**" ]
 }
@@ -103,14 +104,6 @@ setup() {
   run bash .scripts/run-migrator-tests.sh
   [ "$status" -eq 1 ]
   [[ "$output" == *"Missing required migrator test: migrators/missing-test/test-migrator.sh"* ]]
-=======
-@test "CI runs message bus and migrator validations before cache snapshot without duplicates" {
-  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  validation=$(grep -n '^      - name: Bazel precommit checks, unit tests, and cacheable validations$' "$workflow" | cut -d: -f1)
-  snapshot=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
-  [ "$validation" -lt "$snapshot" ]
-  [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | test("mise run test-(message-bus|migrator-packaging)"))] | length' "$workflow")" -eq 0 ]
->>>>>>> origin/main
 }
 
 @test "only ARM64 validation downloads LFS screenshot baselines" {
