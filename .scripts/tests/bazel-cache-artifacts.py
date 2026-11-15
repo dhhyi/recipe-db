@@ -776,7 +776,11 @@ class CacheArtifactTests(unittest.TestCase):
             pr_number="17", run_id="999", run_number=999, run_attempt="1", commit="head",
             cache=str(self.root / "cache"),
         )
-        for head, listing in (({"ref": "feature"}, None), (None, None)):
+        for head, listing, inspected in (
+            ({"ref": "feature"}, None, 0),
+            ({"ref": "feature"}, {"workflow_runs": [{"event": "pull_request", "run_number": 1}]}, 1),
+            (None, None, 0),
+        ):
             event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}, "head": head}}))
             requests = []
 
@@ -791,12 +795,49 @@ class CacheArtifactTests(unittest.TestCase):
                     patch.object(CACHE, "request_json", side_effect=request), \
                     redirect_stdout(output), redirect_stderr(errors):
                 CACHE.discover_and_restore(args)
-            self.assertIn("source=pr inspected-runs=0 attempted-candidates=0 reason=API failure",
+            self.assertIn(f"source=pr inspected-runs={inspected} attempted-candidates=0 reason=API failure",
                           output.getvalue())
             self.assertIn("source=main inspected-runs=0 attempted-candidates=0 reason=exhausted history",
                           output.getvalue())
             self.assertIn("API-error source=pr", errors.getvalue())
             self.assertIn("event=push&branch=main", requests[-1])
+
+    def test_bad_artifact_metadata_preserves_squash_main_fallback(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        squash_sha = "a" * 40
+        final_head = "b" * 40
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            pr_number="", run_id="999", run_number=999, run_attempt="1", commit=squash_sha,
+            cache=str(self.root / "cache"),
+        )
+        pull = {"number": 17, "head": {"sha": final_head, "ref": "feature"}}
+        main_run = {"id": 1, "run_number": 1, "head_sha": "base", "event": "push",
+                    "head_branch": "main"}
+        pr_run = {"id": 2, "run_number": 2, "head_sha": final_head, "event": "pull_request"}
+
+        def request(url, token):
+            return {"workflow_runs": [pr_run] if "event=pull_request" in url else [main_run]}
+
+        def artifacts(base, token, run):
+            return [{"name": "bazel-cache-v2-main-r1-a1"}] if run["id"] == 1 \
+                else [{"name": "bazel-cache-v2-pr-17-r2-a1", "workflow_run": None}]
+
+        output = io.StringIO()
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={squash_sha: 0, "base": 1}), \
+                patch.object(CACHE, "squash_pull_request", return_value=pull), \
+                patch.object(CACHE, "request_json", side_effect=request), \
+                patch.object(CACHE, "artifacts_for_run", side_effect=artifacts), \
+                patch.object(CACHE, "download_candidate", return_value=None), \
+                patch.object(CACHE, "copy_cache") as copy, \
+                redirect_stdout(output), redirect_stderr(io.StringIO()):
+            CACHE.discover_and_restore(args)
+        copy.assert_called_once()
+        self.assertIn("source=pr inspected-runs=1 attempted-candidates=0 reason=API failure",
+                      output.getvalue())
+        self.assertIn("using main-only snapshot", output.getvalue())
 
     def test_pr_rerun_restores_only_prior_attempt(self):
         args = SimpleNamespace(run_number=10, run_id="42", run_attempt="3",

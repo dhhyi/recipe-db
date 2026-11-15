@@ -1491,6 +1491,10 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
             return finish("API failure")
         inspected += len(page)
         try:
+            if any(type(run.get("id")) is not int or run["id"] <= 0
+                   or type(run.get("run_number")) is not int or run["run_number"] <= 0
+                   or type(run.get("run_attempt", 1)) is not int for run in page):
+                raise ValueError("invalid run identity")
             candidates = rank_runs(
                 page, scope, pr_number, history,
                 int(args.run_number) if scope == "pr" else None,
@@ -1505,7 +1509,12 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
                 continue
             try:
                 artifacts = artifacts_for_run(base, token, run)
-            except ApiFailure as error:
+                if any(not isinstance(artifact, dict)
+                       or not isinstance(artifact.get("name"), str)
+                       or not isinstance(artifact.get("workflow_run", {}), dict)
+                       for artifact in artifacts):
+                    raise ApiFailure("malformed artifact metadata")
+            except (ApiFailure, Invalid, KeyError, TypeError, ValueError, AttributeError) as error:
                 print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
                       file=sys.stderr)
                 api_failed = True
