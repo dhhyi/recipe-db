@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import http.client
+import itertools
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -43,6 +44,9 @@ MAX_FILES = 500_000
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_METADATA_BYTES = 1024**2
 WORKFLOW_RUNS_PAGE_SIZE = 20
+PR_RUN_LIMIT = 100
+PR_CANDIDATE_LIMIT = 20
+MAIN_RUN_LIMIT = 20
 MAX_ACTION_RESULT_BYTES = 64 * 1024**2
 MAX_TREE_EXPANDED_BYTES = 64 * 1024**2
 MAX_ACTION_LOG_RECORD_BYTES = 16 * 1024**2
@@ -1433,7 +1437,7 @@ def squash_pull_request(base, token, repository, commit_sha):
     if not isinstance(head, dict) or type(pull.get("number")) is not int \
             or pull["number"] <= 0 or not re.fullmatch(
         r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head.get("sha", ""))
-    ):
+    ) or not isinstance(head.get("ref"), str) or not head["ref"]:
         print(f"cache: squash-fallback revision={commit_sha}: malformed final PR head")
         return False
     head_repository = head.get("repo")
@@ -1446,74 +1450,98 @@ def squash_pull_request(base, token, repository, commit_sha):
 
 
 def restore_scope(args, base, token, scope, pr_number, history, destination,
-                  expected_head=None, require_trusted_writer=False):
-    query = {"event": "pull_request"} if scope == "pr" \
+                  expected_head=None, require_trusted_writer=False, head_branch=None):
+    inspected = 0
+    attempted = 0
+    api_failed = False
+
+    def finish(reason, restored=False):
+        print(f"cache: discovery source={scope} inspected-runs={inspected} "
+              f"attempted-candidates={attempted} reason={reason}")
+        if not restored:
+            print(f"cache: fallback scope={scope}: no acceptable snapshot")
+        return restored
+
+    if scope == "pr" and (not isinstance(head_branch, str) or not head_branch):
+        print("cache: API-error source=pr missing head branch", file=sys.stderr)
+        return finish("API failure")
+    query = {"event": "pull_request", "branch": head_branch} if scope == "pr" \
         else {"event": "push", "branch": "main"}
-    runs_url = f"{base}/actions/runs?" + urllib.parse.urlencode(query)
-    try:
-        runs = list(paginated(
-            runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE
-        ))
+    workflow = urllib.parse.quote(WORKFLOW, safe="")
+    runs_url = f"{base}/actions/workflows/{workflow}/runs?" + urllib.parse.urlencode(query)
+    limit = PR_RUN_LIMIT if scope == "pr" else MAIN_RUN_LIMIT
+    runs = iter(paginated(runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE))
+    while inspected < limit:
+        try:
+            page = list(itertools.islice(runs, min(WORKFLOW_RUNS_PAGE_SIZE, limit - inspected)))
+        except ApiFailure as error:
+            print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
+            return finish("API failure")
+        inspected += len(page)
         candidates = rank_runs(
-            runs, scope, pr_number, history,
+            page, scope, pr_number, history,
             int(args.run_number) if scope == "pr" else None,
         )
-    except ApiFailure as error:
-        print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
-        return False
-    for run in candidates:
-        if expected_head is not None and run.get("head_sha") != expected_head:
-            continue
-        try:
-            artifacts = artifacts_for_run(base, token, run)
-        except ApiFailure as error:
-            print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
-                  file=sys.stderr)
-            continue
-        for artifact in artifacts:
-            artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
-            legacy_pattern = LEGACY_MAIN_ARTIFACT_PATTERN if scope == "main" \
-                else LEGACY_PR_ARTIFACT_PATTERN
-            if legacy_pattern.fullmatch(artifact.get("name", "")):
-                print(f"cache: migration-skip source={scope} artifact={artifact['name']}: "
-                      "legacy synthetic-build format is not consumable")
-                continue
-            match = re.fullmatch(
-                rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
-                artifact.get("name", ""),
-            )
-            if match is None or int(match.group(1)) != int(run["id"]):
-                continue
-            if artifact.get("expired"):
-                print(f"cache: artifact-miss run={run['id']} attempt={match.group(2)}: expired")
-                continue
-            attempt = int(match.group(2))
-            if scope == "pr" and not pr_attempt_is_eligible(
-                run, attempt, int(args.run_id), int(args.run_number), int(args.run_attempt)
-            ):
-                continue
-            if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
+        for run in candidates:
+            if run.get("conclusion") == "skipped" \
+                    or (expected_head is not None and run.get("head_sha") != expected_head):
                 continue
             try:
-                extra = {}
-                if expected_head is not None:
-                    extra["expected_head"] = expected_head
-                if require_trusted_writer:
-                    extra["require_trusted_writer"] = True
-                downloaded = download_candidate(
-                    base, token, artifact, destination, args.repository, run, scope,
-                    pr_number, **extra,
-                )
-                if downloaded is None:
-                    return True
-                print(f"cache: artifact-miss source={scope} run={run['id']}: {downloaded}")
+                artifacts = artifacts_for_run(base, token, run)
             except ApiFailure as error:
-                print(f"cache: API-error source={scope} run={run['id']}: {error}", file=sys.stderr)
-            except Exception as error:
-                print(f"cache: rejected run={run['id']} source={scope} "
-                      f"artifact={artifact.get('name')}: {error}")
-    print(f"cache: fallback scope={scope}: no acceptable snapshot")
-    return False
+                print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
+                      file=sys.stderr)
+                api_failed = True
+                continue
+            for artifact in artifacts:
+                artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
+                legacy_pattern = LEGACY_MAIN_ARTIFACT_PATTERN if scope == "main" \
+                    else LEGACY_PR_ARTIFACT_PATTERN
+                if legacy_pattern.fullmatch(artifact.get("name", "")):
+                    print(f"cache: migration-skip source={scope} artifact={artifact['name']}: "
+                          "legacy synthetic-build format is not consumable")
+                    continue
+                match = re.fullmatch(
+                    rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
+                    artifact.get("name", ""),
+                )
+                if match is None or int(match.group(1)) != int(run["id"]):
+                    continue
+                if artifact.get("expired"):
+                    print(f"cache: artifact-miss run={run['id']} attempt={match.group(2)}: expired")
+                    continue
+                attempt = int(match.group(2))
+                if scope == "pr" and not pr_attempt_is_eligible(
+                    run, attempt, int(args.run_id), int(args.run_number), int(args.run_attempt)
+                ):
+                    continue
+                if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
+                    continue
+                attempted += 1
+                try:
+                    extra = {}
+                    if expected_head is not None:
+                        extra["expected_head"] = expected_head
+                    if require_trusted_writer:
+                        extra["require_trusted_writer"] = True
+                    downloaded = download_candidate(
+                        base, token, artifact, destination, args.repository, run, scope,
+                        pr_number, **extra,
+                    )
+                    if downloaded is None:
+                        return finish("restored snapshot", True)
+                    print(f"cache: artifact-miss source={scope} run={run['id']}: {downloaded}")
+                except ApiFailure as error:
+                    print(f"cache: API-error source={scope} run={run['id']}: {error}", file=sys.stderr)
+                    api_failed = True
+                except Exception as error:
+                    print(f"cache: rejected run={run['id']} source={scope} "
+                          f"artifact={artifact.get('name')}: {error}")
+                if scope == "pr" and attempted >= PR_CANDIDATE_LIMIT:
+                    return finish("candidate limit")
+        if len(page) < WORKFLOW_RUNS_PAGE_SIZE:
+            return finish("API failure" if api_failed else "exhausted history")
+    return finish("run limit")
 
 
 def identical_files(left, right):
@@ -1616,7 +1644,8 @@ def discover_and_restore(args):
         history = run_history(target_sha)
         if scope == "pr":
             restored = restore_scope(
-                args, base, token, "pr", pr_number, history, Path(args.cache)
+                args, base, token, "pr", pr_number, history, Path(args.cache),
+                head_branch=current_event["pull_request"].get("head", {}).get("ref"),
             )
             if not restored:
                 main_history = run_history(current_event["pull_request"]["base"]["sha"])
@@ -1650,7 +1679,7 @@ def discover_and_restore(args):
                     final_head = pull["head"]["sha"]
                     pr_restored = restore_scope(
                         args, base, token, "pr", pull_number, {}, pr_cache,
-                        final_head, True,
+                        final_head, True, head_branch=pull["head"]["ref"],
                     )
                     if main_restored and pr_restored:
                         try:
