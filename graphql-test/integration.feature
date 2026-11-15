@@ -7,6 +7,10 @@ Feature: integration
     * url graphqlApi
     * configure headers = { Authorization: '#(ownerAuthorization)' }
 
+  Scenario: testing HEAD probe reports availability without executing GraphQL
+    * method head
+    * status 204
+
   Scenario: should be possible to have a recipe without rating
     * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: 'Rice Pudding' } } }
     * method post

@@ -344,7 +344,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let graphql_route = if runtime_mode != mode::RuntimeMode::Testing {
         post(graphql).get(graphql)
     } else {
-        get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) }).post(graphql)
+        get(|| async { Html(GraphiQLSource::build().endpoint("/graphql").finish()) })
+            .post(graphql)
+            .head(|| async { StatusCode::NO_CONTENT })
     };
     let graphql_app =
         Router::new()

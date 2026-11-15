@@ -8,6 +8,12 @@ Feature: HTTP Connection Handling
     * status 200
     * match karate.response.header('Connection') == 'close'
 
+  Scenario: testing availability probe does not load or mutate ratings
+    * url 'http://ratings:8456'
+    * path 'ratings'
+    * method head
+    * status 204
+
   Scenario: testing reset clears all ratings and can be repeated
     * url 'http://ratings:8456'
     * path 'ratings'

@@ -186,6 +186,11 @@ server = HTTP::Server.new do |context|
   request = context.request
   response = context.response
 
+  if mode == "testing" && request.method == "HEAD" && request.path == "/link-extract"
+    response.status_code = 204
+    next
+  end
+
   case request.path
   when "/health"
     response.status_code = 200

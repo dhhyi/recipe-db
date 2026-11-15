@@ -165,7 +165,13 @@ func newHandler(client graphql.Client, cache *pageCache) http.Handler {
 
 func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint string) http.Handler {
 	googleOAuthEnabled := os.Getenv("GOOGLE_OAUTH_CLIENT_ID") != ""
+	testingMode := os.Getenv("MODE") == "testing"
 	mux := http.NewServeMux()
+	if testingMode {
+		mux.HandleFunc("HEAD /{$}", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
 	mux.HandleFunc("GET /{$}", browseHandler(client))
 	mux.HandleFunc("GET /recipe/{id}/tags", recipeTagsHandler(endpoint))
 	mux.HandleFunc("GET /recipe/{id}/tags/options", recipeTagOptionsHandler(endpoint))

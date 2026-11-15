@@ -17,6 +17,7 @@ devcontainer:
   ports:
     - 3000
   environment:
+    MODE: testing
     GRAPHQL_URL: http://traefik/graphql
     TYPESENSE_URL: http://typesense:8108
     TYPESENSE_API_KEY_FILE: /run/secrets/typesense-api-key

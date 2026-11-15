@@ -23,6 +23,12 @@ RSpec.describe "image-inline" do
 
   let(:fixture_api) { ENV.fetch("FIXTURE_API") }
 
+  it "probes availability without fetching an image" do
+    head "/image-inline/"
+    expect_status(204)
+    expect(response.body).to be_empty
+  end
+
   def inline_path(url)
     "/image-inline/?url=#{CGI.escape(url)}"
   end

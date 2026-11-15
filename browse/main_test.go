@@ -7,6 +7,7 @@ import (
 	"html"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,86 @@ import (
 	"frontend/page_metadata"
 	"frontend/src/components"
 )
+
+func TestTestingRootHeadProbeIsExactAndDoesNotQueryGraphQL(t *testing.T) {
+	t.Setenv("MODE", "testing")
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	handler := newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	response, err := server.Client().Head(server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent || response.ContentLength != 0 ||
+		response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected testing HEAD response: status=%d headers=%v", response.StatusCode, response.Header)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("testing HEAD probe made %d GraphQL calls", calls.Load())
+	}
+
+	response, err = server.Client().Head(server.URL + "/not-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("non-root HEAD was intercepted: %d", response.StatusCode)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("non-root HEAD made %d GraphQL calls", calls.Load())
+	}
+}
+
+func TestProductionRootHeadKeepsExistingPageResponse(t *testing.T) {
+	for _, mode := range []string{"production", "unset", "backup"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "unset" {
+				previous, found := os.LookupEnv("MODE")
+				_ = os.Unsetenv("MODE")
+				t.Cleanup(func() {
+					if found {
+						_ = os.Setenv("MODE", previous)
+					} else {
+						_ = os.Unsetenv("MODE")
+					}
+				})
+			} else {
+				t.Setenv("MODE", mode)
+			}
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer upstream.Close()
+			server := httptest.NewServer(newHandler(graphql.NewClient(upstream.URL, upstream.Client()), nil))
+			defer server.Close()
+
+			response, err := server.Client().Head(server.URL + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadGateway ||
+				response.Header.Get("Content-Type") != "text/html; charset=utf-8" ||
+				response.Header.Get("Cache-Control") != "no-store" {
+				t.Fatalf("production HEAD behavior changed: status=%d headers=%v", response.StatusCode, response.Header)
+			}
+			if calls.Load() == 0 {
+				t.Fatal("production HEAD did not use the existing page handler")
+			}
+		})
+	}
+}
 
 func assertStyledErrorPage(t *testing.T, response *httptest.ResponseRecorder, status int, title, message string, head bool) {
 	t.Helper()
