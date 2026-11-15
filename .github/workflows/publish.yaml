@@ -143,6 +143,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: upload Bazel execution logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: bazel-execution-logs
+          path: |
+            ${{ runner.temp }}/bazel-format-execution.json
+            ${{ runner.temp }}/bazel-check-execution.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: prepare Bazel cache snapshot
         id: prepare-bazel-cache
         if: always() && steps.source.outcome == 'success'

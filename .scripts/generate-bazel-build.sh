@@ -44,7 +44,8 @@ emit_rule() {
     if [[ -n "$dependency" ]]; then
       printf ' %s' "\$(location :$dependency)"
     fi
-    printf '",\n'
+    # Bazel replays streams separately; keep group markers with command output.
+    printf ' 2>&1",\n'
     printf '    tags = ["no-sandbox", "no-remote"],\n'
     printf ')\n'
   } >> "$output"

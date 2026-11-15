@@ -62,27 +62,30 @@ EOF
   [ ! -d "$BAZEL_DIAGNOSTICS_DIR" ]
 }
 
-@test "Bazel builds with diagnostics print commands and rebuild explanations and retain unique logs" {
+@test "Bazel builds with diagnostics retain unique explanation logs without printing them" {
   for attempt in 1 2; do
     run /bin/bash .scripts/bazel.sh build --action_env=PATH "//:target with spaces"
     [ "$status" -eq 0 ]
     [ "${lines[4]}" = build ]
-    [ "${lines[5]}" = --subcommands ]
-    [ "${lines[6]}" = --verbose_explanations ]
-    [[ "${lines[7]}" == "--explain=$BAZEL_DIAGNOSTICS_DIR/"* ]]
-    [ "${lines[8]}" = --action_env=PATH ]
-    [ "${lines[9]}" = "//:target with spaces" ]
-    [[ "$output" == *'Bazel rebuild explanations ('* ]]
-    [[ "$output" == *'Executing action: input file changed'* ]]
+    [ "${lines[5]}" = --verbose_explanations ]
+    [[ "${lines[6]}" == "--explain=$BAZEL_DIAGNOSTICS_DIR/"* ]]
+    [ "${lines[7]}" = --action_env=PATH ]
+    [ "${lines[8]}" = "//:target with spaces" ]
+    [ "${#lines[@]}" -eq 9 ]
+    [[ "$output" != *'Executing action: input file changed'* ]]
     logs=("$BAZEL_DIAGNOSTICS_DIR/"*.log)
     [ "${#logs[@]}" -eq "$attempt" ]
+    grep -Fx 'Executing action: input file changed' "${logs[@]}"
   done
 }
 
-@test "Bazel prints explanations after failed builds and preserves the failure status" {
+@test "Bazel retains explanations after failed builds and preserves the failure status" {
   run env BAZEL_STATUS=27 /bin/bash .scripts/bazel.sh build //:all
   [ "$status" -eq 27 ]
-  [[ "$output" == *'Executing action: input file changed'* ]]
+  [[ "$output" != *'Executing action: input file changed'* ]]
+  logs=("$BAZEL_DIAGNOSTICS_DIR/"*.log)
+  [ "${#logs[@]}" -eq 1 ]
+  grep -Fx 'Executing action: input file changed' "${logs[0]}"
 }
 
 @test "Bazel preserves startup options, argument boundaries and tool precedence" {
