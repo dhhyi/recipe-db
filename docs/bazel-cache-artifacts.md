@@ -64,6 +64,8 @@ Each diagnostics-enabled invocation retains a unique timestamped explanation log
 
 CI also uploads the available formatting and check execution logs as `bazel-execution-logs` with seven-day retention, including after a build failure. These JSON logs contain action commands, environment variables, and cache information; they are not identical to Bazel's subcommand output.
 
+Generated project actions merge stderr into stdout before Bazel captures their output, keeping GitHub Actions group markers in order with the command output they enclose.
+
 Explanations can identify changed inputs or action commands when the local action cache has prior state. CI restores only the disk cache, not the output base/local action cache, so a fresh runner may report missing prior action state rather than a specific changed file. Combine the explanations with the existing execution-log cache-hit counts and snapshot restore diagnostics; a missing local action record alone does not prove a disk-cache miss.
 
 ## Cacheable integration validations

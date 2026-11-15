@@ -117,6 +117,33 @@ EOF
   run -1 grep -F '"local"' BUILD.bazel
 }
 
+@test "project actions keep mixed output inside group markers and preserve failures" {
+  printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
+  for script in generate-bazel format-bazel bazel-check; do
+    cat > ".scripts/$script.sh" << 'EOF'
+#!/bin/sh
+printf '%s\n' '::group::example' >&2
+printf '%s\n' 'stdout output'
+printf '%s\n' 'stderr output' >&2
+printf '%s\n' '::endgroup::' >&2
+exit "${ACTION_STATUS:-0}"
+EOF
+  done
+  bash .scripts/generate-bazel-build.sh
+
+  for target in example_generate example_format_check example_check example_precommit; do
+    command=$(sed -n "/name = \"$target\"/,/^)/p" BUILD.bazel \
+      | sed -n 's/^    cmd = \(.*\),$/\1/p' | jq -r . \
+      | sed "s/\$(location \([^)]*\))/\1/g")
+    for action_status in 0 23; do
+      run --separate-stderr env ACTION_STATUS="$action_status" bash -c "$command" action output
+      [ "$status" -eq "$action_status" ]
+      [ -z "$stderr" ]
+      [ "$output" = "$(printf '%s\n' '::group::example' 'stdout output' 'stderr output' '::endgroup::')" ]
+    done
+  done
+}
+
 @test "cached validations discover independent source and fixture inputs" {
   run bash .scripts/generate-bazel-build.sh
   [ "$status" -eq 0 ]
