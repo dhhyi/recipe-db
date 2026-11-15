@@ -7,6 +7,8 @@ devcontainer:
     labels:
       org.opencontainers.image.source: https://github.com/dhhyi/recipe-db
   build:
+    packages:
+      - libatomic1
     args:
       VENOM_VERSION: "intercloud-beta-11"
     root:

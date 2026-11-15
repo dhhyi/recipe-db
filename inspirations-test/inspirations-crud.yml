@@ -29,6 +29,21 @@ testcases:
         response:
           statusCode: 201
 
+  - name: Probe collection availability without changing inspirations
+    steps:
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations"
+          method: HEAD
+        response:
+          statusCode: 204
+      - type: tavern
+        request:
+          url: "{{.REST_API}}/inspirations/"
+          method: HEAD
+        response:
+          statusCode: 204
+
   - name: Check inspiration
     steps:
       - type: tavern

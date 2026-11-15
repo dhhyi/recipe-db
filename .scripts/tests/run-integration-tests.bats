@@ -156,6 +156,29 @@ EOF
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS search-test' "$MOCK_LOG"
 }
 
+@test "inspirations tests wait with HEAD on their own REST API without GraphQL or fixture requests" {
+  run bash .scripts/run-integration-tests.sh --development inspirations-test
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^curl ' "$MOCK_LOG")" -eq 1 ]
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/inspirations' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm inspirations-test' "$MOCK_LOG"
+}
+
+@test "inspirations readiness retries connection failures and unrelated error responses" {
+  for response in 404 503; do
+    : > "$MOCK_LOG"
+    rm -f "$MOCK_LOG.curl-failed" "$MOCK_LOG.inspirations-not-ready"
+
+    run env CURL_FAIL_ONCE=true INSPIRATIONS_NOT_READY_ONCE="$response" \
+      bash .scripts/run-integration-tests.sh --development inspirations-test
+
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^curl ' "$MOCK_LOG")" -eq 3 ]
+    grep -Fx 'docker compose --profile test run --rm inspirations-test' "$MOCK_LOG"
+  done
+}
+
 @test "tags integration tests use isolated disposable instances and categorized fixtures" {
   add_test_project tags-test
   jq '.services["tags-test"] = {profiles: ["test"]}

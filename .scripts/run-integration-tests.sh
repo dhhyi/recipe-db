@@ -112,10 +112,11 @@ fi
 
 wait_for_http() {
   local description=$1 url=$2 expected_status=$3
+  local -a request_options=("${@:4}")
   local deadline=$((SECONDS + 40)) actual
   while ((SECONDS < deadline)); do
     actual=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-      --connect-timeout 1 --max-time 2 "$url" 2> /dev/null || true)
+      --connect-timeout 1 --max-time 2 "${request_options[@]}" "$url" 2> /dev/null || true)
     if [[ $actual == "$expected_status" ]]; then
       return 0
     fi
@@ -203,8 +204,7 @@ for project in "${projects[@]}"; do
       wait_for_images
       ;;
     inspirations-test)
-      wait_for_graphql "GraphQL API"
-      wait_for_fixture "$project" graphql-test-fixture/
+      wait_for_http "inspirations API" http://127.0.0.1:3000/inspirations 204 --head
       ;;
     link-extract-test)
       wait_for_http "link-extract API" http://127.0.0.1:3000/link-extract 400
