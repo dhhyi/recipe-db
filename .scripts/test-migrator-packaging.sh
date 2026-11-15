@@ -14,7 +14,10 @@ cleanup() {
   status=$?
   trap - 0
   if [ "$image_built" = true ]; then
-    docker image rm "$image" > /dev/null 2>&1 || status=1
+    if ! docker image rm "$image" > /dev/null; then
+      printf 'Failed to remove migrator test image %s\n' "$image" >&2
+      status=1
+    fi
   fi
   if [ "$status" -eq 0 ]; then
     rm -rf "$work" || status=1

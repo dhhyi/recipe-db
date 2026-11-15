@@ -70,14 +70,7 @@ The generated Bazel targets `//:message_bus_validation` and `//:migrator_packagi
 
 The message-bus target declares the GraphQL compilation sources, tests, manifests and lockfile, project/devcontainer configuration and task mapping, runner helpers, NATS configuration, and the pinned NATS image reference as inputs. The migrator-packaging target declares its manifests, lockfile, fixtures, and shared migration-Job template/helper inputs. Generated source discovery includes additions and removals, so those alter the relevant target's inputs; the targets do not use the Git revision or unrelated repository files as cache keys. Their dependency sets are independent.
 
-Representative local timings, measured with fresh Bazel output bases and a shared disk cache:
-
-| Target | Cache miss (validation execution) | Cache hit (Bazel build elapsed) |
-| --- | ---: | ---: |
-| `//:message_bus_validation` | 100.700 s | 3.472 s |
-| `//:migrator_packaging_validation` | 5.944 s | 2.922 s |
-
-These are environment-specific observations, not guaranteed CI durations. A hit is reported as a cache hit in the Bazel execution log; a miss runs the validation, and either test or cleanup failures remain build failures.
+The workflow execution log distinguishes a cache hit from an executed action. A hit reuses the successful validation result without starting its test containers; a miss runs the validation, and either test or cleanup failures remain build failures.
 
 ## Trust and evidence boundary
 
