@@ -12,7 +12,8 @@ setup() {
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
   mkdir -p .mise/tasks
   cp "$BATS_TEST_DIRNAME/../../.mise/tasks/"*.toml .mise/tasks/
-  cp "$BATS_TEST_DIRNAME/../../.mise/config.toml" .mise/
+  yq -p toml -o toml 'del(.tools.node, .tools."npm:@devcontainers/cli")' \
+    "$BATS_TEST_DIRNAME/../../.mise/config.toml" > .mise/config.toml
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_CONFIG_DIR="$BATS_TEST_TMPDIR/mise-config"
