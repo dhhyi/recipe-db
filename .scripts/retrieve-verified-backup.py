@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import runpy
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -257,11 +258,11 @@ def retrieve(args):
         os.close(directory)
         if not complete:
             destination.rmdir()
-    print(json.dumps({
+    return {
         "backupId": baseline["backupId"],
         "manifest": str(destination / baseline["manifest"]),
         "archive": str(destination / baseline["archive"]),
-    }, sort_keys=True))
+    }
 
 
 def main():
@@ -271,6 +272,12 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi):
         parser.error("--pi must be an SSH user@hostname")
+
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, interrupt)
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="recipe-db-ssh-", dir="/tmp") as directory:
         args.control_path = str(Path(directory) / "connection")
@@ -285,8 +292,10 @@ def main():
                         raise AuthenticationError("SSH connection setup failed")
                     time.sleep(0.1)
                 authenticate(args)
-                retrieve(args)
+                result = retrieve(args)
             finally:
+                for signum in (signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(signum, signal.SIG_IGN)
                 args.sudo_password = None
                 if connection.poll() is None:
                     connection.terminate()
@@ -295,7 +304,9 @@ def main():
                     except subprocess.TimeoutExpired:
                         connection.kill()
                         connection.wait()
-                        raise AuthenticationError("SSH connection cleanup timed out")
+                        raise AuthenticationError(
+                            "SSH connection cleanup timed out; check destination before retrying")
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":
@@ -313,5 +324,5 @@ if __name__ == "__main__":
               "destination and package integrity", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("backup retrieval: interrupted; no completed download", file=sys.stderr)
+        print("backup retrieval: interrupted; check destination before retrying", file=sys.stderr)
         sys.exit(130)

@@ -92,7 +92,7 @@ if args[:2] == ["-M", "-N"]:
     control = Path(args[3])
     assert control.parent.stat().st_mode & 0o777 == 0o700
     (root / "connection.json").write_text(json.dumps({
-        "pid": os.getpid(), "control": str(control), "closed": False,
+        "pid": os.getpid(), "parent": os.getppid(), "control": str(control), "closed": False,
     }))
     if os.environ.get("REQUIRE_TERMINAL") == "1":
         with open("/dev/tty", "rb+", buffering=0) as terminal:
@@ -104,6 +104,8 @@ if args[:2] == ["-M", "-N"]:
     connection.listen()
 
     def close(signum, frame):
+        if os.environ["CASE"] == "cleanup-timeout":
+            return
         connection.close()
         control.unlink()
         (root / "connection.json").write_text(json.dumps({
@@ -162,6 +164,7 @@ PY
 import json
 import os
 from pathlib import Path
+import signal
 import sys
 
 root = Path(os.environ["REMOTE_ROOT"])
@@ -181,6 +184,10 @@ if case == "corrupt":
     data = b"x" * len(data)
 if case == "interrupted" and name.endswith(".tar.gz"):
     sys.stdout.buffer.write(data[:3])
+    sys.exit(1)
+if case in ("terminated", "hangup") and name.endswith(".tar.gz"):
+    connection = json.loads((root / "connection.json").read_text())
+    os.kill(connection["parent"], signal.SIGTERM if case == "terminated" else signal.SIGHUP)
     sys.exit(1)
 if case == "oversized":
     data += b"extra"
@@ -246,8 +253,14 @@ from pathlib import Path
 
 root = Path(os.environ["REMOTE_ROOT"])
 connection = json.loads((root / "connection.json").read_text())
-assert connection["closed"]
+assert connection["closed"] or os.environ["CASE"] == "cleanup-timeout"
 assert not Path(connection["control"]).parent.exists()
+try:
+    os.kill(connection["pid"], 0)
+except ProcessLookupError:
+    pass
+else:
+    raise AssertionError("SSH master remains alive")
 PY
 }
 
@@ -417,13 +430,19 @@ PY
 @test "corrupt oversized interrupted and changing downloads never become completed files" {
   cp remote/state/baseline.json remote/original-baseline.json
   cp remote/state/status.json remote/original-status.json
-  for CASE in corrupt oversized interrupted changed-baseline failed-status; do
+  for CASE in corrupt oversized interrupted changed-baseline failed-status terminated hangup cleanup-timeout; do
     export CASE
     cp remote/original-baseline.json remote/state/baseline.json
     cp remote/original-status.json remote/state/status.json
     run python3 .scripts/retrieve-verified-backup.py "$DESTINATION"
     [ "$status" -ne 0 ]
-    [ ! -e "$DESTINATION" ]
+    if [[ $CASE == cleanup-timeout ]]; then
+      [ -d "$DESTINATION" ]
+      [[ $output == *"SSH connection cleanup timed out"* ]]
+      [[ $output != *'{"archive":'* ]]
+    else
+      [ ! -e "$DESTINATION" ]
+    fi
     [[ $output != *private-authorization* ]]
     assert_connection_closed
   done
