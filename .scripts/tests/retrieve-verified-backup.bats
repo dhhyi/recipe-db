@@ -104,6 +104,9 @@ if password_auth:
     assert sys.stdin.buffer.readline() == b"fixture-sudo-password\n"
     if os.environ.get("REJECT_SUDO_PASSWORD") == "1":
         sys.exit(1)
+    if os.environ.get("DENY_AFTER_AUTHENTICATION") == "1":
+        print("sudo: piadmin is not allowed to execute python3 as root", file=sys.stderr)
+        sys.exit(1)
     code_index = 7
 else:
     assert command[:5] == ["sudo", "-n", "-k", "python3", "-c"]
@@ -252,7 +255,8 @@ try:
     expected_sudo_prompts = int(os.environ.get("REQUIRE_SUDO_PASSWORD") == "1")
     assert content.count(b"Pi sudo password (not SSH key passphrase): ") == expected_sudo_prompts
     assert b"fixture-sudo-password" not in content
-    if os.environ.get("REJECT_SUDO_PASSWORD") == "1":
+    if os.environ.get("REJECT_SUDO_PASSWORD") == "1" \
+            or os.environ.get("DENY_AFTER_AUTHENTICATION") == "1":
         assert os.waitstatus_to_exitcode(status) != 0, repr(content)
         assert not os.path.exists(os.environ["DESTINATION"])
         print("authentication rejected")
@@ -293,6 +297,15 @@ PY
   run ! grep -q fixture-sudo-password "$MOCK_LOG"
 }
 
+@test "sudo policy denial after authentication fails without creating a download" {
+  export REQUIRE_SUDO_PASSWORD=1 DENY_AFTER_AUTHENTICATION=1
+  terminal_retrieval
+  [ "$status" -eq 0 ]
+  [ "$output" = "authentication rejected" ]
+  [ ! -e "$DESTINATION" ]
+  [ ! -s "$MOCK_LOG" ]
+}
+
 @test "sudo password authentication refuses noninteractive echoed input" {
   export REQUIRE_SUDO_PASSWORD=1
   run python3 -c 'import os; os.setsid(); os.execvp("python3", ["python3", ".scripts/retrieve-verified-backup.py", os.environ["DESTINATION"]])' < /dev/null
@@ -301,7 +314,7 @@ PY
   [ ! -e "$DESTINATION" ]
 }
 
-@test "sudo permission denial fails without requesting a password" {
+@test "reported sudo permission denial fails without requesting a password" {
   export DENY_SUDO=1
   run python3 .scripts/retrieve-verified-backup.py "$DESTINATION" < /dev/null
   [ "$status" -ne 0 ]
