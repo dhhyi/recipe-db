@@ -265,8 +265,6 @@ If staging fails or is interrupted, inspect the saved state and Lease; do not ru
 
 ## 6. Run and validate migrations
 
-The tags service's 1-to-2 transition is packaged as `migrators/tags-1-to-2`, included in the immutable candidate inventory, and activated only by these guarded migration commands. It rebuilds the tags table to allow the `other` category while preserving existing tag IDs, names, and recipe assignments; the `storage-version` marker changes to `2` only after database validation. The tags application itself never performs this conversion at startup.
-
 Discover the complete migration sequence against the candidate's pinned source and the actual storage-version markers. Planning is read-only; it does not change saved release progression or activate Jobs:
 
 ```sh

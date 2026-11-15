@@ -64,6 +64,7 @@ setup() {
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrator packaging") | .run' "$workflow")" = "mise run test-migrator-packaging" ]
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrators") | .run' "$workflow")" = "bash .scripts/run-migrator-tests.sh" ]
   ! grep -q '^\[test-tags-migrator\]' "$BATS_TEST_DIRNAME/../../.mise/tasks/validation.toml"
+  [ "$(yq -r '.workflows.suite_inputs[".scripts/tests/mise-workflows.bats"][] | select(. == "migrators/**")' "$BATS_TEST_DIRNAME/groups.yaml")" = "migrators/**" ]
 }
 
 @test "migrator test discovery succeeds when there are no migrators" {

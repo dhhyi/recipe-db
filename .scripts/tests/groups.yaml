@@ -263,11 +263,7 @@ workflows:
       - .scripts/create-oauth-secrets.sh
       - .scripts/create-search-key.sh
       - .scripts/run-migrator-tests.sh
-      - migrators/tags-1-to-2/test-migrator.sh
-      - migrators/tags-1-to-2/test_migration.py
-      - migrators/tags-1-to-2/migrate.py
-      - migrators/tags-1-to-2/migration.json
-      - migrators/tags-1-to-2/Dockerfile
+      - migrators/**
 precommit:
   tests:
     - .scripts/tests/precommit.bats
