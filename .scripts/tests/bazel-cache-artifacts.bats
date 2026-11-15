@@ -95,6 +95,28 @@ load test_helper
   grep -F "path: \${{ runner.temp }}/bazel-diagnostics/*.log" "$slice"
 }
 
+@test "Publish uploads both Bazel execution logs even when a build fails" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  step='.jobs.quality-checks.steps[] | select(.name == "upload Bazel execution logs")'
+
+  run yq -r "$step | .if" "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'always()' ]
+  run yq -r "$step | .uses" "$workflow"
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ ^actions/upload-artifact@v[0-9]+$ ]]
+  run yq -r "$step | .with.path" "$workflow"
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  [ "${lines[0]}" = '${{ runner.temp }}/bazel-format-execution.json' ]
+  # shellcheck disable=SC2016
+  [ "${lines[1]}" = '${{ runner.temp }}/bazel-check-execution.json' ]
+  [ "${#lines[@]}" -eq 2 ]
+  run yq -r "$step | .with.if-no-files-found" "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = ignore ]
+}
+
 @test "Publish configures runner-dependent diagnostics only in build step environments" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   run yq '.jobs.quality-checks.env | has("BAZEL_DIAGNOSTICS_DIR")' "$workflow"

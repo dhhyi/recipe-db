@@ -58,9 +58,11 @@ The workflow log reports inspected-run and attempted-candidate counts and the st
 
 ## Rebuild diagnostics
 
-The shared `mise run --raw bazel build ...` wrapper enables `--subcommands`, `--explain`, and `--verbose_explanations` only when `BAZEL_DIAGNOSTICS_DIR` is non-empty, as configured by CI. Pre-commit builds leave it unset and use normal Bazel output without extra diagnostics. When enabled, the wrapper prints executed commands during the build and the rebuild explanations afterwards, including on failure, while preserving Bazel's exit status. These flags report the current build; they do not run a separate dry run.
+The shared `mise run --raw bazel build ...` wrapper enables `--explain` and `--verbose_explanations` only when `BAZEL_DIAGNOSTICS_DIR` is non-empty, as configured by CI. Pre-commit builds leave it unset and use normal Bazel output without extra diagnostics. When enabled, the wrapper saves rebuild explanations to a file, including on failure, while preserving Bazel's exit status. These flags report the current build; they do not run a separate dry run.
 
 Each diagnostics-enabled invocation retains a unique timestamped explanation log under `BAZEL_DIAGNOSTICS_DIR`. CI uses the runner's temporary diagnostics directory and uploads its logs as `bazel-rebuild-explanations` with seven-day retention even if a build fails. Non-build commands and invocations with Bazel startup options before `build` pass through unchanged.
+
+CI also uploads the available formatting and check execution logs as `bazel-execution-logs` with seven-day retention, including after a build failure. These JSON logs contain action commands, environment variables, and cache information; they are not identical to Bazel's subcommand output.
 
 Explanations can identify changed inputs or action commands when the local action cache has prior state. CI restores only the disk cache, not the output base/local action cache, so a fresh runner may report missing prior action state rather than a specific changed file. Combine the explanations with the existing execution-log cache-hit counts and snapshot restore diagnostics; a missing local action record alone does not prove a disk-cache miss.
 
