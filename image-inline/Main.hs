@@ -25,14 +25,14 @@ import Network.HTTP.Client
     responseStatus,
   )
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.HTTP.Types.Method (StdMethod (HEAD))
 import Network.HTTP.Types.Status (Status, status204, status400, status500, statusCode, statusIsSuccessful)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Posix.Signals (Handler (Catch), installHandler, sigTERM)
-import Web.Scotty (ActionM, ScottyM, get, json, queryParamMaybe, scotty, setHeader, status, text)
-import qualified Web.Scotty as Scotty
+import Web.Scotty (ActionM, ScottyM, addroute, get, json, queryParamMaybe, scotty, setHeader, status, text)
 
 -- extension -> mime type, mirroring the previous Perl implementation's table
 extToMime :: String -> String
@@ -80,7 +80,7 @@ app cacheEnabled testingMode db manager = do
   get "/health" $ status status204
 
   if testingMode
-    then Scotty.head "/image-inline/" $ status status204
+    then addroute HEAD "/image-inline/" $ status status204
     else pure ()
 
   get "/image-inline/" $ do
