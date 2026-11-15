@@ -90,27 +90,27 @@ Before production maintenance, rehearse the exact deployed release, latest remot
 
 This is a required process step, not a machine-enforced maintenance gate. An operator may exceptionally proceed without a passing rehearsal when urgency warrants it, but must record that decision and the failed, interrupted or skipped outcome accurately. That discretion never waives storage, ordering, ownership, stopped-worker or migration-validation guards, and does not permit changing or bypassing them.
 
-The supplied backup is production data and may predate today's records; this step does not capture a fresh backup. Its `capturedAt` is recorded in the result. Keep its manifest, archive, rehearsal directory and result private. Use an already verified local copy, such as the pair provided for this rehearsal. If one is not available, an operator may use the existing [backup retrieval procedure](production-kubernetes.md#fresh-deployment-restore) only with separate authorization for its temporary Pi-side files and possible rclone authorization refresh. It reads the remote package without changing the Drive baseline or uploader state and never runs upload, delete or prune operations. The rehearsal runner does not fetch or select a remote package: it validates the supplied pair and records the operator's attestation to the latest Pi status and baseline. Do not use a partial download or proceed without confirming the exact baseline as below.
+Retrieve the current verified backup with the standard command below, from your workstation checkout. It works in fish as well as POSIX shells. The timestamp gives each download a new private destination:
 
-Before running the command, confirm on the Pi that the latest uploader status is `verified-upload` or `verified-unchanged`, is not overdue, and that the remote baseline is the exact supplied package:
+```sh
+mkdir -p "$HOME/.local/share/recipe-db/rehearsals"
+mise run --raw retrieve-verified-backup \
+  "$HOME/.local/share/recipe-db/rehearsals/backup-$(date -u +%Y%m%dT%H%M%SZ)"
+```
 
-- The package manifest's `backupId` must match the Pi baseline's `backupId`.
-- For `verified-upload`, the status report's `backupId` must also match the package.
-- For `verified-unchanged`, the status report may name a newer local capture; compare the Pi baseline's archive and manifest names, SHA-256 values and `backupId` with the supplied pair instead.
-- Stop for any other status or any identity/hash mismatch. The required confirmation token attests that you checked the current status and exact remote baseline; its result records the attested baseline ID and explicitly says the remote status was not independently verified.
+Keep `--raw` so authentication prompts work. Expect at most one SSH-key unlock and a separate Pi sudo-password prompt. Success prints JSON containing the verified `backupId` and absolute `manifest` and `archive` paths; use those paths as `SOURCE_MANIFEST` and `SOURCE_ARCHIVE` below. Stop if retrieval fails. See the [retrieval reference](production-kubernetes.md#fresh-deployment-restore) for prerequisites and a different SSH target.
 
-Use the read-only status and baseline records on the Pi:
+The command checks uploader health and freshness, selects the exact verified baseline even for `verified-unchanged`, and verifies both files' identity and hashes. It replaces manual downloads and hash comparisons. The files stream from Drive through one shared SSH connection without Pi-side backup staging or copied Drive credentials; the connection closes when retrieval finishes. Drive reads may refresh authorization on the Pi but do not change the baseline or uploader state or run upload, delete or prune operations.
+
+The downloaded backup is production data and may predate today's records; retrieval does not capture a fresh backup. Its `capturedAt` is recorded in the rehearsal result. Keep the downloaded files, rehearsal directory and result private.
+
+The rehearsal runner still requires the latest uploader status and its existing confirmation token; it does not fetch a package or independently verify remote status. Immediately before the rehearsal, run this read-only command on the Pi and use its `status` as `BACKUP_STATUS` below:
 
 ```sh
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
-sudo python3 -c '
-import json
-with open("/var/lib/recipe-db-backup/baseline.json") as source:
-    baseline = json.load(source)
-print(json.dumps({key: baseline[key] for key in
-    ("backupId", "archive", "manifest", "archiveSha256", "manifestSha256")}))
-'
 ```
+
+Require `verified-upload` or `verified-unchanged`, not overdue. For `verified-upload`, its `backupId` must match the retrieved ID. For `verified-unchanged`, the status may name a newer local capture; the retrieval command has already checked the exact remote baseline. If the baseline has advanced or the rehearsal is delayed, retrieve it again into a new directory. The confirmation token attests to these checks; do not use partial files or bypass a failed check.
 
 The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It adapts the private values for local use while preserving storage sizing, resource limits and timeouts; Pi storage identities, production integrations and credentials are not copied. It reads the live release ConfigMap and Deployment annotations, verifies the live image digests against the source OCI inventory, and requires every stateful workload to be ready on that release. It directly compares all package storage markers with the source release's declared versions. Ready workloads on those exact images provide indirect evidence that live markers passed startup validation; the result explicitly records that live marker files were not directly read. No marker is read by an extra production Pod or process. If any preflight fails, investigate; do not override the check.
 
