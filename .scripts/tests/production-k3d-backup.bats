@@ -1518,6 +1518,30 @@ PY
   run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
 }
 
+@test "migration planning accepts only an empty defaulted pod security context" {
+  export MOCK_MIGRATIONS=true
+  prepare_candidate_release
+  local job_file
+  for job_file in "$MOCK_LOG".migration-job*.json; do
+    [[ -f $job_file ]] || continue
+    jq '.spec.template.spec.securityContext={}' "$job_file" > "$job_file.next"
+    mv "$job_file.next" "$job_file"
+  done
+
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+
+  for job_file in "$MOCK_LOG".migration-job*.json; do
+    [[ -f $job_file ]] || continue
+    jq '.spec.template.spec.securityContext={runAsUser:0}' "$job_file" > "$job_file.next"
+    mv "$job_file.next" "$job_file"
+  done
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"staged migration Job"* && $output == *"does not match the candidate and pinned transition"* ]]
+  run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
+}
+
 @test "migration claim recovery requires exact confirmation and does not activate a Job" {
   export MOCK_MIGRATIONS=true
   prepare_candidate_release
