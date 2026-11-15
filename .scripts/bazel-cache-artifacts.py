@@ -840,7 +840,7 @@ def request_delete(url, token):
         raise ApiFailure("artifact deletion outcome is unknown; artifact still exists") from error
 
 
-def paginated(url, token, key, page_size=100, strict=False):
+def paginated(url, token, key, page_size=100, strict=False, missing_is_error=True):
     page = 1
     while True:
         separator = "&" if "?" in url else "?"
@@ -851,7 +851,7 @@ def paginated(url, token, key, page_size=100, strict=False):
                 raise
             raise ApiFailure("malformed GitHub API response") from error
         if result is None:
-            if strict:
+            if strict and missing_is_error:
                 raise ApiFailure("GitHub API listing not found")
             return
         if strict and (not isinstance(result, dict) or not isinstance(result.get(key), list)
@@ -916,7 +916,7 @@ def pr_attempt_is_eligible(run, attempt, current_run, current_run_number, curren
 
 def artifacts_for_run(base, token, run):
     url = f"{base}/actions/runs/{run['id']}/artifacts"
-    artifacts = list(paginated(url, token, "artifacts"))
+    artifacts = list(paginated(url, token, "artifacts", strict=True, missing_is_error=False))
     def attempt(artifact):
         match = re.search(r"-a(\d+)$", artifact.get("name", ""))
         return int(match.group(1)) if match else 0

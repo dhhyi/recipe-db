@@ -839,6 +839,26 @@ class CacheArtifactTests(unittest.TestCase):
                       output.getvalue())
         self.assertIn("using main-only snapshot", output.getvalue())
 
+    def test_artifact_listing_shape_errors_and_deleted_runs_are_distinct(self):
+        run = {"id": 1, "run_number": 1, "head_sha": "head", "event": "pull_request"}
+        args = SimpleNamespace(run_number=10, run_id="10", run_attempt="1",
+                               repository="owner/repo")
+        for listing, reason in (({}, "API failure"), (None, "exhausted history")):
+            output = io.StringIO()
+
+            def request(url, token):
+                return listing if "/artifacts?" in url else {"workflow_runs": [run]}
+
+            with self.subTest(reason=reason), \
+                    patch.object(CACHE, "request_json", side_effect=request), \
+                    redirect_stdout(output), redirect_stderr(io.StringIO()):
+                self.assertFalse(CACHE.restore_scope(
+                    args, "https://api.github.com/repos/owner/repo", "token", "pr", 17,
+                    {}, self.root / "cache", head_branch="feature",
+                ))
+            self.assertIn(f"inspected-runs=1 attempted-candidates=0 reason={reason}",
+                          output.getvalue())
+
     def test_pr_rerun_restores_only_prior_attempt(self):
         args = SimpleNamespace(run_number=10, run_id="42", run_attempt="3",
                                repository="owner/repo")
@@ -1508,7 +1528,7 @@ class CacheArtifactTests(unittest.TestCase):
             {"name": "bazel-cache-v2-pr-17-r4-a3"},
             {"name": "bazel-cache-v2-pr-17-r4-a2"},
         ]
-        with patch.object(CACHE, "paginated", side_effect=lambda url, token, key: (
+        with patch.object(CACHE, "paginated", side_effect=lambda url, token, key, **kwargs: (
             artifact_runs.append(url) or artifacts
         )):
             ordered = CACHE.artifacts_for_run("https://api.github.com/repos/owner/repo", "token", runs[0])
