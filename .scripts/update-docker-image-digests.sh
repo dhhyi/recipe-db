@@ -47,6 +47,21 @@ for project_file in "$project_root"/*/.project.yaml; do
   printf '%s\t%s\n' "${dockerfile#"$project_root"/}" "$args_file" >> "$temporary_directory/dockerfiles"
 done
 
+fixture_args_file="$temporary_directory/fixture-args"
+: > "$fixture_args_file"
+find "$project_root/.scripts/tests/fixtures" -type f -name Dockerfile -print \
+  | sort > "$temporary_directory/fixture-dockerfiles"
+while IFS= read -r dockerfile; do
+  [ -f "$dockerfile" ] || continue
+  awk -v mode=scan -v args_file="$fixture_args_file" -f "$scanner" "$dockerfile" \
+    > "$temporary_directory/dockerfile-images"
+  while IFS= read -r image; do
+    printf '%s\t%s\n' "${dockerfile#"$project_root"/}" "$image" >> "$temporary_directory/inventory"
+  done < "$temporary_directory/dockerfile-images"
+  printf '%s\t%s\n' "${dockerfile#"$project_root"/}" "$fixture_args_file" \
+    >> "$temporary_directory/dockerfiles"
+done < "$temporary_directory/fixture-dockerfiles"
+
 find "$project_root/.scripts/templates" -type f \( -name '*.yml' -o -name '*.yaml' \) -print \
   | sort > "$temporary_directory/template-files"
 while IFS= read -r template; do

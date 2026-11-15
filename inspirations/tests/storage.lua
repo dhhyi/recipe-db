@@ -163,6 +163,10 @@ for _, document in ipairs({"{}", "[]", populated}) do
         local loaded, handlers = start(mode)
         assert(loaded and read_data() == document)
         status(handlers, "GET /health", 204)
+        for _, route in ipairs({"HEAD /inspirations", "HEAD /inspirations/"}) do
+            local body, headers = assert(handlers[route])()
+            assert(body == nil and headers[":status"] == "204", route)
+        end
         if mode == "backup" then
             status(handlers, "PUT /inspirations/...", 503, {"recipe"}, nil, nil,
                    '["https://changed.example.com"]')

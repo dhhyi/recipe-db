@@ -3,6 +3,11 @@ set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd -P)
 cd "$project_root"
+nats_image=$(mise exec -- yq -r '.infrastructure.nats' "$project_root/deploy/local.yaml")
+if ! printf '%s\n' "$nats_image" | grep -Eq '^nats:[^@[:space:]]+@sha256:[0-9a-f]{64}$'; then
+  echo "The application NATS image must be pinned by digest in deploy/local.yaml" >&2
+  exit 1
+fi
 name=recipe-db-message-bus-test-$$
 container_started=false
 volume_created=false
@@ -34,7 +39,7 @@ docker create --name "$name" --network intranet --network-alias "$name" \
   --env "VERBOSE=${VERBOSE:-false}" \
   --mount "type=bind,src=$project_root/message-bus/nats.conf,dst=/etc/nats/nats.conf,readonly" \
   --mount "type=volume,src=$name,dst=/data" \
-  nats:2-alpine --config /etc/nats/nats.conf
+  "$nats_image" --config /etc/nats/nats.conf
 container_started=true
 docker start "$name" > /dev/null
 

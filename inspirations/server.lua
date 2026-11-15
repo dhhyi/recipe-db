@@ -287,8 +287,11 @@ end
 app.add_handler("DELETE", "/inspirations", delete_all)
 app.add_handler("DELETE", "/inspirations/", delete_all)
 
-app.add_handler("GET", "/health",
-                function() return nil, {[":status"] = "204"} end)
+local function service_online() return nil, {[":status"] = "204"} end
+
+app.add_handler("GET", "/health", service_online)
+app.add_handler("HEAD", "/inspirations", service_online)
+app.add_handler("HEAD", "/inspirations/", service_online)
 
 app.add_handler("GET", "/inspirations/...", function(captures)
     local recipe_id = captures[1]

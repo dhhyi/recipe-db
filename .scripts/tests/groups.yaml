@@ -225,8 +225,10 @@ tasks:
     .scripts/tests/update-docker-image-digests.bats:
       - .scripts/update-docker-image-digests.sh
       - .scripts/docker-base-images.awk
+      - .scripts/external-image-references.awk
       - .scripts/update-image-references.awk
       - .scripts/templates/**
+      - ":(glob).scripts/tests/fixtures/**/Dockerfile"
       - .mise/tasks/development.toml
       - deploy/local.yaml
       - deploy/pi.yaml
@@ -248,6 +250,8 @@ workflows:
       - ":(glob)*/build.gradle"
     .scripts/tests/bazel-cache-artifacts.bats:
       - .scripts/bazel-cache-artifacts.py
+      - .scripts/tests/bazel-cache-artifacts.py
+      - .scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json
       - .github/workflows/publish.yaml
       - .github/workflows/bazel-cache-cleanup.yaml
     .scripts/tests/mise-workflows.bats:

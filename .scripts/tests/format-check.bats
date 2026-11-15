@@ -115,8 +115,20 @@ setup_bazel_fixture() {
   cp "$BATS_TEST_DIRNAME/../"{generate-bazel-build,format-files,format-bazel,run-in-devcontainer,bazel}.sh .scripts/
   cp "$BATS_TEST_DIRNAME/../../.bazelversion" .
   printf '%s\n' 'module(name = "format_fixture")' > MODULE.bazel
-  mkdir -p .scripts/tests .mise/tasks example other
+  mkdir -p .scripts/tests .mise/tasks example other deploy message-bus graphql/.devcontainer \
+    graphql/src graphql/testdata .scripts/lib .scripts/templates \
+    .scripts/tests/fixtures/migrator-packaging
   touch .scripts/tests/example.bats .scripts/tests/test_helper.bash .scripts/test-scripts.sh
+  touch .mise/tasks/validation.toml .mise/tasks/development.toml .mise/tasks/compose.toml
+  touch .scripts/run-bazel-validation.sh .scripts/test-message-bus.sh \
+    .scripts/test-migrator-packaging.sh .scripts/generate-production-build-metadata.sh \
+    .scripts/create-production-release-inventory.sh .scripts/validate-production-release.sh \
+    .scripts/lib/project-metadata.sh .scripts/migrator-manifest.schema.json \
+    .scripts/templates/kubernetes.lib.yml .scripts/templates/kubernetes-migration-job-test.yml \
+    deploy/local.yaml message-bus/nats.conf graphql/.project.yaml \
+    graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
+    graphql/Cargo.toml graphql/Cargo.lock graphql/src/main.rs graphql/testdata/events.json \
+    .scripts/tests/fixtures/migrator-packaging/fixture.json
   cat > .scripts/tests/groups.yaml << 'EOF'
 tooling:
   tests: [.scripts/tests/example.bats]

@@ -41,9 +41,9 @@ templ InspirationsLazy(in *gql.RecipeInspirationsResponse) {
 }
 
 templ inspirationsList(in []gql.InspirationsLink) {
-	<ul class="markerless">
+	<ul>
 		for _, insp := range in {
-			<li>
+			<li class="list-none">
 				@inspiration(insp)
 			</li>
 		}

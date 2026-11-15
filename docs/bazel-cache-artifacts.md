@@ -10,7 +10,7 @@ This guide describes the Bazel disk-cache artifact lifecycle for maintainers of 
 - [Rebuild diagnostics](#rebuild-diagnostics)
 - [Trust and evidence boundary](#trust-and-evidence-boundary)
 
-The Publish `quality-checks` job uses completed Bazel disk-cache snapshots as workflow artifacts. This replaces only the Bazel `actions/cache` step. Mise tool caching, the quality gates, WIP handling, integration/image jobs, and other workflow artifacts are unchanged.
+The Publish `quality-checks` job uses completed Bazel disk-cache snapshots as workflow artifacts. This replaces only the Bazel `actions/cache` step. Mise tool caching, the quality gates, WIP handling, integration/image jobs, and other workflow artifacts are unchanged. The `//:all` validation runs before snapshot preparation and upload, so successful message-bus and migrator-packaging actions can be reused by later builds without starting their test containers.
 
 ## Contract
 
@@ -27,8 +27,8 @@ Compatibility requires the same cache format, `.bazelversion`, OS, architecture,
 
 Restore uses one snapshot at a time and completes before Bazel starts:
 
-- PR builds prefer the newest earlier compatible artifact for that same PR, ordered by run number and attempt, without requiring ancestry after a force push. If none is usable, they try trusted main snapshots.
-- Main builds consider only main push artifacts whose revisions occur on the built revision's first-parent history. The closest revision wins, with run number and attempt breaking ties.
+- PR builds prefer the newest earlier compatible artifact for that same PR, ordered by run number and attempt, without requiring ancestry after a force push. Discovery queries only Publish pull-request runs on the PR head branch and inspects at most 100 runs and attempts at most 20 candidates. If none is usable, they independently try trusted main snapshots.
+- Main builds consider only the latest 20 Publish push runs on `main` whose revisions occur on the built revision's first-parent history. The closest revision wins, with run number and attempt breaking ties. If none is usable, the build starts cold.
 - A main revision associated by GitHub commit/PR metadata with exactly one squash-merged PR on `main` attempts a two-source restore. The PR snapshot must be for the PR's final head, not its synthetic CI merge revision or the resulting squash commit. Its paired main snapshot must precede the squash commit on first-parent history. Other main revisions use the incremental-main path.
 - An artifact from the current in-progress attempt is excluded. A prior attempt of the same run can be considered.
 
@@ -54,7 +54,7 @@ The limits are an 8 GiB downloaded workflow ZIP and snapshot tar, 12 GiB expande
 
 Missing, expired, or concurrently deleted artifacts are ordinary misses: the selector tries another eligible candidate and ultimately runs Bazel cold if needed. Legacy v1 PR snapshots are explicitly skipped during migration; v1 main snapshots also produce a migration diagnostic and are not interpreted as v2. API authorization, service, and download errors are logged separately from misses. Safe read requests use bounded retries for transient connection failures; deletion outcomes are confirmed or reported incomplete. Cache lookup and snapshot-preparation errors do not skip quality checks or convert their result to success; an upload-action failure is non-blocking.
 
-The workflow log reports each selected producer run/attempt and built revision, PR head/base and squash revision, compatibility and writer-trust decisions, action-key conflicts, fallback/rejection reason, cache action hits and executions from Bazel execution logs, snapshot preparation/restore/union times, archive and expanded sizes, and helper peak resident memory. The upload-artifact step's duration and transfer diagnostics are available in the Actions job log.
+The workflow log reports inspected-run and attempted-candidate counts and the stop reason for each discovery, each selected producer run/attempt and built revision, PR head/base and squash revision, compatibility and writer-trust decisions, action-key conflicts, fallback/rejection reason, cache action hits and executions from Bazel execution logs, snapshot preparation/restore/union times, archive and expanded sizes, and helper peak resident memory. The upload-artifact step's duration and transfer diagnostics are available in the Actions job log.
 
 ## Rebuild diagnostics
 
@@ -63,6 +63,14 @@ The shared `mise run --raw bazel build ...` wrapper enables `--subcommands`, `--
 Each diagnostics-enabled invocation retains a unique timestamped explanation log under `BAZEL_DIAGNOSTICS_DIR`. CI uses the runner's temporary diagnostics directory and uploads its logs as `bazel-rebuild-explanations` with seven-day retention even if a build fails. Non-build commands and invocations with Bazel startup options before `build` pass through unchanged.
 
 Explanations can identify changed inputs or action commands when the local action cache has prior state. CI restores only the disk cache, not the output base/local action cache, so a fresh runner may report missing prior action state rather than a specific changed file. Combine the explanations with the existing execution-log cache-hit counts and snapshot restore diagnostics; a missing local action record alone does not prove a disk-cache miss.
+
+## Cacheable integration validations
+
+The generated Bazel targets `//:message_bus_validation` and `//:migrator_packaging_validation` wrap the existing Mise validation commands. `//:all` runs both in the Publish quality-checks job, before cache snapshot preparation. Execution-log reporting distinguishes an executed action from a successful disk-cache hit; on a hit, Bazel reuses the result without starting the validation's test containers. The existing Mise commands remain available for direct use.
+
+The message-bus target declares the GraphQL compilation sources, tests, manifests and lockfile, project/devcontainer configuration and task mapping, runner helpers, NATS configuration, and the pinned NATS image reference as inputs. The migrator-packaging target declares its release-metadata scripts, manifest schema, fixtures, and shared migration-Job template/helper inputs. Generated source discovery includes additions and removals, so those alter the relevant target's inputs; the targets do not use the Git revision or unrelated repository files as cache keys. Their dependency sets are independent.
+
+The workflow execution log distinguishes a cache hit from an executed action. A hit reuses the successful validation result without starting its test containers; a miss runs the validation, and either test or cleanup failures remain build failures.
 
 ## Trust and evidence boundary
 

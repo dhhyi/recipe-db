@@ -2,9 +2,9 @@
 set -eu
 
 project_root=$(cd "$(dirname "$0")/.." && pwd -P)
-. "$project_root/.scripts/lib/project-metadata.sh"
 fixture_root="$project_root/.scripts/tests/fixtures/migrator-packaging"
 migrator="$fixture_root/repository/migrators/soup-1-to-2"
+test_revision=0123456789abcdef0123456789abcdef01234567
 test_id="recipe-db-migrator-packaging-$$"
 image="$test_id"
 work=$(mktemp -d "${TMPDIR:-/tmp}/$test_id.XXXXXX")
@@ -14,7 +14,10 @@ cleanup() {
   status=$?
   trap - 0
   if [ "$image_built" = true ]; then
-    docker image rm "$image" > /dev/null 2>&1 || status=1
+    if ! docker image rm "$image" > /dev/null; then
+      printf 'Failed to remove migrator test image %s\n' "$image" >&2
+      status=1
+    fi
   fi
   if [ "$status" -eq 0 ]; then
     rm -rf "$work" || status=1
@@ -74,7 +77,6 @@ cmp "$fixture_root/rejected/recipe.json" "$rejected_data/recipe.json"
 cmp "$fixture_root/input/storage-version" "$rejected_data/storage-version"
 
 test_release_packaging() {
-  test_revision=$(git -C "$project_root" rev-parse HEAD)
   test_repository="$work/repository"
   cp -R "$fixture_root/repository" "$test_repository"
   mkdir -p "$test_repository/.scripts" "$work/bin"
@@ -140,40 +142,33 @@ EOF
   sh "$project_root/.scripts/validate-production-release.sh" \
     "$work/schema-1-release.json" "$test_revision" "$zero_repository"
 
-  application_project_metadata_to_jsonl "$project_root" "$work/projects.jsonl"
-  jq --slurpfile projects "$work/projects.jsonl" '
-    .images = ($projects | map({
-      key:.name,
-      value:("ghcr.io/dhhyi/recipe-db-" + .name + "@sha256:" + ("e" * 64))
-    }) | from_entries)
-  ' "$work/release.json" > "$work/render-release.json"
-  jq '.migrations=[]' "$work/render-release.json" > "$work/render-empty-release.json"
-  jq 'del(.migrations) | .schemaVersion=1' "$work/render-release.json" \
-    > "$work/render-schema-1-release.json"
-  mise exec -- yq -o=json '.' "$project_root/deploy/local.yaml" > "$work/config.json"
-  jq -n --slurpfile config "$work/config.json" --slurpfile projects "$work/projects.jsonl" \
-    --slurpfile release "$work/release.json" \
+  jq -n --slurpfile release "$work/release.json" \
     --arg artifact "ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
-    --rawfile nats "$project_root/message-bus/nats.conf" \
-    --rawfile maintenanceNginx "$project_root/browse-maintenance/nginx.conf" \
-    --rawfile maintenanceHtml "$project_root/browse-maintenance/unavailable.html" \
-    --rawfile oauthConfig "$project_root/oauth2-proxy/oauth2-proxy.cfg" \
-    --rawfile designNginx "$project_root/design/nginx.conf" \
-    '{config:$config[0],projects:$projects,release:$release[0],artifact:$artifact,
-      files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,
-        oauthConfig:$oauthConfig,designNginx:$designNginx}}' > "$work/template-values.json"
+    '{
+      config:{
+        namespace:"recipe-db",
+        runtime:{},
+        volumes:{images:"2Gi"},
+        resources:{requests:{cpu:"25m",memory:"32Mi"},limits:{memory:"512Mi"}}
+      },
+      release:$release[0],
+      artifact:$artifact,
+      files:{}
+    }' > "$work/template-values.json"
 
   render_and_check_jobs() {
     test_inventory=$1
     test_expected_job=$2
     jq --slurpfile release "$test_inventory" '.release=$release[0]' \
       "$work/template-values.json" > "$work/current-template-values.json"
-    mise exec -- ytt \
-      -f "$project_root/.scripts/templates/kubernetes-template.yml" \
+    if ! mise exec -- ytt \
+      -f "$project_root/.scripts/templates/kubernetes-migration-job-test.yml" \
       -f "$project_root/.scripts/templates/kubernetes.lib.yml" \
       --data-values-file "$work/current-template-values.json" -o json \
-      | jq -s '[.[] | select(.kind == "Job" and .metadata.labels["recipe-db/migration"] == "staged")]' \
-        > "$work/migration-jobs.json"
+      > "$work/migration-jobs-output.json"; then
+      return 1
+    fi
+    jq -s '.' "$work/migration-jobs-output.json" > "$work/migration-jobs.json"
     if [ "$test_expected_job" = true ]; then
       test_job_name=$(jq -r --arg revision "$test_revision" '
         "migration-" + $revision[0:12] + "-" + .migrations[0].image[-40:]
@@ -181,6 +176,7 @@ EOF
       jq -e --arg name "$test_job_name" --arg revision "$test_revision" \
         --arg image "$(jq -r '.migrations[0].image' "$test_inventory")" '
         length == 1
+        and .[0].kind == "Job"
         and .[0].metadata.name == $name
         and .[0].metadata.annotations["recipe-db/revision"] == $revision
         and .[0].spec.suspend == true
@@ -199,9 +195,9 @@ EOF
     fi
   }
 
-  render_and_check_jobs "$work/render-release.json" true
-  render_and_check_jobs "$work/render-empty-release.json" false
-  render_and_check_jobs "$work/render-schema-1-release.json" false
+  render_and_check_jobs "$work/release.json" true
+  render_and_check_jobs "$work/empty-release.json" false
+  render_and_check_jobs "$work/schema-1-release.json" false
 }
 
 test_release_packaging

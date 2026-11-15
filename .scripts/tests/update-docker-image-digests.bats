@@ -12,7 +12,8 @@ setup() {
 }
 
 create_fixture() {
-  mkdir -p "$FIXTURE_ROOT/demo" "$FIXTURE_ROOT/.scripts/templates" "$FIXTURE_ROOT/deploy"
+  mkdir -p "$FIXTURE_ROOT/demo" "$FIXTURE_ROOT/.scripts/templates" "$FIXTURE_ROOT/deploy" \
+    "$FIXTURE_ROOT/.scripts/tests/fixtures/migrator-packaging/repository/migrators/soup-1-to-2"
   cat > "$FIXTURE_ROOT/demo/.project.yaml" << 'EOF'
 devcontainer:
   build:
@@ -20,6 +21,8 @@ devcontainer:
 EOF
   old_digest=$(printf '%064d' 0 | tr '0' 'b')
   printf 'FROM alpine:3.20@sha256:%s\n' "$old_digest" > "$FIXTURE_ROOT/demo/Dockerfile"
+  printf 'FROM python:3.14-alpine\n' \
+    > "$FIXTURE_ROOT/.scripts/tests/fixtures/migrator-packaging/repository/migrators/soup-1-to-2/Dockerfile"
   cat > "$FIXTURE_ROOT/.scripts/templates/external.lib.yml" << 'EOF'
 #@ def services():
 #@   return {
@@ -79,6 +82,7 @@ EOF
   run "$FIXTURE_ROOT/.scripts/update-docker-image-digests.sh" --list
   [ "$status" -eq 0 ]
   [[ "$output" == *$'alpine:3.20\n  demo/Dockerfile'* ]]
+  [[ "$output" == *$'python:3.14-alpine\n  .scripts/tests/fixtures/migrator-packaging/repository/migrators/soup-1-to-2/Dockerfile'* ]]
   [[ "$output" == *$'nats:2.11.10-alpine\n  .scripts/templates/external.lib.yml\n  deploy/local.yaml\n  deploy/pi.yaml'* ]]
   [[ "$output" == *$'traefik:v3.7.16\n  deploy/local.yaml\n  deploy/pi.yaml'* ]]
   [[ "$output" != *"@sha256:"* ]]
@@ -92,6 +96,8 @@ EOF
   run "$FIXTURE_ROOT/.scripts/update-docker-image-digests.sh"
   [ "$status" -eq 0 ]
   grep -Fq "FROM alpine:3.20@sha256:$(printf '%064d' 0 | tr '0' 'a')" "$FIXTURE_ROOT/demo/Dockerfile"
+  grep -Fq "FROM python:3.14-alpine@sha256:$(printf '%064d' 0 | tr '0' 'a')" \
+    "$FIXTURE_ROOT/.scripts/tests/fixtures/migrator-packaging/repository/migrators/soup-1-to-2/Dockerfile"
   grep -Eq '"image": "nats:2[.]11[.]10-alpine@sha256:[a-f0-9]{64}"' "$FIXTURE_ROOT/.scripts/templates/external.lib.yml"
   grep -Fq 'nats:2.11.10-alpine@sha256:' "$FIXTURE_ROOT/deploy/local.yaml"
   grep -Eq 'maintenance: "nginx:stable-alpine@sha256:[a-f0-9]{64}"' "$FIXTURE_ROOT/deploy/local.yaml"
@@ -106,6 +112,8 @@ EOF
 
 @test "a failed registry lookup leaves every source unchanged" {
   cp "$FIXTURE_ROOT/demo/Dockerfile" "$BATS_TEST_TMPDIR/Dockerfile"
+  cp "$FIXTURE_ROOT/.scripts/tests/fixtures/migrator-packaging/repository/migrators/soup-1-to-2/Dockerfile" \
+    "$BATS_TEST_TMPDIR/fixture-Dockerfile"
   cp "$FIXTURE_ROOT/.scripts/templates/external.lib.yml" "$BATS_TEST_TMPDIR/template.yml"
   cp "$FIXTURE_ROOT/deploy/local.yaml" "$BATS_TEST_TMPDIR/local.yaml"
   cp "$FIXTURE_ROOT/deploy/pi.yaml" "$BATS_TEST_TMPDIR/pi.yaml"
@@ -113,6 +121,8 @@ EOF
   run "$FIXTURE_ROOT/.scripts/update-docker-image-digests.sh"
   [ "$status" -ne 0 ]
   cmp "$BATS_TEST_TMPDIR/Dockerfile" "$FIXTURE_ROOT/demo/Dockerfile"
+  cmp "$BATS_TEST_TMPDIR/fixture-Dockerfile" \
+    "$FIXTURE_ROOT/.scripts/tests/fixtures/migrator-packaging/repository/migrators/soup-1-to-2/Dockerfile"
   cmp "$BATS_TEST_TMPDIR/template.yml" "$FIXTURE_ROOT/.scripts/templates/external.lib.yml"
   cmp "$BATS_TEST_TMPDIR/local.yaml" "$FIXTURE_ROOT/deploy/local.yaml"
   cmp "$BATS_TEST_TMPDIR/pi.yaml" "$FIXTURE_ROOT/deploy/pi.yaml"

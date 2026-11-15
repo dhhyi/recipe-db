@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import http.client
+import itertools
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -43,6 +44,9 @@ MAX_FILES = 500_000
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_METADATA_BYTES = 1024**2
 WORKFLOW_RUNS_PAGE_SIZE = 20
+PR_RUN_LIMIT = 100
+PR_CANDIDATE_LIMIT = 20
+MAIN_RUN_LIMIT = 20
 MAX_ACTION_RESULT_BYTES = 64 * 1024**2
 MAX_TREE_EXPANDED_BYTES = 64 * 1024**2
 MAX_ACTION_LOG_RECORD_BYTES = 16 * 1024**2
@@ -836,13 +840,23 @@ def request_delete(url, token):
         raise ApiFailure("artifact deletion outcome is unknown; artifact still exists") from error
 
 
-def paginated(url, token, key, page_size=100):
+def paginated(url, token, key, page_size=100, strict=False, missing_is_error=True):
     page = 1
     while True:
         separator = "&" if "?" in url else "?"
-        result = request_json(f"{url}{separator}per_page={page_size}&page={page}", token)
+        try:
+            result = request_json(f"{url}{separator}per_page={page_size}&page={page}", token)
+        except (Invalid, ValueError, UnicodeDecodeError) as error:
+            if not strict:
+                raise
+            raise ApiFailure("malformed GitHub API response") from error
         if result is None:
+            if strict and missing_is_error:
+                raise ApiFailure("GitHub API listing not found")
             return
+        if strict and (not isinstance(result, dict) or not isinstance(result.get(key), list)
+                       or any(not isinstance(entry, dict) for entry in result[key])):
+            raise ApiFailure("malformed GitHub API listing")
         entries = result.get(key, [])
         yield from entries
         if len(entries) < page_size:
@@ -902,7 +916,7 @@ def pr_attempt_is_eligible(run, attempt, current_run, current_run_number, curren
 
 def artifacts_for_run(base, token, run):
     url = f"{base}/actions/runs/{run['id']}/artifacts"
-    artifacts = list(paginated(url, token, "artifacts"))
+    artifacts = list(paginated(url, token, "artifacts", strict=True, missing_is_error=False))
     def attempt(artifact):
         match = re.search(r"-a(\d+)$", artifact.get("name", ""))
         return int(match.group(1)) if match else 0
@@ -1433,7 +1447,7 @@ def squash_pull_request(base, token, repository, commit_sha):
     if not isinstance(head, dict) or type(pull.get("number")) is not int \
             or pull["number"] <= 0 or not re.fullmatch(
         r"(?:[0-9a-f]{40}|[0-9a-f]{64})", str(head.get("sha", ""))
-    ):
+    ) or not isinstance(head.get("ref"), str) or not head["ref"]:
         print(f"cache: squash-fallback revision={commit_sha}: malformed final PR head")
         return False
     head_repository = head.get("repo")
@@ -1446,74 +1460,114 @@ def squash_pull_request(base, token, repository, commit_sha):
 
 
 def restore_scope(args, base, token, scope, pr_number, history, destination,
-                  expected_head=None, require_trusted_writer=False):
-    query = {"event": "pull_request"} if scope == "pr" \
+                  expected_head=None, require_trusted_writer=False, head_branch=None):
+    inspected = 0
+    attempted = 0
+    api_failed = False
+
+    def finish(reason, restored=False):
+        print(f"cache: discovery source={scope} inspected-runs={inspected} "
+              f"attempted-candidates={attempted} reason={reason}")
+        if not restored:
+            print(f"cache: fallback scope={scope}: no acceptable snapshot")
+        return restored
+
+    if scope == "pr" and (not isinstance(head_branch, str) or not head_branch):
+        print("cache: API-error source=pr missing head branch", file=sys.stderr)
+        return finish("API failure")
+    query = {"event": "pull_request", "branch": head_branch} if scope == "pr" \
         else {"event": "push", "branch": "main"}
-    runs_url = f"{base}/actions/runs?" + urllib.parse.urlencode(query)
-    try:
-        runs = list(paginated(
-            runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE
-        ))
-        candidates = rank_runs(
-            runs, scope, pr_number, history,
-            int(args.run_number) if scope == "pr" else None,
-        )
-    except ApiFailure as error:
-        print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
-        return False
-    for run in candidates:
-        if expected_head is not None and run.get("head_sha") != expected_head:
-            continue
+    workflow = urllib.parse.quote(WORKFLOW, safe="")
+    runs_url = f"{base}/actions/workflows/{workflow}/runs?" + urllib.parse.urlencode(query)
+    limit = PR_RUN_LIMIT if scope == "pr" else MAIN_RUN_LIMIT
+    runs = iter(paginated(
+        runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE, strict=True
+    ))
+    while inspected < limit:
         try:
-            artifacts = artifacts_for_run(base, token, run)
+            page = list(itertools.islice(runs, min(WORKFLOW_RUNS_PAGE_SIZE, limit - inspected)))
         except ApiFailure as error:
-            print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
-                  file=sys.stderr)
-            continue
-        for artifact in artifacts:
-            artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
-            legacy_pattern = LEGACY_MAIN_ARTIFACT_PATTERN if scope == "main" \
-                else LEGACY_PR_ARTIFACT_PATTERN
-            if legacy_pattern.fullmatch(artifact.get("name", "")):
-                print(f"cache: migration-skip source={scope} artifact={artifact['name']}: "
-                      "legacy synthetic-build format is not consumable")
-                continue
-            match = re.fullmatch(
-                rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
-                artifact.get("name", ""),
+            print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
+            return finish("API failure")
+        inspected += len(page)
+        try:
+            if any(type(run.get("id")) is not int or run["id"] <= 0
+                   or type(run.get("run_number")) is not int or run["run_number"] <= 0
+                   or type(run.get("run_attempt", 1)) is not int for run in page):
+                raise ValueError("invalid run identity")
+            candidates = rank_runs(
+                page, scope, pr_number, history,
+                int(args.run_number) if scope == "pr" else None,
             )
-            if match is None or int(match.group(1)) != int(run["id"]):
-                continue
-            if artifact.get("expired"):
-                print(f"cache: artifact-miss run={run['id']} attempt={match.group(2)}: expired")
-                continue
-            attempt = int(match.group(2))
-            if scope == "pr" and not pr_attempt_is_eligible(
-                run, attempt, int(args.run_id), int(args.run_number), int(args.run_attempt)
-            ):
-                continue
-            if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"cache: API-error source={scope} malformed run metadata: {error}",
+                  file=sys.stderr)
+            return finish("API failure")
+        for run in candidates:
+            if run.get("conclusion") == "skipped" \
+                    or (expected_head is not None and run.get("head_sha") != expected_head):
                 continue
             try:
-                extra = {}
-                if expected_head is not None:
-                    extra["expected_head"] = expected_head
-                if require_trusted_writer:
-                    extra["require_trusted_writer"] = True
-                downloaded = download_candidate(
-                    base, token, artifact, destination, args.repository, run, scope,
-                    pr_number, **extra,
+                artifacts = artifacts_for_run(base, token, run)
+                if any(not isinstance(artifact, dict)
+                       or not isinstance(artifact.get("name"), str)
+                       or not isinstance(artifact.get("workflow_run", {}), dict)
+                       for artifact in artifacts):
+                    raise ApiFailure("malformed artifact metadata")
+            except (ApiFailure, Invalid, KeyError, TypeError, ValueError, AttributeError) as error:
+                print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
+                      file=sys.stderr)
+                api_failed = True
+                continue
+            for artifact in artifacts:
+                artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
+                legacy_pattern = LEGACY_MAIN_ARTIFACT_PATTERN if scope == "main" \
+                    else LEGACY_PR_ARTIFACT_PATTERN
+                if legacy_pattern.fullmatch(artifact.get("name", "")):
+                    print(f"cache: migration-skip source={scope} artifact={artifact['name']}: "
+                          "legacy synthetic-build format is not consumable")
+                    continue
+                match = re.fullmatch(
+                    rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
+                    artifact.get("name", ""),
                 )
-                if downloaded is None:
-                    return True
-                print(f"cache: artifact-miss source={scope} run={run['id']}: {downloaded}")
-            except ApiFailure as error:
-                print(f"cache: API-error source={scope} run={run['id']}: {error}", file=sys.stderr)
-            except Exception as error:
-                print(f"cache: rejected run={run['id']} source={scope} "
-                      f"artifact={artifact.get('name')}: {error}")
-    print(f"cache: fallback scope={scope}: no acceptable snapshot")
-    return False
+                if match is None or int(match.group(1)) != int(run["id"]):
+                    continue
+                if artifact.get("expired"):
+                    print(f"cache: artifact-miss run={run['id']} attempt={match.group(2)}: expired")
+                    continue
+                attempt = int(match.group(2))
+                if scope == "pr" and not pr_attempt_is_eligible(
+                    run, attempt, int(args.run_id), int(args.run_number), int(args.run_attempt)
+                ):
+                    continue
+                if artifact.get("workflow_run", {}).get("id") not in (None, int(run["id"])):
+                    continue
+                attempted += 1
+                try:
+                    extra = {}
+                    if expected_head is not None:
+                        extra["expected_head"] = expected_head
+                    if require_trusted_writer:
+                        extra["require_trusted_writer"] = True
+                    downloaded = download_candidate(
+                        base, token, artifact, destination, args.repository, run, scope,
+                        pr_number, **extra,
+                    )
+                    if downloaded is None:
+                        return finish("restored snapshot", True)
+                    print(f"cache: artifact-miss source={scope} run={run['id']}: {downloaded}")
+                except ApiFailure as error:
+                    print(f"cache: API-error source={scope} run={run['id']}: {error}", file=sys.stderr)
+                    api_failed = True
+                except Exception as error:
+                    print(f"cache: rejected run={run['id']} source={scope} "
+                          f"artifact={artifact.get('name')}: {error}")
+                if scope == "pr" and attempted >= PR_CANDIDATE_LIMIT:
+                    return finish("candidate limit")
+        if len(page) < WORKFLOW_RUNS_PAGE_SIZE:
+            return finish("API failure" if api_failed else "exhausted history")
+    return finish("run limit")
 
 
 def identical_files(left, right):
@@ -1615,8 +1669,10 @@ def discover_and_restore(args):
             else args.commit
         history = run_history(target_sha)
         if scope == "pr":
+            head = current_event["pull_request"].get("head")
             restored = restore_scope(
-                args, base, token, "pr", pr_number, history, Path(args.cache)
+                args, base, token, "pr", pr_number, history, Path(args.cache),
+                head_branch=head.get("ref") if isinstance(head, dict) else None,
             )
             if not restored:
                 main_history = run_history(current_event["pull_request"]["base"]["sha"])
@@ -1650,7 +1706,7 @@ def discover_and_restore(args):
                     final_head = pull["head"]["sha"]
                     pr_restored = restore_scope(
                         args, base, token, "pr", pull_number, {}, pr_cache,
-                        final_head, True,
+                        final_head, True, head_branch=pull["head"]["ref"],
                     )
                     if main_restored and pr_restored:
                         try:

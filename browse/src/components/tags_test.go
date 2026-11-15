@@ -163,7 +163,7 @@ func TestTagOptionsUseOneContinuousListAndEmptyInventoryIsExplicit(t *testing.T)
 		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 	}
 	body := renderTagComponent(t, TagOptions("42", "", tags))
-	if strings.Count(body, "<ul") != 1 || strings.Count(body, "<li>") != len(tags) ||
+	if strings.Count(body, "<ul") != 1 || strings.Count(body, "<li") != len(tags) ||
 		strings.Contains(body, "<fieldset") || strings.Contains(body, "<legend") ||
 		strings.Contains(body, "Küche") || strings.Contains(body, "Ernährungsweise") || strings.Contains(body, "Gang") {
 		t.Fatalf("options must use one continuous list without category headings: %s", body)
