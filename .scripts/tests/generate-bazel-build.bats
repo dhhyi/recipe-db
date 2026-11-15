@@ -5,7 +5,8 @@ load test_helper
 setup() {
   setup_fixture generate-bazel-build.sh
   git init -q
-  mkdir -p example deploy .scripts/tests .scripts/templates .mise/tasks
+  mkdir -p example deploy .scripts/tests .scripts/templates .scripts/lib .mise/tasks message-bus \
+    graphql/src graphql/testdata graphql/.devcontainer .scripts/tests/fixtures/migrator-packaging
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
@@ -19,7 +20,16 @@ EOF
   cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
-    .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml
+    .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml \
+    .mise/tasks/validation.toml .mise/tasks/development.toml .mise/tasks/compose.toml \
+    .scripts/run-in-devcontainer.sh .scripts/test-message-bus.sh .scripts/test-migrator-packaging.sh \
+    message-bus/nats.conf graphql/.project.yaml graphql/.devcontainer/devcontainer.json \
+    graphql/.devcontainer/Dockerfile graphql/Cargo.toml graphql/Cargo.lock graphql/src/main.rs \
+    graphql/testdata/events.json .scripts/generate-production-build-metadata.sh \
+    .scripts/create-production-release-inventory.sh .scripts/validate-production-release.sh \
+    .scripts/lib/project-metadata.sh .scripts/migrator-manifest.schema.json \
+    .scripts/templates/kubernetes.lib.yml .scripts/templates/kubernetes-migration-job-test.yml \
+    .scripts/tests/fixtures/migrator-packaging/fixture.json
   cat > .scripts/tests/groups.yaml << 'EOF'
 compose:
   tests:
@@ -44,10 +54,12 @@ EOF
   [ "$status" -eq 0 ]
   sed -n '/name = "test_scripts_suite_example"/,/^)/p' BUILD.bazel > test-rule
   for file in .scripts/tests/example.bats .scripts/tests/groups.yaml \
-    .scripts/tests/test_helper.bash .scripts/templates/example.yml .scripts/test-scripts.sh; do
+    .scripts/tests/test_helper.bash .scripts/templates/example.yml \
+    .scripts/templates/kubernetes-migration-job-test.yml .scripts/templates/kubernetes.lib.yml \
+    .scripts/test-scripts.sh; do
     grep -Fx "        \"$file\"," test-rule
   done
-  [ "$(grep -c '^        "' test-rule)" -eq 5 ]
+  [ "$(grep -c '^        "' test-rule)" -eq 7 ]
   grep -Fx '    tools = ["mise.toml", ".mise/config.toml", ".mise/tasks/script-tests.toml", ".bazelversion"],' test-rule
   grep -Fx '    outs = ["test-scripts-test_scripts_suite_example.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts .scripts/tests/example.bats && touch $@",' test-rule
@@ -56,10 +68,10 @@ EOF
   sed -n '/name = "test_scripts_suite_other"/,/^)/p' BUILD.bazel > test-rule
   for file in .scripts/generate-bazel-build.sh .scripts/tests/other.bats \
     example/.project.yaml deploy/local.yaml deploy/pi.yaml .scripts/tests/groups.yaml \
-    .scripts/tests/test_helper.bash .scripts/test-scripts.sh; do
+    .scripts/tests/test_helper.bash .scripts/test-scripts.sh graphql/.project.yaml; do
     grep -Fx "        \"$file\"," test-rule
   done
-  [ "$(grep -c '^        "' test-rule)" -eq 8 ]
+  [ "$(grep -c '^        "' test-rule)" -eq 9 ]
   grep -Fx '    outs = ["test-scripts-test_scripts_suite_other.ok"],' test-rule
   grep -Fx '    cmd = "mise run --raw test-scripts .scripts/tests/other.bats && touch $@",' test-rule
 
@@ -100,6 +112,60 @@ EOF
     grep -Fx '    tags = ["no-sandbox", "no-remote"],' target-rule
   done
   run -1 grep -F '"local"' BUILD.bazel
+}
+
+@test "cached validations discover independent source and fixture inputs" {
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
+  sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  cp message-bus-rule original-message-bus-rule
+  cp migrator-rule original-migrator-rule
+
+  for file in .scripts/test-message-bus.sh deploy/local.yaml message-bus/nats.conf \
+    graphql/.project.yaml graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
+    graphql/Cargo.toml graphql/Cargo.lock graphql/src/main.rs graphql/testdata/events.json \
+    .scripts/run-in-devcontainer.sh .mise/tasks/validation.toml; do
+    grep -Fx "        \"$file\"," message-bus-rule
+  done
+  for file in .scripts/test-migrator-packaging.sh .scripts/templates/kubernetes.lib.yml \
+    .scripts/templates/kubernetes-migration-job-test.yml \
+    .scripts/tests/fixtures/migrator-packaging/fixture.json \
+    .scripts/migrator-manifest.schema.json; do
+    grep -Fx "        \"$file\"," migrator-rule
+  done
+  grep -Fx '    cmd = "mise run --raw test-message-bus && touch $@",' message-bus-rule
+  grep -Fx '    cmd = "mise run --raw test-migrator-packaging && touch $@",' migrator-rule
+  ! grep -F 'README.md' message-bus-rule migrator-rule
+
+  touch graphql/src/new-test.rs
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
+  sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  grep -Fx '        "graphql/src/new-test.rs",' message-bus-rule
+  cmp original-migrator-rule migrator-rule
+  rm graphql/src/new-test.rs
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
+  cmp original-message-bus-rule message-bus-rule
+
+  touch .scripts/tests/fixtures/migrator-packaging/new-fixture.json
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
+  sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  cmp original-message-bus-rule message-bus-rule
+  grep -Fx '        ".scripts/tests/fixtures/migrator-packaging/new-fixture.json",' migrator-rule
+  rm .scripts/tests/fixtures/migrator-packaging/new-fixture.json
+  touch unrelated.txt
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+  sed -n '/name = "message_bus_validation"/,/^)/p' BUILD.bazel > message-bus-rule
+  sed -n '/name = "migrator_packaging_validation"/,/^)/p' BUILD.bazel > migrator-rule
+  cmp original-message-bus-rule message-bus-rule
+  cmp original-migrator-rule migrator-rule
 }
 
 @test "includes new untracked tests but excludes ignored files" {

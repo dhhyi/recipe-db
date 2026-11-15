@@ -1,0 +1,4 @@
+#@ load("kubernetes.lib.yml", "inventory", "migration_job")
+#@ for migration in inventory.get("migrations", []):
+--- #@ migration_job(migration)
+#@ end
