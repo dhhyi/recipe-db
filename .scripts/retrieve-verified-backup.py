@@ -294,7 +294,7 @@ def main():
                 authenticate(args)
                 result = retrieve(args)
             finally:
-                for signum in (signal.SIGTERM, signal.SIGHUP):
+                for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                     signal.signal(signum, signal.SIG_IGN)
                 args.sudo_password = None
                 if connection.poll() is None:

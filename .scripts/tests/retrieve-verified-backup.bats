@@ -90,9 +90,10 @@ if args[:2] == ["-M", "-N"]:
     assert args[4:6] == ["-o", "ControlPersist=no"]
     assert args[6] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
     control = Path(args[3])
+    parent = os.getppid()
     assert control.parent.stat().st_mode & 0o777 == 0o700
     (root / "connection.json").write_text(json.dumps({
-        "pid": os.getpid(), "parent": os.getppid(), "control": str(control), "closed": False,
+        "pid": os.getpid(), "parent": parent, "control": str(control), "closed": False,
     }))
     if os.environ.get("REQUIRE_TERMINAL") == "1":
         with open("/dev/tty", "rb+", buffering=0) as terminal:
@@ -105,6 +106,7 @@ if args[:2] == ["-M", "-N"]:
 
     def close(signum, frame):
         if os.environ["CASE"] == "cleanup-timeout":
+            os.kill(parent, signal.SIGINT)
             return
         connection.close()
         control.unlink()
