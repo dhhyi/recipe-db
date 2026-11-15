@@ -60,7 +60,7 @@ category: backend
 backupRole: cleanup-participant
 backupData: { kind: sqlite, file: tags.sqlite }
 storageVersion:
-  value: 1
+  value: 2
   file: src/storage_version_generated.ml
   template: |
     let value = {{STORAGE_VERSION}}

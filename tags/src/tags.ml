@@ -1,6 +1,6 @@
 open Lwt.Infix
 
-type category = Cuisine | Dietary_style | Course
+type category = Cuisine | Dietary_style | Course | Other
 
 type tag = { id : string; category : category; name : string }
 
@@ -168,14 +168,20 @@ let category_slug = function
   | Cuisine -> "cuisine"
   | Dietary_style -> "dietary-style"
   | Course -> "course"
+  | Other -> "other"
 
 let category_of_string = function
   | "cuisine" -> Some Cuisine
   | "dietary-style" -> Some Dietary_style
   | "course" -> Some Course
+  | "other" -> Some Other
   | _ -> None
 
-let category_order = function Cuisine -> 0 | Dietary_style -> 1 | Course -> 2
+let category_order = function
+  | Cuisine -> 0
+  | Dietary_style -> 1
+  | Course -> 2
+  | Other -> 3
 
 let problem ?field status title detail code =
   { status; title; detail; code; field }
@@ -289,6 +295,7 @@ let category_json = function
   | Cuisine -> `String "cuisine"
   | Dietary_style -> `String "dietary-style"
   | Course -> `String "course"
+  | Other -> `String "other"
 
 let tag_json tag =
   `Assoc
@@ -357,7 +364,7 @@ let open_database configured_location =
   exec db
     "CREATE TABLE IF NOT EXISTS tags (\
      id TEXT PRIMARY KEY NOT NULL,\
-     category TEXT NOT NULL CHECK (category IN ('cuisine', 'dietary-style', 'course')),\
+     category TEXT NOT NULL CHECK (category IN ('cuisine', 'dietary-style', 'course', 'other')),\
      name TEXT NOT NULL)";
   exec db
     "CREATE TABLE IF NOT EXISTS assignments (\
@@ -578,7 +585,7 @@ let category_parameter request =
           raise
             (Problem
                (problem ~field:"category" 422 "Invalid category"
-                  "The category must be cuisine, dietary-style, or course."
+                  "The category must be cuisine, dietary-style, course, or other."
                   "invalid-category")))
 
 let json_response ?(status = 200) json =
@@ -821,7 +828,7 @@ let handle mode db request =
                     raise
                       (Problem
                          (problem ~field:"category" 422 "Invalid category"
-                            "The category must be cuisine, dietary-style, or course."
+                            "The category must be cuisine, dietary-style, course, or other."
                             "invalid-category"))
               in
               let name = string_field "name" fields in

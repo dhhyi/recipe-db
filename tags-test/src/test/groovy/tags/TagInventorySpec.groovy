@@ -22,6 +22,7 @@ class TagInventorySpec extends TagsApiSpec {
 		when:
 		def inventory = http('GET', "${api}/tags")
 		def filtered = http('GET', "${api}/tags?category=dietary-style")
+		def other = http('GET', "${api}/tags?category=other")
 		def invalidFilter = http('GET', "${api}/tags?category=unknown")
 
 		then:
@@ -30,9 +31,10 @@ class TagInventorySpec extends TagsApiSpec {
 		inventory.jsonPath().getList('category') == [
 			'cuisine',
 			'dietary-style',
-			'course'
+			'course',
+			'other'
 		]
-		inventory.jsonPath().getList('id').every { it ==~ /^(cuisine|dietary-style|course)-[a-z0-9]+$/ }
+		inventory.jsonPath().getList('id').every { it ==~ /^(cuisine|dietary-style|course|other)-[a-z0-9]+$/ }
 		inventory.jsonPath().getList('name').containsAll([
 			'Thai',
 			'Gluten-free',
@@ -40,6 +42,9 @@ class TagInventorySpec extends TagsApiSpec {
 		])
 		filtered.statusCode() == 200
 		filtered.jsonPath().getList('category').every { it == 'dietary-style' }
+		other.statusCode() == 200
+		other.jsonPath().getList('category') == ['other']
+		other.jsonPath().getList('name') == ['General']
 		invalidFilter.statusCode() == 422
 		invalidFilter.contentType().startsWith('application/problem+json')
 		invalidFilter.jsonPath().getString('code') == 'invalid-category'
@@ -79,12 +84,15 @@ class TagInventorySpec extends TagsApiSpec {
 		when:
 		def first = create('cuisine', 'Soup')
 		def second = create('course', 'Soup')
+		def third = create('other', 'Soup')
 
 		then:
 		first.statusCode() == 201
 		second.statusCode() == 201
 		first.jsonPath().getString('id') == 'cuisine-soup'
 		second.jsonPath().getString('id') == 'course-soup'
+		third.statusCode() == 201
+		third.jsonPath().getString('id') == 'other-soup'
 	}
 
 	@Unroll

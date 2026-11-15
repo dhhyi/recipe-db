@@ -24,6 +24,9 @@ const pills = () => html`
     <span class="recipe-tag recipe-tag--course" aria-label="Gang: Hauptgericht"
       >Hauptgericht</span
     >
+    <span class="recipe-tag recipe-tag--other" aria-label="Sonstiges: Allgemein"
+      >Allgemein</span
+    >
   </div>
 `;
 
@@ -43,6 +46,10 @@ const legend = () => html`
     <li class="flex items-center gap-1">
       <span class="recipe-tag recipe-tag--course" aria-hidden="true"></span>
       <span>Gang</span>
+    </li>
+    <li class="flex items-center gap-1">
+      <span class="recipe-tag recipe-tag--other" aria-hidden="true"></span>
+      <span>Sonstiges</span>
     </li>
   </ul>
 `;

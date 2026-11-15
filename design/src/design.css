@@ -400,6 +400,12 @@ recipe-tile-component a[slot="image"] > img {
   --recipe-tag-color: #581c87;
 }
 
+.recipe-tag--other {
+  --recipe-tag-background: #f3f4f6;
+  --recipe-tag-border: #9ca3af;
+  --recipe-tag-color: #374151;
+}
+
 .recipe-tags-detail .recipe-tag {
   max-width: 100%;
   min-width: 0;
@@ -457,6 +463,12 @@ recipe-tile-component a[slot="image"] > img {
     --recipe-tag-border: #c084fc;
     --recipe-tag-color: #faf5ff;
   }
+
+  .recipe-tag--other {
+    --recipe-tag-background: #374151;
+    --recipe-tag-border: #9ca3af;
+    --recipe-tag-color: #f9fafb;
+  }
 }
 
 [data-theme="dark"] .recipe-tag--cuisine {
@@ -475,6 +487,12 @@ recipe-tile-component a[slot="image"] > img {
   --recipe-tag-background: #581c87;
   --recipe-tag-border: #c084fc;
   --recipe-tag-color: #faf5ff;
+}
+
+[data-theme="dark"] .recipe-tag--other {
+  --recipe-tag-background: #374151;
+  --recipe-tag-border: #9ca3af;
+  --recipe-tag-color: #f9fafb;
 }
 
 rating-component[hx-post] {

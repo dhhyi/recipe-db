@@ -17,13 +17,38 @@ func TestOrderedTagsUsesCategoryFoldedNameAndID(t *testing.T) {
 		{Id: "z", Category: gql.TagCategoryCuisine, Name: "ÉCLAIR"},
 		{Id: "dietary", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},
 		{Id: "a", Category: gql.TagCategoryCuisine, Name: "e\u0301clair"},
+		{Id: "other", Category: gql.TagCategoryOther, Name: "General"},
 	})
 	ids := make([]string, len(tags))
 	for i, tag := range tags {
 		ids[i] = tag.Id
 	}
-	if want := []string{"a", "z", "dietary", "course"}; !reflect.DeepEqual(ids, want) {
+	if want := []string{"a", "z", "dietary", "course", "other"}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("unexpected stable tag order: %v", ids)
+	}
+}
+
+func TestOtherTagUsesGrayClassAndAppearsInRecipeTagViews(t *testing.T) {
+	tag := gql.RecipeTag{Id: "other", Category: gql.TagCategoryOther, Name: "General"}
+	if got := tagClass(tag.Category); got != "recipe-tag recipe-tag--other" {
+		t.Fatalf("OTHER tag must use its gray class, got %q", got)
+	}
+	if got := tagCategoryLabel(tag.Category); got != "Sonstiges" {
+		t.Fatalf("unexpected OTHER category label: %q", got)
+	}
+
+	widget := renderTagComponent(t, RecipeTagsWidget("42", []gql.RecipeTag{tag}, true, true, "", false))
+	if !strings.Contains(widget, `class="recipe-tag recipe-tag--other"`) ||
+		!strings.Contains(widget, `aria-label="Sonstiges: General"`) {
+		t.Fatalf("OTHER tag is not displayed accessibly in the recipe editor: %s", widget)
+	}
+	if !strings.Contains(widget, "Sonstiges") {
+		t.Fatalf("OTHER category is missing from the recipe-tag legend: %s", widget)
+	}
+
+	options := renderTagComponent(t, TagOptions("42", "", []gql.RecipeTag{tag}))
+	if !strings.Contains(options, `class="recipe-tag recipe-tag--other"`) {
+		t.Fatalf("OTHER tag is not selectable in recipe-tag options: %s", options)
 	}
 }
 

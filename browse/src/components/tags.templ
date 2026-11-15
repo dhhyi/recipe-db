@@ -35,8 +35,10 @@ func tagCategoryOrder(category gql.TagCategory) int {
 		return 1
 	case gql.TagCategoryCourse:
 		return 2
-	default:
+	case gql.TagCategoryOther:
 		return 3
+	default:
+		return 4
 	}
 }
 
@@ -48,6 +50,8 @@ func tagCategoryLabel(category gql.TagCategory) string {
 		return "Ernährungsweise"
 	case gql.TagCategoryCourse:
 		return "Gang"
+	case gql.TagCategoryOther:
+		return "Sonstiges"
 	default:
 		return "Tag"
 	}
@@ -61,6 +65,8 @@ func tagClass(category gql.TagCategory) string {
 		return "recipe-tag recipe-tag--dietary-style"
 	case gql.TagCategoryCourse:
 		return "recipe-tag recipe-tag--course"
+	case gql.TagCategoryOther:
+		return "recipe-tag recipe-tag--other"
 	default:
 		return "recipe-tag"
 	}

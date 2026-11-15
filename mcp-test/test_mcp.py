@@ -171,6 +171,7 @@ async def test_tag_tools_describe_categories_and_optional_bulk_lists():
             "CUISINE",
             "DIETARY_STYLE",
             "COURSE",
+            "OTHER",
         }
         change_schema = tools["change_recipe_tags"].input_schema
         assert "addTagIds" not in change_schema.get("required", [])
@@ -223,6 +224,7 @@ async def test_change_recipe_tags_bulk_and_get_recipe_includes_tags():
         for category, name in [
             ("CUISINE", f"Bulk A {uuid.uuid4()}"),
             ("COURSE", f"Bulk B {uuid.uuid4()}"),
+            ("OTHER", f"Bulk C {uuid.uuid4()}"),
         ]:
             result = await session.call_tool(
                 "create_tag", {"category": category, "name": name}
@@ -249,7 +251,10 @@ async def test_change_recipe_tags_bulk_and_get_recipe_includes_tags():
             "change_recipe_tags",
             {"recipeId": recipe_id, "removeTagIds": [tags[0]["id"]]},
         )
-        assert [tag["id"] for tag in json.loads(removed.content[0].text)] == [tags[1]["id"]]
+        assert [tag["id"] for tag in json.loads(removed.content[0].text)] == [
+            tags[1]["id"],
+            tags[2]["id"],
+        ]
 
 
 async def test_get_recipe_schema_describes_name_as_required_for_add_recipe():
