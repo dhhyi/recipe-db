@@ -3,6 +3,7 @@
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import getpass
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import runpy
 import shlex
 import subprocess
 import sys
+import warnings
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,7 +70,7 @@ def parse_json(content):
     return json.loads(content, object_pairs_hook=unique)
 
 
-def ssh_command(args, *remote_args):
+def ssh_command(args, command):
     home = Path.home() / ".config/recipe-db/ssh"
     return [
         "ssh", "-T", "-i", str(home / "recipe-db-pi"),
@@ -76,15 +78,37 @@ def ssh_command(args, *remote_args):
         "-o", f"UserKnownHostsFile={home / 'known_hosts'}",
         "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=3", args.pi,
-        shlex.join(["sudo", "-n", "python3", "-c", REMOTE, *remote_args]),
+        shlex.join(command),
     ]
+
+
+def authenticate(args):
+    command = ssh_command(args, ["sudo", "-n", "-k", "python3", "-c", "pass"])
+    command[-1] += " 2>/dev/null"
+    result = subprocess.run(
+        command, stdin=subprocess.DEVNULL,
+    )
+    args.sudo_password = None
+    if result.returncode == 1:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            args.sudo_password = getpass.getpass("Pi sudo password (not SSH key passphrase): ")
+    elif result.returncode != 0:
+        raise ValueError("SSH or sudo authentication check failed")
 
 
 def receive(args, remote_args, limit, destination=None):
     digest, size, content = hashlib.sha256(), 0, bytearray()
-    with subprocess.Popen(ssh_command(args, *remote_args), stdin=subprocess.DEVNULL,
+    password = args.sudo_password
+    sudo = ["sudo", "-n", "-k"] if password is None else ["sudo", "-S", "-k", "-p", ""]
+    command = [*sudo, "python3", "-c", REMOTE, *remote_args]
+    with subprocess.Popen(ssh_command(args, command),
+                          stdin=subprocess.DEVNULL if password is None else subprocess.PIPE,
                           stdout=subprocess.PIPE) as process:
         try:
+            if password is not None:
+                process.stdin.write((password + "\n").encode())
+                process.stdin.close()
             while block := process.stdout.read(min(1024 * 1024, limit - size + 1)):
                 size += len(block)
                 if size > limit:
@@ -233,12 +257,20 @@ def main():
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi):
         parser.error("--pi must be an SSH user@hostname")
     os.umask(0o077)
-    retrieve(args)
+    authenticate(args)
+    try:
+        retrieve(args)
+    finally:
+        args.sudo_password = None
 
 
 if __name__ == "__main__":
     try:
         main()
+    except (getpass.GetPassWarning, EOFError):
+        print("backup retrieval: sudo authentication requires an interactive terminal; "
+              "run mise run --raw retrieve-verified-backup DESTINATION", file=sys.stderr)
+        sys.exit(1)
     except (OSError, ValueError, TypeError, KeyError):
         print("backup retrieval: failed; check Pi backup health, SSH/sudo access, "
               "destination and package integrity", file=sys.stderr)

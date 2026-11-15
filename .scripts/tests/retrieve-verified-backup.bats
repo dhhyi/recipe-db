@@ -1,5 +1,8 @@
 #!/usr/bin/env bats
 
+# Bats isolates each test's authentication settings in a subshell.
+# shellcheck disable=SC2030,SC2031
+
 load test_helper
 
 setup() {
@@ -79,19 +82,34 @@ assert args[:-2] == [
 ]
 assert args[-2] in ("piadmin@recipe-pi.home", "operator@other-pi.home")
 command = shlex.split(args[-1])
-assert command[:4] == ["sudo", "-n", "python3", "-c"]
-assert len(command) in (6, 7)
+if command[-1:] == ["2>/dev/null"]:
+    command.pop()
+    assert command == ["sudo", "-n", "-k", "python3", "-c", "pass"]
+password_auth = os.environ.get("REQUIRE_SUDO_PASSWORD") == "1"
 if os.environ.get("REQUIRE_TERMINAL") == "1":
     with open("/dev/tty", "rb+", buffering=0) as terminal:
         assert os.tcgetpgrp(terminal.fileno()) == os.getpgrp()
         terminal.write(b"Test SSH passphrase: ")
         assert terminal.readline().strip() == b"fixture-passphrase"
+if command == ["sudo", "-n", "-k", "python3", "-c", "pass"]:
+    sys.exit(1 if password_auth else 0)
+if password_auth:
+    assert command[:7] == ["sudo", "-S", "-k", "-p", "", "python3", "-c"]
+    assert sys.stdin.buffer.readline() == b"fixture-sudo-password\n"
+    if os.environ.get("REJECT_SUDO_PASSWORD") == "1":
+        sys.exit(1)
+    code_index = 7
+else:
+    assert command[:5] == ["sudo", "-n", "-k", "python3", "-c"]
+    code_index = 5
+assert len(command) in (code_index + 2, code_index + 3)
 root = Path(os.environ["REMOTE_ROOT"])
 with open(os.environ["MOCK_LOG"], "a") as log:
-    log.write(json.dumps(command[5:]) + "\n")
-code = command[4].replace("/usr/local/sbin/recipe-db-backup-upload", os.environ["UPLOADER"])
+    log.write(json.dumps(command[code_index + 1:]) + "\n")
+code = command[code_index].replace("/usr/local/sbin/recipe-db-backup-upload", os.environ["UPLOADER"])
 code = code.replace("/etc/recipe-db/backup.json", str(root / "config.json"))
-sys.exit(subprocess.run(["python3", "-c", code, *command[5:]]).returncode)
+sys.exit(subprocess.run(["python3", "-c", code, *command[code_index + 1:]],
+                        stdin=subprocess.DEVNULL).returncode)
 PY
   cat > bin/rclone << 'PY'
 #!/usr/bin/env python3
@@ -176,13 +194,13 @@ PY
 @test "streams the verified baseline privately with no Pi staging or credential transfer" {
   # Fish expands its own argv, not the surrounding Bash shell.
   # shellcheck disable=SC2016
-  run --separate-stderr fish -c 'mise run retrieve-verified-backup "$argv[1]"' -- "$DESTINATION"
+  run --separate-stderr fish -c 'mise run --raw retrieve-verified-backup "$argv[1]"' -- "$DESTINATION"
   assert_private_success
   [ "$(wc -l < "$MOCK_LOG")" -eq 4 ]
   [[ $output != *private-authorization* ]]
 }
 
-@test "documented task keeps SSH passphrase prompts in the terminal foreground" {
+terminal_retrieval() {
   export REQUIRE_TERMINAL=1
   run python3 - << 'PY'
 import errno
@@ -196,9 +214,8 @@ import time
 pid, terminal = pty.fork()
 if pid == 0:
     os.execlp("fish", "fish", "--interactive", "--no-config")
-os.write(terminal, b'mise run --output prefix retrieve-verified-backup "$DESTINATION"; exit $status\n')
-content = bytearray()
-pending = bytearray()
+os.write(terminal, b'mise run --raw retrieve-verified-backup "$DESTINATION"; exit $status\n')
+content, pending = bytearray(), bytearray()
 finished = False
 try:
     deadline = time.monotonic() + 30
@@ -215,16 +232,27 @@ try:
             break
         content.extend(block)
         pending.extend(block)
-        prompt = b"Test SSH passphrase: "
-        while prompt in pending:
-            _, _, pending = pending.partition(prompt)
-            os.write(terminal, b"fixture-passphrase\n")
+        for prompt, answer in (
+            (b"Test SSH passphrase: ", b"fixture-passphrase\n"),
+            (b"Pi sudo password (not SSH key passphrase): ", b"fixture-sudo-password\n"),
+        ):
+            if prompt in pending:
+                _, _, pending = pending.partition(prompt)
+                os.write(terminal, answer)
     else:
         raise AssertionError("task did not finish; terminal output: " + repr(content))
     _, status = os.waitpid(pid, 0)
     finished = True
+    expected_sudo_prompts = int(os.environ.get("REQUIRE_SUDO_PASSWORD") == "1")
+    assert content.count(b"Pi sudo password (not SSH key passphrase): ") == expected_sudo_prompts
+    assert b"fixture-sudo-password" not in content
+    if os.environ.get("REJECT_SUDO_PASSWORD") == "1":
+        assert os.waitstatus_to_exitcode(status) != 0, repr(content)
+        assert not os.path.exists(os.environ["DESTINATION"])
+        print("authentication rejected")
+        raise SystemExit(0)
     assert os.waitstatus_to_exitcode(status) == 0, repr(content)
-    assert content.count(b"Test SSH passphrase: ") == 4, repr(content)
+    assert content.count(b"Test SSH passphrase: ") == 5, repr(content)
     text = content.decode()
     start = text.find('{"archive":')
     assert start >= 0, repr(content)
@@ -236,7 +264,35 @@ finally:
         os.waitpid(pid, 0)
     os.close(terminal)
 PY
+}
+
+@test "documented task keeps SSH passphrase prompts in the terminal foreground" {
+  terminal_retrieval
   assert_private_success
+}
+
+@test "separate sudo password travels only over SSH stdin without passwordless sudo" {
+  export REQUIRE_SUDO_PASSWORD=1
+  terminal_retrieval
+  assert_private_success
+  run ! grep -q fixture-sudo-password "$MOCK_LOG"
+}
+
+@test "rejected sudo password fails without creating a download or exposing the password" {
+  export REQUIRE_SUDO_PASSWORD=1 REJECT_SUDO_PASSWORD=1
+  terminal_retrieval
+  [ "$status" -eq 0 ]
+  [ "$output" = "authentication rejected" ]
+  [ ! -e "$DESTINATION" ]
+  run ! grep -q fixture-sudo-password "$MOCK_LOG"
+}
+
+@test "sudo password authentication refuses noninteractive echoed input" {
+  export REQUIRE_SUDO_PASSWORD=1
+  run python3 -c 'import os; os.setsid(); os.execvp("python3", ["python3", ".scripts/retrieve-verified-backup.py", os.environ["DESTINATION"]])' < /dev/null
+  [ "$status" -ne 0 ]
+  [[ $output == *"sudo authentication requires an interactive terminal"* ]]
+  [ ! -e "$DESTINATION" ]
 }
 
 @test "verified-unchanged retrieves the baseline rather than the newer local capture" {

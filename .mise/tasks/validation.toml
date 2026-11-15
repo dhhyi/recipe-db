@@ -1,7 +1,6 @@
 [retrieve-verified-backup]
 description = "Stream the Pi's verified Drive backup into a new private workstation directory"
 run = "python3 .scripts/retrieve-verified-backup.py"
-raw = true
 raw_args = true
 
 [production-backup-recovery-k3d]

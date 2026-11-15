@@ -242,10 +242,10 @@ To retrieve the current verified backup for a workstation rehearsal, run this fr
 
 ```sh
 mkdir -p "$HOME/.local/share/recipe-db"
-mise run retrieve-verified-backup "$HOME/.local/share/recipe-db/rehearsal-backup"
+mise run --raw retrieve-verified-backup "$HOME/.local/share/recipe-db/rehearsal-backup"
 ```
 
-The command uses the operator SSH key and verified host keys under `~/.config/recipe-db/ssh/`, connecting to `piadmin@recipe-pi.home` by default; pass `--pi user@hostname` to select another Pi. SSH may request the key's passphrase. The Pi must already have the configured backup uploader, Python 3, rclone, working Drive authorization and non-interactive sudo access.
+The command uses the operator SSH key and verified host keys under `~/.config/recipe-db/ssh/`, connecting to `piadmin@recipe-pi.home` by default; pass `--pi user@hostname` to select another Pi. Keep `--raw`: SSH may request the key's passphrase, and Mise must leave the command in the terminal foreground for that prompt. If sudo requires authentication, a separate `Pi sudo password` prompt requests the Pi login password, not the SSH key passphrase. The password stays in process memory for this invocation and is sent only through encrypted SSH standard input, never command arguments or files. The Pi must already have the configured backup uploader, Python 3, rclone, working Drive authorization and sudo permission.
 
 Success prints JSON containing `backupId` and absolute `manifest` and `archive` paths. The command requires a healthy, non-overdue uploader check, selects the exact verified baseline (including for `verified-unchanged`), and streams both files from Drive through SSH without staging backup files on the Pi or copying authorization. It verifies baseline hashes, manifest identity and archive size/hash, then rechecks backup health and baseline identity before publishing the local pair. If the baseline changes, rerun the command. No manual backup-ID confirmation is needed.
 
