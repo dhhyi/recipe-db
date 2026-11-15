@@ -5,8 +5,11 @@ load test_helper
 setup() {
   setup_fixture retrieve-verified-backup.py
   setup_mock_bin
-  mkdir -p provisioning/files
+  mkdir -p provisioning/files .mise/tasks
   cp "$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" provisioning/files/
+  cp "$BATS_TEST_DIRNAME/../../.mise/tasks/validation.toml" .mise/tasks/
+  printf '[task_config]\nincludes = [".mise/tasks/*.toml"]\n' > mise.toml
+  export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   export HOME="$FIXTURE_ROOT/home"
   mkdir -p "$HOME/.config/recipe-db/ssh" remote/state remote/drive
   export REMOTE_ROOT="$FIXTURE_ROOT/remote"
@@ -168,7 +171,7 @@ PY
 @test "streams the verified baseline privately with no Pi staging or credential transfer" {
   # Fish expands its own argv, not the surrounding Bash shell.
   # shellcheck disable=SC2016
-  run fish -c 'python3 .scripts/retrieve-verified-backup.py "$argv[1]"' -- "$DESTINATION"
+  run --separate-stderr fish -c 'mise run --raw retrieve-verified-backup "$argv[1]"' -- "$DESTINATION"
   assert_private_success
   [ "$(wc -l < "$MOCK_LOG")" -eq 4 ]
   [[ $output != *private-authorization* ]]
