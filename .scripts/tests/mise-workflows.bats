@@ -50,18 +50,21 @@ setup() {
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
-@test "CI builds all Bazel targets including script regression tests" {
+@test "CI builds all Bazel targets including cacheable validations and script regression tests" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  script=$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks and unit tests") | .run' "$workflow")
+  script=$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks, unit tests, and cacheable validations") | .run' "$workflow")
 
   [[ "$script" == *"mise run --raw generate-bazel-build"* ]]
   [[ "$script" == *"mise run --raw bazel build"* ]]
   [[ "$script" == *" //:all"* ]]
 }
 
-@test "CI explicitly runs standalone migrator packaging tests" {
+@test "CI runs message bus and migrator validations before cache snapshot without duplicates" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrator packaging") | .run' "$workflow")" = "mise run test-migrator-packaging" ]
+  validation=$(grep -n '^      - name: Bazel precommit checks, unit tests, and cacheable validations$' "$workflow" | cut -d: -f1)
+  snapshot=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
+  [ "$validation" -lt "$snapshot" ]
+  [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | test("mise run test-(message-bus|migrator-packaging)"))] | length' "$workflow")" -eq 0 ]
 }
 
 @test "only ARM64 validation downloads LFS screenshot baselines" {
@@ -161,7 +164,7 @@ EOF
     builds=$((builds + 1))
   done < <(yq -o=json -I=0 '.jobs.quality-checks.steps[].run | select(contains("bazel build"))' "$workflow")
   [ "$builds" -eq 2 ]
-  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "validate message bus integration and recovery") | .run' "$workflow")" = "mise run test-message-bus" ]
+  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks, unit tests, and cacheable validations") | .run | contains(" //:all")' "$workflow")" = true ]
 }
 
 @test "CI Compose startup and integration failures preserve failure without dumping logs" {

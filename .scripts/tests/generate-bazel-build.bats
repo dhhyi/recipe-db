@@ -137,7 +137,7 @@ EOF
   done
   grep -Fx '    cmd = "sh .scripts/run-bazel-validation.sh test-message-bus && touch $@",' message-bus-rule
   grep -Fx '    cmd = "sh .scripts/run-bazel-validation.sh test-migrator-packaging && touch $@",' migrator-rule
-  ! grep -F 'README.md' message-bus-rule migrator-rule
+  run -1 grep -F 'README.md' message-bus-rule migrator-rule
 
   touch graphql/src/new-test.rs
   run bash .scripts/generate-bazel-build.sh

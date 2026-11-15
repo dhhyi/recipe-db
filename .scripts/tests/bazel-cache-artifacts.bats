@@ -9,20 +9,23 @@ load test_helper
   [[ "$output" == *"OK"* ]]
 }
 
-@test "Publish restores, validates and uploads Bazel snapshots before integration" {
+@test "Publish restores, validates and uploads Bazel snapshots after cacheable validations" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   restore=$(grep -n '^      - name: restore and union Bazel disk cache artifacts$' "$workflow" | cut -d: -f1)
   format=$(grep -n '^      - name: check project formatting$' "$workflow" | cut -d: -f1)
-  checks=$(grep -n '^      - name: Bazel precommit checks and unit tests$' "$workflow" | cut -d: -f1)
+  checks=$(grep -n '^      - name: Bazel precommit checks, unit tests, and cacheable validations$' "$workflow" | cut -d: -f1)
   prepare=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
   upload=$(grep -n '^      - name: upload Bazel cache snapshot$' "$workflow" | cut -d: -f1)
-  integration=$(grep -n '^      - name: validate message bus integration and recovery$' "$workflow" | cut -d: -f1)
 
   [ "$restore" -lt "$format" ]
   [ "$format" -lt "$checks" ]
   [ "$checks" -lt "$prepare" ]
   [ "$prepare" -lt "$upload" ]
-  [ "$upload" -lt "$integration" ]
+  run yq -r '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks, unit tests, and cacheable validations") | .run' "$workflow"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *" //:all"* ]]
+  run grep -E 'run: mise run test-(message-bus|migrator-packaging)$' "$workflow"
+  [ "$status" -eq 1 ]
   grep -F 'actions: read' "$workflow"
   grep -F 'fetch-depth: 0' "$workflow"
   grep -F -- "--run-number \"\$GITHUB_RUN_NUMBER\"" "$workflow"
@@ -68,7 +71,7 @@ load test_helper
 @test "Bazel snapshot preservation runs after failures and cancellation with verified source" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   slice="$BATS_TEST_TMPDIR/workflow-slice"
-  sed -n '/- name: check project formatting/,/- name: validate message bus integration/p' "$workflow" > "$slice"
+  sed -n '/- name: check project formatting/,/- name: build and validate production AMD64 images for pull requests/p' "$workflow" > "$slice"
 
   grep -F -- "--execution_log_json_file=\"\$RUNNER_TEMP/bazel-format-execution.json\"" "$slice"
   grep -F -- "--execution_log_json_file=\"\$RUNNER_TEMP/bazel-check-execution.json\"" "$slice"
@@ -98,7 +101,7 @@ load test_helper
   [ "$status" -eq 0 ]
   [ "$output" = false ]
 
-  for step in "check project formatting" "Bazel precommit checks and unit tests"; do
+  for step in "check project formatting" "Bazel precommit checks, unit tests, and cacheable validations"; do
     run env STEP="$step" yq -r '.jobs.quality-checks.steps[] | select(.name == strenv(STEP)) | .env.BAZEL_DIAGNOSTICS_DIR' "$workflow"
     [ "$status" -eq 0 ]
     [ "$output" = "\${{ runner.temp }}/bazel-diagnostics" ]
