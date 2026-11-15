@@ -2878,7 +2878,7 @@ release_migration_load_jobs() {
           )
         | .template.spec |= del(
             .serviceAccountName,.dnsPolicy,.schedulerName,
-            .terminationGracePeriodSeconds,.enableServiceLinks
+            .terminationGracePeriodSeconds,.enableServiceLinks,.securityContext
           )
         | .template.spec.containers |= map(del(
             .imagePullPolicy,.terminationMessagePath,.terminationMessagePolicy
@@ -2915,6 +2915,8 @@ release_migration_load_jobs() {
         or .[0].spec.template.spec.terminationGracePeriodSeconds == 30)
       and (. [0].spec.template.spec.enableServiceLinks == null
         or .[0].spec.template.spec.enableServiceLinks == true)
+      and (. [0].spec.template.spec.securityContext == null
+        or .[0].spec.template.spec.securityContext == {})
       and all(. [0].spec.template.spec.containers[];
         (.imagePullPolicy == null or .imagePullPolicy == "IfNotPresent")
         and (.terminationMessagePath == null or .terminationMessagePath == "/dev/termination-log")
