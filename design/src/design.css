@@ -75,25 +75,6 @@ h6 {
   font-size: 1rem;
 }
 
-ul:not(.markerless, .unlist, .unlist-all),
-ol:not(.markerless, .unlist, .unlist-all) {
-  padding-inline-start: 1.5rem;
-}
-
-ul:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
-  > li:not([style*="--list-marker:"]) {
-  list-style-type: disc;
-}
-
-ol:not(.markerless, .unlist, .unlist-all):not([style*="--list-marker:"])
-  > li:not([style*="--list-marker:"]) {
-  list-style-type: decimal;
-}
-
-#recipe-tag-options > ul.markerless > li {
-  list-style-type: none;
-}
-
 a:not([role="button"]):not(:hover, :active, :focus) {
   text-decoration-line: none;
 }

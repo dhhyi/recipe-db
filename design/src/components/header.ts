@@ -125,13 +125,13 @@ export class HeaderComponent extends LitElement {
   private renderAuth() {
     if (!this.authRole || !this.authEnabled) return null;
     if (this.authRole === "anonymous") {
-      return html`<ul class="unlist">
+      return html`<ul>
         <li>
           <a href="/oauth2/start?rd=%2F" @click=${this.startLogin}>Anmelden</a>
         </li>
       </ul>`;
     }
-    return html`<ul class="unlist">
+    return html`<ul>
       <li>
         <details class="dropdown">
           <summary aria-label="Profil">
@@ -143,7 +143,7 @@ export class HeaderComponent extends LitElement {
             >
           </summary>
           <ul
-            class="profile-menu unlist w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
+            class="profile-menu w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
             dir="rtl"
           >
             ${
@@ -173,7 +173,7 @@ export class HeaderComponent extends LitElement {
         @focusin=${this.revealForFocus}
       >
         <nav class="[--pico-nav-element-spacing-vertical:0]">
-          <ul class="unlist">
+          <ul>
             <li>
               <a
                 href="/"

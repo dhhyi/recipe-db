@@ -13,7 +13,7 @@ templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	if recipeEdit || (images && imageEdit) {
 		<details class="dropdown sm:ml-auto">
 			<summary role="button" class="outline">Bearbeiten</summary>
-			<ul class="markerless">
+			<ul>
 				if recipeEdit {
 					<li><a href={ "/edit/" + id }>Rezept bearbeiten</a></li>
 				}

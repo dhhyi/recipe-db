@@ -97,7 +97,7 @@ export const Dropdown: Story = {
     <main class="container">
       <details class="dropdown">
         <summary role="button" class="outline">Edit</summary>
-        <ul class="markerless">
+        <ul>
           <li><a href="#">Edit recipe</a></li>
           <li><a href="#">Edit images</a></li>
         </ul>

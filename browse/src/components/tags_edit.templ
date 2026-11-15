@@ -167,7 +167,7 @@ templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
 				}
 			}
 		</div>
-		<ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
+		<ul class="flex flex-wrap gap-2" aria-label="Tag-Kategorien">
 			for _, category := range tagCategories() {
 				<li class="flex items-center gap-1">
 					<span class={ tagClass(category) } aria-hidden="true"></span>
@@ -182,9 +182,9 @@ templ TagOptions(id, query string, tags []gql.RecipeTag) {
 	if len(tags) == 0 {
 		<p>Keine passenden Tags gefunden.</p>
 	} else {
-		<ul class="markerless flex flex-wrap gap-2" data-query={ query }>
+		<ul class="flex flex-wrap gap-2" data-query={ query }>
 			for _, tag := range orderedTags(tags) {
-				<li>
+				<li class="list-none">
 					<form
 						action={ recipeTagsPath(id) }
 						method="post"

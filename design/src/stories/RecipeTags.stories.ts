@@ -28,7 +28,7 @@ const pills = () => html`
 `;
 
 const legend = () => html`
-  <ul class="markerless flex flex-wrap gap-2" aria-label="Tag-Kategorien">
+  <ul class="flex flex-wrap gap-2" aria-label="Tag-Kategorien">
     <li class="flex items-center gap-1">
       <span class="recipe-tag recipe-tag--cuisine" aria-hidden="true"></span>
       <span>Küche</span>
