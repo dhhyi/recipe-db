@@ -126,7 +126,8 @@ EOF
   for file in .scripts/test-message-bus.sh deploy/local.yaml message-bus/nats.conf \
     graphql/.project.yaml graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
     graphql/Cargo.toml graphql/Cargo.lock graphql/src/main.rs graphql/testdata/events.json \
-    .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh .mise/tasks/validation.toml; do
+    .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
+    .mise/tasks/validation.toml .mise/tasks/project-actions.toml; do
     grep -Fx "        \"$file\"," message-bus-rule
   done
   for file in .scripts/test-migrator-packaging.sh .scripts/templates/kubernetes.lib.yml \

@@ -309,7 +309,8 @@ done
 } >> "$output"
 
 emit_cacheable_validation_rule message_bus_validation test-message-bus \
-  mise.toml .mise/config.toml .mise/tasks/validation.toml .mise/tasks/development.toml \
+  mise.toml .mise/config.toml .mise/tasks/validation.toml .mise/tasks/project-actions.toml \
+  .mise/tasks/development.toml \
   .mise/tasks/compose.toml .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
   .scripts/test-message-bus.sh \
   deploy/local.yaml message-bus/nats.conf graphql/.project.yaml \
