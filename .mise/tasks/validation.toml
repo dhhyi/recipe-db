@@ -1,3 +1,8 @@
+[retrieve-verified-backup]
+description = "Stream the Pi's verified Drive backup into a new private workstation directory"
+run = "python3 .scripts/retrieve-verified-backup.py"
+raw_args = true
+
 [production-backup-recovery-k3d]
 description = "Run a complete synthetic backup and fresh-target recovery rehearsal in k3d"
 run = "bash .scripts/backup-recovery-k3d.sh"

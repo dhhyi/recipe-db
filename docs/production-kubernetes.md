@@ -238,7 +238,20 @@ Reattachment checks the old namespace/claim, requested capacity, node and guarde
 
 Restore is recovery at the backup's recorded immutable application release, not an upgrade or in-place repair. Use a newly provisioned, explicitly identified local k3d or Pi k3s target. Never deploy the normal application first: initialization populates databases and derived volumes, making that target unsuitable for restore. Existing or partially restored data must not be wiped, merged or overwritten to make a target pass.
 
-Select a complete package and its sibling manifest from a verified restore point. For remote backups, use the Pi's private rclone authorization to download both files, then transfer only the backup files to a private local directory before invoking restore; `rclone copyto` writes temporary package files on the Pi and may refresh rclone authorization. For [#251: Rehearse complete upgrades before release](https://github.com/dhhyi/recipe-db/issues/251), use this retrieval procedure only when the operator separately authorizes those temporary Pi-side effects; otherwise use a previously supplied verified local copy. This reads the remote package without changing the Drive baseline or uploader state. A failed download is not a restore candidate. Keep backup contents, credentials and private command output out of CI artifacts/logs. Listing or byte size alone does not verify a downloaded backup.
+To retrieve the current verified backup for a workstation rehearsal, run this from your workstation checkout, including from fish. Choose a **new** destination directory under an existing parent with no symlink components:
+
+```sh
+mkdir -p "$HOME/.local/share/recipe-db"
+mise run retrieve-verified-backup "$HOME/.local/share/recipe-db/rehearsal-backup"
+```
+
+The command uses the operator SSH key and verified host keys under `~/.config/recipe-db/ssh/`, connecting to `piadmin@recipe-pi.home` by default; pass `--pi user@hostname` to select another Pi. SSH may request the key's passphrase. The Pi must already have the configured backup uploader, Python 3, rclone, working Drive authorization and non-interactive sudo access.
+
+Success prints JSON containing `backupId` and absolute `manifest` and `archive` paths. The command requires a healthy, non-overdue uploader check, selects the exact verified baseline (including for `verified-unchanged`), and streams both files from Drive through SSH without staging backup files on the Pi or copying authorization. It verifies baseline hashes, manifest identity and archive size/hash, then rechecks backup health and baseline identity before publishing the local pair. If the baseline changes, rerun the command. No manual backup-ID confirmation is needed.
+
+The destination has mode `0700` and files have mode `0600`. Existing destinations and destination symlinks are refused; failed or interrupted transfers are not published as completed downloads. This retrieves an existing backup only: it does not capture, upload, delete, prune, restore or start a rehearsal. Drive reads may refresh the Pi's authorization. Keep these production-data files private and out of shared logs and CI artifacts.
+
+For a selected historical restore point, or when the latest baseline status is unavailable, select a complete package and its sibling manifest using the manual procedure below. It downloads both files on the Pi before transferring them to the workstation. Use this alternative only with separate authorization for its temporary Pi-side files and possible rclone authorization refresh. It reads the remote package without changing the Drive baseline or uploader state. A failed download is not a restore candidate. Listing or byte size alone does not verify a downloaded backup.
 
 If the original Pi is unavailable and no verified package was downloaded beforehand, provision the replacement Pi and [authorize Drive interactively there](google-drive-authorization.md#1-authorize-on-a-new-pi) before retrieving the backup. Recovery no longer depends on an authorized rclone config in the workstation or encrypted dotfiles.
 

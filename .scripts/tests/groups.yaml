@@ -138,11 +138,16 @@ deploy:
       - deploy/local.yaml
 backup:
   tests:
+    - .scripts/tests/retrieve-verified-backup.bats
     - .scripts/tests/backup-package.bats
     - .scripts/tests/backup-recovery-k3d.bats
     - .scripts/tests/backup-snapshot.bats
     - .scripts/tests/production-k3d-backup.bats
   suite_inputs:
+    .scripts/tests/retrieve-verified-backup.bats:
+      - .scripts/retrieve-verified-backup.py
+      - provisioning/files/backup-upload.py
+      - .mise/tasks/validation.toml
     .scripts/tests/backup-package.bats:
       - .scripts/validate-backup-package.py
       - .scripts/validate-backup-snapshot.py
