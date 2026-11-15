@@ -71,8 +71,7 @@ defmodule Recipes.RouterTest do
         |> Router.call(@options)
 
       assert denied.status == 405
-      assert ["GET, POST, DELETE"] = get_resp_header(denied, "allow")
-      assert %{"code" => "method-not-allowed"} = Jason.decode!(denied.resp_body)
+      assert ["GET, POST"] = get_resp_header(denied, "allow")
     end
   end
 

@@ -60,9 +60,8 @@ router imagesRouter:
     resp Http204, ""
 
   head "/images":
-    if runtimeMode == "testing":
-      resp Http204, ""
-    respProblem(Http404, "Not Found", "Not found", "not-found")
+    cond runtimeMode == "testing"
+    resp Http204, ""
 
   get "/public/@name":
     let name = decodeUrl(@"name", decodePlus = false)
