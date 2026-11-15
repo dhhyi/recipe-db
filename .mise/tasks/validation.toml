@@ -34,7 +34,3 @@ run = "bash .scripts/test-migrations-k3d.sh"
 [test-migrator-packaging]
 description = "Build and externally verify the synthetic migrator image and release packaging"
 run = "sh .scripts/test-migrator-packaging.sh"
-
-[test-tags-migrator]
-description = "Test the tags storage migration and its standalone image"
-run = "sh .scripts/test-tags-migrator.sh"

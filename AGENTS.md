@@ -86,7 +86,7 @@ Project generator, format, and check commands invoked by Bazel must still run in
 
 ## Standalone migrator tests
 
-Keep `mise run test-migrator-packaging` focused on the general migrator manifest, image, and release-packaging contract using its synthetic fixture. Put behavior and image tests for a particular migrator in a separate migrator-specific task and script, and run that task separately in CI.
+Keep `mise run test-migrator-packaging` focused on the general migrator manifest, image, and release-packaging contract using its synthetic fixture. Each migrator must provide `migrators/<name>/test-migrator.sh` for its behavior and image tests. CI discovers and runs these scripts sequentially via `.scripts/run-migrator-tests.sh`, failing on the first failure or when a migrator lacks its test script; no migrators is a successful no-op. Do not add a per-migrator mise task.
 
 ## Committing during autonomous implementation
 

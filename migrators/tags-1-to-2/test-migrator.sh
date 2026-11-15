@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-project_root=$(cd "$(dirname "$0")/.." && pwd -P)
+project_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 migrator="$project_root/migrators/tags-1-to-2"
 test_id="recipe-db-tags-migrator-$$"
 image="$test_id"

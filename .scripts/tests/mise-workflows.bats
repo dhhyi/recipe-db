@@ -7,7 +7,7 @@ setup() {
   for script in create-auth-accounts create-auth-test-fixture create-oauth-secrets create-search-key; do
     cp "$BATS_TEST_DIRNAME/../$script.sh" .scripts/
   done
-  for script in merge-graphql-schemas sync-storage-version-templates; do
+  for script in merge-graphql-schemas sync-storage-version-templates run-migrator-tests; do
     cp "$BATS_TEST_DIRNAME/../$script.sh" .scripts/
   done
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
@@ -59,10 +59,48 @@ setup() {
   [[ "$script" == *" //:all"* ]]
 }
 
-@test "CI runs generic migrator packaging and tags migration tests separately" {
+@test "CI runs generic migrator packaging and discovers per-migrator tests" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrator packaging") | .run' "$workflow")" = "mise run test-migrator-packaging" ]
-  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test tags migration") | .run' "$workflow")" = "mise run test-tags-migrator" ]
+  [ "$(yq '.jobs.quality-checks.steps[] | select(.name == "test migrators") | .run' "$workflow")" = "bash .scripts/run-migrator-tests.sh" ]
+  ! grep -q '^\[test-tags-migrator\]' "$BATS_TEST_DIRNAME/../../.mise/tasks/validation.toml"
+}
+
+@test "migrator test discovery succeeds when there are no migrators" {
+  run bash .scripts/run-migrator-tests.sh
+  [ "$status" -eq 0 ]
+  [ "$output" = "No migrators found." ]
+}
+
+@test "migrator test discovery runs tests sequentially in order" {
+  mkdir -p migrators/first migrators/second
+  printf '#!/bin/sh\necho first >> "%s"\n' "$FIXTURE_ROOT/order" \
+    > migrators/first/test-migrator.sh
+  printf '#!/bin/sh\necho second >> "%s"\n' "$FIXTURE_ROOT/order" \
+    > migrators/second/test-migrator.sh
+
+  run bash .scripts/run-migrator-tests.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat "$FIXTURE_ROOT/order")" = $'first\nsecond' ]
+}
+
+@test "migrator test discovery fails fast" {
+  mkdir -p migrators/first migrators/second
+  printf '#!/bin/sh\necho first >> "%s"\nexit 1\n' "$FIXTURE_ROOT/order" \
+    > migrators/first/test-migrator.sh
+  printf '#!/bin/sh\necho second >> "%s"\n' "$FIXTURE_ROOT/order" \
+    > migrators/second/test-migrator.sh
+
+  run bash .scripts/run-migrator-tests.sh
+  [ "$status" -eq 1 ]
+  [ "$(cat "$FIXTURE_ROOT/order")" = first ]
+}
+
+@test "migrator test discovery rejects migrators without tests" {
+  mkdir -p migrators/missing-test
+  run bash .scripts/run-migrator-tests.sh
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Missing required migrator test: migrators/missing-test/test-migrator.sh"* ]]
 }
 
 @test "only ARM64 validation downloads LFS screenshot baselines" {

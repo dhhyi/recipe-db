@@ -179,8 +179,8 @@ jobs:
       - name: test migrator packaging
         run: mise run test-migrator-packaging
 
-      - name: test tags migration
-        run: mise run test-tags-migrator
+      - name: test migrators
+        run: bash .scripts/run-migrator-tests.sh
 
       - name: build and validate production AMD64 images for pull requests
         if: github.event_name == 'pull_request'
