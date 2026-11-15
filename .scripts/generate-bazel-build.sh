@@ -50,42 +50,6 @@ emit_rule() {
   } >> "$output"
 }
 
-emit_cacheable_validation_rule() {
-  local name=$1 task=$2
-  shift 2
-  declare -A validation_files=()
-  for pattern in "$@"; do
-    matched=false
-    if [[ -f "$pattern" ]]; then
-      validation_files["$pattern"]=1
-      matched=true
-    fi
-    while IFS= read -r -d '' file; do
-      [[ -f "$file" ]] || continue
-      validation_files["$file"]=1
-      matched=true
-    done < <(git ls-files --cached --others --exclude-standard -z -- "$pattern" | sort -zu)
-    if [[ "$matched" == false ]]; then
-      printf 'Validation target %s input pattern matches no files: %s\n' "$name" "$pattern" >&2
-      exit 1
-    fi
-  done
-
-  {
-    printf '\ngenrule(\n'
-    printf '    name = "%s",\n' "$name"
-    printf '    srcs = [\n'
-    while IFS= read -r file; do
-      printf '        %s,\n' "$(quote "$file")"
-    done < <(printf '%s\n' "${!validation_files[@]}" | sort)
-    printf '    ],\n'
-    printf '    outs = ["%s.ok"],\n' "$name"
-    printf '    cmd = "sh .scripts/run-bazel-validation.sh %s && touch $@",\n' "$task"
-    printf '    tags = ["no-sandbox", "no-remote"],\n'
-    printf ')\n'
-  } >> "$output"
-}
-
 for project_file in */.project.yaml; do
   project=${project_file%/.project.yaml}
   check=$(yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project_file")
@@ -308,23 +272,84 @@ done
   printf ')\n'
 } >> "$output"
 
-emit_cacheable_validation_rule message_bus_validation test-message-bus \
-  mise.toml .mise/config.toml .mise/tasks/validation.toml .mise/tasks/project-actions.toml \
-  .mise/tasks/development.toml \
-  .mise/tasks/compose.toml .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
-  .scripts/test-message-bus.sh \
-  deploy/local.yaml message-bus/nats.conf graphql/.project.yaml \
-  graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile \
+message_bus_inputs=(
+  mise.toml .mise/config.toml .mise/tasks/validation.toml .mise/tasks/project-actions.toml
+  .mise/tasks/development.toml .mise/tasks/compose.toml
+  .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh .scripts/test-message-bus.sh
+  deploy/local.yaml message-bus/nats.conf graphql/.project.yaml
+  graphql/.devcontainer/devcontainer.json graphql/.devcontainer/Dockerfile
   graphql/Cargo.toml graphql/Cargo.lock 'graphql/src/**' 'graphql/testdata/**'
+)
+declare -A message_bus_files=()
+for pattern in "${message_bus_inputs[@]}"; do
+  matched=false
+  if [[ -f "$pattern" ]]; then
+    message_bus_files["$pattern"]=1
+    matched=true
+  fi
+  while IFS= read -r -d '' file; do
+    [[ -f "$file" ]] || continue
+    message_bus_files["$file"]=1
+    matched=true
+  done < <(git ls-files --cached --others --exclude-standard -z -- "$pattern" | sort -zu)
+  if [[ "$matched" == false ]]; then
+    printf 'Validation target message_bus_validation input pattern matches no files: %s\n' "$pattern" >&2
+    exit 1
+  fi
+done
+{
+  printf '\ngenrule(\n'
+  printf '    name = "message_bus_validation",\n'
+  printf '    srcs = [\n'
+  while IFS= read -r file; do
+    printf '        %s,\n' "$(quote "$file")"
+  done < <(printf '%s\n' "${!message_bus_files[@]}" | sort)
+  printf '    ],\n'
+  printf '    outs = ["message_bus_validation.ok"],\n'
+  printf '    cmd = "sh .scripts/run-bazel-validation.sh test-message-bus && touch $@",\n'
+  printf '    tags = ["no-sandbox", "no-remote"],\n'
+  printf ')\n'
+} >> "$output"
 
-emit_cacheable_validation_rule migrator_packaging_validation test-migrator-packaging \
-  mise.toml .mise/config.toml .mise/tasks/validation.toml .scripts/run-bazel-validation.sh \
-  .scripts/test-migrator-packaging.sh \
-  .scripts/generate-production-build-metadata.sh .scripts/create-production-release-inventory.sh \
-  .scripts/validate-production-release.sh .scripts/lib/project-metadata.sh \
-  .scripts/migrator-manifest.schema.json .scripts/templates/kubernetes.lib.yml \
-  .scripts/templates/kubernetes-migration-job-test.yml \
+migrator_packaging_inputs=(
+  mise.toml .mise/config.toml .mise/tasks/validation.toml
+  .scripts/run-bazel-validation.sh .scripts/test-migrator-packaging.sh
+  .scripts/generate-production-build-metadata.sh .scripts/create-production-release-inventory.sh
+  .scripts/validate-production-release.sh .scripts/lib/project-metadata.sh
+  .scripts/migrator-manifest.schema.json .scripts/templates/kubernetes.lib.yml
+  .scripts/templates/kubernetes-migration-job-test.yml
   '.scripts/tests/fixtures/migrator-packaging/**'
+)
+declare -A migrator_packaging_files=()
+for pattern in "${migrator_packaging_inputs[@]}"; do
+  matched=false
+  if [[ -f "$pattern" ]]; then
+    migrator_packaging_files["$pattern"]=1
+    matched=true
+  fi
+  while IFS= read -r -d '' file; do
+    [[ -f "$file" ]] || continue
+    migrator_packaging_files["$file"]=1
+    matched=true
+  done < <(git ls-files --cached --others --exclude-standard -z -- "$pattern" | sort -zu)
+  if [[ "$matched" == false ]]; then
+    printf 'Validation target migrator_packaging_validation input pattern matches no files: %s\n' "$pattern" >&2
+    exit 1
+  fi
+done
+{
+  printf '\ngenrule(\n'
+  printf '    name = "migrator_packaging_validation",\n'
+  printf '    srcs = [\n'
+  while IFS= read -r file; do
+    printf '        %s,\n' "$(quote "$file")"
+  done < <(printf '%s\n' "${!migrator_packaging_files[@]}" | sort)
+  printf '    ],\n'
+  printf '    outs = ["migrator_packaging_validation.ok"],\n'
+  printf '    cmd = "sh .scripts/run-bazel-validation.sh test-migrator-packaging && touch $@",\n'
+  printf '    tags = ["no-sandbox", "no-remote"],\n'
+  printf ')\n'
+} >> "$output"
 
 if ! cmp -s "$output" BUILD.bazel; then
   mv "$output" BUILD.bazel
