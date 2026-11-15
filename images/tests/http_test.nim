@@ -282,8 +282,9 @@ suite "backend HTTP publication contract":
     server.stopServer()
     server = startServer(mode = some("production"))
     let productionAvailability = client.request(base & "/images", httpMethod = HttpHead)
-    check productionAvailability.code != Http204
+    check productionAvailability.code == Http404
     discard productionAvailability.body
+    client.close()
     for path in ["/images", "/images/"]:
       let explicitProduction = client.request(base & path, httpMethod = HttpDelete)
       check explicitProduction.code == Http404
@@ -293,8 +294,9 @@ suite "backend HTTP publication contract":
     server.stopServer()
     server = startServer(mode = none(string))
     let defaultAvailability = client.request(base & "/images", httpMethod = HttpHead)
-    check defaultAvailability.code != Http204
+    check defaultAvailability.code == Http404
     discard defaultAvailability.body
+    client.close()
     for path in ["/images", "/images/"]:
       let guarded = client.request(base & path, httpMethod = HttpDelete)
       check guarded.code == Http404
@@ -304,7 +306,7 @@ suite "backend HTTP publication contract":
     server.stopServer()
     server = startServer(mode = some("backup"))
     let backupAvailability = client.request(base & "/images", httpMethod = HttpHead)
-    check backupAvailability.code != Http204
+    check backupAvailability.code == Http404
     discard backupAvailability.body
     client.close()
     server.stopServer()

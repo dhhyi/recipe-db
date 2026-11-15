@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"html"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -36,7 +37,11 @@ func TestTestingRootHeadProbeIsExactAndDoesNotQueryGraphQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusNoContent || response.ContentLength != 0 ||
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNoContent || len(body) != 0 ||
 		response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("unexpected testing HEAD response: status=%d headers=%v", response.StatusCode, response.Header)
 	}
