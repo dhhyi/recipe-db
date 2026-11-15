@@ -840,13 +840,23 @@ def request_delete(url, token):
         raise ApiFailure("artifact deletion outcome is unknown; artifact still exists") from error
 
 
-def paginated(url, token, key, page_size=100):
+def paginated(url, token, key, page_size=100, strict=False):
     page = 1
     while True:
         separator = "&" if "?" in url else "?"
-        result = request_json(f"{url}{separator}per_page={page_size}&page={page}", token)
+        try:
+            result = request_json(f"{url}{separator}per_page={page_size}&page={page}", token)
+        except (Invalid, ValueError, UnicodeDecodeError) as error:
+            if not strict:
+                raise
+            raise ApiFailure("malformed GitHub API response") from error
         if result is None:
+            if strict:
+                raise ApiFailure("GitHub API listing not found")
             return
+        if strict and (not isinstance(result, dict) or not isinstance(result.get(key), list)
+                       or any(not isinstance(entry, dict) for entry in result[key])):
+            raise ApiFailure("malformed GitHub API listing")
         entries = result.get(key, [])
         yield from entries
         if len(entries) < page_size:
@@ -1470,7 +1480,9 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
     workflow = urllib.parse.quote(WORKFLOW, safe="")
     runs_url = f"{base}/actions/workflows/{workflow}/runs?" + urllib.parse.urlencode(query)
     limit = PR_RUN_LIMIT if scope == "pr" else MAIN_RUN_LIMIT
-    runs = iter(paginated(runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE))
+    runs = iter(paginated(
+        runs_url, token, "workflow_runs", page_size=WORKFLOW_RUNS_PAGE_SIZE, strict=True
+    ))
     while inspected < limit:
         try:
             page = list(itertools.islice(runs, min(WORKFLOW_RUNS_PAGE_SIZE, limit - inspected)))
@@ -1478,10 +1490,15 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
             print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
             return finish("API failure")
         inspected += len(page)
-        candidates = rank_runs(
-            page, scope, pr_number, history,
-            int(args.run_number) if scope == "pr" else None,
-        )
+        try:
+            candidates = rank_runs(
+                page, scope, pr_number, history,
+                int(args.run_number) if scope == "pr" else None,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            print(f"cache: API-error source={scope} malformed run metadata: {error}",
+                  file=sys.stderr)
+            return finish("API failure")
         for run in candidates:
             if run.get("conclusion") == "skipped" \
                     or (expected_head is not None and run.get("head_sha") != expected_head):
@@ -1643,9 +1660,10 @@ def discover_and_restore(args):
             else args.commit
         history = run_history(target_sha)
         if scope == "pr":
+            head = current_event["pull_request"].get("head")
             restored = restore_scope(
                 args, base, token, "pr", pr_number, history, Path(args.cache),
-                head_branch=current_event["pull_request"].get("head", {}).get("ref"),
+                head_branch=head.get("ref") if isinstance(head, dict) else None,
             )
             if not restored:
                 main_history = run_history(current_event["pull_request"]["base"]["sha"])

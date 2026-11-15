@@ -588,7 +588,7 @@ class CacheArtifactTests(unittest.TestCase):
     def test_workflow_run_listing_uses_bounded_page_size(self):
         requests = []
 
-        def fake_paginated(url, token, key, page_size=100):
+        def fake_paginated(url, token, key, page_size=100, strict=False):
             requests.append((key, page_size))
             return iter(())
 
@@ -755,6 +755,8 @@ class CacheArtifactTests(unittest.TestCase):
         args = SimpleNamespace(run_number=999, run_id="999", run_attempt="1",
                                repository="owner/repo")
         for result, reason in (({"workflow_runs": []}, "exhausted history"),
+                               (None, "API failure"),
+                               ({"workflow_runs": "invalid"}, "API failure"),
                                (CACHE.ApiFailure("denied"), "API failure")):
             output = io.StringIO()
             with self.subTest(reason=reason), \
@@ -766,6 +768,53 @@ class CacheArtifactTests(unittest.TestCase):
                 ))
             self.assertIn(f"inspected-runs=0 attempted-candidates=0 reason={reason}",
                           output.getvalue())
+
+    def test_bad_pr_listing_and_missing_head_still_fall_back_to_main(self):
+        event_path = self.root / "event.json"
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="pull_request",
+            pr_number="17", run_id="999", run_number=999, run_attempt="1", commit="head",
+            cache=str(self.root / "cache"),
+        )
+        for head, listing in (({"ref": "feature"}, None), (None, None)):
+            event_path.write_text(json.dumps({"pull_request": {"base": {"sha": "base"}, "head": head}}))
+            requests = []
+
+            def request(url, token):
+                requests.append(url)
+                return listing if "event=pull_request" in url else {"workflow_runs": []}
+
+            output = io.StringIO()
+            errors = io.StringIO()
+            with self.subTest(head=head), patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                    patch.object(CACHE, "run_history", return_value={"base": 0}), \
+                    patch.object(CACHE, "request_json", side_effect=request), \
+                    redirect_stdout(output), redirect_stderr(errors):
+                CACHE.discover_and_restore(args)
+            self.assertIn("source=pr inspected-runs=0 attempted-candidates=0 reason=API failure",
+                          output.getvalue())
+            self.assertIn("source=main inspected-runs=0 attempted-candidates=0 reason=exhausted history",
+                          output.getvalue())
+            self.assertIn("API-error source=pr", errors.getvalue())
+            self.assertIn("event=push&branch=main", requests[-1])
+
+    def test_pr_rerun_restores_only_prior_attempt(self):
+        args = SimpleNamespace(run_number=10, run_id="42", run_attempt="3",
+                               repository="owner/repo")
+        run = {"id": 42, "run_number": 10, "run_attempt": 3, "head_sha": "head",
+               "event": "pull_request"}
+        artifacts = [{"name": f"bazel-cache-v2-pr-17-r42-a{attempt}"}
+                     for attempt in (3, 2, 1)]
+        with patch.object(CACHE, "request_json", return_value={"workflow_runs": [run]}), \
+                patch.object(CACHE, "artifacts_for_run", return_value=artifacts), \
+                patch.object(CACHE, "download_candidate", return_value=None) as download, \
+                redirect_stdout(io.StringIO()):
+            self.assertTrue(CACHE.restore_scope(
+                args, "https://api.github.com/repos/owner/repo", "token", "pr", 17,
+                {}, self.root / "cache", head_branch="feature",
+            ))
+        self.assertEqual(download.call_count, 1)
+        self.assertEqual(download.call_args.args[2]["name"], "bazel-cache-v2-pr-17-r42-a2")
 
     def test_candidate_limit_independently_falls_back_to_main(self):
         event_path = self.root / "event.json"
@@ -1203,22 +1252,22 @@ class CacheArtifactTests(unittest.TestCase):
         jobs = [{"name": CACHE.JOB, "steps": [
             {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
         ]}]
-        destination = self.root / "restored"
-
         def copy_artifact(url, token, path, maximum):
             shutil.copyfile(artifact_zip, path)
             return path.stat().st_size
 
-        with patch.object(CACHE, "request_file", side_effect=copy_artifact), \
-                patch.object(CACHE, "producer_attempt", return_value=detail), \
-                patch.object(CACHE, "jobs_for_attempt", return_value=jobs):
-            result = CACHE.download_candidate(
-                "https://api.github.com/repos/owner/repo", "token", artifact,
-                destination, "owner/repo", run, "main", None,
-            )
-
-        self.assertIsNone(result)
-        self.assertTrue((destination / "ac" / "aa" / ("a" * 64)).is_file())
+        for conclusion in ("failure", "cancelled"):
+            destination = self.root / f"restored-{conclusion}"
+            with self.subTest(conclusion=conclusion), \
+                    patch.object(CACHE, "request_file", side_effect=copy_artifact), \
+                    patch.object(CACHE, "producer_attempt", return_value={**detail, "conclusion": conclusion}), \
+                    patch.object(CACHE, "jobs_for_attempt", return_value=jobs):
+                result = CACHE.download_candidate(
+                    "https://api.github.com/repos/owner/repo", "token", artifact,
+                    destination, "owner/repo", {**run, "conclusion": conclusion}, "main", None,
+                )
+            self.assertIsNone(result)
+            self.assertTrue((destination / "ac" / "aa" / ("a" * 64)).is_file())
 
     def test_pinned_copilot_candidate_still_requires_final_head_upload_and_valid_cache(self):
         head = "a" * 40
@@ -1889,7 +1938,7 @@ class CacheArtifactTests(unittest.TestCase):
         artifacts = {1: [], 2: [{"id": 22, "name": "bazel-cache-v2-main-r2-a1"}]}
         calls = []
 
-        def fake_paginated(url, token, key, page_size=100):
+        def fake_paginated(url, token, key, page_size=100, strict=False):
             return [pr_run] if "event=pull_request" in url else [main_run]
 
         def fake_download(base, token, artifact, cache_path, repository, run, scope, pr_number):
