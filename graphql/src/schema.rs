@@ -180,9 +180,7 @@ mod tests {
         ] {
             assert!(sdl.contains(field), "schema is missing {field}");
         }
-        assert!(sdl.contains(
-            "enum TagCategory {\n\tCUISINE\n\tDIETARY_STYLE\n\tCOURSE\n\tOTHER"
-        ));
+        assert!(sdl.contains("enum TagCategory {\n\tCUISINE\n\tDIETARY_STYLE\n\tCOURSE\n\tOTHER"));
         let recipe_input = sdl
             .split("input RecipeInput {")
             .nth(1)
