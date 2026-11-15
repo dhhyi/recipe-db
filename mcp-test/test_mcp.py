@@ -19,6 +19,12 @@ MCP_REQUEST_TIMEOUT = 30
 MCP_SESSION_TIMEOUT_SECONDS = 60
 
 
+def test_testing_head_availability_probe_is_empty():
+    response = httpx.head(MCP_URL, timeout=1)
+    assert response.status_code == 204
+    assert response.content == b""
+
+
 @pytest.fixture(scope="session", autouse=True)
 def fixture_server_ready():
     with httpx.Client(timeout=1) as client:

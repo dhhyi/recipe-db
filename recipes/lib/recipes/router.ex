@@ -41,6 +41,16 @@ defmodule Recipes.Router do
     end
   end
 
+  head "/recipes" do
+    if Application.fetch_env!(:recipes, :mode) == :testing do
+      send_resp(conn, 204, "")
+    else
+      conn
+      |> put_resp_header("allow", collection_methods())
+      |> Problem.send(405, "Method Not Allowed", "Method not allowed", "method-not-allowed")
+    end
+  end
+
   post "/recipes" do
     with {:ok, document, conn} <- decode_body(conn, "application/json"),
          :ok <- Recipe.validate(document),

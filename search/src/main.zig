@@ -40,7 +40,7 @@ pub fn main() !void {
         const thread = try std.Thread.spawn(.{}, worker, .{ cfg, &state });
         thread.detach();
     }
-    try api.run(cfg, &state, mode == .backup);
+    try api.run(cfg, &state, mode == .backup, mode == .testing);
 }
 
 test {

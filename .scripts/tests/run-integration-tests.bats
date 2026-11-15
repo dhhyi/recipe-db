@@ -89,8 +89,8 @@ docker compose --profile test config --format json
 docker compose --profile test build fixtures recipes-test ratings-test
 docker compose --profile test ps --services --status running
 docker compose --profile test up -d fixtures
-curl http://127.0.0.1:3000/recipes
-curl http://127.0.0.1:3000/ratings
+curl HEAD http://127.0.0.1:3000/recipes
+curl HEAD http://127.0.0.1:3000/ratings
 docker compose --profile test run --rm recipes-test
 docker compose --profile test run --rm ratings-test
 docker compose --profile test stop fixtures
@@ -117,12 +117,16 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(grep -c '^docker compose --profile test run --rm ' "$MOCK_LOG")" -eq 8 ]
   grep -Fx 'docker compose --profile test build fixtures graphql-test image-inline-test images-test inspirations-test link-extract-test mcp-test ratings-test recipes-test' "$MOCK_LOG"
-  grep -Fx 'curl http://127.0.0.1:3000/images/nonexistent/meta' "$MOCK_LOG"
-  grep -Fx 'curl http://127.0.0.1:8080/graphql' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/images' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/link-extract' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/image-inline/' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/recipes' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/ratings' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:8080/graphql' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:8080/mcp' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/graphql-test-fixture/' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/link-extract-test-fixture/page' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/image-inline-test-fixture/tiny.png' "$MOCK_LOG"
-  grep -Fx 'curl http://127.0.0.1:8080/mcp' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/mcp-test-fixture/test.jpg' "$MOCK_LOG"
 }
 
@@ -150,8 +154,8 @@ EOF
   run bash .scripts/run-integration-tests.sh --development search-test
 
   [ "$status" -eq 0 ]
-  grep -Fx 'curl http://127.0.0.1:8080/graphql' "$MOCK_LOG"
-  grep -Fx 'curl http://127.0.0.1:3000/search/reindex' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:8080/graphql' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/search' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/mcp-test-fixture/test.jpg' "$MOCK_LOG"
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS search-test' "$MOCK_LOG"
 }
@@ -177,6 +181,16 @@ EOF
     [ "$(grep -c '^curl ' "$MOCK_LOG")" -eq 3 ]
     grep -Fx 'docker compose --profile test run --rm inspirations-test' "$MOCK_LOG"
   done
+}
+
+@test "unavailable HEAD probes fail before starting their test job" {
+  run env HEAD_RESPONSE=503 bash -c \
+    'sleep() { SECONDS=40; }; source .scripts/run-integration-tests.sh --development images-test'
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Timed out waiting for images API at http://127.0.0.1:3000/images (expected HTTP 204, last got 503)."* ]]
+  grep -Fx 'curl HEAD http://127.0.0.1:3000/images' "$MOCK_LOG"
+  run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
 }
 
 @test "tags integration tests use isolated disposable instances and categorized fixtures" {
@@ -210,8 +224,8 @@ EOF
   run bash .scripts/run-integration-tests.sh --development e2e-test
 
   [ "$status" -eq 0 ]
-  grep -Fx 'curl http://127.0.0.1:8080/graphql' "$MOCK_LOG"
-  grep -Fx 'curl http://127.0.0.1:8080/' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:8080/graphql' "$MOCK_LOG"
+  grep -Fx 'curl HEAD http://127.0.0.1:8080/' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/images-edit/' "$MOCK_LOG"

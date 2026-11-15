@@ -59,6 +59,10 @@ router imagesRouter:
   get "/health":
     resp Http204, ""
 
+  head "/images":
+    cond runtimeMode == "testing"
+    resp Http204, ""
+
   get "/public/@name":
     let name = decodeUrl(@"name", decodePlus = false)
     let parsed = parseImageName(name)

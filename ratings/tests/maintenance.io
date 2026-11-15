@@ -90,6 +90,16 @@ list("production", "backup") foreach(mode,
     )
 )
 api runtimeMode := "testing"
+head := api routeRequest(requestFor("HEAD", "/ratings"))
+assert(head containsSeq("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"),
+       "testing availability response is empty")
+assert(fakeDb at("resets") == 0, "availability does not mutate ratings")
+for _, mode in ipairs({"production", "backup"}) do
+    api runtimeMode := mode
+    assert((api routeRequest(requestFor("HEAD", "/ratings"))) containsSeq(
+        "HTTP/1.1 405 Method Not Allowed"), "availability override is testing-only")
+end
+api runtimeMode := "testing"
 list("/ratings", "/ratings/") foreach(target,
     response := api delete(requestFor("DELETE", target))
     assert(response containsSeq("HTTP/1.1 204"), "testing reset accepts collection variants")

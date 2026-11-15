@@ -179,6 +179,10 @@ suite "backend HTTP publication contract":
       if dirExists(root):
         removeDir(root)
 
+    let availability = client.request(base & "/images", httpMethod = HttpHead)
+    check availability.code == Http204
+    check availability.body.len == 0
+
     let image = newImage(70, 40)
     image.fill(parseHtmlColor("#ff0000"))
     let input = image.encodeImage(PngFormat)
@@ -277,6 +281,10 @@ suite "backend HTTP publication contract":
     client.close()
     server.stopServer()
     server = startServer(mode = some("production"))
+    let productionAvailability = client.request(base & "/images", httpMethod = HttpHead)
+    check productionAvailability.code == Http404
+    discard productionAvailability.body
+    client.close()
     for path in ["/images", "/images/"]:
       let explicitProduction = client.request(base & path, httpMethod = HttpDelete)
       check explicitProduction.code == Http404
@@ -285,6 +293,10 @@ suite "backend HTTP publication contract":
     client.close()
     server.stopServer()
     server = startServer(mode = none(string))
+    let defaultAvailability = client.request(base & "/images", httpMethod = HttpHead)
+    check defaultAvailability.code == Http404
+    discard defaultAvailability.body
+    client.close()
     for path in ["/images", "/images/"]:
       let guarded = client.request(base & path, httpMethod = HttpDelete)
       check guarded.code == Http404
@@ -292,7 +304,16 @@ suite "backend HTTP publication contract":
       check fileExists(store.manifestPath(specialId))
     client.close()
     server.stopServer()
+    server = startServer(mode = some("backup"))
+    let backupAvailability = client.request(base & "/images", httpMethod = HttpHead)
+    check backupAvailability.code == Http404
+    discard backupAvailability.body
+    client.close()
+    server.stopServer()
     server = startServer(mode = some("testing"))
+    let testingAvailability = client.request(base & "/images", httpMethod = HttpHead)
+    check testingAvailability.code == Http204
+    check testingAvailability.body.len == 0
     let wiped = client.request(base & "/images/", httpMethod = HttpDelete)
     check wiped.code == Http204
     discard wiped.body

@@ -42,6 +42,21 @@ class RecipesTest {
         .body("", hasSize(0));
   }
 
+  @Test
+  void collectionHeadIsEmptyAndDoesNotLoadOrChangeRecipes() {
+    given().header("Connection", "close")
+        .head("/recipes")
+        .then()
+        .statusCode(204)
+        .body(equalTo(""));
+
+    given().header("Connection", "close")
+        .get("/recipes")
+        .then()
+        .statusCode(200)
+        .body("", hasSize(0));
+  }
+
   private static String createRecipe(String body) {
     var response = given().header("Connection", "close")
         .contentType(ContentType.JSON)

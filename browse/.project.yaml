@@ -16,6 +16,7 @@ devcontainer:
   ports:
     - 3000
   environment:
+    MODE: testing
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     NATS_URL: "nats://nats:4222"
   initialize: |

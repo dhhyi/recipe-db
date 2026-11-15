@@ -126,57 +126,6 @@ wait_for_http() {
   return 1
 }
 
-wait_for_images() {
-  local deadline=$((SECONDS + 40)) response
-  while ((SECONDS < deadline)); do
-    response=$(curl --silent --output /dev/null --write-out '%{http_code} %{content_type}' \
-      --connect-timeout 1 --max-time 2 \
-      http://127.0.0.1:3000/images/nonexistent/meta 2> /dev/null || true)
-    if [[ $response == "404 application/problem+json" ]]; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "Timed out waiting for images API at http://127.0.0.1:3000/images/nonexistent/meta (expected HTTP 404 with application/problem+json, last got ${response:-no response})." >&2
-  return 1
-}
-
-wait_for_graphql() {
-  local description=$1
-  local deadline=$((SECONDS + 40)) actual
-  while ((SECONDS < deadline)); do
-    actual=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-      --connect-timeout 1 --max-time 2 \
-      -H 'Content-Type: application/json' \
-      --data '{"query":"{ __typename }"}' \
-      http://127.0.0.1:8080/graphql 2> /dev/null || true)
-    if [[ $actual == 200 ]]; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "Timed out waiting for $description at http://127.0.0.1:8080/graphql (last got ${actual:-no response})." >&2
-  return 1
-}
-
-wait_for_mcp() {
-  local deadline=$((SECONDS + 40)) actual
-  while ((SECONDS < deadline)); do
-    actual=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-      --connect-timeout 1 --max-time 2 \
-      -H 'Content-Type: application/json' \
-      -H 'Accept: application/json, text/event-stream' \
-      --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"readiness","version":"1.0"}}}' \
-      http://127.0.0.1:8080/mcp 2> /dev/null || true)
-    if [[ $actual == 200 ]]; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "Timed out waiting for the MCP API at http://127.0.0.1:8080/mcp (last got ${actual:-no response})." >&2
-  return 1
-}
-
 wait_for_fixture() {
   wait_for_http "shared fixture for $1" "http://127.0.0.1:3000/$2" 200
 }
@@ -184,43 +133,43 @@ wait_for_fixture() {
 for project in "${projects[@]}"; do
   case "$project" in
     e2e-test)
-      wait_for_graphql "GraphQL API"
-      wait_for_http "browse frontend" http://127.0.0.1:8080/ 200
+      wait_for_http "GraphQL API" http://127.0.0.1:8080/graphql 204 --head
+      wait_for_http "browse frontend" http://127.0.0.1:8080/ 204 --head
       wait_for_http "shared design assets" http://127.0.0.1:8080/design/styles.css 302
       wait_for_http "recipe editor" http://127.0.0.1:8080/edit/new 200
       wait_for_http "image editor" http://127.0.0.1:8080/images-edit/ 200
       ;;
     recipes-test)
-      wait_for_http "recipes API" http://127.0.0.1:3000/recipes 200
+      wait_for_http "recipes API" http://127.0.0.1:3000/recipes 204 --head
       ;;
     ratings-test)
-      wait_for_http "ratings API" http://127.0.0.1:3000/ratings 200
+      wait_for_http "ratings API" http://127.0.0.1:3000/ratings 204 --head
       ;;
     graphql-test)
-      wait_for_graphql "GraphQL API"
+      wait_for_http "GraphQL API" http://127.0.0.1:8080/graphql 204 --head
       wait_for_fixture "$project" graphql-test-fixture/
       ;;
     images-test)
-      wait_for_images
+      wait_for_http "images API" http://127.0.0.1:3000/images 204 --head
       ;;
     inspirations-test)
       wait_for_http "inspirations API" http://127.0.0.1:3000/inspirations 204 --head
       ;;
     link-extract-test)
-      wait_for_http "link-extract API" http://127.0.0.1:3000/link-extract 400
+      wait_for_http "link-extract API" http://127.0.0.1:3000/link-extract 204 --head
       wait_for_fixture "$project" link-extract-test-fixture/page
       ;;
     image-inline-test)
-      wait_for_http "image-inline API" http://127.0.0.1:3000/image-inline/ 400
+      wait_for_http "image-inline API" http://127.0.0.1:3000/image-inline/ 204 --head
       wait_for_fixture "$project" image-inline-test-fixture/tiny.png
       ;;
     mcp-test)
-      wait_for_mcp
+      wait_for_http "MCP API" http://127.0.0.1:8080/mcp 204 --head
       wait_for_fixture "$project" mcp-test-fixture/test.jpg
       ;;
     search-test)
-      wait_for_graphql "GraphQL API"
-      wait_for_http "search API" http://127.0.0.1:3000/search/reindex 200
+      wait_for_http "GraphQL API" http://127.0.0.1:8080/graphql 204 --head
+      wait_for_http "search API" http://127.0.0.1:3000/search 204 --head
       wait_for_fixture "$project" mcp-test-fixture/test.jpg
       ;;
     tags-test) ;;

@@ -6,6 +6,11 @@ Suite Setup     Wait For Fixture
 
 
 *** Test Cases ***
+Collection Availability Does Not Require Input
+    ${response}=    HEAD On Session    link_extract    /link-extract
+    Should Be Equal As Integers    ${response.status_code}    204
+    Should Be Empty    ${response.text}
+
 Missing Url Is Rejected
     ${response}=    GET On Session    link_extract    /link-extract    expected_status=400
     ${body}=    Set Variable    ${response.json()}

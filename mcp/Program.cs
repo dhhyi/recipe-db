@@ -34,6 +34,10 @@ builder.Services.AddMcpServer()
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok());
+if (mode == "testing")
+{
+    app.MapMethods("/mcp", ["HEAD"], () => Results.NoContent());
+}
 app.MapMcp("/mcp");
 
 app.Run();

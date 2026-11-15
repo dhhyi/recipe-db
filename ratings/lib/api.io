@@ -50,6 +50,14 @@ RESTAPI get := method(request,
     return request errorNotFound
 )
 
+RESTAPI head := method(request,
+    path := request at("path")
+    if (runtimeMode == "testing" and path size == 1 and path at(0) == "ratings",
+        return request sendNoContent
+    )
+    return request errorMethodNotAllowed
+)
+
 RESTAPI put := method(request,
     if (runtimeMode == "backup", return request errorMaintenanceMode)
     if (request at("path") at(0) == "ratings",
