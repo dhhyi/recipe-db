@@ -186,6 +186,7 @@ PY
   export REQUIRE_TERMINAL=1
   run python3 - << 'PY'
 import errno
+import json
 import os
 import pty
 import select
@@ -194,8 +195,8 @@ import time
 
 pid, terminal = pty.fork()
 if pid == 0:
-    os.execlp("fish", "fish", "--interactive", "--no-config", "-c",
-              'mise run --output prefix retrieve-verified-backup "$DESTINATION"')
+    os.execlp("fish", "fish", "--interactive", "--no-config")
+os.write(terminal, b'mise run --output prefix retrieve-verified-backup "$DESTINATION"; exit $status\n')
 content = bytearray()
 pending = bytearray()
 finished = False
@@ -224,9 +225,11 @@ try:
     finished = True
     assert os.waitstatus_to_exitcode(status) == 0, repr(content)
     assert content.count(b"Test SSH passphrase: ") == 4, repr(content)
-    for line in content.decode().splitlines():
-        if line.startswith('{"archive":'):
-            print(line)
+    text = content.decode()
+    start = text.find('{"archive":')
+    assert start >= 0, repr(content)
+    result, _ = json.JSONDecoder().raw_decode(text[start:])
+    print(json.dumps(result))
 finally:
     if not finished:
         os.kill(pid, signal.SIGKILL)
