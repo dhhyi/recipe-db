@@ -248,6 +248,8 @@ workflows:
       - ":(glob)*/build.gradle"
     .scripts/tests/bazel-cache-artifacts.bats:
       - .scripts/bazel-cache-artifacts.py
+      - .scripts/tests/bazel-cache-artifacts.py
+      - .scripts/tests/fixtures/bazel-cache-artifacts-execution-log.json
       - .github/workflows/publish.yaml
       - .github/workflows/bazel-cache-cleanup.yaml
     .scripts/tests/mise-workflows.bats:
