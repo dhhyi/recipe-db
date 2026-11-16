@@ -98,7 +98,11 @@ For pnpm 12 two-document lockfiles, GitHub fixed application dependency detectio
 2. End the turn and wait for confirmation before applying them.
 3. Implement only with separate authorization, including documentation edits. Clarify mixed requests when authorization is unclear.
 
-Use issues to capture and refine future work. Every issue in this process has exactly one workflow label: `idea`, `umbrella`, `spec`, `manual`, or `decision`. Other metadata labels may coexist. Labels describe issue type; open/closed state tracks completion.
+Use issues to capture and refine future work. Native GitHub issue types describe the kind of work; workflow labels describe its definition, structure, or execution requirements. Open/closed state tracks completion.
+
+### Workflow labels
+
+Every issue in this process has exactly one workflow label: `idea`, `umbrella`, `spec`, `manual`, or `decision`. Other metadata labels may coexist.
 
 In GitHub issue descriptions, reference issues using GitHub's autolink syntax (`#123` in this repository, `owner/repo#123` elsewhere) instead of manually titled Markdown links. In lists, GitHub can show the current title and state. Mermaid diagrams are excluded; follow the diagram rules below.
 
@@ -125,9 +129,9 @@ flowchart TD
     Decision -.->|Defines base contract| Umbrella
 ```
 
-Solid arrows change issue type; dashed arrows create children or reference contracts, not blockers. Nodes represent types, not individual issues.
+Solid arrows change workflow labels; dashed arrows create children or reference contracts, not blockers. Nodes represent workflow categories, not individual issues.
 
-- Replace the workflow label only when the type changes; preserve other metadata and resolve missing or conflicting workflow labels with the user.
+- Replace the workflow label only when the workflow category changes; preserve other metadata except for the [decision native-type rule](#native-issue-types), and resolve missing or conflicting workflow labels with the user.
 - Separate automatable work from human-only steps when practical.
 - Relate standalone decisions to affected issues natively and link the contract in their descriptions. Do not create an umbrella solely to hold a decision.
 
@@ -137,6 +141,24 @@ Solid arrows change issue type; dashed arrows create children or reference contr
 - When splitting a spec, convert it into an umbrella and map every original requirement and acceptance criterion to children or overall completion criteria.
 - Preserve settled child specs. Fully settled split-out scopes may be specs directly; unresolved children start as ideas.
 - Review incoming/outgoing dependencies and update affected umbrellas when restructuring.
+
+### Native issue types
+
+Assign one of these four types when creating or refining a non-decision issue:
+
+| Type | Use when the primary outcome is | Examples |
+| --- | --- | --- |
+| **Feature** | A new capability for visitors, editors, API clients, or operators. | Recipe collections, an editor image gallery, new telemetry and dashboard insights. |
+| **Improvement** | Making an existing capability simpler, faster, clearer, or more maintainable. | Drag-and-drop for existing button-based reordering, recurring build-cache housekeeping, WebMCP discovery of existing website actions. |
+| **Bug** | Correcting behavior that violates an established or reasonably expected contract. | Configuration paths that unexpectedly depend on one workstation's absolute home directory. |
+| **Task** | Supporting work, assessment, preparation, routine execution, or enforcement of repository standards. | Feasibility research, forwarding established operations through GraphQL or MCP, synchronizing Python versions. |
+
+- Classify each issue by its own primary outcome, not its parent, size, implementation layer, or title verb. A child is not automatically a Task, and an umbrella is not automatically a Feature.
+- Distinguish introducing a capability from carrying it through a required access layer. Forwarding an established operation is usually Task; genuinely new behavior in that layer may be Feature.
+- New telemetry sources and useful dashboard views are Features when they add information for analysis, not merely transport existing data.
+- An assessment that may recommend no change is Task. Investigative wording alone does not make an issue Task when its scope includes delivering a capability or improvement.
+- Issues labeled `decision` must have no native type: their outcome is an agreement, not implementation. Exclude them from missing-type checks. When changing to or from the `decision` workflow label, clear or assign the native type accordingly.
+- Type and workflow label are independent for other issues: a Feature can be `idea`, `spec`, `manual`, or `umbrella`. Changing readiness does not by itself change the native type.
 
 ## Hierarchy, dependencies, and completion
 
