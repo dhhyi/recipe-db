@@ -74,7 +74,7 @@ To tear down an already running container without running anything meaningful, u
 mise run --raw in-devcontainer --rm recipes true
 ```
 
-When instructed to create a Git worktree, run `mise install` from the new worktree root immediately after creating it, before running other project commands. If setup does not generate `.prettierignore`, run `mise run sync-ignore-files` before invoking Prettier or the pre-commit hook.
+At the start of work in any new or otherwise uninitialized worktree, always run `mise install` from that worktree's root before any other project command. This applies whether you created the worktree or it was provided as a workspace; do not assume setup in another worktree applies. If instructed to create a Git worktree, run `mise install` immediately after creating it. If `.prettierignore` is missing, run `mise install`.
 
 ## Working on Bazel scripts
 
