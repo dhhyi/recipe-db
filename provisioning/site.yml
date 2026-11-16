@@ -130,6 +130,7 @@
               - ca-certificates
               - curl
               - git
+              - jq
               - nftables
               - unattended-upgrades
               - containernetworking-plugins
