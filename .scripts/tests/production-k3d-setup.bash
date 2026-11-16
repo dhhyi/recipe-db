@@ -138,7 +138,7 @@ if [[ $1 = info ]]; then echo "$MOCK_MEMORY"; exit; fi
 if [[ $MOCK_ABSENT = true && ! -f ${MOCK_LOG%/*}/created ]]; then exit 1; fi
 jq -n --arg foreign "$MOCK_FOREIGN" --arg public "$MOCK_PUBLIC" \
   --arg rehearsalId "${MOCK_REHEARSAL_ID:-}" '[
-  {Config:{Image:"rancher/k3s:v1.35.5-k3s1",Labels:{
+  {Config:{Image:"rancher/k3s:v1.35.6-k3s1",Labels:{
     "recipe-db.managed":(if $foreign == "true" then "foreign" else "rehearsal" end),
     "recipe-db.rehearsal-id":$rehearsalId,
     "k3d.cluster":"recipe-db-rehearsal","k3d.role":"server"}},

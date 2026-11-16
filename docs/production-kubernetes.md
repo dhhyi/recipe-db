@@ -99,7 +99,7 @@ Detailed findings and delivery ownership are tracked in [#143: Define a release 
 - For initial physical Pi setup, follow the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md). Provisioning and deployment success alone do not establish recovery or production acceptance.
 - Run commands from the repository root, with an absolute values-file path. Examples below use `/home/runner/work/recipe-db/recipe-db`; substitute your actual absolute checkout path.
 - Local rehearsal requires an x86-64 host, a running Docker daemon with **more than 8 GiB** assigned, available loopback ports 8080 and 6445, and access to GHCR. Leave enough disk space for images and the requested PVCs.
-- The tool contract is k3d **5.8.3**, k3s **v1.35.5-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
+- The tool contract is k3d **5.8.3**, k3s **v1.35.6-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
 - Use a published `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 hex digits>` artifact, not a mutable tag or an individual application image. The driver validates the artifact shape, source, revision and complete image inventory.
 - No development Compose generation or development authentication fixture is needed. Do not copy fixture credentials into production.
 
