@@ -191,7 +191,7 @@ image_built=true
 
 phase='cluster-create'
 if ! run_logged cluster-create k3d cluster create "$cluster" \
-  --image rancher/k3s:v1.35.6-k3s1 --servers 1 --agents 0 \
+  --image rancher/k3s:v1.35.10-k3s1 --servers 1 --agents 0 \
   --kubeconfig-update-default=false --kubeconfig-switch-context=false \
   --wait --timeout 180s; then
   if k3d cluster list -o json | jq -e --arg cluster "$cluster" \
