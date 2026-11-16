@@ -460,38 +460,62 @@ When selecting or upgrading k3s or Traefik, verify that the k3s-bundled Traefik 
 
 Existing private deployment and backup values using a generic Traefik tag must be updated to the verified explicit version of the same pinned image before deploying or restoring. Preserve the digest and all other settings; coordinate the Pi's installed backup inputs through the documented backup-configuration procedure, never during retained maintenance. Historical release templates also consume the supplied private values, so this is required when restoring older releases.
 
+For the specific 1.35.6 transition with an older installed chart, follow the [transition cookbook](k3s-traefik-transition.md). It temporarily selects the Helm controller's `abort` failure policy: the default `reinstall` policy can automatically uninstall and reinstall a failed chart.
+
 ### Check Traefik after a K3s upgrade
 
 K3s updates its desired Traefik chart separately from the running controller. A healthy existing controller, a ready node, or a completed Helm job does not prove that the new chart was installed. An install job can exit successfully after skipping an upgrade because its expected release revision does not match the current revision.
 
-With the Pi API tunnel open and `KUBECONFIG` set as in the [release cookbook](production-release-cookbook.md#prepare-the-workstation), run these read-only checks on the workstation. Use the context from the private Pi values if it differs from `recipe-db-pi`:
+With the Pi API tunnel open and `VALUES` and `KUBECONFIG` set as in the [release cookbook](production-release-cookbook.md#prepare-the-workstation), run these read-only checks on the workstation in fish:
 
-```sh
-mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context recipe-db-pi \
-  -n kube-system get helmchart traefik -o json \
-  | mise exec -- jq '{chart: .spec.chart, job: .status.jobName, conditions: .status.conditions}'
-mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context recipe-db-pi \
+```fish
+set -g PI_CONTEXT (mise exec -- yq -er '.context' "$VALUES")
+and test -n "$PI_CONTEXT"
+```
+
+Stop if either command fails. Use that context for all checks:
+
+```fish
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get helmchart traefik traefik-crd -o json \
+  | mise exec -- jq '[.items[] | {name: .metadata.name, chart: .spec.chart,
+      job: .status.jobName, conditions: .status.conditions}]'
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
   -n kube-system get deployment traefik -o json \
   | mise exec -- jq '{chart: .metadata.labels["helm.sh/chart"],
       images: [.spec.template.spec.containers[] | select(.name == "traefik") | .image]}'
-mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context recipe-db-pi \
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
   -n kube-system rollout status deployment/traefik --timeout=60s
 ```
 
-If the HelmChart reports `helm-install-traefik` as its job, inspect its status and logs locally:
+Verify the installed CRD chart version without printing the release's other contents:
 
-```sh
-mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context recipe-db-pi \
-  -n kube-system get job helm-install-traefik
-mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context recipe-db-pi \
-  -n kube-system get pods -l job-name=helm-install-traefik
-mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context recipe-db-pi \
-  -n kube-system logs job/helm-install-traefik
+```fish
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get secrets -l owner=helm,name=traefik-crd,status=deployed -o json \
+  | mise exec -- jq -er '.items | if length == 1 then .[0].data.release else error("expected one deployed release") end' \
+  | base64 -d | base64 -d | gzip -dc \
+  | mise exec -- jq -es 'if length == 1 and .[0].info.status == "deployed"
+      then {status: .[0].info.status, chart: .[0].chart.metadata.version}
+      else error("invalid deployed release") end'
 ```
 
-Compare the chart archive named by `chart` in the HelmChart with the Deployment's chart label. The label uses `_` where the archive version uses `+`. Require the versions to match and the rollout to be ready; also compare the Deployment's image tag and digest with the intended private values. Check the HelmChart's named job and its logs for failures or a skipped upgrade, including a release-revision mismatch. If it has multiple Pods or retries, inspect their individual logs too; the job log command may select only one Pod. Keep logs private. If the job has another name, inspect the job reported by the HelmChart instead. If the job or its outcome cannot be established, the chart versions differ, or the image or rollout is wrong, stop and investigate; do not treat the K3s upgrade as complete or retry blindly.
+Stop if this command fails or does not print exactly one deployed chart version. If the HelmCharts report `helm-install-traefik` and `helm-install-traefik-crd` as their jobs, inspect both statuses and logs locally:
 
-These checks do not prove application routing or authentication. Verify those separately, and verify a fresh backup before re-enabling scheduled backups.
+```fish
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get job helm-install-traefik helm-install-traefik-crd
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get pods -l 'job-name in (helm-install-traefik,helm-install-traefik-crd)'
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system logs job/helm-install-traefik
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system logs job/helm-install-traefik-crd
+```
+
+Compare each chart archive named by its HelmChart with the installed chart: the Deployment label for Traefik, and the deployed release version for its CRDs. The Deployment label uses `_` where the archive version uses `+`. Require both versions to match and the rollout to be ready; also compare the Deployment's image tag and digest with the intended private values. Check each HelmChart's named job and its logs for failures or a skipped upgrade, including a release-revision mismatch. If a job has multiple Pods or retries, inspect their individual logs too; the job log command may select only one Pod. Keep logs private. If a job has another name, inspect the job reported by that HelmChart instead. If either job or its outcome cannot be established, the chart versions differ, or the image or rollout is wrong, stop and investigate; do not treat the K3s upgrade as complete or retry blindly.
+
+These checks do not prove application routing or authentication. Check the website and sign-in as described in the [release cookbook](production-release-cookbook.md#9-check-the-normal-website), without recording a release result at this stage. Verify a fresh backup before re-enabling scheduled backups.
 
 ### Deployment behavior
 
