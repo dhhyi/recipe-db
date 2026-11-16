@@ -4,7 +4,7 @@ This cookbook is for operators releasing Recipe DB to the Pi, with AI help where
 
 The [production image releases guide](production-releases.md) explains the release artifact and registry requirements. The [production configuration guide](production-configuration.md) is authoritative for private inputs and their contents.
 
-The cookbook now includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; keep the Pi unchanged until the rehearsal and all later step conditions are satisfied.
+The cookbook includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; do not deploy the candidate until the rehearsal and all later step conditions are satisfied.
 
 For current capabilities and limits, see the [release capability overview](production-kubernetes.md#release-capability-inventory). The agreed sequence and remaining work are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143).
 
@@ -24,6 +24,46 @@ For current capabilities and limits, see the [release capability overview](produ
 ## 1. Prepare the candidate
 
 Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root in fish. Commands labelled for the Pi use its POSIX-compatible shell; commands in the provisioning container's SSH-agent shell use Bash.
+
+### Pause scheduled backups
+
+At the start of the attempt, connect to the Pi using the verified host and user from the private provisioning inventory. Record whether the schedule was already disabled; do not automatically enable a schedule that was intentionally paused before this attempt. On the Pi:
+
+```sh
+sudo systemctl show recipe-db-backup.timer --property=LoadState --property=UnitFileState --property=ActiveState
+```
+
+Then stop and disable the timer. This changes production scheduling but does not stop a backup already running:
+
+```sh
+sudo systemctl disable --now recipe-db-backup.timer
+```
+
+Stop if that command fails. Check the timer, the backup service and retained maintenance state:
+
+```sh
+sudo systemctl show recipe-db-backup.timer --property=LoadState --property=UnitFileState --property=ActiveState
+sudo systemctl show recipe-db-backup.service --property=LoadState --property=ActiveState
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+```
+
+Require the timer to be loaded, disabled and inactive, the service to be loaded and inactive, and `maintenanceActive: false`. If a backup is running, let it finish and check again; do not stop it. Investigate a failed service or retained maintenance before continuing.
+
+Run an explicit backup with the currently deployed release's inputs. Capture temporarily blocks application operations; allow for this interruption. On the Pi:
+
+```sh
+sudo systemctl start recipe-db-backup.service
+```
+
+If it fails, stop and inspect the backup status and recovery state. Otherwise check:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+```
+
+Require `verified-upload` or `verified-unchanged` and `maintenanceActive: false`. Keep the timer disabled until step 10 or an explicitly approved abort recovery. Manual captures, including the pre-migration and post-release backups, remain necessary. Pausing the schedule does not stop application writes or other manual backups. A check becomes overdue after 26 hours; if needed, capture and verify a fresh backup before retrieval or resuming the schedule.
+
+If the attempt is aborted, leave the schedule disabled while resolving any active maintenance or recovery. Once the deployed application and its matching backup inputs are safe, run and verify an explicit backup, then use the [backup-enable playbook](../provisioning/backup-enable.yml) to resume the schedule if appropriate. It requires maintenance to have ended and a verified check newer than the last backup configuration installation. Do not automatically reopen access, recover data or enable the timer after an error.
 
 ### Publish the candidate
 
@@ -86,7 +126,7 @@ Compare the Pi's running K3s version with the candidate's [provisioning target](
 1. Verify a recoverable backup, a recovery plan covering Kubernetes state, and an idle backup service with no retained maintenance operation. An application backup alone is not a Kubernetes rollback plan.
 2. Check the [Traefik image and bundled chart compatibility](production-kubernetes.md#bundled-traefik-configuration) and update private deployment and backup values if needed. Keep the image digest and `backup_capture_revision` matched to `OLD_RELEASE`, not the candidate; install changed backup inputs only while backup is idle and outside retained maintenance. Changing private values alone does not update the live HelmChartConfig. If the live configuration is incompatible with the new chart, plan and review its transition before upgrading; do not assume the ingress controller will reconcile successfully.
 3. Review the [provisioning commands](raspberry-pi-rebuild.md#5-provision-the-host) and allow downtime. Pass `-e allow_k3s_upgrade=true` explicitly to the preflight and provisioning invocations; downgrades remain forbidden.
-4. Verify Kubernetes, system components and the existing application are healthy. Follow [Check Traefik after a K3s upgrade](production-kubernetes.md#check-traefik-after-a-k3s-upgrade): a ready old controller or successful installer job alone is not proof the new chart was installed. Stop if the chart, image, rollout or installer outcome does not match. Provisioning disables scheduled backups: verify a fresh backup using the old release's inputs before [re-enabling the timer](../provisioning/backup-enable.yml).
+4. Verify Kubernetes, system components and the existing application are healthy. Follow [Check Traefik after a K3s upgrade](production-kubernetes.md#check-traefik-after-a-k3s-upgrade): a ready old controller or successful installer job alone is not proof the new chart was installed. Stop if the chart, image, rollout or installer outcome does not match. Keep scheduled backups disabled and verify a fresh backup using the old release's inputs.
 
 Stop on failure. Do not run ordinary provisioning during retained release maintenance. Skip the upgrade when none is needed.
 
@@ -204,11 +244,9 @@ On the Pi, verify installation before proceeding:
 ```sh
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
 sudo systemctl show --property=ActiveState --value recipe-db-backup.service
-sudo systemctl is-enabled recipe-db-backup.timer
-sudo systemctl is-active recipe-db-backup.timer
 ```
 
-Require `migrationRecoveryCloseoutVersion: 1`, `maintenanceActive: false`, service state `inactive` or `failed`, and timer `disabled` and `inactive` (the last two commands return nonzero for these deliberate states). Keep the timer disabled through maintenance and recovery.
+Require `migrationRecoveryCloseoutVersion: 1`, `maintenanceActive: false` and service state `inactive` or `failed`. The uploader-only install keeps the timer stopped and disabled; keep it that way through maintenance and recovery.
 
 On the Pi, enter maintenance through the backup service's uploader:
 
@@ -546,7 +584,7 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-finalize \
 
 Finalization independently checks GitHub's published release, commit, artifact link and contiguous release numbering. Only after that succeeds does it remove the temporary Pi release snapshot, progress files and operation Lease. The verified Drive backup and application data are not removed. If publication or its verification fails, keep the state and Lease and retry or investigate; do not manually delete them.
 
-Back in the provisioning container's SSH-agent shell, enable the schedule:
+If the schedule was not intentionally paused before this release, back in the provisioning container's SSH-agent shell, enable it:
 
 ```sh
 ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
@@ -555,4 +593,4 @@ ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
 
 Enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
 
-**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was enabled only afterward.
+**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was resumed only afterward if appropriate.
