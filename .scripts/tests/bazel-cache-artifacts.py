@@ -194,7 +194,6 @@ class CacheArtifactTests(unittest.TestCase):
     def test_cleanup_rejects_spoofed_pr_association(self):
         fixture = cleanup_fixture(201, 1, pr_number=17)
         for pulls in (
-            [],
             [{"number": 18, "base": {"repo": {"id": 9, "full_name": "owner/repo"}}}],
             [{"number": 17, "base": {"repo": {"id": 10, "full_name": "owner/repo"}}}],
             [{"number": 17, "base": {"repo": {"id": 9, "full_name": "other/repo"}}}],
@@ -206,6 +205,13 @@ class CacheArtifactTests(unittest.TestCase):
                     fixture["artifact"], fixture["run"], fixture["jobs"],
                     "owner/repo", 9, "https://api.github.com/repos/owner/repo", "token"
                 )
+
+        with patch.object(CACHE, "request_json", return_value=[]):
+            identity = CACHE.cleanup_artifact_identity(
+                fixture["artifact"], fixture["run"], fixture["jobs"],
+                "owner/repo", 9, "https://api.github.com/repos/owner/repo", "token"
+            )
+        self.assertTrue(identity["unassociatedPRHead"])
 
     def test_cleanup_scope_and_event_come_from_authenticated_run(self):
         for pr_number in (None, 17):
@@ -362,6 +368,31 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertEqual(deleted, [
             "https://api.github.com/repos/owner/repo/actions/artifacts/301",
         ])
+
+    def test_cleanup_deletes_pr_artifact_when_historical_head_is_unassociated(self):
+        fixture = cleanup_fixture(304, 1, pr_number=14)
+        api_base = "https://api.github.com/repos/owner/repo"
+        deleted = []
+
+        def fake_json(url, token):
+            if url == api_base:
+                return {"id": 9, "full_name": "owner/repo"}
+            if url.endswith("/pulls"):
+                return []
+            return {"artifacts": [fixture["artifact"]]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt", return_value=fixture["run"]), \
+                patch.object(CACHE, "jobs_for_attempt", return_value=fixture["jobs"]), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=lambda url, token: deleted.append(url) or True):
+            with redirect_stdout(io.StringIO()) as output:
+                status = CACHE.cleanup_artifacts(api_base, "token", "owner/repo")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(deleted, [f"{api_base}/actions/artifacts/{fixture['artifact']['id']}"])
+        self.assertIn("deleted-unassociated-pr", output.getvalue())
+        self.assertIn("deleted-unassociated-pr=1", output.getvalue())
 
     def test_cleanup_authenticates_legacy_pr_head_before_deletion(self):
         fixture = cleanup_fixture(350, 1, pr_number=15)
