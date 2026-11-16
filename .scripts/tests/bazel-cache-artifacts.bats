@@ -56,10 +56,16 @@ load test_helper
     [ "$output" = true ]
   done
 
-  run yq -r '.jobs.publish.steps[] | select(.name == "checkout") | .with.ref' "$workflow"
-  [ "$status" -eq 0 ]
-  # shellcheck disable=SC2016
-  [ "$output" = '${{ github.sha }}' ]
+  for job in publish-devcontainers publish-release; do
+    run env JOB="$job" yq -r '.jobs[strenv(JOB)].steps[] | select(.name == "checkout") | .with.ref' "$workflow"
+    [ "$status" -eq 0 ]
+    # shellcheck disable=SC2016
+    [ "$output" = '${{ github.sha }}' ]
+    run env JOB="$job" yq -r '.jobs[strenv(JOB)].steps[] | select(.name == "verify exact source revision") | .env.EXPECTED_SOURCE_SHA' "$workflow"
+    [ "$status" -eq 0 ]
+    # shellcheck disable=SC2016
+    [ "$output" = '${{ github.sha }}' ]
+  done
   # shellcheck disable=SC2016
   run grep -F -- '--commit "${{ steps.source.outputs.sha }}"' "$workflow"
   [ "$status" -eq 0 ]

@@ -223,9 +223,6 @@ jobs:
       contents: read
       packages: write
     runs-on: ubuntu-24.04-arm
-    outputs:
-      release_status: ${{ steps.check-existing-release.outputs.status }}
-      release_digest: ${{ steps.check-existing-release.outputs.digest }}
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       REGISTRY_CACHE_SUFFIX: "-arm64"
@@ -357,7 +354,6 @@ jobs:
           result=$(sh .scripts/check-production-release.sh "${{ steps.source.outputs.sha }}")
           if [[ $result == found:* ]]; then
             echo "status=found" >> "$GITHUB_OUTPUT"
-            echo "digest=${result#found:}" >> "$GITHUB_OUTPUT"
           else
             echo "status=absent" >> "$GITHUB_OUTPUT"
           fi
@@ -409,7 +405,70 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  publish:
+  publish-devcontainers:
+    needs:
+      - quality-checks
+      - arm64-validation
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-24.04
+    env:
+      DOCKER_BUILDKIT: 1
+      COMPOSE_PARALLEL_LIMIT: 1
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: verify exact source revision
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          source_sha=$(git rev-parse HEAD)
+          if [[ $source_sha != "$EXPECTED_SOURCE_SHA" ]]; then
+            echo "Checked out $source_sha, expected event source $EXPECTED_SOURCE_SHA." >&2
+            exit 1
+          fi
+          echo "Building exact source revision $source_sha"
+
+      - name: setup mise tools
+        uses: jdx/mise-action@v5
+        with:
+          install: false
+          cache: true
+
+      - name: login to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: create buildx builder
+        run: docker buildx create --use
+
+      - name: install tools and synchronize
+        env:
+          MISE_JOBS: "1"
+        run: mise install
+
+      - name: build and push devcontainers
+        run: |
+          for project in $(ls */.project.yaml | xargs dirname); do
+            has_publish=$(mise exec -- yq eval 'select(documentIndex==0) | .devcontainer.publish.image // ""' "$project/.project.yaml")
+            if [ -z "$has_publish" ]; then
+              continue
+            fi
+            echo "::group::build and push devcontainer $project"
+            sh $project/.update_devcontainer.sh --build --push-cache -vv
+            echo "::endgroup::"
+          done
+
+  publish-release:
     needs:
       - quality-checks
       - arm64-validation
@@ -466,19 +525,19 @@ jobs:
 
       - name: build, publish, and verify production release
         id: production-release
+        env:
+          SOURCE_REVISION: ${{ steps.source.outputs.sha }}
         run: |
           set -euo pipefail
           inventory="$RUNNER_TEMP/release.json"
-          if [[ '${{ needs.arm64-validation.outputs.release_status }}' == found ]]; then
-            digest='${{ needs.arm64-validation.outputs.release_digest }}'
-            oras pull "ghcr.io/dhhyi/recipe-db-releases@$digest" --output "$RUNNER_TEMP/existing-release"
-            inventory="$RUNNER_TEMP/existing-release/release.json"
-            sh .scripts/validate-production-release.sh "$inventory" "${{ steps.source.outputs.sha }}"
+          result=$(sh .scripts/check-production-release.sh "$SOURCE_REVISION" "$inventory")
+          if [[ $result == found:* ]]; then
+            digest=${result#found:}
             echo "Reusing complete release inventory: ghcr.io/dhhyi/recipe-db-releases@$digest"
           else
             metadata="$RUNNER_TEMP/production-build-amd64.json"
             sh .scripts/generate-production-build-metadata.sh \
-              "${{ steps.source.outputs.sha }}" linux/amd64 "$metadata" true
+              "$SOURCE_REVISION" linux/amd64 "$metadata" true
             docker buildx bake --file "$metadata" --push
             smoke_image=$(jq -r '.target.design.tags[0]' "$metadata")
             docker pull --platform linux/amd64 "$smoke_image"
@@ -492,8 +551,8 @@ jobs:
                 "$image-arm64"
             done < <(jq -r '.target[] | .tags[0]' "$metadata")
 
-            sh .scripts/create-production-release-inventory.sh "${{ steps.source.outputs.sha }}" "$inventory"
-            sh .scripts/publish-production-release.sh "$inventory" "${{ steps.source.outputs.sha }}"
+            sh .scripts/create-production-release-inventory.sh "$SOURCE_REVISION" "$inventory"
+            sh .scripts/publish-production-release.sh "$inventory" "$SOURCE_REVISION"
           fi
           echo "inventory=$inventory" >> "$GITHUB_OUTPUT"
 
@@ -511,15 +570,3 @@ jobs:
             repository="ghcr.io/dhhyi/recipe-db-$project"
             docker buildx imagetools create --tag "$repository:latest" "$image"
           done < <(jq -r '.images | to_entries[] | [.key, .value] | @tsv' "$inventory")
-
-      - name: build and push devcontainers
-        run: |
-          for project in $(ls */.project.yaml | xargs dirname); do
-            has_publish=$(mise exec -- yq eval 'select(documentIndex==0) | .devcontainer.publish.image // ""' "$project/.project.yaml")
-            if [ -z "$has_publish" ]; then
-              continue
-            fi
-            echo "::group::build and push devcontainer $project"
-            sh $project/.update_devcontainer.sh --build --push-cache -vv
-            echo "::endgroup::"
-          done

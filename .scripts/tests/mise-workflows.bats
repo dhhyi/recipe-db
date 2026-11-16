@@ -50,6 +50,107 @@ setup() {
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
+@test "production and devcontainer publishing have independent retry boundaries after validation" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  jobs=$(yq -o=json '.jobs' "$workflow")
+  for job in publish-devcontainers publish-release; do
+    jq -e --arg job "$job" '
+      .[$job] |
+      (.needs | sort) == ["arm64-validation", "quality-checks"] and
+      .if == "github.event_name == '\''push'\'' && github.ref == '\''refs/heads/main'\''"
+    ' <<< "$jobs"
+  done
+  jq -e '
+    [.[] | .steps[] | select(.name == "build and push devcontainers")] | length == 1
+  ' <<< "$jobs"
+  jq -e '
+    .["publish-devcontainers"].steps[-1].name == "build and push devcontainers" and
+    ([.["publish-release"].steps[] | select(.name == "build and push devcontainers")] | length == 0)
+  ' <<< "$jobs"
+}
+
+@test "release publishing freshly checks inventory before building and fails closed on lookup errors" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  script=$(yq '.jobs.publish-release.steps[] | select(.id == "production-release") | .run' "$workflow")
+  export SOURCE_REVISION=0123456789abcdef0123456789abcdef01234567
+  cat > .scripts/check-production-release.sh << 'EOF'
+#!/bin/sh
+set -eu
+printf 'lookup %s\n' "$1" >> "$MOCK_LOG"
+case "$SCENARIO" in
+  found)
+    printf '%s\n' '{"existing":true}' > "$2"
+    echo found:sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    ;;
+  absent) echo absent ;;
+  failure) echo "release verification failed" >&2; exit 42 ;;
+esac
+EOF
+  cat > .scripts/generate-production-build-metadata.sh << 'EOF'
+#!/bin/sh
+set -eu
+printf 'metadata %s %s\n' "$1" "$2" >> "$MOCK_LOG"
+printf '{"target":{"design":{"tags":["ghcr.io/dhhyi/recipe-db-design:sha-%s-amd64"]}}}\n' "$1" > "$3"
+EOF
+  cat > .scripts/create-production-release-inventory.sh << 'EOF'
+#!/bin/sh
+set -eu
+printf 'inventory %s\n' "$1" >> "$MOCK_LOG"
+printf '%s\n' '{"new":true}' > "$2"
+EOF
+  cat > .scripts/publish-production-release.sh << 'EOF'
+#!/bin/sh
+set -eu
+printf 'publish %s\n' "$2" >> "$MOCK_LOG"
+[ "$(cat "$1")" = '{"new":true}' ]
+EOF
+  cat > .scripts/smoke-production-image.sh << 'EOF'
+#!/bin/sh
+printf 'smoke %s\n' "$1" >> "$MOCK_LOG"
+EOF
+  cat > bin/docker << 'EOF'
+#!/bin/sh
+printf 'docker %s\n' "$*" >> "$MOCK_LOG"
+EOF
+  chmod +x bin/docker
+
+  for scenario in found absent failure; do
+    export SCENARIO="$scenario"
+    release_temp="$BATS_TEST_TMPDIR/$scenario"
+    export GITHUB_OUTPUT="$release_temp/output"
+    mkdir "$release_temp"
+    : > "$MOCK_LOG"
+    run env RUNNER_TEMP="$release_temp" bash -eo pipefail -c "$script"
+    if [[ $scenario == failure ]]; then
+      [ "$status" -eq 42 ]
+      [[ "$output" == *"release verification failed"* ]]
+      [ ! -e "$GITHUB_OUTPUT" ]
+    else
+      [ "$status" -eq 0 ]
+      [ "$(cat "$GITHUB_OUTPUT")" = "inventory=$release_temp/release.json" ]
+    fi
+    if [[ $scenario == absent ]]; then
+      image="ghcr.io/dhhyi/recipe-db-design:sha-$SOURCE_REVISION"
+      expected=$(printf '%s\n' \
+        "lookup $SOURCE_REVISION" \
+        "metadata $SOURCE_REVISION linux/amd64" \
+        "docker buildx bake --file $release_temp/production-build-amd64.json --push" \
+        "docker pull --platform linux/amd64 $image-amd64" \
+        "smoke $image-amd64" \
+        "docker buildx imagetools create --tag $image $image-amd64 $image-arm64" \
+        "inventory $SOURCE_REVISION" \
+        "publish $SOURCE_REVISION")
+      [ "$(cat "$MOCK_LOG")" = "$expected" ]
+    else
+      [ "$(cat "$MOCK_LOG")" = "lookup $SOURCE_REVISION" ]
+      if [[ $scenario == found ]]; then
+        [ "$(cat "$release_temp/release.json")" = '{"existing":true}' ]
+        [[ "$output" == *"Reusing complete release inventory:"* ]]
+      fi
+    fi
+  done
+}
+
 @test "CI builds all Bazel targets including cacheable validations and script regression tests" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   script=$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks, unit tests, and cacheable validations") | .run' "$workflow")
@@ -113,7 +214,7 @@ setup() {
 @test "only ARM64 validation downloads LFS screenshot baselines" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.arm64-validation.steps[] | select(.name == "checkout") | .with.lfs' "$workflow")" = true ]
-  for job in quality-checks publish; do
+  for job in quality-checks publish-devcontainers publish-release; do
     [ "$(yq ".jobs.$job.steps[] | select(.name == \"checkout\") | .with.lfs // false" "$workflow")" = false ]
   done
 }
@@ -185,7 +286,7 @@ EOF
   for variable in TYPESENSE_API_KEY_FILE GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE; do
     [ "$(yq "[.env, .jobs[].env] | map(select(has(\"$variable\"))) | length" "$workflow")" -eq 0 ]
   done
-  for job in arm64-validation publish; do
+  for job in arm64-validation publish-release; do
     [ "$(yq "[.jobs.$job.steps[] | select(.run // \"\" | contains(\"generate-production-build-metadata.sh\"))] | length" "$workflow")" -eq 1 ]
   done
   [ "$(yq '[.jobs.quality-checks.steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 1 ]
@@ -197,7 +298,7 @@ EOF
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   [ "$(yq '.jobs.quality-checks.env.DEVCONTAINER_KEEP_RUNNING' "$workflow")" = true ]
   [ "$(yq '[.. | select(tag == "!!map" and has("DEVCONTAINER_KEEP_RUNNING"))] | length' "$workflow")" -eq 1 ]
-  for job in arm64-validation publish; do
+  for job in arm64-validation publish-release; do
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_URL" "$workflow")" = "https://recipes.example/oauth2/callback" ]
     [ "$(yq ".jobs.$job.env.GOOGLE_OAUTH_REDIRECT_HOST" "$workflow")" = recipes.example ]
   done
