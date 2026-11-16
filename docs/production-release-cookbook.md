@@ -49,21 +49,27 @@ sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/back
 
 Require the timer to be loaded, disabled and inactive, the service to be loaded and inactive, and `maintenanceActive: false`. If a backup is running, let it finish and check again; do not stop it. Investigate a failed service or retained maintenance before continuing.
 
-Run an explicit backup with the currently deployed release's inputs. Capture temporarily blocks application operations; allow for this interruption. On the Pi:
+Run and verify an [ordinary backup](#verify-an-ordinary-backup) before continuing. Keep the timer disabled until step 10 or an explicitly approved abort recovery. Manual captures, including the pre-migration and post-release backups, remain necessary. Pausing the schedule does not stop application writes or other manual backups. If the check becomes overdue, capture and verify a fresh backup before retrieval or resuming the schedule; see [backup status](production-kubernetes.md#verified-remote-packaging).
+
+If the attempt is aborted, leave the schedule disabled while resolving any active maintenance or recovery. Once the deployed application and its matching backup inputs are safe, [verify a backup and resume the schedule](#verify-a-backup-then-re-enable-its-schedule) if appropriate. Do not automatically reopen access, recover data or enable the timer after an error.
+
+### Verify an ordinary backup
+
+Use the currently deployed release's matching backup inputs, with no retained maintenance operation. Capture temporarily blocks application operations; allow for this interruption. On the Pi:
 
 ```sh
+BACKUP_STARTED=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)
 sudo systemctl start recipe-db-backup.service
 ```
 
 If it fails, stop and inspect the backup status and recovery state. Otherwise check:
 
 ```sh
+printf 'Backup started no earlier than %s\n' "$BACKUP_STARTED"
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
 ```
 
-Require `verified-upload` or `verified-unchanged` and `maintenanceActive: false`. Keep the timer disabled until step 10 or an explicitly approved abort recovery. Manual captures, including the pre-migration and post-release backups, remain necessary. Pausing the schedule does not stop application writes or other manual backups. A check becomes overdue after 26 hours; if needed, capture and verify a fresh backup before retrieval or resuming the schedule.
-
-If the attempt is aborted, leave the schedule disabled while resolving any active maintenance or recovery. Once the deployed application and its matching backup inputs are safe, run and verify an explicit backup, then use the [backup-enable playbook](../provisioning/backup-enable.yml) to resume the schedule if appropriate. It requires maintenance to have ended and a verified check newer than the last backup configuration installation. Do not automatically reopen access, recover data or enable the timer after an error.
+Require `verified-upload` or `verified-unchanged`, `maintenanceActive: false`, and `lastCheck` at or after the printed start time.
 
 ### Publish the candidate
 
@@ -482,40 +488,7 @@ Continue only after a passed website check or an explicit `accept-partial-failur
 
 The following procedure also applies after accepted fresh-target recovery.
 
-### Align backup capture with the deployed release
-
-Backup capture must use the same immutable release as the deployed application and a checkout at its source revision. In the chezmoi-managed operator files:
-
-1. Set `backup/backup-release-ref` to the exact `RELEASE` digest.
-2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to `REVISION`. This selects the matching source checkout at `/opt/recipe-db` for backup capture.
-3. Check `backup/backup-values.yaml` still matches the deployed Pi configuration and refers to the current workstation's operator inputs using the provisioning container paths described in the [configuration guide](production-configuration.md#private-workstation-directory).
-4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
-
-   ```fish
-   chezmoi add ~/.config/recipe-db/backup/backup-release-ref \
-     ~/.config/recipe-db/provisioning/inventory.yml \
-     ~/.config/recipe-db/backup/backup-values.yaml
-   ```
-
-On the workstation, open the provisioning devcontainer's SSH-agent Bash shell:
-
-```fish
-mise run --raw in-devcontainer provisioning ssh-agent bash
-```
-
-Inside that Bash shell, add the Pi key, then update the managed capture checkout and install the new backup inputs:
-
-```sh
-ssh-add ~/.config/recipe-db/ssh/recipe-db-pi
-ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
-  site.yml --ask-become-pass
-ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
-  backup-configure.yml --ask-become-pass
-```
-
-Run the Ansible commands from the shell opened inside the provisioning container. `site.yml` updates the managed `/opt/recipe-db` checkout to `REVISION`; `backup-configure.yml` installs the prepared release reference, values and referenced private application inputs. It checks that root-only Drive authorization already exists on the Pi, but never copies or replaces it. Routine releases and application restores do not require Google login again. For a new Pi or lost/broken authorization, follow the [Drive authorization cookbook](google-drive-authorization.md) first. Configuration installation leaves the scheduled backup timer stopped and disabled, and refuses to change inputs while a backup is running.
-
-If provisioning preflight fails, stop and resolve its reported issue before continuing. Do not enable scheduled capture until the next step succeeds.
+Keep the existing capture checkout and backup inputs unchanged until after finalization. Do not run ordinary provisioning or install new backup inputs while the release Lease is held.
 
 ### Capture and verify the post-release backup
 
@@ -584,13 +557,52 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-finalize \
 
 Finalization independently checks GitHub's published release, commit, artifact link and contiguous release numbering. Only after that succeeds does it remove the temporary Pi release snapshot, progress files and operation Lease. The verified Drive backup and application data are not removed. If publication or its verification fails, keep the state and Lease and retry or investigate; do not manually delete them.
 
-If the schedule was not intentionally paused before this release, back in the provisioning container's SSH-agent shell, enable it:
+### Align backup capture with the deployed release
+
+After finalization, backup capture must use the same immutable release as the deployed application and a checkout at its source revision. In the chezmoi-managed operator files:
+
+1. Set `backup/backup-release-ref` to the exact `RELEASE` digest.
+2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to `REVISION`. This selects the matching source checkout at `/opt/recipe-db` for backup capture.
+3. Check `backup/backup-values.yaml` still matches the deployed Pi configuration and refers to the current workstation's operator inputs using the provisioning container paths described in the [configuration guide](production-configuration.md#private-workstation-directory).
+4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
+
+   ```fish
+   chezmoi add ~/.config/recipe-db/backup/backup-release-ref \
+     ~/.config/recipe-db/provisioning/inventory.yml \
+     ~/.config/recipe-db/backup/backup-values.yaml
+   ```
+
+On the workstation, open the provisioning devcontainer's SSH-agent Bash shell:
+
+```fish
+mise run --raw in-devcontainer provisioning ssh-agent bash
+```
+
+Inside that Bash shell, add the Pi key, then update the managed capture checkout and install the new backup inputs:
+
+```sh
+ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    site.yml --ask-become-pass \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    backup-configure.yml --ask-become-pass
+```
+
+Run the Ansible commands from the shell opened inside the provisioning container. `site.yml` updates the managed `/opt/recipe-db` checkout to `REVISION`; `backup-configure.yml` installs the prepared release reference, values and referenced private application inputs. It checks that root-only Drive authorization already exists on the Pi, but never copies or replaces it. Routine releases and application restores do not require Google login again. For a new Pi or lost/broken authorization, follow the [Drive authorization cookbook](google-drive-authorization.md) first. Configuration installation leaves the scheduled backup timer stopped and disabled, and refuses to change inputs while a backup is running.
+
+If provisioning preflight fails, stop and resolve its reported issue before continuing. Do not enable scheduled capture until the next step succeeds.
+
+### Verify a backup, then re-enable its schedule
+
+With maintenance ended and backup inputs matching the deployed release, [verify an ordinary backup](#verify-an-ordinary-backup). For a release, this is separate from the post-release backup captured before finalization. The new check must be later than the latest backup configuration installation; the enable playbook verifies that condition. If both timestamps fall in the same second, capture and verify again before enabling.
+
+If resuming the schedule is appropriate, in the provisioning container's SSH-agent shell, enable it. For a release, leave it paused if it was intentionally paused before the attempt:
 
 ```sh
 ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
   backup-enable.yml --ask-become-pass
 ```
 
-Enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
+For a completed release, enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
 
-**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was resumed only afterward if appropriate.
+**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, a fresh ordinary backup was verified after configuration, and scheduled capture was resumed only afterward if appropriate.
