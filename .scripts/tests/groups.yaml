@@ -87,6 +87,7 @@ deploy:
   suite_inputs:
     .scripts/tests/kubernetes-templates.bats:
       - .scripts/templates/kubernetes*.yml
+      - .scripts/templates/traefik-service-template.lib.yml
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"
       - deploy/**

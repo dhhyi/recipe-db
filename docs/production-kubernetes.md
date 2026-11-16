@@ -21,6 +21,9 @@ This guide is the technical reference for maintainers and operators using Recipe
     - [Controlled test-CA renewal rehearsal](#controlled-test-ca-renewal-rehearsal)
   - [Workstation-only token rehearsal on the Pi](#workstation-only-token-rehearsal-on-the-pi)
   - [Home-LAN HTTP token rehearsal on the Pi](#home-lan-http-token-rehearsal-on-the-pi)
+  - [Bundled Traefik configuration](#bundled-traefik-configuration)
+  - [Check Traefik after a K3s upgrade](#check-traefik-after-a-k3s-upgrade)
+  - [Deployment behavior](#deployment-behavior)
 - [What the protocol smoke verifies](#what-the-protocol-smoke-verifies)
 - [Storage, Pi adaptation and destructive deletion](#storage-pi-adaptation-and-destructive-deletion)
 - [Script regression checks](#script-regression-checks)
@@ -99,7 +102,7 @@ Detailed findings and delivery ownership are tracked in [#143: Define a release 
 - For initial physical Pi setup, follow the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md). Provisioning and deployment success alone do not establish recovery or production acceptance.
 - Run commands from the repository root, with an absolute values-file path. Examples below use `/home/runner/work/recipe-db/recipe-db`; substitute your actual absolute checkout path.
 - Local rehearsal requires an x86-64 host, a running Docker daemon with **more than 8 GiB** assigned, available loopback ports 8080 and 6445, and access to GHCR. Leave enough disk space for images and the requested PVCs.
-- The tool contract is k3d **5.8.3**, k3s **v1.35.6-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
+- The tool contract is k3d **5.8.3**, k3s **v1.35.10-k3s1**, kubectl **1.35.5**, ORAS **1.3.6**, and ytt **0.55.4**, plus Bash, jq, yq, curl and GNU `sha256sum` (and OpenSSL for the token-generation example). Repository mise configuration supplies the pinned tools. Docker is a host prerequisite.
 - Pi provisioning pins the same K3s patch version and its ARM64 binary checksum in [`provisioning/group_vars/pi.yml`](../provisioning/group_vars/pi.yml). Changing an existing Pi's version requires a verified backup and explicit `allow_k3s_upgrade=true` for the reviewed preflight and provisioning commands; the default remains `false`, and downgrades are refused. Treat this as separate infrastructure maintenance, not an application deployment. Ordinary provisioning disables scheduled backups; follow the [backup configuration and activation sequence](#verified-remote-packaging) afterward.
 - Use a published `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 hex digits>` artifact, not a mutable tag or an individual application image. The driver validates the artifact shape, source, revision and complete image inventory.
 - No development Compose generation or development authentication fixture is needed. Do not copy fixture credentials into production.
@@ -201,7 +204,7 @@ Prepare `backup.json` under `~/.config/recipe-db/backup/` and install it with `b
 
 Canonical Ansible provisioning installs `/usr/local/sbin/recipe-db-backup-capture` and its isolated checksum-pinned Mise/capture tools without repository development hooks. Set `backup_capture_revision` in the private inventory to the deployed full commit to manage `/opt/recipe-db`; an empty value does not select or update a checkout. The command reads operator-installed `/etc/recipe-db/backup-values.yaml` and `/etc/recipe-db/backup-release-ref`, then invokes the guarded lifecycle. Use this managed command as `captureCommand`, rather than manually installing host tooling. The selected visible My Drive destination is `gdrive:RecipeDB Backups`. See [production configuration and recovery](production-configuration.md) for private file ownership and recovery. After restore and acceptance, run `backup-configure.yml` to install the operator-prepared recovery inputs and referenced application secrets; it records a private configuration-generation timestamp only after successful installation. Start and verify one explicit capture after that timestamp; only then run `backup-enable.yml`, which requires a verified status with a later `lastCheck` before enabling the timer.
 
-For a release, keep the backup inputs unchanged throughout retained maintenance. Complete the candidate's website check, post-release backup upload/readback, acceptance, publication and `release-finalize` first, using the same pinned operator tooling throughout. Preserve the required private evidence outside the maintenance directory before finalization removes that directory. Only afterward run ordinary provisioning with `backup_capture_revision` set to the deployed candidate revision, followed by `backup-configure.yml` with the matching prepared backup release reference and inputs. Keep the timer disabled until a fresh ordinary backup, newer than the configuration-generation timestamp, is remotely verified. No provisioning exception during maintenance is required. Before maintenance, the supported `backup-configure.yml --tags backup-uploader` administrative install updates only the reviewed publisher while idle and maintenance-inactive; verify its `migrationRecoveryCloseoutVersion: 1` status capability as described in the [release cookbook](production-release-cookbook.md#3-block-application-access-and-enter-maintenance). Keep the old capture wrapper and pinned inputs until finalization. Direct lifecycle capture produces the retained snapshot, after which `nightly` uploads that snapshot without invoking the capture wrapper.
+For a release, keep the backup inputs unchanged throughout retained maintenance. Complete the candidate's website check, post-release backup upload/readback, acceptance, publication and `release-finalize` first, using the same pinned operator tooling throughout. Preserve the required private evidence outside the maintenance directory before finalization removes that directory. Only afterward run ordinary provisioning with `backup_capture_revision` set to the deployed candidate revision, followed by `backup-configure.yml` with the matching prepared backup release reference and inputs. Keep the timer disabled until a fresh ordinary backup, newer than the configuration-generation timestamp, is remotely verified. No provisioning exception during maintenance is required. Before maintenance, the supported `backup-configure.yml --tags backup-uploader` administrative install updates only the reviewed publisher while idle and maintenance-inactive; verify its `migrationRecoveryCloseoutVersion: 1` status capability as described in the [release cookbook](production-release-cookbook.md#3-block-application-access-and-enter-maintenance). Keep the old capture wrapper and pinned inputs until finalization. Direct lifecycle capture produces the retained post-release snapshot, after which `release-upload` uploads that snapshot without invoking the capture wrapper.
 
 Create and authorize `/etc/recipe-db/rclone.conf` interactively on the Pi with the dedicated operator-owned Google account; keep it root-owned, mode `0600`. Follow the [Drive authorization cookbook](google-drive-authorization.md), using the Desktop OAuth client stored in operator home and a private SSH browser tunnel. The authorized config stays on the Pi, where rclone refreshes its tokens. `backup-configure.yml` checks its permissions but never copies, replaces or retrieves it. Routine updates and application restores keep this authorization; a fresh host rebuild or lost/broken authorization requires interactive login. Never put OAuth tokens in operator home, chezmoi, backup JSON, command arguments, source control, application backups or service logs. Retain the protected account-recovery method independently of the Pi and workstation. Lost authorization does not invalidate already verified Drive points.
 
@@ -445,9 +448,74 @@ mise run production-smoke "$VALUES" "$RELEASE" \
 
 `create` reuses only a cluster that passes the managed-identity checks; it refuses an unrelated cluster using the reserved name. `deploy` applies namespaced configuration and operator secrets, initializes JetStream, and waits for readiness. Under the shared Lease, it removes an existing owned cleanup Job and waits for its workers to disappear before recreating the release-specific Job suspended; Kubernetes Job templates cannot be updated in place. An unowned Job or failed worker removal blocks deployment. `recipe-db-release` records the release artifact and source revision. Reapplying the identical artifact is intentional and should preserve PVC-backed data. `status` and smoke failure diagnostics report resource summaries, not credentials. All smoke Kubernetes operations use the driver's guarded `kubectl` interface with explicit context and namespace; no ambient kubeconfig is trusted.
 
+After the pinned k3s image changes, the current driver refuses older rehearsal clusters. Preserve retained failure evidence and use the original tooling and its target-bound recovery instructions to inspect or clean up those clusters; do not bypass the identity check.
+
+### Bundled Traefik configuration
+
 The application objects live in `recipe-db`. The intentional infrastructure exception is the bundled Traefik `HelmChartConfig`, its route Secret, and its internal metadata Service in `kube-system`. There is **one** bundled Traefik with a file provider, not a second ingress controller or a parallel hand-maintained application route list. Routes, priorities, strip-prefix middleware, OAuth forward-auth, identity-header stripping and internal GraphQL ingress-token injection retain their project-metadata definitions. The internal metadata port is cluster-only; router/service discovery does not expose raw route configuration, middleware configuration, dashboards or credentials publicly.
 
-`infrastructure.traefik` explicitly overrides the bundled controller's image via `HelmChartConfig` to the digest-pinned `traefik:v3` reference from the deployment values. The k3s-bundled Traefik 3.6.13 lacks the required `aliasHeadersStrategy` support; the override preserves the existing authentication header-alias sanitization and must stay at 3.7 or later. This upgrades the same bundled controller, not an additional ingress deployment.
+`infrastructure.traefik` overrides the bundled controller's image via `HelmChartConfig` to the digest-pinned reference from the deployment values. Use the image's explicit patch version in the tag, such as `traefik:v3.7.16@sha256:...`: the bundled chart reads the tag for compatibility checks and interprets `v3` as 3.0, even when the digest identifies a newer image. The digest updater preserves tags and does not discover newer Traefik versions; when upgrading Traefik, update the tag in both deployment values and the Compose source template, then verify that the resolved digest identifies that version. Traefik 3.7 or later is required for authentication header-alias sanitization. This upgrades the same bundled controller, not an additional ingress deployment.
+
+When selecting or upgrading k3s or Traefik, verify that the k3s-bundled Traefik chart accepts the configured image version and that the version supports the configured features. Chart version checks do not inspect the digest. Test the combination in a rehearsal before production: k3s v1.35.6's bundled chart rejects Traefik 3.7.16, whereas the chart bundled with v1.35.10 accepts it.
+
+Existing private deployment and backup values using a generic Traefik tag must be updated to the verified explicit version of the same pinned image before deploying or restoring. Preserve the digest and all other settings; coordinate the Pi's installed backup inputs through the documented backup-configuration procedure, never during retained maintenance. Historical release templates also consume the supplied private values, so this is required when restoring older releases.
+
+### Check Traefik after a K3s upgrade
+
+K3s updates its desired Traefik chart separately from the running controller. A healthy existing controller, a ready node, or a completed Helm job does not prove that the new chart was installed. An install job can exit successfully after skipping an upgrade because its expected release revision does not match the current revision.
+
+With the Pi API tunnel open and `VALUES` and `KUBECONFIG` set as in the [release cookbook](production-release-cookbook.md#prepare-the-workstation), run these read-only checks on the workstation in fish:
+
+```fish
+set -g PI_CONTEXT (mise exec -- yq -er '.context' "$VALUES")
+and test -n "$PI_CONTEXT"
+```
+
+Stop if either command fails. Use that context for all checks:
+
+```fish
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get helmchart traefik traefik-crd -o json \
+  | mise exec -- jq '[.items[] | {name: .metadata.name, chart: .spec.chart,
+      job: .status.jobName, conditions: .status.conditions}]'
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get deployment traefik -o json \
+  | mise exec -- jq '{chart: .metadata.labels["helm.sh/chart"],
+      images: [.spec.template.spec.containers[] | select(.name == "traefik") | .image]}'
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system rollout status deployment/traefik --timeout=60s
+```
+
+Verify the installed CRD chart version without printing the release's other contents:
+
+```fish
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get secrets -l owner=helm,name=traefik-crd,status=deployed -o json \
+  | mise exec -- jq -er '.items | if length == 1 then .[0].data.release else error("expected one deployed release") end' \
+  | base64 -d | base64 -d | gzip -dc \
+  | mise exec -- jq -es 'if length == 1 and .[0].info.status == "deployed"
+      then {status: .[0].info.status, chart: .[0].chart.metadata.version}
+      else error("invalid deployed release") end'
+```
+
+Stop if this command fails or does not print exactly one deployed chart version. If the HelmCharts report `helm-install-traefik` and `helm-install-traefik-crd` as their jobs, inspect both statuses and logs locally:
+
+```fish
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get job helm-install-traefik helm-install-traefik-crd
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system get pods -l 'job-name in (helm-install-traefik,helm-install-traefik-crd)'
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system logs job/helm-install-traefik
+mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$PI_CONTEXT" \
+  -n kube-system logs job/helm-install-traefik-crd
+```
+
+Compare each chart archive named by its HelmChart with the installed chart: the Deployment label for Traefik, and the deployed release version for its CRDs. The Deployment label uses `_` where the archive version uses `+`. Require both versions to match and the rollout to be ready; also compare the Deployment's image tag and digest with the intended private values. Check each HelmChart's named job and its logs for failures or a skipped upgrade, including a release-revision mismatch. If a job has multiple Pods or retries, inspect their individual logs too; the job log command may select only one Pod. Keep logs private. If a job has another name, inspect the job reported by that HelmChart instead. If either job or its outcome cannot be established, the chart versions differ, or the image or rollout is wrong, stop and investigate; do not treat the K3s upgrade as complete or retry blindly.
+
+These checks do not prove application routing or authentication. Check the website and sign-in as described in the [release cookbook](production-release-cookbook.md#9-check-the-normal-website), without recording a release result at this stage. Verify a fresh backup before re-enabling scheduled backups.
+
+### Deployment behavior
 
 The driver applies the two namespaces separately. Application secret checksums include the rendered manifests and trigger workload replacement when credentials or rendered configuration change, including OAuth provider settings generated by templates. A separate route checksum in the bundled controller's pod annotations triggers a Traefik rollout when its file-provider configuration or ingress token changes; deployment waits for that exact checksum, not a previously ready controller. Identical inputs keep both checksums stable.
 

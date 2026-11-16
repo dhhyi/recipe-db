@@ -4,7 +4,7 @@ This cookbook is for operators releasing Recipe DB to the Pi, with AI help where
 
 The [production image releases guide](production-releases.md) explains the release artifact and registry requirements. The [production configuration guide](production-configuration.md) is authoritative for private inputs and their contents.
 
-The cookbook now includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; keep the Pi unchanged until the rehearsal and all later step conditions are satisfied.
+The cookbook includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; do not deploy the candidate until the rehearsal and all later step conditions are satisfied.
 
 For current capabilities and limits, see the [release capability overview](production-kubernetes.md#release-capability-inventory). The agreed sequence and remaining work are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143).
 
@@ -23,7 +23,53 @@ For current capabilities and limits, see the [release capability overview](produ
 
 ## 1. Prepare the candidate
 
-Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root.
+Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root in fish. Commands labelled for the Pi use its POSIX-compatible shell; commands in the provisioning container's SSH-agent shell use Bash.
+
+### Pause scheduled backups
+
+At the start of the attempt, connect to the Pi using the verified host and user from the private provisioning inventory. Record whether the schedule was already disabled; do not automatically enable a schedule that was intentionally paused before this attempt. On the Pi:
+
+```sh
+sudo systemctl show recipe-db-backup.timer --property=LoadState --property=UnitFileState --property=ActiveState
+```
+
+Then stop and disable the timer. This changes production scheduling but does not stop a backup already running:
+
+```sh
+sudo systemctl disable --now recipe-db-backup.timer
+```
+
+Stop if that command fails. Check the timer, the backup service and retained maintenance state:
+
+```sh
+sudo systemctl show recipe-db-backup.timer --property=LoadState --property=UnitFileState --property=ActiveState
+sudo systemctl show recipe-db-backup.service --property=LoadState --property=ActiveState
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+```
+
+Require the timer to be loaded, disabled and inactive, the service to be loaded and inactive, and `maintenanceActive: false`. If a backup is running, let it finish and check again; do not stop it. Investigate a failed service or retained maintenance before continuing.
+
+Run and verify an [ordinary backup](#verify-an-ordinary-backup) before continuing. Keep the timer disabled until step 10 or an explicitly approved abort recovery. Manual captures, including the pre-migration and post-release backups, remain necessary. Pausing the schedule does not stop application writes or other manual backups. If the check becomes overdue, capture and verify a fresh backup before retrieval or resuming the schedule; see [backup status](production-kubernetes.md#verified-remote-packaging).
+
+If the attempt is aborted, leave the schedule disabled while resolving any active maintenance or recovery. Once the deployed application and its matching backup inputs are safe, [verify a backup and resume the schedule](#verify-a-backup-then-re-enable-its-schedule) if appropriate. Do not automatically reopen access, recover data or enable the timer after an error.
+
+### Verify an ordinary backup
+
+Use the currently deployed release's matching backup inputs, with no retained maintenance operation. Capture temporarily blocks application operations; allow for this interruption. On the Pi:
+
+```sh
+BACKUP_STARTED=$(date -u +%Y-%m-%dT%H:%M:%S+00:00)
+sudo systemctl start recipe-db-backup.service
+```
+
+If it fails, stop and inspect the backup status and recovery state. Otherwise check:
+
+```sh
+printf 'Backup started no earlier than %s\n' "$BACKUP_STARTED"
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+```
+
+Require `verified-upload` or `verified-unchanged`, `maintenanceActive: false`, and `lastCheck` at or after the printed start time.
 
 ### Publish the candidate
 
@@ -38,24 +84,29 @@ Use the artifact digest, not a `sha-<revision>` or `latest` tag. The workflow's 
 
 ### Prepare the workstation
 
-Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Define the SHA from the successful workflow first. Check that the checkout has no local changes before selecting the revision, then install its pinned tools:
+Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Define the SHA from the successful workflow first and check that the checkout has no local changes:
 
-```sh
-REVISION='<full-40-character-commit-sha>'
+```fish
+set -g REVISION '<full-40-character-commit-sha>'
 git status --short
-git fetch origin main
-git switch --detach "$REVISION"
-mise install
 ```
 
-Expect no output from `git status --short`; if it reports changes, preserve them before switching. Confirm `git rev-parse HEAD` equals `REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
+Expect no output from `git status --short`; if it reports changes, preserve them before switching. Then select the revision and install its pinned tools:
+
+```fish
+git fetch origin main
+and git switch --detach "$REVISION"
+and mise install
+```
+
+Confirm `git rev-parse HEAD` equals `REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
 
 From the repository root, set the exact published artifact and private file paths:
 
-```sh
-RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-VALUES="$HOME/.config/recipe-db/deployment/pi-values.yaml"
-KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml"
+```fish
+set -g RELEASE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+set -g VALUES "$HOME/.config/recipe-db/deployment/pi-values.yaml"
+set -gx KUBECONFIG "$HOME/.config/recipe-db/kubeconfig/pi.yaml"
 ```
 
 Confirm that `VALUES` and `KUBECONFIG` identify the intended Pi configuration and its generated kubeconfig. If either check fails, stop and correct the configuration first.
@@ -66,7 +117,7 @@ Record the currently deployed release separately as `OLD_RELEASE`. Backup operat
 
 Keep a loopback-only SSH tunnel open to the Pi Kubernetes API. In a separate terminal:
 
-```sh
+```fish
 ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
   -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
   -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home
@@ -79,8 +130,9 @@ The tunnel command must remain running. If the Pi hostname or SSH user differs, 
 Compare the Pi's running K3s version with the candidate's [provisioning target](../provisioning/group_vars/pi.yml). If an upgrade is needed, complete it as separate infrastructure maintenance before step 2:
 
 1. Verify a recoverable backup, a recovery plan covering Kubernetes state, and an idle backup service with no retained maintenance operation. An application backup alone is not a Kubernetes rollback plan.
-2. Review the [provisioning commands](raspberry-pi-rebuild.md#5-provision-the-host) and allow downtime. Pass `-e allow_k3s_upgrade=true` explicitly to the preflight and provisioning invocations; downgrades remain forbidden. Keep backup inputs and `backup_capture_revision` matched to `OLD_RELEASE`, not the candidate.
-3. Verify Kubernetes, system components and the existing application are healthy. Provisioning disables scheduled backups: verify a fresh backup using the old release's inputs before [re-enabling the timer](../provisioning/backup-enable.yml).
+2. Check the [Traefik image and bundled chart compatibility](production-kubernetes.md#bundled-traefik-configuration) and update private deployment and backup values if needed. Keep the image digest and `backup_capture_revision` matched to `OLD_RELEASE`, not the candidate; install changed backup inputs only while backup is idle and outside retained maintenance. Changing private values alone does not update the live HelmChartConfig. If the live configuration is incompatible with the new chart, plan and review its transition before upgrading; do not assume the ingress controller will reconcile successfully.
+3. Review the [provisioning commands](raspberry-pi-rebuild.md#5-provision-the-host) and allow downtime. Pass `-e allow_k3s_upgrade=true` explicitly to the preflight and provisioning invocations; downgrades remain forbidden.
+4. Verify Kubernetes, system components and the existing application are healthy. Follow [Check Traefik after a K3s upgrade](production-kubernetes.md#check-traefik-after-a-k3s-upgrade): a ready old controller or successful installer job alone is not proof the new chart was installed. Stop if the chart, image, rollout or installer outcome does not match. Keep scheduled backups disabled and verify a fresh backup using the old release's inputs.
 
 Stop on failure. Do not run ordinary provisioning during retained release maintenance. Skip the upgrade when none is needed.
 
@@ -100,12 +152,12 @@ Before production maintenance, rehearse the exact deployed release, latest remot
 
 This is a required process step, not a machine-enforced maintenance gate. An operator may exceptionally proceed without a passing rehearsal when urgency warrants it, but must record that decision and the failed, interrupted or skipped outcome accurately. That discretion never waives storage, ordering, ownership, stopped-worker or migration-validation guards, and does not permit changing or bypassing them.
 
-Retrieve the current verified backup with the standard command below, from your workstation checkout. It works in fish as well as POSIX shells. The timestamp gives each download a new private destination:
+Retrieve the current verified backup with the standard command below, from your workstation checkout. The timestamp gives each download a new private destination:
 
-```sh
+```fish
 mkdir -p "$HOME/.local/share/recipe-db/rehearsals"
-mise run --raw retrieve-verified-backup \
-  "$HOME/.local/share/recipe-db/rehearsals/backup-$(date -u +%Y%m%dT%H%M%SZ)"
+and mise run --raw retrieve-verified-backup \
+  "$HOME/.local/share/recipe-db/rehearsals/backup-"(date -u +%Y%m%dT%H%M%SZ)
 ```
 
 Keep `--raw` so authentication prompts work. Expect at most one SSH-key unlock and a separate Pi sudo-password prompt. Success prints JSON containing the verified `backupId` and absolute `manifest` and `archive` paths; use those paths as `SOURCE_MANIFEST` and `SOURCE_ARCHIVE` below. Stop if retrieval fails. See the [retrieval reference](production-kubernetes.md#fresh-deployment-restore) for prerequisites and a different SSH target.
@@ -126,23 +178,23 @@ The runner also requires `backup-release-ref` and the private `$HOME/.config/rec
 
 From the candidate checkout, set the exact published digest and private package paths. Use a new private directory outside the checkout for each run:
 
-```sh
+```fish
 umask 077
-RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-SOURCE_MANIFEST='/private/path/to/the-exact-backup.manifest.json'
-SOURCE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
-BACKUP_STATUS='<verified-upload-or-verified-unchanged-from-the-Pi>'
-REHEARSAL_ROOT="$HOME/.local/share/recipe-db/rehearsals"
+set -g RELEASE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+set -g SOURCE_MANIFEST '/private/path/to/the-exact-backup.manifest.json'
+set -g SOURCE_ARCHIVE '/private/path/to/the-exact-backup.tar.gz'
+set -g BACKUP_STATUS '<verified-upload-or-verified-unchanged-from-the-Pi>'
+set -g REHEARSAL_ROOT "$HOME/.local/share/recipe-db/rehearsals"
 mkdir -p "$REHEARSAL_ROOT"
-RUN_DIRECTORY=$(mktemp -d "$REHEARSAL_ROOT/issue-251.XXXXXXXX")
-cp -- "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RUN_DIRECTORY/"
-chmod 600 "$RUN_DIRECTORY"/*
-MANIFEST="$RUN_DIRECTORY/$(basename "$SOURCE_MANIFEST")"
-ARCHIVE="$RUN_DIRECTORY/$(basename "$SOURCE_ARCHIVE")"
-BACKUP_ID=$(jq -er .backupId "$MANIFEST")
-BACKUP_CONFIRMATION="VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
-RESULT="$RUN_DIRECTORY/result"
-mise run production-upgrade-rehearsal-k3d \
+and set -g RUN_DIRECTORY (mktemp -d "$REHEARSAL_ROOT/issue-251.XXXXXXXX")
+and cp -- "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RUN_DIRECTORY/"
+and chmod 600 "$RUN_DIRECTORY"/*
+and set -g MANIFEST "$RUN_DIRECTORY/"(basename "$SOURCE_MANIFEST")
+and set -g ARCHIVE "$RUN_DIRECTORY/"(basename "$SOURCE_ARCHIVE")
+and set -g BACKUP_ID (jq -er .backupId "$MANIFEST")
+and set -g BACKUP_CONFIRMATION "VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
+and set -g RESULT "$RUN_DIRECTORY/result"
+and mise run production-upgrade-rehearsal-k3d \
   "$MANIFEST" "$ARCHIVE" "$BACKUP_STATUS" "$BACKUP_CONFIRMATION" "$RELEASE" "$RESULT"
 ```
 
@@ -150,7 +202,7 @@ The clean tooling checkout must contain both the package's source revision and t
 
 Continue only when the command exits zero and the private result confirms both scenarios and cleanup:
 
-```sh
+```fish
 jq -e --arg release "$RELEASE" '
   .status == "passed"
   and .candidate.artifact == $release
@@ -185,7 +237,7 @@ After testing, use an approved maintenance window. Keep the old release's matchi
 
 Before entering maintenance, install the reviewed uploader from the provisioning devcontainer on the workstation:
 
-```sh
+```fish
 mise run --raw in-devcontainer provisioning \
   ansible-playbook -i /home/vscode/.config/recipe-db/provisioning/inventory.yml \
   backup-configure.yml --tags backup-uploader --ask-become-pass
@@ -198,11 +250,9 @@ On the Pi, verify installation before proceeding:
 ```sh
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
 sudo systemctl show --property=ActiveState --value recipe-db-backup.service
-sudo systemctl is-enabled recipe-db-backup.timer
-sudo systemctl is-active recipe-db-backup.timer
 ```
 
-Require `migrationRecoveryCloseoutVersion: 1`, `maintenanceActive: false`, service state `inactive` or `failed`, and timer `disabled` and `inactive` (the last two commands return nonzero for these deliberate states). Keep the timer disabled through maintenance and recovery.
+Require `migrationRecoveryCloseoutVersion: 1`, `maintenanceActive: false` and service state `inactive` or `failed`. The uploader-only install keeps the timer stopped and disabled; keep it that way through maintenance and recovery.
 
 On the Pi, enter maintenance through the backup service's uploader:
 
@@ -275,7 +325,7 @@ If staging fails or is interrupted, inspect the saved state and Lease; do not ru
 
 ## 6. Run and validate migrations
 
-Discover the complete migration sequence against the candidate's pinned source and the actual storage-version markers. Planning is read-only; it does not change saved release progression or activate Jobs:
+On the Pi, discover the complete migration sequence against the candidate's pinned source and the actual storage-version markers. Planning is read-only; it does not change saved release progression or activate Jobs:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-plan \
@@ -382,16 +432,16 @@ For a separately approved deployment onto compatible storage, with no retained m
 
 From the candidate checkout on the workstation, deploy and inspect status:
 
-```sh
-KUBECONFIG="$KUBECONFIG" mise run production-k3d deploy "$VALUES" "$RELEASE"
-KUBECONFIG="$KUBECONFIG" mise run production-k3d status "$VALUES"
+```fish
+mise run production-k3d deploy "$VALUES" "$RELEASE"
+and mise run production-k3d status "$VALUES"
 ```
 
 Continue only when deployment completes successfully and status reports the expected Pi target/context and ready workloads. `deploy` applies the release and waits for readiness; it does not provision the Pi or restore application data. Do not run `create`, `verify`, or `delete` against the Pi.
 
 ## 8. Explicitly reopen application access
 
-Once the candidate is ready and the operator explicitly instructs reopening, run the separate guarded command:
+Once the candidate is ready and the operator explicitly instructs reopening, run the separate guarded command on the Pi:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-reopen \
@@ -402,7 +452,7 @@ Readiness never reopens access. If reopening fails, the command attempts to reas
 
 ## 9. Check the normal website
 
-After reopening, thoroughly check the actual public website, especially every feature changed in this release. Decide what to inspect; viewing a recipe and image, search, and sign-in when configured are reminders, not a complete checklist. Verify an intended edit only when that write is approved. Readiness and GraphQL output are not acceptance.
+After reopening, thoroughly check the actual public website, especially every feature changed in this release. Decide what to inspect; viewing a recipe and image, search, and sign-in when configured are reminders, not a complete checklist. Verify an intended edit only when that write is approved. Readiness and GraphQL output are not acceptance. Record the result on the Pi:
 
 ```sh
 RESULT=passed
@@ -438,35 +488,7 @@ Continue only after a passed website check or an explicit `accept-partial-failur
 
 The following procedure also applies after accepted fresh-target recovery.
 
-### Align backup capture with the deployed release
-
-Backup capture must use the same immutable release as the deployed application and a checkout at its source revision. In the chezmoi-managed operator files:
-
-1. Set `backup/backup-release-ref` to the exact `RELEASE` digest.
-2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to `REVISION`. This selects the matching source checkout at `/opt/recipe-db` for backup capture.
-3. Check `backup/backup-values.yaml` still matches the deployed Pi configuration and refers to the current workstation's operator inputs using the provisioning container paths described in the [configuration guide](production-configuration.md#private-workstation-directory).
-4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
-
-   ```sh
-   chezmoi add ~/.config/recipe-db/backup/backup-release-ref \
-     ~/.config/recipe-db/provisioning/inventory.yml \
-     ~/.config/recipe-db/backup/backup-values.yaml
-   ```
-
-Open the provisioning devcontainer's SSH-agent shell, add the Pi key, then update the managed capture checkout and install the new backup inputs:
-
-```sh
-mise run --raw in-devcontainer provisioning ssh-agent bash
-ssh-add ~/.config/recipe-db/ssh/recipe-db-pi
-ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
-  site.yml --ask-become-pass
-ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
-  backup-configure.yml --ask-become-pass
-```
-
-Run the Ansible commands from the shell opened inside the provisioning container. `site.yml` updates the managed `/opt/recipe-db` checkout to `REVISION`; `backup-configure.yml` installs the prepared release reference, values and referenced private application inputs. It checks that root-only Drive authorization already exists on the Pi, but never copies or replaces it. Routine releases and application restores do not require Google login again. For a new Pi or lost/broken authorization, follow the [Drive authorization cookbook](google-drive-authorization.md) first. Configuration installation leaves the scheduled backup timer stopped and disabled, and refuses to change inputs while a backup is running.
-
-If provisioning preflight fails, stop and resolve its reported issue before continuing. Do not enable scheduled capture until the next step succeeds.
+Keep the existing capture checkout and backup inputs unchanged until after finalization. Do not run ordinary provisioning or install new backup inputs while the release Lease is held.
 
 ### Capture and verify the post-release backup
 
@@ -511,16 +533,17 @@ jq '{status,phase,candidate,acceptedAt,websiteCheck,postCheckDisposition,
 
 On the workstation, set `STATE` to the Pi's absolute retained state directory and copy the evidence privately, using the verified SSH user and host from step 1:
 
-```sh
-ACCEPTANCE="$HOME/.config/recipe-db/release-acceptance.json"
+```fish
+set -g STATE /var/lib/recipe-db-backup/maintenance
+set -g ACCEPTANCE "$HOME/.config/recipe-db/release-acceptance.json"
 scp -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" -o IdentitiesOnly=yes \
   "piadmin@recipe-pi.home:$STATE/release-acceptance.json" "$ACCEPTANCE"
 ```
 
 Write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and a direct link to its OCI manifest, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Publish from the checkout at `REVISION`:
 
-```sh
-NOTES="$HOME/.config/recipe-db/release-notes.md"
+```fish
+set -g NOTES "$HOME/.config/recipe-db/release-notes.md"
 .scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES" "$ACCEPTANCE"
 ```
 
@@ -534,13 +557,52 @@ KUBECONFIG="$KUBECONFIG" mise run production-k3d release-finalize \
 
 Finalization independently checks GitHub's published release, commit, artifact link and contiguous release numbering. Only after that succeeds does it remove the temporary Pi release snapshot, progress files and operation Lease. The verified Drive backup and application data are not removed. If publication or its verification fails, keep the state and Lease and retry or investigate; do not manually delete them.
 
-Back in the provisioning container's SSH-agent shell, enable the schedule:
+### Align backup capture with the deployed release
+
+After finalization, backup capture must use the same immutable release as the deployed application and a checkout at its source revision. In the chezmoi-managed operator files:
+
+1. Set `backup/backup-release-ref` to the exact `RELEASE` digest.
+2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to `REVISION`. This selects the matching source checkout at `/opt/recipe-db` for backup capture.
+3. Check `backup/backup-values.yaml` still matches the deployed Pi configuration and refers to the current workstation's operator inputs using the provisioning container paths described in the [configuration guide](production-configuration.md#private-workstation-directory).
+4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
+
+   ```fish
+   chezmoi add ~/.config/recipe-db/backup/backup-release-ref \
+     ~/.config/recipe-db/provisioning/inventory.yml \
+     ~/.config/recipe-db/backup/backup-values.yaml
+   ```
+
+On the workstation, open the provisioning devcontainer's SSH-agent Bash shell:
+
+```fish
+mise run --raw in-devcontainer provisioning ssh-agent bash
+```
+
+Inside that Bash shell, add the Pi key, then update the managed capture checkout and install the new backup inputs:
+
+```sh
+ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    site.yml --ask-become-pass \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    backup-configure.yml --ask-become-pass
+```
+
+Run the Ansible commands from the shell opened inside the provisioning container. `site.yml` updates the managed `/opt/recipe-db` checkout to `REVISION`; `backup-configure.yml` installs the prepared release reference, values and referenced private application inputs. It checks that root-only Drive authorization already exists on the Pi, but never copies or replaces it. Routine releases and application restores do not require Google login again. For a new Pi or lost/broken authorization, follow the [Drive authorization cookbook](google-drive-authorization.md) first. Configuration installation leaves the scheduled backup timer stopped and disabled, and refuses to change inputs while a backup is running.
+
+If provisioning preflight fails, stop and resolve its reported issue before continuing. Do not enable scheduled capture until the next step succeeds.
+
+### Verify a backup, then re-enable its schedule
+
+With maintenance ended and backup inputs matching the deployed release, [verify an ordinary backup](#verify-an-ordinary-backup). For a release, this is separate from the post-release backup captured before finalization. The new check must be later than the latest backup configuration installation; the enable playbook verifies that condition. If both timestamps fall in the same second, capture and verify again before enabling.
+
+If resuming the schedule is appropriate, in the provisioning container's SSH-agent shell, enable it. For a release, leave it paused if it was intentionally paused before the attempt:
 
 ```sh
 ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
   backup-enable.yml --ask-become-pass
 ```
 
-Enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
+For a completed release, enable the schedule only after successful finalization. The playbook independently requires a verified backup check after the latest configuration installation and that maintenance has ended.
 
-**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, and scheduled capture was enabled only afterward.
+**Success:** the Pi runs `RELEASE`, the managed capture checkout is at `REVISION`, the public website was checked, a post-release `verified-upload` includes every actual storage-version marker, the operator accepted and published the sequential GitHub Release, cleanup followed publication, a fresh ordinary backup was verified after configuration, and scheduled capture was resumed only afterward if appropriate.

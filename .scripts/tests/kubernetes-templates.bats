@@ -33,6 +33,13 @@ render() {
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
 }
 
+@test "local, Pi and Compose use the same pinned Traefik image" {
+  local image
+  image=$(yq -r '.infrastructure.traefik' "$ROOT/deploy/local.yaml")
+  [ "$image" = "$(yq -r '.infrastructure.traefik' "$ROOT/deploy/pi.yaml")" ]
+  grep -Fq "\"image\": \"$image\"" "$ROOT/.scripts/templates/traefik-service-template.lib.yml"
+}
+
 @test "design redirects stay origin-relative behind TLS termination and use the reviewed production config" {
   grep -q 'absolute_redirect off;' "$ROOT/design/nginx.conf"
   grep -Fq "return 302 \"\$real_css_file\";" "$ROOT/design/nginx.conf"
@@ -463,7 +470,7 @@ for stop_signal in (signal.SIGTERM, signal.SIGQUIT):
     .volumes[0].type == "secret" and
     .providers.kubernetesIngress.enabled == false and
     .image.repository == "traefik" and
-    .image.tag == "v3@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65"
+    .image.tag == "v3.7.16@sha256:1336e85aaed293bd63d005086e0dd013b04078b26aaeb1c18b26a2f928af7e65"
   ' helm.yaml
   jq -e '
     all(.items[] | select(.kind == "Service"); .spec.type != "NodePort" and .spec.type != "LoadBalancer")

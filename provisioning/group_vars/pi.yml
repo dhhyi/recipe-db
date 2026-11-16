@@ -1,6 +1,6 @@
 data_root: /srv/recipe-db
-k3s_version: v1.35.6+k3s1
-k3s_sha256: 64c71644eb83d48f54da43c86ee8ba0ddff69db87e11d96a48fec7a965b1bc80
+k3s_version: v1.35.10+k3s1
+k3s_sha256: 0c780ef4b6275bd27c77ed64a647fa1d859b1bd60597ad420f3243c261e5ffb6
 rclone_version: 1.75.2
 rclone_sha256: b8ba161d5c837206fad79ff1aabf0a81aa02a5fb164cdbc0ff5db4160aecd278
 backup_mise_version: 2026.10.21

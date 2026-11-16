@@ -151,6 +151,14 @@ production_config() {
       and all(.[]; type == "string" and startswith("/") and (test("[\\r\\n]") | not)))
   ' "$work/config.json" > /dev/null \
     || production_fail "invalid or incomplete production values"
+  case "$2" in
+    render | deploy | restore | release-stage | release-fallback-stage)
+      jq -e '.infrastructure.traefik |
+        test("^traefik:v3[.]([7-9]|[1-9][0-9])[.][0-9]+@sha256:[0-9a-f]{64}$")' \
+        "$work/config.json" > /dev/null \
+        || production_fail "Traefik requires an explicit v3.7-or-later patch version and digest for Helm chart compatibility"
+      ;;
+  esac
   target=$(jq -r .target "$work/config.json")
   cluster=$(jq -r .cluster "$work/config.json")
   context=$(jq -r .context "$work/config.json")

@@ -510,7 +510,7 @@ legacy_pi_claims() {
   export MOCK_ABSENT=true
   run bash .scripts/production-k3d.sh create "$VALUES"
   [ "$status" -eq 0 ]
-  grep -q 'cluster create recipe-db-rehearsal --image rancher/k3s:v1.35.6-k3s1 --servers 1 --agents 0' "$MOCK_LOG"
+  grep -q 'cluster create recipe-db-rehearsal --image rancher/k3s:v1.35.10-k3s1 --servers 1 --agents 0' "$MOCK_LOG"
   grep -q -- '--api-port 127.0.0.1:6445 --port 127.0.0.1:8080:80@loadbalancer' "$MOCK_LOG"
   grep -q -- '--runtime-label recipe-db.managed=rehearsal@server:0' "$MOCK_LOG"
   grep -q -- '--kubeconfig-update-default=false --kubeconfig-switch-context=false' "$MOCK_LOG"
@@ -621,6 +621,26 @@ legacy_pi_claims() {
     run bash .scripts/production-k3d.sh verify "$VALUES"
     [ "$status" -ne 0 ]
     [[ $output == *"invalid or incomplete production values"* ]]
+    mv values.original "$VALUES"
+  done
+  [ ! -s "$MOCK_LOG" ]
+}
+
+@test "Helm rendering rejects ambiguous Traefik versions before cluster access" {
+  for tag in v3 v3.7; do
+    cp "$VALUES" values.original
+    set_value ".infrastructure.traefik=\"traefik:$tag@sha256:\" + (\"a\"*64)"
+    for action in render deploy restore release-stage release-fallback-stage; do
+      case "$action" in
+        render | deploy) args=("$ARTIFACT") ;;
+        restore) args=("/manifest" "/archive" "backup-1-2" "/state" "RESTORE-backup-1-2") ;;
+        release-stage) args=("/state" "$ARTIFACT" "verified-upload" "confirmation") ;;
+        release-fallback-stage) args=("/state" "$ARTIFACT" "confirmation") ;;
+      esac
+      run bash .scripts/production-k3d.sh "$action" "$VALUES" "${args[@]}"
+      [ "$status" -ne 0 ]
+      [[ $output == *"Traefik requires an explicit v3.7-or-later patch version"* ]]
+    done
     mv values.original "$VALUES"
   done
   [ ! -s "$MOCK_LOG" ]

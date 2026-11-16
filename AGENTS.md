@@ -36,6 +36,10 @@ Follow [issue planning and refinement](CONTRIBUTING.md#issue-planning-and-refine
 - Keep PR-backed issues open until merge; use a closing keyword in the PR. Report pending review accurately in umbrellas and dependencies.
 - Create future-work issues only when asked; reuse existing issues and preserve their agreed scope and discussion.
 
+## Operator shell contexts
+
+The operator's workstation uses fish. Provide fish-compatible workstation commands; use POSIX-compatible shell syntax for commands run on the Raspberry Pi. Label where commands run and do not assume the workstation, Pi, and devcontainer use the same shell.
+
 ## Running commands for a project
 
 Never run project tooling (elm, go, gradle, cargo, pnpm, ...) directly on the host. Always go through the devcontainer:
