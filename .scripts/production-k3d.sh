@@ -162,7 +162,7 @@ local_identity() {
     and ($rehearsalId == "" or .[0].Config.Labels["recipe-db.rehearsal-id"] == $rehearsalId)
     and .[0].Config.Labels["k3d.cluster"] == $cluster
     and .[0].Config.Labels["k3d.role"] == "server"
-    and .[0].Config.Image == "rancher/k3s:v1.35.5-k3s1"
+    and .[0].Config.Image == "rancher/k3s:v1.35.6-k3s1"
     and .[1].Config.Labels["k3d.cluster"] == $cluster
     and .[1].Config.Labels["k3d.role"] == "loadbalancer"
     and all(.[]; .State.Running == true)
@@ -4203,7 +4203,7 @@ case "$command" in
           production_fail "reserved cluster container already exists"
         fi
       done
-      create_args=(--image rancher/k3s:v1.35.5-k3s1
+      create_args=(--image rancher/k3s:v1.35.6-k3s1
         --servers 1 --agents 0 --api-port "127.0.0.1:$api_port"
         --port "127.0.0.1:$http_port:80@loadbalancer"
         --runtime-label 'recipe-db.managed=rehearsal@server:0'

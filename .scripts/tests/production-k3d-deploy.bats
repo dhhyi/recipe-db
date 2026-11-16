@@ -510,7 +510,7 @@ legacy_pi_claims() {
   export MOCK_ABSENT=true
   run bash .scripts/production-k3d.sh create "$VALUES"
   [ "$status" -eq 0 ]
-  grep -q 'cluster create recipe-db-rehearsal --image rancher/k3s:v1.35.5-k3s1 --servers 1 --agents 0' "$MOCK_LOG"
+  grep -q 'cluster create recipe-db-rehearsal --image rancher/k3s:v1.35.6-k3s1 --servers 1 --agents 0' "$MOCK_LOG"
   grep -q -- '--api-port 127.0.0.1:6445 --port 127.0.0.1:8080:80@loadbalancer' "$MOCK_LOG"
   grep -q -- '--runtime-label recipe-db.managed=rehearsal@server:0' "$MOCK_LOG"
   grep -q -- '--kubeconfig-update-default=false --kubeconfig-switch-context=false' "$MOCK_LOG"

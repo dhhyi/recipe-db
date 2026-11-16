@@ -74,7 +74,17 @@ ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
 
 The tunnel command must remain running. If the Pi hostname or SSH user differs, use the values in the private provisioning inventory and verified `known_hosts`; do not bypass host-key checking.
 
-**Success:** the candidate digest, revision, matching checkout and Pi connection are ready. Nothing has been deployed.
+### Check Pi infrastructure before rehearsal
+
+Compare the Pi's running K3s version with the candidate's [provisioning target](../provisioning/group_vars/pi.yml). If an upgrade is needed, complete it as separate infrastructure maintenance before step 2:
+
+1. Verify a recoverable backup, a recovery plan covering Kubernetes state, and an idle backup service with no retained maintenance operation. An application backup alone is not a Kubernetes rollback plan.
+2. Review the [provisioning commands](raspberry-pi-rebuild.md#5-provision-the-host) and allow downtime. Pass `-e allow_k3s_upgrade=true` explicitly to the preflight and provisioning invocations; downgrades remain forbidden. Keep backup inputs and `backup_capture_revision` matched to `OLD_RELEASE`, not the candidate.
+3. Verify Kubernetes, system components and the existing application are healthy. Provisioning disables scheduled backups: verify a fresh backup using the old release's inputs before [re-enabling the timer](../provisioning/backup-enable.yml).
+
+Stop on failure. Do not run ordinary provisioning during retained release maintenance. Skip the upgrade when none is needed.
+
+**Success:** the candidate digest, revision, matching checkout and Pi connection are ready, and any required infrastructure maintenance is complete. The candidate application has not been deployed.
 
 The one-time version-1 rollout and first versioned production backup are complete in [#265: Prepare and rehearse the one-time storage-version rollout](https://github.com/dhhyi/recipe-db/issues/265) and [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260). Do not repeat marker initialization as part of a routine release. The narrow marker-only fallback in [#278: Use the previous release as the version-1 rollout fallback](https://github.com/dhhyi/recipe-db/issues/278) applies only to unchanged formats with its retained-operation guards; it is not a rollback for data-format migrations. There is no deployment-time bypass. Follow the sequential migration and complete-recovery procedures below for actual migrations.
 
