@@ -59,6 +59,10 @@ class Invalid(ValueError):
     pass
 
 
+class UnassociatedPRHead(Invalid):
+    pass
+
+
 class ApiFailure(RuntimeError):
     pass
 
@@ -950,6 +954,10 @@ def resolve_pr_association(base, token, repository, head_sha, requested_pr, repo
                 and base_repository.get("full_name") == repository \
                 and (repository_id is None or base_repository.get("id") == repository_id):
             eligible[pull["number"]] = pull
+    if not eligible and not pulls:
+        raise UnassociatedPRHead(
+            f"commit-to-PR association is missing for PR #{requested_pr}"
+        )
     if not eligible:
         raise Invalid(f"commit-to-PR association is missing for PR #{requested_pr}")
     if len(eligible) != 1:
@@ -1017,20 +1025,26 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
             raise Invalid("PR artifact has an invalid producer event")
         if base is None or token is None:
             raise Invalid("commit-to-PR identity verifier is unavailable")
-        resolve_pr_association(
-            base, token, repository, detail.get("head_sha", ""), pr_number, repository_id
-        )
     matching_job = next((job for job in jobs if job.get("name") == JOB), None)
     if matching_job is None or not any(
         step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
         for step in matching_job.get("steps", [])
     ):
         raise Invalid("producer did not complete the cache upload step")
+    unassociated_pr_head = False
+    if scope == "pr":
+        try:
+            resolve_pr_association(
+                base, token, repository, detail.get("head_sha", ""), pr_number, repository_id
+            )
+        except UnassociatedPRHead:
+            unassociated_pr_head = True
     return {
         "artifact": artifact,
         "id": artifact["id"],
         "scope": scope,
         "pr": pr_number,
+        "unassociatedPRHead": unassociated_pr_head,
         "runNumber": int(detail["run_number"]),
         "attempt": attempt,
         "runId": run_id,
@@ -1078,7 +1092,8 @@ def cleanup_artifacts(base, token, repository):
 
         merged_prs = {}
         for identity in identities:
-            if identity["scope"] != "pr" or identity["pr"] in merged_prs:
+            if identity["scope"] != "pr" or identity["unassociatedPRHead"] \
+                    or identity["pr"] in merged_prs:
                 continue
             pr_number = identity["pr"]
             try:
@@ -1109,10 +1124,13 @@ def cleanup_artifacts(base, token, repository):
             delete.extend(main_artifacts[MAIN_ARTIFACT_RETENTION:])
         delete.extend(
             item for item in identities
-            if item["scope"] == "pr" and merged_prs.get(item["pr"]) is True
+            if item["scope"] == "pr" and (
+                item["unassociatedPRHead"] or merged_prs.get(item["pr"]) is True
+            )
         )
 
         deleted = 0
+        deleted_unassociated_pr = 0
         already_gone = 0
         for identity in delete:
             try:
@@ -1121,7 +1139,14 @@ def cleanup_artifacts(base, token, repository):
                 )
                 if removed:
                     deleted += 1
-                    print(f"cleanup: deleted artifact={identity['artifact']['name']}")
+                    if identity["unassociatedPRHead"]:
+                        deleted_unassociated_pr += 1
+                        print(
+                            "cleanup: deleted-unassociated-pr "
+                            f"artifact={identity['artifact']['name']}"
+                        )
+                    else:
+                        print(f"cleanup: deleted artifact={identity['artifact']['name']}")
                 else:
                     already_gone += 1
                     print(f"cleanup: already-gone artifact={identity['artifact']['name']}")
@@ -1135,7 +1160,8 @@ def cleanup_artifacts(base, token, repository):
                   file=sys.stderr)
             return 1
         print(f"cleanup: complete retained-main={min(len(main_artifacts), MAIN_ARTIFACT_RETENTION)} "
-              f"deleted={deleted} already-gone={already_gone}")
+              f"deleted={deleted} already-gone={already_gone} "
+              f"deleted-unassociated-pr={deleted_unassociated_pr}")
         return 0
     except (ApiFailure, Invalid) as error:
         print(f"cleanup: API-error {error}; cleanup incomplete", file=sys.stderr)
