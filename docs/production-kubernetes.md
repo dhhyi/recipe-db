@@ -460,8 +460,6 @@ When selecting or upgrading k3s or Traefik, verify that the k3s-bundled Traefik 
 
 Existing private deployment and backup values using a generic Traefik tag must be updated to the verified explicit version of the same pinned image before deploying or restoring. Preserve the digest and all other settings; coordinate the Pi's installed backup inputs through the documented backup-configuration procedure, never during retained maintenance. Historical release templates also consume the supplied private values, so this is required when restoring older releases.
 
-For the specific 1.35.6 transition with an older installed chart, follow the [transition cookbook](k3s-traefik-transition.md). It temporarily selects the Helm controller's `abort` failure policy: the default `reinstall` policy can automatically uninstall and reinstall a failed chart.
-
 ### Check Traefik after a K3s upgrade
 
 K3s updates its desired Traefik chart separately from the running controller. A healthy existing controller, a ready node, or a completed Helm job does not prove that the new chart was installed. An install job can exit successfully after skipping an upgrade because its expected release revision does not match the current revision.
