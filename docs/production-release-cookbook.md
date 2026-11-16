@@ -82,16 +82,45 @@ Record both values from the successful workflow:
 
 Use the artifact digest, not a `sha-<revision>` or `latest` tag. The workflow's successful publication verifies the inventory and its platform images. If you need to independently inspect or retrieve the artifact, follow [Get and verify a release](production-releases.md#get-and-verify-a-release).
 
-### Prepare the workstation
+### Tag the release candidate
 
-Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Define the SHA from the successful workflow first and check that the checkout has no local changes:
+On the workstation, define the SHA from the successful workflow and check the checkout:
 
 ```fish
 set -g REVISION '<full-40-character-commit-sha>'
 git status --short
+git branch --show-current
+git fetch origin main
+and git rev-parse HEAD
+and git rev-parse refs/remotes/origin/main
 ```
 
-Expect no output from `git status --short`; if it reports changes, preserve them before switching. Then select the revision and install its pinned tools:
+Require a clean checkout on `main`, with both printed commit IDs equal to `REVISION`. If `main` has moved or the checkout differs, stop and select a published candidate again rather than tagging a different commit.
+
+Inspect published GitHub Releases and both remote and local Git tags:
+
+```fish
+gh release list --repo dhhyi/recipe-db --limit 1000 --json tagName,isDraft,isPrerelease
+and git ls-remote --tags --refs origin
+and git tag --list 'v*'
+```
+
+Stop if any inspection fails or the release list contains 1,000 entries and may be incomplete. Among published releases, excluding drafts and prereleases, require a contiguous `v1`, `v2`, ... sequence and select the next whole-number version. If there are no published releases, select `v1`. For that version, inspect the local and remote `vN-rcM` tags and select one more than the highest candidate number, or `rc1` if none exists. For example, after final `v1` and candidate `v2-rc3`, select `v2-rc4`. Each fresh attempt gets a new candidate number, even if its commit is unchanged.
+
+Create a lightweight tag for `REVISION` and push it immediately:
+
+```fish
+set -g RC_TAG 'vN-rcM'
+git tag "$RC_TAG" "$REVISION"
+and git push origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
+and git ls-remote --tags --refs origin "refs/tags/$RC_TAG"
+```
+
+Replace `vN-rcM` with the selected tag. Require the remote output to show `REVISION` and `refs/tags/$RC_TAG`. If creation, push or verification fails, stop and inspect local and remote tags. Never move or overwrite an existing tag. If a push failed, retry the same tag only after verifying that its local target is `REVISION` and that the remote tag is absent or already points to `REVISION`. Keep the candidate tag even if the attempt is aborted or succeeds; it is not a GitHub Release.
+
+### Prepare the workstation
+
+Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Select the revision and install its pinned tools:
 
 ```fish
 git fetch origin main
@@ -547,7 +576,7 @@ set -g NOTES "$HOME/.config/recipe-db/release-notes.md"
 .scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES" "$ACCEPTANCE"
 ```
 
-The script requires candidate-bound operator acceptance and verified-upload evidence before any GitHub call. It selects the next contiguous `vN` tag, publishes the supplied notes for `REVISION`, and safely recognizes a matching already-published release on retry. Do not finalize if publication fails or the published release does not match the candidate. On the Pi, use the tag printed by the publisher:
+The script requires candidate-bound operator acceptance and verified-upload evidence before any GitHub call. It selects the next contiguous `vN` tag, publishes the supplied notes for `REVISION`, and safely recognizes a matching already-published release on retry. The final tag identifies the same commit as the candidate tag; keep both tags. Do not finalize if publication fails or the published release does not match the candidate. On the Pi, use the tag printed by the publisher:
 
 ```sh
 TAG=vN
