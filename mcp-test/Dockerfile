@@ -2,7 +2,7 @@
 
 # Versions are supplied by the generated Compose build arguments.
 ARG PYTHON_VERSION
-FROM python:${PYTHON_VERSION}-slim-trixie@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913
+FROM python:${PYTHON_VERSION}-slim-trixie@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
