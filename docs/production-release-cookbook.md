@@ -23,7 +23,7 @@ For current capabilities and limits, see the [release capability overview](produ
 
 ## 1. Prepare the candidate
 
-Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root.
+Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root in fish. Commands labelled for the Pi use its POSIX-compatible shell; commands in the provisioning container's SSH-agent shell use Bash.
 
 ### Publish the candidate
 
@@ -38,24 +38,29 @@ Use the artifact digest, not a `sha-<revision>` or `latest` tag. The workflow's 
 
 ### Prepare the workstation
 
-Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Define the SHA from the successful workflow first. Check that the checkout has no local changes before selecting the revision, then install its pinned tools:
+Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Define the SHA from the successful workflow first and check that the checkout has no local changes:
 
-```sh
-REVISION='<full-40-character-commit-sha>'
+```fish
+set -g REVISION '<full-40-character-commit-sha>'
 git status --short
-git fetch origin main
-git switch --detach "$REVISION"
-mise install
 ```
 
-Expect no output from `git status --short`; if it reports changes, preserve them before switching. Confirm `git rev-parse HEAD` equals `REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
+Expect no output from `git status --short`; if it reports changes, preserve them before switching. Then select the revision and install its pinned tools:
+
+```fish
+git fetch origin main
+and git switch --detach "$REVISION"
+and mise install
+```
+
+Confirm `git rev-parse HEAD` equals `REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
 
 From the repository root, set the exact published artifact and private file paths:
 
-```sh
-RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-VALUES="$HOME/.config/recipe-db/deployment/pi-values.yaml"
-KUBECONFIG="$HOME/.config/recipe-db/kubeconfig/pi.yaml"
+```fish
+set -g RELEASE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+set -g VALUES "$HOME/.config/recipe-db/deployment/pi-values.yaml"
+set -gx KUBECONFIG "$HOME/.config/recipe-db/kubeconfig/pi.yaml"
 ```
 
 Confirm that `VALUES` and `KUBECONFIG` identify the intended Pi configuration and its generated kubeconfig. If either check fails, stop and correct the configuration first.
@@ -66,7 +71,7 @@ Record the currently deployed release separately as `OLD_RELEASE`. Backup operat
 
 Keep a loopback-only SSH tunnel open to the Pi Kubernetes API. In a separate terminal:
 
-```sh
+```fish
 ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
   -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
   -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home
@@ -101,12 +106,12 @@ Before production maintenance, rehearse the exact deployed release, latest remot
 
 This is a required process step, not a machine-enforced maintenance gate. An operator may exceptionally proceed without a passing rehearsal when urgency warrants it, but must record that decision and the failed, interrupted or skipped outcome accurately. That discretion never waives storage, ordering, ownership, stopped-worker or migration-validation guards, and does not permit changing or bypassing them.
 
-Retrieve the current verified backup with the standard command below, from your workstation checkout. It works in fish as well as POSIX shells. The timestamp gives each download a new private destination:
+Retrieve the current verified backup with the standard command below, from your workstation checkout. The timestamp gives each download a new private destination:
 
-```sh
+```fish
 mkdir -p "$HOME/.local/share/recipe-db/rehearsals"
-mise run --raw retrieve-verified-backup \
-  "$HOME/.local/share/recipe-db/rehearsals/backup-$(date -u +%Y%m%dT%H%M%SZ)"
+and mise run --raw retrieve-verified-backup \
+  "$HOME/.local/share/recipe-db/rehearsals/backup-"(date -u +%Y%m%dT%H%M%SZ)
 ```
 
 Keep `--raw` so authentication prompts work. Expect at most one SSH-key unlock and a separate Pi sudo-password prompt. Success prints JSON containing the verified `backupId` and absolute `manifest` and `archive` paths; use those paths as `SOURCE_MANIFEST` and `SOURCE_ARCHIVE` below. Stop if retrieval fails. See the [retrieval reference](production-kubernetes.md#fresh-deployment-restore) for prerequisites and a different SSH target.
@@ -127,23 +132,23 @@ The runner also requires `backup-release-ref` and the private `$HOME/.config/rec
 
 From the candidate checkout, set the exact published digest and private package paths. Use a new private directory outside the checkout for each run:
 
-```sh
+```fish
 umask 077
-RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-SOURCE_MANIFEST='/private/path/to/the-exact-backup.manifest.json'
-SOURCE_ARCHIVE='/private/path/to/the-exact-backup.tar.gz'
-BACKUP_STATUS='<verified-upload-or-verified-unchanged-from-the-Pi>'
-REHEARSAL_ROOT="$HOME/.local/share/recipe-db/rehearsals"
+set -g RELEASE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+set -g SOURCE_MANIFEST '/private/path/to/the-exact-backup.manifest.json'
+set -g SOURCE_ARCHIVE '/private/path/to/the-exact-backup.tar.gz'
+set -g BACKUP_STATUS '<verified-upload-or-verified-unchanged-from-the-Pi>'
+set -g REHEARSAL_ROOT "$HOME/.local/share/recipe-db/rehearsals"
 mkdir -p "$REHEARSAL_ROOT"
-RUN_DIRECTORY=$(mktemp -d "$REHEARSAL_ROOT/issue-251.XXXXXXXX")
-cp -- "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RUN_DIRECTORY/"
-chmod 600 "$RUN_DIRECTORY"/*
-MANIFEST="$RUN_DIRECTORY/$(basename "$SOURCE_MANIFEST")"
-ARCHIVE="$RUN_DIRECTORY/$(basename "$SOURCE_ARCHIVE")"
-BACKUP_ID=$(jq -er .backupId "$MANIFEST")
-BACKUP_CONFIRMATION="VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
-RESULT="$RUN_DIRECTORY/result"
-mise run production-upgrade-rehearsal-k3d \
+and set -g RUN_DIRECTORY (mktemp -d "$REHEARSAL_ROOT/issue-251.XXXXXXXX")
+and cp -- "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RUN_DIRECTORY/"
+and chmod 600 "$RUN_DIRECTORY"/*
+and set -g MANIFEST "$RUN_DIRECTORY/"(basename "$SOURCE_MANIFEST")
+and set -g ARCHIVE "$RUN_DIRECTORY/"(basename "$SOURCE_ARCHIVE")
+and set -g BACKUP_ID (jq -er .backupId "$MANIFEST")
+and set -g BACKUP_CONFIRMATION "VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
+and set -g RESULT "$RUN_DIRECTORY/result"
+and mise run production-upgrade-rehearsal-k3d \
   "$MANIFEST" "$ARCHIVE" "$BACKUP_STATUS" "$BACKUP_CONFIRMATION" "$RELEASE" "$RESULT"
 ```
 
@@ -151,7 +156,7 @@ The clean tooling checkout must contain both the package's source revision and t
 
 Continue only when the command exits zero and the private result confirms both scenarios and cleanup:
 
-```sh
+```fish
 jq -e --arg release "$RELEASE" '
   .status == "passed"
   and .candidate.artifact == $release
@@ -186,7 +191,7 @@ After testing, use an approved maintenance window. Keep the old release's matchi
 
 Before entering maintenance, install the reviewed uploader from the provisioning devcontainer on the workstation:
 
-```sh
+```fish
 mise run --raw in-devcontainer provisioning \
   ansible-playbook -i /home/vscode/.config/recipe-db/provisioning/inventory.yml \
   backup-configure.yml --tags backup-uploader --ask-become-pass
@@ -276,7 +281,7 @@ If staging fails or is interrupted, inspect the saved state and Lease; do not ru
 
 ## 6. Run and validate migrations
 
-Discover the complete migration sequence against the candidate's pinned source and the actual storage-version markers. Planning is read-only; it does not change saved release progression or activate Jobs:
+On the Pi, discover the complete migration sequence against the candidate's pinned source and the actual storage-version markers. Planning is read-only; it does not change saved release progression or activate Jobs:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-migration-plan \
@@ -383,16 +388,16 @@ For a separately approved deployment onto compatible storage, with no retained m
 
 From the candidate checkout on the workstation, deploy and inspect status:
 
-```sh
-KUBECONFIG="$KUBECONFIG" mise run production-k3d deploy "$VALUES" "$RELEASE"
-KUBECONFIG="$KUBECONFIG" mise run production-k3d status "$VALUES"
+```fish
+mise run production-k3d deploy "$VALUES" "$RELEASE"
+and mise run production-k3d status "$VALUES"
 ```
 
 Continue only when deployment completes successfully and status reports the expected Pi target/context and ready workloads. `deploy` applies the release and waits for readiness; it does not provision the Pi or restore application data. Do not run `create`, `verify`, or `delete` against the Pi.
 
 ## 8. Explicitly reopen application access
 
-Once the candidate is ready and the operator explicitly instructs reopening, run the separate guarded command:
+Once the candidate is ready and the operator explicitly instructs reopening, run the separate guarded command on the Pi:
 
 ```sh
 KUBECONFIG="$KUBECONFIG" mise run production-k3d release-reopen \
@@ -403,7 +408,7 @@ Readiness never reopens access. If reopening fails, the command attempts to reas
 
 ## 9. Check the normal website
 
-After reopening, thoroughly check the actual public website, especially every feature changed in this release. Decide what to inspect; viewing a recipe and image, search, and sign-in when configured are reminders, not a complete checklist. Verify an intended edit only when that write is approved. Readiness and GraphQL output are not acceptance.
+After reopening, thoroughly check the actual public website, especially every feature changed in this release. Decide what to inspect; viewing a recipe and image, search, and sign-in when configured are reminders, not a complete checklist. Verify an intended edit only when that write is approved. Readiness and GraphQL output are not acceptance. Record the result on the Pi:
 
 ```sh
 RESULT=passed
@@ -448,16 +453,21 @@ Backup capture must use the same immutable release as the deployed application a
 3. Check `backup/backup-values.yaml` still matches the deployed Pi configuration and refers to the current workstation's operator inputs using the provisioning container paths described in the [configuration guide](production-configuration.md#private-workstation-directory).
 4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
 
-   ```sh
+   ```fish
    chezmoi add ~/.config/recipe-db/backup/backup-release-ref \
      ~/.config/recipe-db/provisioning/inventory.yml \
      ~/.config/recipe-db/backup/backup-values.yaml
    ```
 
-Open the provisioning devcontainer's SSH-agent shell, add the Pi key, then update the managed capture checkout and install the new backup inputs:
+On the workstation, open the provisioning devcontainer's SSH-agent Bash shell:
+
+```fish
+mise run --raw in-devcontainer provisioning ssh-agent bash
+```
+
+Inside that Bash shell, add the Pi key, then update the managed capture checkout and install the new backup inputs:
 
 ```sh
-mise run --raw in-devcontainer provisioning ssh-agent bash
 ssh-add ~/.config/recipe-db/ssh/recipe-db-pi
 ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
   site.yml --ask-become-pass
@@ -512,16 +522,17 @@ jq '{status,phase,candidate,acceptedAt,websiteCheck,postCheckDisposition,
 
 On the workstation, set `STATE` to the Pi's absolute retained state directory and copy the evidence privately, using the verified SSH user and host from step 1:
 
-```sh
-ACCEPTANCE="$HOME/.config/recipe-db/release-acceptance.json"
+```fish
+set -g STATE /var/lib/recipe-db-backup/maintenance
+set -g ACCEPTANCE "$HOME/.config/recipe-db/release-acceptance.json"
 scp -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" -o IdentitiesOnly=yes \
   "piadmin@recipe-pi.home:$STATE/release-acceptance.json" "$ACCEPTANCE"
 ```
 
 Write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and a direct link to its OCI manifest, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Publish from the checkout at `REVISION`:
 
-```sh
-NOTES="$HOME/.config/recipe-db/release-notes.md"
+```fish
+set -g NOTES "$HOME/.config/recipe-db/release-notes.md"
 .scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES" "$ACCEPTANCE"
 ```
 
