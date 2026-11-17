@@ -70,15 +70,19 @@ function snapshot(root) {
   return result;
 }
 
-function run(root, name) {
+function run(root, name, failMarkerPublication = false) {
   const container = `${testId}-${name}`;
-  const result = spawnSync("docker", [
+  const args = [
     "run", "--rm", "--name", container,
     "--user", `${process.getuid()}:${process.getgid()}`,
     "--network", "none",
     "--mount", `type=bind,src=${root},dst=/data`,
-    image,
-  ], { encoding: "utf8" });
+  ];
+  if (failMarkerPublication) {
+    args.push("--env", "NODE_OPTIONS=--require=/data/fail-marker-publication.cjs");
+  }
+  args.push(image);
+  const result = spawnSync("docker", args, { encoding: "utf8" });
   assert.ifError(result.error);
   return result;
 }
@@ -88,8 +92,8 @@ function expectSuccess(root, name) {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 }
 
-function expectMigrationFailure(root, name) {
-  const result = run(root, name);
+function expectMigrationFailure(root, name, failMarkerPublication = false) {
+  const result = run(root, name, failMarkerPublication);
   assert.notEqual(result.status, 0, `${name} unexpectedly succeeded`);
   assert.match(result.stderr, /images 1-to-2 migration failed/u);
 }
@@ -226,6 +230,45 @@ try {
     expectMigrationFailure(root, name);
     assert.deepEqual(snapshot(root), before, `${name} changed data`);
   }
+
+  const markerFailure = createRoot("marker-failure");
+  const oldFirst = addManifest(markerFailure, "first");
+  const oldSecond = addManifest(markerFailure, "second");
+  fs.writeFileSync(
+    path.join(markerFailure, "fail-marker-publication.cjs"),
+    `const fs = require("node:fs");
+const renameSync = fs.renameSync;
+fs.renameSync = function (source, target) {
+  if (target === "/data/storage-version") {
+    throw new Error("injected marker publication failure");
+  }
+  return renameSync.call(fs, source, target);
+};
+`,
+  );
+  const markerFailurePublic = snapshot(path.join(markerFailure, "public"));
+  const failedMarkerPublish = run(markerFailure, "marker-failure", true);
+  assert.notEqual(failedMarkerPublish.status, 0);
+  assert.match(failedMarkerPublish.stderr, /injected marker publication failure/u);
+  assert.equal(
+    fs.readFileSync(path.join(markerFailure, "storage-version"), "utf8"),
+    "1\n",
+  );
+  for (const [recipeId, oldMetadata] of [
+    ["first", oldFirst],
+    ["second", oldSecond],
+  ]) {
+    const entries = JSON.parse(fs.readFileSync(
+      path.join(markerFailure, "manifests", `${recipeId}.json`), "utf8"));
+    assert.deepEqual(entries, [{ ...oldMetadata, id: normalDigest }]);
+  }
+  assert.deepEqual(
+    snapshot(path.join(markerFailure, "public")),
+    markerFailurePublic,
+  );
+  const uncertainMarkerState = snapshot(markerFailure);
+  expectMigrationFailure(markerFailure, "marker-failure-retry");
+  assert.deepEqual(snapshot(markerFailure), uncertainMarkerState);
 
   const uncertain = createRoot("uncertain");
   const partial = addManifest(uncertain, "partial");

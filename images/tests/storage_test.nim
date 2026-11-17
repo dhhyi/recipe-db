@@ -78,6 +78,12 @@ suite "immutable image storage":
     expect StorageError:
       discard versionedStore.checkStorageVersion("backup")
 
+    writeFile(versionRoot / "storage-version", "1\n")
+    writeFile(versionedStore.manifestFolder / "recipe.json", "{}")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("production")
+    check readFile(versionRoot / "storage-version") == "1\n"
+
     writeFile(versionRoot / "storage-version", "3\n")
     expect StorageError:
       discard versionedStore.checkStorageVersion("production")
@@ -331,6 +337,7 @@ suite "immutable image storage":
     let superseded = store.publish("recipe-a", b.normal, b.thumb)
     let current = store.publish("recipe-a", a.normal, b.thumb)
     let removed = store.publish("recipe-a", c.normal, c.thumb)
+    check current["thumbUrl"] == superseded["thumbUrl"]
     check store.deleteImage("recipe-a", removed["id"].getStr)
     check fileExists(store.publicFolder / removed.filename("url"))
     check fileExists(store.publicFolder / removed.filename("thumbUrl"))
