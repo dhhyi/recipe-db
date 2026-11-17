@@ -1,0 +1,26 @@
+- name: Maintain only the managed Recipe DB checkout
+  hosts: pi
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require one Pi and a non-root administrator connection
+      become: false
+      ansible.builtin.assert:
+        that:
+          - groups['pi'] | length == 1
+          - ansible_user is defined and ansible_user != 'root'
+
+    - name: Keep scheduled capture disabled during checkout maintenance
+      ansible.builtin.systemd_service:
+        name: recipe-db-backup.timer
+        enabled: false
+        state: stopped
+
+    - name: Require an idle backup service before changing the checkout
+      ansible.builtin.command: systemctl show --property=ActiveState --value recipe-db-backup.service
+      register: backup_service_active
+      changed_when: false
+      failed_when: backup_service_active.stdout not in ['inactive', 'failed']
+
+    - name: Maintain the explicitly selected checkout
+      ansible.builtin.import_tasks: checkout-tasks.yml

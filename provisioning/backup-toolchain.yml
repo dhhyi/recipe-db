@@ -90,13 +90,10 @@
   failed_when: >-
     backup_missing_tools_after.rc != 0 or backup_missing_tools_after.stdout | from_json | length > 0
 
-- name: Check out the explicitly selected immutable backup capture release
-  ansible.builtin.git:
-    repo: https://github.com/dhhyi/recipe-db.git
-    dest: /opt/recipe-db
-    version: "{{ backup_capture_revision }}"
-    force: false
-    recursive: false
+- name: Maintain the selected backup capture checkout
+  ansible.builtin.import_tasks: checkout-tasks.yml
+  vars:
+    checkout_revision: "{{ backup_capture_revision }}"
   when: backup_capture_revision != ''
 
 - name: Install the private capture command

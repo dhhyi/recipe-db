@@ -1,0 +1,20 @@
+- name: Validate the immutable checkout revision
+  ansible.builtin.assert:
+    that:
+      - checkout_revision is match('^[0-9a-f]{40}$')
+    fail_msg: Supply the full immutable checkout revision.
+
+- name: Refuse changing a checkout used by an active command or another operation
+  ansible.builtin.script:
+    cmd: >-
+      files/checkout-guard.py --revision {{ checkout_revision | quote }} --maintenance-holder {{ checkout_maintenance_holder | default('') | quote }}
+    executable: /usr/bin/python3
+  changed_when: false
+
+- name: Check out the explicitly selected immutable backup capture release
+  ansible.builtin.git:
+    repo: https://github.com/dhhyi/recipe-db.git
+    dest: /opt/recipe-db
+    version: "{{ checkout_revision }}"
+    force: false
+    recursive: false
