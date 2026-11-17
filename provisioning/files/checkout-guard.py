@@ -18,6 +18,9 @@ def validate(revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/
         raise ValueError("checkout revision must be a full immutable Git commit")
     if holder and not re.fullmatch(r"backup-[0-9]+-[0-9]+", holder):
         raise ValueError("maintenance confirmation must name the exact backup holder")
+    command = state_path.parent.parent / "release-command.json"
+    if command.exists() or command.is_symlink():
+        raise ValueError("stop the workstation release command before changing its checkout")
     if state_path.is_symlink():
         raise ValueError("maintenance state must not be a symlink")
     if state_path.exists():

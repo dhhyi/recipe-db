@@ -31,6 +31,7 @@ BACKUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 REMOTE_FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 MAX_REMOTE_MANIFEST_BYTES = 128 * 1024**2
 SAFE_RECOVERY_STATES = {("failed", "safely-recovered"), ("recovered", "safely-recovered")}
+RELEASE_REFERENCE_PATH = Path("/etc/recipe-db/backup-release-ref")
 
 
 class BackupError(Exception):
@@ -952,55 +953,99 @@ def upload_snapshot(snapshot, config, require_storage_versions=False, force_uplo
 
 
 def run_release_upload(config):
-    ensure_private_dir(config["stateDirectory"])
     lock_fd = acquire_run_lock(config)
-    maintenance = maintenance_state_path(config)
     try:
-        state = lifecycle_state(maintenance)
-        if not isinstance(state, dict) or state.get("status") != "access-open" \
-                or state.get("phase") != "post-release-backup-captured":
-            raise BackupError("capture-failure", "release-gates-incomplete")
-        website_check = state.get("websiteCheck")
-        disposition = state.get("postCheckDisposition")
-        partial_failure_accepted = isinstance(disposition, dict) \
-            and disposition.get("choice") == "accept-partial-failure"
-        if not isinstance(website_check, dict) or not (
-            website_check.get("outcome") == "passed"
-            or (website_check.get("outcome") == "failed" and partial_failure_accepted)
-        ):
-            raise BackupError("capture-failure", "release-gates-incomplete")
-        candidate = state.get("candidate")
-        post_release = state.get("postReleaseBackup")
-        if not isinstance(candidate, dict) or not isinstance(post_release, dict) \
-                or candidate.get("artifact") == state.get("source", {}).get("artifact") \
-                or post_release.get("status") != "captured" \
-                or post_release.get("artifact") != candidate.get("artifact"):
-            raise BackupError("capture-failure", "release-backup-identity-mismatch")
-        snapshot = maintenance / "post-release-backup"
-        if post_release.get("snapshotPath") != str(snapshot):
-            raise BackupError("capture-failure", "release-backup-path-mismatch")
-        try:
-            manifest = validate_snapshot(snapshot, require_storage_versions=True)
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
-            raise BackupError("capture-failure", "invalid-release-snapshot") from error
-        if manifest.get("backupId") != post_release.get("backupId") \
-                or manifest.get("source", {}).get("artifact") != candidate.get("artifact"):
-            raise BackupError("capture-failure", "release-backup-identity-mismatch")
-        result = upload_snapshot(snapshot, config, require_storage_versions=True, force_upload=True)
-        if result != "verified-upload":
-            raise BackupError("upload-failure", "changed-release-requires-verified-upload")
-        state["postReleaseBackup"]["uploadStatus"] = result
-        state["postReleaseBackup"]["uploadedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        atomic_json(maintenance / "backup-state.json", state)
-        return result
+        marker = Path(config["stateDirectory"]) / "release-command.json"
+        if marker.exists() or marker.is_symlink():
+            raise BackupError("interrupted", "workstation-release-command-active")
+        return upload_release_snapshot(config)
     finally:
         os.close(lock_fd)
+
+
+def run_release_capture(config):
+    maintenance = maintenance_state_path(config)
+    state = lifecycle_state(maintenance)
+    if not isinstance(state, dict):
+        raise BackupError("capture-failure", "release-gates-incomplete")
+    candidate = state.get("candidate")
+    website = state.get("websiteCheck")
+    disposition = state.get("postCheckDisposition")
+    if not isinstance(candidate, dict) or not isinstance(website, dict) or not (
+        (state.get("status"), state.get("phase")) == ("access-open", "website-passed")
+        and website.get("outcome") == "passed"
+        or (state.get("status"), state.get("phase")) == (
+            "post-check-disposition", "accept-partial-failure")
+        and website.get("outcome") == "failed"
+        and isinstance(disposition, dict) and disposition.get("choice") == "accept-partial-failure"
+        or (state.get("status"), state.get("phase")) == (
+            "access-open", "post-release-backup-captured")
+    ):
+        raise BackupError("capture-failure", "release-gates-incomplete")
+    if not isinstance(candidate.get("artifact"), str) or not re.fullmatch(
+        r"ghcr.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}", candidate["artifact"]
+    ) or candidate["artifact"] == state.get("source", {}).get("artifact"):
+        raise BackupError("capture-failure", "release-backup-identity-mismatch")
+    if RELEASE_REFERENCE_PATH.is_symlink() or not RELEASE_REFERENCE_PATH.is_file() \
+            or RELEASE_REFERENCE_PATH.read_text().strip() != candidate.get("artifact"):
+        raise BackupError("capture-failure", "release-backup-inputs-not-aligned")
+    alignment = state.get("backupAlignment")
+    if not isinstance(alignment, dict) or alignment.get("artifact") != candidate["artifact"] \
+            or alignment.get("revision") != candidate.get("revision"):
+        raise BackupError("capture-failure", "release-backup-inputs-not-aligned")
+    if state.get("postReleaseBackup") is None:
+        run_capture_command(config, "release-capture", maintenance, candidate["artifact"])
+    return upload_release_snapshot(config)
+
+
+def upload_release_snapshot(config):
+    maintenance = maintenance_state_path(config)
+    state = lifecycle_state(maintenance)
+    if not isinstance(state, dict) or state.get("status") != "access-open" \
+            or state.get("phase") != "post-release-backup-captured":
+        raise BackupError("capture-failure", "release-gates-incomplete")
+    website_check = state.get("websiteCheck")
+    disposition = state.get("postCheckDisposition")
+    partial_failure_accepted = isinstance(disposition, dict) \
+        and disposition.get("choice") == "accept-partial-failure"
+    if not isinstance(website_check, dict) or not (
+        website_check.get("outcome") == "passed"
+        or (website_check.get("outcome") == "failed" and partial_failure_accepted)
+    ):
+        raise BackupError("capture-failure", "release-gates-incomplete")
+    candidate = state.get("candidate")
+    post_release = state.get("postReleaseBackup")
+    if not isinstance(candidate, dict) or not isinstance(post_release, dict) \
+            or candidate.get("artifact") == state.get("source", {}).get("artifact") \
+            or post_release.get("status") != "captured" \
+            or post_release.get("artifact") != candidate.get("artifact"):
+        raise BackupError("capture-failure", "release-backup-identity-mismatch")
+    snapshot = maintenance / "post-release-backup"
+    if post_release.get("snapshotPath") != str(snapshot):
+        raise BackupError("capture-failure", "release-backup-path-mismatch")
+    try:
+        manifest = validate_snapshot(snapshot, require_storage_versions=True)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise BackupError("capture-failure", "invalid-release-snapshot") from error
+    if manifest.get("backupId") != post_release.get("backupId") \
+            or manifest.get("source", {}).get("artifact") != candidate.get("artifact"):
+        raise BackupError("capture-failure", "release-backup-identity-mismatch")
+    result = upload_snapshot(snapshot, config, require_storage_versions=True, force_upload=True)
+    if result != "verified-upload":
+        raise BackupError("upload-failure", "changed-release-requires-verified-upload")
+    state["postReleaseBackup"]["uploadStatus"] = result
+    state["postReleaseBackup"]["uploadedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    atomic_json(maintenance / "backup-state.json", state)
+    return result
 
 
 def run_nightly(config):
     state = ensure_private_dir(config["stateDirectory"])
     lock_fd = acquire_run_lock(config)
     try:
+        marker = state / "release-command.json"
+        if marker.exists() or marker.is_symlink():
+            raise BackupError("interrupted", "workstation-release-command-active")
         try:
             reconcile_stale_captures(state)
         except BackupError as error:
@@ -1024,6 +1069,8 @@ def run_nightly(config):
                 archive_recovered_maintenance(config)
             else:
                 try:
+                    if isinstance(maintenance_data, dict) and maintenance_data.get("candidate") is not None:
+                        return run_release_capture(config)
                     return run_maintenance_capture(config)
                 except BackupError as error:
                     backup_id = maintenance_data.get("backupId") \

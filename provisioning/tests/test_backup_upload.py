@@ -161,6 +161,71 @@ raise SystemExit(0)
     def make_snapshot(self, name="snapshot", **kwargs):
         return snapshot(self.root / name, **kwargs)
 
+    def test_normal_service_captures_candidate_and_retries_failed_upload_without_recapture(self):
+        self.write_maintenance_capture()
+        candidate = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "b" * 64
+        maintenance = backup.ensure_private_dir(self.state / "maintenance")
+        release_snapshot = maintenance / "post-release-backup"
+        reference = self.root / "backup-release-ref"
+        reference.write_text(candidate + "\n")
+        state = {
+            "backupId": "backup-1-2", "status": "access-open", "phase": "website-passed",
+            "source": {"artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64},
+            "candidate": {"artifact": candidate, "revision": "b" * 40},
+            "backupAlignment": {"artifact": candidate, "revision": "b" * 40},
+            "websiteCheck": {"outcome": "passed"},
+        }
+        backup.atomic_json(maintenance / "backup-state.json", state)
+
+        def capture(config, action, path, artifact):
+            self.assertEqual((action, path, artifact), ("release-capture", maintenance, candidate))
+            snapshot(release_snapshot, files={"recipes.sqlite3": b"data", "storage-version": b"2\n"},
+                     backup_id="backup-3-4", artifact=candidate, revision="b" * 40)
+            saved = dict(state, phase="post-release-backup-captured", postReleaseBackup={
+                "status": "captured", "artifact": candidate, "backupId": "backup-3-4",
+                "snapshotPath": str(release_snapshot),
+            })
+            backup.atomic_json(maintenance / "backup-state.json", saved)
+
+        with patch.object(backup, "RELEASE_REFERENCE_PATH", reference), \
+                patch.object(backup, "run_capture_command", side_effect=capture) as worker:
+            with patch.dict(os.environ, {"FAKE_RCLONE_FAIL": "copyto"}):
+                with self.assertRaises(backup.BackupError):
+                    backup.run_nightly(self.config)
+            self.assertEqual(worker.call_count, 1)
+            self.assertTrue(release_snapshot.is_dir())
+            self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+            self.assertEqual(worker.call_count, 1)
+        saved = backup.lifecycle_state(maintenance)
+        self.assertEqual(saved["source"], state["source"])
+        self.assertEqual(saved["postReleaseBackup"]["uploadStatus"], "verified-upload")
+        self.assertTrue(backup.report_status(self.config)["maintenanceActive"])
+        self.assertEqual(backup.report_status(self.config)["backupId"], "backup-3-4")
+
+    def test_normal_service_refuses_unaccepted_or_unaligned_candidate_before_capture(self):
+        self.write_maintenance_capture()
+        maintenance = backup.ensure_private_dir(self.state / "maintenance")
+        candidate = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "b" * 64
+        reference = self.root / "backup-release-ref"
+        reference.write_text("old release\n")
+        state = {
+            "backupId": "backup-1-2", "status": "access-open", "phase": "website-passed",
+            "source": {"artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64},
+            "candidate": {"artifact": candidate}, "websiteCheck": {"outcome": "passed"},
+        }
+        with patch.object(backup, "RELEASE_REFERENCE_PATH", reference), \
+                patch.object(backup, "run_capture_command") as worker:
+            backup.atomic_json(maintenance / "backup-state.json", state)
+            with self.assertRaisesRegex(backup.BackupError, "inputs-not-aligned"):
+                backup.run_nightly(self.config)
+            reference.write_text(candidate + "\n")
+            state["websiteCheck"]["outcome"] = "failed"
+            backup.atomic_json(maintenance / "backup-state.json", state)
+            with self.assertRaisesRegex(backup.BackupError, "gates-incomplete"):
+                backup.run_nightly(self.config)
+            worker.assert_not_called()
+        self.assertFalse((self.remote / "backups").exists())
+
     def test_release_upload_requires_passed_website_and_changed_versioned_artifact(self):
         candidate = "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "b" * 64
         backup_id = "backup-20261110T100000-42"

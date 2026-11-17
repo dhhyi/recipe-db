@@ -1,0 +1,39 @@
+- name: Prepare only the managed release and backup tools before maintenance
+  hosts: pi
+  gather_facts: false
+  become: true
+  vars:
+    backup_capture_revision: "{{ checkout_revision }}"
+  tasks:
+    - name: Require one Pi, non-root administrator and immutable tooling revision
+      become: false
+      ansible.builtin.assert:
+        that:
+          - groups['pi'] | length == 1
+          - ansible_user is defined and ansible_user != 'root'
+          - checkout_revision is match('^[0-9a-f]{40}$')
+
+    - name: Keep scheduled capture disabled
+      ansible.builtin.systemd_service:
+        name: recipe-db-backup.timer
+        enabled: false
+        state: stopped
+
+    - name: Reuse the guarded isolated backup toolchain and checkout maintenance
+      ansible.builtin.import_tasks: backup-toolchain.yml
+
+    - name: Install the reviewed backup publisher
+      ansible.builtin.copy:
+        src: files/backup-upload.py
+        dest: /usr/local/sbin/recipe-db-backup-upload
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the bounded private release file helper
+      ansible.builtin.copy:
+        src: files/release-files.py
+        dest: /usr/local/sbin/recipe-db-release-files
+        owner: root
+        group: root
+        mode: "0700"
