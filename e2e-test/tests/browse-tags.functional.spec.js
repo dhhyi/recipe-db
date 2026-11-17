@@ -785,6 +785,11 @@ for (const status of [401, 403]) {
       expect(response.status()).toBe(status);
       expect(response.headers()["x-tag-replace"]).toBeUndefined();
       await expectTagEditingDenied(dialog);
+      if (phase === "mutation") {
+        await expect(dialog.locator("[data-tag-feedback]")).toContainText(
+          /änderung konnte nicht bestätigt werden/i,
+        );
+      }
       await expect(
         dialog.locator("#recipe-tag-assigned .recipe-tag"),
       ).toContainText(confirmed.name);
