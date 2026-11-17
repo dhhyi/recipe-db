@@ -299,6 +299,12 @@ for (const role of ["anonymous", "member", "owner"]) {
       test("recipe tag editor", async ({ page, taggedDemoRecipe }) => {
         await page.goto(`/recipe/${taggedDemoRecipe.id}`);
         await expectHeader(page, role);
+        await waitForImageDecoded(
+          page.getByRole("img", {
+            name: taggedDemoRecipe.name,
+            exact: true,
+          }),
+        );
 
         const editButton = page.getByRole("button", {
           name: "Tags bearbeiten",
@@ -329,8 +335,16 @@ for (const role of ["anonymous", "member", "owner"]) {
         expect((await removeButton.boundingBox()).height).toBeLessThanOrEqual(
           editHeight,
         );
+        const detailBeforeClose = await page
+          .locator("#recipe-tags")
+          .elementHandle();
         await dialog.getByRole("button", { name: /schließen/i }).click();
         await expect(dialog).toBeHidden();
+        await expect
+          .poll(() =>
+            detailBeforeClose.evaluate((element) => element.isConnected),
+          )
+          .toBe(false);
         await expect(editButton).toBeVisible();
         await editButton.click();
         const search = dialog.getByRole("searchbox", {
@@ -348,12 +362,6 @@ for (const role of ["anonymous", "member", "owner"]) {
         await expect(
           page.locator("#recipe-tag-options button[type='submit']"),
         ).not.toHaveCount(1);
-        await waitForImageDecoded(
-          page.getByRole("img", {
-            name: taggedDemoRecipe.name,
-            exact: true,
-          }),
-        );
         await expect(dialog.locator("[aria-busy='true']")).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
         const updatedAt = page.getByText(

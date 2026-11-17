@@ -377,6 +377,7 @@ test("dialog closes refresh detail tags and reopening loads fresh data with an e
   await expect(
     dialog.getByRole("button", { name: `${tag.name} entfernen` }),
   ).toBeVisible();
+  const detailBeforeClose = await page.locator("#recipe-tags").elementHandle();
   const secondReload = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
@@ -386,6 +387,9 @@ test("dialog closes refresh detail tags and reopening loads fresh data with an e
   await dialog.getByRole("button", { name: "Schließen" }).click();
   await expect(dialog).toBeHidden();
   expect((await secondReload).status()).toBe(200);
+  await expect
+    .poll(() => detailBeforeClose.evaluate((element) => element.isConnected))
+    .toBe(false);
   await openTagDialog(page);
   const thirdReload = page.waitForResponse(
     (response) =>
@@ -431,7 +435,9 @@ test("single-result click and Enter clear search; multi-result click preserves i
   await expect(options).toHaveCount(2);
   await search.press("Enter");
   await expect(dialog.locator("[data-tag-remove]")).toHaveCount(1);
-  await dialog.getByRole("button", { name: "E2E Paar Eins", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "E2E Paar Eins", exact: true })
+    .click();
   await expect(
     dialog.getByRole("button", { name: "E2E Paar Eins entfernen" }),
   ).toBeVisible();
@@ -477,11 +483,41 @@ test("failed detail refresh after close can be retried", async ({
   await dialog.getByRole("button", { name: "Schließen" }).click();
   await expect(dialog).toBeHidden();
   const detail = page.locator("#recipe-tags");
-  await expect(detail.locator("[data-tag-feedback]")).toContainText(
+  await expect(detail.locator("[data-detail-tag-feedback]")).toContainText(
     "Tags konnten nicht aktualisiert werden.",
   );
   await detail.locator("[data-tag-retry]").click();
   await expect(detail.locator("[data-recipe-tag]")).toHaveText(tag.name);
+});
+
+test("options loading failure is distinct from an empty search and can be retried", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  await findOrCreateTag(request, "COURSE", "E2E Auswahl");
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  await expect(tagOptions(dialog)).toHaveCount(1);
+  let fail = true;
+  await page.route(`**/recipe/${recipe.id}/tags/options**`, async (route) => {
+    if (fail) {
+      fail = false;
+      return route.abort("failed");
+    }
+    return route.fallback();
+  });
+  await search.fill("E2E Auswahl");
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Tag-Auswahl konnte nicht geladen werden.",
+  );
+  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Tag-Auswahl erneut laden" }).click();
+  await expect(tagOptions(dialog)).toHaveText("E2E Auswahl");
+  await search.fill("E2E Nicht vorhanden");
+  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toBeVisible();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
 test("saving blocks dismissal and competing changes without changing the backdrop", async ({
@@ -519,7 +555,9 @@ test("saving blocks dismissal and competing changes without changing the backdro
     await tagOptions(dialog).first().click();
     await pending;
     await expect(dialog).toHaveAttribute("closedby", "none");
-    await expect(dialog.getByRole("button", { name: "Schließen" })).toBeDisabled();
+    await expect(
+      dialog.getByRole("button", { name: "Schließen" }),
+    ).toBeDisabled();
     await expect(tagOptions(dialog).first()).toBeDisabled();
     await page.keyboard.press("Escape");
     await page.mouse.click(1, 1);
@@ -566,7 +604,9 @@ test("uncertain save failure keeps search and confirmed tags, permits retry and 
     return route.fallback();
   });
   await tagOptions(dialog).first().click();
-  await expect(dialog.getByRole("alert")).toContainText(/nicht bestätigt/i);
+  await expect(dialog.locator("[data-tag-feedback]")).toContainText(
+    /nicht bestätigt/i,
+  );
   await expect(search).toHaveValue("E2E Fehler");
   await expect(
     dialog.getByRole("button", { name: "E2E Vorhanden entfernen" }),
@@ -645,6 +685,14 @@ transitionTest(
       "list-style-type",
       "none",
     );
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.tagTransitions.every((transition) => transition.finished),
+        ),
+      )
+      .toBe(true);
+    await page.evaluate(() => (window.tagTransitions = []));
     await page.getByRole("searchbox", { name: "Tag suchen" }).fill(tag.name);
     await expect
       .poll(() => page.evaluate(() => window.tagTransitions[0]?.finished))

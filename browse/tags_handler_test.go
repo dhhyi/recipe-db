@@ -195,16 +195,16 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 			owner:  true,
 			path:   "/recipe/42/tags",
 			status: http.StatusOK,
-			want:   []string{"Tags bearbeiten", "Apfelkuchen"},
-			unwant: []string{"Tag hinzufügen", "entfernen"},
+			want:   []string{"Tags bearbeiten", "Apfelkuchen", `id="recipe-tags-dialog"`},
+			unwant: []string{"Apfelkuchen entfernen"},
 		},
 		{
 			name:   "owner edit fragment",
 			owner:  true,
 			path:   "/recipe/42/tags?edit=1",
 			status: http.StatusOK,
-			want:   []string{"Fertig", "Tag hinzufügen", "Apfelkuchen entfernen", `name="q"`},
-			unwant: []string{"Tags bearbeiten"},
+			want:   []string{`id="recipe-tag-assigned"`, "Apfelkuchen entfernen"},
+			unwant: []string{"Fertig", "Tags bearbeiten", `id="recipe-tags-dialog"`, `id="recipe-tag-search"`},
 		},
 		{
 			name:   "non-owner edit denied",
@@ -272,7 +272,8 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 	deniedInventory := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=veg", "", true)
 	if deniedInventory.Code != http.StatusUnauthorized || !strings.Contains(deniedInventory.Body.String(), "Tags bearbeiten ist nicht erlaubt.") ||
 		strings.Contains(deniedInventory.Body.String(), "Tag hinzufügen") ||
-		deniedInventory.Header().Get("HX-Retarget") != "#recipe-tags" {
+		deniedInventory.Header().Get("HX-Retarget") != "#recipe-tag-assigned" ||
+		strings.Contains(deniedInventory.Body.String(), `id="recipe-tags-dialog"`) {
 		t.Fatalf("expired inventory credentials must remove edit controls with an explicit denial: %d %v %s", deniedInventory.Code, deniedInventory.Header(), deniedInventory.Body.String())
 	}
 
@@ -328,7 +329,7 @@ func TestRecipeTagMutationsUseDedicatedGraphQLAndRefreshCache(t *testing.T) {
 	}
 	removeLast := tagRequest(handler, http.MethodPost, "/recipe/42/tags/dessert/remove", "", true)
 	if removeLast.Code != http.StatusOK || strings.Contains(removeLast.Body.String(), "recipe-tags-detail") ||
-		!strings.Contains(removeLast.Body.String(), "Tag hinzufügen") {
+		!strings.Contains(removeLast.Body.String(), `id="recipe-tag-assigned"`) {
 		t.Fatalf("removing the final assignment must leave the empty owner editor: %d %s", removeLast.Code, removeLast.Body.String())
 	}
 	state.mu.Lock()
