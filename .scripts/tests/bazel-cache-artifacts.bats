@@ -14,12 +14,16 @@ load test_helper
   restore=$(grep -n '^      - name: restore and union Bazel disk cache artifacts$' "$workflow" | cut -d: -f1)
   format=$(grep -n '^      - name: check project formatting$' "$workflow" | cut -d: -f1)
   checks=$(grep -n '^      - name: Bazel precommit checks, unit tests, and cacheable validations$' "$workflow" | cut -d: -f1)
+  inspect=$(grep -n '^      - name: inspect Bazel cache$' "$workflow" | cut -d: -f1)
+  prune=$(grep -n '^      - name: prune Bazel cache$' "$workflow" | cut -d: -f1)
   prepare=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
   upload=$(grep -n '^      - name: upload Bazel cache snapshot$' "$workflow" | cut -d: -f1)
 
   [ "$restore" -lt "$format" ]
   [ "$format" -lt "$checks" ]
-  [ "$checks" -lt "$prepare" ]
+  [ "$checks" -lt "$inspect" ]
+  [ "$inspect" -lt "$prune" ]
+  [ "$prune" -lt "$prepare" ]
   [ "$prepare" -lt "$upload" ]
   run yq -r '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks, unit tests, and cacheable validations") | .run' "$workflow"
   [ "$status" -eq 0 ]
@@ -84,11 +88,47 @@ load test_helper
   grep -F 'steps.prepare-bazel-cache.outputs.name' "$slice"
   run yq -r '.jobs.quality-checks.steps[] | select(.id == "prepare-bazel-cache") | .if' "$workflow"
   [ "$status" -eq 0 ]
-  [ "$output" = "always() && steps.source.outcome == 'success'" ]
+  [[ "$output" == *"always()"* ]]
+  [[ "$output" == *"steps.source.outcome == 'success'"* ]]
+  [[ "$output" == *"steps.inspect-cache.outcome == 'success'"* ]]
 
   run yq -r '.jobs.quality-checks.steps[] | select(.name == "upload Bazel cache snapshot") | .if' "$workflow"
   [ "$status" -eq 0 ]
   [ "$output" = "always() && steps.prepare-bazel-cache.outcome == 'success' && steps.prepare-bazel-cache.outputs.name != ''" ]
+
+  for step in restore-cache inspect-cache prune-cache prepare-bazel-cache upload-cache; do
+    run env STEP="$step" yq -r '.jobs.quality-checks.steps[] | select(.id == strenv(STEP)) | .continue-on-error' "$workflow"
+    [ "$status" -eq 0 ]
+    [ "$output" = true ]
+  done
+  run yq -r '.jobs.quality-checks.steps[] | select(.id == "prepare-bazel-cache") | .if' "$workflow"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"steps.inspect-cache.outcome == 'success'"* ]]
+  run yq -r '.jobs.quality-checks.steps[] | select(.id == "prepare-bazel-cache") | .run' "$workflow"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--prune-required"* ]]
+}
+
+@test "main cache health reports failures without blocking publication jobs" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  run yq -r '.jobs["cache-health"].needs' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = "quality-checks" ]
+  run yq -r '.jobs["cache-health"].if' "$workflow"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"github.event_name == 'push'"* ]]
+  [[ "$output" == *"cache_prune_needed == 'true'"* ]]
+  run yq -r '.jobs["cache-health"].steps[0].run' "$workflow"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"A Bazel cache operation failed."* ]]
+
+  for job in publish-devcontainers publish-release; do
+    run env JOB="$job" yq -r '.jobs[strenv(JOB)].needs | join(",")' "$workflow"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"cache-health"* ]]
+    [[ "$output" == *"quality-checks"* ]]
+    [[ "$output" == *"arm64-validation"* ]]
+  done
 }
 
 @test "Publish retains rebuild explanations even when Bazel fails" {

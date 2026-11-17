@@ -55,6 +55,23 @@ def put_cache_file(root, category, key, content):
     return path
 
 
+def set_mtime(path, timestamp):
+    os.utime(path, (timestamp, timestamp))
+
+
+def put_inline_action(root, key, size=0):
+    put_cache_file(root, "ac", key, message(5, b"x" * size))
+
+
+def put_inline_payload(root, key, payload_size):
+    for overhead in range(2, 12):
+        size = payload_size - overhead
+        result = message(5, b"x" * size)
+        if len(result) == payload_size:
+            return put_cache_file(root, "ac", key, result)
+    raise AssertionError(f"cannot encode inline ActionResult of {payload_size} bytes")
+
+
 def put_tree_cache(root, tree, root_directory, action_digest="a" * 64, output_path=b"tree"):
     tree_digest = hashlib.sha256(tree).hexdigest()
     put_cache_file(root, "cas", tree_digest, tree)
@@ -118,6 +135,33 @@ class CacheArtifactTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+
+    def test_restore_reports_missing_token_as_cache_failure(self):
+        output = self.root / "restore-output"
+        args = SimpleNamespace(output=str(output))
+        with patch.dict(os.environ, {"GITHUB_TOKEN": ""}), redirect_stderr(io.StringIO()):
+            result = CACHE.discover_and_restore(args)
+        self.assertEqual(result, 1)
+        self.assertEqual(output.read_text(), "status=failure\nreason=missing GITHUB_TOKEN\n")
+
+    def test_restore_reports_api_failure_while_retaining_cold_fallback(self):
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        output = self.root / "restore-output"
+        args = SimpleNamespace(
+            repository="owner/repo", event_path=str(event_path), event_name="push",
+            run_id="999", run_attempt="1", commit="head", cache=str(self.root / "cache"),
+            output=str(output),
+        )
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
+                patch.object(CACHE, "run_history", return_value={"head": 0}), \
+                patch.object(CACHE, "squash_pull_request", return_value=None), \
+                patch.object(CACHE, "request_json", side_effect=CACHE.ApiFailure("offline")), \
+                redirect_stderr(io.StringIO()):
+            result = CACHE.discover_and_restore(args)
+        self.assertEqual(result, 1)
+        self.assertIn("status=failure", output.read_text())
+        self.assertIn("workflow run listing failed: offline", output.read_text())
 
     def test_cleanup_identity_accepts_real_artifact_metadata_for_main_and_pr(self):
         for version in ("v1", "v2"):
@@ -999,14 +1043,35 @@ class CacheArtifactTests(unittest.TestCase):
         source = self.root / "source"
         source.mkdir()
         make_cache(source)
+        for directory in ("ac", "cas"):
+            for path in (source / directory).rglob("*"):
+                if path.is_file():
+                    set_mtime(path, 0)
         (source / "tmp").mkdir()
         (source / "tmp" / "partial").write_bytes(b"unfinished")
         archive = self.root / "snapshot.tar"
         destination = self.root / "restored"
 
         stats = CACHE.snapshot(source, archive)
+        with tarfile.open(archive, "r:") as snapshot:
+            self.assertTrue(all(member.mtime == 0 for member in snapshot))
         restored = CACHE.unpack_snapshot(archive, destination)
         CACHE.cache_files(destination)
+        self.assertTrue(all(
+            path.stat().st_mtime == 0
+            for directory in ("ac", "cas")
+            for path in (destination / directory).rglob("*")
+            if path.is_file()
+        ))
+
+        repeated = self.root / "restored-again"
+        CACHE.unpack_snapshot(archive, repeated)
+        self.assertTrue(all(
+            path.stat().st_mtime == 0
+            for directory in ("ac", "cas")
+            for path in (repeated / directory).rglob("*")
+            if path.is_file()
+        ))
 
         self.assertEqual(stats["files"], 2)
         self.assertEqual(restored["files"], 2)
@@ -1017,6 +1082,316 @@ class CacheArtifactTests(unittest.TestCase):
         )
         self.assertEqual((destination / "cas" / hashlib.sha256(b"built").hexdigest()[:2]
                           / hashlib.sha256(b"built").hexdigest()).read_bytes(), b"built")
+
+    def test_snapshot_rejects_negative_and_excessively_future_timestamps(self):
+        source = self.root / "source"
+        source.mkdir()
+        make_cache(source)
+        action = source / "ac" / "aa" / ("a" * 64)
+        set_mtime(action, -1)
+        with self.assertRaisesRegex(CACHE.Invalid, "invalid cache timestamp"):
+            CACHE.cache_files(source)
+
+        set_mtime(action, int(CACHE.time.time()) + CACHE.MAX_CLOCK_SKEW_SECONDS + 1)
+        with self.assertRaisesRegex(CACHE.Invalid, "invalid cache timestamp"):
+            CACHE.cache_files(source)
+
+        set_mtime(action, int(CACHE.time.time()) + CACHE.MAX_CLOCK_SKEW_SECONDS)
+        CACHE.cache_files(source)
+
+    def test_snapshot_archive_rejects_invalid_timestamps_and_accepts_clock_skew(self):
+        source = self.root / "source"
+        source.mkdir()
+        make_cache(source)
+        files = CACHE.cache_files(source)
+
+        def make_archive(path, timestamp):
+            with tarfile.open(path, "w:", format=tarfile.GNU_FORMAT) as archive:
+                for category in ("ac", "cas"):
+                    for digest_value, (file_path, size, _) in files[category].items():
+                        member = tarfile.TarInfo(
+                            f"{category}/{digest_value[:2]}/{digest_value}"
+                        )
+                        member.size = size
+                        member.mtime = timestamp
+                        with file_path.open("rb") as stream:
+                            archive.addfile(member, stream)
+
+        for timestamp in (
+            -1,
+            int(CACHE.time.time()) + CACHE.MAX_CLOCK_SKEW_SECONDS + 1,
+        ):
+            archive = self.root / f"invalid-{timestamp}.tar"
+            make_archive(archive, timestamp)
+            with self.subTest(timestamp=timestamp):
+                with self.assertRaisesRegex(CACHE.Invalid, "invalid timestamp"):
+                    CACHE.unpack_snapshot(archive, self.root / f"restored-{timestamp}")
+
+        skew = int(CACHE.time.time()) + CACHE.MAX_CLOCK_SKEW_SECONDS - 5
+        archive = self.root / "clock-skew.tar"
+        make_archive(archive, skew)
+        restored = self.root / "clock-skew"
+        CACHE.unpack_snapshot(archive, restored)
+        self.assertTrue(all(
+            path.stat().st_mtime == skew
+            for category in ("ac", "cas")
+            for path in (restored / category).rglob("*")
+            if path.is_file()
+        ))
+
+    def test_union_preserves_newer_identical_timestamps_and_main_conflict_timestamp(self):
+        main = self.root / "main"
+        pr = self.root / "pr"
+        main.mkdir()
+        pr.mkdir()
+        make_cache(main, b"same", action_digest="a" * 64)
+        make_cache(pr, b"same", action_digest="a" * 64)
+        set_mtime(main / "ac" / "aa" / ("a" * 64), 100)
+        set_mtime(pr / "ac" / "aa" / ("a" * 64), 200)
+        cas_digest = hashlib.sha256(b"same").hexdigest()
+        set_mtime(main / "cas" / cas_digest[:2] / cas_digest, 100)
+        set_mtime(pr / "cas" / cas_digest[:2] / cas_digest, 200)
+        destination = self.root / "union"
+        CACHE.union_caches(main, pr, destination)
+        self.assertEqual((destination / "ac" / "aa" / ("a" * 64)).stat().st_mtime, 200)
+        self.assertEqual((destination / "cas" / cas_digest[:2] / cas_digest).stat().st_mtime, 200)
+
+        conflict_main = self.root / "conflict-main"
+        conflict_pr = self.root / "conflict-pr"
+        conflict_main.mkdir()
+        conflict_pr.mkdir()
+        make_cache(conflict_main, b"main", action_digest="b" * 64)
+        make_cache(conflict_pr, b"pr", action_digest="b" * 64)
+        set_mtime(conflict_main / "ac" / "bb" / ("b" * 64), 300)
+        set_mtime(conflict_pr / "ac" / "bb" / ("b" * 64), 400)
+        conflict_destination = self.root / "conflict-union"
+        CACHE.union_caches(conflict_main, conflict_pr, conflict_destination)
+        self.assertEqual(
+            (conflict_destination / "ac" / "bb" / ("b" * 64)).stat().st_mtime, 300
+        )
+
+    def test_pruning_expires_old_results_and_keeps_complete_protected_graph(self):
+        source = self.root / "source"
+        source.mkdir()
+        now = int(CACHE.time.time())
+        boundary = now - CACHE.PRUNE_MAX_AGE_SECONDS
+        make_cache(source, b"regular", action_digest="a" * 64)
+        set_mtime(source / "ac" / "aa" / ("a" * 64), now)
+        make_cache(source, b"regular", action_digest="f" * 64)
+        set_mtime(source / "ac" / "ff" / ("f" * 64), now)
+
+        output = b"tree output"
+        output_digest = hashlib.sha256(output).hexdigest()
+        put_cache_file(source, "cas", output_digest, output)
+        file_node = message(1, b"nested.txt") + message(2, digest(output))
+        root_directory = message(1, file_node)
+        tree = message(1, root_directory)
+        tree_digest = hashlib.sha256(tree).hexdigest()
+        put_cache_file(source, "cas", tree_digest, tree)
+        tree_result = message(
+            3, message(1, b"directory") + message(3, digest(tree))
+            + message(5, digest(root_directory))
+        ) + message(12, message(1, b"link") + message(2, b"directory/nested.txt"))
+        put_cache_file(source, "ac", "b" * 64, tree_result)
+        set_mtime(source / "ac" / "bb" / ("b" * 64), now)
+
+        inline_symlink = message(5, b"inline") \
+            + message(12, message(1, b"link") + message(2, b"target"))
+        put_cache_file(source, "ac", "c" * 64, inline_symlink)
+        set_mtime(source / "ac" / "cc" / ("c" * 64), now)
+        put_inline_action(source, "d" * 64)
+        put_inline_action(source, "e" * 64)
+        set_mtime(source / "ac" / "dd" / ("d" * 64), boundary)
+        set_mtime(source / "ac" / "ee" / ("e" * 64), boundary - 1)
+
+        orphan = b"orphan"
+        orphan_digest = hashlib.sha256(orphan).hexdigest()
+        put_cache_file(source, "cas", orphan_digest, orphan)
+        for path in (source / "cas").rglob("*"):
+            if path.is_file() and path.stat().st_mtime > now:
+                set_mtime(path, now)
+
+        plan = CACHE.inspect_cache(source, now, True, now=now)
+        self.assertEqual(plan["expired"], {"e" * 64})
+        self.assertTrue(plan["prune"])
+        all_files = CACHE.cache_files(source)
+        expected_protected, expected_blobs = CACHE.cache_payload(all_files, plan["protected"])
+        self.assertEqual(plan["protectedBytes"], expected_protected)
+        expected_reference_count = len(
+            all_files["references"]["a" * 64]
+            | all_files["references"]["b" * 64]
+            | all_files["references"]["f" * 64]
+        )
+        self.assertEqual(len(expected_blobs), expected_reference_count)
+        shared_references = all_files["references"]["a" * 64] \
+            | all_files["references"]["f" * 64]
+        self.assertEqual(len(shared_references), 1)
+        self.assertLess(
+            len(shared_references),
+            len(all_files["references"]["a" * 64])
+            + len(all_files["references"]["f" * 64]),
+        )
+        expected_references = all_files["references"]
+        CACHE.prune_cache(source, now, now=now)
+        pruned = CACHE.cache_files(source, now=now)
+        self.assertEqual(
+            set(pruned["ac"]), {"a" * 64, "b" * 64, "c" * 64, "d" * 64, "f" * 64}
+        )
+        self.assertEqual(
+            set(pruned["cas"]),
+            expected_references["a" * 64] | expected_references["b" * 64],
+        )
+        self.assertNotIn(orphan_digest, pruned["cas"])
+
+    def test_pruning_uses_strict_trigger_and_stops_at_first_crossing_result(self):
+        now = int(CACHE.time.time())
+        source = self.root / "exact-trigger"
+        source.mkdir()
+        protected = put_inline_payload(source, "a" * 64, 1024)
+        set_mtime(protected, now)
+        historical = put_inline_payload(
+            source, "b" * 64, 10 * 1024**2 - protected.stat().st_size
+        )
+        set_mtime(historical, now - 1)
+        exact = CACHE.inspect_cache(source, now, True, now=now)
+        self.assertEqual(exact["retainedBytes"], CACHE.PRUNE_TRIGGER_BYTES)
+        self.assertFalse(exact["prune"])
+
+        source = self.root / "crossing"
+        source.mkdir()
+        protected = put_inline_payload(source, "a" * 64, 1024**2)
+        set_mtime(protected, now)
+        tied_smallest = put_inline_payload(source, "b" * 64, 3 * 1024**2)
+        tied_later_key = put_inline_payload(source, "c" * 64, 3 * 1024**2)
+        older_large = put_inline_payload(source, "d" * 64, 7 * 1024**2)
+        for path, timestamp in (
+            (tied_smallest, now - 1),
+            (tied_later_key, now - 1),
+            (older_large, now - 2),
+        ):
+            set_mtime(path, timestamp)
+        plan = CACHE.inspect_cache(source, now, True, now=now)
+        self.assertTrue(plan["prune"])
+        self.assertIn("size-trigger", plan["reasons"])
+        CACHE.prune_cache(source, now, now=now)
+        result = CACHE.cache_files(source)
+        self.assertEqual(set(result["ac"]), {"a" * 64, "b" * 64})
+        self.assertEqual(
+            sum(size for _, size, _ in result["ac"].values()),
+            4 * 1024**2,
+        )
+
+        source = self.root / "overshoot"
+        source.mkdir()
+        protected = put_inline_payload(source, "a" * 64, 1024**2)
+        newest = put_inline_payload(source, "b" * 64, 7 * 1024**2)
+        older = put_inline_payload(source, "c" * 64, 5 * 1024**2)
+        set_mtime(protected, now)
+        set_mtime(newest, now - 1)
+        set_mtime(older, now - 2)
+        CACHE.prune_cache(source, now, now=now)
+        overshoot = CACHE.cache_files(source)
+        self.assertEqual(set(overshoot["ac"]), {"a" * 64, "b" * 64})
+        self.assertEqual(
+            sum(size for _, size, _ in overshoot["ac"].values()),
+            8 * 1024**2,
+        )
+
+    def test_pruning_keeps_failed_or_pr_ineligible_cache_without_expiry(self):
+        source = self.root / "source"
+        source.mkdir()
+        now = int(CACHE.time.time())
+        put_inline_action(source, "a" * 64)
+        action = source / "ac" / "aa" / ("a" * 64)
+        set_mtime(action, now - CACHE.PRUNE_MAX_AGE_SECONDS - 1)
+        plan = CACHE.inspect_cache(source, now, False, now=now)
+        self.assertFalse(plan["prune"])
+        self.assertIn("a" * 64, plan["expired"])
+        self.assertTrue(action.exists())
+
+    def test_orphan_payload_can_trigger_size_cleanup_without_becoming_history(self):
+        source = self.root / "source"
+        source.mkdir()
+        now = int(CACHE.time.time())
+        protected = put_inline_payload(source, "a" * 64, 1024)
+        set_mtime(protected, now)
+        orphan = b"o" * (11 * 1024**2)
+        orphan_digest = hashlib.sha256(orphan).hexdigest()
+        put_cache_file(source, "cas", orphan_digest, orphan)
+        set_mtime(source / "cas" / orphan_digest[:2] / orphan_digest, now)
+
+        plan = CACHE.inspect_cache(source, now, True, now=now)
+        self.assertIn("size-trigger", plan["reasons"])
+        self.assertGreater(plan["retainedBytes"], CACHE.PRUNE_TRIGGER_BYTES)
+        self.assertEqual(plan["retainedClosureBytes"], protected.stat().st_size)
+        CACHE.prune_cache(source, now, now=now)
+        files = CACHE.cache_files(source)
+        self.assertEqual(set(files["ac"]), {"a" * 64})
+        self.assertEqual(files["cas"], {})
+
+    def test_protected_set_overflow_fails_preparation_without_archive(self):
+        source = self.root / "source"
+        source.mkdir()
+        now = int(CACHE.time.time())
+        put_inline_payload(source, "b" * 64, CACHE.PRUNE_TARGET_BYTES)
+        set_mtime(source / "ac" / "bb" / ("b" * 64), now)
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        allowed_output = self.root / "allowed-output"
+        allowed_args = SimpleNamespace(
+            cache=str(source), archive=str(self.root / "allowed.tar"),
+            manifest=str(self.root / "allowed.json"), event_path=str(event_path),
+            event_name="push", repository="owner/repo", run_id="1", run_attempt="1",
+            commit="a" * 40, pr_number="", output=str(allowed_output), execution_log=[],
+            build_start=now, prune_eligible=True, prune_required=False,
+            prune_succeeded=False,
+        )
+        self.assertEqual(CACHE.upload(allowed_args), 0)
+        self.assertIn("status=success", allowed_output.read_text())
+
+        source = self.root / "overflow"
+        source.mkdir()
+        put_inline_payload(source, "a" * 64, CACHE.PRUNE_TARGET_BYTES + 1)
+        set_mtime(source / "ac" / "aa" / ("a" * 64), now)
+        output = self.root / "github-output"
+        args = SimpleNamespace(
+            cache=str(source), archive=str(self.root / "snapshot.tar"),
+            manifest=str(self.root / "manifest.json"), event_path=str(event_path),
+            event_name="push", repository="owner/repo", run_id="1", run_attempt="1",
+            commit="a" * 40, pr_number="", output=str(output), execution_log=[],
+            build_start=now, prune_eligible=True, prune_required=False,
+            prune_succeeded=False,
+        )
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(CACHE.upload(args), 1)
+        self.assertFalse(Path(args.archive).exists())
+        self.assertIn("status=failure", output.read_text())
+        self.assertIn("exceeds 4 MiB", output.read_text())
+
+    def test_preparation_fails_and_skips_upload_when_required_pruning_did_not_succeed(self):
+        source = self.root / "source"
+        source.mkdir()
+        now = int(CACHE.time.time())
+        put_inline_action(source, "a" * 64)
+        put_inline_action(source, "b" * 64)
+        set_mtime(source / "ac" / "aa" / ("a" * 64), now)
+        set_mtime(source / "ac" / "bb" / ("b" * 64), now - 1)
+        event_path = self.root / "event.json"
+        event_path.write_text("{}")
+        output = self.root / "github-output"
+        args = SimpleNamespace(
+            cache=str(source), archive=str(self.root / "snapshot.tar"),
+            manifest=str(self.root / "manifest.json"), event_path=str(event_path),
+            event_name="push", repository="owner/repo", run_id="1", run_attempt="1",
+            commit="a" * 40, pr_number="", output=str(output), execution_log=[],
+            build_start=now, prune_eligible=True, prune_required=True,
+            prune_succeeded=False,
+        )
+        with patch.object(CACHE, "PRUNE_TRIGGER_BYTES", 1), \
+                redirect_stderr(io.StringIO()):
+            self.assertEqual(CACHE.upload(args), 1)
+        self.assertFalse(Path(args.archive).exists())
+        self.assertIn("required cache pruning did not succeed", output.read_text())
 
     def test_union_keeps_both_sources_and_main_wins_valid_action_conflicts(self):
         main = self.root / "main"
@@ -1854,7 +2229,8 @@ class CacheArtifactTests(unittest.TestCase):
         results = {"main": True, "pr": True}
 
         def fake_restore(args, base, token, scope, pr_number, revisions, destination,
-                         expected_head=None, require_trusted_writer=False, head_branch=None):
+                         expected_head=None, require_trusted_writer=False, head_branch=None,
+                         failures=None):
             restored.append((scope, pr_number, dict(revisions), expected_head, require_trusted_writer))
             if results[scope]:
                 Path(destination).mkdir(parents=True)
@@ -1896,7 +2272,8 @@ class CacheArtifactTests(unittest.TestCase):
                 restored = []
 
                 def fake_restore(args, base, token, scope, pr_number, history, destination,
-                                 expected_head=None, require_trusted_writer=False, head_branch=None):
+                                 expected_head=None, require_trusted_writer=False,
+                                 head_branch=None, failures=None):
                     restored.append(scope)
                     if results[scope]:
                         Path(destination).mkdir(parents=True)
@@ -1930,7 +2307,8 @@ class CacheArtifactTests(unittest.TestCase):
         )
 
         def fake_restore(args, base, token, scope, pr_number, history, destination,
-                         expected_head=None, require_trusted_writer=False, head_branch=None):
+                         expected_head=None, require_trusted_writer=False, head_branch=None,
+                         failures=None):
             Path(destination).mkdir(parents=True)
             return True
 
@@ -1966,7 +2344,8 @@ class CacheArtifactTests(unittest.TestCase):
             restored = []
 
             def fake_restore(args, base, token, scope, pr_number, history, destination,
-                             expected_head=None, require_trusted_writer=False, head_branch=None):
+                             expected_head=None, require_trusted_writer=False,
+                             head_branch=None, failures=None):
                 restored.append((scope, dict(history)))
                 return False
 

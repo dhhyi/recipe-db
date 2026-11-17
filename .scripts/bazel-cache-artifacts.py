@@ -6,6 +6,7 @@ import hashlib
 import http.client
 import itertools
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import platform
@@ -51,6 +52,10 @@ MAX_ACTION_RESULT_BYTES = 64 * 1024**2
 MAX_TREE_EXPANDED_BYTES = 64 * 1024**2
 MAX_ACTION_LOG_RECORD_BYTES = 16 * 1024**2
 MAX_ACTION_LOG_CHUNK_BYTES = 64 * 1024
+PRUNE_TARGET_BYTES = 4 * 1024**2
+PRUNE_TRIGGER_BYTES = 10 * 1024**2
+PRUNE_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
+MAX_CLOCK_SKEW_SECONDS = 5 * 60
 API_READ_ATTEMPTS = 3
 EMPTY_DIGEST = hashlib.sha256(b"").hexdigest()
 
@@ -202,9 +207,10 @@ def read_digest(data):
     return digest, size
 
 
-def cache_files(root):
+def cache_files(root, now=None):
     if root.is_symlink() or not root.is_dir():
         raise Invalid(f"not a cache directory: {root}")
+    now = time.time() if now is None else now
     count = 0
     total = 0
     files = {"ac": {}, "cas": {}}
@@ -242,6 +248,9 @@ def cache_files(root):
                     or relative[1] != relative[2][:2]:
                 raise Invalid(f"unsupported digest cache path: {path}")
             info = path.stat(follow_symlinks=False)
+            if not math.isfinite(info.st_mtime) or info.st_mtime < 0 \
+                    or info.st_mtime > now + MAX_CLOCK_SKEW_SECONDS:
+                raise Invalid(f"invalid cache timestamp: {path}")
             total += info.st_size
             if total > MAX_EXPANDED_BYTES or info.st_size > MAX_FILE_BYTES:
                 raise Invalid("cache snapshot exceeds file or expansion limits")
@@ -253,27 +262,30 @@ def cache_files(root):
                         hasher.update(block)
                 if hasher.hexdigest() != digest:
                     raise Invalid(f"CAS digest mismatch: {path}")
-            files[relative[0]][digest] = (path, info.st_size)
+            files[relative[0]][digest] = (path, info.st_size, int(info.st_mtime))
     if not files["ac"] and not files["cas"]:
         return files
     if not files["ac"]:
         raise Invalid("snapshot contains no action results")
-    validate_action_results(files)
+    files["references"] = validate_action_results(files)
     return files
 
 
-def referenced_blob(files, digest, size):
+def referenced_blob(files, digest, size, references=None):
     if size == 0 and digest == EMPTY_DIGEST:
         return
     blob = files["cas"].get(digest)
     if blob is None or blob[1] != size:
         raise Invalid(f"missing or wrong-size referenced blob {digest}")
+    if references is not None:
+        references.add(digest)
 
 
-def validate_tree(files, digest, size, output_path, seen, symlinks, budget, depth=0):
+def validate_tree(files, digest, size, output_path, seen, symlinks, budget,
+                  references=None, depth=0):
     if depth > 256:
         raise Invalid("cache output tree exceeds depth limit")
-    referenced_blob(files, digest, size)
+    referenced_blob(files, digest, size, references)
     blob = files["cas"].get(digest)
     if blob is None:
         raise Invalid("empty tree blob is not valid")
@@ -301,14 +313,14 @@ def validate_tree(files, digest, size, output_path, seen, symlinks, budget, dept
     root_digest = hashlib.sha256(root).hexdigest()
     visited = set()
     validate_directory(files, fields(root), output_path, seen, depth, directory_map,
-                       visited, {root_digest}, symlinks, budget, len(root))
+                       visited, {root_digest}, symlinks, budget, len(root), references)
     if visited != set(directory_map):
         raise Invalid("Tree contains an unreferenced child directory")
 
 
 def validate_directory(files, directory, output_path, seen, depth, directory_map,
                        visited=None, active=None, symlinks=None, budget=None,
-                       directory_size=0):
+                       directory_size=0, references=None):
     if depth > 256:
         raise Invalid("cache output tree exceeds depth limit")
     visited = visited if visited is not None else set()
@@ -350,7 +362,7 @@ def validate_directory(files, directory, output_path, seen, depth, directory_map
                 digest_data = one(item, 2, 2)
                 if digest_data is None:
                     raise Invalid("output tree file lacks a digest")
-                referenced_blob(files, *read_digest(digest_data))
+                referenced_blob(files, *read_digest(digest_data), references)
                 if 6 in item:
                     fields(one(item, 6, 2))
             elif kind == "directory":
@@ -371,7 +383,8 @@ def validate_directory(files, directory, output_path, seen, depth, directory_map
                     raise Invalid("cyclic output directory tree")
                 visited.add(digest)
                 validate_directory(files, fields(raw), key, seen, depth + 1, directory_map,
-                                   visited, active | {digest}, symlinks, budget, len(raw))
+                                   visited, active | {digest}, symlinks, budget, len(raw),
+                                   references)
             else:
                 if set(item) - {1, 2, 4}:
                     raise Invalid("unsupported output symlink fields")
@@ -382,7 +395,7 @@ def validate_directory(files, directory, output_path, seen, depth, directory_map
                     fields(one(item, 4, 2))
 
 
-def validate_action_result(files, data):
+def validate_action_result(files, data, references=None):
     result = fields(data)
     if set(result) - {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}:
         raise Invalid("unsupported ActionResult fields")
@@ -418,7 +431,7 @@ def validate_action_result(files, data):
             ):
                 raise Invalid("inline output digest mismatch")
         else:
-            referenced_blob(files, digest, size)
+            referenced_blob(files, digest, size, references)
         if 7 in item:
             fields(one(item, 7, 2))
     for wire, output in result.get(3, []):
@@ -440,7 +453,7 @@ def validate_action_result(files, data):
         digest, size = read_digest(digest_data)
         validate_tree(
             files, digest, size, str(path) if path is not None else "", seen,
-            symlinks, tree_budget,
+            symlinks, tree_budget, references,
         )
         if 4 in item and one(item, 4, 0) not in (0, 1):
             raise Invalid("malformed OutputDirectory sorted flag")
@@ -475,7 +488,7 @@ def validate_action_result(files, data):
         if inline is not None and digest_data is not None:
             raise Invalid("ambiguous inline and digest output stream")
         if digest_data is not None:
-            referenced_blob(files, *read_digest(digest_data))
+            referenced_blob(files, *read_digest(digest_data), references)
     if 9 in result:
         fields(one(result, 9, 2))
     validate_symlink_graph(symlinks)
@@ -483,16 +496,20 @@ def validate_action_result(files, data):
 
 def validate_action_results(files):
     count = 0
-    for digest, (path, size) in files["ac"].items():
+    references = {}
+    for digest, (path, size, _) in files["ac"].items():
         count += 1
         if size > MAX_ACTION_RESULT_BYTES:
             raise Invalid("ActionResult exceeds metadata limit")
         try:
-            validate_action_result(files, path.read_bytes())
+            action_references = set()
+            validate_action_result(files, path.read_bytes(), action_references)
         except (Invalid, UnicodeError) as error:
             raise Invalid(f"invalid ActionResult {digest}: {error}") from error
         if count > MAX_FILES:
             raise Invalid("ActionResult count exceeds limit")
+        references[digest] = action_references
+    return references
 
 
 def make_manifest(args, archive):
@@ -562,7 +579,7 @@ def snapshot(source, archive):
     count = 0
     with tarfile.open(archive, "w:") as output:
         for kind in ("ac", "cas"):
-            for digest, (path, _) in checked[kind].items():
+            for digest, (path, _, _) in checked[kind].items():
                 descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
                 try:
                     info = os.fstat(descriptor)
@@ -571,7 +588,10 @@ def snapshot(source, archive):
                     entry = tarfile.TarInfo(f"{kind}/{digest[:2]}/{digest}")
                     entry.size = info.st_size
                     entry.mode = 0o600
-                    entry.mtime = 0
+                    if not math.isfinite(info.st_mtime) or info.st_mtime < 0 \
+                            or info.st_mtime > time.time() + MAX_CLOCK_SKEW_SECONDS:
+                        raise Invalid(f"invalid cache timestamp: {path}")
+                    entry.mtime = int(info.st_mtime)
                     with os.fdopen(os.dup(descriptor), "rb") as stream:
                         output.addfile(entry, stream)
                 finally:
@@ -643,6 +663,10 @@ def unpack_snapshot(archive, destination):
                     raise Invalid("snapshot archive exceeds member-count limit")
                 if not member.isfile() or member.issym() or member.islnk():
                     raise Invalid("snapshot archive contains a link or special file")
+                if not isinstance(member.mtime, (int, float)) \
+                        or not math.isfinite(member.mtime) or member.mtime < 0 \
+                        or member.mtime > time.time() + MAX_CLOCK_SKEW_SECONDS:
+                    raise Invalid("snapshot archive contains an invalid timestamp")
                 count += 1
                 total += member.size
                 if count > MAX_FILES or total > MAX_EXPANDED_BYTES \
@@ -664,6 +688,7 @@ def unpack_snapshot(archive, destination):
                         remaining -= len(block)
                     if stream.read(1):
                         raise Invalid("snapshot archive member exceeds declared size")
+                os.utime(target, (member.mtime, member.mtime))
                 if path.parts[0] == "cas" and digest.hexdigest() != path.parts[-1]:
                     raise Invalid("CAS digest mismatch in snapshot archive")
                 if path.parts[0] == "ac" and not re.fullmatch(r"[0-9a-f]{64}", path.parts[-1]):
@@ -1486,7 +1511,8 @@ def squash_pull_request(base, token, repository, commit_sha):
 
 
 def restore_scope(args, base, token, scope, pr_number, history, destination,
-                  expected_head=None, require_trusted_writer=False, head_branch=None):
+                  expected_head=None, require_trusted_writer=False, head_branch=None,
+                  failures=None):
     inspected = 0
     attempted = 0
     api_failed = False
@@ -1498,8 +1524,13 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
             print(f"cache: fallback scope={scope}: no acceptable snapshot")
         return restored
 
+    def failed(error):
+        if failures is not None:
+            failures.append(str(error))
+
     if scope == "pr" and (not isinstance(head_branch, str) or not head_branch):
         print("cache: API-error source=pr missing head branch", file=sys.stderr)
+        failed("PR restore lacks the head branch")
         return finish("API failure")
     query = {"event": "pull_request", "branch": head_branch} if scope == "pr" \
         else {"event": "push", "branch": "main"}
@@ -1514,6 +1545,7 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
             page = list(itertools.islice(runs, min(WORKFLOW_RUNS_PAGE_SIZE, limit - inspected)))
         except ApiFailure as error:
             print(f"cache: API-error source={scope} listing: {error}", file=sys.stderr)
+            failed(f"workflow run listing failed: {error}")
             return finish("API failure")
         inspected += len(page)
         try:
@@ -1528,6 +1560,7 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
         except (KeyError, TypeError, ValueError) as error:
             print(f"cache: API-error source={scope} malformed run metadata: {error}",
                   file=sys.stderr)
+            failed(f"workflow run metadata is invalid: {error}")
             return finish("API failure")
         for run in candidates:
             if run.get("conclusion") == "skipped" \
@@ -1544,6 +1577,7 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
                 print(f"cache: API-error source={scope} run={run['id']} artifacts: {error}",
                       file=sys.stderr)
                 api_failed = True
+                failed(f"artifact listing failed for run {run['id']}: {error}")
                 continue
             for artifact in artifacts:
                 artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
@@ -1586,9 +1620,11 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
                 except ApiFailure as error:
                     print(f"cache: API-error source={scope} run={run['id']}: {error}", file=sys.stderr)
                     api_failed = True
+                    failed(f"artifact restore failed for run {run['id']}: {error}")
                 except Exception as error:
                     print(f"cache: rejected run={run['id']} source={scope} "
                           f"artifact={artifact.get('name')}: {error}")
+                    failed(f"artifact {artifact.get('name')} was rejected: {error}")
                 if scope == "pr" and attempted >= PR_CANDIDATE_LIMIT:
                     return finish("candidate limit")
         if len(page) < WORKFLOW_RUNS_PAGE_SIZE:
@@ -1626,17 +1662,18 @@ def union_caches(main_cache, pr_cache, destination):
                 existing = merged.get(digest)
                 if existing is None:
                     merged[digest] = source
-                elif not identical_files(existing[0], source[0]):
-                    if category == "cas":
-                        raise Invalid(f"conflicting CAS bytes for digest {digest}")
-                    print(f"cache: union-conflict action-key={digest} winner=main")
-                elif category == "cas" and source[0].stat().st_mtime_ns \
-                        > existing[0].stat().st_mtime_ns:
-                    merged[digest] = source
-                    print(f"cache: union-duplicate cas={digest}")
+                elif identical_files(existing[0], source[0]):
+                    if source[2] > existing[2]:
+                        merged[digest] = source
+                        print(f"cache: union-duplicate category={category} digest={digest} "
+                              f"winner=pr-newer")
+                    else:
+                        print(f"cache: union-duplicate category={category} digest={digest}")
                 elif category == "cas":
-                    print(f"cache: union-duplicate cas={digest}")
-            for digest, (source, size) in merged.items():
+                    raise Invalid(f"conflicting CAS bytes for digest {digest}")
+                else:
+                    print(f"cache: union-conflict action-key={digest} winner=main")
+            for digest, (source, size, _) in merged.items():
                 counts[category] += 1
                 expanded += size
                 if counts["ac"] + counts["cas"] > MAX_FILES \
@@ -1644,8 +1681,6 @@ def union_caches(main_cache, pr_cache, destination):
                     raise Invalid("cache union exceeds file or expansion limits")
                 target = stage / category / digest[:2] / digest
                 target.parent.mkdir(parents=True, exist_ok=True)
-                if category == "ac" and digest in main_files[category]:
-                    source = main_files[category][digest][0]
                 shutil.copy2(source, target)
         validated = cache_files(stage)
         stage.rename(destination)
@@ -1680,11 +1715,210 @@ def copy_cache(source, destination):
             shutil.rmtree(stage)
 
 
+def cache_payload(files, action_keys):
+    blobs = set()
+    payload = 0
+    for key in action_keys:
+        payload += files["ac"][key][1]
+        blobs.update(files["references"][key])
+    payload += sum(files["cas"][digest][1] for digest in blobs)
+    return payload, blobs
+
+
+def pruning_plan(files, build_start, eligible, now=None):
+    now = time.time() if now is None else now
+    action_keys = set(files["ac"])
+    protected = {
+        key for key, (_, _, mtime) in files["ac"].items() if mtime >= build_start
+    }
+    protected_bytes, protected_blobs = cache_payload(files, protected)
+    expired = {
+        key for key, (_, _, mtime) in files["ac"].items()
+        if key not in protected and mtime < int(now) - PRUNE_MAX_AGE_SECONDS
+    }
+    retained = action_keys - expired
+    retained_closure_bytes, _ = cache_payload(files, retained)
+    retained_bytes = sum(files["ac"][key][1] for key in retained) \
+        + sum(size for _, size, _ in files["cas"].values())
+    reasons = []
+    if expired:
+        reasons.append("age-expiry")
+    if retained_bytes > PRUNE_TRIGGER_BYTES:
+        reasons.append("size-trigger")
+    if protected_bytes > PRUNE_TARGET_BYTES:
+        reasons.append("protected-set-overflow")
+    prune = eligible and bool(reasons)
+    return {
+        "actionKeys": action_keys,
+        "protected": protected,
+        "protectedBlobs": protected_blobs,
+        "protectedBytes": protected_bytes,
+        "expired": expired,
+        "retained": retained,
+        "retainedBytes": retained_bytes,
+        "retainedClosureBytes": retained_closure_bytes,
+        "reasons": reasons,
+        "prune": prune,
+        "payloadBytes": sum(size for _, size, _ in files["ac"].values())
+        + sum(size for _, size, _ in files["cas"].values()),
+        "entryCount": len(files["ac"]) + len(files["cas"]),
+    }
+
+
+def inspect_cache(source, build_start, eligible, now=None):
+    files = cache_files(Path(source), now=now)
+    plan = pruning_plan(files, build_start, eligible, now=now)
+    if plan["protectedBytes"] > PRUNE_TARGET_BYTES:
+        reason = "protected set exceeds 4 MiB; increase PRUNE_TARGET_BYTES only after " \
+                 "reviewing the current-main working set"
+    elif not eligible:
+        reason = "pruning-ineligible"
+    elif plan["reasons"]:
+        reason = ",".join(plan["reasons"])
+    else:
+        reason = "policy-within-limits"
+    plan["reason"] = reason
+    print(
+        "cache: inspect "
+        f"payloadBytes={plan['payloadBytes']} entries={plan['entryCount']} "
+        f"protectedBytes={plan['protectedBytes']} protectedActions={len(plan['protected'])} "
+        f"expiredActions={len(plan['expired'])} "
+        f"afterExpiryPayloadBytes={plan['retainedBytes']} "
+        f"prune={'true' if plan['prune'] else 'false'} reason={reason}"
+    )
+    return plan
+
+
+def prune_cache(source, build_start, now=None):
+    started = time.monotonic()
+    source = Path(source)
+    files = cache_files(source, now=now)
+    plan = pruning_plan(files, build_start, True, now=now)
+    if plan["protectedBytes"] > PRUNE_TARGET_BYTES:
+        raise Invalid(
+            "protected current-build cache set exceeds 4 MiB "
+            f"({plan['protectedBytes']} bytes); increase PRUNE_TARGET_BYTES only after "
+            "reviewing the current-main working set"
+        )
+    if not plan["prune"]:
+        raise Invalid("cache pruning was requested when no expiry or size policy applies")
+
+    if "size-trigger" in plan["reasons"]:
+        selected = set(plan["protected"])
+        selected_bytes, selected_blobs = cache_payload(files, selected)
+    else:
+        selected = set(plan["retained"])
+        selected_bytes, selected_blobs = cache_payload(files, selected)
+    if "size-trigger" in plan["reasons"] and selected_bytes < PRUNE_TARGET_BYTES:
+        candidates = sorted(
+            plan["retained"] - selected,
+            key=lambda key: (-files["ac"][key][2], key),
+        )
+        for key in candidates:
+            selected.add(key)
+            new_blobs = files["references"][key] - selected_blobs
+            selected_bytes += files["ac"][key][1] \
+                + sum(files["cas"][digest][1] for digest in new_blobs)
+            selected_blobs.update(new_blobs)
+            if selected_bytes >= PRUNE_TARGET_BYTES:
+                break
+
+    stage = Path(tempfile.mkdtemp(prefix=".bazel-cache-prune-", dir=source.parent))
+    backup = None
+    try:
+        for category, digests in (("ac", selected), ("cas", selected_blobs)):
+            for digest in digests:
+                target = stage / category / digest[:2] / digest
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(files[category][digest][0], target)
+        temporary = source / "tmp"
+        if temporary.exists():
+            shutil.copytree(temporary, stage / "tmp", dirs_exist_ok=True,
+                            copy_function=shutil.copy2)
+        staged_files = cache_files(stage, now=now)
+        if set(staged_files["ac"]) != selected:
+            raise Invalid("pruned cache staging changed the retained action results")
+
+        backup = Path(tempfile.mkdtemp(prefix=".bazel-cache-prune-backup-",
+                                       dir=source.parent))
+        backup.rmdir()
+        source.rename(backup)
+        try:
+            stage.rename(source)
+        except Exception:
+            backup.rename(source)
+            backup = None
+            raise
+        shutil.rmtree(backup)
+        backup = None
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
+        if backup is not None and backup.exists() and not source.exists():
+            backup.rename(source)
+        elif backup is not None and backup.exists():
+            shutil.rmtree(backup)
+
+    after = cache_files(source, now=now)
+    after_bytes = sum(size for _, size, _ in after["ac"].values()) \
+        + sum(size for _, size, _ in after["cas"].values())
+    after_entries = len(after["ac"]) + len(after["cas"])
+    print(
+        "cache: prune "
+        f"reason={','.join(plan['reasons'])} "
+        f"beforePayloadBytes={plan['payloadBytes']} afterPayloadBytes={after_bytes} "
+        f"beforeEntries={plan['entryCount']} afterEntries={after_entries} "
+        f"protectedBytes={plan['protectedBytes']} "
+        f"removedActions={len(files['ac']) - len(after['ac'])} "
+        f"removedBlobs={len(files['cas']) - len(after['cas'])} "
+        f"overshootBytes={max(0, after_bytes - PRUNE_TARGET_BYTES) if 'size-trigger' in plan['reasons'] else 0} "
+        f"seconds={round(time.monotonic() - started, 3)}"
+    )
+    return {"files": after_entries, "payloadBytes": after_bytes}
+
+
+def write_outputs(path, values):
+    if not path:
+        return
+    with Path(path).open("a") as stream:
+        for name, value in values.items():
+            value = str(value).replace("\r", " ").replace("\n", " ")
+            stream.write(f"{name}={value}\n")
+
+
+def inspect_command(args):
+    try:
+        plan = inspect_cache(args.cache, args.build_start, args.eligible)
+        write_outputs(args.output, {
+            "prune": str(plan["prune"]).lower(),
+            "reason": plan["reason"],
+            "protected_bytes": plan["protectedBytes"],
+        })
+    except Exception as error:
+        write_outputs(args.output, {"prune": "false", "reason": error, "status": "failure"})
+        print(f"cache: inspect-error {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def prune_command(args):
+    try:
+        prune_cache(args.cache, args.build_start)
+        write_outputs(args.output, {"status": "success"})
+    except Exception as error:
+        write_outputs(args.output, {"status": "failure", "reason": error})
+        print(f"cache: prune-error {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def discover_and_restore(args):
+    failures = []
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         print("cache: API-error missing GITHUB_TOKEN; continuing uncached", file=sys.stderr)
-        return
+        failures.append("missing GITHUB_TOKEN")
+        return restore_result(args, failures)
     base = api_base(args.repository)
     try:
         current_event = parse_json(Path(args.event_path).read_bytes())
@@ -1699,10 +1933,12 @@ def discover_and_restore(args):
             restored = restore_scope(
                 args, base, token, "pr", pr_number, history, Path(args.cache),
                 head_branch=head.get("ref") if isinstance(head, dict) else None,
+                failures=failures,
             )
             if not restored:
                 main_history = run_history(current_event["pull_request"]["base"]["sha"])
-                restore_scope(args, base, token, "main", None, main_history, Path(args.cache))
+                restore_scope(args, base, token, "main", None, main_history, Path(args.cache),
+                              failures=failures)
         else:
             pull = None
             try:
@@ -1710,29 +1946,33 @@ def discover_and_restore(args):
             except ApiFailure as error:
                 print(f"cache: API-error squash-association: {error}; using main-only path",
                       file=sys.stderr)
+                failures.append(f"squash association lookup failed: {error}")
                 pull = False
             if pull is None:
-                restore_scope(args, base, token, "main", None, history, Path(args.cache))
+                restore_scope(args, base, token, "main", None, history, Path(args.cache),
+                              failures=failures)
             else:
                 squash_history = dict(history)
                 squash_history.pop(args.commit, None)
                 if pull is False:
                     print(f"cache: squash-fallback revision={args.commit}: using main-only snapshot")
                     restore_scope(
-                        args, base, token, "main", None, squash_history, Path(args.cache)
+                        args, base, token, "main", None, squash_history, Path(args.cache),
+                        failures=failures,
                     )
-                    return
+                    return restore_result(args, failures)
                 with tempfile.TemporaryDirectory(prefix="bazel-cache-union-") as directory:
                     main_cache = Path(directory) / "main"
                     pr_cache = Path(directory) / "pr"
                     main_restored = restore_scope(
-                        args, base, token, "main", None, squash_history, main_cache
+                        args, base, token, "main", None, squash_history, main_cache,
+                        failures=failures,
                     )
                     pull_number = int(pull["number"])
                     final_head = pull["head"]["sha"]
                     pr_restored = restore_scope(
                         args, base, token, "pr", pull_number, {}, pr_cache,
-                        final_head, True, head_branch=pull["head"]["ref"],
+                        final_head, True, head_branch=pull["head"]["ref"], failures=failures,
                     )
                     if main_restored and pr_restored:
                         try:
@@ -1740,6 +1980,7 @@ def discover_and_restore(args):
                         except Exception as error:
                             print(f"cache: union-rejected pr={pull_number}: {error}; "
                                   "using main-only snapshot")
+                            failures.append(f"PR cache union failed: {error}")
                             copy_cache(main_cache, Path(args.cache))
                     elif main_restored:
                         print(f"cache: squash-fallback pr={pull_number}: using main-only snapshot")
@@ -1751,8 +1992,20 @@ def discover_and_restore(args):
                         print("cache: cold build; neither squash source has a compatible snapshot")
     except ApiFailure as error:
         print(f"cache: API-error {error}; continuing uncached", file=sys.stderr)
+        failures.append(f"cache selection API request failed: {error}")
     except Exception as error:
         print(f"cache: selection-error {error}; continuing uncached", file=sys.stderr)
+        failures.append(f"cache selection failed: {error}")
+    return restore_result(args, failures)
+
+
+def restore_result(args, failures):
+    if failures:
+        reason = "; ".join(failures)
+        write_outputs(getattr(args, "output", ""), {"status": "failure", "reason": reason})
+        return 1
+    write_outputs(getattr(args, "output", ""), {"status": "success"})
+    return 0
 
 
 def upload(args):
@@ -1762,6 +2015,20 @@ def upload(args):
     manifest_path = Path(args.manifest)
     try:
         report_action_logs(args.execution_log)
+        prune_eligible = args.prune_eligible is True or args.prune_eligible == "true"
+        prune_required = args.prune_required is True or args.prune_required == "true"
+        prune_succeeded = args.prune_succeeded is True or args.prune_succeeded == "true"
+        if prune_eligible:
+            files = cache_files(cache)
+            plan = pruning_plan(files, args.build_start, True)
+            if plan["protectedBytes"] > PRUNE_TARGET_BYTES:
+                raise Invalid(
+                    "protected current-build cache set exceeds 4 MiB "
+                    f"({plan['protectedBytes']} bytes); increase PRUNE_TARGET_BYTES only "
+                    "after reviewing the current-main working set"
+                )
+            if prune_required and not prune_succeeded:
+                raise Invalid("required cache pruning did not succeed; snapshot upload skipped")
         stats = snapshot(cache, archive)
         manifest = make_manifest(args, archive)
         if manifest_path.exists() or manifest_path.is_symlink():
@@ -1770,15 +2037,15 @@ def upload(args):
             stream.write(json.dumps(manifest, sort_keys=True) + "\n")
         identity = f"pr-{manifest['pullRequest']['number']}" if manifest["pullRequest"] else "main"
         name = f"{ARTIFACT_PREFIX}-{identity}-r{args.run_id}-a{args.run_attempt}"
-        if args.output:
-            Path(args.output).write_text(f"name={name}\n")
+        write_outputs(args.output, {"name": name, "status": "success"})
         print(f"cache: snapshot ready name={name} source={args.commit} "
               f"stats={json.dumps(stats)} totalSeconds={round(time.monotonic() - started, 3)} "
               f"peakRssBytes={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024}")
     except Exception as error:
-        print(f"cache: upload-preparation-error {error}; checks remain successful", file=sys.stderr)
-        if args.output:
-            Path(args.output).write_text("name=\n")
+        write_outputs(args.output, {"name": "", "status": "failure", "reason": error})
+        print(f"cache: upload-preparation-error {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def report_action_logs(specifications):
@@ -1865,6 +2132,15 @@ def report_action_logs(specifications):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    inspect = commands.add_parser("inspect")
+    inspect.add_argument("--cache", required=True)
+    inspect.add_argument("--build-start", required=True, type=int)
+    inspect.add_argument("--eligible", choices=("true", "false"), default="false")
+    inspect.add_argument("--output", default="")
+    prune = commands.add_parser("prune")
+    prune.add_argument("--cache", required=True)
+    prune.add_argument("--build-start", required=True, type=int)
+    prune.add_argument("--output", default="")
     create = commands.add_parser("prepare-upload")
     create.add_argument("--cache", required=True)
     create.add_argument("--archive", required=True)
@@ -1877,6 +2153,10 @@ def main():
     create.add_argument("--commit", required=True)
     create.add_argument("--pr-number", default="")
     create.add_argument("--output", default="")
+    create.add_argument("--build-start", required=True, type=int)
+    create.add_argument("--prune-eligible", choices=("true", "false"), default="false")
+    create.add_argument("--prune-required", choices=("true", "false"), default="false")
+    create.add_argument("--prune-succeeded", choices=("true", "false"), default="false")
     create.add_argument("--execution-log", action="append", default=[])
     restore = commands.add_parser("restore")
     restore.add_argument("--cache", required=True)
@@ -1888,13 +2168,19 @@ def main():
     restore.add_argument("--run-attempt", required=True)
     restore.add_argument("--commit", required=True)
     restore.add_argument("--pr-number", default="")
+    restore.add_argument("--output", default="")
     cleanup = commands.add_parser("cleanup")
     cleanup.add_argument("--repository", required=True)
     args = parser.parse_args()
+    if args.command == "inspect":
+        args.eligible = args.eligible == "true"
+        return inspect_command(args)
+    if args.command == "prune":
+        return prune_command(args)
     if args.command == "prepare-upload":
-        upload(args)
+        return upload(args)
     elif args.command == "restore":
-        discover_and_restore(args)
+        return discover_and_restore(args)
     else:
         token = os.environ.get("GITHUB_TOKEN")
         if not token:

@@ -28,6 +28,14 @@ jobs:
        !contains(github.event.pull_request.title, '[WIP]')) &&
       (github.event.action != 'edited' ||
        contains(github.event.changes.title.from, '[WIP]'))
+    outputs:
+      cache_restore_outcome: ${{ steps.cache-outcomes.outputs.restore_outcome }}
+      cache_inspect_outcome: ${{ steps.cache-outcomes.outputs.inspect_outcome }}
+      cache_prune_outcome: ${{ steps.cache-outcomes.outputs.prune_outcome }}
+      cache_prepare_outcome: ${{ steps.cache-outcomes.outputs.prepare_outcome }}
+      cache_upload_outcome: ${{ steps.cache-outcomes.outputs.upload_outcome }}
+      cache_prune_needed: ${{ steps.cache-outcomes.outputs.prune_needed }}
+      cache_failure_reason: ${{ steps.cache-outcomes.outputs.failure_reason }}
     permissions:
       actions: read
       contents: read
@@ -81,6 +89,8 @@ jobs:
           docker compose version
 
       - name: restore and union Bazel disk cache artifacts
+        id: restore-cache
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || '' }}
@@ -94,9 +104,15 @@ jobs:
             --run-number "$GITHUB_RUN_NUMBER" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --commit "${{ steps.source.outputs.sha }}" \
-            --pr-number "$PR_NUMBER"
+            --pr-number "$PR_NUMBER" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: record Bazel cache build start
+        id: cache-build-start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: check project formatting
+        id: format
         env:
           BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
         run: |
@@ -118,6 +134,7 @@ jobs:
             --jobs=1 --disk_cache="$HOME/.cache/bazel-disk" "${format_targets[@]}"
 
       - name: Bazel precommit checks, unit tests, and cacheable validations
+        id: checks
         env:
           BAZEL_DIAGNOSTICS_DIR: ${{ runner.temp }}/bazel-diagnostics
         run: |
@@ -155,11 +172,41 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: inspect Bazel cache
+        id: inspect-cache
+        if: always() && steps.source.outcome == 'success'
+        continue-on-error: true
+        env:
+          CACHE_PRUNE_ELIGIBLE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.format.outcome == 'success' && steps.checks.outcome == 'success' }}
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py inspect \
+            --cache "$HOME/.cache/bazel-disk" \
+            --build-start "${{ steps.cache-build-start.outputs.epoch }}" \
+            --eligible "$CACHE_PRUNE_ELIGIBLE" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: prune Bazel cache
+        id: prune-cache
+        if: always() && steps.inspect-cache.outcome == 'success' && steps.inspect-cache.outputs.prune == 'true'
+        continue-on-error: true
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py prune \
+            --cache "$HOME/.cache/bazel-disk" \
+            --build-start "${{ steps.cache-build-start.outputs.epoch }}" \
+            --output "$GITHUB_OUTPUT"
+
       - name: prepare Bazel cache snapshot
         id: prepare-bazel-cache
-        if: always() && steps.source.outcome == 'success'
+        if: >-
+          always() &&
+          steps.source.outcome == 'success' &&
+          steps.inspect-cache.outcome == 'success'
+        continue-on-error: true
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          CACHE_PRUNE_ELIGIBLE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.format.outcome == 'success' && steps.checks.outcome == 'success' }}
+          CACHE_PRUNE_REQUIRED: ${{ steps.inspect-cache.outputs.prune }}
+          CACHE_PRUNE_SUCCEEDED: ${{ steps.prune-cache.outcome == 'success' }}
         run: |
           python3 .scripts/bazel-cache-artifacts.py prepare-upload \
             --cache "$HOME/.cache/bazel-disk" \
@@ -171,12 +218,17 @@ jobs:
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --commit "${{ steps.source.outputs.sha }}" \
+            --build-start "${{ steps.cache-build-start.outputs.epoch }}" \
+            --prune-eligible "$CACHE_PRUNE_ELIGIBLE" \
+            --prune-required "${CACHE_PRUNE_REQUIRED:-false}" \
+            --prune-succeeded "$CACHE_PRUNE_SUCCEEDED" \
             --pr-number "$PR_NUMBER" \
             --execution-log "format=$RUNNER_TEMP/bazel-format-execution.json" \
             --execution-log "checks=$RUNNER_TEMP/bazel-check-execution.json" \
             --output "$GITHUB_OUTPUT"
 
       - name: upload Bazel cache snapshot
+        id: upload-cache
         if: always() && steps.prepare-bazel-cache.outcome == 'success' && steps.prepare-bazel-cache.outputs.name != ''
         uses: actions/upload-artifact@v7
         continue-on-error: true
@@ -187,6 +239,58 @@ jobs:
             ${{ runner.temp }}/bazel-cache/manifest.json
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}
+
+      - name: report Bazel cache outcomes
+        id: cache-outcomes
+        if: always()
+        env:
+          RESTORE_OUTCOME: ${{ steps.restore-cache.outcome }}
+          INSPECT_OUTCOME: ${{ steps.inspect-cache.outcome }}
+          PRUNE_OUTCOME: ${{ steps.prune-cache.outcome }}
+          PREPARE_OUTCOME: ${{ steps.prepare-bazel-cache.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload-cache.outcome }}
+          PRUNE_NEEDED: ${{ steps.inspect-cache.outputs.prune }}
+          RESTORE_REASON: ${{ steps.restore-cache.outputs.reason }}
+          INSPECT_REASON: ${{ steps.inspect-cache.outputs.reason }}
+          PRUNE_REASON: ${{ steps.prune-cache.outputs.reason }}
+          PREPARE_REASON: ${{ steps.prepare-bazel-cache.outputs.reason }}
+        run: |
+          set -euo pipefail
+          outcome() {
+            case "$1" in
+              success) echo success ;;
+              failure) echo failure ;;
+              *) echo not-attempted ;;
+            esac
+          }
+          restore=$(outcome "$RESTORE_OUTCOME")
+          inspect=$(outcome "$INSPECT_OUTCOME")
+          prune=$(outcome "$PRUNE_OUTCOME")
+          prepare=$(outcome "$PREPARE_OUTCOME")
+          upload=$(outcome "$UPLOAD_OUTCOME")
+          reason=""
+          if [[ $restore == failure ]]; then
+            reason=${RESTORE_REASON:-"Cache restore failed; build continued with fallback."}
+          elif [[ $inspect == failure ]]; then
+            reason=${INSPECT_REASON:-"Cache inspection failed; see the inspect step."}
+          elif [[ $prune == failure ]]; then
+            reason=${PRUNE_REASON:-"Cache pruning failed; see the prune step."}
+          elif [[ $prepare == failure ]]; then
+            reason=${PREPARE_REASON:-"Cache preparation or validation failed; upload skipped."}
+          elif [[ $upload == failure ]]; then
+            reason="Cache artifact upload failed; see the upload step."
+          fi
+          reason=${reason//$'\n'/ }
+          reason=${reason//$'\r'/ }
+          {
+            echo "restore_outcome=$restore"
+            echo "inspect_outcome=$inspect"
+            echo "prune_outcome=$prune"
+            echo "prepare_outcome=$prepare"
+            echo "upload_outcome=$upload"
+            echo "prune_needed=${PRUNE_NEEDED:-not-attempted}"
+            echo "failure_reason=$reason"
+          } >> "$GITHUB_OUTPUT"
 
       - name: build and validate production AMD64 images for pull requests
         if: github.event_name == 'pull_request'
@@ -212,6 +316,82 @@ jobs:
           done
           smoke_image=$(jq -r '.target.design.tags[0]' "$metadata")
           sh .scripts/smoke-production-image.sh "$smoke_image"
+
+  cache-health:
+    needs: quality-checks
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        needs.quality-checks.outputs.cache_restore_outcome == 'failure' ||
+        needs.quality-checks.outputs.cache_inspect_outcome == 'failure' ||
+        needs.quality-checks.outputs.cache_prune_outcome == 'failure' ||
+        needs.quality-checks.outputs.cache_prepare_outcome == 'failure' ||
+        needs.quality-checks.outputs.cache_upload_outcome == 'failure' ||
+        (
+          needs.quality-checks.outputs.cache_prepare_outcome == 'success' &&
+          needs.quality-checks.outputs.cache_upload_outcome == 'not-attempted'
+        ) ||
+        needs.quality-checks.outputs.cache_prune_needed == 'true' ||
+        (
+          needs.quality-checks.result == 'success' &&
+          (
+            needs.quality-checks.outputs.cache_restore_outcome == '' ||
+            needs.quality-checks.outputs.cache_inspect_outcome == '' ||
+            needs.quality-checks.outputs.cache_prepare_outcome == '' ||
+            needs.quality-checks.outputs.cache_upload_outcome == ''
+          )
+        ) ||
+        (
+          needs.quality-checks.result == 'failure' &&
+          (
+            needs.quality-checks.outputs.cache_restore_outcome == '' ||
+            needs.quality-checks.outputs.cache_inspect_outcome == '' ||
+            needs.quality-checks.outputs.cache_prepare_outcome == '' ||
+            needs.quality-checks.outputs.cache_upload_outcome == ''
+          )
+        )
+      )
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: report cache health
+        env:
+          RESTORE_OUTCOME: ${{ needs.quality-checks.outputs.cache_restore_outcome }}
+          INSPECT_OUTCOME: ${{ needs.quality-checks.outputs.cache_inspect_outcome }}
+          PRUNE_OUTCOME: ${{ needs.quality-checks.outputs.cache_prune_outcome }}
+          PREPARE_OUTCOME: ${{ needs.quality-checks.outputs.cache_prepare_outcome }}
+          UPLOAD_OUTCOME: ${{ needs.quality-checks.outputs.cache_upload_outcome }}
+          PRUNE_NEEDED: ${{ needs.quality-checks.outputs.cache_prune_needed }}
+          FAILURE_REASON: ${{ needs.quality-checks.outputs.cache_failure_reason }}
+          QUALITY_RESULT: ${{ needs.quality-checks.result }}
+        run: |
+          set -euo pipefail
+          for outcome in "$RESTORE_OUTCOME" "$INSPECT_OUTCOME" "$PRUNE_OUTCOME" \
+            "$PREPARE_OUTCOME" "$UPLOAD_OUTCOME"; do
+            if [[ $outcome == failure ]]; then
+              echo "${FAILURE_REASON:-A Bazel cache operation failed.}" >&2
+              exit 1
+            fi
+          done
+          if [[ $PREPARE_OUTCOME == success && $UPLOAD_OUTCOME != success ]]; then
+            echo "Cache preparation succeeded but snapshot upload was not successful." >&2
+            exit 1
+          fi
+          if [[ $QUALITY_RESULT == success || $QUALITY_RESULT == failure ]] &&
+            [[ -z $RESTORE_OUTCOME || -z $INSPECT_OUTCOME || -z $PREPARE_OUTCOME || -z $UPLOAD_OUTCOME ]]; then
+            echo "Cache outcomes are missing from the quality-checks job." >&2
+            exit 1
+          fi
+          if [[ $PRUNE_NEEDED == true ]]; then
+            if [[ $PRUNE_OUTCOME != success || $PREPARE_OUTCOME != success || $UPLOAD_OUTCOME != success ]]; then
+              echo "Required cache pruning, validation, preparation, or upload was not successful." >&2
+              exit 1
+            fi
+            echo "Cache pruning completed and the validated snapshot was uploaded."
+          fi
 
   arm64-validation:
     if: >-
