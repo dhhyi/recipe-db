@@ -328,8 +328,258 @@ test("detail view tags link to filtered search while edit mode remains non-navig
 
   await page.goto(`/recipe/${recipe.id}`);
   await page.getByRole("button", { name: "Tags bearbeiten" }).click();
-  await expect(page.locator("#recipe-tags a[data-recipe-tag]")).toHaveCount(0);
-  await expect(page.locator("#recipe-tags [data-tag-remove]")).toHaveCount(2);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("a[data-recipe-tag]")).toHaveCount(0);
+  await expect(dialog.locator("[data-tag-remove]")).toHaveCount(2);
+});
+
+async function openTagDialog(page) {
+  await page.getByRole("button", { name: "Tags bearbeiten" }).click();
+  const dialog = page.locator("#recipe-tags-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("closedby", "any");
+  return dialog;
+}
+
+function tagOptions(dialog) {
+  return dialog.locator("#recipe-tag-options button[type='submit']");
+}
+
+test("dialog closes refresh detail tags and reopening loads fresh data with an empty search", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  const tag = await findOrCreateTag(request, "COURSE", "E2E Frisch");
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  await search.fill("Frisch");
+  await expect(tagOptions(dialog)).toHaveCount(1);
+  await assignTag(request, recipe, tag);
+
+  const detailReload = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+      response.request().method() === "GET" &&
+      !new URL(response.url()).searchParams.has("edit"),
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  expect((await detailReload).status()).toBe(200);
+  await expect(page.locator("#recipe-tags [data-recipe-tag]")).toHaveText(
+    tag.name,
+  );
+
+  await openTagDialog(page);
+  await expect(search).toHaveValue("");
+  await expect(
+    dialog.getByRole("button", { name: `${tag.name} entfernen` }),
+  ).toBeVisible();
+  const secondReload = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+      response.request().method() === "GET" &&
+      !new URL(response.url()).searchParams.has("edit"),
+  );
+  await dialog.getByRole("button", { name: "Schließen" }).click();
+  await expect(dialog).toBeHidden();
+  expect((await secondReload).status()).toBe(200);
+  await openTagDialog(page);
+  const thirdReload = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+      response.request().method() === "GET" &&
+      !new URL(response.url()).searchParams.has("edit"),
+  );
+  await page.mouse.click(1, 1);
+  await expect(dialog).toBeHidden();
+  expect((await thirdReload).status()).toBe(200);
+});
+
+test("single-result click and Enter clear search; multi-result click preserves it", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  for (const name of ["E2E Einzig", "E2E Paar Eins", "E2E Paar Zwei"]) {
+    await findOrCreateTag(request, "COURSE", name);
+  }
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  const options = tagOptions(dialog);
+  await dialog.evaluate((element) => {
+    window.testTagDialog = element;
+    window.testTagSearch = element.querySelector("#recipe-tag-search");
+  });
+
+  await search.fill("e2e einzig");
+  await expect(options).toHaveCount(1);
+  await options.first().click();
+  await expect(
+    dialog.getByRole("button", { name: "E2E Einzig entfernen" }),
+  ).toBeVisible();
+  await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
+  await expect(
+    dialog.getByRole("button", { name: "E2E Einzig", exact: true }),
+  ).toHaveCount(0);
+
+  await search.fill("E2E Paar");
+  await expect(options).toHaveCount(2);
+  await search.press("Enter");
+  await expect(dialog.locator("[data-tag-remove]")).toHaveCount(1);
+  await dialog.getByRole("button", { name: "E2E Paar Eins", exact: true }).click();
+  await expect(
+    dialog.getByRole("button", { name: "E2E Paar Eins entfernen" }),
+  ).toBeVisible();
+  await expect(search).toHaveValue("E2E Paar");
+  await expect(options).toHaveCount(1);
+  await expect(options).toHaveText("E2E Paar Zwei");
+  await search.press("Enter");
+  await expect(
+    dialog.getByRole("button", { name: "E2E Paar Zwei entfernen" }),
+  ).toBeVisible();
+  await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
+  await dialog.getByRole("button", { name: "E2E Paar Zwei entfernen" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "E2E Paar Zwei entfernen" }),
+  ).toHaveCount(0);
+  expect(
+    await dialog.evaluate(
+      (element) =>
+        element === window.testTagDialog &&
+        element.querySelector("#recipe-tag-search") === window.testTagSearch,
+    ),
+  ).toBe(true);
+});
+
+test("failed detail refresh after close can be retried", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  const tag = await findOrCreateTag(request, "COURSE", "E2E Erneut");
+  await assignTag(request, recipe, tag);
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  let fail = true;
+  await page.route(`**/recipe/${recipe.id}/tags`, async (route) => {
+    if (route.request().method() === "GET" && fail) {
+      fail = false;
+      return route.abort("failed");
+    }
+    return route.fallback();
+  });
+  await dialog.getByRole("button", { name: "Schließen" }).click();
+  await expect(dialog).toBeHidden();
+  const detail = page.locator("#recipe-tags");
+  await expect(detail.locator("[data-tag-feedback]")).toContainText(
+    "Tags konnten nicht aktualisiert werden.",
+  );
+  await detail.locator("[data-tag-retry]").click();
+  await expect(detail.locator("[data-recipe-tag]")).toHaveText(tag.name);
+});
+
+test("saving blocks dismissal and competing changes without changing the backdrop", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  await findOrCreateTag(request, "COURSE", "E2E Langsam");
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  await search.fill("E2E Langsam");
+  await expect(tagOptions(dialog)).toHaveCount(1);
+
+  const appearance = () =>
+    dialog.evaluate((element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return {
+        bounds: [x, y, width, height],
+        backdrop: getComputedStyle(element, "::backdrop").backgroundColor,
+      };
+    });
+  const before = await appearance();
+  let release;
+  let started;
+  const gate = new Promise((resolve) => (release = resolve));
+  const pending = new Promise((resolve) => (started = resolve));
+  await page.route(`**/recipe/${recipe.id}/tags`, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    started();
+    await gate;
+    await route.continue();
+  });
+  try {
+    await tagOptions(dialog).first().click();
+    await pending;
+    await expect(dialog).toHaveAttribute("closedby", "none");
+    await expect(dialog.getByRole("button", { name: "Schließen" })).toBeDisabled();
+    await expect(tagOptions(dialog).first()).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await page.mouse.click(1, 1);
+    await expect(dialog).toBeVisible();
+    const during = await appearance();
+    expect(during.backdrop).toBe(before.backdrop);
+    during.bounds.forEach((value, index) =>
+      expect(value).toBeCloseTo(before.bounds[index], 0),
+    );
+  } finally {
+    release();
+  }
+  await expect(
+    dialog.getByRole("button", { name: "E2E Langsam entfernen" }),
+  ).toBeVisible();
+  await expect(dialog).toHaveAttribute("closedby", "any");
+  await expect(dialog.getByRole("button", { name: "Schließen" })).toBeEnabled();
+  const after = await appearance();
+  expect(after.backdrop).toBe(before.backdrop);
+  expect(after.bounds[0]).toBeCloseTo(before.bounds[0], 0);
+  expect(after.bounds[2]).toBeCloseTo(before.bounds[2], 0);
+});
+
+test("uncertain save failure keeps search and confirmed tags, permits retry and close with reduced motion", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  const existing = await findOrCreateTag(request, "COURSE", "E2E Vorhanden");
+  await findOrCreateTag(request, "COURSE", "E2E Fehler");
+  await assignTag(request, recipe, existing);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  await search.fill("E2E Fehler");
+  await expect(tagOptions(dialog)).toHaveCount(1);
+  let fail = true;
+  await page.route(`**/recipe/${recipe.id}/tags`, async (route) => {
+    if (route.request().method() === "POST" && fail) {
+      fail = false;
+      return route.abort("failed");
+    }
+    return route.fallback();
+  });
+  await tagOptions(dialog).first().click();
+  await expect(dialog.getByRole("alert")).toContainText(/nicht bestätigt/i);
+  await expect(search).toHaveValue("E2E Fehler");
+  await expect(
+    dialog.getByRole("button", { name: "E2E Vorhanden entfernen" }),
+  ).toBeVisible();
+  await expect(dialog).toHaveAttribute("closedby", "any");
+  await expect(dialog.getByRole("button", { name: "Schließen" })).toBeEnabled();
+  await tagOptions(dialog).first().click();
+  await expect(
+    dialog.getByRole("button", { name: "E2E Fehler entfernen" }),
+  ).toBeVisible();
+  await expect(search).toHaveValue("");
+  await dialog.getByRole("button", { name: "Schließen" }).click();
+  await expect(dialog).toBeHidden();
 });
 
 const transitionTest = test.extend({ viewTransitions: true });
@@ -355,7 +605,7 @@ transitionTest(
           run.types = [...transition.types];
           run.tagNames = [
             ...document.querySelectorAll(
-              "#recipe-tags form[data-tag-mutation]",
+              "dialog form[data-tag-mutation]",
             ),
           ].map((form) => getComputedStyle(form).viewTransitionName);
           run.otherNames = [

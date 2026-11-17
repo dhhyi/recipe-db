@@ -259,6 +259,9 @@ for (const role of ["anonymous", "member", "owner"]) {
         page.getByRole("button", { name: "Bearbeiten", exact: true }),
       ).toHaveCount(role === "owner" ? 1 : 0);
       await expect(
+        page.getByRole("button", { name: "Tags bearbeiten", exact: true }),
+      ).toHaveCount(role === "owner" ? 1 : 0);
+      await expect(
         page.getByRole("heading", { name: "Zubereitung", exact: true }),
       ).toBeVisible();
       await expect(
@@ -303,35 +306,34 @@ for (const role of ["anonymous", "member", "owner"]) {
         });
         await expect(editButton).toBeVisible();
         await editButton.click();
-
+        const dialog = page.getByRole("dialog");
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toHaveAttribute("closedby", "any");
         await expect(
-          page.getByRole("searchbox", { name: "Tag suchen", exact: true }),
+          dialog.getByRole("searchbox", { name: "Tag suchen", exact: true }),
         ).toBeVisible();
         await expect(
           page.getByRole("button", { name: "Fertig", exact: true }),
-        ).toBeVisible();
-        await expect(
-          page.locator("#recipe-tags [data-tag-remove]"),
-        ).toHaveCount(3);
-        await expect(page.locator("#recipe-tags details")).toHaveCount(0);
+        ).toHaveCount(0);
+        await expect(dialog.locator("[data-tag-remove]")).toHaveCount(3);
+        await expect(dialog.locator("details")).toHaveCount(0);
         await expect(page.locator("#recipe-tag-options > ul")).toHaveCount(1);
         await expect(
           page.locator(
             "#recipe-tag-options fieldset, #recipe-tag-options legend",
           ),
         ).toHaveCount(0);
-        const pill = page.locator("#recipe-tags .recipe-tag").first();
+        const pill = dialog.locator(".recipe-tag").first();
         const editHeight = (await pill.boundingBox()).height;
         const removeButton = pill.getByRole("button");
         expect((await removeButton.boundingBox()).height).toBeLessThanOrEqual(
           editHeight,
         );
-        await page.getByRole("button", { name: "Fertig", exact: true }).click();
+        await dialog.getByRole("button", { name: /schließen/i }).click();
+        await expect(dialog).toBeHidden();
         await expect(editButton).toBeVisible();
-        await expect(page.locator("#recipe-tag-search")).toHaveCount(0);
-        expect((await pill.boundingBox()).height).toBeCloseTo(editHeight, 1);
         await editButton.click();
-        const search = page.getByRole("searchbox", {
+        const search = dialog.getByRole("searchbox", {
           name: "Tag suchen",
           exact: true,
         });
@@ -352,10 +354,7 @@ for (const role of ["anonymous", "member", "owner"]) {
             exact: true,
           }),
         );
-        await page
-          .getByRole("link", { name: "Zur Startseite" })
-          .scrollIntoViewIfNeeded();
-        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(dialog.locator("[aria-busy='true']")).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
         const updatedAt = page.getByText(
           /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
@@ -364,7 +363,6 @@ for (const role of ["anonymous", "member", "owner"]) {
         await updatedAt.evaluate((element) => {
           element.textContent = "Zuletzt aktualisiert: gerade eben";
         });
-        await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
         await screenshot(page, "tag-editor.png");
 
         let assignments = 0;
@@ -384,9 +382,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         await expect(options).toHaveCount(2);
         await search.press("Enter");
         expect(assignments).toBe(0);
-        await expect(
-          page.locator("#recipe-tags [data-tag-remove]"),
-        ).toHaveCount(3);
+        await expect(dialog.locator("[data-tag-remove]")).toHaveCount(3);
 
         await search.fill(" Deutsch ");
         await expect(options).toHaveCount(1);
@@ -414,10 +410,9 @@ for (const role of ["anonymous", "member", "owner"]) {
         await expect(
           page.getByRole("button", { name: "Deutsch entfernen", exact: true }),
         ).toBeVisible();
-        await expect(
-          page.locator("#recipe-tags [data-tag-remove]"),
-        ).toHaveCount(4);
+        await expect(dialog.locator("[data-tag-remove]")).toHaveCount(4);
         expect(assignments).toBe(1);
+        await expect(search).toHaveValue("");
         await expect(search).toBeFocused();
       });
     }
