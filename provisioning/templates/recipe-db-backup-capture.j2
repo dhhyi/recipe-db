@@ -1,12 +1,22 @@
 #!/bin/bash
 set -euo pipefail
 umask 077
-if [[ $# == 1 ]]; then
+if [[ ${1:-} == recovery && $# -ge 3 ]]; then
+  action=recovery
+  recovery_command=$2
+  shift 2
+  path=$1
+  recovery_arguments=("$@")
+elif [[ $# == 1 ]]; then
   action=nightly
   path=$1
 elif [[ $# == 2 ]]; then
   action=$1
   path=$2
+elif [[ $# == 3 && $1 == release-capture ]]; then
+  action=$1
+  path=$2
+  candidate=$3
 else
   printf 'backup capture requires an action and its absolute state or snapshot directory\n' >&2
   exit 1
@@ -23,13 +33,33 @@ cd /opt/recipe-db
 }
 release=$(cat /etc/recipe-db/backup-release-ref)
 case "$action" in
+  recovery)
+    exec 9>/var/lib/recipe-db-backup/run.lock
+    flock -n 9 || {
+      printf 'another backup or managed checkout operation is active\n' >&2
+      exit 1
+    }
+    [[ $path == /var/lib/recipe-db-backup/maintenance &&
+      ! -e /var/lib/recipe-db-backup/release-command.json &&
+      ! -L /var/lib/recipe-db-backup/release-command.json ]] || {
+      printf 'recovery requires the retained operation and a stopped workstation command\n' >&2
+      exit 1
+    }
+    case "$recovery_command" in
+      backup-exit | release-migration-status | release-migration-recover-claim | release-migration-recover | release-recovery-reopen) ;;
+      *) printf 'unsupported operator recovery command\n' >&2; exit 1 ;;
+    esac
+    export RECIPE_DB_PI_RECOVERY=true
+    exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+      --release-sources-from-git "$recovery_command" /etc/recipe-db/backup-values.yaml "${recovery_arguments[@]}"
+    ;;
   nightly)
     [[ $# == 1 && $path == /* && ! -e $path && ! -L $path ]] || {
       printf 'nightly backup requires a new absolute snapshot directory\n' >&2
       exit 1
     }
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-      backup-run /etc/recipe-db/backup-values.yaml "$release" "$path"
+      --release-sources-from-git backup-run /etc/recipe-db/backup-values.yaml "$release" "$path"
     ;;
   maintenance-enter)
     [[ $path == /* && ! -e $path && ! -L $path ]] || {
@@ -37,7 +67,7 @@ case "$action" in
       exit 1
     }
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-      backup-enter /etc/recipe-db/backup-values.yaml "$release" "$path"
+      --release-sources-from-git backup-enter /etc/recipe-db/backup-values.yaml "$release" "$path"
     ;;
   maintenance-capture)
     [[ $path == /* && -d $path && ! -L $path ]] || {
@@ -45,7 +75,16 @@ case "$action" in
       exit 1
     }
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-      backup-capture /etc/recipe-db/backup-values.yaml "$path"
+      --release-sources-from-git backup-capture /etc/recipe-db/backup-values.yaml "$path"
+    ;;
+  release-capture)
+    [[ $path == /var/lib/recipe-db-backup/maintenance && -d $path && ! -L $path &&
+      $candidate == "$release" ]] || {
+      printf 'release capture requires the retained operation and aligned candidate inputs\n' >&2
+      exit 1
+    }
+    exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
+      --release-sources-from-git release-backup-capture /etc/recipe-db/backup-values.yaml "$path" "$candidate"
     ;;
   *)
     printf 'unsupported backup capture action\n' >&2

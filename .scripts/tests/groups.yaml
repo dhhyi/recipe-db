@@ -38,9 +38,16 @@ compose:
       - package.json
 release:
   tests:
+    - .scripts/tests/production-release-files.bats
     - .scripts/tests/production-release.bats
     - .scripts/tests/production-upgrade-rehearsal.bats
   suite_inputs:
+    .scripts/tests/production-release-files.bats:
+      - .scripts/production-release.py
+      - .scripts/retrieve-verified-backup.py
+      - provisioning/files/backup-upload.py
+      - provisioning/files/release-files.py
+      - .scripts/tests/test_helper.bash
     .scripts/tests/production-release.bats:
       - .scripts/lib/project-metadata.sh
       - .scripts/migrator-manifest.schema.json
@@ -105,6 +112,9 @@ deploy:
       - .scripts/validate-backup-snapshot.py
       - .scripts/validate-backup-package.py
       - provisioning/files/backup-upload.py
+      - provisioning/files/release-files.py
+      - .scripts/production-release.py
+      - .scripts/retrieve-verified-backup.py
       - .scripts/templates/**
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"

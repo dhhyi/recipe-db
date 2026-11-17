@@ -1,8 +1,11 @@
 import importlib.util
+import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
+import tempfile
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -24,7 +27,144 @@ def load_script(name):
 storage = load_script("storage-guard")
 network = load_script("network-preflight")
 host = load_script("host-preflight")
+checkout_guard = load_script("checkout-guard")
 UUID = "02f61d5e-92cb-4f9c-a781-099d97795020"
+
+
+class CheckoutTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.checkout = root / "checkout"
+        self.checkout.mkdir()
+        self.state = root / "maintenance/backup-state.json"
+        self.state.parent.mkdir()
+        self.proc = root / "proc"
+        self.proc.mkdir()
+        parent = self.proc / str(os.getppid())
+        parent.mkdir()
+        (parent / "stat").write_text(f"{parent.name} (ansible) S" + " 0" * 18 + " 1234\n")
+        self.revision = "a" * 40
+
+    def validate(self, holder=""):
+        checkout_guard.validate(self.revision, holder, self.checkout, self.state, self.proc)
+
+    def test_scoped_maintenance_update_requires_exact_holder_and_pinned_revision(self):
+        self.state.write_text('{"backupId":"backup-1-2","status":"captured","phase":"captured"}')
+        with self.assertRaisesRegex(ValueError, "exact holder"):
+            self.validate()
+        with self.assertRaisesRegex(ValueError, "exact holder"):
+            self.validate("backup-1-3")
+        self.validate("backup-1-2")
+        self.state.write_text(
+            '{"backupId":"backup-1-2","status":"candidate-staged","toolingRevision":"' + "b" * 40 + '"}'
+        )
+        with self.assertRaisesRegex(ValueError, "recorded tooling"):
+            self.validate("backup-1-2")
+
+    def test_active_checkout_process_refuses_update(self):
+        process = self.proc / "999999"
+        process.mkdir()
+        (process / "cwd").symlink_to(self.checkout)
+        (process / "cmdline").write_bytes(b"bash\0")
+        with self.assertRaisesRegex(ValueError, "process is using"):
+            self.validate()
+        (process / "cwd").unlink()
+        (process / "cwd").symlink_to(self.proc)
+        (process / "cmdline").write_bytes(
+            b"bash\0" + str(self.checkout / ".scripts/production-k3d.sh").encode() + b"\0"
+        )
+        with self.assertRaisesRegex(ValueError, "process is using"):
+            self.validate()
+        (process / "cmdline").write_bytes(b"unrelated-command\0")
+        self.validate()
+
+    def test_dangling_state_symlink_and_invalid_revision_are_refused(self):
+        self.state.symlink_to(self.proc / "missing")
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            self.validate()
+        self.state.unlink()
+        self.revision = "main"
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            self.validate()
+
+    def test_git_mutation_holds_shared_lock_after_validation(self):
+        config = {"stateDirectory": str(self.state.parent.parent)}
+        backup = load_script("backup-upload")
+
+        def mutate(arguments, check, pass_fds):
+            self.assertEqual(len(pass_fds), 1)
+            with self.assertRaises(backup.BackupError):
+                backup.acquire_run_lock(config)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with patch.object(checkout_guard.subprocess, "run", side_effect=mutate):
+            self.assertEqual(checkout_guard.guarded_git(
+                ["--version"], self.revision, "", self.checkout, self.state, self.proc), 0)
+        descriptor = backup.acquire_run_lock(config)
+        self.addCleanup(os.close, descriptor)
+        with patch.object(checkout_guard.subprocess, "run") as git:
+            with self.assertRaises(BlockingIOError):
+                checkout_guard.guarded_git(
+                    ["--version"], self.revision, "", self.checkout, self.state, self.proc)
+            git.assert_not_called()
+
+    def test_operation_start_after_initial_guard_prevents_git_mutation(self):
+        self.validate()
+        marker = self.state.parent.parent / "release-command.json"
+        marker.write_text('{"holder":"backup-1-2","token":"test"}')
+        with patch.object(checkout_guard.subprocess, "run") as git:
+            with self.assertRaisesRegex(ValueError, "stop the workstation"):
+                checkout_guard.guarded_git(
+                    ["checkout", self.revision], self.revision, "",
+                    self.checkout, self.state, self.proc)
+            git.assert_not_called()
+
+    def test_git_child_retains_exclusion_after_guard_descriptor_closes(self):
+        backup = load_script("backup-upload")
+        config = {"stateDirectory": str(self.state.parent.parent)}
+        children = []
+
+        def detached_child(arguments, check, pass_fds=()):
+            children.append(subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"], pass_fds=pass_fds,
+            ))
+            return subprocess.CompletedProcess(arguments, 0)
+
+        try:
+            with patch.object(checkout_guard.subprocess, "run", side_effect=detached_child):
+                checkout_guard.guarded_git(
+                    ["--version"], self.revision, "", self.checkout, self.state, self.proc)
+            with self.assertRaises(backup.BackupError):
+                backup.acquire_run_lock(config)
+        finally:
+            for child in children:
+                child.terminate()
+                child.wait(timeout=10)
+        descriptor = backup.acquire_run_lock(config)
+        os.close(descriptor)
+
+    def test_overlapping_ansible_tasks_cannot_interleave_between_git_calls(self):
+        second = self.proc / "999998"
+        second.mkdir()
+        (second / "stat").write_text("999998 (ansible) S" + " 0" * 18 + " 5678\n")
+        with patch.object(checkout_guard.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 0)) as git:
+            checkout_guard.guarded_git(
+                ["--version"], self.revision, "", self.checkout, self.state, self.proc)
+            with patch.object(checkout_guard.os, "getppid", return_value=999998):
+                with self.assertRaisesRegex(ValueError, "another Ansible checkout task"):
+                    checkout_guard.guarded_git(
+                        ["checkout", self.revision], self.revision, "",
+                        self.checkout, self.state, self.proc)
+            self.assertEqual(git.call_count, 1)
+            (self.proc / str(os.getppid()) / "stat").unlink()
+            with patch.object(checkout_guard.os, "getppid", return_value=999998):
+                checkout_guard.guarded_git(
+                    ["checkout", self.revision], self.revision, "",
+                    self.checkout, self.state, self.proc)
+            self.assertEqual(git.call_count, 2)
 
 
 class StorageTests(unittest.TestCase):
@@ -224,9 +364,12 @@ class ContractTests(unittest.TestCase):
         install = by_name["Install missing pinned backup capture tools"]
         self.assertEqual(install["when"], "backup_missing_tools.stdout | from_json | length > 0")
         self.assertEqual(install["environment"], "{{ backup_toolchain_environment }}")
-        checkout = by_name["Check out the explicitly selected immutable backup capture release"]
-        self.assertEqual(checkout["when"], "backup_capture_revision != ''")
-        self.assertEqual(checkout["ansible.builtin.git"]["version"], "{{ backup_capture_revision }}")
+        include = by_name["Maintain the selected backup capture checkout"]
+        self.assertEqual(include["when"], "backup_capture_revision != ''")
+        self.assertEqual(include["vars"]["checkout_revision"], "{{ backup_capture_revision }}")
+        checkout_tasks = yaml.safe_load((ROOT / include["ansible.builtin.import_tasks"]).read_text())
+        checkout = checkout_tasks[-1]
+        self.assertEqual(checkout["ansible.builtin.git"]["version"], "{{ checkout_revision }}")
         self.assertFalse(checkout["ansible.builtin.git"]["force"])
         self.assertFalse(checkout["ansible.builtin.git"]["recursive"])
         self.assertFalse(any("ansible.builtin.shell" in task for task in tasks))
@@ -432,6 +575,33 @@ class ContractTests(unittest.TestCase):
         self.assertIn('backup-capture /etc/recipe-db/backup-values.yaml "$path"', command)
         self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
         self.assertNotIn("mise run", command)
+
+    def test_managed_recovery_holds_shared_lock_through_tool_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, checkout, config = root / "state", root / "checkout", root / "config"
+            for path in (state, checkout, config):
+                path.mkdir()
+            (config / "backup-values.yaml").write_text("fixture")
+            (config / "backup-release-ref").write_text("fixture-release")
+            mise = root / "mise"
+            mise.write_text(
+                f"#!{sys.executable}\nimport fcntl, os, sys\n"
+                f"descriptor = os.open({str(state / 'run.lock')!r}, os.O_RDWR)\n"
+                "try:\n    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                "except BlockingIOError:\n    sys.exit(0)\n"
+                "sys.exit(1)\n"
+            )
+            mise.chmod(0o700)
+            command = self.render("recipe-db-backup-capture.j2") \
+                .replace("/var/lib/recipe-db-backup", str(state)) \
+                .replace("/opt/recipe-db", str(checkout)) \
+                .replace("/etc/recipe-db", str(config)) \
+                .replace("/usr/local/bin/mise", str(mise))
+            subprocess.run(
+                ["bash", "-s", "recovery", "release-migration-status", str(state / "maintenance")],
+                input=command, text=True, check=True,
+            )
 
     def test_firewall_does_not_flush_cluster_rules_or_expose_admin(self):
         rules = self.render("firewall.nft.j2")

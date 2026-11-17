@@ -2,6 +2,7 @@
 """Stream the Pi's verified Drive baseline into a new private local directory."""
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import getpass
 import hashlib
@@ -265,6 +266,37 @@ def retrieve(args):
     }
 
 
+@contextmanager
+def ssh_session(args):
+    with tempfile.TemporaryDirectory(prefix="recipe-db-ssh-", dir="/tmp") as directory:
+        args.control_path = str(Path(directory) / "connection")
+        with subprocess.Popen(
+            [*ssh_options(), "-M", "-N", "-S", args.control_path,
+             "-o", "ControlPersist=no", args.pi],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        ) as connection:
+            try:
+                while not Path(args.control_path).is_socket():
+                    if connection.poll() is not None:
+                        raise AuthenticationError("SSH connection setup failed")
+                    time.sleep(0.1)
+                authenticate(args)
+                yield
+            finally:
+                for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(signum, signal.SIG_IGN)
+                args.sudo_password = None
+                if connection.poll() is None:
+                    connection.terminate()
+                    try:
+                        connection.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        connection.kill()
+                        connection.wait()
+                        raise AuthenticationError(
+                            "SSH connection cleanup timed out; check destination before retrying")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", help="new directory under an existing symlink-free parent")
@@ -279,33 +311,8 @@ def main():
     for signum in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(signum, interrupt)
     os.umask(0o077)
-    with tempfile.TemporaryDirectory(prefix="recipe-db-ssh-", dir="/tmp") as directory:
-        args.control_path = str(Path(directory) / "connection")
-        with subprocess.Popen(
-            [*ssh_options(), "-M", "-N", "-S", args.control_path,
-             "-o", "ControlPersist=no", args.pi],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        ) as connection:
-            try:
-                while not Path(args.control_path).is_socket():
-                    if connection.poll() is not None:
-                        raise AuthenticationError("SSH connection setup failed")
-                    time.sleep(0.1)
-                authenticate(args)
-                result = retrieve(args)
-            finally:
-                for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-                    signal.signal(signum, signal.SIG_IGN)
-                args.sudo_password = None
-                if connection.poll() is None:
-                    connection.terminate()
-                    try:
-                        connection.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        connection.kill()
-                        connection.wait()
-                        raise AuthenticationError(
-                            "SSH connection cleanup timed out; check destination before retrying")
+    with ssh_session(args):
+        result = retrieve(args)
     print(json.dumps(result, sort_keys=True))
 
 

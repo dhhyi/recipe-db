@@ -1,0 +1,35 @@
+- name: Align the existing backup service with the website-checked candidate
+  hosts: pi
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Require one Pi and a non-root administrator connection
+      become: false
+      ansible.builtin.assert:
+        that:
+          - groups['pi'] | length == 1
+          - ansible_user is defined and ansible_user != 'root'
+          - release_backup_holder is match('^backup-[0-9]+-[0-9]+$')
+          - backup_capture_revision is match('^[0-9a-f]{40}$')
+
+    - name: Keep scheduled capture disabled until release finalization
+      ansible.builtin.systemd_service:
+        name: recipe-db-backup.timer
+        enabled: false
+        state: stopped
+
+    - name: Require an idle backup service before aligning its reference
+      ansible.builtin.command: systemctl show --property=ActiveState --value recipe-db-backup.service
+      register: backup_service_active
+      changed_when: false
+      failed_when: backup_service_active.rc != 0 or backup_service_active.stdout not in ['inactive', 'failed']
+
+    - name: Align only the reference after checking retained candidate and unchanged private values
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/recipe-db-release-files]
+        stdin: >-
+          {{ {'operation': 'align', 'holder': release_backup_holder,
+              'artifact': lookup('ansible.builtin.file', '/home/vscode/.config/recipe-db/backup/backup-release-ref') | trim,
+              'revision': backup_capture_revision} | to_json }}
+      changed_when: true
+      no_log: true

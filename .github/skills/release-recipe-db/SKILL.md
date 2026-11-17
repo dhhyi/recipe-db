@@ -11,9 +11,19 @@ This skill defines communication and pacing, not a second release procedure. Do 
 
 ## Contents
 
+- [Agree who runs commands](#agree-who-runs-commands)
 - [Establish the starting point](#establish-the-starting-point)
 - [Guide one batch at a time](#guide-one-batch-at-a-time)
 - [Handle failures and aborts](#handle-failures-and-aborts)
+
+## Agree who runs commands
+
+- Before operational checks, ask whether the operator wants to run all commands or delegate specified read-only checks to the agent. Agree on the scope, such as local Git/GitHub inspection or selected read-only cluster checks. Until agreed, leave command execution with the operator; do not assume delegation from skill invocation or lack of password prompts.
+- Before each delegated batch, tell the operator which commands will run, where, and why. Report the results and any failures before advancing; do not silently run checks in the background. Pause for decisions rather than treating delegation as approval of the next step.
+- If an agreed check requires interactive authentication the agent cannot complete, hand it to the operator. Never request secrets in chat or bypass authentication.
+- Read-only delegation does not authorize Git fetches, tagging, pushes, tool installation, backups, rehearsals or other state-changing operations. These remain operator-guided; agent execution needs separate explicit authorization. An isolated rehearsal is not a read-only check.
+- For example, when candidate inspection is delegated, inspect the published run, checkout and local/remote tags, then propose the verified SHA, artifact digest and next candidate tag with supporting results. Wait for approval before providing the modifying commands. Set needed variables in the operator's terminal; do not rely on variables in the agent's shell.
+- Keep this responsibility agreement in the skill, not the cookbook. The cookbook must remain a complete procedure an operator can follow without an AI.
 
 ## Establish the starting point
 
@@ -35,8 +45,11 @@ Keep each instruction page to roughly one screen:
 4. **Commands:** one coherent, copy-pasteable batch using verified values.
 5. **Expected result and stop condition:** what proves success, when to stop, and the minimal non-sensitive result needed next.
 
-- Wait for the operator's result before advancing. Acknowledge it briefly and validate the relevant evidence; do not automatically chain through subsequent steps.
-- Default to operator-run operational commands. Perform useful read-only investigation yourself, but do not silently execute an upgrade, rehearsal, deployment, migration, access change, cleanup or publication.
+- For operator-run batches, wait for the operator's result before advancing. Acknowledge it briefly and validate the relevant evidence; do not automatically chain through subsequent steps.
+- Follow the agreed command responsibilities. Do not silently execute an upgrade, rehearsal, deployment, migration, access change, cleanup or publication.
+- Assume the operator can use workstation fish, a Pi SSH session as `piadmin` with POSIX-compatible commands, and the provisioning container's SSH-agent Bash shell. Ask the operator to open a missing shell or Kubernetes tunnel. Do not attempt protected SSH or sudo yourself when their key-passphrase/password prompts cannot be answered.
+- Give each command in its actual shell. Do not wrap Pi commands in workstation `ssh host 'command'` one-liners. Plain SSH connection/tunnel setup and operator-authenticated internal file transport by the release controller are distinct from those one-liners.
+- Keep normal release orchestration on the workstation. The existing privileged backup service still captures and uploads on the Pi, including the post-release check after guarded candidate alignment. Other normal Pi operations are narrow host/file requests; no root developer setup or long-running privileged release controller. Explicitly approved failure recovery may use the managed Pi toolchain with elevated privileges; this never authorizes root development setup or automatic recovery/reopening.
 - Use fish-compatible workstation commands. Commands inside another shell must be clearly labelled. Split preparation from long-running execution when combining them would overwhelm the page.
 - Before presenting every script or command batch, double-check that all placeholders are filled with relevant, verified values from the sources identified by the configuration guide and cookbook. Check that referenced files exist, shell variables are set in the terminal where they will be used, and values identify the intended release and target. Do not print secret values.
 - Never present executable instructions containing unresolved placeholders or "insert the path yourself." Resolve discoverable values yourself; if a required value cannot be verified, stop and ask before providing the executable batch. Do not guess among multiple files or targets.
@@ -59,4 +72,4 @@ For example, after a download succeeds, locate and verify its exact output paths
 
 Reusable starting prompt:
 
-> Use the release-recipe-db skill for a fresh production release. Read the current release cookbook and production configuration guide as the sources of truth. Use calm, direct and simple language. Give me a short overview, then one small command batch at a time: why, where, impact and expected result. Find configuration values and exact paths yourself, double-check that no placeholders remain, use fish-compatible workstation commands, and wait for my result before continuing. Do not make production changes without my explicit confirmation. We finish this attempt in this session or abort it.
+> Use the release-recipe-db skill for a fresh production release. Read the current release cookbook and production configuration guide as the sources of truth. First agree with me which read-only checks, if any, you may run; announce those checks before execution and report their results. Use calm, direct and simple language. Give me a short overview, then one small command batch at a time: why, where, impact and expected result. Find configuration values and exact paths, double-check that no placeholders remain, use fish-compatible workstation commands, and wait for my result on operator-run batches before continuing. Do not make production changes without my explicit confirmation. We finish this attempt in this session or abort it.

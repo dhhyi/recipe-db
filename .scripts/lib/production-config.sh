@@ -181,18 +181,29 @@ production_config() {
   fi
 }
 
+production_input_path() {
+  if [[ -n ${RECIPE_DB_RELEASE_INPUTS:-} ]]; then
+    jq -er --arg path "$1" '.[$path] | select(type == "string" and startswith("/"))' \
+      "$RECIPE_DB_RELEASE_INPUTS" || production_fail "workstation application input was not preflighted"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 production_secrets() {
   local key path decoded cookie
   for key in "${operator_secret_keys[@]}"; do
     path=$(jq -r --arg key "$key" '.secrets[$key]' "$work/config.json")
+    path=$(production_input_path "$path") || return 1
     [[ -f $path && -r $path && -s $path ]] || production_fail "missing or unreadable secret file: $key"
     # Copy once: secret validation, route rendering and Secret creation use the same bytes.
     cp -- "$path" "$work/$key"
   done
   if jq -e 'has("httpsStaging")' "$work/config.json" > /dev/null; then
-    [[ -f $acme_email_path && -r $acme_email_path && -s $acme_email_path ]] \
+    path=$(production_input_path "$acme_email_path") || return 1
+    [[ -f $path && -r $path && -s $path ]] \
       || production_fail "missing or unreadable secret file: acme-account-email"
-    cp -- "$acme_email_path" "$work/acme-account-email"
+    cp -- "$path" "$work/acme-account-email"
     jq -eRs '
       length <= 255 and
       test("^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?([.][A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+\\n?\\z")

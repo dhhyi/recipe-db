@@ -26,15 +26,15 @@ values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == backup-enter ||
-    $command == backup-capture || $command == restore ]] \
-    || production_fail "Git release sources are limited to render, backup-enter, backup-capture, restore and guarded release operations"
+    $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore ]] \
+    || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
     || production_fail "Git release sources require a clean tooling checkout"
 fi
 case "$command" in
   create | create-new | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
-  render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
+  render | deploy | release-preflight) [[ $# = 1 ]] || production_fail "render/deploy/preflight require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
@@ -157,6 +157,10 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 production_config "$values" "$command"
+release_private_file() {
+  [[ -n ${RECIPE_DB_RELEASE_SOCKET:-} ]] || return 0
+  python3 "$root/.scripts/production-release.py" --file-request "$1"
+}
 if [[ -n ${RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES:-} ]]; then
   [[ $RECIPE_DB_BACKUP_MAX_SNAPSHOT_BYTES =~ ^[1-9][0-9]*$ ]] \
     || production_fail "invalid configured backup staging limit"
@@ -538,7 +542,8 @@ backup_state_write() {
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.status=$status | .phase=$phase | .updatedAt=$updatedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
-    && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
+    && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json" \
+    && release_private_file checkpoint
 }
 
 backup_wait_pods_gone() {
@@ -1472,7 +1477,8 @@ release_state_write() {
        else . end
      | .status=$status | .phase=$phase | .updatedAt=$updatedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
-    && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json"
+    && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json" \
+    && release_private_file checkpoint
 }
 
 release_recovery_state_write() {
@@ -1845,6 +1851,8 @@ release_stage() {
     fi
     mv -T -- "$retained_tmp" "$snapshot.previous-runtime-secret.json" \
       || production_fail "could not persist securely retained previous-release credentials"
+    release_private_file retain \
+      || production_fail "could not retain previous-release credentials on the Pi before staging"
   fi
   restore_validate_retained_runtime_secret
   cp "$work/pulled/release.json" "$work/original-release.json"
@@ -2047,36 +2055,38 @@ release_migration_shell_quote() {
 }
 
 release_migration_next_command() {
-  local action=$1 source_flag=
-  $release_sources_from_git && source_flag="--release-sources-from-git "
-  printf 'Next: mise run production-k3d %s%s %s %s %s\n' \
-    "$source_flag" "$action" \
-    "$(release_migration_shell_quote "$values")" \
-    "$(release_migration_shell_quote "$snapshot")" \
-    "$(release_migration_shell_quote "$artifact")"
+  printf 'Next: '
+  release_migration_cli "$1" "$artifact"
+}
+
+release_migration_cli() {
+  local action=$1 source_flag='' argument
+  shift
+  if [[ ${RECIPE_DB_PI_RECOVERY:-} == true ]]; then
+    printf 'sudo /usr/local/sbin/recipe-db-backup-capture recovery %s %s' \
+      "$action" "$(release_migration_shell_quote "$snapshot")"
+  else
+    $release_sources_from_git && source_flag="--release-sources-from-git "
+    printf 'mise run production-k3d %s%s %s %s' \
+      "$source_flag" "$action" "$(release_migration_shell_quote "$values")" \
+      "$(release_migration_shell_quote "$snapshot")"
+  fi
+  for argument in "$@"; do
+    printf ' %s' "$(release_migration_shell_quote "$argument")"
+  done
+  printf '\n'
 }
 
 release_migration_claim_recovery_command() {
-  local holder=$1 source_flag=
-  $release_sources_from_git && source_flag="--release-sources-from-git "
+  local holder=$1
   printf 'Only after confirming the prior command stopped, recover this claim with:\n'
-  printf '  mise run production-k3d %srelease-migration-recover-claim %s %s %s %s %s\n' \
-    "$source_flag" \
-    "$(release_migration_shell_quote "$values")" \
-    "$(release_migration_shell_quote "$snapshot")" \
-    "$(release_migration_shell_quote "$artifact")" \
-    "$(release_migration_shell_quote "$holder")" \
-    "$(release_migration_shell_quote "RECOVER-$holder")"
+  printf '  '
+  release_migration_cli release-migration-recover-claim "$artifact" "$holder" "RECOVER-$holder"
 }
 
 release_migration_start_command() {
-  local source_flag=
-  $release_sources_from_git && source_flag="--release-sources-from-git "
-  printf 'Next: mise run production-k3d %srelease-start %s %s %s\n' \
-    "$source_flag" \
-    "$(release_migration_shell_quote "$values")" \
-    "$(release_migration_shell_quote "$snapshot")" \
-    "$(release_migration_shell_quote "$artifact")"
+  printf 'Next: '
+  release_migration_cli release-start "$artifact"
 }
 
 release_migration_recovery_scope() {
@@ -2099,7 +2109,7 @@ release_migration_recovery_scope() {
 }
 
 release_migration_recovery_next_command() {
-  local manifest archive candidate revision backup attempt confirmation source_flag=
+  local manifest archive candidate revision backup attempt confirmation
   if ! jq -e '(.status == "recovery-required" and .phase == "migration-recovery-failed"
       and .migrationRecovery.status == "failed" and (.migrationRecovery.safeToRetry | type) == "boolean")
     or (.status == "recovered" and .phase == "migration-recovered"
@@ -2135,18 +2145,10 @@ release_migration_recovery_next_command() {
     return 0
   }
   confirmation="CLEAR-AND-RESTORE-$backup-$revision-ATTEMPT-$attempt"
-  $release_sources_from_git && source_flag="--release-sources-from-git "
   release_migration_recovery_scope
   printf 'Only after verifying all storage workers are stopped, revalidating this complete backup, and explicitly approving another full clear-and-restore:\n'
-  printf '  mise run production-k3d %srelease-migration-recover %s %s %s %s %s %s %s\n' \
-    "$source_flag" \
-    "$(release_migration_shell_quote "$values")" \
-    "$(release_migration_shell_quote "$snapshot")" \
-    "$(release_migration_shell_quote "$candidate")" \
-    "$(release_migration_shell_quote "$manifest")" \
-    "$(release_migration_shell_quote "$archive")" \
-    "$(release_migration_shell_quote "$backup")" \
-    "$(release_migration_shell_quote "$confirmation")"
+  printf '  '
+  release_migration_cli release-migration-recover "$candidate" "$manifest" "$archive" "$backup" "$confirmation"
 }
 
 release_migration_recovery_retry_ready() {
@@ -3452,7 +3454,7 @@ release_migration_next() {
 
 release_migration_status() {
   local candidate=$2 status index count transition job job_json condition service from to claim
-  local recovery_phase failure_reason source_flag=
+  local recovery_phase failure_reason
   release_load_operation "$1" "$candidate" true
   if release_recovery_is_reopened; then
     artifact=$(jq -er .source.artifact "$snapshot/backup-state.json")
@@ -3466,12 +3468,10 @@ release_migration_status() {
       printf 'production: complete recovery already reopened and ownership release recorded\n'
     else
       release_recovery_validate_closeout
-      $release_sources_from_git && source_flag="--release-sources-from-git "
       printf 'Only after explicit approval, reconcile already reopened ownership (no application or storage changes):\n'
-      printf '  mise run production-k3d %srelease-recovery-reopen %s %s %s %s\n' \
-        "$source_flag" "$(release_migration_shell_quote "$values")" \
-        "$(release_migration_shell_quote "$snapshot")" "$(release_migration_shell_quote "$artifact")" \
-        "$(release_migration_shell_quote "OPEN-RECOVERY-$backup_id-$(jq -er .source.revision "$snapshot/backup-state.json")")"
+      printf '  '
+      release_migration_cli release-recovery-reopen "$artifact" \
+        "OPEN-RECOVERY-$backup_id-$(jq -er .source.revision "$snapshot/backup-state.json")"
     fi
     return
   fi
@@ -3488,13 +3488,9 @@ release_migration_status() {
       release_migration_safe_inspection "recovery-guard-$backup_id"
     else
       printf 'production: complete recovery verified; candidate remains aborted; public reopening requires separate operator approval\n'
-      $release_sources_from_git && source_flag="--release-sources-from-git "
-      printf 'Next: mise run production-k3d %srelease-recovery-reopen %s %s %s %s\n' \
-        "$source_flag" \
-        "$(release_migration_shell_quote "$values")" \
-        "$(release_migration_shell_quote "$snapshot")" \
-        "$(release_migration_shell_quote "$(jq -er .source.artifact "$snapshot/backup-state.json")")" \
-        "$(release_migration_shell_quote "OPEN-RECOVERY-$backup_id-$(jq -er .source.revision "$snapshot/backup-state.json")")"
+      printf 'Next: '
+      release_migration_cli release-recovery-reopen "$(jq -er .source.artifact "$snapshot/backup-state.json")" \
+        "OPEN-RECOVERY-$backup_id-$(jq -er .source.revision "$snapshot/backup-state.json")"
     fi
     return
   fi
@@ -4137,6 +4133,8 @@ release_finalize() {
         '{publishedRelease:{tag:$tag,url:$url,verifiedAt:$verifiedAt}}')" \
       || return 1
     cluster_operation_lock_update release-published || return 1
+    release_private_file prune \
+      || production_fail "published release is verified but Pi temporary data cleanup failed; Lease remains"
     find "$snapshot" -mindepth 1 -maxdepth 1 ! -name backup-state.json \
       -exec rm -rf -- {} + || production_fail "published release is verified but temporary data cleanup failed; Lease and progress state remain"
     cluster_operation_lock_release "$backup_id" \
@@ -4150,6 +4148,8 @@ release_finalize() {
     || production_fail "published release is verified and Lease is released; retry cleanup of the remaining state file"
   rmdir -- "$snapshot" \
     || production_fail "published release is verified and Lease is released; retry cleanup of the remaining state directory"
+  release_private_file finalize \
+    || production_fail "published release is verified and Lease is released; retry Pi private state cleanup"
   printf 'production: GitHub Release %s is confirmed; temporary release data and operation Lease were removed\n' "$tag"
 }
 
@@ -4251,6 +4251,14 @@ case "$command" in
     pull_release "$1"
     render
     cat "$work/rendered.yml"
+    ;;
+  release-preflight)
+    production_secrets
+    production_ephemeral_secrets
+    pull_release "$1"
+    render
+    connect
+    kube get deployments,pods,jobs,pvc
     ;;
   deploy)
     production_secrets
