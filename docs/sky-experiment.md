@@ -41,7 +41,9 @@ This is the supported web-only HTML API, **not** `Std.Ui.html` wrapped around ev
 
 The shared design uses named CSS cascade layers. Sky's reset is unlayered, so its normal declarations outrank normal declarations inside those layers, regardless of stylesheet loading order. Moving our stylesheet after the reset does not solve this. It also affects the shared header's light-DOM contents.
 
-The isolated [compatibility bridge](../sky-experiment/public/design-compat.js) wraps that runtime style block in `@layer sky-runtime`. The page declares this layer before the shared design's layers. Thus shared rules win without copying them, patching the compiler, or accumulating per-element overrides. The bridge also restores `body` font inheritance: otherwise Sky's body font and line-height still mask typography inherited from the design's `html` rules, even in a lower layer.
+The isolated [compatibility bridge](../sky-experiment/public/design-compat.js), when enabled, wraps that runtime style block in `@layer sky-runtime`. The page declares this layer before the shared design's layers. Thus shared rules win without copying them, patching the compiler, or accumulating per-element overrides. The bridge also restores `body` font inheritance: otherwise Sky's body font and line-height still mask typography inherited from the design's `html` rules, even in a lower layer.
+
+For the current visual comparison, the bridge's `resets[0].textContent` assignment is commented out. The app deliberately shows Sky's unlayered reset interfering with the shared design. Uncomment that assignment and rebuild the Sky image to restore the intended styling.
 
 **This is an unsupported workaround, not a Sky extension API.** It depends on the pinned runtime's inline reset signature and page structure, and throws an explicit error if that signature is absent or ambiguous. A runtime change that preserves the signature can still require review. The bridge requires JavaScript and runs after document parsing; a flash of reset styling is possible, and with JavaScript disabled the reset remains uncorrected. It is not a robust production styling contract.
 

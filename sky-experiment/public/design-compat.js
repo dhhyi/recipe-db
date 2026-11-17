@@ -12,5 +12,5 @@ if (resets.length !== 1) {
 }
 // The design sets typography on html; even a layered body font overrides
 // inheritance, so let body inherit it instead of Sky's font and line-height.
-resets[0].textContent = `@layer sky-runtime {${resets[0].textContent} body { font: inherit; }}`;
+// resets[0].textContent = `@layer sky-runtime {${resets[0].textContent} body { font: inherit; }}`;
 document.documentElement.lang = "de";
