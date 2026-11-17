@@ -49,16 +49,22 @@ function checkVersion(markerPath, expected) {
 }
 
 function validRecipeId(recipeId) {
-  return typeof recipeId === "string" &&
+  return (
+    typeof recipeId === "string" &&
     Buffer.byteLength(recipeId, "utf8") > 0 &&
     Buffer.byteLength(recipeId, "utf8") <= 128 &&
     !recipeId.includes("..") &&
-    !/[/\\\u0000-\u001f]/u.test(recipeId);
+    !/[/\\\u0000-\u001f]/u.test(recipeId)
+  );
 }
 
 function parseOutputUrl(url, recipeId, thumbnail, manifestPath) {
-  if (typeof url !== "string" || !url.startsWith("/public/") ||
-      url.includes("?") || url.includes("#")) {
+  if (
+    typeof url !== "string" ||
+    !url.startsWith("/public/") ||
+    url.includes("?") ||
+    url.includes("#")
+  ) {
     fail(`invalid public URL in ${manifestPath}`);
   }
   const component = url.slice("/public/".length);
@@ -76,37 +82,56 @@ function parseOutputUrl(url, recipeId, thumbnail, manifestPath) {
     fail(`unsafe output filename in ${manifestPath}`);
   }
   const match = /^(.+)-([0-9a-f]{64})(-thumb)?\.png$/u.exec(filename);
-  if (!match || !validRecipeId(match[1]) || match[1] !== recipeId ||
-      Boolean(match[3]) !== thumbnail) {
-    fail(`output filename does not match recipe ${recipeId} in ${manifestPath}`);
+  if (
+    !match ||
+    !validRecipeId(match[1]) ||
+    match[1] !== recipeId ||
+    Boolean(match[3]) !== thumbnail
+  ) {
+    fail(
+      `output filename does not match recipe ${recipeId} in ${manifestPath}`,
+    );
   }
   return { filename, digest: match[2] };
 }
 
 function validateEntry(metadata, recipeId, manifestPath, publicDirectory) {
-  if (!metadata || Array.isArray(metadata) || typeof metadata !== "object" ||
-      metadata.recipeId !== recipeId || !validRecipeId(metadata.recipeId) ||
-      typeof metadata.modified !== "string" ||
-      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}$/u.test(metadata.modified) ||
-      !Number.isSafeInteger(metadata.width) ||
-      !Number.isSafeInteger(metadata.height) ||
-      !((metadata.width === 650 && metadata.height === 488) ||
-        (metadata.width === 648 && metadata.height === 486)) ||
-      !Number.isSafeInteger(metadata.size) || metadata.size <= 0 ||
-      typeof metadata.url !== "string" ||
-      typeof metadata.thumbUrl !== "string") {
+  if (
+    !metadata ||
+    Array.isArray(metadata) ||
+    typeof metadata !== "object" ||
+    metadata.recipeId !== recipeId ||
+    !validRecipeId(metadata.recipeId) ||
+    typeof metadata.modified !== "string" ||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}$/u.test(metadata.modified) ||
+    !Number.isSafeInteger(metadata.width) ||
+    !Number.isSafeInteger(metadata.height) ||
+    !(
+      (metadata.width === 650 && metadata.height === 488) ||
+      (metadata.width === 648 && metadata.height === 486)
+    ) ||
+    !Number.isSafeInteger(metadata.size) ||
+    metadata.size <= 0 ||
+    typeof metadata.url !== "string" ||
+    typeof metadata.thumbUrl !== "string"
+  ) {
     fail(`invalid version-1 metadata in ${manifestPath}`);
   }
   const modified = new Date(`${metadata.modified}Z`);
-  if (!Number.isFinite(modified.valueOf()) ||
-      modified.toISOString().slice(0, -1) !== metadata.modified) {
+  if (
+    !Number.isFinite(modified.valueOf()) ||
+    modified.toISOString().slice(0, -1) !== metadata.modified
+  ) {
     fail(`invalid modified timestamp in ${manifestPath}`);
   }
 
-  const normal = parseOutputUrl(
-    metadata.url, recipeId, false, manifestPath);
+  const normal = parseOutputUrl(metadata.url, recipeId, false, manifestPath);
   const thumbnail = parseOutputUrl(
-    metadata.thumbUrl, recipeId, true, manifestPath);
+    metadata.thumbUrl,
+    recipeId,
+    true,
+    manifestPath,
+  );
   const normalInfo = regularFile(path.join(publicDirectory, normal.filename));
   regularFile(path.join(publicDirectory, thumbnail.filename));
   if (normalInfo.size !== metadata.size) {
@@ -176,7 +201,11 @@ function preflight(manifestDirectory, publicDirectory) {
       fail(`cannot parse manifest ${name}: ${error.message}`);
     }
     const digest = validateEntry(
-      metadata, recipeId, manifestPath, publicDirectory);
+      metadata,
+      recipeId,
+      manifestPath,
+      publicDirectory,
+    );
     manifests.push({
       manifestPath,
       recipeId,
@@ -192,15 +221,23 @@ function validateTarget(manifests, publicDirectory) {
     try {
       entries = JSON.parse(fs.readFileSync(manifest.manifestPath, "utf8"));
     } catch (error) {
-      fail(`cannot validate converted manifest ${manifest.manifestPath}: ${error.message}`);
+      fail(
+        `cannot validate converted manifest ${manifest.manifestPath}: ${error.message}`,
+      );
     }
     if (!Array.isArray(entries) || entries.length !== 1) {
       fail(`invalid version-2 manifest at ${manifest.manifestPath}`);
     }
     const digest = validateEntry(
-      entries[0], manifest.recipeId, manifest.manifestPath, publicDirectory);
-    if (entries[0].id !== digest ||
-        JSON.stringify(entries[0]) !== JSON.stringify(manifest.converted)) {
+      entries[0],
+      manifest.recipeId,
+      manifest.manifestPath,
+      publicDirectory,
+    );
+    if (
+      entries[0].id !== digest ||
+      JSON.stringify(entries[0]) !== JSON.stringify(manifest.converted)
+    ) {
       fail(`converted manifest changed metadata at ${manifest.manifestPath}`);
     }
   }
@@ -217,7 +254,10 @@ function migrate() {
 
   const manifests = preflight(manifestDirectory, publicDirectory);
   for (const manifest of manifests) {
-    atomicWrite(manifest.manifestPath, `${JSON.stringify([manifest.converted])}\n`);
+    atomicWrite(
+      manifest.manifestPath,
+      `${JSON.stringify([manifest.converted])}\n`,
+    );
   }
   validateTarget(manifests, publicDirectory);
   checkVersion(markerPath, sourceVersion);

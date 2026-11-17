@@ -73,13 +73,22 @@ function snapshot(root) {
 function run(root, name, failMarkerPublication = false) {
   const container = `${testId}-${name}`;
   const args = [
-    "run", "--rm", "--name", container,
-    "--user", `${process.getuid()}:${process.getgid()}`,
-    "--network", "none",
-    "--mount", `type=bind,src=${root},dst=/data`,
+    "run",
+    "--rm",
+    "--name",
+    container,
+    "--user",
+    `${process.getuid()}:${process.getgid()}`,
+    "--network",
+    "none",
+    "--mount",
+    `type=bind,src=${root},dst=/data`,
   ];
   if (failMarkerPublication) {
-    args.push("--env", "NODE_OPTIONS=--require=/data/fail-marker-publication.cjs");
+    args.push(
+      "--env",
+      "NODE_OPTIONS=--require=/data/fail-marker-publication.cjs",
+    );
   }
   args.push(image);
   const result = spawnSync("docker", args, { encoding: "utf8" });
@@ -107,13 +116,20 @@ try {
   fs.writeFileSync(path.join(conversion, "public", orphanName), orphanBytes);
   const imageFilesBefore = snapshot(path.join(conversion, "public"));
   expectSuccess(conversion, "conversion");
-  assert.equal(fs.readFileSync(path.join(conversion, "storage-version"), "utf8"), "2\n");
+  assert.equal(
+    fs.readFileSync(path.join(conversion, "storage-version"), "utf8"),
+    "2\n",
+  );
   for (const [recipeId, oldMetadata] of [
     ["recipe-650", old650],
     ["recipe-648", old648],
   ]) {
-    const entries = JSON.parse(fs.readFileSync(
-      path.join(conversion, "manifests", `${recipeId}.json`), "utf8"));
+    const entries = JSON.parse(
+      fs.readFileSync(
+        path.join(conversion, "manifests", `${recipeId}.json`),
+        "utf8",
+      ),
+    );
     assert.equal(entries.length, 1);
     assert.deepEqual(entries[0], { ...oldMetadata, id: normalDigest });
   }
@@ -125,88 +141,122 @@ try {
 
   const empty = createRoot("empty");
   expectSuccess(empty, "empty");
-  assert.equal(fs.readFileSync(path.join(empty, "storage-version"), "utf8"), "2\n");
+  assert.equal(
+    fs.readFileSync(path.join(empty, "storage-version"), "utf8"),
+    "2\n",
+  );
   assert.deepEqual(fs.readdirSync(path.join(empty, "manifests")), []);
 
   const rejected = [
-    ["malformed-json", (root) => {
-      fs.writeFileSync(path.join(root, "manifests", "z-bad.json"), "{");
-    }],
-    ["unsupported-array", (root) => {
-      fs.writeFileSync(path.join(root, "manifests", "z-bad.json"), "[]\n");
-    }],
-    ["mismatched-recipe-id", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      metadata.recipeId = "other-recipe";
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["mismatched-output-recipe", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      const mismatchedName = `other-${normalDigest}.png`;
-      fs.writeFileSync(path.join(root, "public", mismatchedName), "normal");
-      metadata.url = `/public/${mismatchedName}`;
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["invalid-content-digest", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      const invalidName = `z-bad-${"A".repeat(64)}.png`;
-      fs.writeFileSync(path.join(root, "public", invalidName), "normal");
-      metadata.url = `/public/${invalidName}`;
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["symlink-reference", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      const normalPath = path.join(root, "public", `z-bad-${normalDigest}.png`);
-      fs.unlinkSync(normalPath);
-      fs.symlinkSync(
-        `z-bad-${thumbDigest}-thumb.png`,
-        normalPath,
-      );
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["unsafe-url", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      metadata.url = "/public/../outside.png";
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["external-url", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      metadata.thumbUrl = "https://example.invalid/image.png";
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["missing-output", (root) => {
-      const metadata = addManifest(root, "z-bad");
-      fs.unlinkSync(path.join(root, "public", `z-bad-${normalDigest}.png`));
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
-    ["unsupported-dimensions", (root) => {
-      const metadata = addManifest(root, "z-bad", [640, 480]);
-      fs.writeFileSync(
-        path.join(root, "manifests", "z-bad.json"),
-        JSON.stringify(metadata),
-      );
-    }],
+    [
+      "malformed-json",
+      (root) => {
+        fs.writeFileSync(path.join(root, "manifests", "z-bad.json"), "{");
+      },
+    ],
+    [
+      "unsupported-array",
+      (root) => {
+        fs.writeFileSync(path.join(root, "manifests", "z-bad.json"), "[]\n");
+      },
+    ],
+    [
+      "mismatched-recipe-id",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        metadata.recipeId = "other-recipe";
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "mismatched-output-recipe",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        const mismatchedName = `other-${normalDigest}.png`;
+        fs.writeFileSync(path.join(root, "public", mismatchedName), "normal");
+        metadata.url = `/public/${mismatchedName}`;
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "invalid-content-digest",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        const invalidName = `z-bad-${"A".repeat(64)}.png`;
+        fs.writeFileSync(path.join(root, "public", invalidName), "normal");
+        metadata.url = `/public/${invalidName}`;
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "symlink-reference",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        const normalPath = path.join(
+          root,
+          "public",
+          `z-bad-${normalDigest}.png`,
+        );
+        fs.unlinkSync(normalPath);
+        fs.symlinkSync(`z-bad-${thumbDigest}-thumb.png`, normalPath);
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "unsafe-url",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        metadata.url = "/public/../outside.png";
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "external-url",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        metadata.thumbUrl = "https://example.invalid/image.png";
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "missing-output",
+      (root) => {
+        const metadata = addManifest(root, "z-bad");
+        fs.unlinkSync(path.join(root, "public", `z-bad-${normalDigest}.png`));
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
+    [
+      "unsupported-dimensions",
+      (root) => {
+        const metadata = addManifest(root, "z-bad", [640, 480]);
+        fs.writeFileSync(
+          path.join(root, "manifests", "z-bad.json"),
+          JSON.stringify(metadata),
+        );
+      },
+    ],
   ];
 
   for (const [name, makeInvalid] of rejected) {
@@ -215,8 +265,15 @@ try {
     makeInvalid(root);
     const before = snapshot(root);
     expectMigrationFailure(root, name);
-    assert.deepEqual(snapshot(root), before, `${name} changed data during preflight`);
-    assert.equal(fs.readFileSync(path.join(root, "storage-version"), "utf8"), "1\n");
+    assert.deepEqual(
+      snapshot(root),
+      before,
+      `${name} changed data during preflight`,
+    );
+    assert.equal(
+      fs.readFileSync(path.join(root, "storage-version"), "utf8"),
+      "1\n",
+    );
   }
 
   for (const [name, marker] of [
@@ -249,7 +306,10 @@ fs.renameSync = function (source, target) {
   const markerFailurePublic = snapshot(path.join(markerFailure, "public"));
   const failedMarkerPublish = run(markerFailure, "marker-failure", true);
   assert.notEqual(failedMarkerPublish.status, 0);
-  assert.match(failedMarkerPublish.stderr, /injected marker publication failure/u);
+  assert.match(
+    failedMarkerPublish.stderr,
+    /injected marker publication failure/u,
+  );
   assert.equal(
     fs.readFileSync(path.join(markerFailure, "storage-version"), "utf8"),
     "1\n",
@@ -258,8 +318,12 @@ fs.renameSync = function (source, target) {
     ["first", oldFirst],
     ["second", oldSecond],
   ]) {
-    const entries = JSON.parse(fs.readFileSync(
-      path.join(markerFailure, "manifests", `${recipeId}.json`), "utf8"));
+    const entries = JSON.parse(
+      fs.readFileSync(
+        path.join(markerFailure, "manifests", `${recipeId}.json`),
+        "utf8",
+      ),
+    );
     assert.deepEqual(entries, [{ ...oldMetadata, id: normalDigest }]);
   }
   assert.deepEqual(
@@ -279,7 +343,10 @@ fs.renameSync = function (source, target) {
   const uncertainBefore = snapshot(uncertain);
   expectMigrationFailure(uncertain, "uncertain");
   assert.deepEqual(snapshot(uncertain), uncertainBefore);
-  assert.equal(fs.readFileSync(path.join(uncertain, "storage-version"), "utf8"), "1\n");
+  assert.equal(
+    fs.readFileSync(path.join(uncertain, "storage-version"), "utf8"),
+    "1\n",
+  );
 
   succeeded = true;
   console.log("images 1-to-2 migration container fixtures passed");
@@ -287,6 +354,8 @@ fs.renameSync = function (source, target) {
   if (succeeded) {
     fs.rmSync(workDirectory, { recursive: true, force: true });
   } else {
-    console.error(`images migration fixture diagnostics retained in ${workDirectory}`);
+    console.error(
+      `images migration fixture diagnostics retained in ${workDirectory}`,
+    );
   }
 }
