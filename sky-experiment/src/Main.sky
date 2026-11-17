@@ -1,0 +1,160 @@
+module Main exposing (main, init, update, Msg(..))
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.String as String
+import Std.App as App
+import Std.Cmd as Cmd exposing (Cmd)
+import Std.Html as Html exposing (Html)
+import Std.Html.Attributes as Attr
+import Std.Html.Events exposing (onClick)
+import Std.Sub as Sub
+
+type Msg
+    = Increment
+    | Decrement
+    | Reset
+
+
+init : () -> ( Int, Cmd Msg )
+init _ =
+    ( 0, Cmd.none )
+
+
+update : Msg -> Int -> ( Int, Cmd Msg )
+update msg count =
+    case msg of
+
+        Increment ->
+            ( count + 1, Cmd.none )
+
+        Decrement ->
+            ( count - 1, Cmd.none )
+
+        Reset ->
+            ( 0, Cmd.none )
+
+
+view : Int -> Html Msg
+view count =
+    Html.div
+        [ Attr.class "container flex flex-col min-h-dvh [&>main]:grow" ]
+        [ Html.node
+              "header-component"
+              [ Attr.attribute "hx-get" "/identity"
+              , Attr.attribute "hx-trigger" "load"
+              , Attr.attribute "hx-swap" "outerHTML"
+              , Attr.attribute "sky-external" ""
+              ]
+              []
+        , Html.node
+              "main"
+              []
+              [ Html.h1 [] [ Html.text "Sky-Experiment" ]
+              , Html.p
+                    []
+                    [ Html.text
+                          "Eine kleine Sky-Anwendung mit dem gemeinsamen Header und Design der RezeptDB."
+                    ]
+              , Html.h2 [] [ Html.text "Gemeinsames Design" ]
+              , Html.p
+                    []
+                    [ Html.text
+                          "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."
+                    ]
+              , Html.p
+                    []
+                    [ Html.text
+                          "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
+                    ]
+              , Html.section
+                    [ Attr.attribute "aria-labelledby" "counter-heading" ]
+                    [ Html.h2
+                          [ Attr.id "counter-heading" ]
+                          [ Html.text "Zähler" ]
+                    , Html.p
+                          []
+                          [ Html.text "Aktueller Wert: "
+                          , Html.node
+                                "output"
+                                [ Attr.id "counter"
+                                , Attr.attribute "aria-live" "polite"
+                                ]
+                                [ Html.text (String.fromInt count) ]
+                          ]
+                    , Html.div
+                          [ Attr.class "flex flex-wrap gap-2" ]
+                          [ Html.button
+                                [ Attr.type_ "button", onClick Decrement ]
+                                [ Html.text "Verringern" ]
+                          , Html.button
+                                [ Attr.type_ "button"
+                                , onClick Reset
+                                , Attr.class "secondary"
+                                ]
+                                [ Html.text "Zurücksetzen" ]
+                          , Html.button
+                                [ Attr.type_ "button", onClick Increment ]
+                                [ Html.text "Erhöhen" ]
+                          ]
+                    , Html.p
+                          []
+                          [ Html.text
+                                "Die Zählerlogik läuft in Sky auf dem Server. Jeder Browser hat eine eigene, flüchtige Sitzung."
+                          ]
+                    ]
+              ]
+        , Html.node "footer-component" [ Attr.attribute "sky-external" "" ] []
+        ]
+
+
+head : Int -> List (Html Msg)
+head _ =
+    [ Html.node "title" [] [ Html.text "Sky-Experiment | RezeptDB" ]
+    , Html.node
+          "meta"
+          [ Attr.attribute "name" "htmx-config"
+          , Attr.attribute
+                "content"
+                "{\"disableSelector\":\"[hx-disable], [data-hx-disable], header-component a\"}"
+          ]
+          []
+    , Html.node
+          "style"
+          [ Attr.id "design-layer-order" ]
+          [ Html.text
+                "@layer sky-runtime, theme, base, blades, components, utilities;"
+          ]
+    , Html.node
+          "link"
+          [ Attr.attribute "rel" "stylesheet", Attr.href "/design/styles.css" ]
+          []
+    , Html.node
+          "script"
+          [ Attr.type_ "module", Attr.src "/design/components.js" ]
+          []
+    , Html.node
+          "script"
+          [ Attr.src "/design/htmx.min.js", Attr.attribute "defer" "" ]
+          []
+    , Html.node
+          "script"
+          [ Attr.src "/sky-experiment/static/design-compat.js"
+          , Attr.attribute "defer" ""
+          ]
+          []
+    ]
+
+
+main =
+    App.web
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = \_ -> Sub.none
+        }
+        |> App.withConfig
+               (App.WebConfig
+                   { App.webDefaults | port = 8000, static = Just "public" })
+        |> App.withHead head
+        |> App.withNotFound ()
+        |> App.run

@@ -1,0 +1,32 @@
+module CounterTest exposing (tests)
+
+import Sky.Core.Prelude exposing (..)
+import Main exposing (Msg(..), init, update)
+import Sky.Test as Test exposing (Test)
+
+
+tests : List Test
+tests =
+    [ Test.test
+          "increments from the initial value"
+          (\_ ->
+              let
+                  ( initial, _ ) = init ()
+                  ( count, _ ) = update Increment initial
+              in
+                  Test.equal 1 count)
+    , Test.test
+          "can decrement below zero"
+          (\_ ->
+              let
+                  ( count, _ ) = update Decrement 0
+              in
+                  Test.equal (-1) count)
+    , Test.test
+          "resets a changed counter"
+          (\_ ->
+              let
+                  ( count, _ ) = update Reset 7
+              in
+                  Test.equal 0 count)
+    ]

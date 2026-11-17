@@ -322,6 +322,18 @@ outputs = [
   "tags/.update_devcontainer.sh",
 ]
 
+["sync-devcontainer:sky-experiment"]
+description = "Synchronize the Sky experiment devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - sky-experiment/.project.yaml sky-experiment"
+sources = ["sky-experiment/.project.yaml"]
+outputs = [
+  "sky-experiment/.devcontainer/devcontainer.json",
+  "sky-experiment/.devcontainer/Dockerfile",
+  "sky-experiment/.vscode/tasks.json",
+  "sky-experiment/.update_devcontainer.sh",
+]
+
 ["sync-devcontainer:tags-test"]
 description = "Synchronize the tags-test devcontainer"
 shell = "bash -o pipefail -c"

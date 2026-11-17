@@ -14,6 +14,7 @@ COPY ["images-edit/index.html","/images-edit/index.html"]
 COPY ["images-edit/src","/images-edit/src"]
 COPY ["recipes-edit/index.html","/recipes-edit/index.html"]
 COPY ["recipes-edit/src","/recipes-edit/src"]
+COPY ["sky-experiment/src","/sky-experiment/src"]
 # END generated Tailwind Docker inputs
 RUN pnpm build
 
