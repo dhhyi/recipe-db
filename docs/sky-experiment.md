@@ -25,6 +25,8 @@ For development, open the generated Sky experiment devcontainer and run its **Ru
 
 ## What integrates cleanly
 
+The `version = "0.1.0"` in [sky.toml](../sky-experiment/sky.toml) versions this experiment, not the Sky compiler. Both the [devcontainer configuration](../sky-experiment/.project.yaml) and [production Dockerfile](../sky-experiment/Dockerfile) pin the compiler to `0.29.12`. Check the installed compiler with `mise run --raw in-devcontainer sky-experiment sky --version`, not the application manifest.
+
 - `Std.App.web` accepts a typed `Std.Html` view directly. HTML tags, attributes and click handlers are ordinary Sky functions; no raw HTML strings or custom counter JavaScript are necessary.
 - The page loads `/design/styles.css`, `/design/components.js` and shared htmx. It uses the real `header-component`, `/identity` response and `footer-component`; it does not recreate them. Sky handles only counter state and rendering.
 - Existing project metadata adds the app to Compose, devcontainer generation, builds and Tailwind source discovery. There is no separate CSS build.
