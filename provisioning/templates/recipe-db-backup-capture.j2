@@ -34,6 +34,11 @@ cd /opt/recipe-db
 release=$(cat /etc/recipe-db/backup-release-ref)
 case "$action" in
   recovery)
+    exec 9>/var/lib/recipe-db-backup/run.lock
+    flock -n 9 || {
+      printf 'another backup or managed checkout operation is active\n' >&2
+      exit 1
+    }
     [[ $path == /var/lib/recipe-db-backup/maintenance &&
       ! -e /var/lib/recipe-db-backup/release-command.json &&
       ! -L /var/lib/recipe-db-backup/release-command.json ]] || {

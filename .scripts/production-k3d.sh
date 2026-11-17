@@ -34,7 +34,7 @@ if [[ $release_sources_from_git == true ]]; then
 fi
 case "$command" in
   create | create-new | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
-  render | deploy) [[ $# = 1 ]] || production_fail "render/deploy require an immutable release artifact" ;;
+  render | deploy | release-preflight) [[ $# = 1 ]] || production_fail "render/deploy/preflight require an immutable release artifact" ;;
   backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
@@ -4251,6 +4251,14 @@ case "$command" in
     pull_release "$1"
     render
     cat "$work/rendered.yml"
+    ;;
+  release-preflight)
+    production_secrets
+    production_ephemeral_secrets
+    pull_release "$1"
+    render
+    connect
+    kube get deployments,pods,jobs,pvc
     ;;
   deploy)
     production_secrets

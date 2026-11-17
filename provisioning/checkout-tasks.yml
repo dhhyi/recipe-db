@@ -11,6 +11,14 @@
     executable: /usr/bin/python3
   changed_when: false
 
+- name: Install the lock-guarded Git executable used only by checkout maintenance
+  ansible.builtin.copy:
+    src: files/checkout-guard.py
+    dest: /usr/local/sbin/recipe-db-checkout-git
+    owner: root
+    group: root
+    mode: "0700"
+
 - name: Check out the explicitly selected immutable backup capture release
   ansible.builtin.git:
     repo: https://github.com/dhhyi/recipe-db.git
@@ -18,3 +26,7 @@
     version: "{{ checkout_revision }}"
     force: false
     recursive: false
+    executable: /usr/local/sbin/recipe-db-checkout-git
+  environment:
+    RECIPE_DB_CHECKOUT_REVISION: "{{ checkout_revision }}"
+    RECIPE_DB_CHECKOUT_HOLDER: "{{ checkout_maintenance_holder | default('') }}"

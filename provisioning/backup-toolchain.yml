@@ -5,6 +5,11 @@
   failed_when: >-
     backup_service_active.rc != 0 or backup_service_active.stdout not in ['inactive', 'failed']
 
+- name: Require the system shared-lock utility before installing managed recovery
+  ansible.builtin.command:
+    argv: [/usr/bin/flock, --version]
+  changed_when: false
+
 - name: Check whether backup configuration is installed
   ansible.builtin.stat:
     path: /etc/recipe-db/backup.json

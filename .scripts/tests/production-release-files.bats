@@ -172,3 +172,31 @@ sleep 60
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "missing system release prerequisites fail before SSH or maintenance" {
+  run python3 - << 'PY'
+from contextlib import redirect_stderr
+import importlib.util
+import io
+from unittest.mock import Mock, patch
+
+spec = importlib.util.spec_from_file_location("release", ".scripts/production-release.py")
+release = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release)
+for missing in ("openssl", "curl"):
+    connection = Mock()
+    errors = io.StringIO()
+    with patch.object(release.sys, "argv", ["release", "preflight", "/operator/values.yaml", "candidate"]), \
+            patch.object(release.shutil, "which", side_effect=lambda tool: None if tool == missing else "/bin/"+tool), \
+            patch.dict(release.ssh, {"ssh_session": connection}), redirect_stderr(errors):
+        try:
+            release.main()
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError("missing prerequisite accepted")
+    connection.assert_not_called()
+    assert "missing workstation prerequisite: "+missing in errors.getvalue()
+PY
+  [ "$status" -eq 0 ]
+}

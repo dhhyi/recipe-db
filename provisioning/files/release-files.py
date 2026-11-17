@@ -92,6 +92,14 @@ def write_bytes(path, content):
             temporary.unlink()
 
 
+def finish_finalization(maintenance, marker):
+    maintenance.with_name(maintenance.name + ".previous-runtime-secret.json").unlink(missing_ok=True)
+    (maintenance / "backup-state.json").unlink(missing_ok=True)
+    if maintenance.exists():
+        maintenance.rmdir()
+    marker.unlink()
+
+
 def handle(request, config):
     base = Path(config["stateDirectory"])
     maintenance = backup["maintenance_state_path"](config)
@@ -105,6 +113,23 @@ def handle(request, config):
         return dict(config_info(), fileProtocolVersion=1, toolingRevision=revision,
                     helperSha256=digest(Path(__file__).read_bytes()),
                     publisherSha256=digest(Path(backup["__file__"]).read_bytes()))
+    if marker.exists():
+        claim = json.loads(private_read(marker))
+        cleanup = claim.get("finalization")
+        if cleanup is not None:
+            retry = operation == "begin" and request.get("action") == "release-finalize" \
+                and request.get("arguments") == [
+                    cleanup["artifact"], cleanup["tag"],
+                    f"PUBLISHED-{claim['holder']}-{cleanup['tag']}",
+                ]
+            continuing = operation == "finalize" and request.get("token") == claim["token"] \
+                and request.get("expected") == cleanup["expected"]
+            if not (retry or continuing):
+                raise ValueError("publication cleanup is incomplete; retry the exact release-finalize command")
+            if state_path.exists() and digest(private_read(state_path)) != cleanup["expected"]:
+                raise ValueError("authoritative Pi state changed during publication cleanup")
+            finish_finalization(maintenance, marker)
+            return {"finalized": True}
     content = private_read(state_path)
     state = json.loads(content)
     if operation == "status":
@@ -140,7 +165,6 @@ def handle(request, config):
         ).decode().strip()
         if not eligible or state.get("backupId") != request["holder"] \
                 or candidate.get("artifact") != request["artifact"] \
-                or candidate.get("revision") != request["revision"] \
                 or revision != request["revision"] or state.get("toolingRevision") != revision \
                 or state.get("configSha256") != config_info()["configSha256"] \
                 or state.get("postReleaseBackup") is not None:
@@ -152,7 +176,7 @@ def handle(request, config):
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         write_bytes(REFERENCE.with_name("backup-configured-at"), (now + "\n").encode())
         state["backupAlignment"] = {
-            "artifact": candidate["artifact"], "revision": revision, "alignedAt": now,
+            "artifact": candidate["artifact"], "revision": candidate["revision"], "alignedAt": now,
         }
         backup["atomic_json"](state_path, state)
         return {"status": "backup-inputs-aligned", "backupId": state["backupId"]}
@@ -228,10 +252,12 @@ def handle(request, config):
             else:
                 path.unlink()
     else:
-        maintenance.with_name(maintenance.name + ".previous-runtime-secret.json").unlink(missing_ok=True)
-        state_path.unlink()
-        maintenance.rmdir()
-        marker.unlink()
+        claim["finalization"] = {
+            "artifact": state["candidate"]["artifact"], "tag": state["publishedRelease"]["tag"],
+            "expected": digest(content),
+        }
+        backup["atomic_json"](marker, claim)
+        finish_finalization(maintenance, marker)
     return {}
 
 

@@ -2,10 +2,12 @@
 """Refuse checkout changes while its code or another maintenance operation is active."""
 
 import argparse
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 
@@ -13,7 +15,8 @@ CHECKOUT = Path("/opt/recipe-db")
 STATE = Path("/var/lib/recipe-db-backup/maintenance/backup-state.json")
 
 
-def validate(revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/proc")):
+def validate(revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/proc"),
+             ignored_pids=()):
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("checkout revision must be a full immutable Git commit")
     if holder and not re.fullmatch(r"backup-[0-9]+-[0-9]+", holder):
@@ -42,7 +45,7 @@ def validate(revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/
         return
     expected = str(checkout)
     for process in proc.iterdir():
-        if not process.name.isdecimal() or int(process.name) == os.getpid():
+        if not process.name.isdecimal() or int(process.name) in {os.getpid(), *ignored_pids}:
             continue
         try:
             cwd = os.readlink(process / "cwd")
@@ -57,7 +60,24 @@ def validate(revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/
             raise ValueError("a process is using the managed checkout; stop it before changing revision")
 
 
+def guarded_git(arguments, revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/proc")):
+    descriptor = os.open(state_path.parent.parent / "run.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        validate(revision, holder, checkout, state_path, proc, ignored_pids=(os.getppid(),))
+        return subprocess.run(["/usr/bin/git", *arguments], check=False).returncode
+    finally:
+        os.close(descriptor)
+
+
 def main():
+    if Path(__file__).name == "recipe-db-checkout-git":
+        try:
+            return guarded_git(sys.argv[1:], os.environ["RECIPE_DB_CHECKOUT_REVISION"],
+                               os.environ.get("RECIPE_DB_CHECKOUT_HOLDER", ""))
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            print(f"checkout guard: {error}", file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--maintenance-holder", default="")

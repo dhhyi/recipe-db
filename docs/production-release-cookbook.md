@@ -130,6 +130,8 @@ and mise install
 
 Confirm `git rev-parse HEAD` equals `REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
 
+The workstation also needs OpenSSH, OpenSSL, curl, Git, Python 3, Bash, GNU core utilities, findutils, grep, sed, awk and tar installed by its system package manager. Mise supplies the repository-pinned rendering and Kubernetes tools; it does not install every system prerequisite. The release preflight checks required executables and validates the mapped application inputs before downtime.
+
 From the repository root, set the exact published artifact and private file paths:
 
 ```fish
@@ -184,6 +186,12 @@ TOOLING_REVISION=$(git rev-parse HEAD) \
 ```
 
 Require `TOOLING_REVISION` to equal the candidate's `REVISION` recorded on the workstation. The playbook refuses active capture or retained maintenance, leaves the timer disabled, and preserves the installed old-release backup reference and private values. The managed capture wrapper loads each release's own immutable Git metadata, so its tooling checkout can be newer than the release being backed up. It never runs repository development setup on the Pi. Exit this container shell when finished; an open session holds the container lifecycle lock.
+
+Back in workstation fish, preserve that initial tooling identity for the whole attempt:
+
+```fish
+set -g TOOLING_REVISION "$REVISION"
+```
 
 Back in **workstation fish**, check the complete operator boundary before downtime:
 
@@ -334,7 +342,7 @@ Continue only when status is `verified-upload` or `verified-unchanged` and `main
 
 After verifying the backup, prepare the candidate on the target while access stays blocked. Do not start normal applications against unmigrated data.
 
-Return to the **workstation fish shell** from step 1. Keep that checkout at the same `REVISION` throughout this attempt. Read the retained operation through the private file helper:
+Return to the **workstation fish shell** from step 1. Keep that checkout at the initial `TOOLING_REVISION` throughout this attempt, including any temporary-fix candidate. `REVISION` and `RELEASE` describe the application being staged. Read the retained operation through the private file helper:
 
 ```fish
 set -g RELEASE_STATE (mise run --raw production-release --pi "$PI" status "$VALUES")
@@ -533,6 +541,25 @@ mise run --raw production-release --pi "$PI" release-disposition \
 
 No choice automatically rolls back or restores. Existing restore accepts only fresh targets; do not overwrite populated production storage or force-delete a retained lock. Keep the release Lease and recovery state through backup alignment, explicit acceptance and GitHub publication.
 
+For a temporary fix, retain the original tooling checkout. In workstation fish, fetch the published fix without switching that checkout, and set `REVISION` and `RELEASE` to the new candidate:
+
+```fish
+git fetch origin main
+```
+
+In the provisioning container's SSH-agent Bash shell, refresh the Pi's Git objects without moving its tooling revision. Set the two variables from the retained attempt; workstation variables do not carry into Bash:
+
+```sh
+TOOLING_REVISION='<original full tooling revision>'
+RELEASE_HOLDER='<exact retained holder>'
+ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    maintain-checkout.yml -e "checkout_revision=$TOOLING_REVISION" \
+    -e "checkout_maintenance_holder=$RELEASE_HOLDER" --ask-become-pass
+```
+
+Require a successful recap and exit the container shell. Back in workstation fish, repeat the release preflight for the new `RELEASE`, then steps 5–9. Do not prepare or replace pinned tooling during the retained attempt.
+
 ## 10. Align backups and record the result
 
 Continue only after a passed website check or an explicit `accept-partial-failure` disposition. Keep scheduled capture disabled until its inputs match the deployed release and a new backup reports `verified-upload`.
@@ -544,7 +571,7 @@ The post-release backup must exercise the service that will run on schedule, usi
 On the workstation, update the chezmoi-managed operator files:
 
 1. Set `backup/backup-release-ref` to the exact `RELEASE` digest.
-2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to `REVISION`. This selects the matching source checkout at `/opt/recipe-db` for backup capture.
+2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to the initial `TOOLING_REVISION`, not a later temporary-fix candidate's revision. This preserves the managed controller checkout; the service loads candidate application metadata from its own immutable Git revision.
 3. Keep `backup/backup-values.yaml` and the installed private application inputs unchanged during this retained operation. The original configuration hash remains bound to recovery. A release requiring different private values or credentials needs separately planned configuration maintenance; do not bypass the comparison.
 4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
 
@@ -615,7 +642,7 @@ set -g ACCEPTANCE (mktemp "$HOME/.config/recipe-db/release-acceptance-$RC_TAG.XX
 and mise run --raw production-release --pi "$PI" evidence "$VALUES" > "$ACCEPTANCE"
 ```
 
-Stop if export fails. Write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and its OCI manifest link, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Do not include credentials, private configuration or application records. Publish from the checkout at `REVISION`:
+Stop if export fails. Write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and its OCI manifest link, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Do not include credentials, private configuration or application records. Publish from the retained tooling checkout, targeting the candidate's `REVISION`:
 
 ```fish
 set -g NOTES "$HOME/.config/recipe-db/release-notes.md"
@@ -630,7 +657,7 @@ mise run --raw production-release --pi "$PI" release-finalize \
   "$VALUES" "$RELEASE" "$TAG" "PUBLISHED-$HOLDER-$TAG"
 ```
 
-Finalization independently checks the published commit, artifact link and sequential release numbering before removing temporary Pi snapshots, private progress and operation ownership. It does not remove application data or the verified Drive backup. On failure, retain state and ownership and inspect before retrying.
+Finalization independently checks the published commit, artifact link and sequential release numbering before removing temporary Pi snapshots, private progress and operation ownership. It does not remove application data or the verified Drive backup. On failure, inspect before retrying. If terminal cleanup was interrupted after publication and Lease release, rerun the exact same `release-finalize` command: its holder/candidate/tag-bound private cleanup record allows it to finish even after the progress file has been removed. Do not abandon that cleanup claim.
 
 ### Verify a backup, then re-enable its schedule
 

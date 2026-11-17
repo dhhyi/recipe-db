@@ -678,6 +678,23 @@ EOF
   run ! grep -Eq ' apply | patch | scale | delete | create ' "$MOCK_LOG"
 }
 
+@test "release preflight validates mapped inputs without mutating the cluster" {
+  local canonical="$FIXTURE_ROOT/canonical-values.yaml"
+  jq '.secrets |= with_entries(.value = ("/etc/recipe-db/application-inputs/"+.key))' \
+    "$VALUES" > "$canonical"
+  jq '.secrets | to_entries | map({key:("/etc/recipe-db/application-inputs/"+.key),value:.value}) | from_entries' \
+    "$VALUES" > "$FIXTURE_ROOT/input-map.json"
+  export RECIPE_DB_RELEASE_INPUTS="$FIXTURE_ROOT/input-map.json"
+  run bash .scripts/production-k3d.sh release-preflight "$canonical" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  run ! grep -Eq ' apply | patch | scale | delete | create ' "$MOCK_LOG"
+  printf 'invalid JSON\n' > "$FIXTURE_ROOT/auth-accounts.json"
+  : > "$MOCK_LOG"
+  run bash .scripts/production-k3d.sh release-preflight "$canonical" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  run ! grep -q '^kubectl ' "$MOCK_LOG"
+}
+
 @test "candidate staging records an exact handoff and requires a separate guarded reopen" {
   local start_log nats_ready init_done graph_barrier
   prepare_candidate_release
@@ -2306,8 +2323,11 @@ EOF
   printf '*\n' > .gitignore
   git add -f .gitignore .scripts/production-release.py .scripts/retrieve-verified-backup.py provisioning/files
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Include reviewed release tooling'
-  export MOCK_REVISION
+  export MOCK_REVISION MOCK_SOURCE_REVISION
+  MOCK_SOURCE_REVISION=$(git rev-parse HEAD)
+  git -c user.name=Test -c user.email=test@example.invalid commit --allow-empty -qm 'Later application candidate'
   MOCK_REVISION=$(git rev-parse HEAD)
+  git checkout --detach "$MOCK_SOURCE_REVISION" > /dev/null
   prepare_captured_release
   mock_github_release_api
 
@@ -2371,7 +2391,8 @@ with patch.object(files,"REFERENCE",reference), patch.object(
     files,"config_info",return_value={"configSha256":state["configSha256"]}
 ):
     files.handle({"operation":"align","holder":holder,"artifact":candidate,
-                  "revision":state["candidate"]["revision"]},config)
+                  "revision":state["toolingRevision"]},config)
+assert state["candidate"]["revision"] != state["toolingRevision"]
 for service in ("recipes","tags","images"):
     path = Path(os.environ["FIXTURE_ROOT"])/"tar-data"/service/"storage-version"
     path.parent.mkdir(parents=True,exist_ok=True)

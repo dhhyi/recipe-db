@@ -163,7 +163,11 @@ def run_controller(args, directory, canonical, mapped):
     args.token = uuid.uuid4().hex
     revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).decode().strip()
     initial = remote(args, {"operation": "begin", "token": args.token,
-                            "revision": revision, "action": args.action})
+                            "revision": revision, "action": args.action,
+                            "arguments": args.arguments})
+    if initial.get("finalized"):
+        print("Release publication cleanup completed; temporary Pi state and command claim removed.")
+        return 0
     snapshot = directory / "maintenance"
     snapshot.mkdir(mode=0o700)
     state = initial["state"]
@@ -218,9 +222,14 @@ def main():
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi) \
             or not Path(args.values).is_absolute():
         parser.error("use an explicit SSH user@hostname and absolute workstation values")
-    for tool in ("git", "ssh", "jq", "yq", "ytt", "oras", "kubectl", "bash"):
+    for tool in (
+        "git", "ssh", "jq", "yq", "ytt", "oras", "kubectl", "bash", "openssl", "curl",
+        "awk", "base64", "basename", "cat", "chmod", "cp", "cut", "date", "dirname",
+        "find", "grep", "head", "mkdir", "mktemp", "mv", "realpath", "rm", "rmdir",
+        "sed", "sha256sum", "sleep", "sort", "stat", "tar", "tr", "wc", "xargs",
+    ):
         if shutil.which(tool) is None:
-            parser.error(f"missing workstation prerequisite: {tool}; run the candidate's mise install")
+            parser.error(f"missing workstation prerequisite: {tool}; install documented system tools and run mise install")
 
     def interrupt(signum, frame):
         raise KeyboardInterrupt
@@ -243,12 +252,8 @@ def main():
                 parser.error("preflight requires the immutable candidate artifact")
             subprocess.run(
                 ["bash", str(ROOT / ".scripts/production-k3d.sh"), "--release-sources-from-git",
-                 "render", str(canonical), *args.arguments],
-                stdout=subprocess.DEVNULL, check=True,
-            )
-            subprocess.run(
-                ["bash", str(ROOT / ".scripts/production-k3d.sh"), "status", str(canonical)],
-                check=True,
+                 "release-preflight", str(canonical), *args.arguments],
+                env=dict(os.environ, RECIPE_DB_RELEASE_INPUTS=str(mapped)), check=True,
             )
             print("Release preflight passed; no release or maintenance operation was started.")
             return 0

@@ -1,8 +1,10 @@
 import importlib.util
+import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -36,7 +38,8 @@ class CheckoutTests(unittest.TestCase):
         root = Path(temporary.name)
         self.checkout = root / "checkout"
         self.checkout.mkdir()
-        self.state = root / "backup-state.json"
+        self.state = root / "maintenance/backup-state.json"
+        self.state.parent.mkdir()
         self.proc = root / "proc"
         self.proc.mkdir()
         self.revision = "a" * 40
@@ -82,6 +85,37 @@ class CheckoutTests(unittest.TestCase):
         self.revision = "main"
         with self.assertRaisesRegex(ValueError, "immutable"):
             self.validate()
+
+    def test_git_mutation_holds_shared_lock_after_validation(self):
+        config = {"stateDirectory": str(self.state.parent.parent)}
+        backup = load_script("backup-upload")
+
+        def mutate(arguments, check):
+            with self.assertRaises(backup.BackupError):
+                backup.acquire_run_lock(config)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with patch.object(checkout_guard.subprocess, "run", side_effect=mutate):
+            self.assertEqual(checkout_guard.guarded_git(
+                ["--version"], self.revision, "", self.checkout, self.state, self.proc), 0)
+        descriptor = backup.acquire_run_lock(config)
+        self.addCleanup(os.close, descriptor)
+        with patch.object(checkout_guard.subprocess, "run") as git:
+            with self.assertRaises(BlockingIOError):
+                checkout_guard.guarded_git(
+                    ["--version"], self.revision, "", self.checkout, self.state, self.proc)
+            git.assert_not_called()
+
+    def test_operation_start_after_initial_guard_prevents_git_mutation(self):
+        self.validate()
+        marker = self.state.parent.parent / "release-command.json"
+        marker.write_text('{"holder":"backup-1-2","token":"test"}')
+        with patch.object(checkout_guard.subprocess, "run") as git:
+            with self.assertRaisesRegex(ValueError, "stop the workstation"):
+                checkout_guard.guarded_git(
+                    ["checkout", self.revision], self.revision, "",
+                    self.checkout, self.state, self.proc)
+            git.assert_not_called()
 
 
 class StorageTests(unittest.TestCase):
@@ -492,6 +526,33 @@ class ContractTests(unittest.TestCase):
         self.assertIn('backup-capture /etc/recipe-db/backup-values.yaml "$path"', command)
         self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
         self.assertNotIn("mise run", command)
+
+    def test_managed_recovery_holds_shared_lock_through_tool_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, checkout, config = root / "state", root / "checkout", root / "config"
+            for path in (state, checkout, config):
+                path.mkdir()
+            (config / "backup-values.yaml").write_text("fixture")
+            (config / "backup-release-ref").write_text("fixture-release")
+            mise = root / "mise"
+            mise.write_text(
+                f"#!{sys.executable}\nimport fcntl, os, sys\n"
+                f"descriptor = os.open({str(state / 'run.lock')!r}, os.O_RDWR)\n"
+                "try:\n    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                "except BlockingIOError:\n    sys.exit(0)\n"
+                "sys.exit(1)\n"
+            )
+            mise.chmod(0o700)
+            command = self.render("recipe-db-backup-capture.j2") \
+                .replace("/var/lib/recipe-db-backup", str(state)) \
+                .replace("/opt/recipe-db", str(checkout)) \
+                .replace("/etc/recipe-db", str(config)) \
+                .replace("/usr/local/bin/mise", str(mise))
+            subprocess.run(
+                ["bash", "-s", "recovery", "release-migration-status", str(state / "maintenance")],
+                input=command, text=True, check=True,
+            )
 
     def test_firewall_does_not_flush_cluster_rules_or_expose_admin(self):
         rules = self.render("firewall.nft.j2")

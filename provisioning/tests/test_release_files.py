@@ -68,7 +68,8 @@ class ReleaseFilesTests(unittest.TestCase):
         initial = self.begin()
         with self.assertRaisesRegex(ValueError, "verified publication"):
             self.request("prune", expected=initial["expected"])
-        self.state.update(status="release-published", phase="published-cleanup-pending")
+        self.state.update(status="release-published", phase="published-cleanup-pending",
+                          publishedRelease={"tag": "v1"})
         current = self.request("checkpoint", expected=initial["expected"], state=self.state)
         archive = self.maintenance / "recipes.tar"
         archive.write_bytes(b"test archive")
@@ -79,6 +80,40 @@ class ReleaseFilesTests(unittest.TestCase):
         self.request("finalize", expected=current["expected"])
         self.assertFalse(self.maintenance.exists())
         self.assertFalse((self.base / "release-command.json").exists())
+
+    def test_interrupted_terminal_deletions_resume_only_exact_publication_cleanup(self):
+        for deletion in ("credentials", "state", "directory", "marker"):
+            with self.subTest(deletion=deletion):
+                self.maintenance.mkdir(mode=0o700, exist_ok=True)
+                self.state.update(status="release-published", phase="published-cleanup-pending",
+                                  publishedRelease={"tag": "v1"})
+                files.backup["atomic_json"](self.path, self.state)
+                initial = self.begin()
+                credentials = self.base / "maintenance.previous-runtime-secret.json"
+                files.backup["atomic_json"](credentials, {"test": True})
+                target = {"credentials": credentials, "state": self.path,
+                          "directory": self.maintenance,
+                          "marker": self.base / "release-command.json"}[deletion]
+                method = "rmdir" if deletion == "directory" else "unlink"
+                original = getattr(Path, method)
+
+                def interrupted(path, *args, **kwargs):
+                    if path == target:
+                        raise OSError("injected cleanup interruption")
+                    return original(path, *args, **kwargs)
+
+                with patch.object(Path, method, interrupted):
+                    with self.assertRaisesRegex(OSError, "injected cleanup"):
+                        self.request("finalize", expected=initial["expected"])
+                with self.assertRaisesRegex(ValueError, "exact release-finalize"):
+                    self.request("begin", action="release-finalize",
+                                 arguments=[self.previous, "v1", "PUBLISHED-backup-1-2-v1"])
+                result = self.request("begin", action="release-finalize", arguments=[
+                    self.candidate, "v1", "PUBLISHED-backup-1-2-v1",
+                ])
+                self.assertEqual(result, {"finalized": True})
+                self.assertFalse(self.maintenance.exists())
+                self.assertFalse((self.base / "release-command.json").exists())
 
     def test_abandoned_claim_requires_exact_stopped_command_confirmation(self):
         self.begin()
@@ -94,6 +129,7 @@ class ReleaseFilesTests(unittest.TestCase):
         reference.chmod(0o600)
         self.state.update(status="access-open", phase="website-passed",
                           websiteCheck={"outcome": "passed"})
+        self.state["candidate"]["revision"] = "d" * 40
         files.backup["atomic_json"](self.path, self.state)
         with patch.object(files, "REFERENCE", reference), patch.object(
             files, "config_info", return_value={"configSha256": self.state["configSha256"]},
@@ -104,6 +140,7 @@ class ReleaseFilesTests(unittest.TestCase):
             self.request("align", holder="backup-1-2", artifact=self.candidate, revision="b" * 40)
         self.assertEqual(reference.read_text().strip(), self.candidate)
         self.assertEqual(json.loads(self.path.read_text())["source"], self.state["source"])
+        self.assertEqual(json.loads(self.path.read_text())["backupAlignment"]["revision"], "d" * 40)
         self.assertTrue(reference.with_name("backup-configured-at").is_file())
 
     def test_private_file_symlinks_are_refused(self):
