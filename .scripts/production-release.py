@@ -60,6 +60,14 @@ def parse_values(path):
     return documents[0]
 
 
+def validate_operator_files(directory):
+    for filename in ("backup/backup-values.yaml", "provisioning/inventory.yml"):
+        parse_values(directory / filename)
+    reference = (directory / "backup/backup-release-ref").read_text().strip()
+    if not re.fullmatch(r"ghcr.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}", reference):
+        raise ValueError("prepared backup release reference must be an immutable recipe-db artifact")
+
+
 def prepare_inputs(args, directory):
     info = remote(args, {"operation": "info"})
     if info.get("fileProtocolVersion") != 1:
@@ -222,14 +230,19 @@ def main():
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi) \
             or not Path(args.values).is_absolute():
         parser.error("use an explicit SSH user@hostname and absolute workstation values")
-    for tool in (
+    tools = (
         "git", "ssh", "jq", "yq", "ytt", "oras", "kubectl", "bash", "openssl", "curl",
         "awk", "base64", "basename", "cat", "chmod", "cp", "cut", "date", "dirname",
         "find", "grep", "head", "mkdir", "mktemp", "mv", "realpath", "rm", "rmdir",
         "sed", "sha256sum", "sleep", "sort", "stat", "tar", "tr", "wc", "xargs",
-    ):
+    )
+    if args.action == "preflight":
+        tools += ("gh", "chezmoi")
+    for tool in tools:
         if shutil.which(tool) is None:
             parser.error(f"missing workstation prerequisite: {tool}; install documented system tools and run mise install")
+    if args.action == "preflight":
+        validate_operator_files(Path.home() / ".config/recipe-db")
 
     def interrupt(signum, frame):
         raise KeyboardInterrupt

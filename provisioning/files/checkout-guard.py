@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 
 CHECKOUT = Path("/opt/recipe-db")
@@ -60,11 +61,35 @@ def validate(revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/
             raise ValueError("a process is using the managed checkout; stop it before changing revision")
 
 
+def process_identity(pid, proc):
+    try:
+        started = (proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()[19]
+    except FileNotFoundError:
+        return None
+    return {"pid": pid, "started": started}
+
+
 def guarded_git(arguments, revision, holder, checkout=CHECKOUT, state_path=STATE, proc=Path("/proc")):
     descriptor = os.open(state_path.parent.parent / "run.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        owner_path = state_path.parent.parent / "checkout-owner.json"
+        owner = process_identity(os.getppid(), proc)
+        if owner is None:
+            raise ValueError("checkout task process identity is unavailable")
+        if owner_path.is_symlink():
+            raise ValueError("checkout task owner must not be a symlink")
+        if owner_path.exists():
+            previous = json.loads(owner_path.read_text())
+            if previous != owner and process_identity(previous["pid"], proc) == previous:
+                raise ValueError("another Ansible checkout task is still active")
         validate(revision, holder, checkout, state_path, proc, ignored_pids=(os.getppid(),))
+        with tempfile.NamedTemporaryFile(mode="w", dir=owner_path.parent, delete=False) as temporary:
+            json.dump(owner, temporary)
+        try:
+            os.replace(temporary.name, owner_path)
+        finally:
+            Path(temporary.name).unlink(missing_ok=True)
         return subprocess.run(["/usr/bin/git", *arguments], check=False, pass_fds=(descriptor,)).returncode
     finally:
         os.close(descriptor)

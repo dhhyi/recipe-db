@@ -183,7 +183,7 @@ from unittest.mock import Mock, patch
 spec = importlib.util.spec_from_file_location("release", ".scripts/production-release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
-for missing in ("openssl", "curl"):
+for missing in ("openssl", "curl", "gh", "chezmoi"):
     connection = Mock()
     errors = io.StringIO()
     with patch.object(release.sys, "argv", ["release", "preflight", "/operator/values.yaml", "candidate"]), \
@@ -197,6 +197,41 @@ for missing in ("openssl", "curl"):
             raise AssertionError("missing prerequisite accepted")
     connection.assert_not_called()
     assert "missing workstation prerequisite: "+missing in errors.getvalue()
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "preflight refuses missing or malformed later backup alignment inputs" {
+  run python3 - << 'PY'
+import importlib.util
+from pathlib import Path
+import tempfile
+
+spec = importlib.util.spec_from_file_location("release", ".scripts/production-release.py")
+release = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release)
+with tempfile.TemporaryDirectory() as temporary:
+    directory = Path(temporary)
+    for folder in ("backup","provisioning"):
+        (directory/folder).mkdir()
+    (directory/"backup/backup-values.yaml").write_text('{"target":"pi"}')
+    (directory/"provisioning/inventory.yml").write_text('{"all":{}}')
+    reference = directory/"backup/backup-release-ref"
+    try:
+        release.validate_operator_files(directory)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing backup reference accepted")
+    reference.write_text("mutable-tag")
+    try:
+        release.validate_operator_files(directory)
+    except ValueError as error:
+        assert "immutable" in str(error)
+    else:
+        raise AssertionError("mutable backup reference accepted")
+    reference.write_text("ghcr.io/dhhyi/recipe-db-releases@sha256:"+"a"*64)
+    release.validate_operator_files(directory)
 PY
   [ "$status" -eq 0 ]
 }

@@ -42,6 +42,9 @@ class CheckoutTests(unittest.TestCase):
         self.state.parent.mkdir()
         self.proc = root / "proc"
         self.proc.mkdir()
+        parent = self.proc / str(os.getppid())
+        parent.mkdir()
+        (parent / "stat").write_text(f"{parent.name} (ansible) S" + " 0" * 18 + " 1234\n")
         self.revision = "a" * 40
 
     def validate(self, holder=""):
@@ -141,6 +144,27 @@ class CheckoutTests(unittest.TestCase):
                 child.wait(timeout=10)
         descriptor = backup.acquire_run_lock(config)
         os.close(descriptor)
+
+    def test_overlapping_ansible_tasks_cannot_interleave_between_git_calls(self):
+        second = self.proc / "999998"
+        second.mkdir()
+        (second / "stat").write_text("999998 (ansible) S" + " 0" * 18 + " 5678\n")
+        with patch.object(checkout_guard.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 0)) as git:
+            checkout_guard.guarded_git(
+                ["--version"], self.revision, "", self.checkout, self.state, self.proc)
+            with patch.object(checkout_guard.os, "getppid", return_value=999998):
+                with self.assertRaisesRegex(ValueError, "another Ansible checkout task"):
+                    checkout_guard.guarded_git(
+                        ["checkout", self.revision], self.revision, "",
+                        self.checkout, self.state, self.proc)
+            self.assertEqual(git.call_count, 1)
+            (self.proc / str(os.getppid()) / "stat").unlink()
+            with patch.object(checkout_guard.os, "getppid", return_value=999998):
+                checkout_guard.guarded_git(
+                    ["checkout", self.revision], self.revision, "",
+                    self.checkout, self.state, self.proc)
+            self.assertEqual(git.call_count, 2)
 
 
 class StorageTests(unittest.TestCase):

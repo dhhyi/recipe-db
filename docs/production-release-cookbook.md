@@ -120,17 +120,23 @@ Replace `vN-rcM` with the selected tag. Require the remote output to show `REVIS
 
 ### Prepare the workstation
 
-Use a checkout at `REVISION` so the renderer and deployment metadata match the release. Select the revision and install its pinned tools:
+Keep tooling identity separate from application identity. Default to the initial candidate's reviewed revision:
+
+```fish
+set -g TOOLING_REVISION "$REVISION"
+```
+
+A different compatible, reviewed tooling revision may be selected by setting `TOOLING_REVISION` to its full commit SHA before continuing; it need not equal the application `REVISION`. The controller reads each application's own immutable Git metadata. Select the tooling checkout and install its pinned tools:
 
 ```fish
 git fetch origin main
-and git switch --detach "$REVISION"
+and git switch --detach "$TOOLING_REVISION"
 and mise install
 ```
 
-Confirm `git rev-parse HEAD` equals `REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
+Confirm `git rev-parse HEAD` equals `TOOLING_REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
 
-The workstation also needs OpenSSH, OpenSSL, curl, Git, Python 3, Bash, GNU core utilities, findutils, grep, sed, awk and tar installed by its system package manager. Mise supplies the repository-pinned rendering and Kubernetes tools; it does not install every system prerequisite. The release preflight checks required executables and validates the mapped application inputs before downtime.
+The workstation also needs OpenSSH, OpenSSL, curl, Git, GitHub CLI, chezmoi, Python 3, Bash, GNU core utilities, findutils, grep, sed, awk and tar installed by its system package manager. Mise supplies the repository-pinned rendering and Kubernetes tools; it does not install every system prerequisite. The release preflight checks required executables, prepared alignment files and mapped application inputs before downtime.
 
 From the repository root, set the exact published artifact and private file paths:
 
@@ -185,15 +191,9 @@ TOOLING_REVISION=$(git rev-parse HEAD) \
     release-prepare.yml -e "checkout_revision=$TOOLING_REVISION" --ask-become-pass
 ```
 
-Require `TOOLING_REVISION` to equal the candidate's `REVISION` recorded on the workstation. The playbook refuses active capture or retained maintenance, leaves the timer disabled, and preserves the installed old-release backup reference and private values. The managed capture wrapper loads each release's own immutable Git metadata, so its tooling checkout can be newer than the release being backed up. It never runs repository development setup on the Pi. Exit this container shell when finished; an open session holds the container lifecycle lock.
+Require the Bash `TOOLING_REVISION` to equal the reviewed tooling revision selected on the workstation, not necessarily the application's `REVISION`. The playbook refuses active capture or retained maintenance, leaves the timer disabled, and preserves the installed old-release backup reference and private values. The managed capture wrapper loads each release's own immutable Git metadata, so its tooling checkout can be newer than the release being backed up. It never runs repository development setup on the Pi. Exit this container shell when finished; an open session holds the container lifecycle lock.
 
-Back in workstation fish, preserve that initial tooling identity for the whole attempt:
-
-```fish
-set -g TOOLING_REVISION "$REVISION"
-```
-
-Back in **workstation fish**, check the complete operator boundary before downtime:
+Back in **workstation fish**, check workstation prerequisites and the private metadata connection before downtime:
 
 ```fish
 mise run --raw production-release --pi "$PI" preflight "$VALUES" "$RELEASE"
@@ -203,7 +203,9 @@ Require `Release preflight passed`. This checks the installed helper/publisher a
 
 After preparation, [verify another ordinary backup](#verify-an-ordinary-backup) using the installed old-release reference. Require a healthy result before entering maintenance.
 
-**Success:** the candidate digest, revision, matching checkout and Pi connection are ready, and any required infrastructure maintenance is complete. The candidate application has not been deployed.
+This read-only check does not acquire an operation Lease or run the storage preparation/host-probe workflow. Storage validation remains part of the guarded backup and staging operations; preflight success does not waive those later checks.
+
+**Success:** the candidate digest and revision, reviewed tooling checkout and Pi connection are ready, and any required infrastructure maintenance is complete. The candidate application has not been deployed.
 
 The one-time version-1 rollout and first versioned production backup are complete in [#265: Prepare and rehearse the one-time storage-version rollout](https://github.com/dhhyi/recipe-db/issues/265) and [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260). Do not repeat marker initialization as part of a routine release. The narrow marker-only fallback in [#278: Use the previous release as the version-1 rollout fallback](https://github.com/dhhyi/recipe-db/issues/278) applies only to unchanged formats with its retained-operation guards; it is not a rollback for data-format migrations. There is no deployment-time bypass. Follow the sequential migration and complete-recovery procedures below for actual migrations.
 
@@ -245,7 +247,7 @@ Require `verified-upload` or `verified-unchanged`, not overdue. For `verified-up
 
 The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It adapts the private values for local use while preserving storage sizing, resource limits and timeouts; Pi storage identities, production integrations and credentials are not copied. It reads the live release ConfigMap and Deployment annotations, verifies the live image digests against the source OCI inventory, and requires every stateful workload to be ready on that release. It directly compares all package storage markers with the source release's declared versions. Ready workloads on those exact images provide indirect evidence that live markers passed startup validation; the result explicitly records that live marker files were not directly read. No marker is read by an extra production Pod or process. If any preflight fails, investigate; do not override the check.
 
-From the candidate checkout, set the exact published digest and private package paths. Use a new private directory outside the checkout for each run:
+From the reviewed tooling checkout, set the exact published digest and private package paths. Use a new private directory outside the checkout for each run:
 
 ```fish
 umask 077
@@ -260,7 +262,7 @@ and cp -- "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RUN_DIRECTORY/"
 and chmod 600 "$RUN_DIRECTORY"/*
 and set -g MANIFEST "$RUN_DIRECTORY/"(basename "$SOURCE_MANIFEST")
 and set -g ARCHIVE "$RUN_DIRECTORY/"(basename "$SOURCE_ARCHIVE")
-and set -g BACKUP_ID (jq -er .backupId "$MANIFEST")
+and set -g BACKUP_ID (mise exec -- jq -er .backupId "$MANIFEST")
 and set -g BACKUP_CONFIRMATION "VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
 and set -g RESULT "$RUN_DIRECTORY/result"
 and mise run production-upgrade-rehearsal-k3d \
@@ -272,7 +274,7 @@ The clean tooling checkout must contain both the package's source revision and t
 Continue only when the command exits zero and the private result confirms both scenarios and cleanup:
 
 ```fish
-jq -e --arg release "$RELEASE" '
+mise exec -- jq -e --arg release "$RELEASE" '
   .status == "passed"
   and .candidate.artifact == $release
   and .deployedIdentity.matchesBackupSource == true
@@ -346,7 +348,7 @@ Return to the **workstation fish shell** from step 1. Keep that checkout at the 
 
 ```fish
 set -g RELEASE_STATE (mise run --raw production-release --pi "$PI" status "$VALUES")
-and set -g HOLDER (printf '%s\n' "$RELEASE_STATE" | jq -er .backupId)
+and set -g HOLDER (printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -er .backupId)
 and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$HOLDER"
 ```
 
@@ -360,11 +362,11 @@ mise run --raw production-release --pi "$PI" release-stage \
 Use the exact `verified-upload` or `verified-unchanged` status reported by the uploader and confirm `maintenanceActive: true`; substitute that status in both command arguments as needed. The typed value records the operator's remote-verification check; it does not perform an upload or verify the remote itself. Staging validates the immutable candidate against this checkout, stops all workloads, applies the candidate with every Deployment at zero replicas, and retains the old-release state, access barrier and Lease. Continue only when it reports `candidate staged with workloads stopped`. Schema-2 migrators are created as release-specific Jobs with pinned images and are left suspended; staging never runs them. Immediately inspect the candidate's migration Jobs on first staging. The release-specific revision label selects only this candidate. An empty result is expected for a schema-2 inventory with `migrations: []`; a schema-1 inventory's missing metadata does not prove that no migration is needed. See [production image releases](production-releases.md) for the manifest and packaging contract and `mise run test-migrator-packaging`. Do not automatically delete migrator images; retain images needed by active releases, rehearsals, and immediate recovery.
 
 ```fish
-set -g NAMESPACE (yq -r '.namespace' "$VALUES")
-set -g CONTEXT (yq -r '.context' "$VALUES")
-kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" --namespace "$NAMESPACE" \
+set -g NAMESPACE (mise exec -- yq -r '.namespace' "$VALUES")
+and set -g CONTEXT (mise exec -- yq -r '.context' "$VALUES")
+and mise exec -- kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" --namespace "$NAMESPACE" \
   get jobs -l "recipe-db/revision=$REVISION,recipe-db/migration=staged" -o json \
-  | jq -e 'all(.items[]; .spec.suspend == true and .spec.backoffLimit == 0)'
+  | mise exec -- jq -e 'all(.items[]; .spec.suspend == true and .spec.backoffLimit == 0)'
 ```
 
 If staging fails or is interrupted, inspect the saved state and Lease; do not run `deploy`, `backup-exit`, or recovery automatically.
@@ -613,7 +615,7 @@ Require `verified-upload` for the **post-release** backup ID, with `maintenanceA
 
 ```fish
 set -g RELEASE_STATE (mise run --raw production-release --pi "$PI" status "$VALUES")
-and set -g POST_BACKUP_ID (printf '%s\n' "$RELEASE_STATE" | jq -er .postReleaseBackup.backupId)
+and set -g POST_BACKUP_ID (printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -er .postReleaseBackup.backupId)
 and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$POST_BACKUP_ID"
 ```
 

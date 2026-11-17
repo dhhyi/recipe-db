@@ -123,6 +123,30 @@ class ReleaseFilesTests(unittest.TestCase):
         self.assertTrue(self.path.exists())
         self.assertFalse((self.base / "release-command.json").exists())
 
+    def test_cleanup_proof_write_failure_preserves_state_and_original_claim(self):
+        self.state.update(status="release-published", phase="published-cleanup-pending",
+                          publishedRelease={"tag": "v1"})
+        files.backup["atomic_json"](self.path, self.state)
+        initial = self.begin()
+        marker = self.base / "release-command.json"
+        original = marker.read_bytes()
+        replace = files.os.replace
+
+        def interrupted(source, destination):
+            if Path(destination) == marker:
+                raise OSError("injected proof write failure")
+            return replace(source, destination)
+
+        with patch.object(files.os, "replace", side_effect=interrupted):
+            with self.assertRaisesRegex(OSError, "proof write failure"):
+                self.request("finalize", expected=initial["expected"])
+        self.assertEqual(marker.read_bytes(), original)
+        self.assertTrue(self.path.exists())
+        self.request("end")
+        initial = self.begin()
+        self.request("finalize", expected=initial["expected"])
+        self.assertFalse(self.maintenance.exists())
+
     def test_alignment_only_changes_reference_after_candidate_and_website_gates(self):
         reference = self.base / "backup-release-ref"
         reference.write_text(self.previous + "\n")
