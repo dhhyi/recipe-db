@@ -198,9 +198,7 @@ jobs:
       - name: prepare Bazel cache snapshot
         id: prepare-bazel-cache
         if: >-
-          always() &&
-          steps.source.outcome == 'success' &&
-          steps.inspect-cache.outcome == 'success'
+          always() && steps.source.outcome == 'success' && steps.inspect-cache.outcome == 'success'
         continue-on-error: true
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || '' }}
@@ -320,10 +318,7 @@ jobs:
   cache-health:
     needs: quality-checks
     if: >-
-      always() &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      (
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && (
         needs.quality-checks.outputs.cache_restore_outcome == 'failure' ||
         needs.quality-checks.outputs.cache_inspect_outcome == 'failure' ||
         needs.quality-checks.outputs.cache_prune_outcome == 'failure' ||
