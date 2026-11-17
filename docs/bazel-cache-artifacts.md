@@ -5,6 +5,7 @@ This guide describes the Bazel disk-cache artifact lifecycle for maintainers of 
 **Table of contents**
 
 - [Contract](#contract)
+- [Timestamp-aware pruning and cache health](#timestamp-aware-pruning-and-cache-health)
 - [Nightly cleanup](#nightly-cleanup)
 - [Safety limits and fallback](#safety-limits-and-fallback)
 - [Rebuild diagnostics](#rebuild-diagnostics)
@@ -34,9 +35,30 @@ Restore uses one snapshot at a time and completes before Bazel starts:
 
 For a squash restore, both artifacts are staged and validated independently before union and before Bazel starts. Main imports a PR artifact only when the merged PR's head repository is this repository and the producer passes the authenticated identity policy below. Fork-produced artifacts are never imported into main. Missing or ambiguous commit-to-PR association, an ineligible producer, or an unavailable final-head artifact falls back to main-only; an eligible PR artifact can seed the build by itself if no preceding main snapshot is available. If neither source is usable, the build starts cold. API errors, ordinary misses, trust rejections, and invalid snapshots have distinct diagnostics.
 
-The union deduplicates identical CAS entries, rejects different bytes under the same CAS digest, combines action-result keys, and keeps main's valid result for conflicting action keys while retaining both sources' CAS blobs. Both sources must pass the normal complete snapshot validation; an invalid source is rejected as a whole and is not repaired from the other. The workflow never imports output bases or active cache directories.
+The union deduplicates identical entries, rejects different bytes under the same CAS digest, combines action-result keys, and keeps main's valid result for conflicting action keys while retaining both sources' CAS blobs. Identical action results and CAS entries retain the newer last-use timestamp. Both sources must pass the normal complete snapshot validation; an invalid source is rejected as a whole and is not repaired from the other. The workflow never imports output bases or active cache directories.
 
-After source verification succeeds, snapshot preparation runs even if formatting or Bazel checks fail or the job is cancelled. Upload runs once before integration or image validation when preparation succeeds and produces a validated snapshot. Completed actions remain reusable even when another action fails; incomplete temporary entries are excluded. A failed or cancelled producer remains eligible only if its cache-upload step succeeded. Cache preservation does not change the original quality-check result, and runner termination can still prevent an upload. Main artifacts retain for 90 days; PR artifacts retain for seven days.
+After source verification succeeds, snapshot preparation runs even if formatting or Bazel checks fail or the job is cancelled, when cache inspection succeeds. Upload runs once before integration or image validation when preparation succeeds and produces a validated snapshot. Completed actions remain reusable even when another action fails; incomplete temporary entries are excluded. A failed or cancelled producer remains eligible only if its cache-upload step succeeded. Cache preservation does not change the original quality-check result, and runner termination can still prevent an upload. Main artifacts retain for 90 days; PR artifacts retain for seven days.
+
+## Timestamp-aware pruning and cache health
+
+Cache-file modification times represent Bazel last use: Bazel refreshes an ActionResult and its referenced blobs on a disk-cache hit, and newly stored entries also receive a recent mtime. The helper archives these whole-second mtimes in the tar headers and restores them on extraction. It does not use atime, refresh old entries during restore, or assign a new baseline to zero timestamps. Negative timestamps and timestamps more than five minutes in the future reject the candidate and follow normal restore fallback; up to five minutes of clock skew is accepted.
+
+Identical entries from a main/PR union use the newer timestamp. A conflicting ActionResult keeps main's bytes and timestamp; the discarded PR result cannot make the main result appear recently used. Unique PR entries retain their own last-use time.
+
+Only a main push whose formatting and Bazel checks both succeeded is eligible for pruning. PRs and failed, skipped, or interrupted main checks preserve the cache without age expiry or size trimming, then validate and upload it when possible. Thus failed-main snapshots can temporarily exceed the policy. A later successful main run applies the policy and protects every ActionResult used or generated since the quality-check build began, along with its complete referenced content.
+
+The policy counts uncompressed cache-file payload, counting shared blobs once; tar headers and compressed artifact size are diagnostic only. On eligible runs:
+
+1. A protected working set above 4 MiB fails cache preparation with a parameter-tuning diagnostic; required content is never evicted.
+2. Historical ActionResults last used more than 14 days ago expire. Content not referenced by any retained result, including orphan CAS blobs, is removed.
+3. If the remaining cache-file payload exceeds 10 MiB, the helper starts with the protected set and adds historical results newest first, breaking ties by action key. The trigger counts orphan CAS bytes too, but orphans are never history candidates and are removed when pruning runs. It stops at the first result that reaches or crosses 4 MiB, keeping that whole result. It does not backfill with smaller entries. The target is soft, so one large result may overshoot it.
+4. Below the 10 MiB trigger, non-expired history remains intact unless it is expired by age.
+
+Existing zero-timestamp snapshots are reusable. On the first eligible successful main run, unused zero-timestamp results are older than the 14-day cutoff and expire; the current-build working set is refreshed by Bazel and protected. This is the intended lukewarm reset, not a format migration or grace period.
+
+The quality-checks job reports cache restore, inspection, pruning, preparation, validation, and upload outcomes separately, using each step's actual outcome even when `continue-on-error` is set. Inspection reports total and protected payload, expiry findings, and whether pruning is needed. Pruning reports its reasons, before/after payload and entry counts, protected-set size, removals, target overshoot, and duration. Any failed preparation prevents upload. Cache-only failures do not mask or replace the quality-check result.
+
+The main-only `cache-health` job reads those outputs and performs no cache transfer, pruning, or build. It is skipped when no pruning was needed and cache saving succeeded (or was genuinely not attempted). It succeeds only when required pruning and the validated snapshot upload both succeed; preparation, pruning, validation, upload, or reported restore failures make it red. A missing outcome after otherwise successful quality checks is also an error. Repeated green runs indicate frequent pruning and may mean the age/size parameters need tuning. Neither publication job depends on cache health, so cache failures mark the workflow overview red without blocking publication when quality checks and ARM64 validation succeeded.
 
 ## Nightly cleanup
 
