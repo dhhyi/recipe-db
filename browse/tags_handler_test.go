@@ -354,7 +354,8 @@ func TestRecipeTagMutationFailuresRetainConfirmedAssignments(t *testing.T) {
 	body := response.Body.String()
 	if response.Code != http.StatusBadGateway || !strings.Contains(body, "Apfelkuchen") ||
 		strings.Contains(body, "Dessert") || !strings.Contains(body, "Änderung konnte nicht bestätigt werden") ||
-		!strings.Contains(body, "Tags neu laden") || response.Header().Get("X-Tag-Replace") != "true" {
+		!strings.Contains(body, "Tags neu laden") || response.Header().Get("X-Tag-Replace") != "true" ||
+		strings.Contains(body, `id="recipe-tags-dialog"`) || strings.Contains(body, `id="recipe-tag-search"`) {
 		t.Fatalf("failed write lost the last confirmed state or omitted retry: %d %v %s", response.Code, response.Header(), body)
 	}
 	cache.mu.Lock()
@@ -362,6 +363,18 @@ func TestRecipeTagMutationFailuresRetainConfirmedAssignments(t *testing.T) {
 	cache.mu.Unlock()
 	if cached {
 		t.Fatal("uncertain mutation response left potentially stale recipe HTML cached")
+	}
+}
+
+func TestRecipeTagEditorLoadFailureStaysInsideDialog(t *testing.T) {
+	state := &tagHandlerState{failNextTags: true}
+	handler, _ := newTagHandlerTest(t, state, nil)
+	response := tagRequest(handler, http.MethodGet, "/recipe/42/tags?edit=1", "", true)
+	body := response.Body.String()
+	if response.Code != http.StatusBadGateway || response.Header().Get("X-Tag-Replace") != "true" ||
+		!strings.Contains(body, `id="recipe-tag-assigned"`) || !strings.Contains(body, "Tags neu laden") ||
+		strings.Contains(body, `id="recipe-tags-dialog"`) || strings.Contains(body, `id="recipe-tag-search"`) {
+		t.Fatalf("editor load failure must be retryable without replacing the dialog: %d %v %s", response.Code, response.Header(), body)
 	}
 }
 

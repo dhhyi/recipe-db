@@ -402,6 +402,84 @@ test("dialog closes refresh detail tags and reopening loads fresh data with an e
   expect((await thirdReload).status()).toBe(200);
 });
 
+test("closing during a delayed editor load prevents stale data on reopen", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  const tag = await findOrCreateTag(request, "COURSE", "E2E Verspätet");
+  await page.goto(`/recipe/${recipe.id}`);
+  let releaseEditor;
+  let editorStarted;
+  let editorFinished;
+  let releaseDetail;
+  let detailStarted;
+  const editorGate = new Promise((resolve) => (releaseEditor = resolve));
+  const editorPending = new Promise((resolve) => (editorStarted = resolve));
+  const editorDone = new Promise((resolve) => (editorFinished = resolve));
+  const detailGate = new Promise((resolve) => (releaseDetail = resolve));
+  const detailPending = new Promise((resolve) => (detailStarted = resolve));
+  let delayEditor = true;
+  let delayDetail = true;
+  await page.route(
+    (url) => url.pathname === `/recipe/${recipe.id}/tags`,
+    async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const url = new URL(route.request().url());
+      if (url.searchParams.get("edit") === "1" && delayEditor) {
+        delayEditor = false;
+        const staleResponse = await route.fetch();
+        editorStarted();
+        await editorGate;
+        try {
+          await route.fulfill({ response: staleResponse });
+        } catch {
+          // The dialog deliberately aborts the obsolete request on close.
+        } finally {
+          editorFinished();
+        }
+        return;
+      }
+      if (!url.searchParams.has("edit") && delayDetail) {
+        delayDetail = false;
+        detailStarted();
+        await detailGate;
+      }
+      await route.fallback();
+    },
+  );
+  try {
+    const dialog = await openTagDialog(page);
+    await editorPending;
+    await assignTag(request, recipe, tag);
+    await dialog.getByRole("button", { name: "Schließen" }).click();
+    await detailPending;
+    await expect(dialog).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "Tags bearbeiten" }),
+    ).toBeDisabled();
+    releaseDetail();
+    await expect(
+      page.locator("#recipe-tags [data-recipe-tag]"),
+    ).toHaveText(tag.name);
+    await openTagDialog(page);
+    await expect(
+      dialog.getByRole("button", { name: `${tag.name} entfernen` }),
+    ).toBeVisible();
+    releaseEditor();
+    await editorDone;
+    await expect(
+      dialog.getByRole("button", { name: `${tag.name} entfernen` }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole("searchbox", { name: "Tag suchen" }),
+    ).toHaveValue("");
+  } finally {
+    releaseEditor();
+    releaseDetail();
+  }
+});
+
 test("single-result click and Enter clear search; multi-result click preserves it", async ({
   page,
   request,
@@ -531,6 +609,7 @@ test("saving blocks dismissal and competing changes without changing the backdro
   const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
   await search.fill("E2E Langsam");
   await expect(tagOptions(dialog)).toHaveCount(1);
+  const mutationSource = await tagOptions(dialog).first().elementHandle();
 
   const appearance = () =>
     dialog.evaluate((element) => {
@@ -575,10 +654,19 @@ test("saving blocks dismissal and competing changes without changing the backdro
   ).toBeVisible();
   await expect(dialog).toHaveAttribute("closedby", "any");
   await expect(dialog.getByRole("button", { name: "Schließen" })).toBeEnabled();
+  await expect
+    .poll(() => mutationSource.evaluate((element) => element.isConnected))
+    .toBe(false);
   const after = await appearance();
   expect(after.backdrop).toBe(before.backdrop);
   expect(after.bounds[0]).toBeCloseTo(before.bounds[0], 0);
   expect(after.bounds[2]).toBeCloseTo(before.bounds[2], 0);
+  await dialog.getByRole("button", { name: "E2E Langsam entfernen" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "E2E Langsam entfernen" }),
+  ).toHaveCount(0);
+  await expect(dialog).toHaveAttribute("closedby", "any");
+  await expect(dialog.getByRole("button", { name: "Schließen" })).toBeEnabled();
 });
 
 test("uncertain save failure keeps search and confirmed tags, permits retry and close with reduced motion", async ({
