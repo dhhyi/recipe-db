@@ -568,6 +568,167 @@ test("failed detail refresh after close can be retried", async ({
   await expect(detail.locator("[data-recipe-tag]")).toHaveText(tag.name);
 });
 
+test("reopening after a failed detail refresh fetches fresh assignments and clears search", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  const original = await findOrCreateTag(request, "COURSE", "E2E Vorher");
+  const added = await findOrCreateTag(request, "COURSE", "E2E Danach");
+  await assignTag(request, recipe, original);
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  await search.fill("E2E Danach");
+  await expect(tagOptions(dialog)).toHaveCount(1);
+  await assignTag(request, recipe, added);
+
+  let failRefresh = true;
+  await page.route(
+    (url) => url.pathname === `/recipe/${recipe.id}/tags`,
+    async (route) => {
+      const url = new URL(route.request().url());
+      if (
+        route.request().method() === "GET" &&
+        !url.searchParams.has("edit") &&
+        failRefresh
+      ) {
+        failRefresh = false;
+        return route.abort("failed");
+      }
+      return route.fallback();
+    },
+  );
+  await dialog.getByRole("button", { name: "Schließen" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(
+    page.locator("#recipe-tags [data-detail-tag-feedback]"),
+  ).toContainText("Tags konnten nicht aktualisiert werden.");
+  const freshAssignments = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+      new URL(response.url()).searchParams.get("edit") === "1" &&
+      response.request().method() === "GET",
+  );
+  await openTagDialog(page);
+  expect((await freshAssignments).status()).toBe(200);
+  await expect(search).toHaveValue("");
+  for (const tag of [original, added]) {
+    await expect(
+      dialog.getByRole("button", { name: `${tag.name} entfernen` }),
+    ).toBeVisible();
+  }
+  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: added.name, exact: true }),
+  ).toHaveCount(0);
+});
+
+test("failed assignment reload after an uncertain save retains confirmed tags and the uncertainty", async ({
+  page,
+  request,
+  basicRecipe: recipe,
+}) => {
+  const confirmed = await findOrCreateTag(request, "COURSE", "E2E Bestätigt");
+  await findOrCreateTag(request, "COURSE", "E2E Ungewiss");
+  await assignTag(request, recipe, confirmed);
+  await page.goto(`/recipe/${recipe.id}`);
+  const dialog = await openTagDialog(page);
+  const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+  await search.fill("E2E Ungewiss");
+  await expect(tagOptions(dialog)).toHaveCount(1);
+  await page.route(`**/recipe/${recipe.id}/tags`, async (route) => {
+    if (route.request().method() === "POST") return route.abort("failed");
+    return route.fallback();
+  });
+  await tagOptions(dialog).first().click();
+  await expect(dialog.locator("[data-tag-feedback]")).toContainText(
+    /nicht bestätigt/i,
+  );
+  const reload = dialog.getByRole("button", { name: "Tags neu laden" });
+  await expect(reload).toBeVisible();
+  await withIgnoredServices(request, ["tags"], async () => {
+    await page.evaluate(() => {
+      window.tagReloadFinished = new Promise((resolve) => {
+        const finished = (event) => {
+          if (
+            event.detail.requestConfig?.elt?.hasAttribute(
+              "data-assignment-retry",
+            )
+          ) {
+            document.body.removeEventListener("htmx:afterRequest", finished);
+            resolve();
+          }
+        };
+        document.body.addEventListener("htmx:afterRequest", finished);
+      });
+    });
+    const failedReload = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+        new URL(response.url()).searchParams.get("edit") === "1" &&
+        response.request().method() === "GET",
+    );
+    await reload.click();
+    expect((await failedReload).status()).toBeGreaterThanOrEqual(400);
+    await page.evaluate(() => window.tagReloadFinished);
+    await expect(page.locator(".htmx-settling")).toHaveCount(0);
+    await expect(
+      dialog.getByRole("button", { name: `${confirmed.name} entfernen` }),
+    ).toBeVisible();
+    await expect(dialog.locator("[data-tag-feedback]")).toContainText(
+      /nicht bestätigt/i,
+    );
+    await expect(search).toHaveValue("E2E Ungewiss");
+    await expect(
+      dialog.getByRole("button", { name: "Schließen" }),
+    ).toBeEnabled();
+  });
+});
+
+test("expired credentials during initial assignment loading show denial without editing", async ({
+  page,
+  basicRecipe: recipe,
+}) => {
+  await page.goto(`/recipe/${recipe.id}`);
+  let mutationRequests = 0;
+  await page.route(
+    (url) => url.pathname === `/recipe/${recipe.id}/tags`,
+    async (route) => {
+      if (route.request().method() === "POST") mutationRequests += 1;
+      if (
+        route.request().method() === "GET" &&
+        new URL(route.request().url()).searchParams.get("edit") === "1"
+      ) {
+        return route.fulfill({
+          status: 401,
+          contentType: "text/plain",
+          body: "Unauthorized",
+        });
+      }
+      return route.fallback();
+    },
+  );
+  const denied = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+      new URL(response.url()).searchParams.get("edit") === "1",
+  );
+  const dialog = await openTagDialog(page);
+  expect([401, 403]).toContain((await denied).status());
+  await expect(dialog.locator("[data-tag-feedback]")).toContainText(
+    /nicht erlaubt|nicht berechtigt|anmeldung erforderlich/i,
+  );
+  await expect(
+    dialog.getByRole("searchbox", { name: "Tag suchen" }),
+  ).toBeHidden();
+  await expect(dialog.locator("[data-tag-mutation]")).toHaveCount(0);
+  expect(mutationRequests).toBe(0);
+  await expect(
+    dialog.getByRole("button", { name: "Schließen" }),
+  ).toBeEnabled();
+});
+
 test("options loading failure is distinct from an empty search and can be retried", async ({
   page,
   request,

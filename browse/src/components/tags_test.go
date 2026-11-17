@@ -189,7 +189,7 @@ func TestTagEditTransitionsUseSafeDistinctNames(t *testing.T) {
 		t.Fatalf("editable tags need distinct, safe transition names: %s", edit)
 	}
 	read := renderTagComponent(t, RecipeTagsWidget("42", tags, true, false, "", false))
-	if strings.Contains(read, "--tag-transition-name") || strings.Contains(read, `data-tag-mutation`) {
+	if strings.Contains(read, "--tag-transition-name") || strings.Contains(read, `<form `) {
 		t.Fatalf("read-only tags must not use tag-edit transitions: %s", read)
 	}
 	options := renderTagComponent(t, TagOptions("42", "", tags))
@@ -218,6 +218,30 @@ func TestTagDialogKeepsShellStableAndGuardsRequests(t *testing.T) {
 	} {
 		if !strings.Contains(body, text) {
 			t.Errorf("missing dialog safeguard %q", text)
+		}
+	}
+}
+
+func TestTagEditorReopensAndPreservesAssignmentsOnFailure(t *testing.T) {
+	read := renderTagComponent(t, RecipeTagsWidget("42", nil, true, false, "", false))
+	for _, text := range []string{
+		`search.value = ''`, `dialog.dataset.loading = 'true'`,
+		`dialog.querySelector('[data-tag-options-section]').hidden = true`,
+		`this.dataset.denied`, `this.dataset.loading`, `event.detail.target?.id === 'recipe-tag-feedback'`,
+		`retry.hidden = false`, `form[data-tag-mutation] button`, `this.dataset.uncertainty`,
+		`feedback.textContent += ' ' + this.dataset.uncertainty`,
+	} {
+		if !strings.Contains(read, text) {
+			t.Errorf("missing reopen or failure safeguard %q", text)
+		}
+	}
+	for _, owner := range []bool{false, true} {
+		assignments := renderTagComponent(t, RecipeTagAssignments("42", []gql.RecipeTag{{Id: "a", Name: "A"}}, owner, "", false))
+		if !strings.Contains(assignments, `hx-get="/recipe/42/tags?edit=1"`) ||
+			!strings.Contains(assignments, `hx-trigger="load-editor"`) ||
+			!strings.Contains(assignments, `id="recipe-tag-feedback"`) ||
+			(owner && (!strings.Contains(assignments, `data-assignment-retry`) || !strings.Contains(assignments, `hidden`))) {
+			t.Fatalf("assignment fragment cannot reload safely (owner=%v): %s", owner, assignments)
 		}
 	}
 }

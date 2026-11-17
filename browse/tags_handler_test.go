@@ -30,6 +30,7 @@ type tagHandlerState struct {
 	mutationFailed  bool
 	failNextTags    bool
 	failConfirm     bool
+	tagsHTTPStatus  int
 }
 
 func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +54,11 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 	var response map[string]any
 	switch request.OperationName {
 	case "RecipeTags":
+		if state.tagsHTTPStatus != 0 {
+			w.WriteHeader(state.tagsHTTPStatus)
+			_, _ = w.Write([]byte(`{"errors":[{"message":"access denied"}]}`))
+			return
+		}
 		if state.failNextTags {
 			state.failNextTags = false
 			response = map[string]any{
@@ -272,7 +278,7 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 	deniedInventory := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=veg", "", true)
 	if deniedInventory.Code != http.StatusUnauthorized || !strings.Contains(deniedInventory.Body.String(), "Tags bearbeiten ist nicht erlaubt.") ||
 		strings.Contains(deniedInventory.Body.String(), "Tag hinzufügen") ||
-		deniedInventory.Header().Get("HX-Retarget") != "#recipe-tag-assigned" ||
+		deniedInventory.Header().Get("HX-Retarget") != "#recipe-tag-feedback" ||
 		strings.Contains(deniedInventory.Body.String(), `id="recipe-tags-dialog"`) {
 		t.Fatalf("expired inventory credentials must remove edit controls with an explicit denial: %d %v %s", deniedInventory.Code, deniedInventory.Header(), deniedInventory.Body.String())
 	}
@@ -372,9 +378,44 @@ func TestRecipeTagEditorLoadFailureStaysInsideDialog(t *testing.T) {
 	response := tagRequest(handler, http.MethodGet, "/recipe/42/tags?edit=1", "", true)
 	body := response.Body.String()
 	if response.Code != http.StatusBadGateway || response.Header().Get("X-Tag-Replace") != "true" ||
-		!strings.Contains(body, `id="recipe-tag-assigned"`) || !strings.Contains(body, "Tags neu laden") ||
+		response.Header().Get("HX-Retarget") != "#recipe-tag-feedback" ||
+		response.Header().Get("HX-Reswap") != "outerHTML" ||
+		!strings.Contains(body, `id="recipe-tag-feedback"`) || !strings.Contains(body, "möglicherweise nicht aktuell") ||
+		strings.Contains(body, `id="recipe-tag-assigned"`) ||
 		strings.Contains(body, `id="recipe-tags-dialog"`) || strings.Contains(body, `id="recipe-tag-search"`) {
-		t.Fatalf("editor load failure must be retryable without replacing the dialog: %d %v %s", response.Code, response.Header(), body)
+		t.Fatalf("editor load failure must preserve assignments and show retryable feedback: %d %v %s", response.Code, response.Header(), body)
+	}
+}
+
+func TestRecipeTagMutationCredentialFailurePreservesAssignments(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			state := &tagHandlerState{
+				assigned:       []testTag{{id: "assigned", category: "CUISINE", name: "Apfelkuchen"}},
+				tagsHTTPStatus: status,
+			}
+			handler, _ := newTagHandlerTest(t, state, nil)
+			for _, request := range []struct{ path, body string }{
+				{"/recipe/42/tags", "tagId=new"},
+				{"/recipe/42/tags/assigned/remove", ""},
+			} {
+				response := tagRequest(handler, http.MethodPost, request.path, request.body, true)
+				if response.Code != status || response.Header().Get("HX-Retarget") != "#recipe-tag-feedback" ||
+					response.Header().Get("HX-Reswap") != "outerHTML" || response.Header().Get("X-Tag-Replace") != "true" ||
+					!strings.Contains(response.Body.String(), "Tags bearbeiten ist nicht erlaubt.") ||
+					strings.Contains(response.Body.String(), `id="recipe-tag-assigned"`) ||
+					strings.Contains(response.Body.String(), "nicht bestätigt") {
+					t.Fatalf("credential failure must preserve assignments and report denial: %d %v %s", response.Code, response.Header(), response.Body.String())
+				}
+			}
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			for _, operation := range state.operations {
+				if operation == "AddRecipeTag" || operation == "RemoveRecipeTag" {
+					t.Fatal("credential failure reached mutation")
+				}
+			}
+		})
 	}
 }
 
