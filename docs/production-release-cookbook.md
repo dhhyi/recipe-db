@@ -1,8 +1,10 @@
 # Release production in ten steps
 
-This cookbook is for operators releasing Recipe DB to the Pi, with AI help where useful. It follows the agreed ten-step release sequence. It covers routine releases, not first-time Pi provisioning or fresh-cluster restore; use the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for those.
+This cookbook is for operators releasing Recipe DB to the Pi. It follows the agreed ten-step release sequence. It covers routine releases, not first-time Pi provisioning or fresh-cluster restore; use the [clean-Pi rebuild cookbook](raspberry-pi-rebuild.md) for those.
 
 The [production image releases guide](production-releases.md) explains the release artifact and registry requirements. The [production configuration guide](production-configuration.md) is authoritative for private inputs and their contents.
+
+Before starting step 1, finish testing the intended candidate website on demo data. Do not start the release sequence until these checks pass.
 
 The cookbook includes an isolated production-backup upgrade rehearsal, but it does not authorize a release or replace the independent production guards below. A passing result applies only to its exact backup and candidate; do not deploy the candidate until the rehearsal and all later step conditions are satisfied.
 
@@ -24,8 +26,6 @@ For current capabilities and limits, see the [release capability overview](produ
 ## 1. Prepare the candidate
 
 Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root in fish. Commands labelled for the Pi use its POSIX-compatible shell; commands in the provisioning container's SSH-agent shell use Bash.
-
-The assisting agent may run the documented read-only GitHub workflow and release lookups and report their results. This is a specific exception: rehearsals and all other release operations remain operator-guided, even when they require no password.
 
 ### Pause scheduled backups
 
@@ -77,6 +77,15 @@ Require `verified-upload` or `verified-unchanged`, `maintenanceActive: false`, a
 
 Merge the intended changes to `main` and wait for the `Publish` workflow for that commit to succeed. The workflow runs automatically on pushes to `main`; production deployment remains a separate manual action.
 
+Inspect successful runs from the workstation:
+
+```fish
+gh run list --repo dhhyi/recipe-db --workflow Publish --branch main \
+  --status success --limit 5 --json headSha,url,conclusion
+```
+
+Select the successful run for the intended commit, not simply the latest successful run.
+
 Record both values from the successful workflow:
 
 - The full 40-character source commit SHA (`REVISION`).
@@ -86,13 +95,17 @@ Use the artifact digest, not a `sha-<revision>` or `latest` tag. The workflow's 
 
 ### Tag the release candidate
 
-On the workstation, define the SHA from the successful workflow and check the checkout:
+On the workstation, first refresh the remote-tracking reference. This updates local Git metadata without changing working files:
 
 ```fish
-set -g REVISION '<full-40-character-commit-sha>'
-git status --short
-git branch --show-current
 git fetch origin main
+```
+
+Stop if the fetch fails. Then inspect the checkout:
+
+```fish
+git status --short
+and git branch --show-current
 and git rev-parse HEAD
 and git rev-parse refs/remotes/origin/main
 ```
@@ -109,9 +122,10 @@ and git tag --list 'v*'
 
 Stop if any inspection fails or the release list contains 1,000 entries and may be incomplete. Among published releases, excluding drafts and prereleases, require a contiguous `v1`, `v2`, ... sequence and select the next whole-number version. If there are no published releases, select `v1`. For that version, inspect the local and remote `vN-rcM` tags and select one more than the highest candidate number, or `rc1` if none exists. For example, after final `v1` and candidate `v2-rc3`, select `v2-rc4`. Each fresh attempt gets a new candidate number, even if its commit is unchanged.
 
-Create a lightweight tag for `REVISION` and push it immediately:
+Confirm the full `REVISION`, immutable `RELEASE` digest and selected `RC_TAG` against the inspection results before creating a tag. Create a lightweight tag for `REVISION` and push it immediately:
 
 ```fish
+set -g REVISION '<full-40-character-commit-sha>'
 set -g RC_TAG 'vN-rcM'
 git tag "$RC_TAG" "$REVISION"
 and git push origin "refs/tags/$RC_TAG:refs/tags/$RC_TAG"
@@ -146,7 +160,6 @@ From the repository root, set the exact published artifact and private file path
 set -g RELEASE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
 set -g VALUES "$HOME/.config/recipe-db/deployment/pi-values.yaml"
 set -gx KUBECONFIG "$HOME/.config/recipe-db/kubeconfig/pi.yaml"
-set -g PI piadmin@recipe-pi.home
 ```
 
 Confirm that `VALUES` and `KUBECONFIG` identify the intended Pi configuration and its generated kubeconfig. If either check fails, stop and correct the configuration first.
@@ -198,7 +211,7 @@ Require the Bash `TOOLING_REVISION` to equal the reviewed tooling revision selec
 Back in **workstation fish**, check workstation prerequisites and the private metadata connection before downtime:
 
 ```fish
-mise run --raw production-release --pi "$PI" preflight "$VALUES" "$RELEASE"
+mise run --raw production-release --pi piadmin@recipe-pi.home preflight "$VALUES" "$RELEASE"
 ```
 
 Require `Release preflight passed`. This checks the installed helper/publisher and tooling revision, compares workstation values and application-input hashes with the Pi's unchanged private inputs, validates candidate rendering, and connects through the Kubernetes tunnel. It prompts for the SSH key and sudo password in the operator terminal as needed; never paste passwords into chat. Stop on any mismatch or missing prerequisite. The controller runs here; only bounded private metadata operations run through SSH/sudo. Backup capture and Drive upload stay in the existing Pi service. No application archive is copied to the workstation by release commands.
@@ -213,7 +226,7 @@ The one-time version-1 rollout and first versioned production backup are complet
 
 ## 2. Finish testing and upgrade rehearsals
 
-Test the candidate website on demo data. Before production maintenance, rehearse restoring old data, migrating it and running the candidate on isolated storage.
+Before production maintenance, rehearse restoring old data, migrating it and running the candidate on isolated storage.
 
 Synthetic fixtures remain part of automated tooling regressions; they are not an additional required release rehearsal. See the [rehearsal reference](production-kubernetes.md#end-to-end-backup-and-recovery-rehearsal) for the synthetic test boundary.
 
@@ -267,9 +280,16 @@ and set -g ARCHIVE "$RUN_DIRECTORY/"(basename "$SOURCE_ARCHIVE")
 and set -g BACKUP_ID (mise exec -- jq -er .backupId "$MANIFEST")
 and set -g BACKUP_CONFIRMATION "VERIFIED-$BACKUP_ID-$BACKUP_STATUS"
 and set -g RESULT "$RUN_DIRECTORY/result"
+and set -g REHEARSAL_LOG (mktemp /tmp/(date -u +%Y-%m-%d-%H%M%S)-release-rehearsal.XXXXXX.log)
 and mise run production-upgrade-rehearsal-k3d \
-  "$MANIFEST" "$ARCHIVE" "$BACKUP_STATUS" "$BACKUP_CONFIRMATION" "$RELEASE" "$RESULT"
+  "$MANIFEST" "$ARCHIVE" "$BACKUP_STATUS" "$BACKUP_CONFIRMATION" "$RELEASE" "$RESULT" \
+  2>&1 | tee -a "$REHEARSAL_LOG"
+set -l REHEARSAL_PIPE_STATUS $pipestatus
+test "$REHEARSAL_PIPE_STATUS[1]" -eq 0
+and test "$REHEARSAL_PIPE_STATUS[2]" -eq 0
 ```
+
+Progress is visible in the terminal and saved in the private `REHEARSAL_LOG`. The two status checks require both the rehearsal and `tee` to succeed; stop if either fails. Preserve `$pipestatus` immediately after the pipeline, before running another command.
 
 The clean tooling checkout must contain both the package's source revision and the candidate revision. The runner uses current lifecycle scripts with `--release-sources-from-git`, which renders each immutable artifact's exact metadata and templates rather than substituting current application inputs. Clean worktrees provide release validation and candidate smoke assets. On one fresh cluster, it restores the supplied backup, injects a missing-Job uncertainty after activation intent, verifies guarded complete clear-and-restore recovery and candidate abort, then reopens the recovered source release. Reopening first removes stopped, owned candidate-only Deployments using their exact server identities; running or changed resources block reopening. It captures a new snapshot on that same cluster and runs the successful migration/no-migration, startup, local route and smoke checks. No second initial restore or cluster is needed. It runs the current smoke harness from the pinned candidate worktree against that candidate's assets. During the release rehearsal, the smoke check confirms the held release lock before and after persistent-volume restarts instead of trying to acquire a second deployment lock for an identical redeploy; the ordinary smoke test still exercises identical redeployment outside a locked release. The recovery scenario does not run a migration Job; if the candidate declares none, the uncertain transition is synthetic because no candidate migration Job exists. No production credentials are copied into the rehearsal.
 
@@ -349,7 +369,7 @@ After verifying the backup, prepare the candidate on the target while access sta
 Return to the **workstation fish shell** from step 1. Keep that checkout at the initial `TOOLING_REVISION` throughout this attempt, including any temporary-fix candidate. `REVISION` and `RELEASE` describe the application being staged. Read the retained operation through the private file helper:
 
 ```fish
-set -g RELEASE_STATE (mise run --raw production-release --pi "$PI" status "$VALUES")
+set -g RELEASE_STATE (mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES")
 and set -g HOLDER (printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -er .backupId)
 and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$HOLDER"
 ```
@@ -357,7 +377,7 @@ and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$HOLDER"
 Stop if any command fails. Require `captured/captured` and the holder belonging to the backup just verified. Run staging only after the Pi uploader reports `verified-upload` or `verified-unchanged` with `maintenanceActive: true`:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-stage \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-stage \
   "$VALUES" "$RELEASE" verified-upload "VERIFIED-$HOLDER-verified-upload"
 ```
 
@@ -387,16 +407,16 @@ Use the exact reported values, only after confirming termination. This does not 
 On the **workstation**, discover the complete migration sequence against the candidate's pinned source and actual storage-version markers. Planning does not change saved release progression or activate Jobs:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-migration-plan \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-migration-plan \
   "$VALUES" "$RELEASE"
 ```
 
 Review each service's current and required versions, the ordered transitions, and the reported blockers. The command prints the next permitted invocation. Run only the recommended `release-migration-next` or `release-migration-status` command with the exact workstation values and immutable candidate it prints:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-migration-next \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-migration-next \
   "$VALUES" "$RELEASE"
-mise run --raw production-release --pi "$PI" release-migration-status \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-migration-status \
   "$VALUES" "$RELEASE"
 ```
 
@@ -430,7 +450,7 @@ If a terminal exits while holding the separate `recipe-db-migration` command cla
 
 ### Recover a failed or uncertain migration
 
-This is the explicit exception to workstation-controlled release steps: an operator-approved recovery may run for a long time on the Pi using the installed isolated toolchain, without opening a root shell or installing developer tools. It is a destructive recovery for a failed or uncertain step-6 migration only. It is not a retry or rollback. It is forbidden once public access may have opened during this retained operation, including after a temporary-fix restaging: the original backup cannot safely discard subsequent public writes. The candidate is aborted; do not run `release-migration-next`, `release-start`, `release-reopen`, `backup-exit`, or ordinary deployment. An agent may prepare the command but cannot supply the human approval.
+This is the explicit exception to workstation-controlled release steps: an operator-approved recovery may run for a long time on the Pi using the installed isolated toolchain, without opening a root shell or installing developer tools. It is a destructive recovery for a failed or uncertain step-6 migration only. It is not a retry or rollback. It is forbidden once public access may have opened during this retained operation, including after a temporary-fix restaging: the original backup cannot safely discard subsequent public writes. The candidate is aborted; do not run `release-migration-next`, `release-start`, `release-reopen`, `backup-exit`, or ordinary deployment. Approval must come from the human operator.
 
 First inspect the failed Job, both Leases and every worker using the private commands printed by `release-migration-status`. Confirm the old `recipe-db-deploy` Lease and access barrier remain, and that no migration Job, worker, or other storage user is running or terminating. A disconnected terminal, expired Lease or delete request is not proof of termination. If anything is active or uncertain, stop and resolve it before recovery.
 
@@ -483,8 +503,8 @@ This step applies only when migration succeeded or no migration was required. Co
 For an eligible candidate, return to **workstation fish**, using the variables from steps 1 and 5. Start it and wait for readiness:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-start "$VALUES" "$RELEASE"
-mise run --raw production-release --pi "$PI" status "$VALUES"
+mise run --raw production-release --pi piadmin@recipe-pi.home release-start "$VALUES" "$RELEASE"
+mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES"
 ```
 
 Startup is guarded by the exact candidate identity and recorded handoff. GraphQL starts in backup mode first; other candidate workloads then start and must become ready while GraphQL continues blocking application operations. Continue only when state is `release-ready/ready` and all candidate workloads are ready. A startup or readiness failure retains the Lease and inspectable recovery state; do not reopen access or roll back automatically.
@@ -507,7 +527,7 @@ Continue only when deployment completes successfully and status reports the expe
 Once the candidate is ready and the operator explicitly instructs reopening, run the separate guarded command on the **workstation**:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-reopen \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-reopen \
   "$VALUES" "$RELEASE" "OPEN-$HOLDER"
 ```
 
@@ -520,7 +540,7 @@ After reopening, thoroughly check the actual public website, especially every fe
 ```fish
 set -g RESULT passed
 set -g NOTES 'Operator notes on the actual public website check'
-mise run --raw production-release --pi "$PI" release-website-result \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-website-result \
   "$VALUES" "$RELEASE" "$RESULT" "$NOTES" "WEBSITE-$HOLDER-$RESULT"
 ```
 
@@ -528,15 +548,15 @@ Use `set -g RESULT failed` and record concise, non-sensitive notes when any requ
 
 ```fish
 # Close application access and then assess recovery yourself.
-mise run --raw production-release --pi "$PI" release-disposition \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-disposition \
   "$VALUES" "$RELEASE" close-access \
   "DISPOSITION-$HOLDER-close-access"
 # Or close access and stop workloads to stage a new temporary-fix release.
-mise run --raw production-release --pi "$PI" release-disposition \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-disposition \
   "$VALUES" "$RELEASE" temporary-fix \
   "DISPOSITION-$HOLDER-temporary-fix"
 # Or explicitly accept a partial failure and continue.
-mise run --raw production-release --pi "$PI" release-disposition \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-disposition \
   "$VALUES" "$RELEASE" accept-partial-failure \
   "DISPOSITION-$HOLDER-accept-partial-failure"
 ```
@@ -574,16 +594,41 @@ The post-release backup must exercise the service that will run on schedule, usi
 
 On the workstation, update the chezmoi-managed operator files:
 
-1. Set `backup/backup-release-ref` to the exact `RELEASE` digest.
-2. Set `provisioning/inventory.yml`'s `backup_capture_revision` to the initial `TOOLING_REVISION`, not a later temporary-fix candidate's revision. This preserves the managed controller checkout; the service loads candidate application metadata from its own immutable Git revision.
-3. Keep `backup/backup-values.yaml` and the installed private application inputs unchanged during this retained operation. The original configuration hash remains bound to recovery. A release requiring different private values or credentials needs separately planned configuration maintenance; do not bypass the comparison.
-4. Add or update these files in chezmoi, then commit and sync the private chezmoi repository. This preserves the release state for recovery; it does not itself update the Pi.
+```fish
+env TOOLING_REVISION="$TOOLING_REVISION" mise exec -- yq -i \
+  '.all.children.pi.hosts.recipe-db-pi.backup_capture_revision = strenv(TOOLING_REVISION)' \
+  "$HOME/.config/recipe-db/provisioning/inventory.yml"
+and printf '%s\n' "$RELEASE" > "$HOME/.config/recipe-db/backup/backup-release-ref"
+```
 
-   ```fish
-   chezmoi add ~/.config/recipe-db/backup/backup-release-ref \
-     ~/.config/recipe-db/provisioning/inventory.yml \
-     ~/.config/recipe-db/backup/backup-values.yaml
-   ```
+Stop if either update fails. The inventory path matches the `recipe-db-pi` host entry in the example inventory. Keep `backup_capture_revision` at the initial `TOOLING_REVISION`, not a later temporary-fix candidate's revision. This preserves the managed controller checkout; the service loads candidate application metadata from its own immutable Git revision. The reference file receives the exact `RELEASE` digest.
+
+Keep `backup/backup-values.yaml` and the installed private application inputs unchanged during this retained operation. The original configuration hash remains bound to recovery. A release requiring different private values or credentials needs separately planned configuration maintenance; do not bypass the comparison.
+
+Re-add only these already-managed files to chezmoi, resolve their actual source paths (including any private/encrypted filename attributes), and stage them in the private repository:
+
+```fish
+chezmoi git -- --no-pager diff --cached --exit-code --stat
+and chezmoi re-add -- ~/.config/recipe-db/backup/backup-release-ref \
+  ~/.config/recipe-db/provisioning/inventory.yml \
+  ~/.config/recipe-db/backup/backup-values.yaml
+and set -g RELEASE_CONFIG_SOURCES (chezmoi source-path -- \
+  ~/.config/recipe-db/backup/backup-release-ref \
+  ~/.config/recipe-db/provisioning/inventory.yml \
+  ~/.config/recipe-db/backup/backup-values.yaml)
+and chezmoi git -- add -- $RELEASE_CONFIG_SOURCES
+and chezmoi git -- --no-pager diff --cached --stat -- $RELEASE_CONFIG_SOURCES
+```
+
+The first check stops the batch if the private repository already has staged changes; resolve those separately without automatically unstaging or committing them. Stop if any command fails. Review the changes privately before committing; do not paste private configuration diffs into chat. Then commit only these files and push to the private repository:
+
+```fish
+chezmoi git -- commit --only -m "Align Recipe DB backup inputs for $RC_TAG" \
+  -- $RELEASE_CONFIG_SOURCES
+and chezmoi git -- push
+```
+
+`--only` excludes unrelated staged files from this commit. The push also publishes any earlier unpushed commits on the current private branch; review those before pushing. Require both commands to succeed before continuing. This preserves the release state for recovery; it does not itself update the Pi.
 
 On the workstation, open the provisioning devcontainer's SSH-agent Bash shell:
 
@@ -616,7 +661,7 @@ The service recognizes the website-checked retained candidate, captures it using
 Require `verified-upload` for the **post-release** backup ID, with `maintenanceActive: true`. `verified-unchanged` is not sufficient after changing the artifact. On the **workstation**, inspect and confirm that exact backup:
 
 ```fish
-set -g RELEASE_STATE (mise run --raw production-release --pi "$PI" status "$VALUES")
+set -g RELEASE_STATE (mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES")
 and set -g POST_BACKUP_ID (printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -er .postReleaseBackup.backupId)
 and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$POST_BACKUP_ID"
 ```
@@ -624,14 +669,14 @@ and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$POST_BACKUP_ID"
 Stop on failure or an identity mismatch. After checking the Pi upload status matches:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-backup-verify \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-backup-verify \
   "$VALUES" "$RELEASE" verified-upload "UPLOADED-$POST_BACKUP_ID-verified-upload"
 ```
 
 Only after explicit operator acceptance:
 
 ```fish
-mise run --raw production-release --pi "$PI" release-accept \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-accept \
   "$VALUES" "$RELEASE" "ACCEPT-$HOLDER"
 ```
 
@@ -643,7 +688,7 @@ On **workstation fish**, export only the selected acceptance evidence to a new p
 
 ```fish
 set -g ACCEPTANCE (mktemp "$HOME/.config/recipe-db/release-acceptance-$RC_TAG.XXXXXX.json")
-and mise run --raw production-release --pi "$PI" evidence "$VALUES" > "$ACCEPTANCE"
+and mise run --raw production-release --pi piadmin@recipe-pi.home evidence "$VALUES" > "$ACCEPTANCE"
 ```
 
 Stop if export fails. Write operator-authored release notes with these headings: `Accepted gates`, `Website checks`, `Backup result`, `Storage versions/migrations`, and `Release features`. Include the exact immutable `RELEASE` digest and its OCI manifest link, `https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/sha256:<digest>`, plus the agreed evidence; do not generate a changelog. Do not include credentials, private configuration or application records. Publish from the retained tooling checkout, targeting the candidate's `REVISION`:
@@ -657,7 +702,7 @@ The publisher requires candidate-bound acceptance and verified-upload evidence b
 
 ```fish
 set -g TAG vN
-mise run --raw production-release --pi "$PI" release-finalize \
+mise run --raw production-release --pi piadmin@recipe-pi.home release-finalize \
   "$VALUES" "$RELEASE" "$TAG" "PUBLISHED-$HOLDER-$TAG"
 ```
 
