@@ -131,6 +131,61 @@ load test_helper
   done
 }
 
+@test "cache outcome and health scripts distinguish required, failed and unattempted operations" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  outcome_script="$BATS_TEST_TMPDIR/cache-outcomes.sh"
+  health_script="$BATS_TEST_TMPDIR/cache-health.sh"
+  run yq -r '.jobs["quality-checks"].steps[] | select(.id == "cache-outcomes") | .run' "$workflow"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" > "$outcome_script"
+  run yq -r '.jobs["cache-health"].steps[] | select(.name == "report cache health") | .run' "$workflow"
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" > "$health_script"
+
+  outcomes="$BATS_TEST_TMPDIR/cache-outcomes"
+  run env \
+    RESTORE_OUTCOME=success INSPECT_OUTCOME=success PRUNE_OUTCOME=skipped \
+    PREPARE_OUTCOME=success UPLOAD_OUTCOME=success PRUNE_NEEDED=false \
+    RESTORE_REASON= INSPECT_REASON= PRUNE_REASON= PREPARE_REASON= \
+    GITHUB_OUTPUT="$outcomes" bash "$outcome_script"
+  [ "$status" -eq 0 ]
+  grep -Fx 'prune_outcome=not-attempted' "$outcomes"
+  grep -Fx 'prune_needed=false' "$outcomes"
+  run env \
+    RESTORE_OUTCOME=success INSPECT_OUTCOME=success PRUNE_OUTCOME=not-attempted \
+    PREPARE_OUTCOME=success UPLOAD_OUTCOME=success PRUNE_NEEDED=false \
+    FAILURE_REASON= QUALITY_RESULT=success bash "$health_script"
+  [ "$status" -eq 0 ]
+
+  run env \
+    RESTORE_OUTCOME=success INSPECT_OUTCOME=success PRUNE_OUTCOME=success \
+    PREPARE_OUTCOME=success UPLOAD_OUTCOME=success PRUNE_NEEDED=true \
+    FAILURE_REASON= QUALITY_RESULT=success bash "$health_script"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cache pruning completed"* ]]
+
+  run env \
+    RESTORE_OUTCOME=success INSPECT_OUTCOME=success PRUNE_OUTCOME=not-attempted \
+    PREPARE_OUTCOME=success UPLOAD_OUTCOME=not-attempted PRUNE_NEEDED=true \
+    FAILURE_REASON= QUALITY_RESULT=success bash "$health_script"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"snapshot upload was not successful"* ]]
+
+  run env \
+    RESTORE_OUTCOME=failure INSPECT_OUTCOME=success PRUNE_OUTCOME=not-attempted \
+    PREPARE_OUTCOME=success UPLOAD_OUTCOME=success PRUNE_NEEDED=false \
+    FAILURE_REASON='Cache restore API request failed.' QUALITY_RESULT=success bash "$health_script"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Cache restore API request failed."* ]]
+
+  run env \
+    RESTORE_OUTCOME=success INSPECT_OUTCOME=success PRUNE_OUTCOME=not-attempted \
+    PREPARE_OUTCOME= UPLOAD_OUTCOME= PRUNE_NEEDED=false \
+    FAILURE_REASON= QUALITY_RESULT=success bash "$health_script"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Cache outcomes are missing"* ]]
+}
+
 @test "Publish retains rebuild explanations even when Bazel fails" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   slice="$BATS_TEST_TMPDIR/diagnostics-step"
