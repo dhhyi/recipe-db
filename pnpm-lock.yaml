@@ -167,8 +167,8 @@ importers:
   .:
     devDependencies:
       '@anyblades/blades':
-        specifier: 3.1.1
-        version: 3.1.1
+        specifier: 3.1.4
+        version: 3.1.4
       '@prettier/plugin-xml':
         specifier: ^3.1.1
         version: 3.4.2(prettier@3.9.6)
@@ -187,8 +187,8 @@ importers:
 
 packages:
 
-  '@anyblades/blades@3.1.1':
-    resolution: {integrity: sha512-JpoRNEV9gVJxOuI1vBYCqYr6MNO5qIo4jUdh2yYNVsx7doF61KJHxXQzljotGhbWzR8W1nzaC9QtN7PMGO4vmA==}
+  '@anyblades/blades@3.1.4':
+    resolution: {integrity: sha512-+sFFnRLgyu2mvHTUXrbIObZ/NKpEgK00hdyjBQdTESI3aTAn5BjNgVZW7OfTi/beyohHlTbcTTPvu6nYGleT3w==}
 
   '@dual-bundle/import-meta-resolve@4.2.1':
     resolution: {integrity: sha512-id+7YRUgoUX6CgV0DtuhirQWodeeA7Lf4i2x71JS/vtA5pRb/hIGWlw+G6MeXvsM+MXrz0VAydTGElX1rAfgPg==}
@@ -247,7 +247,7 @@ packages:
 
 snapshots:
 
-  '@anyblades/blades@3.1.1': {}
+  '@anyblades/blades@3.1.4': {}
 
   '@dual-bundle/import-meta-resolve@4.2.1': {}
 

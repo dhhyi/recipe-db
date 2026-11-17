@@ -167,8 +167,8 @@ importers:
   .:
     dependencies:
       '@anyblades/blades':
-        specifier: 3.1.1
-        version: 3.1.1
+        specifier: 3.1.4
+        version: 3.1.4
       lit:
         specifier: ^3.3.3
         version: 3.3.3
@@ -218,8 +218,8 @@ packages:
   '@adobe/css-tools@4.5.0':
     resolution: {integrity: sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q==}
 
-  '@anyblades/blades@3.1.1':
-    resolution: {integrity: sha512-JpoRNEV9gVJxOuI1vBYCqYr6MNO5qIo4jUdh2yYNVsx7doF61KJHxXQzljotGhbWzR8W1nzaC9QtN7PMGO4vmA==}
+  '@anyblades/blades@3.1.4':
+    resolution: {integrity: sha512-+sFFnRLgyu2mvHTUXrbIObZ/NKpEgK00hdyjBQdTESI3aTAn5BjNgVZW7OfTi/beyohHlTbcTTPvu6nYGleT3w==}
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -2033,7 +2033,7 @@ snapshots:
 
   '@adobe/css-tools@4.5.0': {}
 
-  '@anyblades/blades@3.1.1': {}
+  '@anyblades/blades@3.1.4': {}
 
   '@babel/code-frame@7.29.7':
     dependencies:
