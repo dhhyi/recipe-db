@@ -475,7 +475,7 @@ YAML
     and .failureRecovery.injectedFailure == null' "$result_directory/result.json"
 }
 
-@test "local rehearsal values preserve production storage sizing without production integrations" {
+@test "historical rehearsal uses current infrastructure and preserves production storage sizing without integrations" {
   use_mise_tools
   mkdir -p work secrets
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/
@@ -504,17 +504,32 @@ YAML
   source .scripts/lib/rehearsal-k3d.sh
   # shellcheck source=.scripts/lib/production-config.sh
   source .scripts/production-config.sh
-  rehearsal_write_values "$FIXTURE_ROOT" recipe-db-rehearsal-adapted \
-    22001 32001 "$accounts_file" "$rehearsal_values" "$source_values"
-  run production_config "$rehearsal_values" restore
-  [ "$status" -eq 0 ]
-  [ "$(jq -r '.rehearsalId // ""' "$work/config.json")" = '' ]
-  sed -n '/^write_cluster_values() {/,/^}/p' \
-    .scripts/production-upgrade-rehearsal-k3d.sh > cluster-values-function.sh
+  local source_worktree="$FIXTURE_ROOT/historical" candidate_worktree="$FIXTURE_ROOT"
+  mkdir -p "$source_worktree/deploy"
+  yq '.infrastructure.traefik |= sub(":v3[.][0-9]+[.][0-9]+@", ":v3@")' \
+    deploy/local.yaml > "$source_worktree/deploy/local.yaml"
+  local function_name
+  for function_name in write_values write_cluster_values rehearsal_cluster_name; do
+    sed -n "/^${function_name}() {/,/^}/p" \
+      .scripts/production-upgrade-rehearsal-k3d.sh
+  done > cluster-values-function.sh
   # shellcheck disable=SC1091
   source cluster-values-function.sh
-  local run_id=a1b2c3d4e5f60718
-  write_cluster_values "$rehearsal_values" "$cluster_values"
+  local run_id=a1b2c3d4e5f60718 http_port=22001 deployment_values="$source_values"
+  local success_source_values success_candidate_values success_cluster_values
+  mark() { :; }
+  sed -n '/^success_source_values=/,/^mark$/p' \
+    .scripts/production-upgrade-rehearsal-k3d.sh > prepare-values.sh
+  # shellcheck disable=SC1091
+  source prepare-values.sh
+  rehearsal_values=$success_source_values
+  cluster_values=$success_cluster_values
+  local values
+  for values in "$rehearsal_values" "$success_candidate_values"; do
+    run production_config "$values" restore
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.rehearsalId // ""' "$work/config.json")" = '' ]
+  done
   run production_config "$cluster_values" restore
   [ "$status" -eq 0 ]
   [ "$(stat -c %a "$cluster_values")" = 600 ]

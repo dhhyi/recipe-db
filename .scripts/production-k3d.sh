@@ -90,6 +90,32 @@ release_migration_claim_holder=
 release_migration_claim_artifact=
 release_recovery_reopen_started=false
 pod_watch_pid=
+release_recovery_reopen_cleanup() {
+  local result=$1 failed=false
+  [[ ${command:-} == release-recovery-reopen &&
+    $result != 0 && $release_recovery_reopen_started == true ]] || return 0
+  restore_routes_apply "$work/recovery-existing-barrier.yml" || {
+    printf 'production: could not restore the public recovery barrier after reopening failure\n' >&2
+    failed=true
+  }
+  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
+    -p '{"spec":{"ports":[{"port":80,"targetPort":3000}]}}' > /dev/null || {
+    printf 'production: could not restore the internal GraphQL barrier target after reopening failure\n' >&2
+    failed=true
+  }
+  backup_reblock_graphql || failed=true
+  release_recovery_state_write recovery-required migration-reopen-failed \
+    "$(jq -cn --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{migrationRecovery:{status:"verified",phase:"complete",reopenFailedAt:$failedAt}}')" \
+    migration-recovery-failed || {
+    printf 'production: could not persist the failed recovery-reopen phase\n' >&2
+    failed=true
+  }
+  printf 'production: recovery reopening failed; attempted to restore the public and GraphQL barriers; inspect state and Lease before retrying\n' >&2
+  release_recovery_reopen_started=false
+  [[ $failed == false ]]
+}
+
 cleanup() {
   local result=$?
   trap - EXIT
@@ -2402,32 +2428,6 @@ release_migration_recover() {
   [[ -f $3 && -f $4 ]] \
     || production_fail "recovery requires the verified complete backup manifest and archive"
   restore_run "$3" "$4" "$expected" "$snapshot" "$confirmation" migration-recovery "$candidate"
-}
-
-release_recovery_reopen_cleanup() {
-  local result=$1 failed=false
-  [[ ${command:-} == release-recovery-reopen &&
-    $result != 0 && $release_recovery_reopen_started == true ]] || return 0
-  restore_routes_apply "$work/recovery-existing-barrier.yml" || {
-    printf 'production: could not restore the public recovery barrier after reopening failure\n' >&2
-    failed=true
-  }
-  kube --namespace kube-system patch service recipe-db-internal --type=strategic \
-    -p '{"spec":{"ports":[{"port":80,"targetPort":3000}]}}' > /dev/null || {
-    printf 'production: could not restore the internal GraphQL barrier target after reopening failure\n' >&2
-    failed=true
-  }
-  backup_reblock_graphql || failed=true
-  release_recovery_state_write recovery-required migration-reopen-failed \
-    "$(jq -cn --arg failedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{migrationRecovery:{status:"verified",phase:"complete",reopenFailedAt:$failedAt}}')" \
-    migration-recovery-failed || {
-    printf 'production: could not persist the failed recovery-reopen phase\n' >&2
-    failed=true
-  }
-  printf 'production: recovery reopening failed; attempted to restore the public and GraphQL barriers; inspect state and Lease before retrying\n' >&2
-  release_recovery_reopen_started=false
-  [[ $failed == false ]]
 }
 
 release_recovery_remove_candidate_only_deployments() {
