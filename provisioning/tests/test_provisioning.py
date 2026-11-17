@@ -90,7 +90,8 @@ class CheckoutTests(unittest.TestCase):
         config = {"stateDirectory": str(self.state.parent.parent)}
         backup = load_script("backup-upload")
 
-        def mutate(arguments, check):
+        def mutate(arguments, check, pass_fds):
+            self.assertEqual(len(pass_fds), 1)
             with self.assertRaises(backup.BackupError):
                 backup.acquire_run_lock(config)
             return subprocess.CompletedProcess(arguments, 0)
@@ -116,6 +117,30 @@ class CheckoutTests(unittest.TestCase):
                     ["checkout", self.revision], self.revision, "",
                     self.checkout, self.state, self.proc)
             git.assert_not_called()
+
+    def test_git_child_retains_exclusion_after_guard_descriptor_closes(self):
+        backup = load_script("backup-upload")
+        config = {"stateDirectory": str(self.state.parent.parent)}
+        children = []
+
+        def detached_child(arguments, check, pass_fds=()):
+            children.append(subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"], pass_fds=pass_fds,
+            ))
+            return subprocess.CompletedProcess(arguments, 0)
+
+        try:
+            with patch.object(checkout_guard.subprocess, "run", side_effect=detached_child):
+                checkout_guard.guarded_git(
+                    ["--version"], self.revision, "", self.checkout, self.state, self.proc)
+            with self.assertRaises(backup.BackupError):
+                backup.acquire_run_lock(config)
+        finally:
+            for child in children:
+                child.terminate()
+                child.wait(timeout=10)
+        descriptor = backup.acquire_run_lock(config)
+        os.close(descriptor)
 
 
 class StorageTests(unittest.TestCase):

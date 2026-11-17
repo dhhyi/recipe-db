@@ -65,7 +65,7 @@ def guarded_git(arguments, revision, holder, checkout=CHECKOUT, state_path=STATE
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         validate(revision, holder, checkout, state_path, proc, ignored_pids=(os.getppid(),))
-        return subprocess.run(["/usr/bin/git", *arguments], check=False).returncode
+        return subprocess.run(["/usr/bin/git", *arguments], check=False, pass_fds=(descriptor,)).returncode
     finally:
         os.close(descriptor)
 
