@@ -686,48 +686,116 @@ test("failed assignment reload after an uncertain save retains confirmed tags an
   });
 });
 
-test("expired credentials during initial assignment loading show denial without editing", async ({
-  page,
-  basicRecipe: recipe,
-}) => {
-  await page.goto(`/recipe/${recipe.id}`);
-  let mutationRequests = 0;
-  await page.route(
-    (url) => url.pathname === `/recipe/${recipe.id}/tags`,
-    async (route) => {
-      if (route.request().method() === "POST") mutationRequests += 1;
-      if (
-        route.request().method() === "GET" &&
-        new URL(route.request().url()).searchParams.get("edit") === "1"
-      ) {
-        return route.fulfill({
-          status: 401,
-          contentType: "text/plain",
-          body: "Unauthorized",
-        });
-      }
-      return route.fallback();
-    },
-  );
-  const denied = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
-      new URL(response.url()).searchParams.get("edit") === "1",
-  );
-  const dialog = await openTagDialog(page);
-  expect([401, 403]).toContain((await denied).status());
+async function expectTagEditingDenied(dialog) {
   await expect(dialog.locator("[data-tag-feedback]")).toContainText(
     /nicht erlaubt|nicht berechtigt|anmeldung erforderlich/i,
   );
   await expect(
-    dialog.getByRole("searchbox", { name: "Tag suchen" }),
-  ).toBeHidden();
-  await expect(dialog.locator("[data-tag-mutation]")).toHaveCount(0);
-  expect(mutationRequests).toBe(0);
+    dialog.locator("#recipe-tag-search:visible:enabled"),
+  ).toHaveCount(0);
+  await expect(dialog.locator("[data-tag-mutation] button:enabled")).toHaveCount(
+    0,
+  );
+  await expect(dialog).toHaveAttribute("closedby", "any");
   await expect(
     dialog.getByRole("button", { name: "Schließen" }),
   ).toBeEnabled();
-});
+}
+
+for (const status of [401, 403]) {
+  test(`headerless ${status} during initial assignment load denies editing`, async ({
+    page,
+    basicRecipe: recipe,
+  }) => {
+    await page.goto(`/recipe/${recipe.id}`);
+    await page.route(
+      (url) => url.pathname === `/recipe/${recipe.id}/tags`,
+      async (route) => {
+        if (
+          route.request().method() === "GET" &&
+          new URL(route.request().url()).searchParams.get("edit") === "1"
+        ) {
+          return route.fulfill({ status, body: "Access denied" });
+        }
+        return route.fallback();
+      },
+    );
+    const denied = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/recipe/${recipe.id}/tags` &&
+        new URL(response.url()).searchParams.get("edit") === "1",
+    );
+    const dialog = await openTagDialog(page);
+    const response = await denied;
+    expect(response.status()).toBe(status);
+    expect(response.headers()["x-tag-replace"]).toBeUndefined();
+    await expectTagEditingDenied(dialog);
+    await dialog.getByRole("button", { name: "Schließen" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  for (const phase of ["options", "mutation"]) {
+    test(`headerless ${status} during ${phase} preserves confirmed tags and denies editing`, async ({
+      page,
+      request,
+      basicRecipe: recipe,
+    }) => {
+      const confirmed = await findOrCreateTag(request, "COURSE", "E2E Bekannt");
+      await findOrCreateTag(request, "COURSE", "E2E Auswahl");
+      await assignTag(request, recipe, confirmed);
+      await page.goto(`/recipe/${recipe.id}`);
+      const dialog = await openTagDialog(page);
+      const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
+      await expect(tagOptions(dialog)).toHaveCount(1);
+      await expect(
+        dialog.getByRole("button", { name: `${confirmed.name} entfernen` }),
+      ).toBeVisible();
+      const path = `/recipe/${recipe.id}/tags`;
+      await page.route(
+        (url) =>
+          url.pathname === (phase === "options" ? `${path}/options` : path),
+        async (route) => {
+          const method = route.request().method();
+          if (
+            (phase === "options" && method === "GET") ||
+            (phase === "mutation" && method === "POST")
+          ) {
+            return route.fulfill({ status, body: "Access denied" });
+          }
+          return route.fallback();
+        },
+      );
+      const denied = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname ===
+            (phase === "options" ? `${path}/options` : path) &&
+          response.request().method() ===
+            (phase === "options" ? "GET" : "POST"),
+      );
+      await search.fill("E2E Auswahl");
+      if (phase === "mutation") {
+        await expect(tagOptions(dialog)).toHaveCount(1);
+        await expect(dialog.locator("#recipe-tag-options > ul")).toHaveAttribute(
+          "data-query",
+          "E2E Auswahl",
+        );
+        await tagOptions(dialog).first().click();
+      }
+      const response = await denied;
+      expect(response.status()).toBe(status);
+      expect(response.headers()["x-tag-replace"]).toBeUndefined();
+      await expectTagEditingDenied(dialog);
+      await expect(
+        dialog.locator("#recipe-tag-assigned .recipe-tag"),
+      ).toContainText(confirmed.name);
+      await expect(
+        dialog.locator("#recipe-tag-assigned .recipe-tag"),
+      ).not.toContainText("E2E Auswahl");
+      await dialog.getByRole("button", { name: "Schließen" }).click();
+      await expect(dialog).toBeHidden();
+    });
+  }
+}
 
 test("options loading failure is distinct from an empty search and can be retried", async ({
   page,

@@ -246,6 +246,26 @@ func TestTagEditorReopensAndPreservesAssignmentsOnFailure(t *testing.T) {
 	}
 }
 
+func TestTagDialogHandlesUnmarkedAuthorizationFailuresWithoutSwapping(t *testing.T) {
+	body := renderTagComponent(t, RecipeTagsWidget("42", nil, true, false, "", false))
+	for _, text := range []string{
+		`const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace`,
+		`event.detail.isError = false; return`,
+		`event.detail.xhr.status === 401 || event.detail.xhr.status === 403`,
+		`this.dataset.denied = 'true'`,
+		`status.textContent = 'Tags bearbeiten ist nicht erlaubt.'`,
+		`this.querySelectorAll('form[data-tag-mutation] button').forEach(button => button.disabled = true)`,
+		`this.setAttribute('closedby', 'any')`,
+	} {
+		if !strings.Contains(body, text) {
+			t.Errorf("missing unmarked authorization failure safeguard %q", text)
+		}
+	}
+	if strings.Contains(body, `|| event.detail.target?.id === 'recipe-tag-options'; event.detail.shouldSwap = replace`) {
+		t.Fatal("an arbitrary options error response must not be swapped into the dialog")
+	}
+}
+
 func TestTagOptionsPreserveAndEscapeSearchForEnterGuard(t *testing.T) {
 	body := renderTagComponent(t, TagOptions("42", ` Vegan "& `, []gql.RecipeTag{
 		{Id: "vegan", Category: gql.TagCategoryDietaryStyle, Name: "Vegan"},

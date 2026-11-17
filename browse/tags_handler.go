@@ -212,7 +212,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 		query, err := tagQuery(r)
 		if err != nil {
 			component := components.TagOptionsError(r.URL.RequestURI(), "Ungültige Suchanfrage.")
-			writeTagComponent(w, r, http.StatusBadRequest, component, false, false, false)
+			writeTagComponent(w, r, http.StatusBadRequest, component, true, false, false)
 			return
 		}
 		client, upstreamStatus := requestScopedClient(endpoint, r, w)
@@ -232,7 +232,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 				message = "Rezept nicht gefunden."
 			}
 			component := components.TagOptionsError(r.URL.RequestURI(), message)
-			writeTagComponent(w, r, status, component, false, false, false)
+			writeTagComponent(w, r, status, component, true, false, false)
 			return
 		}
 		inventory, err := loadTagInventory(r, client)
@@ -248,7 +248,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 				message = "Rezept nicht gefunden."
 			}
 			component := components.TagOptionsError(r.URL.RequestURI(), message)
-			writeTagComponent(w, r, status, component, false, false, false)
+			writeTagComponent(w, r, status, component, true, false, false)
 			return
 		}
 		options := unassignedTagOptions(inventory, assigned, query)

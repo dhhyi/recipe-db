@@ -267,9 +267,15 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 	state.inventoryFailed = true
 	state.mu.Unlock()
 	failed := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=veg", "", true)
-	if failed.Code != http.StatusBadGateway || !strings.Contains(failed.Body.String(), "Tag-Auswahl konnte nicht geladen werden.") ||
+	if failed.Code != http.StatusBadGateway || failed.Header().Get("X-Tag-Replace") != "true" ||
+		!strings.Contains(failed.Body.String(), "Tag-Auswahl konnte nicht geladen werden.") ||
 		!strings.Contains(failed.Body.String(), "Erneut versuchen") {
 		t.Fatalf("inventory dependency failure must be explicit and retryable: %d %s", failed.Code, failed.Body.String())
+	}
+	invalidSearch := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=one&q=two", "", true)
+	if invalidSearch.Code != http.StatusBadRequest || invalidSearch.Header().Get("X-Tag-Replace") != "true" ||
+		!strings.Contains(invalidSearch.Body.String(), "Ungültige Suchanfrage.") {
+		t.Fatalf("server-rendered invalid search feedback must be safe to swap: %d %v %s", invalidSearch.Code, invalidSearch.Header(), invalidSearch.Body.String())
 	}
 	state.mu.Lock()
 	state.inventoryFailed = false
