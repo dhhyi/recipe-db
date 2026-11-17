@@ -2403,6 +2403,16 @@ EOF
   [ "$(migration_job_count)" -eq 4 ]
   unset MOCK_FINALIZE_ACTIVE_WORKER
 
+  export MOCK_FINALIZE_DELETE_FAIL=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"release state and Lease are retained"* ]]
+  [ "$(migration_job_count)" -eq 4 ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.migrationJobsCleanup.status == "pending"' "$STATE/backup-state.json" > /dev/null
+  unset MOCK_FINALIZE_DELETE_FAIL
+
   jq -n --arg candidate "ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" '
     {metadata:{name:"migration-other-release",
       annotations:{"recipe-db/release":$candidate,
@@ -2414,7 +2424,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(migration_job_count)" -eq 0 ]
   [ -e "$MOCK_LOG.foreign-migration-job.json" ]
-  [ "$(grep -c ' delete job migration-' "$MOCK_LOG")" -eq 4 ]
+  [ "$(grep -c ' delete job migration-' "$MOCK_LOG")" -eq 5 ]
 }
 
 @test "release finalization resumes interrupted migration Job cleanup with its Lease retained" {
