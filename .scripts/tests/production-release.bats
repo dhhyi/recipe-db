@@ -849,18 +849,22 @@ write_release_acceptance() {
 
 @test "GitHub release publisher creates the next sequential release from authored notes and retries safely" {
   local artifact=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  local mise
+  mise=$(command -v mise)
   mock_github_releases
   write_release_notes "$artifact"
   write_release_acceptance "$artifact"
 
-  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
+  run env PATH="$FIXTURE_ROOT/bin:/usr/bin:/bin" "$mise" exec -- \
+    .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
   [ "$status" -eq 0 ]
   [[ $output == *"v1 https://github.com/dhhyi/recipe-db/releases/tag/v1"* ]]
   [ "$(grep -c 'release create v1' "$MOCK_GH_LOG")" -eq 1 ]
   run grep -q -- '--generate-notes' "$MOCK_GH_LOG"
   [ "$status" -ne 0 ]
 
-  run bash .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
+  run env PATH="$FIXTURE_ROOT/bin:/usr/bin:/bin" "$mise" exec -- \
+    .scripts/publish-production-github-release.sh "$REVISION" "$artifact" release-notes.md acceptance.json
   [ "$status" -eq 0 ]
   [ "$(grep -c 'release create v1' "$MOCK_GH_LOG")" -eq 1 ]
 }

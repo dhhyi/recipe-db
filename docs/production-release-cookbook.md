@@ -648,7 +648,7 @@ Stop if export fails. Write operator-authored release notes with these headings:
 
 ```fish
 set -g NOTES "$HOME/.config/recipe-db/release-notes.md"
-.scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES" "$ACCEPTANCE"
+mise exec -- .scripts/publish-production-github-release.sh "$REVISION" "$RELEASE" "$NOTES" "$ACCEPTANCE"
 ```
 
 The publisher requires candidate-bound acceptance and verified-upload evidence before contacting GitHub. It selects the next contiguous `vN`, and recognizes a matching already-published release on retry. Keep both the candidate and final tags. Only after publication succeeds, use its printed tag on the **workstation**:
