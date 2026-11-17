@@ -2835,10 +2835,15 @@ release_migration_read_versions() {
 }
 
 release_migration_load_jobs() {
-  local migration name matches allow_missing=${1:-false}
-  kube get jobs -l "recipe-db/revision=$revision,recipe-db/migration=staged" -o json \
-    > "$work/migration-jobs.json" \
-    || production_fail "cannot inspect staged candidate migration Jobs"
+  local migration name matches allow_missing=${1:-false} jobs_file=${2:-}
+  if [[ -n $jobs_file ]]; then
+    cp -- "$jobs_file" "$work/migration-jobs.json" \
+      || production_fail "cannot prepare candidate migration Jobs"
+  else
+    kube get jobs -l "recipe-db/revision=$revision,recipe-db/migration=staged" -o json \
+      > "$work/migration-jobs.json" \
+      || production_fail "cannot inspect staged candidate migration Jobs"
+  fi
   while IFS= read -r migration; do
     name="migration-${revision:0:12}-$(jq -r '.image[-40:]' <<< "$migration")"
     matches=$(jq -c --arg name "$name" '[.items[] | select(.metadata.name == $name)]' \
@@ -4036,6 +4041,125 @@ release_accept() {
   printf 'production: operator accepted the release; publish its sequential GitHub Release before finalization\n'
 }
 
+release_finalize_migration_jobs() {
+  local candidate=$1 allow_missing=false marker expected_names name job_json
+  jq -e --arg candidate "$candidate" '
+    .migrationResult.artifact == $candidate
+    and (.migrationResult.outcome == "migration-succeeded"
+      or .migrationResult.outcome == "no-migration-required")
+    and .migrationExecution.status == .migrationResult.outcome
+    and all(.migrationExecution.transitions[]?; .status == "completed")
+  ' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "release migration result is failed, uncertain, or does not match the candidate"
+  release_migration_load_metadata "$candidate"
+  expected_names=$(jq -c --arg revision "$revision" '
+    [.migrations[] | "migration-" + $revision[0:12] + "-" + .image[-40:]]
+  ' "$work/pulled/release.json") \
+    || production_fail "cannot list candidate migration Jobs"
+  marker=$(jq -c '.migrationJobsCleanup // empty' "$snapshot/backup-state.json")
+  if [[ -n $marker ]]; then
+    jq -e --arg candidate "$candidate" --arg revision "$revision" \
+      --argjson jobs "$expected_names" '
+      .artifact == $candidate and .revision == $revision and .jobs == $jobs
+      and (.status == "pending" or .status == "complete")
+    ' <<< "$marker" > /dev/null \
+      || production_fail "saved migration cleanup state does not match this candidate"
+    allow_missing=true
+  fi
+
+  kube get jobs -o json > "$work/all-migration-jobs.json" \
+    || production_fail "cannot inspect migration Jobs before release cleanup"
+  jq -e '.items | type == "array"' "$work/all-migration-jobs.json" > /dev/null \
+    || production_fail "migration Job inventory is invalid"
+  jq --arg candidate "$candidate" --argjson names "$expected_names" '
+    {items:[.items[] | select(
+      .metadata.annotations["recipe-db/release"] == $candidate
+      or (.metadata.name as $name | ($names | index($name)) != null)
+    )]}
+  ' "$work/all-migration-jobs.json" > "$work/finalize-migration-jobs.json" \
+    || production_fail "cannot select candidate migration Jobs"
+  jq -e --arg candidate "$candidate" --arg revision "$revision" \
+    --argjson names "$expected_names" '
+    all(.items[];
+      .metadata.annotations["recipe-db/release"] == $candidate
+      and .metadata.annotations["recipe-db/revision"] == $revision
+      and ((.metadata.name as $name | ($names | index($name)) != null)))
+  ' "$work/finalize-migration-jobs.json" > /dev/null \
+    || production_fail "candidate migration Job does not match the release and revision"
+  if [[ $lease_present == false ]]; then
+    [[ $(jq -r '.migrationJobsCleanup.status // ""' "$snapshot/backup-state.json") == complete ]] \
+      || production_fail "migration Job cleanup was not recorded before release ownership was removed"
+    jq -e '(.items | length) == 0' "$work/finalize-migration-jobs.json" > /dev/null \
+      || production_fail "candidate migration Jobs remain after release ownership was removed"
+    return 0
+  fi
+
+  release_migration_load_jobs "$allow_missing" "$work/finalize-migration-jobs.json"
+  while IFS= read -r name; do
+    job_json=$(jq -ce --arg name "$name" \
+      '[.items[] | select(.metadata.name == $name)] | if length == 1 then .[0] else empty end' \
+      "$work/migration-jobs.json") || {
+      [[ $allow_missing == true ]] && continue
+      production_fail "candidate migration Job $name is missing"
+    }
+    jq -e '(.status.active // 0) == 0
+      and (.status.failed // 0) == 0
+      and all(.status.conditions[]?; .type != "Failed" or .status != "True")
+      and (.spec.suspend == true
+        or (.status.succeeded // 0) > 0
+        or any(.status.conditions[]?; .type == "Complete" and .status == "True"))' \
+      <<< "$job_json" > /dev/null \
+      || production_fail "candidate migration Job $name is failed, active, or uncertain"
+    release_migration_worker_pods "$name"
+    jq -e 'all(.items[]; .status.phase == "Succeeded"
+      and all(.status.containerStatuses[]?;
+        .state.terminated.exitCode == 0))' "$work/migration-worker-pods.json" > /dev/null \
+      || production_fail "candidate migration Job $name has active or uncertain workers"
+  done < <(jq -r --arg revision "$revision" \
+    '.migrations[] | "migration-" + $revision[0:12] + "-" + .image[-40:]' \
+    "$work/pulled/release.json")
+
+  if [[ -z $marker ]]; then
+    release_state_write release-published published-cleanup-pending \
+      "$(jq -cn --arg candidate "$candidate" --arg revision "$revision" \
+        --argjson jobs "$expected_names" \
+        '{migrationJobsCleanup:{artifact:$candidate,revision:$revision,jobs:$jobs,status:"pending"}}')" \
+      || production_fail "could not retain candidate migration cleanup intent"
+    cluster_operation_lock_update release-published \
+      || production_fail "could not retain release ownership for migration cleanup"
+  fi
+  while IFS= read -r name; do
+    job_json=$(jq -ce --arg name "$name" \
+      '[.items[] | select(.metadata.name == $name)] | if length == 1 then .[0] else empty end' \
+      "$work/migration-jobs.json") || continue
+    release_migration_worker_pods "$name"
+    jq -e 'all(.items[]; .status.phase == "Succeeded"
+      and all(.status.containerStatuses[]?;
+        .state.terminated.exitCode == 0))' "$work/migration-worker-pods.json" > /dev/null \
+      || production_fail "candidate migration Job $name has active or uncertain workers"
+    kube delete job "$name" --wait=true --timeout="${timeout}s" > /dev/null \
+      || production_fail "could not remove candidate migration Job $name; release state and Lease are retained"
+  done < <(jq -r --arg revision "$revision" \
+    '.migrations[] | "migration-" + $revision[0:12] + "-" + .image[-40:]' \
+    "$work/pulled/release.json")
+
+  kube get jobs -o json > "$work/all-migration-jobs.json" \
+    || production_fail "cannot verify candidate migration Job cleanup"
+  jq -e --arg candidate "$candidate" --argjson names "$expected_names" '
+    all(.items[];
+      .metadata.annotations["recipe-db/release"] != $candidate
+      and (.metadata.name as $name | ($names | index($name)) == null))
+  ' "$work/all-migration-jobs.json" > /dev/null \
+    || production_fail "candidate migration Jobs remain after cleanup; release state and Lease are retained"
+  release_state_write release-published published-cleanup-pending \
+    "$(jq -cn --arg candidate "$candidate" --arg revision "$revision" \
+      --argjson jobs "$expected_names" \
+      --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+      {migrationJobsCleanup:{artifact:$candidate,revision:$revision,jobs:$jobs,
+        status:"complete",completedAt:$completedAt}}')" \
+    || production_fail "candidate migration Jobs were removed but cleanup completion could not be recorded"
+}
+
 release_finalize() {
   local candidate=$2 tag=$3 confirmation=$4 old_release current api_url
   local page=1
@@ -4133,6 +4257,9 @@ release_finalize() {
         '{publishedRelease:{tag:$tag,url:$url,verifiedAt:$verifiedAt}}')" \
       || return 1
     cluster_operation_lock_update release-published || return 1
+  fi
+  release_finalize_migration_jobs "$candidate"
+  if $lease_present; then
     release_private_file prune \
       || production_fail "published release is verified but Pi temporary data cleanup failed; Lease remains"
     find "$snapshot" -mindepth 1 -maxdepth 1 ! -name backup-state.json \

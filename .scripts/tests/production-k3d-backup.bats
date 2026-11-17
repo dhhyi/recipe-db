@@ -91,6 +91,62 @@ complete_candidate_migration() {
   export MOCK_COMPLETED_MIGRATION=false
 }
 
+prepare_published_migration_release() {
+  export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true MOCK_COMPLETED_MIGRATION=false
+  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":3,"ratings":1,"inspirations":1,"tags":2}'
+  prepare_candidate_release
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  export MOCK_COMPLETED_MIGRATION=true
+  run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  export MOCK_STORAGE_VERSIONS='{"recipes":2,"images":3,"ratings":1,"inspirations":1,"tags":2}'
+  run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -eq 0 ]
+
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/recipes/storage-version"
+  printf '3\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/tags/storage-version"
+  run bash .scripts/production-k3d.sh release-website-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Checked completed migration release" "WEBSITE-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-backup-capture "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  local post_id
+  post_id=$(jq -er '.postReleaseBackup.backupId' "$STATE/backup-state.json")
+  jq '.postReleaseBackup.uploadStatus="verified-upload"' \
+    "$STATE/backup-state.json" > "$STATE/backup-state.next"
+  mv "$STATE/backup-state.next" "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-backup-verify "$VALUES" "$STATE" \
+    "$CANDIDATE" verified-upload "UPLOADED-$post_id-verified-upload"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-accept "$VALUES" "$STATE" \
+    "$CANDIDATE" "ACCEPT-$HOLDER"
+  [ "$status" -eq 0 ]
+
+  mock_github_release_api
+  jq -n --arg revision "$MOCK_REVISION" --arg candidate "$CANDIDATE" \
+    --arg digest "${CANDIDATE##*@}" '
+    {tag_name:"v1",target_commitish:$revision,draft:false,prerelease:false,
+      published_at:"2026-11-10T12:00:00Z",
+      html_url:"https://github.com/dhhyi/recipe-db/releases/tag/v1",
+      body:("Completed migration; " + $candidate +
+        " https://ghcr.io/v2/dhhyi/recipe-db-releases/manifests/" + $digest)}
+  ' > "$MOCK_GITHUB_RELEASE_JSON"
+}
+
+migration_job_count() {
+  local count=0 job
+  for job in "$MOCK_LOG".migration-job*.json; do
+    [[ -f $job ]] && ((count += 1))
+  done
+  printf '%s\n' "$count"
+}
+
 complete_candidate_release_with_start() {
   local use_git_sources=${1:-false}
   local -a source_args=()
@@ -2312,6 +2368,77 @@ EOF
   deletion=$(awk '/delete --raw \/apis\/coordination.k8s.io\/v1\/namespaces\/kube-system\/leases\/recipe-db-deploy/ {line=NR} END {print line}' \
     "$MOCK_LOG")
   [ "$confirmation" -lt "$deletion" ]
+}
+
+@test "release finalization removes only verified completed and unused migration Jobs" {
+  prepare_published_migration_release
+  local job_file job_name
+  job_file="$MOCK_LOG.migration-job.json"
+  job_name=$(jq -er '.metadata.name' "$job_file")
+  cp "$job_file" "$job_file.original"
+  jq '.metadata.annotations["recipe-db/release"]="ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' \
+    "$job_file" > "$job_file.next"
+  mv "$job_file.next" "$job_file"
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"does not match the release and revision"* ]]
+  [ "$(migration_job_count)" -eq 4 ]
+  [ ! -e "$MOCK_LOG.finalize-delete-count" ]
+
+  mv "$job_file.original" "$job_file"
+  export MOCK_FAILED_MIGRATION=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"failed, active, or uncertain"* ]]
+  [ "$(migration_job_count)" -eq 4 ]
+  unset MOCK_FAILED_MIGRATION
+
+  export MOCK_FINALIZE_ACTIVE_WORKER=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"active or uncertain workers"* ]]
+  [ "$(migration_job_count)" -eq 4 ]
+  unset MOCK_FINALIZE_ACTIVE_WORKER
+
+  jq -n --arg candidate "ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" '
+    {metadata:{name:"migration-other-release",
+      annotations:{"recipe-db/release":$candidate,
+        "recipe-db/revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+      spec:{suspend:true},status:{}}
+  ' > "$MOCK_LOG.foreign-migration-job.json"
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -eq 0 ]
+  [ "$(migration_job_count)" -eq 0 ]
+  [ -e "$MOCK_LOG.foreign-migration-job.json" ]
+  [ "$(grep -c ' delete job migration-' "$MOCK_LOG")" -eq 4 ]
+}
+
+@test "release finalization resumes interrupted migration Job cleanup with its Lease retained" {
+  prepare_published_migration_release
+  export MOCK_FINALIZE_INTERRUPT_AFTER_DELETE=true
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -eq 143 ]
+  [ "$(migration_job_count)" -eq 3 ]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e --arg candidate "$CANDIDATE" --arg revision "$MOCK_REVISION" '
+    .status == "release-published" and .phase == "published-cleanup-pending"
+    and .migrationJobsCleanup.artifact == $candidate
+    and .migrationJobsCleanup.revision == $revision
+    and .migrationJobsCleanup.status == "pending"
+  ' "$STATE/backup-state.json" > /dev/null
+
+  unset MOCK_FINALIZE_INTERRUPT_AFTER_DELETE
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -eq 0 ]
+  [ "$(migration_job_count)" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  [ ! -e "$STATE" ]
 }
 
 @test "workstation release writes authoritative Pi progress throughout the guarded lifecycle" {

@@ -576,6 +576,65 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           echo '{"items":[]}'
         fi
         handled=true ;;
+      *" get jobs -o json")
+        migration_job_files=()
+        [[ ! -f $MOCK_LOG.migration-job.json ]] || migration_job_files+=("$MOCK_LOG.migration-job.json")
+        for migration_job_file in "$MOCK_LOG".migration-job-*.json; do
+          [[ ! -f $migration_job_file ]] || migration_job_files+=("$migration_job_file")
+        done
+        {
+          if ((${#migration_job_files[@]} > 0)); then
+            for migration_job_file in "${migration_job_files[@]}"; do
+              migration_job_name=$(jq -r '.metadata.name' "$migration_job_file")
+              if [[ -e $MOCK_LOG.migration-activated-$migration_job_name ]] ||
+                [[ -e $MOCK_LOG.migration-activated && ${#migration_job_files[@]} == 1 ]]; then
+                if [[ $MOCK_FAILED_MIGRATION == true ]]; then
+                  jq --arg reason BackoffLimitExceeded \
+                    '.spec.suspend=false | .status={failed:1,conditions:[{type:"Failed",status:"True",reason:$reason}]}' \
+                    "$migration_job_file"
+                elif [[ $MOCK_COMPLETED_MIGRATION == true ]]; then
+                  jq '.spec.suspend=false | .status={succeeded:1,conditions:[{type:"Complete",status:"True"}]}' \
+                    "$migration_job_file"
+                else
+                  jq '.spec.suspend=false | .status={active:1}' "$migration_job_file"
+                fi
+              else
+                cat "$migration_job_file"
+              fi
+            done
+          fi
+          [[ ! -f $MOCK_LOG.foreign-migration-job.json ]] \
+            || cat "$MOCK_LOG.foreign-migration-job.json"
+        } | jq -s '{items:.}'
+        handled=true ;;
+      *" delete job migration-"*)
+        [[ ${MOCK_FINALIZE_DELETE_FAIL:-false} != true ]] || exit 1
+        migration_job_name=
+        expect_job_name=false
+        for argument in "$@"; do
+          if $expect_job_name; then
+            migration_job_name=$argument
+            expect_job_name=false
+          elif [[ $argument == job ]]; then
+            expect_job_name=true
+          fi
+        done
+        for migration_job_file in "$MOCK_LOG".migration-job*.json; do
+          [[ -f $migration_job_file ]] || continue
+          if [[ $(jq -r '.metadata.name' "$migration_job_file") == "$migration_job_name" ]]; then
+            rm -f -- "$migration_job_file"
+          fi
+        done
+        if [[ ${MOCK_FINALIZE_INTERRUPT_AFTER_DELETE:-false} == true ]]; then
+          delete_count=$(cat "$MOCK_LOG.finalize-delete-count" 2>/dev/null || echo 0)
+          delete_count=$((delete_count + 1))
+          printf '%s\n' "$delete_count" > "$MOCK_LOG.finalize-delete-count"
+          if [[ $delete_count == 1 ]]; then
+            kill -TERM "$PPID"
+            exit 143
+          fi
+        fi
+        handled=true ;;
       *" patch job migration-"*)
         if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
           migration_job_name=
@@ -608,7 +667,15 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         [[ ${MOCK_MIGRATION_ACTIVATION_UNKNOWN:-false} != true ]] || exit 1
         handled=true ;;
       *" get pods -l job-name=migration-"*" -o json"*)
-        if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+        if [[ ${MOCK_FINALIZE_ACTIVE_WORKER:-false} == true ]]; then
+          migration_job_name=
+          for argument in "$@"; do
+            [[ $argument == job-name=* ]] && migration_job_name=${argument#job-name=}
+          done
+          jq -n --arg name "$migration_job_name" '
+            {items:[{metadata:{name:($name+"-pod"),labels:{"job-name":$name}},
+              status:{phase:"Running",containerStatuses:[{state:{running:{}}}]}}]}'
+        elif [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
           migration_job_name=
           for argument in "$@"; do
             [[ $argument == job-name=* ]] && migration_job_name=${argument#job-name=}
