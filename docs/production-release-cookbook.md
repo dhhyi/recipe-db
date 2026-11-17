@@ -84,7 +84,7 @@ gh run list --repo dhhyi/recipe-db --workflow Publish --branch main \
   --status success --limit 5 --json headSha,url,conclusion
 ```
 
-Select the successful run for the intended commit, not simply the latest successful run.
+Select the successful run for the intended commit, not simply the latest successful run. If that commit is absent from the listed results, stop and query the `Publish` workflow by its full 40-character commit SHA using `gh run list --commit`. Do not substitute another commit just because its run appears in the list.
 
 Record both values from the successful workflow:
 
