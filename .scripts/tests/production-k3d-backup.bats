@@ -2372,7 +2372,7 @@ EOF
 
 @test "release finalization removes only verified completed and unused migration Jobs" {
   prepare_published_migration_release
-  local job_file job_name
+  local job_file job_name activation_marker
   job_file="$MOCK_LOG.migration-job.json"
   job_name=$(jq -er '.metadata.name' "$job_file")
   cp "$job_file" "$job_file.original"
@@ -2387,6 +2387,31 @@ EOF
   [ ! -e "$MOCK_LOG.finalize-delete-count" ]
 
   mv "$job_file.original" "$job_file"
+  cp "$job_file" "$job_file.original"
+  jq '.metadata.annotations["recipe-db/revision"]="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+    "$job_file" > "$job_file.next"
+  mv "$job_file.next" "$job_file"
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"does not match the release and revision"* ]]
+  [ "$(migration_job_count)" -eq 4 ]
+  [ ! -e "$MOCK_LOG.finalize-delete-count" ]
+
+  mv "$job_file.original" "$job_file"
+  activation_marker="$MOCK_LOG.migration-activated-$job_name"
+  cp "$job_file" "$job_file.uncertain-original"
+  mv "$activation_marker" "$activation_marker.uncertain"
+  jq '.spec.suspend=false | .status={}' "$job_file" > "$job_file.next"
+  mv "$job_file.next" "$job_file"
+  run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
+    "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
+  [ "$status" -ne 0 ]
+  [[ $output == *"failed, active, or uncertain"* ]]
+  [ "$(migration_job_count)" -eq 4 ]
+  mv "$job_file.uncertain-original" "$job_file"
+  mv "$activation_marker.uncertain" "$activation_marker"
+
   export MOCK_FAILED_MIGRATION=true
   run bash .scripts/production-k3d.sh release-finalize "$VALUES" "$STATE" \
     "$CANDIDATE" v1 "PUBLISHED-$HOLDER-v1"
@@ -2425,6 +2450,9 @@ EOF
   [ "$(migration_job_count)" -eq 0 ]
   [ -e "$MOCK_LOG.foreign-migration-job.json" ]
   [ "$(grep -c ' delete job migration-' "$MOCK_LOG")" -eq 5 ]
+  grep -q "oras pull $CANDIDATE" "$MOCK_LOG"
+  run grep -Eq '^oras (delete|manifest delete|blob delete) ' "$MOCK_LOG"
+  [ "$status" -ne 0 ]
 }
 
 @test "release finalization resumes interrupted migration Job cleanup with its Lease retained" {
