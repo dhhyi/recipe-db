@@ -241,12 +241,22 @@ suite "backend HTTP publication contract":
     let replaced = parseJson(replacement.body)
     check replaced["url"] != published["url"]
     check replaced["thumbUrl"] != published["thumbUrl"]
+    image.fill(parseHtmlColor("#00ff00"))
+    let added = client.request(base & "/images/" & id,
+        httpMethod = HttpPost, body = image.encodeImage(PngFormat),
+        headers = newHttpHeaders({"Content-Type": "image/png"}))
+    check added.code == Http201
+    let latest = parseJson(added.body)
+    let defaultMetadata = client.get(base & "/images/" & id & "/meta")
+    check defaultMetadata.code == Http200
+    check parseJson(defaultMetadata.body).kind == JObject
+    check parseJson(defaultMetadata.body) == latest
     client.close()
     server.stopServer()
     server = startServer()
     let afterRestart = client.get(base & "/images/" & id & "/meta")
     check afterRestart.code == Http200
-    check parseJson(afterRestart.body) == replaced
+    check parseJson(afterRestart.body) == latest
     for index, key in ["url", "thumbUrl"]:
       let retained = client.get(base & published[key].getStr)
       check retained.code == Http200
@@ -261,7 +271,7 @@ suite "backend HTTP publication contract":
     check corrupt.headers["Content-Type"] == "application/problem+json"
     check corrupt.headers["Cache-Control"] == "no-store"
     check parseJson(corrupt.body)["code"].getStr == "metadata-error"
-    writeFile(store.manifestPath(id), $replaced)
+    writeFile(store.manifestPath(id), "[" & $replaced & "]")
     removeFile(store.publicFolder / replaced["thumbUrl"].getStr[8 .. ^1])
     let missing = client.get(base & "/images/" & id & "/meta")
     check missing.code == Http500
@@ -376,8 +386,8 @@ suite "backend HTTP publication contract":
     check compact.code == Http204
     check store.metadata("recipe-a") == current
     check fileExists(store.publicFolder / first.filename("url"))
-    check not fileExists(store.publicFolder / superseded.filename("url"))
-    check not fileExists(store.publicFolder / superseded.filename("thumbUrl"))
+    check fileExists(store.publicFolder / superseded.filename("url"))
+    check fileExists(store.publicFolder / superseded.filename("thumbUrl"))
 
     let purge = client.request(base & "/maintenance/recipes/purge/",
         httpMethod = HttpPost, body = """{"recipeId":"recipe-c"}""",

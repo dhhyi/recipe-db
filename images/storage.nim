@@ -8,7 +8,10 @@ type
     root*: string
   StorageError* = object of CatchableError
   ImageNotFound* = object of CatchableError
+  ImageLimitReached* = object of CatchableError
   ImageStateInvalid* = object of CatchableError
+
+const maxImagesPerRecipe* = 10
 
 proc validRecipeId*(id: string): bool =
   if id.len == 0 or id.len > 128 or ".." in id:
@@ -149,10 +152,100 @@ proc writeAtomic(path, bytes: string) =
 proc publishOutput(store: ImageStorage, name, bytes: string) =
   let path = store.publicFolder / name
   if fileExists(path):
+    if getFileInfo(path, followSymlink = false).kind != pcFile:
+      raise newException(StorageError, "Existing output is not a regular file")
     if readFile(path) != bytes:
       raise newException(StorageError, "Existing output does not match its hash")
     return
   writeAtomic(path, bytes)
+
+proc validateMetadata(store: ImageStorage, id: string,
+    metadata: JsonNode, validateFiles = true): JsonNode =
+  if metadata.kind != JObject:
+    raise newException(StorageError, "Invalid manifest entry")
+  for key in ["recipeId", "id", "modified", "url", "thumbUrl"]:
+    if not metadata.hasKey(key) or metadata[key].kind != JString:
+      raise newException(StorageError, "Invalid manifest field: " & key)
+  for key in ["width", "height", "size"]:
+    if not metadata.hasKey(key) or metadata[key].kind != JInt:
+      raise newException(StorageError, "Invalid manifest field: " & key)
+  let
+    width = metadata["width"].getInt
+    height = metadata["height"].getInt
+    imageId = metadata["id"].getStr
+  if metadata["recipeId"].getStr != id or
+      not ((width == 650 and height == 488) or
+      (width == 648 and height == 486)) or metadata["size"].getInt <= 0 or
+      imageId.len != 64:
+    raise newException(StorageError, "Invalid manifest metadata")
+  for c in imageId:
+    if c notin {'0'..'9', 'a'..'f'}:
+      raise newException(StorageError, "Invalid image id")
+  discard parse(metadata["modified"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff",
+      utc())
+
+  for key in ["url", "thumbUrl"]:
+    let url = metadata[key].getStr
+    if not url.startsWith("/public/"):
+      raise newException(StorageError, "Invalid manifest URL")
+    let name = decodeUrl(url[8 .. ^1], decodePlus = false)
+    let parsed = parseImageName(name)
+    if not parsed.valid or parsed.recipeId != id or
+        parsed.thumb != (key == "thumbUrl") or
+        (key == "url" and parsed.hash != imageId):
+      raise newException(StorageError, "Invalid manifest filename")
+    if not validateFiles:
+      continue
+    let path = store.publicFolder / name
+    if not fileExists(path) or
+        getFileInfo(path, followSymlink = false).kind != pcFile:
+      raise newException(StorageError, "Missing or unsafe stored output")
+    let bytes = readFile(path)
+    if outputHash(bytes) != parsed.hash or
+        (key == "url" and bytes.len != metadata["size"].getInt):
+      raise newException(StorageError, "Invalid stored output")
+    let dimensions = decodeImageDimensions(bytes)
+    if dimensions.width != (if parsed.thumb: 300 else: width) or
+        dimensions.height != (if parsed.thumb: 225 else: height):
+      raise newException(StorageError, "Invalid stored output dimensions")
+  metadata
+
+proc readCollection(store: ImageStorage, id: string,
+    validateFiles: bool): JsonNode =
+  if not validRecipeId(id):
+    raise newException(ImageNotFound, "Image not found")
+  let path = store.manifestPath(id)
+  if not fileExists(path):
+    if dirExists(path):
+      raise newException(StorageError, "Invalid manifest")
+    return newJArray()
+  if getFileInfo(path, followSymlink = false).kind != pcFile:
+    raise newException(StorageError, "Invalid manifest file type")
+  try:
+    result = parseJson(readFile(path))
+    if result.kind != JArray or result.len > maxImagesPerRecipe:
+      raise newException(StorageError, "Invalid manifest")
+    var ids: seq[string]
+    for entry in result:
+      discard store.validateMetadata(id, entry, validateFiles)
+      let imageId = entry["id"].getStr
+      if imageId in ids:
+        raise newException(StorageError, "Duplicate image id in manifest")
+      ids.add(imageId)
+  except StorageError:
+    raise
+  except CatchableError:
+    raise newException(StorageError, "Cannot read image metadata: " &
+        getCurrentExceptionMsg())
+
+proc collection*(store: ImageStorage, id: string): JsonNode =
+  store.readCollection(id, true)
+
+proc metadata*(store: ImageStorage, id: string): JsonNode =
+  let images = store.readCollection(id, false)
+  if images.len == 0:
+    raise newException(ImageNotFound, "Image not found")
+  store.validateMetadata(id, images[0])
 
 proc publish*(store: ImageStorage, id, normal, thumbnail: string): JsonNode =
   if not validRecipeId(id):
@@ -160,13 +253,15 @@ proc publish*(store: ImageStorage, id, normal, thumbnail: string): JsonNode =
   let
     dimensions = decodeImageDimensions(normal)
     thumbDimensions = decodeImageDimensions(thumbnail)
-    normalName = id & "-" & outputHash(normal) & ".png"
+    imageId = outputHash(normal)
+    normalName = id & "-" & imageId & ".png"
     thumbName = id & "-" & outputHash(thumbnail) & "-thumb.png"
   if dimensions.width != 648 or dimensions.height != 486 or
       thumbDimensions.width != 300 or thumbDimensions.height != 225:
     raise newException(StorageError, "Invalid output dimensions")
   result = %*{
     "recipeId": id,
+    "id": imageId,
     "height": dimensions.height,
     "width": dimensions.width,
     "size": normal.len,
@@ -174,60 +269,34 @@ proc publish*(store: ImageStorage, id, normal, thumbnail: string): JsonNode =
     "url": "/public/" & encodeUrl(normalName, usePlus = false),
     "thumbUrl": "/public/" & encodeUrl(thumbName, usePlus = false),
   }
+
+  var images = newJArray()
+  images.add(result)
+  for existing in store.collection(id):
+    if existing["id"].getStr != imageId:
+      images.add(existing)
+  if images.len > maxImagesPerRecipe:
+    raise newException(ImageLimitReached,
+        "A recipe can have at most " & $maxImagesPerRecipe & " images")
+
   # Requests use synchronous file operations with threads disabled: publication
   # cannot interleave with another upload or deletion.
   store.publishOutput(normalName, normal)
   store.publishOutput(thumbName, thumbnail)
-  writeAtomic(store.manifestPath(id), $result)
+  writeAtomic(store.manifestPath(id), $images)
 
-proc metadata*(store: ImageStorage, id: string): JsonNode =
+proc deleteImage*(store: ImageStorage, id, imageId: string): bool =
   if not validRecipeId(id):
-    raise newException(ImageNotFound, "Image not found")
-  let path = store.manifestPath(id)
-  if not fileExists(path):
-    if dirExists(path):
-      raise newException(StorageError, "Invalid manifest")
-    raise newException(ImageNotFound, "Image not found")
-  try:
-    result = parseJson(readFile(path))
-    if result.kind != JObject:
-      raise newException(StorageError, "Invalid manifest")
-    for key in ["recipeId", "modified", "url", "thumbUrl"]:
-      if not result.hasKey(key) or result[key].kind != JString:
-        raise newException(StorageError, "Invalid manifest field: " & key)
-    for key in ["width", "height", "size"]:
-      if not result.hasKey(key) or result[key].kind != JInt:
-        raise newException(StorageError, "Invalid manifest field: " & key)
-    let width = result["width"].getInt
-    let height = result["height"].getInt
-    if result["recipeId"].getStr != id or
-        not ((width == 650 and height == 488) or
-        (width == 648 and height == 486)) or result["size"].getInt <= 0:
-      raise newException(StorageError, "Invalid manifest metadata")
-    discard parse(result["modified"].getStr, "yyyy-MM-dd'T'HH:mm:ss'.'fff",
-        utc())
-    for key in ["url", "thumbUrl"]:
-      let url = result[key].getStr
-      if not url.startsWith("/public/"):
-        raise newException(StorageError, "Invalid manifest URL")
-      let name = decodeUrl(url[8 .. ^1], decodePlus = false)
-      let parsed = parseImageName(name)
-      if not parsed.valid or parsed.recipeId != id or
-          parsed.thumb != (key == "thumbUrl"):
-        raise newException(StorageError, "Invalid manifest filename")
-      let bytes = readFile(store.publicFolder / name)
-      if outputHash(bytes) != parsed.hash or
-          (key == "url" and bytes.len != result["size"].getInt):
-        raise newException(StorageError, "Invalid stored output")
-      let dimensions = decodeImageDimensions(bytes)
-      if dimensions.width != (if parsed.thumb: 300 else: width) or
-          dimensions.height != (if parsed.thumb: 225 else: height):
-        raise newException(StorageError, "Invalid stored output dimensions")
-  except StorageError:
-    raise
-  except CatchableError:
-    raise newException(StorageError, "Cannot read image metadata: " &
-        getCurrentExceptionMsg())
+    return false
+  let images = store.collection(id)
+  var retained = newJArray()
+  for entry in images:
+    if entry["id"].getStr == imageId:
+      result = true
+    else:
+      retained.add(entry)
+  if result:
+    writeAtomic(store.manifestPath(id), $retained)
 
 proc deleteRecipe*(store: ImageStorage, id: string): bool =
   if not validRecipeId(id):
@@ -296,19 +365,16 @@ proc compactRecipe*(store: ImageStorage, id: string) =
 
   var current: JsonNode
   try:
-    current = store.metadata(id)
+    current = store.collection(id)
   except CatchableError as error:
-    raise newException(ImageStateInvalid, "Cannot validate current image pair: " & error.msg)
+    raise newException(ImageStateInvalid, "Cannot validate current image collection: " & error.msg)
 
-  let
-    currentNormal = parseImageName(decodeUrl(current["url"].getStr[8 .. ^1], decodePlus = false))
-    currentThumb = parseImageName(decodeUrl(current["thumbUrl"].getStr[8 .. ^1], decodePlus = false))
-  if not currentNormal.valid or not currentThumb.valid:
-    raise newException(ImageStateInvalid, "Manifest does not identify a valid image pair")
-
+  var retained: seq[string]
+  for entry in current:
+    retained.add(decodeUrl(entry["url"].getStr[8 .. ^1], decodePlus = false))
+    retained.add(decodeUrl(entry["thumbUrl"].getStr[8 .. ^1], decodePlus = false))
   for name in outputs:
-    if name != extractFilename(decodeUrl(current["url"].getStr[8 .. ^1], decodePlus = false)) and
-        name != extractFilename(decodeUrl(current["thumbUrl"].getStr[8 .. ^1], decodePlus = false)):
+    if name notin retained:
       removeFile(store.publicFolder / name)
 
 proc wipe*(store: ImageStorage) =

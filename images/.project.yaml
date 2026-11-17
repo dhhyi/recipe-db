@@ -70,7 +70,7 @@ backupRole: cleanup-participant
 backupCompact: true
 backupData: { kind: images }
 storageVersion:
-  value: 1
+  value: 2
   file: storage_version_generated.nim
   template: |
     const expectedStorageVersion* = {{STORAGE_VERSION}}

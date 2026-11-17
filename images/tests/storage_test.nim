@@ -1,4 +1,4 @@
-import std/[json, os, sequtils, strutils, times, unittest, uri]
+import std/[algorithm, json, os, sequtils, strutils, times, unittest, uri]
 import pixie
 import ../storage
 
@@ -70,18 +70,18 @@ suite "immutable image storage":
 
     versionedStore.initialize()
     versionedStore.publishStorageVersion()
-    check readFile(versionRoot / "storage-version") == "1\n"
+    check readFile(versionRoot / "storage-version") == "2\n"
     expect StorageError:
       versionedStore.publishStorageVersion()
-    check readFile(versionRoot / "storage-version") == "1\n"
+    check readFile(versionRoot / "storage-version") == "2\n"
     check not versionedStore.checkStorageVersion("production")
     expect StorageError:
       discard versionedStore.checkStorageVersion("backup")
 
-    writeFile(versionRoot / "storage-version", "2\n")
+    writeFile(versionRoot / "storage-version", "3\n")
     expect StorageError:
       discard versionedStore.checkStorageVersion("production")
-    check readFile(versionRoot / "storage-version") == "2\n"
+    check readFile(versionRoot / "storage-version") == "3\n"
     writeFile(versionRoot / "storage-version", "not-a-version")
     expect StorageError:
       discard versionedStore.checkStorageVersion("testing")
@@ -128,6 +128,78 @@ suite "immutable image storage":
     let thumbOnly = store.publish("recipe", a.normal, b.thumb)
     check thumbOnly["url"] == first["url"]
     check thumbOnly["thumbUrl"] == second["thumbUrl"]
+    check parseJson(readFile(store.manifestPath("recipe"))).kind == JArray
+    check thumbOnly["id"].getStr == parseImageName(first.filename("url")).hash
+
+  test "ordered collections deduplicate, delete by id, and persist atomically":
+    let
+      a = outputs("#ff0000")
+      b = outputs("#0000ff")
+      c = outputs("#00ff00")
+      firstA = store.publish("recipe", a.normal, a.thumb)
+      firstB = store.publish("recipe", b.normal, b.thumb)
+      firstC = store.publish("recipe", c.normal, c.thumb)
+    check store.collection("recipe").mapIt(it["id"].getStr) ==
+        @[firstC["id"].getStr, firstB["id"].getStr, firstA["id"].getStr]
+
+    let updatedB = store.publish("recipe", b.normal, c.thumb)
+    check updatedB["thumbUrl"] == firstC["thumbUrl"]
+    check store.collection("recipe").mapIt(it["id"].getStr) ==
+        @[firstB["id"].getStr, firstC["id"].getStr, firstA["id"].getStr]
+    check store.collection("recipe").filterIt(
+        it["id"].getStr == firstB["id"].getStr).len == 1
+
+    let removedNormal = store.publicFolder / firstC.filename("url")
+    let removedThumb = store.publicFolder / firstC.filename("thumbUrl")
+    check store.deleteImage("recipe", firstC["id"].getStr)
+    check fileExists(removedNormal)
+    check fileExists(removedThumb)
+    check not store.deleteImage("recipe", firstC["id"].getStr)
+    let restarted = ImageStorage(root: testRoot)
+    check restarted.collection("recipe").mapIt(it["id"].getStr) ==
+        @[firstB["id"].getStr, firstA["id"].getStr]
+    check restarted.metadata("recipe") == updatedB
+
+    check restarted.deleteImage("recipe", firstB["id"].getStr)
+    check restarted.deleteImage("recipe", firstA["id"].getStr)
+    check restarted.collection("recipe").len == 0
+    expect ImageNotFound:
+      discard restarted.metadata("recipe")
+
+  test "default metadata reads validate only the first image's files":
+    let
+      a = outputs("#ff0000")
+      b = outputs("#0000ff")
+    let nonDefault = store.publish("recipe", a.normal, a.thumb)
+    let default = store.publish("recipe", b.normal, b.thumb)
+    writeFile(store.publicFolder / nonDefault.filename("url"), "corrupt")
+    check store.metadata("recipe") == default
+    expect StorageError:
+      discard store.collection("recipe")
+
+  test "ten-image limit applies after deduplication and before publication":
+    let a = outputs("#ff0000")
+    for index in 1..9:
+      let generated = outputs("#" & toHex(index, 6))
+      discard store.publish("recipe", generated.normal, generated.thumb)
+    let atCapacity = store.publish("recipe", a.normal, a.thumb)
+    check store.collection("recipe").len == maxImagesPerRecipe
+
+    let replacement = outputs("#0000ff")
+    let refreshed = store.publish("recipe", a.normal, replacement.thumb)
+    check refreshed["id"] == atCapacity["id"]
+    check store.collection("recipe").len == maxImagesPerRecipe
+    check store.metadata("recipe") == refreshed
+
+    let manifest = readFile(store.manifestPath("recipe"))
+    let before = toSeq(walkDir(store.publicFolder))
+        .mapIt(extractFilename(it.path)).sorted()
+    let eleventh = outputs("#ffffff")
+    expect ImageLimitReached:
+      discard store.publish("recipe", eleventh.normal, eleventh.thumb)
+    check readFile(store.manifestPath("recipe")) == manifest
+    check toSeq(walkDir(store.publicFolder))
+        .mapIt(extractFilename(it.path)).sorted() == before
 
   test "accepted recipe ids are escaped only in public URLs":
     let a = outputs("#ff0000")
@@ -152,7 +224,8 @@ suite "immutable image storage":
     metadata["width"] = %650
     metadata["height"] = %488
     metadata["size"] = %bytes.len
-    writeFile(store.manifestPath("recipe"), $metadata)
+    metadata["id"] = %outputHash(bytes)
+    writeFile(store.manifestPath("recipe"), "[" & $metadata & "]")
     check store.metadata("recipe") == metadata
     discard store.publish("recipe", current.normal, current.thumb)
     check store.metadata("recipe")["width"].getInt == 648
@@ -185,7 +258,7 @@ suite "immutable image storage":
   test "manifest rename failure does not publish metadata or leave temporary files":
     let a = outputs("#ff0000")
     createDir(store.manifestPath("recipe"))
-    expect OSError, IOError:
+    expect StorageError:
       discard store.publish("recipe", a.normal, a.thumb)
     for kind, path in walkDir(store.manifestFolder):
       check ".pending-" notin path
@@ -195,22 +268,27 @@ suite "immutable image storage":
   test "malformed manifests and missing or corrupted output are storage errors":
     expect ImageNotFound:
       discard store.metadata("absent")
-    for invalid in ["{", "[]", "{}", """{"recipeId":123}"""]:
+    for invalid in ["{", "{}", """{"recipeId":123}"""]:
       writeFile(store.manifestPath("recipe"), invalid)
       expect StorageError:
         discard store.metadata("recipe")
+    writeFile(store.manifestPath("recipe"), "[]")
+    expect ImageNotFound:
+      discard store.metadata("recipe")
     let a = outputs("#ff0000")
     let first = store.publish("recipe", a.normal, a.thumb)
     var invalid = parseJson($first)
     invalid["thumbUrl"] = %"/public/../secret"
-    writeFile(store.manifestPath("recipe"), $invalid)
+    writeFile(store.manifestPath("recipe"), "[" & $invalid & "]")
     expect StorageError:
       discard store.metadata("recipe")
-    writeFile(store.manifestPath("recipe"), $first)
+    writeFile(store.manifestPath("recipe"), "[" & $first & "]")
     removeFile(store.publicFolder / first.filename("thumbUrl"))
     expect StorageError:
       discard store.metadata("recipe")
-    discard store.publish("recipe", a.normal, a.thumb)
+    expect StorageError:
+      discard store.publish("recipe", a.normal, a.thumb)
+    writeFile(store.publicFolder / first.filename("thumbUrl"), a.thumb)
     writeFile(store.publicFolder / first.filename("url"), "corrupt")
     expect StorageError:
       discard store.metadata("recipe")
@@ -248,9 +326,14 @@ suite "immutable image storage":
   test "backup enumeration, orphan purge and image compaction fail closed":
     let a = outputs("#ff0000")
     let b = outputs("#0000ff")
+    let c = outputs("#00ff00")
     let first = store.publish("recipe-a", a.normal, a.thumb)
     let superseded = store.publish("recipe-a", b.normal, b.thumb)
-    let current = store.publish("recipe-a", a.normal, a.thumb)
+    let current = store.publish("recipe-a", a.normal, b.thumb)
+    let removed = store.publish("recipe-a", c.normal, c.thumb)
+    check store.deleteImage("recipe-a", removed["id"].getStr)
+    check fileExists(store.publicFolder / removed.filename("url"))
+    check fileExists(store.publicFolder / removed.filename("thumbUrl"))
     discard store.publish("recipe-b", b.normal, b.thumb)
     let orphan = store.publish("recipe-c", b.normal, b.thumb)
     writeFile(store.manifestPath("recipe-c"), "{")
@@ -259,10 +342,13 @@ suite "immutable image storage":
     store.compactRecipe("recipe-a")
     check store.metadata("recipe-a") == current
     check toSeq(walkDir(store.publicFolder))
-        .mapIt(extractFilename(it.path)).len == 6
+        .mapIt(extractFilename(it.path)).len == 7
     check fileExists(store.publicFolder / first.filename("url"))
-    check not fileExists(store.publicFolder / superseded.filename("url"))
-    check not fileExists(store.publicFolder / superseded.filename("thumbUrl"))
+    check not fileExists(store.publicFolder / first.filename("thumbUrl"))
+    check fileExists(store.publicFolder / superseded.filename("url"))
+    check fileExists(store.publicFolder / superseded.filename("thumbUrl"))
+    check not fileExists(store.publicFolder / removed.filename("url"))
+    check not fileExists(store.publicFolder / removed.filename("thumbUrl"))
 
     store.purgeRecipeData("recipe-c")
     store.purgeRecipeData("recipe-c")
@@ -282,7 +368,7 @@ suite "immutable image storage":
       store.compactRecipe("recipe-a")
     check toSeq(walkDir(store.publicFolder)).mapIt(readFile(it.path)) == before
 
-    writeFile(store.manifestPath("recipe-a"), $historical)
+    writeFile(store.manifestPath("recipe-a"), "[" & $historical & "]")
     removeFile(store.publicFolder / historical.filename("thumbUrl"))
     expect ImageStateInvalid:
       store.compactRecipe("recipe-a")
