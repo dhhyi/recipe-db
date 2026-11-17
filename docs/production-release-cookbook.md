@@ -25,6 +25,8 @@ For current capabilities and limits, see the [release capability overview](produ
 
 Start with the intended source changes and the private operator inputs. Run workstation commands from the repository root in fish. Commands labelled for the Pi use its POSIX-compatible shell; commands in the provisioning container's SSH-agent shell use Bash.
 
+The assisting agent may run the documented read-only GitHub workflow and release lookups and report their results. This is a specific exception: rehearsals and all other release operations remain operator-guided, even when they require no password.
+
 ### Pause scheduled backups
 
 At the start of the attempt, connect to the Pi using the verified host and user from the private provisioning inventory. Record whether the schedule was already disabled; do not automatically enable a schedule that was intentionally paused before this attempt. On the Pi:
