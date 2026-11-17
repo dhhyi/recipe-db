@@ -640,6 +640,8 @@ legacy_pi_claims() {
       run bash .scripts/production-k3d.sh "$action" "$VALUES" "${args[@]}"
       [ "$status" -ne 0 ]
       [[ $output == *"Traefik requires an explicit v3.7-or-later patch version"* ]]
+      [[ $output != *"command not found"* ]]
+      [[ $output != *"unbound variable"* ]]
     done
     mv values.original "$VALUES"
   done

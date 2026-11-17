@@ -579,8 +579,8 @@ verify_sample() {
 }
 
 write_values() {
-  local worktree=$1 cluster_name=$2 port=$3 output=$4
-  rehearsal_write_values "$worktree" "$cluster_name" "$port" "$((port + 10000))" \
+  local cluster_name=$1 port=$2 output=$3
+  rehearsal_write_values "$root" "$cluster_name" "$port" "$((port + 10000))" \
     "$accounts_file" "$output" "$deployment_values"
 }
 
@@ -1081,10 +1081,10 @@ PY
 success_source_values="$work/success-source-values.yaml"
 success_candidate_values="$work/success-candidate-values.yaml"
 success_cluster_values="$work/success-cluster-values.yaml"
-write_values "$source_worktree" "$(rehearsal_cluster_name "$run_id" r)" \
+write_values "$(rehearsal_cluster_name "$run_id" r)" \
   "$http_port" "$success_source_values"
 write_cluster_values "$success_source_values" "$success_cluster_values"
-write_values "$candidate_worktree" "$(rehearsal_cluster_name "$run_id" r)" \
+write_values "$(rehearsal_cluster_name "$run_id" r)" \
   "$http_port" "$success_candidate_values"
 mark
 

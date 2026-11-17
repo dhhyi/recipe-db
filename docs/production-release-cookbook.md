@@ -177,6 +177,8 @@ Synthetic fixtures remain part of automated tooling regressions; they are not an
 
 ### Rehearse the deployed backup upgrade
 
+The source and candidate use local infrastructure defaults from the current tooling checkout. Their application metadata, templates and images remain pinned to their immutable releases.
+
 Before production maintenance, rehearse the exact deployed release, latest remotely verified backup and candidate on one isolated local cluster. This command makes only read-only Pi API requests; it never deploys to or changes the Pi. It first verifies complete recovery from an injected migration-uncertain state, then exercises a successful upgrade on the recovered cluster. The injection uses a deliberately missing Job after activation intent; no migration is allowed to execute during that scenario.
 
 This is a required process step, not a machine-enforced maintenance gate. An operator may exceptionally proceed without a passing rehearsal when urgency warrants it, but must record that decision and the failed, interrupted or skipped outcome accurately. That discretion never waives storage, ordering, ownership, stopped-worker or migration-validation guards, and does not permit changing or bypassing them.
