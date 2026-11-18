@@ -85,6 +85,7 @@ jobs:
           client-id: ${{ vars.PR_METADATA_APP_CLIENT_ID }}
           private-key: ${{ secrets.PR_METADATA_APP_PRIVATE_KEY }}
           permission-pull-requests: write
+          permission-contents: write
 
       - name: Mark draft ready for review
         if: steps.metadata.outputs.promote == 'true'
