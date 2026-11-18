@@ -197,7 +197,9 @@ suite "backend HTTP publication contract":
     let metadata = client.get(base & "/images/" & id & "/meta")
     check metadata.code == Http200
     check metadata.headers["Cache-Control"] == "no-store"
-    check parseJson(metadata.body) == published
+    check parseJson(metadata.body).kind == JArray
+    check parseJson(metadata.body).len == 1
+    check parseJson(metadata.body)[0] == published
     var originalBytes: array[2, string]
     for index, key in ["url", "thumbUrl"]:
       let response = client.get(base & published[key].getStr)
@@ -249,14 +251,18 @@ suite "backend HTTP publication contract":
     let latest = parseJson(added.body)
     let defaultMetadata = client.get(base & "/images/" & id & "/meta")
     check defaultMetadata.code == Http200
-    check parseJson(defaultMetadata.body).kind == JObject
-    check parseJson(defaultMetadata.body) == latest
+    check parseJson(defaultMetadata.body).kind == JArray
+    check parseJson(defaultMetadata.body).len == 3
+    check parseJson(defaultMetadata.body)[0] == latest
+    let defaultOnly = client.get(base & "/images/" & id & "/meta/0")
+    check defaultOnly.code == Http200
+    check parseJson(defaultOnly.body) == latest
     client.close()
     server.stopServer()
     server = startServer()
     let afterRestart = client.get(base & "/images/" & id & "/meta")
     check afterRestart.code == Http200
-    check parseJson(afterRestart.body) == latest
+    check parseJson(afterRestart.body)[0] == latest
     for index, key in ["url", "thumbUrl"]:
       let retained = client.get(base & published[key].getStr)
       check retained.code == Http200
@@ -277,9 +283,12 @@ suite "backend HTTP publication contract":
     check missing.code == Http500
     check parseJson(missing.body)["code"].getStr == "metadata-error"
     let absent = client.get(base & "/images/absent/meta")
-    check absent.code == Http404
-    check absent.headers["Cache-Control"] == "no-store"
-    check parseJson(absent.body)["code"].getStr == "image-not-found"
+    check absent.code == Http200
+    check parseJson(absent.body) == newJArray()
+    let absentDefault = client.get(base & "/images/absent/meta/0")
+    check absentDefault.code == Http404
+    check absentDefault.headers["Cache-Control"] == "no-store"
+    check parseJson(absentDefault.body)["code"].getStr == "image-not-found"
     let deleted = client.request(base & "/images/" & id,
         httpMethod = HttpDelete)
     check deleted.code == Http204
@@ -409,6 +418,11 @@ suite "backend HTTP publication contract":
         httpMethod = HttpDelete)
     check blockedDelete.code == Http503
     check parseJson(blockedDelete.body)["code"].getStr == "maintenance-mode"
+    let blockedImageDelete = client.request(base & "/images/recipe-a/" &
+        current["id"].getStr, httpMethod = HttpDelete)
+    check blockedImageDelete.code == Http503
+    check parseJson(blockedImageDelete.body)["code"].getStr == "maintenance-mode"
+    check store.collection("recipe-a").len == 2
     let blockedReset = client.request(base & "/images", httpMethod = HttpDelete)
     check blockedReset.code == Http404
     check fileExists(store.manifestPath("recipe-a"))
@@ -427,3 +441,121 @@ suite "backend HTTP publication contract":
     let unavailable = client.get(base & "/maintenance/status")
     check unavailable.code == Http404
     check parseJson(unavailable.body)["code"].getStr == "not-found"
+
+  test "collection, default, individual deletion, and image limit routes":
+    if dirExists(root):
+      removeDir(root)
+    var server = startServer()
+    let client = newHttpClient(timeout = 5000)
+    defer:
+      client.close()
+      server.stopServer()
+      if dirExists(root):
+        removeDir(root)
+
+    proc imageBytes(color: string): string =
+      let image = newImage(70, 40)
+      image.fill(parseHtmlColor(color))
+      image.encodeImage(PngFormat)
+
+    proc upload(recipeId, color: string): Response =
+      client.request(base & "/images/" & recipeId, httpMethod = HttpPost,
+          body = imageBytes(color),
+          headers = newHttpHeaders({"Content-Type": "image/png"}))
+
+    let empty = client.get(base & "/images/empty/meta/")
+    check empty.code == Http200
+    check empty.headers["Cache-Control"] == "no-store"
+    check parseJson(empty.body) == newJArray()
+    for path in ["/images/empty/meta/0", "/images/empty/meta/0/"]:
+      let missing = client.get(base & path)
+      check missing.code == Http404
+      check parseJson(missing.body)["code"].getStr == "image-not-found"
+
+    let uploadA = upload("collection", "#ff0000")
+    let uploadB = upload("collection", "#0000ff")
+    check uploadA.code == Http201
+    check uploadB.code == Http201
+    let a = parseJson(uploadA.body)
+    let b = parseJson(uploadB.body)
+    check a["id"].getStr == outputHash(client.getContent(base & a["url"].getStr))
+    check a["id"].getStr.len == 64
+    for c in a["id"].getStr:
+      check c in {'0'..'9', 'a'..'f'}
+
+    let collection = client.get(base & "/images/collection/meta/")
+    check collection.code == Http200
+    check parseJson(collection.body).kind == JArray
+    check parseJson(collection.body).len == 2
+    check parseJson(collection.body)[0] == b
+    check parseJson(collection.body)[1] == a
+    for path in ["/images/collection/meta/0", "/images/collection/meta/0/"]:
+      let defaultOnly = client.get(base & path)
+      check defaultOnly.code == Http200
+      check defaultOnly.headers["Content-Type"] == "application/json"
+      check defaultOnly.headers["Cache-Control"] == "no-store"
+      check parseJson(defaultOnly.body) == b
+
+    let malformedId = client.request(base & "/images/collection/not-an-image-id",
+        httpMethod = HttpDelete)
+    check malformedId.code == Http400
+    check parseJson(malformedId.body)["code"].getStr == "invalid-image-id"
+    check parseJson(malformedId.body)["field"].getStr == "imageId"
+    let crossRecipe = client.request(base & "/images/other/" & a["id"].getStr,
+        httpMethod = HttpDelete)
+    check crossRecipe.code == Http404
+    check parseJson(client.getContent(base & "/images/collection/meta"))[0] == b
+
+    let removedB = client.request(base & "/images/collection/" & b["id"].getStr & "/",
+        httpMethod = HttpDelete)
+    check removedB.code == Http204
+    check removedB.body.len == 0
+    check client.get(base & b["url"].getStr).code == Http200
+    check parseJson(client.getContent(base & "/images/collection/meta")) == %*[a]
+    check parseJson(client.getContent(base & "/images/collection/meta/0")) == a
+
+    let removedA = client.request(base & "/images/collection/" & a["id"].getStr,
+        httpMethod = HttpDelete)
+    check removedA.code == Http204
+    check parseJson(client.getContent(base & "/images/collection/meta")) == newJArray()
+    check client.get(base & "/images/collection/meta/0").code == Http404
+    check client.request(base & "/images/collection/" & a["id"].getStr,
+        httpMethod = HttpDelete).code == Http404
+
+    let colors = [
+      "#ff0000", "#0000ff", "#00ff00", "#ffff00", "#ff00ff",
+      "#00ffff", "#ffffff", "#000000", "#808080", "#ffa500", "#800080",
+    ]
+    var capacityImages: seq[JsonNode]
+    for color in colors[0 ..< 10]:
+      let response = upload("capacity", color)
+      check response.code == Http201
+      capacityImages.add(parseJson(response.body))
+    let fullCollection = client.getContent(base & "/images/capacity/meta")
+    check parseJson(fullCollection).len == 10
+    let duplicateAtCapacity = upload("capacity", colors[0])
+    check duplicateAtCapacity.code == Http201
+    let afterDuplicate = parseJson(client.getContent(base & "/images/capacity/meta"))
+    check afterDuplicate.len == 10
+    check afterDuplicate[0]["id"] == capacityImages[0]["id"]
+    for i in 0 ..< afterDuplicate.len:
+      for j in i + 1 ..< afterDuplicate.len:
+        check afterDuplicate[i]["id"] != afterDuplicate[j]["id"]
+
+    var fileCountBeforeOverflow = 0
+    for _, _ in walkDir(ImageStorage(root: root).publicFolder):
+      inc fileCountBeforeOverflow
+    let overflow = upload("capacity", colors[10])
+    check overflow.code == Http409
+    check overflow.headers["Content-Type"] == "application/problem+json"
+    check overflow.headers["Cache-Control"] == "no-store"
+    let problem = parseJson(overflow.body)
+    check problem["code"].getStr == "image-limit-reached"
+    check problem["detail"].getStr.contains("10")
+    check parseJson(client.getContent(base & "/images/capacity/meta")) == afterDuplicate
+    check parseJson(client.getContent(base & "/images/capacity/meta/0")) ==
+        afterDuplicate[0]
+    var fileCountAfterOverflow = 0
+    for _, _ in walkDir(ImageStorage(root: root).publicFolder):
+      inc fileCountAfterOverflow
+    check fileCountAfterOverflow == fileCountBeforeOverflow
