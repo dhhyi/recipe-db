@@ -34,6 +34,11 @@ JOB = "quality-checks"
 UPLOAD_STEP = "upload Bazel cache snapshot"
 ARTIFACT_PREFIX = "bazel-cache-v2"
 TRUSTED_COPILOT_ACTOR = (198982749, "Copilot", "Bot")
+TRUSTED_PR_METADATA_ACTOR = (358222943, "recipe-db-pr-metadata[bot]", "Bot")
+TRUSTED_BOT_IDENTITIES = {
+    TRUSTED_COPILOT_ACTOR: "pinned Copilot identity",
+    TRUSTED_PR_METADATA_ACTOR: "pinned PR metadata app identity",
+}
 MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-main-r([1-9]\d*)-a([1-9]\d*)")
 PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
 LEGACY_MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-main-r([1-9]\d*)-a([1-9]\d*)")
@@ -1427,14 +1432,16 @@ def trusted_pr_writer(base, token, run, detail, repository, pr_number):
         print(f"cache: trust-rejected pr={pr_number}: recorded producer head repository is not this repository")
         return False
     if actor_type == "Bot":
-        if actor_identity != TRUSTED_COPILOT_ACTOR:
+        authorization = TRUSTED_BOT_IDENTITIES.get(actor_identity)
+        if authorization is None:
             print(f"cache: trust-rejected pr={pr_number}: unsupported or mismatched bot identity")
             return False
-        print(f"cache: trust-accepted pr={pr_number} authorization=pinned Copilot identity")
+        print(f"cache: trust-accepted pr={pr_number} authorization={authorization}")
         return True
-    if actor_id == TRUSTED_COPILOT_ACTOR[0] or login == TRUSTED_COPILOT_ACTOR[1]:
+    if any(actor_id == identity[0] or login == identity[1]
+           for identity in TRUSTED_BOT_IDENTITIES):
         print(f"cache: trust-rejected pr={pr_number}: producer identity does not match "
-              "the pinned Copilot identity")
+              "a pinned bot identity")
         return False
     if actor_type != "User":
         print(f"cache: trust-rejected pr={pr_number}: unsupported producer actor type")
