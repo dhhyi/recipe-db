@@ -677,9 +677,25 @@ for (const role of ["anonymous", "member", "owner"]) {
 async function expectHeader(page, role) {
   const header = page.locator("header-component");
   await expect(header).toHaveAttribute("auth-role", role);
-  await expect(header).not.toHaveAttribute("auth-enabled");
-  await expect(header.locator("a[href^='/oauth2/']")).toHaveCount(0);
-  await expect(header.locator("details.dropdown")).toHaveCount(0);
+  if ((await header.getAttribute("auth-enabled")) === null) {
+    await expect(header.locator("a[href^='/oauth2/']")).toHaveCount(0);
+    await expect(header.locator("details.dropdown")).toHaveCount(0);
+  } else if (role === "anonymous") {
+    const login = header.getByRole("link", {
+      name: "Anmelden",
+      exact: true,
+    });
+    await expect(login).toBeVisible();
+    await expect(login).toHaveAttribute("data-screenshot-hide", "");
+  } else {
+    const profile = header.locator("details.dropdown");
+    await expect(profile).toBeVisible();
+    await expect(profile).toHaveAttribute("data-screenshot-hide", "");
+    await expect(profile.locator(".profile-menu")).toHaveAttribute(
+      "data-screenshot-hide",
+      "",
+    );
+  }
 }
 
 async function expectEditorDenied(page, role) {
