@@ -56,12 +56,26 @@ test("selecting a local source does not upload, and Cancel keeps the saved image
   await expect(addInput(page)).toHaveCount(0);
   await expect(galleryHeading(page)).toHaveCount(0);
   await expect(galleryImages(page)).toHaveCount(0);
-  await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
-  await expect(selection(page)).toHaveCount(0);
-  await expect(galleryImages(page)).toBeVisible();
-  await expect(addInput(page)).toBeEnabled();
-  await expect(addInput(page)).toBeFocused();
-  expect(uploads).toHaveLength(0);
+  const releaseRead = Promise.withResolvers();
+  await page.route("**/graphql", async (route) => {
+    if (isGalleryRead(route.request())) await releaseRead.promise;
+    await route.fallback();
+  });
+  try {
+    const readStarted = page.waitForRequest(isGalleryRead);
+    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+    await readStarted;
+    await expect(selection(page)).toHaveCount(0);
+    await expect(addInput(page)).toBeDisabled();
+    await expect(galleryImages(page)).toHaveCount(0);
+    releaseRead.resolve();
+    await expect(galleryImages(page)).toBeVisible();
+    await expect(addInput(page)).toBeEnabled();
+    await expect(addInput(page)).toBeFocused();
+    expect(uploads).toHaveLength(0);
+  } finally {
+    releaseRead.resolve();
+  }
 });
 
 test("all eight mouse handles keep the opposite anchor and clamp to source bounds", async ({
@@ -448,7 +462,9 @@ test("a failed post-save gallery read keeps success and Retry does not upload ag
       json: { data: null, errors: [{ message: "Gallery unavailable" }] },
     });
   });
-  const saved = page.getByRole("status").filter({ hasText: "Bild gespeichert." });
+  const saved = page
+    .getByRole("status")
+    .filter({ hasText: "Bild gespeichert." });
   const empty = page.getByText("Kein Bild vorhanden.", { exact: true });
   const retry = page.getByRole("button", { name: "Erneut laden" });
   const error = page.getByText("Rezeptbilder konnten nicht geladen werden.");

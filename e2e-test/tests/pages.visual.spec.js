@@ -654,7 +654,9 @@ for (const role of ["anonymous", "member", "owner"]) {
           `Bilder für ${demoRecipe.name} verwalten`,
         );
         await expect(addInput(page)).toBeEnabled();
-        const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+        const rows = page
+          .getByRole("list", { name: "Rezeptbilder" })
+          .locator("li");
         await expect(rows).toHaveCount(2);
         const firstImage = galleryImages(page).first();
         await expect(firstImage).toHaveAttribute("src", newest.thumbUrl);

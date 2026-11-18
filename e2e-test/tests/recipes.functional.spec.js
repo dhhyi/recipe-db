@@ -482,16 +482,19 @@ test.describe("first image", () => {
       await expect(galleryImages(page)).toHaveCount(order.length);
       for (const [index, key] of order.entries()) {
         const thumbnail = galleryImages(page).nth(index);
-        await expect(thumbnail).toHaveAttribute("alt", `Rezeptbild ${index + 1}`);
+        await expect(thumbnail).toHaveAttribute(
+          "alt",
+          `Rezeptbild ${index + 1}`,
+        );
         await expect(thumbnail).toHaveAttribute("src", thumbUrls[key]);
         await expectPixels(thumbnail, patterns[key], {
           width: 300,
           height: 225,
         });
       }
-      await expect(
-        page.getByText("Standardbild", { exact: true }),
-      ).toHaveCount(1);
+      await expect(page.getByText("Standardbild", { exact: true })).toHaveCount(
+        1,
+      );
       await expect(page.getByRole("heading")).toHaveCount(1);
       await expect(page.getByText(/^Rezeptbild \d+$/)).toHaveCount(0);
     }
@@ -610,9 +613,7 @@ test("Add stays disabled until the initial gallery read completes", async ({
     await page.goto(`/images-edit/${recipeWithoutImage.id}`);
     await readStarted;
     await expect(addInput(page)).toBeDisabled();
-    await expect(
-      page.locator('main [aria-busy="true"]'),
-    ).toBeVisible();
+    await expect(page.locator('main [aria-busy="true"]')).toBeVisible();
     await expect(empty).toHaveCount(0);
     releaseRead.resolve();
     await expect(empty).toBeVisible();
