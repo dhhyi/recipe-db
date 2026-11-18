@@ -19,7 +19,11 @@ public enum TagCategoryChoice
 }
 
 [McpServerToolType]
-public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory)
+public class RecipeTools(
+    IMcpClient client,
+    IHttpClientFactory httpClientFactory,
+    IHttpContextAccessor httpContextAccessor
+)
 {
     private const string ImageUrlGuidance =
         " 'imageUrl' must be a direct HTTP(S) image URL reachable by this server " +
@@ -447,7 +451,9 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
             ?? throw new McpException("Failed to verify permission to manage images");
         if (!capabilities.CanManageImages)
         {
-            throw new McpException(capabilities.Role == "anonymous"
+            // GraphQL distinguishes credential-free guests from authenticated principals with the same role.
+            var credentialFree = httpContextAccessor.HttpContext?.Request.Headers.ContainsKey("Authorization") != true;
+            throw new McpException(capabilities.Role == "anonymous" && credentialFree
                 ? "authentication-required: Sign in to manage images (status: 401)"
                 : "forbidden: You do not have permission to manage images (status: 403)");
         }
