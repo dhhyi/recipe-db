@@ -459,9 +459,9 @@ test("closing during a delayed editor load prevents stale data on reopen", async
       page.getByRole("button", { name: "Tags bearbeiten" }),
     ).toBeDisabled();
     releaseDetail();
-    await expect(
-      page.locator("#recipe-tags [data-recipe-tag]"),
-    ).toHaveText(tag.name);
+    await expect(page.locator("#recipe-tags [data-recipe-tag]")).toHaveText(
+      tag.name,
+    );
     await openTagDialog(page);
     await expect(
       dialog.getByRole("button", { name: `${tag.name} entfernen` }),
@@ -618,7 +618,9 @@ test("reopening after a failed detail refresh fetches fresh assignments and clea
       dialog.getByRole("button", { name: `${tag.name} entfernen` }),
     ).toBeVisible();
   }
-  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toBeVisible();
+  await expect(
+    dialog.getByText("Keine passenden Tags gefunden."),
+  ).toBeVisible();
   await expect(
     dialog.getByRole("button", { name: added.name, exact: true }),
   ).toHaveCount(0);
@@ -693,13 +695,11 @@ async function expectTagEditingDenied(dialog) {
   await expect(
     dialog.locator("#recipe-tag-search:visible:enabled"),
   ).toHaveCount(0);
-  await expect(dialog.locator("[data-tag-mutation] button:enabled")).toHaveCount(
-    0,
-  );
-  await expect(dialog).toHaveAttribute("closedby", "any");
   await expect(
-    dialog.getByRole("button", { name: "Schließen" }),
-  ).toBeEnabled();
+    dialog.locator("[data-tag-mutation] button:enabled"),
+  ).toHaveCount(0);
+  await expect(dialog).toHaveAttribute("closedby", "any");
+  await expect(dialog.getByRole("button", { name: "Schließen" })).toBeEnabled();
 }
 
 for (const status of [401, 403]) {
@@ -775,10 +775,9 @@ for (const status of [401, 403]) {
       await search.fill("E2E Auswahl");
       if (phase === "mutation") {
         await expect(tagOptions(dialog)).toHaveCount(1);
-        await expect(dialog.locator("#recipe-tag-options > ul")).toHaveAttribute(
-          "data-query",
-          "E2E Auswahl",
-        );
+        await expect(
+          dialog.locator("#recipe-tag-options > ul"),
+        ).toHaveAttribute("data-query", "E2E Auswahl");
         await tagOptions(dialog).first().click();
       }
       const response = await denied;
@@ -824,11 +823,17 @@ test("options loading failure is distinct from an empty search and can be retrie
   await expect(dialog.getByRole("alert")).toContainText(
     "Tag-Auswahl konnte nicht geladen werden.",
   );
-  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Tag-Auswahl erneut laden" }).click();
+  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toHaveCount(
+    0,
+  );
+  await dialog
+    .getByRole("button", { name: "Tag-Auswahl erneut laden" })
+    .click();
   await expect(tagOptions(dialog)).toHaveText("E2E Auswahl");
   await search.fill("E2E Nicht vorhanden");
-  await expect(dialog.getByText("Keine passenden Tags gefunden.")).toBeVisible();
+  await expect(
+    dialog.getByText("Keine passenden Tags gefunden."),
+  ).toBeVisible();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
 });
 
@@ -966,9 +971,7 @@ transitionTest(
         transition.ready.then(() => {
           run.types = [...transition.types];
           run.tagNames = [
-            ...document.querySelectorAll(
-              "dialog form[data-tag-mutation]",
-            ),
+            ...document.querySelectorAll("dialog form[data-tag-mutation]"),
           ].map((form) => getComputedStyle(form).viewTransitionName);
           run.otherNames = [
             ...document.querySelectorAll(".recipe-image, .recipe-rating"),
