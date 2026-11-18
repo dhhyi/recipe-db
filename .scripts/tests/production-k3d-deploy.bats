@@ -119,7 +119,7 @@ google_https_values() {
   jq -e '
       . as $routers |
       [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
-      ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql",
+      ($secure | map(.key) | sort) == ["preview-browse","preview-design","preview-graphql",
         "preview-graphql-bearer","preview-graphql-cookie","preview-images-edit",
         "preview-images-public","preview-mcp","preview-oauth2-public","preview-recipes-edit"]
       and all($secure[]; .value.middlewares[0] == "identity-strip"
@@ -295,12 +295,12 @@ google_https_values() {
   jq -e '
     . as $routers |
     [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
-    ($secure | map(.key) | sort) == ["preview-design","preview-frontend","preview-graphql","preview-graphql-bearer","preview-images-edit","preview-images-public","preview-mcp","preview-recipes-edit"]
+    ($secure | map(.key) | sort) == ["preview-browse","preview-design","preview-graphql","preview-graphql-bearer","preview-images-edit","preview-images-public","preview-mcp","preview-recipes-edit"]
     and all($secure[]; .value.rule | startswith("Host(`recipes.example.org`) && "))
     and all($secure[]; .value.middlewares[0] == "identity-strip")
     and all($secure[]; .value.tls.certResolver == "letsencrypt")
     and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
-    and .["preview-frontend"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
+    and .["preview-browse"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
     and all($secure[]; .key as $name |
       .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
     and .["preview-recipes-edit"].middlewares == ["identity-strip","recipes-edit-strip"]

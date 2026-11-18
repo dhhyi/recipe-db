@@ -72,7 +72,7 @@ traefik:
               timeout: 1s
               path: /health
       routers:
-        frontend:
+        browse:
           rule: PathPrefix(`/`)
           entrypoints: web
           priority: 2

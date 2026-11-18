@@ -380,7 +380,7 @@ routes() {
                   entrypoints:["websecure"], tls:$tls,
                   middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
               end;
-            preview("frontend")
+            preview("browse")
             | preview("design")
             | preview("images-public")
             | preview("graphql")

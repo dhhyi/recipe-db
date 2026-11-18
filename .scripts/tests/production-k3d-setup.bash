@@ -1486,7 +1486,7 @@ http:
       priority: 400
       service: oauth2-proxy
       middlewares: [identity-strip]
-    frontend:
+    browse:
       rule: PathPrefix(`/`)
       entrypoints: [web]
       service: recipe-db-frontend
