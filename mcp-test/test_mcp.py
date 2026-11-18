@@ -18,17 +18,19 @@ MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
 AUTH_TOKENS = json.loads(os.environ.get("E2E_AUTH_TOKENS", "{}"))
 MCP_REQUEST_TIMEOUT = 30
 MCP_SESSION_TIMEOUT_SECONDS = 60
+# Traefik keep-alive race, see #368.
+TRAEFIK_HEADERS = {"Connection": "close"}
 
 
 def test_testing_head_availability_probe_is_empty():
-    response = httpx.head(MCP_URL, timeout=1)
+    response = httpx.head(MCP_URL, headers=TRAEFIK_HEADERS, timeout=1)
     assert response.status_code == 204
     assert response.content == b""
 
 
 @pytest.fixture(scope="session", autouse=True)
 def fixture_server_ready():
-    with httpx.Client(timeout=1) as client:
+    with httpx.Client(headers=TRAEFIK_HEADERS, timeout=1) as client:
         for method, url, kwargs in (
             ("GET", f"{FIXTURE_API}/test.jpg", {}),
             (
@@ -67,7 +69,7 @@ def fixture_server_ready():
 @asynccontextmanager
 async def mcp_session(authenticated=True, account="owner"):
     with anyio.fail_after(MCP_SESSION_TIMEOUT_SECONDS):
-        headers = {}
+        headers = dict(TRAEFIK_HEADERS)
         if authenticated:
             token = AUTH_TOKENS.get(account)
             if not token and account == "owner":
