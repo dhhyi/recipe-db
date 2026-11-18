@@ -71,9 +71,9 @@ export class RecipeImageCarousel extends HTMLElement {
       return;
     }
 
-    this.querySelectorAll<HTMLElement>("[data-carousel-prev], [data-carousel-next], [data-carousel-pagination]").forEach(
-      (control) => control.removeAttribute("hidden"),
-    );
+    this.querySelectorAll<HTMLElement>(
+      "[data-carousel-prev], [data-carousel-next], [data-carousel-pagination]",
+    ).forEach((control) => control.removeAttribute("hidden"));
     this.swiper.on("slideChange", this.handleSlideChange);
     this.addEventListener("keydown", this.handleKeyDown);
     this.addEventListener("focusin", this.handleFocusIn);
@@ -142,7 +142,9 @@ export class RecipeImageCarousel extends HTMLElement {
       const previous = this.querySelector<HTMLButtonElement>(
         "[data-carousel-prev]",
       );
-      const next = this.querySelector<HTMLButtonElement>("[data-carousel-next]");
+      const next = this.querySelector<HTMLButtonElement>(
+        "[data-carousel-next]",
+      );
       if (disabledControl === previous) next?.focus();
       else if (disabledControl === next) previous?.focus();
     });

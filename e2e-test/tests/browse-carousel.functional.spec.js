@@ -40,12 +40,17 @@ test("recipe image carousel follows collection order and navigates locally", asy
 
   await expect(slides).toHaveCount(recipe.images.length);
   await expect(dots).toHaveCount(recipe.images.length);
-  expect(await images.evaluateAll((elements) =>
-    elements.map((image) => image.dataset.imageId),
-  )).toEqual(recipe.images.map((image) => image.id));
+  expect(
+    await images.evaluateAll((elements) =>
+      elements.map((image) => image.dataset.imageId),
+    ),
+  ).toEqual(recipe.images.map((image) => image.id));
   await expect(previous).toBeDisabled();
   await expect(next).toBeEnabled();
-  await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[0].id);
+  await expect(activeImage).toHaveAttribute(
+    "data-image-id",
+    recipe.images[0].id,
+  );
 
   const mutations = [];
   page.on("request", (outgoing) => {
@@ -59,22 +64,34 @@ test("recipe image carousel follows collection order and navigates locally", asy
   });
 
   await next.click();
-  await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[1].id);
+  await expect(activeImage).toHaveAttribute(
+    "data-image-id",
+    recipe.images[1].id,
+  );
   await expect(previous).toBeEnabled();
   await expect(next).toBeDisabled();
   await expect(dots.nth(1)).toHaveAttribute("aria-current", "true");
   await dots.nth(0).click();
-  await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[0].id);
+  await expect(activeImage).toHaveAttribute(
+    "data-image-id",
+    recipe.images[0].id,
+  );
   await expect(previous).toBeDisabled();
 
   await next.focus();
   await page.keyboard.press("ArrowRight");
-  await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[1].id);
+  await expect(activeImage).toHaveAttribute(
+    "data-image-id",
+    recipe.images[1].id,
+  );
   await expect(next).toBeDisabled();
   await expect(previous).toBeFocused();
   await page.getByRole("link", { name: "Zur Startseite" }).focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[1].id);
+  await expect(activeImage).toHaveAttribute(
+    "data-image-id",
+    recipe.images[1].id,
+  );
   expect(mutations).toHaveLength(0);
 
   await previous.click();
@@ -85,15 +102,23 @@ test("recipe image carousel follows collection order and navigates locally", asy
     steps: 8,
   });
   await page.mouse.up();
-  await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[1].id);
+  await expect(activeImage).toHaveAttribute(
+    "data-image-id",
+    recipe.images[1].id,
+  );
 
   const footprint = await carousel.boundingBox();
   expect(footprint.width).toBeLessThanOrEqual(650);
-  expect(Math.abs(footprint.width / footprint.height - 4 / 3)).toBeLessThan(0.02);
+  expect(Math.abs(footprint.width / footprint.height - 4 / 3)).toBeLessThan(
+    0.02,
+  );
 
   if (isMobile) {
     await previous.click();
-    await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[0].id);
+    await expect(activeImage).toHaveAttribute(
+      "data-image-id",
+      recipe.images[0].id,
+    );
     const box = await carousel.locator(".swiper").boundingBox();
     const session = await page.context().newCDPSession(page);
     await session.send("Input.dispatchTouchEvent", {
@@ -120,7 +145,10 @@ test("recipe image carousel follows collection order and navigates locally", asy
       touchPoints: [],
     });
     await session.detach();
-    await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[1].id);
+    await expect(activeImage).toHaveAttribute(
+      "data-image-id",
+      recipe.images[1].id,
+    );
   }
 });
 
@@ -181,7 +209,9 @@ test("reinserted carousel handles an already-failed image", async ({
         .slice(2)}.png`;
     });
     if (!image.complete || image.naturalWidth !== 0) {
-      throw new Error("The image must be failed before the carousel reconnects");
+      throw new Error(
+        "The image must be failed before the carousel reconnects",
+      );
     }
 
     parent.insertBefore(carousel, nextSibling);

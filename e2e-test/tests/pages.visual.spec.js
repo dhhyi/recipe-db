@@ -322,9 +322,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         });
         await expect(carousel).toHaveAttribute("data-enhanced", "true");
         await expect(carousel.locator(".swiper-slide")).toHaveCount(2);
-        await waitForImageDecoded(
-          region.locator(".swiper-slide-active img"),
-        );
+        await waitForImageDecoded(region.locator(".swiper-slide-active img"));
         await screenshot(page, "recipe-carousel.png", {
           fullPage: false,
         });
@@ -332,9 +330,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         await carousel
           .getByRole("button", { name: "Nächstes Bild", exact: true })
           .click();
-        await waitForImageDecoded(
-          region.locator(".swiper-slide-active img"),
-        );
+        await waitForImageDecoded(region.locator(".swiper-slide-active img"));
         await screenshot(page, "recipe-carousel-next.png", {
           fullPage: false,
         });
