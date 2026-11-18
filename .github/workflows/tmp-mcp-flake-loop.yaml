@@ -1,0 +1,85 @@
+# TEMPORARY: reproduce the flaky MCP integration test on the ARM64 runner. Remove before merging.
+name: TMP MCP flake loop
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  mcp-loop-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      COMPOSE_PARALLEL_LIMIT: 1
+      GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
+      GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
+      ITERATIONS: 50
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          lfs: true
+
+      - name: setup mise
+        uses: jdx/mise-action@v5
+        with:
+          install: false
+          cache: true
+
+      - name: install Compose generation tools
+        run: mise --no-hooks install jq yq ytt oras
+
+      - name: prepare build context
+        run: |
+          set -euo pipefail
+          docker buildx create --use
+          docker buildx inspect --bootstrap
+          mise run --raw sync-files
+          mise run --raw generate-docker-compose
+          mise run create-intranet
+
+      - name: build development and test images
+        run: docker compose --progress plain --profile development --profile test build
+
+      - name: start development stack
+        run: |
+          docker compose up -d --wait --wait-timeout 120
+          docker compose ps
+
+      - name: loop mcp-test
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/failures"
+          failures=0
+          for i in $(seq "$ITERATIONS"); do
+            echo "::group::iteration $i"
+            mise run integration-tests -- --development mcp-test
+            status=$?
+            echo "::endgroup::"
+            if ((status != 0)); then
+              failures=$((failures + 1))
+              echo "::error::iteration $i failed"
+              cp mcp-test/target/integration-tests/run.log "$RUNNER_TEMP/failures/run-$i.log"
+              cp mcp-test/target/junit.xml "$RUNNER_TEMP/failures/junit-$i.xml" 2>/dev/null || true
+              grep -E "^(FAILED|ERROR) |RemoteProtocolError" mcp-test/target/integration-tests/run.log || true
+            fi
+          done
+          echo "failures=$failures/$ITERATIONS" | tee -a "$GITHUB_STEP_SUMMARY"
+          ((failures == 0))
+
+      - name: capture Compose logs
+        if: always()
+        run: docker compose --profile test logs --no-color --timestamps > "$RUNNER_TEMP/compose.log" 2>&1
+
+      - name: upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tmp-mcp-loop-diagnostics
+          path: |
+            ${{ runner.temp }}/compose.log
+            ${{ runner.temp }}/failures/
+          if-no-files-found: ignore
+          retention-days: 7
