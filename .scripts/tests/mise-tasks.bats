@@ -77,6 +77,7 @@ EOF
     -o IdentitiesOnly=yes \
     -o StrictHostKeyChecking=yes \
     -o "UserKnownHostsFile=$HOME/.config/recipe-db/ssh/known_hosts" \
+    -o GlobalKnownHostsFile=/dev/null \
     -o ExitOnForwardFailure=yes \
     -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home)" ]
 
@@ -88,6 +89,7 @@ EOF
     -o IdentitiesOnly=yes \
     -o StrictHostKeyChecking=yes \
     -o "UserKnownHostsFile=$HOME/.config/recipe-db/ssh/known_hosts" \
+    -o GlobalKnownHostsFile=/dev/null \
     piadmin@recipe-pi.home)" ]
 }
 
