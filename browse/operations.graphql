@@ -86,6 +86,10 @@ fragment RecipeDetail on Recipe {
     url
     thumbUrl
   }
+  images {
+    id
+    url
+  }
   ingredients {
     name
     amount

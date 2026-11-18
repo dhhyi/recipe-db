@@ -333,6 +333,52 @@ header-component > header:focus-within {
   max-width: min(650px, 100%);
 }
 
+.recipe-image-frame {
+  aspect-ratio: 4 / 3;
+  margin: 0 auto;
+  max-width: min(650px, 100%);
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+recipe-image-carousel {
+  display: block;
+}
+
+recipe-image-carousel .swiper,
+recipe-image-carousel .swiper-wrapper,
+recipe-image-carousel .swiper-slide {
+  height: 100%;
+  width: 100%;
+}
+
+recipe-image-carousel .swiper-slide {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+
+.recipe-image-content {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  width: 100%;
+}
+
+recipe-image-carousel:not([data-enhanced]) .swiper-slide:not(:first-child),
+recipe-image-carousel:not([data-enhanced]) .swiper-button-prev,
+recipe-image-carousel:not([data-enhanced]) .swiper-button-next,
+recipe-image-carousel:not([data-enhanced]) .swiper-pagination {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  recipe-image-carousel .swiper-wrapper {
+    transition-duration: 0ms !important;
+  }
+}
+
 .recipe-tag {
   align-items: center;
   background: var(--recipe-tag-background);

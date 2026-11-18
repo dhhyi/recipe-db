@@ -199,7 +199,7 @@ export async function uploadImage(
     multipart: {
       operations: JSON.stringify({
         query:
-          "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl size width height } }",
+          "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { id url thumbUrl size width height } }",
         variables: { id: recipe.id, file: null, crop },
       }),
       map: JSON.stringify({ 0: ["variables.file"] }),
@@ -437,6 +437,11 @@ export const test = base.extend({
   recipeWithImage: async ({ request, basicRecipe }, use) => {
     await uploadImage(request, basicRecipe, "milchreis.png");
     await use(basicRecipe);
+  },
+  multiImageRecipe: async ({ request, basicRecipe }, use) => {
+    const older = await uploadImage(request, basicRecipe, "milchreis.png");
+    const newer = await uploadImage(request, basicRecipe, "image-b.png");
+    await use({ ...basicRecipe, images: [newer, older] });
   },
   recipeWithoutImage: async ({ basicRecipe }, use) => {
     await use(basicRecipe);
