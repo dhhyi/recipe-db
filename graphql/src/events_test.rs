@@ -142,19 +142,21 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
         .route("/images", delete(|| async { StatusCode::NO_CONTENT }))
         .route(
             "/images/{recipe_id}/{image_id}",
-            delete(|Path((_recipe_id, image_id)): Path<(String, String)>| async move {
-                if image_id == "missing" {
-                    (
-                        StatusCode::NOT_FOUND,
-                        Json(json!({
-                            "detail": "Image not found",
-                            "code": "image-not-found"
-                        })),
-                    )
-                } else {
-                    (StatusCode::NO_CONTENT, Json(json!({})))
-                }
-            }),
+            delete(
+                |Path((_recipe_id, image_id)): Path<(String, String)>| async move {
+                    if image_id == "missing" {
+                        (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({
+                                "detail": "Image not found",
+                                "code": "image-not-found"
+                            })),
+                        )
+                    } else {
+                        (StatusCode::NO_CONTENT, Json(json!({})))
+                    }
+                },
+            ),
         )
         .route(
             "/images/{id}",

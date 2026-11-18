@@ -77,11 +77,10 @@ async fn image_collections_ids_deletion_and_authorization() {
                     let second_metadata = second_metadata.clone();
                     async move {
                         match id.as_str() {
-                            "present" => (
-                                StatusCode::OK,
-                                Json(json!([metadata(), second_metadata])),
-                            )
-                                .into_response(),
+                            "present" => {
+                                (StatusCode::OK, Json(json!([metadata(), second_metadata])))
+                                    .into_response()
+                            }
                             "empty" | "recipe with spaces" => {
                                 (StatusCode::OK, Json(json!([]))).into_response()
                             }
@@ -91,10 +90,7 @@ async fn image_collections_ids_deletion_and_authorization() {
                             )
                                 .into_response(),
                             "malformed" => (StatusCode::OK, Json(json!({}))).into_response(),
-                            _ => (
-                                StatusCode::NOT_FOUND,
-                                Json(json!({"detail": "Not found"})),
-                            )
+                            _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "Not found"})))
                                 .into_response(),
                         }
                     }
@@ -111,10 +107,7 @@ async fn image_collections_ids_deletion_and_authorization() {
                     )
                         .into_response(),
                     "present" => (StatusCode::OK, Json(metadata())).into_response(),
-                    _ => (
-                        StatusCode::NOT_FOUND,
-                        Json(json!({"detail": "Not found"})),
-                    )
+                    _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "Not found"})))
                         .into_response(),
                 }
             }),
@@ -166,10 +159,8 @@ async fn image_collections_ids_deletion_and_authorization() {
     let previous_nats = std::env::var_os("NATS_URL");
     std::env::set_var("NATS_URL", "nats://127.0.0.1:1");
     let publisher = crate::events::EventPublisher::from_env().unwrap();
-    let schema = crate::schema::build_schema(
-        crate::mode::RuntimeMode::Testing,
-        Some(publisher.clone()),
-    );
+    let schema =
+        crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher.clone()));
     let sdl = schema.sdl();
     assert!(sdl.contains("images: [ImageMetadata!]"));
     assert!(sdl.contains("addImage("));
@@ -178,10 +169,8 @@ async fn image_collections_ids_deletion_and_authorization() {
 
     let response = schema
         .execute(
-            Request::new(
-                r#"{ recipe(id: "present") { id images { id url } image { id url } } }"#,
-            )
-            .data(crate::test_context("anonymous")),
+            Request::new(r#"{ recipe(id: "present") { id images { id url } image { id url } } }"#)
+                .data(crate::test_context("anonymous")),
         )
         .await;
     assert!(response.errors.is_empty(), "{response:?}");
@@ -222,17 +211,20 @@ async fn image_collections_ids_deletion_and_authorization() {
     ] {
         let response = schema
             .execute(
-                Request::new(format!(r#"{{ recipe(id: "{id}") {{ id name images {{ id }} }} }}"#))
-                    .data(crate::test_context("owner")),
+                Request::new(format!(
+                    r#"{{ recipe(id: "{id}") {{ id name images {{ id }} }} }}"#
+                ))
+                .data(crate::test_context("owner")),
             )
             .await;
-        assert_eq!(!response.errors.is_empty(), should_error, "{id}: {response:?}");
+        assert_eq!(
+            !response.errors.is_empty(),
+            should_error,
+            "{id}: {response:?}"
+        );
         match id {
             "offline" => {
-                assert_eq!(
-                    response.data.into_json().unwrap()["recipe"]["name"],
-                    "Test"
-                );
+                assert_eq!(response.data.into_json().unwrap()["recipe"]["name"], "Test");
                 let error = &response.errors[0];
                 assert_eq!(
                     error.path,
@@ -246,10 +238,7 @@ async fn image_collections_ids_deletion_and_authorization() {
                     Some(&async_graphql::value!("images"))
                 );
             }
-            "deleted" => assert_eq!(
-                response.data.into_json().unwrap(),
-                json!({"recipe": null})
-            ),
+            "deleted" => assert_eq!(response.data.into_json().unwrap(), json!({"recipe": null})),
             "encoded" => assert_eq!(
                 response.data.into_json().unwrap()["recipe"]["images"],
                 json!([])
@@ -262,7 +251,12 @@ async fn image_collections_ids_deletion_and_authorization() {
     for (recipe_id, image_id, expected, error_code) in [
         ("recipe with spaces", "image with spaces", Some(true), None),
         ("present", "missing", Some(false), None),
-        ("present", "unrouted", None, Some("downstream-request-failed")),
+        (
+            "present",
+            "unrouted",
+            None,
+            Some("downstream-request-failed"),
+        ),
         ("present", "invalid", None, Some("invalid-image-id")),
         ("present", "offline", None, Some("service-unavailable")),
     ] {
@@ -290,10 +284,7 @@ async fn image_collections_ids_deletion_and_authorization() {
                 Some(&async_graphql::Value::from(error_code.unwrap()))
             );
             if image_id == "invalid" {
-                assert_eq!(
-                    extensions.get("status"),
-                    Some(&async_graphql::value!(400))
-                );
+                assert_eq!(extensions.get("status"), Some(&async_graphql::value!(400)));
                 assert_eq!(
                     extensions.get("field"),
                     Some(&async_graphql::value!("imageId"))

@@ -48,21 +48,14 @@ impl ImagesApi {
         recipe_id: &str,
     ) -> Result<Option<ImageMetadata>, Error> {
         let recipe_id = RestClient::encode_path_segment(recipe_id);
-        match self
-            .client
-            .get(&format!("{recipe_id}/meta/0"))
-            .await
-        {
+        match self.client.get(&format!("{recipe_id}/meta/0")).await {
             Ok(meta) => Ok(Some(meta)),
             Err(err) if err.confirms_absence("image-not-found") => Ok(None),
             Err(err) => Err(err.into_error()),
         }
     }
 
-    pub async fn get_image_collection(
-        &self,
-        recipe_id: &str,
-    ) -> Result<Vec<ImageMetadata>, Error> {
+    pub async fn get_image_collection(&self, recipe_id: &str) -> Result<Vec<ImageMetadata>, Error> {
         let recipe_id = RestClient::encode_path_segment(recipe_id);
         self.client
             .get(&format!("{recipe_id}/meta"))
