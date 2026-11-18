@@ -42,8 +42,7 @@ internal static class ImageSource
         ConnectCallback = async (context, cancellationToken) =>
         {
             var endpoint = context.DnsEndPoint;
-            var fixture = testing && ((endpoint.Host == "traefik" && endpoint.Port == 3000)
-                || (endpoint.Host == "fixtures" && endpoint.Port == 80));
+            var fixture = testing && endpoint.Host == "fixtures" && endpoint.Port == 80;
             var addresses = await Dns.GetHostAddressesAsync(endpoint.Host, cancellationToken);
             // Connect to the checked address itself so redirects and fresh DNS lookups cannot bypass the check.
             foreach (var address in addresses.Where(address => fixture || IsPublic(address)))

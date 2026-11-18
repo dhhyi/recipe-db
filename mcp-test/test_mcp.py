@@ -13,7 +13,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
-FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
+FIXTURE_API = os.environ.get("FIXTURE_API", "http://fixtures/mcp-test-fixture")
 MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
 AUTH_TOKENS = json.loads(os.environ.get("E2E_AUTH_TOKENS", "{}"))
 MCP_REQUEST_TIMEOUT = 30
@@ -319,6 +319,18 @@ async def test_add_recipe_rejects_image_url_without_creating_a_recipe():
         assert not any(recipe["name"] == name for recipe in json.loads(recipes.content[0].text))
 
 
+async def test_recipe_tools_report_malformed_json_as_tool_errors():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Malformed JSON sentinel")
+        for tool, arguments in (
+            ("add_recipe", {}),
+            ("change_recipe", {"recipeId": recipe_id}),
+        ):
+            result = await session.call_tool(tool, {**arguments, "recipeJson": "{"})
+            assert result.is_error is True
+            assert "Invalid JSON" in result.content[0].text
+
+
 async def test_list_recipes_includes_a_created_recipe():
     async with mcp_session() as session:
         recipe_id = await create_recipe(session, "Listed Recipe")
@@ -415,6 +427,7 @@ async def test_recipe_image_failures_do_not_return_success():
         for tool, arguments, message in (
             ("add_recipe_image", {"imageUrl": "file:///photo.jpg"}, "Invalid imageUrl"),
             ("add_recipe_image", {"imageUrl": "http://127.0.0.1:5000/health"}, "could not download"),
+            ("add_recipe_image", {"imageUrl": "http://traefik:3000/images"}, "could not download"),
             ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/private-redirect.jpg"}, "could not download"),
             ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/missing.jpg"}, "Failed to fetch image: HTTP 404"),
             ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/oversized.jpg"}, "10 MiB download limit"),
@@ -433,6 +446,21 @@ async def test_recipe_image_failures_do_not_return_success():
             if tool == "delete_recipe_image":
                 assert "(field: imageId)" in result.content[0].text
         assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == []
+
+
+async def test_recipe_image_stream_is_bounded_without_content_length():
+    source = f"{FIXTURE_API}/oversized-stream.jpg"
+    async with httpx.AsyncClient() as http:
+        async with http.stream("GET", source) as response:
+            assert response.status_code == 200
+            assert "content-length" not in response.headers
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Oversized streamed image")
+        result = await session.call_tool(
+            "add_recipe_image", {"recipeId": recipe_id, "imageUrl": source}
+        )
+        assert result.is_error is True
+        assert "10 MiB download limit" in result.content[0].text
 
 
 @pytest.mark.skipif(

@@ -16,7 +16,7 @@ devcontainer:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
     MCP_URL: http://traefik/mcp
     REST_API: http://traefik:3000
-    FIXTURE_API: http://traefik:3000/mcp-test-fixture
+    FIXTURE_API: http://fixtures/mcp-test-fixture
 vscode:
   settings:
     window.title: "${dirty}${rootName}${separator}${profileName}${separator}"

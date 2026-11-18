@@ -77,7 +77,7 @@ public class RecipeTools(
         }
         catch (JsonException e)
         {
-            return $"Invalid JSON: {e.Message}";
+            throw new McpException($"Invalid JSON: {e.Message}");
         }
 
         var online = await GetOnlineServicesAsync();
@@ -210,7 +210,7 @@ public class RecipeTools(
         }
         catch (JsonException e)
         {
-            return $"Invalid JSON: {e.Message}";
+            throw new McpException($"Invalid JSON: {e.Message}");
         }
 
         var online = await GetOnlineServicesAsync();
