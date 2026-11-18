@@ -2,8 +2,7 @@ using Json.Schema;
 
 namespace Mcp;
 
-/// Builds the recipe validation schema; `inspirations`/`imageUrl` are only accepted while their
-/// respective backend services are online.
+/// Builds the recipe validation schema; `inspirations` is only accepted while its service is online.
 static class RecipeSchema
 {
     private static readonly JsonSchemaBuilder Ingredient = new JsonSchemaBuilder()
@@ -16,13 +15,13 @@ static class RecipeSchema
         .Required("name")
         .AdditionalProperties(false);
 
-    public static JsonSchema BuildForCreate(bool inspirationsOnline, bool imagesOnline) =>
-        Build(inspirationsOnline, imagesOnline, requireName: true);
+    public static JsonSchema BuildForCreate(bool inspirationsOnline) =>
+        Build(inspirationsOnline, requireName: true);
 
-    public static JsonSchema BuildForUpdate(bool inspirationsOnline, bool imagesOnline) =>
-        Build(inspirationsOnline, imagesOnline, requireName: false);
+    public static JsonSchema BuildForUpdate(bool inspirationsOnline) =>
+        Build(inspirationsOnline, requireName: false);
 
-    private static JsonSchema Build(bool inspirationsOnline, bool imagesOnline, bool requireName)
+    private static JsonSchema Build(bool inspirationsOnline, bool requireName)
     {
         var properties = new Dictionary<string, JsonSchemaBuilder>
         {
@@ -36,11 +35,6 @@ static class RecipeSchema
             properties["inspirations"] = new JsonSchemaBuilder()
                 .Type(SchemaValueType.Array)
                 .Items(new JsonSchemaBuilder().Type(SchemaValueType.String).Format(Formats.Uri));
-        }
-
-        if (imagesOnline)
-        {
-            properties["imageUrl"] = new JsonSchemaBuilder().Type(SchemaValueType.String).Format(Formats.Uri);
         }
 
         var builder = new JsonSchemaBuilder()

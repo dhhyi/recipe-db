@@ -5,17 +5,17 @@ Exposes an [MCP](https://modelcontextprotocol.io/) server over Streamable HTTP s
 Tools:
 
 - `get_recipe_schema` returns the current JSON Schema for `add_recipe`/`change_recipe`'s recipe JSON, so an agent can discover the shape of a recipe (and which optional fields are currently available) without guessing. The recipe JSON itself is a free-form string rather than typed MCP tool parameters because its shape depends on which backend services are online, which a static `inputSchema` can't express.
-- `add_recipe` validates the recipe JSON against a schema generated depending on which backend services are currently online (`inspirations`/`imageUrl` are only accepted while the inspirations/images service, respectively, is up); an included `imageUrl` is fetched and attached to the new recipe.
+- `add_recipe` validates recipe JSON and creates a recipe. `inspirations` is only accepted while its service is online.
 - `list_recipes` lists all recipes with their id and name.
-- `get_recipe` returns the full details of a single recipe (name, method, ingredients, rating, image, inspirations) by id.
-- `change_recipe` patches an existing recipe; only fields present in the JSON are changed, the rest are left untouched. An included `imageUrl` (only accepted while the images service is online) is fetched by the server and added as the default image, retaining earlier images.
+- `get_recipe` returns the full recipe by ID, including the ordered `images` array with stable IDs. The first image is the default. During an Images outage it returns `{ recipe, errors }` with `recipe.images: null`; an available but empty collection is `[]`.
+- `change_recipe` patches only the recipe fields present in the JSON. Use `add_recipe_image` to import one image and prepend it without replacing earlier images. Use `delete_recipe_image` with the stable ID from `get_recipe` to delete one image; it returns `false` if already absent. Deleting the first image promotes the next.
 - `add_rating` rates an existing recipe.
 
 There is intentionally no tool for deleting recipes.
 
 ## Image URL imports
 
-The MCP tool descriptions carry the client instructions. Discover the schema first; supply a direct image URL reachable by the server without browser authentication. Already-public image URLs work. For local/private photos, the client needs file/browser access and HTTP upload, or the user must provide a hosted URL. Obtain permission and confirm rights to share before external hosting; unlisted URLs are not private, and browser cookies/MCP credentials must not be forwarded.
+The MCP tool descriptions carry the client instructions. Discover `add_recipe_image` and supply a direct image URL on a public host, reachable by the server without browser authentication. Source downloads are limited to 10 MiB. For local/private photos, the client needs file/browser access and HTTP upload, or the user must provide a hosted URL. Obtain permission and confirm rights to share before external hosting; unlisted URLs are not private, and browser cookies/MCP credentials must not be forwarded.
 
 Any suitable host works. For example, upload to [Tmpfiles](https://tmpfiles.org/api) without an account or API key:
 
@@ -23,4 +23,4 @@ Any suitable host works. For example, upload to [Tmpfiles](https://tmpfiles.org/
 curl -F "file=@photo.jpg" -F "expire=3600" https://tmpfiles.org/api/v1/upload
 ```
 
-Read the returned sharing page and extract its actual download link, including any token; do not guess a `/dl/` transformation. Check current [terms](https://tmpfiles.org/tos). Before expiry, pass that URL as `imageUrl` to `add_recipe`, or to `change_recipe` to add a new default image while retaining earlier images. Verify with `get_recipe` and its image URL; successful imports are stored locally and survive source expiry. Report failures and check state before retrying uncertain outcomes.
+Read the returned sharing page and extract its actual download link, including any token; do not guess a `/dl/` transformation. Check current [terms](https://tmpfiles.org/tos). Before expiry, call `add_recipe_image` with the `recipeId` and the direct `imageUrl`. Verify the new default in `get_recipe` and load its image URL. Successful imports are stored locally and survive source expiry. Report failures and check state before retrying uncertain outcomes.

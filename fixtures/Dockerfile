@@ -2,3 +2,4 @@ FROM nginx:stable-alpine@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY data/ /usr/share/nginx/html/
+RUN truncate -s 10485761 /usr/share/nginx/html/mcp-test-fixture/oversized.jpg

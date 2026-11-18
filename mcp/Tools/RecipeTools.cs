@@ -19,10 +19,14 @@ public enum TagCategoryChoice
 }
 
 [McpServerToolType]
-public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory)
+public class RecipeTools(
+    IMcpClient client,
+    IHttpClientFactory httpClientFactory,
+    IHttpContextAccessor httpContextAccessor
+)
 {
     private const string ImageUrlGuidance =
-        " Call 'get_recipe_schema' first. 'imageUrl' must be a direct image URL reachable by this server " +
+        " 'imageUrl' must be a direct HTTP(S) image URL on a public host, reachable by this server " +
         "without browser authentication, not a local path or sharing page. For local/private photos, " +
         "use client file/browser access and HTTP upload, or ask the user for a hosted URL if unavailable. " +
         "Do not invent missing capabilities or claim success from hosting alone. " +
@@ -32,7 +36,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         "multipart 'file' and 'expire=3600'; read the returned sharing page and extract its actual download " +
         "link, including any token. Never guess a '/dl/' transformation. See https://tmpfiles.org/api and " +
         "https://tmpfiles.org/tos for current limits/terms. Import before expiry; successful imports are " +
-        "stored locally and survive source expiry. Verify with 'get_recipe' and load its image URL; report " +
+        "stored locally and survive source expiry. Verify the added image in 'get_recipe' and load its URL; report " +
         "hosting/fetch/permission/assignment failures and check state before retrying uncertain outcomes.";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -44,30 +48,25 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     [McpServerTool(Name = "get_recipe_schema")]
     [Description(
         "Returns the current JSON Schema for the recipe JSON accepted by 'add_recipe' and 'change_recipe' " +
-        "- call this first to discover the shape of recipe data, since optional fields (e.g. " +
-        "'inspirations', 'imageUrl') only appear while their backend service is online. " +
-        "See those tools' descriptions for image hosting/import instructions."
+        "- call this first to discover the shape of recipe data. The optional 'inspirations' field " +
+        "only appears while its service is online."
     )]
     public async Task<string> GetRecipeSchema()
     {
         var online = await GetOnlineServicesAsync();
-        var create = RecipeSchema.BuildForCreate(online.Contains("inspirations"), online.Contains("images"));
-        var update = RecipeSchema.BuildForUpdate(online.Contains("inspirations"), online.Contains("images"));
+        var create = RecipeSchema.BuildForCreate(online.Contains("inspirations"));
+        var update = RecipeSchema.BuildForUpdate(online.Contains("inspirations"));
         return JsonSerializer.Serialize(new { addRecipe = create, changeRecipe = update }, JsonOptions);
     }
 
     [McpServerTool(Name = "add_recipe")]
     [Description(
         "Creates a recipe from JSON (name required; method, ingredients optional). The " +
-        "'inspirations' field (array of URLs) and 'imageUrl' field are only accepted while the " +
-        "inspirations/images services (respectively) are online; if 'imageUrl' is given, the server " +
-        "fetches it and attaches it to the new recipe." + ImageUrlGuidance
+        "'inspirations' field (array of URLs) is only accepted while its service is online. " +
+        "Use 'add_recipe_image' separately after creating the recipe."
     )]
     public async Task<string> AddRecipe(
-        [Description(
-            "Recipe JSON object matching 'get_recipe_schema'; optional 'imageUrl' is a direct image " +
-            "download URL, not a local path or sharing page."
-        )] string recipeJson
+        [Description("Recipe JSON object matching 'get_recipe_schema'.")] string recipeJson
     )
     {
         JsonElement element;
@@ -78,18 +77,18 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         }
         catch (JsonException e)
         {
-            return $"Invalid JSON: {e.Message}";
+            throw new McpException($"Invalid JSON: {e.Message}");
         }
 
         var online = await GetOnlineServicesAsync();
-        var schema = RecipeSchema.BuildForCreate(online.Contains("inspirations"), online.Contains("images"));
+        var schema = RecipeSchema.BuildForCreate(online.Contains("inspirations"));
         var validation = schema.Evaluate(element, new EvaluationOptions { OutputFormat = OutputFormat.List });
         if (!validation.IsValid)
         {
             var errors = (validation.Details ?? [])
                 .Where(d => d.Errors is { Count: > 0 })
                 .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}"));
-            return $"Recipe failed schema validation: {string.Join("; ", errors)}";
+            throw new McpException($"Recipe failed schema validation: {string.Join("; ", errors)}");
         }
 
         var recipe = JsonNode.Parse(recipeJson)!.AsObject();
@@ -107,13 +106,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
             return "Failed to create recipe: no recipe returned";
         }
 
-        var result = JsonSerializer.Serialize(new { created.Id, created.Name }, JsonOptions);
-        if (recipe.TryGetPropertyValue("imageUrl", out var imageUrlNode) && (string?)imageUrlNode is { } imageUrl)
-        {
-            result = $"{result}; {await FetchAndAddImageAsync(created.Id, imageUrl)}";
-        }
-
-        return result;
+        return JsonSerializer.Serialize(new { created.Id, created.Name }, JsonOptions);
     }
 
     [McpServerTool(Name = "list_recipes")]
@@ -132,8 +125,9 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
 
     [McpServerTool(Name = "get_recipe")]
     [Description(
-        "Returns the full details of a single recipe (name, method, ingredients, rating, image, " +
-        "inspirations, tags) by id - use this to inspect the current state of a recipe, e.g. before merging " +
+        "Returns the full details of a single recipe (name, method, ingredients, rating, ordered images, " +
+        "inspirations, tags) by id. Images include stable IDs, and the first image is the default. " +
+        "Use this to inspect the current state of a recipe, e.g. before merging " +
         "new data into it with 'change_recipe'. Optional enrichment outages return the recipe with an " +
         "errors array describing the unavailable fields."
     )]
@@ -188,7 +182,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         return service switch
         {
             "rating" => extensions.GetValueOrDefault("service")?.ToString() == "ratings",
-            "image" => extensions.GetValueOrDefault("service")?.ToString() == "images",
+            "images" => extensions.GetValueOrDefault("service")?.ToString() == "images",
             "inspirations" => extensions.GetValueOrDefault("service")?.ToString() == "inspirations",
             "tags" => extensions.GetValueOrDefault("service")?.ToString() == "tags",
             _ => false,
@@ -198,17 +192,13 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
     [McpServerTool(Name = "change_recipe")]
     [Description(
         "Patches an existing recipe from JSON; only fields present in the JSON are changed, omitted " +
-        "fields are left untouched. The 'inspirations' field (array of URLs) and 'imageUrl' field are " +
-        "only accepted while the inspirations/images services (respectively) are online; if 'imageUrl' " +
-        "is given, the server fetches it and adds it as the new default image, retaining earlier images." +
-        ImageUrlGuidance
+        "fields are left untouched. The 'inspirations' field (array of URLs) is only accepted while " +
+        "its service is online. Use 'add_recipe_image' and 'delete_recipe_image' to manage images."
     )]
     public async Task<string> ChangeRecipe(
         [Description("Recipe id")] string recipeId,
         [Description(
-            "Partial recipe JSON object matching 'get_recipe_schema'; only included fields change. " +
-            "'imageUrl' alone adds a new default image using a direct download URL, not a local path or " +
-            "sharing page; earlier images are retained."
+            "Partial recipe JSON object matching 'get_recipe_schema'; only included fields change."
         )] string recipeJson
     )
     {
@@ -220,52 +210,37 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         }
         catch (JsonException e)
         {
-            return $"Invalid JSON: {e.Message}";
+            throw new McpException($"Invalid JSON: {e.Message}");
         }
 
         var online = await GetOnlineServicesAsync();
-        var schema = RecipeSchema.BuildForUpdate(online.Contains("inspirations"), online.Contains("images"));
+        var schema = RecipeSchema.BuildForUpdate(online.Contains("inspirations"));
         var validation = schema.Evaluate(element, new EvaluationOptions { OutputFormat = OutputFormat.List });
         if (!validation.IsValid)
         {
             var errors = (validation.Details ?? [])
                 .Where(d => d.Errors is { Count: > 0 })
                 .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}"));
-            return $"Recipe failed schema validation: {string.Join("; ", errors)}";
+            throw new McpException($"Recipe failed schema validation: {string.Join("; ", errors)}");
         }
 
         var recipe = JsonNode.Parse(recipeJson)!.AsObject();
-        var hasRecipeFields = recipe.Any(property => property.Key != "imageUrl");
-
-        string result;
-        if (hasRecipeFields)
+        if (recipe.Count == 0)
         {
-            var value = BuildRecipeInput(recipe);
-            var response = await client.UpdateRecipe.ExecuteAsync(recipeId, value);
-            if (response.Errors.Count > 0)
-            {
-                throw GraphQLError(response.Errors);
-            }
-
-            var updated = response.Data?.UpdateRecipe;
-            if (updated is null)
-            {
-                return "Failed to change recipe: no recipe returned";
-            }
-
-            result = JsonSerializer.Serialize(new { updated.Id, updated.Name }, JsonOptions);
-        }
-        else
-        {
-            result = "No recipe fields to change";
+            return "No recipe fields to change";
         }
 
-        if (recipe.TryGetPropertyValue("imageUrl", out var imageUrlNode) && (string?)imageUrlNode is { } imageUrl)
+        var value = BuildRecipeInput(recipe);
+        var response = await client.UpdateRecipe.ExecuteAsync(recipeId, value);
+        if (response.Errors.Count > 0)
         {
-            result = $"{result}; {await FetchAndAddImageAsync(recipeId, imageUrl)}";
+            throw GraphQLError(response.Errors);
         }
 
-        return result;
+        var updated = response.Data?.UpdateRecipe;
+        return updated is null
+            ? "Failed to change recipe: no recipe returned"
+            : JsonSerializer.Serialize(new { updated.Id, updated.Name }, JsonOptions);
     }
 
     private async Task<HashSet<string>> GetOnlineServicesAsync()
@@ -404,36 +379,125 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         };
     }
 
-    private async Task<string> FetchAndAddImageAsync(string recipeId, string imageUrl)
+    [McpServerTool(Name = "add_recipe_image")]
+    [Description(
+        "Imports one image into an existing recipe and returns its metadata, including the stable ID. " +
+        "The new image becomes the first (default) image without replacing earlier images." + ImageUrlGuidance
+    )]
+    public async Task<string> AddRecipeImage(
+        [Description("Recipe id")] string recipeId,
+        [Description("Direct HTTP(S) image URL reachable by the server, not a local path or sharing page.")] string imageUrl,
+        CancellationToken cancellationToken
+    )
     {
-        using var http = httpClientFactory.CreateClient();
-        HttpResponseMessage imageResponse;
-        try
+        await RequireImageManagementAsync(cancellationToken);
+        if (!Uri.TryCreate(imageUrl, UriKind.Absolute, out var source)
+            || source.Scheme is not ("http" or "https")
+            || source.UserInfo.Length != 0)
         {
-            imageResponse = await http.GetAsync(imageUrl);
-        }
-        catch (HttpRequestException e)
-        {
-            return $"Failed to fetch image: {e.Message}";
+            throw new McpException("Invalid imageUrl: provide a direct HTTP(S) image URL without embedded credentials.");
         }
 
-        if (!imageResponse.IsSuccessStatusCode)
-        {
-            return $"Failed to fetch image: {(int)imageResponse.StatusCode} {imageResponse.ReasonPhrase}";
-        }
-
-        var contentType = imageResponse.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
-        var filename = imageUrl.Split('/', '?').LastOrDefault(segment => segment.Length > 0) ?? "image";
-
-        await using var stream = await imageResponse.Content.ReadAsStreamAsync();
+        var (stream, contentType) = await FetchImageAsync(source, cancellationToken);
+        using var image = stream;
+        var filename = source.AbsolutePath.Split('/').LastOrDefault(segment => segment.Length > 0) ?? "image";
         var file = new Upload(stream, filename, contentType);
-        var response = await client.AddImage.ExecuteAsync(recipeId, file);
+        var response = await client.AddImage.ExecuteAsync(recipeId, file, cancellationToken);
         if (response.Errors.Count > 0)
         {
             throw GraphQLError(response.Errors);
         }
 
-        return response.Data?.AddImage is not null ? "Image uploaded" : "Failed to upload image";
+        var added = response.Data?.AddImage ?? throw new McpException("Failed to add image: no metadata returned");
+        return JsonSerializer.Serialize(new { added.Id, added.Url, added.ThumbUrl, added.Width, added.Height, added.Size }, JsonOptions);
+    }
+
+    private async Task<(MemoryStream Stream, string ContentType)> FetchImageAsync(
+        Uri source, CancellationToken cancellationToken
+    )
+    {
+        using var http = httpClientFactory.CreateClient(ImageSource.ClientName);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(http.Timeout);
+        var token = deadline.Token;
+        const string tooLarge = "Failed to fetch image: source exceeds the 10 MiB download limit";
+        try
+        {
+            using var response = await http.GetAsync(source, HttpCompletionOption.ResponseHeadersRead, token);
+            if (!response.IsSuccessStatusCode)
+                throw new McpException($"Failed to fetch image: HTTP {(int)response.StatusCode}");
+            if (response.Content.Headers.ContentLength > ImageSource.MaxBytes)
+                throw new McpException(tooLarge);
+
+            using var body = await response.Content.ReadAsStreamAsync(token);
+            var image = new MemoryStream();
+            try
+            {
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await body.ReadAsync(buffer, token)) > 0)
+                {
+                    if (image.Length + read > ImageSource.MaxBytes)
+                        throw new McpException(tooLarge);
+                    image.Write(buffer, 0, read);
+                }
+                image.Position = 0;
+                return (image, response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream");
+            }
+            catch
+            {
+                image.Dispose();
+                throw;
+            }
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException)
+        {
+            throw new McpException("Failed to fetch image: could not download the source URL");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new McpException("Failed to fetch image: source request timed out");
+        }
+    }
+
+    private async Task RequireImageManagementAsync(CancellationToken cancellationToken)
+    {
+        var response = await client.ImageManagementCapability.ExecuteAsync(cancellationToken);
+        if (response.Errors.Count > 0)
+        {
+            throw GraphQLError(response.Errors);
+        }
+
+        var capabilities = response.Data?.MyCapabilities
+            ?? throw new McpException("Failed to verify permission to manage images");
+        if (!capabilities.CanManageImages)
+        {
+            // GraphQL distinguishes credential-free guests from authenticated principals with the same role.
+            var credentialFree = httpContextAccessor.HttpContext?.Request.Headers.ContainsKey("Authorization") != true;
+            throw new McpException(capabilities.Role == "anonymous" && credentialFree
+                ? "authentication-required: Sign in to manage images (status: 401)"
+                : "forbidden: You do not have permission to manage images (status: 403)");
+        }
+    }
+
+    [McpServerTool(Name = "delete_recipe_image")]
+    [Description(
+        "Deletes only the image with the given stable ID (from 'get_recipe'). Returns true if deleted, " +
+        "false if already absent. Deleting the first image makes the next image the default."
+    )]
+    public async Task<string> DeleteRecipeImage(
+        [Description("Recipe id")] string recipeId,
+        [Description("Stable image id from the recipe's images array, not its URL or position.")] string imageId
+    )
+    {
+        var response = await client.DeleteImage.ExecuteAsync(recipeId, imageId);
+        if (response.Errors.Count > 0)
+        {
+            throw GraphQLError(response.Errors);
+        }
+
+        var deleted = response.Data?.DeleteImage ?? throw new McpException("Failed to delete image: no result returned");
+        return JsonSerializer.Serialize(deleted, JsonOptions);
     }
 
     [McpServerTool(Name = "add_rating")]

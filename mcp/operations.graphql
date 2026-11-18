@@ -14,11 +14,23 @@ mutation UpdateRecipe($id: ID!, $value: RecipeInput!) {
 
 mutation AddImage($recipeId: ID!, $file: Upload!) {
   addImage(recipeId: $recipeId, file: $file) {
+    id
     url
     thumbUrl
     width
     height
     size
+  }
+}
+
+mutation DeleteImage($recipeId: ID!, $imageId: ID!) {
+  deleteImage(recipeId: $recipeId, imageId: $imageId)
+}
+
+query ImageManagementCapability {
+  myCapabilities {
+    role
+    canManageImages
   }
 }
 
@@ -55,7 +67,8 @@ query GetRecipe($id: ID!) {
       average
       count
     }
-    image {
+    images {
+      id
       url
       thumbUrl
       width

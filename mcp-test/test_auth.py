@@ -112,16 +112,21 @@ def raw_client():
 async def test_anonymous_reads_and_denied_writes_leave_data_unchanged(accounts):
     async with mcp_session() as owner:
         recipe_id = await create_recipe(owner, "Anonymous authorization sentinel")
+        image = payload(await owner.call_tool(
+            "add_recipe_image", {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/test.jpg"}
+        ))
     async with mcp_session(authenticated=False) as anonymous:
         tools = await anonymous.list_tools()
         assert "get_recipe_schema" in {tool.name for tool in tools.tools}
         assert payload(await anonymous.call_tool("get_recipe_schema", {}))["addRecipe"]
         before_list = payload(await anonymous.call_tool("list_recipes", {}))
         before = payload(await anonymous.call_tool("get_recipe", {"recipeId": recipe_id}))
+        assert before["images"] == [image]
         for name, arguments in (
             ("add_recipe", {"recipeJson": json.dumps({"name": "Denied anonymous recipe"})}),
             ("change_recipe", {"recipeId": recipe_id, "recipeJson": '{"name":"Denied"}'}),
-            ("change_recipe", {"recipeId": recipe_id, "recipeJson": json.dumps({"imageUrl": f"{FIXTURE_API}/test.jpg"})}),
+            ("add_recipe_image", {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/missing.jpg"}),
+            ("delete_recipe_image", {"recipeId": recipe_id, "imageId": image["id"]}),
             ("add_rating", {"recipeId": recipe_id, "rating": 5}),
         ):
             denied(await anonymous.call_tool(name, arguments), "authentication-required")
@@ -140,12 +145,13 @@ async def test_member_ratings_are_distinct_replaceable_and_cannot_impersonate(ac
         for name, arguments in (
             ("add_recipe", {"recipeJson": '{"name":"Denied member recipe"}'}),
             ("change_recipe", {"recipeId": recipe_id, "recipeJson": '{"name":"Denied"}'}),
-            ("change_recipe", {"recipeId": recipe_id, "recipeJson": json.dumps({"imageUrl": f"{FIXTURE_API}/test.jpg"})}),
+            ("add_recipe_image", {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/missing.jpg"}),
+            ("delete_recipe_image", {"recipeId": recipe_id, "imageId": "a" * 64}),
         ):
             denied(await first.call_tool(name, arguments), "forbidden")
         original = payload(await first.call_tool("get_recipe", {"recipeId": recipe_id}))
         assert original["name"] == "Member rating identities"
-        assert original["image"] is None
+        assert original["images"] == []
         result = payload(await first.call_tool("add_rating", {"recipeId": recipe_id, "rating": 2}))
         assert result["count"] == 1
         result = payload(await first.call_tool("add_rating", {"recipeId": recipe_id, "rating": 4}))
@@ -302,10 +308,9 @@ async def test_owner_upload_follows_external_redirect_without_sending_bearer(acc
     async with mcp_session() as owner:
         recipe_id = await create_recipe(owner, "Credential-free image download")
         result = await owner.call_tool(
-            "change_recipe",
-            {"recipeId": recipe_id, "recipeJson": json.dumps({"imageUrl": f"{FIXTURE_API}/redirect.jpg"})},
+            "add_recipe_image",
+            {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/redirect.jpg"},
         )
-        assert result.is_error is False
-        assert "Image uploaded" in result.content[0].text
+        added = payload(result)
         recipe = payload(await owner.call_tool("get_recipe", {"recipeId": recipe_id}))
-        assert recipe["image"] is not None
+        assert recipe["images"] == [added]
