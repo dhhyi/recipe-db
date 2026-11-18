@@ -199,7 +199,7 @@ export async function uploadImage(
     multipart: {
       operations: JSON.stringify({
         query:
-          "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl size width height } }",
+          "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl size width height } }",
         variables: { id: recipe.id, file: null, crop },
       }),
       map: JSON.stringify({ 0: ["variables.file"] }),
@@ -221,7 +221,7 @@ export async function uploadImage(
     `Image seed for ${recipe.name} returned GraphQL errors`,
   ).toBeUndefined();
   expect(
-    result.data?.setImage,
+    result.data?.addImage,
     `Image seed for ${recipe.name} returned no metadata`,
   ).toMatchObject({
     url: expect.any(String),
@@ -229,7 +229,7 @@ export async function uploadImage(
     width: expect.any(Number),
     height: expect.any(Number),
   });
-  return result.data.setImage;
+  return result.data.addImage;
 }
 
 const visualTagCatalog = [

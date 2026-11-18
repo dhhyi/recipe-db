@@ -120,21 +120,21 @@ tests =
             == { x = 200, y = 150 }
       )
     , ( "upload metadata retains the returned immutable URL"
-      , RecipeDB.decodeUpload """{"data":{"setImage":{"url":"/images/hash-new.png","thumbUrl":"/images/hash-new-thumb.png","size":123,"width":648,"height":486}}}"""
+      , RecipeDB.decodeUpload """{"data":{"addImage":{"url":"/images/hash-new.png","thumbUrl":"/images/hash-new-thumb.png","size":123,"width":648,"height":486}}}"""
             == Ok { url = "/images/hash-new.png", thumbUrl = "/images/hash-new-thumb.png", size = 123, width = 648, height = 486 }
       )
     , ( "HTTP-200 GraphQL errors never count as successful save"
-      , RecipeDB.decodeUpload """{"data":{"setImage":{"url":"/images/hash.png","thumbUrl":"/images/thumb.png","size":1,"width":648,"height":486}},"errors":[{"message":"failed"}]}"""
+      , RecipeDB.decodeUpload """{"data":{"addImage":{"url":"/images/hash.png","thumbUrl":"/images/thumb.png","size":1,"width":648,"height":486}},"errors":[{"message":"failed"}]}"""
             |> Result.toMaybe
             |> (==) Nothing
       )
     , ( "malformed GraphQL errors never count as success"
-      , RecipeDB.decodeUpload """{"data":{"setImage":{"url":"x","thumbUrl":"y","size":1,"width":648,"height":486}},"errors":null}"""
+      , RecipeDB.decodeUpload """{"data":{"addImage":{"url":"x","thumbUrl":"y","size":1,"width":648,"height":486}},"errors":null}"""
             |> Result.toMaybe
             |> (==) Nothing
       )
     , ( "invalid upload response rejected", RecipeDB.decodeUpload "not json" |> Result.toMaybe |> (==) Nothing )
-    , ( "null upload metadata rejected", RecipeDB.decodeUpload """{"data":{"setImage":null}}""" |> Result.toMaybe |> (==) Nothing )
+    , ( "null upload metadata rejected", RecipeDB.decodeUpload """{"data":{"addImage":null}}""" |> Result.toMaybe |> (==) Nothing )
     , ( "structured crop and image errors provide German feedback"
       , List.all
             (\( code, message ) ->

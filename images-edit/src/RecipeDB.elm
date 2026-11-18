@@ -95,7 +95,7 @@ makeUploadRequest recipeId file crop targetMsg =
             -- placeholder for every Upload variable the "map" below then overwrites
             Encode.object
                 [ ( "query"
-                  , Encode.string "mutation ($recipeId: ID!, $file: Upload!, $crop: ImageCropInput!) { setImage(recipeId: $recipeId, file: $file, crop: $crop) { url thumbUrl size width height } }"
+                  , Encode.string "mutation ($recipeId: ID!, $file: Upload!, $crop: ImageCropInput!) { addImage(recipeId: $recipeId, file: $file, crop: $crop) { url thumbUrl size width height } }"
                   )
                 , ( "variables"
                   , Encode.object
@@ -199,7 +199,7 @@ decodeMetadata : Decode.Value -> Result String UploadedImage
 decodeMetadata value =
     Decode.decodeValue
         (field "data"
-            (field "setImage"
+            (field "addImage"
                 (map5 UploadedImage
                     (field "url" string)
                     (field "thumbUrl" string)

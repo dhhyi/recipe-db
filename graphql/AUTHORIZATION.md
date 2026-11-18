@@ -44,7 +44,7 @@ The `anonymous` role permits public reads and aggregate ratings. `member` additi
 | `rate` | `WriteRatings` | Deny | Allow | Allow |
 | `createRecipe`, `updateRecipe`, `deleteRecipe` | `ManageRecipes` | Deny | Deny | Allow |
 | Inspiration changes in create/update | `ManageInspirations` | Deny | Deny | Allow |
-| `setImage` | `ManageImages` | Deny | Deny | Allow |
+| `addImage`, `deleteImage` | `ManageImages` | Deny | Deny | Allow |
 | `myCapabilities`, `onlineServices`, `isServiceOnline`, `allServicesOnline` | Effective current principal / public availability | Allow | Allow | Allow |
 
 These are field resolver checks, so GraphQL aliases and nested/composed calls use the same authorization path. `myRating` is nullable and only reads the current principal's vote; no argument accepts another user ID. A missing vote is `null`, while insufficient capability is a structured `authentication-required` or `forbidden` error. Public aggregate fields remain independently nullable only when their existing backend availability contract says so.

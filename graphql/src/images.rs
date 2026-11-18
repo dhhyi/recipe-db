@@ -12,6 +12,7 @@ mod tests;
 #[serde(rename_all = "camelCase")]
 pub struct ImageMetadata {
     pub height: i32,
+    pub id: ID,
     pub size: i32,
     pub thumb_url: String,
     pub url: String,
@@ -46,11 +47,20 @@ impl ImagesApi {
         &self,
         recipe_id: &str,
     ) -> Result<Option<ImageMetadata>, Error> {
+        let recipe_id = RestClient::encode_path_segment(recipe_id);
         match self.client.get(&format!("{recipe_id}/meta/0")).await {
             Ok(meta) => Ok(Some(meta)),
             Err(err) if err.confirms_absence("image-not-found") => Ok(None),
             Err(err) => Err(err.into_error()),
         }
+    }
+
+    pub async fn get_image_collection(&self, recipe_id: &str) -> Result<Vec<ImageMetadata>, Error> {
+        let recipe_id = RestClient::encode_path_segment(recipe_id);
+        self.client
+            .get(&format!("{recipe_id}/meta"))
+            .await
+            .map_err(RestError::into_error)
     }
 
     pub async fn upload_image(
@@ -61,13 +71,36 @@ impl ImagesApi {
         crop: Option<ImageCropInput>,
         publisher: &EventPublisher,
     ) -> Result<ImageMetadata, Error> {
+        let recipe_id_path = RestClient::encode_path_segment(recipe_id);
         let metadata = self
             .client
-            .post_bytes::<ImageMetadata>(recipe_id, mimetype, content, crop.as_ref())
+            .post_bytes::<ImageMetadata>(&recipe_id_path, mimetype, content, crop.as_ref())
             .await
             .map_err(RestError::into_error)?;
         publisher.notify(recipe_id, EventKind::ImageChanged).await;
         Ok(metadata)
+    }
+
+    pub async fn delete_image(
+        &self,
+        recipe_id: &str,
+        image_id: &str,
+        publisher: &EventPublisher,
+    ) -> Result<bool, Error> {
+        let recipe_id_path = RestClient::encode_path_segment(recipe_id);
+        let image_id_path = RestClient::encode_path_segment(image_id);
+        match self
+            .client
+            .delete(&format!("{recipe_id_path}/{image_id_path}"))
+            .await
+        {
+            Ok(()) => {
+                publisher.notify(recipe_id, EventKind::ImageChanged).await;
+                Ok(true)
+            }
+            Err(err) if err.confirms_absence("image-not-found") => Ok(false),
+            Err(err) => Err(err.into_error()),
+        }
     }
 }
 
@@ -76,7 +109,7 @@ pub struct ImagesMutation;
 
 #[Object]
 impl ImagesMutation {
-    async fn set_image(
+    async fn add_image(
         &self,
         ctx: &Context<'_>,
         recipe_id: ID,
@@ -106,6 +139,24 @@ impl ImagesMutation {
                 &mimetype,
                 content,
                 crop,
+                ctx.data::<EventPublisher>()?,
+            )
+            .await
+    }
+
+    async fn delete_image(
+        &self,
+        ctx: &Context<'_>,
+        recipe_id: ID,
+        image_id: ID,
+    ) -> Result<bool, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ManageImages)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
+        ctx.data::<ImagesApi>()?
+            .delete_image(
+                recipe_id.as_str(),
+                image_id.as_str(),
                 ctx.data::<EventPublisher>()?,
             )
             .await

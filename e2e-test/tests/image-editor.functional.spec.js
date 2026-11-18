@@ -269,7 +269,7 @@ test("HTTP-200 GraphQL failure preserves the crop and saved pair and allows retr
         contentType: "application/json",
         body: JSON.stringify({
           data: {
-            setImage: {
+            addImage: {
               url: original,
               thumbUrl: recipe.image.thumbUrl,
               size: previousBytes.length,

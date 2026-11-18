@@ -175,7 +175,7 @@ async def maybe_add_image(number, recipe_id):
                 content = content.read()
                 upload = Upload(image_file, content, content_type)
                 result = await client.add_image(recipe_id, upload)
-                print(f"-> {result.set_image.url}")
+                print(f"-> {result.add_image.url}")
             return
 
 

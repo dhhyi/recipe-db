@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde_json::json;
@@ -31,6 +31,285 @@ fn uploaded_metadata() -> serde_json::Value {
     })
 }
 
+#[tokio::test]
+async fn image_collections_ids_deletion_and_authorization() {
+    let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+    let second_metadata = {
+        let mut metadata = metadata();
+        metadata["id"] = json!("b".repeat(64));
+        metadata["url"] = json!("/opaque/second.png");
+        metadata
+    };
+    let app = Router::new()
+        .route(
+            "/recipes/{id}",
+            get(|Path(id): Path<String>| async move {
+                if id == "deleted" {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"detail": "Recipe not found", "code": "recipe-not-found"})),
+                    )
+                        .into_response();
+                }
+                let recipe_id = if id == "encoded" {
+                    "recipe with spaces"
+                } else {
+                    id.as_str()
+                };
+                (
+                    StatusCode::OK,
+                    Json(json!({
+                        "id": recipe_id,
+                        "name": "Test",
+                        "nameSortKey": "test",
+                        "createdAt": "2026-10-23T13:00:00.123456Z",
+                        "updatedAt": "2026-10-23T13:00:00.123456Z"
+                    })),
+                )
+                    .into_response()
+            }),
+        )
+        .route(
+            "/images/{id}/meta",
+            get({
+                let second_metadata = second_metadata.clone();
+                move |Path(id): Path<String>| {
+                    let second_metadata = second_metadata.clone();
+                    async move {
+                        match id.as_str() {
+                            "present" => {
+                                (StatusCode::OK, Json(json!([metadata(), second_metadata])))
+                                    .into_response()
+                            }
+                            "empty" | "recipe with spaces" => {
+                                (StatusCode::OK, Json(json!([]))).into_response()
+                            }
+                            "offline" => (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(json!({"detail": "Unavailable", "code": "unavailable"})),
+                            )
+                                .into_response(),
+                            "malformed" => (StatusCode::OK, Json(json!({}))).into_response(),
+                            _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "Not found"})))
+                                .into_response(),
+                        }
+                    }
+                }
+            }),
+        )
+        .route(
+            "/images/{id}/meta/0",
+            get(|Path(id): Path<String>| async move {
+                match id.as_str() {
+                    "empty" => (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"detail": "Image not found", "code": "image-not-found"})),
+                    )
+                        .into_response(),
+                    "present" => (StatusCode::OK, Json(metadata())).into_response(),
+                    _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "Not found"})))
+                        .into_response(),
+                }
+            }),
+        )
+        .route(
+            "/images/{recipe_id}/{image_id}",
+            delete(
+                |Path((recipe_id, image_id)): Path<(String, String)>| async move {
+                    if recipe_id == "recipe with spaces" && image_id == "image with spaces" {
+                        return StatusCode::NO_CONTENT.into_response();
+                    }
+                    match image_id.as_str() {
+                        "missing" => (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({
+                                "detail": "Image not found",
+                                "code": "image-not-found"
+                            })),
+                        )
+                            .into_response(),
+                        "unrouted" => (StatusCode::NOT_FOUND, Json(json!({}))).into_response(),
+                        "invalid" | "%2E" | "%2E%2E" => (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "type": "about:blank",
+                                "title": "Bad Request",
+                                "status": 400,
+                                "detail": "Invalid image ID",
+                                "code": "invalid-image-id",
+                                "field": "imageId"
+                            })),
+                        )
+                            .into_response(),
+                        "offline" => (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({"detail": "Unavailable", "code": "unavailable"})),
+                        )
+                            .into_response(),
+                        _ => StatusCode::NO_CONTENT.into_response(),
+                    }
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let previous = std::env::var_os("REST_ENDPOINT");
+    std::env::set_var("REST_ENDPOINT", endpoint);
+    let previous_nats = std::env::var_os("NATS_URL");
+    std::env::set_var("NATS_URL", "nats://127.0.0.1:1");
+    let publisher = crate::events::EventPublisher::from_env().unwrap();
+    let schema =
+        crate::schema::build_schema(crate::mode::RuntimeMode::Testing, Some(publisher.clone()));
+    let sdl = schema.sdl();
+    assert!(sdl.contains("images: [ImageMetadata!]"));
+    assert!(sdl.contains("addImage("));
+    assert!(sdl.contains("deleteImage("));
+    assert!(!sdl.contains("setImage"));
+
+    let response = schema
+        .execute(
+            Request::new(r#"{ recipe(id: "present") { id images { id url } image { id url } } }"#)
+                .data(crate::test_context("anonymous")),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{response:?}");
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({
+            "recipe": {
+                "id": "present",
+                "images": [
+                    {"id": metadata()["id"], "url": metadata()["url"]},
+                    {"id": second_metadata["id"], "url": second_metadata["url"]}
+                ],
+                "image": {"id": metadata()["id"], "url": metadata()["url"]}
+            }
+        })
+    );
+
+    for role in ["anonymous", "member"] {
+        let response = schema
+            .execute(
+                Request::new(r#"{ recipe(id: "empty") { images { id } image { id } } }"#)
+                    .data(crate::test_context(role)),
+            )
+            .await;
+        assert!(response.errors.is_empty(), "{response:?}");
+        assert_eq!(
+            response.data.into_json().unwrap(),
+            json!({"recipe": {"images": [], "image": null}})
+        );
+    }
+
+    for (id, should_error) in [
+        ("offline", true),
+        ("malformed", true),
+        ("unrouted", true),
+        ("deleted", false),
+        ("encoded", false),
+    ] {
+        let response = schema
+            .execute(
+                Request::new(format!(
+                    r#"{{ recipe(id: "{id}") {{ id name images {{ id }} }} }}"#
+                ))
+                .data(crate::test_context("owner")),
+            )
+            .await;
+        assert_eq!(
+            !response.errors.is_empty(),
+            should_error,
+            "{id}: {response:?}"
+        );
+        match id {
+            "offline" => {
+                assert_eq!(response.data.into_json().unwrap()["recipe"]["name"], "Test");
+                let error = &response.errors[0];
+                assert_eq!(
+                    error.path,
+                    vec![
+                        async_graphql::PathSegment::Field("recipe".into()),
+                        async_graphql::PathSegment::Field("images".into())
+                    ]
+                );
+                assert_eq!(
+                    error.extensions.as_ref().unwrap().get("service"),
+                    Some(&async_graphql::value!("images"))
+                );
+            }
+            "deleted" => assert_eq!(response.data.into_json().unwrap(), json!({"recipe": null})),
+            "encoded" => assert_eq!(
+                response.data.into_json().unwrap()["recipe"]["images"],
+                json!([])
+            ),
+            _ => {}
+        }
+    }
+
+    let delete_query = "mutation($recipeId: ID!, $imageId: ID!) { deleteImage(recipeId: $recipeId, imageId: $imageId) }";
+    for (recipe_id, image_id, expected, error_code) in [
+        ("recipe with spaces", "image with spaces", Some(true), None),
+        ("present", "missing", Some(false), None),
+        (
+            "present",
+            "unrouted",
+            None,
+            Some("downstream-request-failed"),
+        ),
+        ("present", "invalid", None, Some("invalid-image-id")),
+        ("present", ".", None, Some("invalid-image-id")),
+        ("present", "..", None, Some("invalid-image-id")),
+        ("present", "offline", None, Some("service-unavailable")),
+    ] {
+        let response = schema
+            .execute(
+                Request::new(delete_query)
+                    .variables(Variables::from_json(json!({
+                        "recipeId": recipe_id,
+                        "imageId": image_id
+                    })))
+                    .data(crate::test_context("owner")),
+            )
+            .await;
+        if let Some(expected) = expected {
+            assert!(response.errors.is_empty(), "{response:?}");
+            assert_eq!(
+                response.data.into_json().unwrap(),
+                json!({"deleteImage": expected})
+            );
+        } else {
+            assert_eq!(response.errors.len(), 1, "{response:?}");
+            let extensions = response.errors[0].extensions.as_ref().unwrap();
+            assert_eq!(
+                extensions.get("code"),
+                Some(&async_graphql::Value::from(error_code.unwrap()))
+            );
+            if matches!(image_id, "invalid" | "." | "..") {
+                assert_eq!(extensions.get("status"), Some(&async_graphql::value!(400)));
+                assert_eq!(
+                    extensions.get("field"),
+                    Some(&async_graphql::value!("imageId"))
+                );
+            }
+        }
+    }
+    let event_status = serde_json::to_value(publisher.status()).unwrap();
+    assert_eq!(event_status["failed"], 1);
+    assert_eq!(event_status["published"], 0);
+
+    task.abort();
+    if let Some(value) = previous {
+        std::env::set_var("REST_ENDPOINT", value);
+    } else {
+        std::env::remove_var("REST_ENDPOINT");
+    }
+    if let Some(value) = previous_nats {
+        std::env::set_var("NATS_URL", value);
+    } else {
+        std::env::remove_var("NATS_URL");
+    }
+}
 #[tokio::test]
 async fn image_metadata_passthrough_and_upstream_errors() {
     let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
@@ -472,9 +751,9 @@ async fn image_metadata_passthrough_and_upstream_errors() {
             variables["crop"] = serde_json::Value::Null;
         }
         let mutation = if id == "present" {
-            "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl width height size } }"
+            "mutation($id: ID!, $file: Upload!) { addImage(recipeId: $id, file: $file) { id url thumbUrl width height size } }"
         } else {
-            "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl width height size } }"
+            "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { id url thumbUrl width height size } }"
         };
         let mut request = Request::new(mutation).variables(Variables::from_json(variables));
         request.set_upload(
@@ -493,7 +772,14 @@ async fn image_metadata_passthrough_and_upstream_errors() {
             assert!(response.errors.is_empty(), "{response:?}");
             assert_eq!(
                 response.data.into_json().unwrap(),
-                json!({"setImage": expected})
+                json!({"addImage": {
+                    "id": uploaded_metadata()["id"],
+                    "url": expected["url"],
+                    "thumbUrl": expected["thumbUrl"],
+                    "width": expected["width"],
+                    "height": expected["height"],
+                    "size": expected["size"]
+                }})
             );
         } else {
             assert_eq!(response.errors.len(), 1, "{response:?}");
@@ -563,7 +849,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
         json!({"x": "1", "y": 2, "width": 3, "height": 4}),
     ] {
         let mut request = Request::new(
-            "mutation($file: Upload!, $crop: ImageCropInput) { setImage(recipeId: \"graphql-invalid\", file: $file, crop: $crop) { url } }",
+            "mutation($file: Upload!, $crop: ImageCropInput) { addImage(recipeId: \"graphql-invalid\", file: $file, crop: $crop) { url } }",
         )
         .variables(Variables::from_json(json!({"file": null, "crop": crop})));
         request.set_upload(

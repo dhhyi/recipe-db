@@ -191,7 +191,7 @@ class DemoDataTagTests(unittest.IsolatedAsyncioTestCase):
                     "add_image",
                     new=AsyncMock(
                         return_value=SimpleNamespace(
-                            set_image=SimpleNamespace(url="/public/image")
+                            add_image=SimpleNamespace(url="/public/image")
                         )
                     ),
                 ) as add_image:

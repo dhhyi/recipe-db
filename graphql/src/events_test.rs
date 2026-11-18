@@ -141,6 +141,24 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
         )
         .route("/images", delete(|| async { StatusCode::NO_CONTENT }))
         .route(
+            "/images/{recipe_id}/{image_id}",
+            delete(
+                |Path((_recipe_id, image_id)): Path<(String, String)>| async move {
+                    if image_id == "missing" {
+                        (
+                            StatusCode::NOT_FOUND,
+                            Json(json!({
+                                "detail": "Image not found",
+                                "code": "image-not-found"
+                            })),
+                        )
+                    } else {
+                        (StatusCode::NO_CONTENT, Json(json!({})))
+                    }
+                },
+            ),
+        )
+        .route(
             "/images/{id}",
             post(|Path(id): Path<String>| async move {
                 match id.as_str() {
@@ -154,7 +172,8 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
                     _ => (
                         StatusCode::CREATED,
                         Json(json!({
-                            "recipeId": id, "modified": "2026-10-23T10:00:00Z",
+                            "recipeId": id, "id": "a".repeat(64),
+                            "modified": "2026-10-23T10:00:00Z",
                             "url": "/opaque/full.png", "thumbUrl": "/opaque/thumb.png",
                             "width": 640, "height": 480, "size": 12345
                         })),
@@ -222,6 +241,11 @@ async fn denied_mutations_have_no_backend_side_effects() {
         ),
         ("member", r#"mutation { deleteRecipe(id: "42") }"#, 403),
         (
+            "member",
+            r#"mutation { deleteImage(recipeId: "42", imageId: "a") }"#,
+            403,
+        ),
+        (
             "anonymous",
             r#"mutation { rate(id: "42", rating: 5) { count } }"#,
             401,
@@ -247,7 +271,7 @@ async fn denied_mutations_have_no_backend_side_effects() {
     }
 
     let mut upload = Request::new(
-        "mutation($file: Upload!) { setImage(recipeId: \"42\", file: $file) { url } }",
+        "mutation($file: Upload!) { addImage(recipeId: \"42\", file: $file) { url } }",
     )
     .variables(Variables::from_json(json!({"file": null})))
     .data(crate::test_context("member"));
@@ -291,6 +315,7 @@ async fn ignored_services_writes_are_not_dispatched_and_publish_no_events() {
         r#"mutation { createRecipe(value: {name: "Ignored"}) { id } }"#,
         r#"mutation { updateRecipe(id: "42", value: {name: "Ignored"}) { id } }"#,
         r#"mutation { deleteRecipe(id: "42") }"#,
+        r#"mutation { deleteImage(recipeId: "42", imageId: "a") }"#,
         r#"mutation { rate(id: "42", rating: 5) { count } }"#,
         r#"mutation { updateRecipe(id: "42", value: {inspirations: ["https://example.com"]}) { id } }"#,
         r#"mutation { createTag(category: CUISINE, name: "Ignored") { id } }"#,
@@ -455,7 +480,7 @@ async fn bus_contract() {
 
     for id in ["invalid", "malformed", "42"] {
         let mut request = Request::new(
-            "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl width height size } }"
+            "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { id url thumbUrl width height size } }"
         ).variables(Variables::from_json(json!({
             "id": id, "file": null,
             "crop": {"x": 17, "y": 29, "width": 101, "height": 83}
@@ -473,13 +498,32 @@ async fn bus_contract() {
         if id == "42" {
             assert_eq!(
                 response.data.into_json().unwrap(),
-                json!({"setImage": {
+                json!({"addImage": {
+                    "id": "a".repeat(64),
                     "url": "/opaque/full.png", "thumbUrl": "/opaque/thumb.png",
                     "width": 640, "height": 480, "size": 12345
                 }})
             );
         }
     }
+
+    execute(
+        &schema,
+        r#"mutation { deleteImage(recipeId: "42", imageId: "a") }"#,
+        true,
+    )
+    .await;
+    let response = schema
+        .execute(
+            Request::new(r#"mutation { deleteImage(recipeId: "42", imageId: "missing") }"#)
+                .data(crate::test_context("owner")),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{response:?}");
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"deleteImage": false})
+    );
 
     execute(&schema, r#"mutation { deleteRecipe(id: "42") }"#, true).await;
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
@@ -551,6 +595,7 @@ async fn bus_contract() {
         ("42", EventKind::InspirationsChanged),
         ("42", EventKind::RecipeChanged),
         ("42", EventKind::RatingChanged),
+        ("42", EventKind::ImageChanged),
         ("42", EventKind::ImageChanged),
         ("42", EventKind::RecipeDeleted),
         ("42", EventKind::TagsChanged),

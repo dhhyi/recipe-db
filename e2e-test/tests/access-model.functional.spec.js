@@ -269,7 +269,7 @@ test("role denials and cross-origin writes leave recipe data unchanged", async (
     const upload = {
       operations: JSON.stringify({
         query:
-          "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url } }",
+          "mutation($id: ID!, $file: Upload!) { addImage(recipeId: $id, file: $file) { url } }",
         variables: { id, file: null },
       }),
       map: '{"0":["variables.file"]}',
@@ -326,7 +326,7 @@ test("role denials and cross-origin writes leave recipe data unchanged", async (
       multipart: upload,
       headers: { Origin: new URL(baseURL).origin },
     });
-    expect((await uploaded.json()).data.setImage.url).toBeTruthy();
+    expect((await uploaded.json()).data.addImage.url).toBeTruthy();
     const response = await member.api.post(`/recipe/${id}/rate`, {
       form: { rating: "5" },
       headers: { Origin: new URL(baseURL).origin },
@@ -440,7 +440,7 @@ test("an invalid image-upload credential never replays a mutation after recovery
     let uploads = 0;
     await page.route("**/graphql", async (route) => {
       const request = route.request();
-      if (request.postData()?.includes("setImage")) uploads += 1;
+      if (request.postData()?.includes("addImage")) uploads += 1;
       if (invalid) {
         const response = await route.fetch({
           headers: {
