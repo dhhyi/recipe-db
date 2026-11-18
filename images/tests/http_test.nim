@@ -272,6 +272,14 @@ suite "backend HTTP publication contract":
 
     let store = ImageStorage(root: root)
     writeFile(store.manifestPath(id), "{")
+    let deleteFailure = client.request(
+        base & "/images/" & id & "/" & latest["id"].getStr,
+        httpMethod = HttpDelete)
+    check deleteFailure.code == Http500
+    check deleteFailure.headers["Content-Type"] == "application/problem+json"
+    check deleteFailure.headers["Cache-Control"] == "no-store"
+    check parseJson(deleteFailure.body)["code"].getStr == "storage-error"
+    check readFile(store.manifestPath(id)) == "{"
     let corrupt = client.get(base & "/images/" & id & "/meta")
     check corrupt.code == Http500
     check corrupt.headers["Content-Type"] == "application/problem+json"

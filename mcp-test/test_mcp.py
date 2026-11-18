@@ -166,7 +166,7 @@ async def test_image_import_guidance_is_available_in_tool_discovery(tool_name):
         assert "get_recipe_schema" in parameter
         assert "not a local path or sharing page" in parameter
         if tool_name == "change_recipe":
-            assert "replaces the recipe's image" in description
+            assert "retaining earlier images" in description
 
 
 async def test_tag_tools_describe_categories_and_optional_bulk_lists():
@@ -344,7 +344,7 @@ async def test_change_recipe_updates_only_the_given_fields():
         assert payload["name"] == "Original Name"
 
 
-async def test_change_recipe_with_image_url_replaces_the_image():
+async def test_change_recipe_with_image_url_uploads_an_image():
     async with mcp_session() as session:
         recipe_id = await create_recipe(session, "Recipe To Get An Image")
         result = await session.call_tool(
