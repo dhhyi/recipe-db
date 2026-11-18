@@ -276,6 +276,7 @@ frontend() {
     [[ -s $work/body ]]
   done
   design_assets
+  pwa_assets
 }
 design_assets() {
   local path location
@@ -307,6 +308,31 @@ design_assets() {
   expect_status 200
   grep -Eqi '^content-type: (application|text)/javascript' "$work/headers"
   [[ -s $work/body ]]
+}
+pwa_assets() {
+  local icon_path
+  request /pwa/manifest.webmanifest \
+    || die 'could not request the PWA manifest'
+  expect_status 200 \
+    || die "PWA manifest returned HTTP $(cat "$work/status")"
+  tr -d '\r' < "$work/headers" \
+    | grep -Eqi '^content-type:[[:space:]]*application/manifest\+json([;[:space:]]|$)' \
+    || die 'PWA manifest did not use application/manifest+json'
+  jq -e '
+    (.icons | type == "array" and length > 0)
+    and all(.icons[]; (.src | type == "string" and
+      test("^/pwa/icons/[A-Za-z0-9][A-Za-z0-9._-]*[.]png$")))
+  ' "$work/body" > /dev/null \
+    || die 'PWA manifest must contain same-origin PNG icon paths under /pwa/icons/'
+  jq -r '.icons[].src' "$work/body" > "$work/pwa-icons.txt"
+  while IFS= read -r icon_path; do
+    request "$icon_path" || die "could not request PWA icon $icon_path"
+    expect_status 200 \
+      || die "PWA icon $icon_path returned HTTP $(cat "$work/status")"
+    tr -d '\r' < "$work/headers" \
+      | grep -Eqi '^content-type:[[:space:]]*image/png([;[:space:]]|$)' \
+      || die "PWA icon $icon_path did not use image/png"
+  done < "$work/pwa-icons.txt"
 }
 phase=frontend-and-design
 frontend
