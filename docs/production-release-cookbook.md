@@ -706,7 +706,7 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-finalize \
   "$VALUES" "$RELEASE" "$TAG" "PUBLISHED-$HOLDER-$TAG"
 ```
 
-Finalization independently checks the published commit, artifact link and sequential release numbering before removing temporary Pi snapshots, private progress and operation ownership. It does not remove application data or the verified Drive backup. On failure, inspect before retrying. If terminal cleanup was interrupted after publication and Lease release, rerun the exact same `release-finalize` command: its holder/candidate/tag-bound private cleanup record allows it to finish even after the progress file has been removed. Do not abandon that cleanup claim.
+Finalization independently checks the published commit, artifact link and sequential release numbering, then verifies and removes only the candidate revision's completed or unused suspended migration Jobs before removing temporary Pi snapshots, private progress and operation ownership. Failed, mismatched, uncertain or worker-backed Jobs are retained with the release state and Lease for inspection and retry. It does not remove application data, immutable migrator images or migration history in the release artifact, or the verified Drive backup. On failure, inspect before retrying. If terminal cleanup was interrupted after publication and Lease release, rerun the exact same `release-finalize` command: its holder/candidate/tag-bound private cleanup record allows it to finish even after the progress file has been removed. Do not abandon that cleanup claim.
 
 ### Verify a backup, then re-enable its schedule
 
