@@ -70,11 +70,13 @@ func TestRecipeDetailUsesOrderedImageCollectionAndPlainSingleImages(t *testing.T
 
 	recipe.Images = recipe.Images[:1]
 	single := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{Recipe: recipe}, ""))
-	if strings.Contains(single, "recipe-image-carousel") ||
+	if !strings.Contains(single, "recipe-image-carousel") ||
 		strings.Contains(single, "data-carousel-prev") ||
 		strings.Contains(single, "data-carousel-next") ||
+		strings.Contains(single, "swiper-pagination") ||
+		strings.Contains(single, `aria-roledescription="Karussell"`) ||
 		!strings.Contains(single, `data-image-id="first-id"`) {
-		t.Fatalf("one image must remain a plain image without carousel controls: %s", single)
+		t.Fatalf("one image must retain fallback handling without carousel controls: %s", single)
 	}
 }
 
@@ -92,7 +94,8 @@ func TestRecipeDetailDistinguishesEmptyAndUnavailableImageCollections(t *testing
 			Image: &gql.RecipeDetailImageImageMetadata{Url: "/default.png"},
 		},
 	}, ""))
-	if strings.Contains(unavailable, "recipe-image-carousel") ||
+	if !strings.Contains(unavailable, "recipe-image-carousel") ||
+		strings.Contains(unavailable, "data-carousel-prev") ||
 		!strings.Contains(unavailable, `src="/default.png"`) {
 		t.Fatalf("a null collection must not be treated as confirmed empty when a default remains available: %s", unavailable)
 	}

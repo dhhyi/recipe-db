@@ -42,7 +42,7 @@ templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
 }
 
 templ image(recipe *gql.RecipeDetail, imageURL string, imageID string) {
-	<figure
+	<recipe-image-carousel
 		class="recipe-image recipe-image-frame"
 		style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
 	>
@@ -54,7 +54,7 @@ templ image(recipe *gql.RecipeDetail, imageURL string, imageID string) {
 			itemprop="image"
 			loading="eager"
 		/>
-	</figure>
+	</recipe-image-carousel>
 }
 
 templ imageCarousel(recipe *gql.RecipeDetail) {
