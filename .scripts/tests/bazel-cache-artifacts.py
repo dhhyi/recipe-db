@@ -2064,29 +2064,38 @@ class CacheArtifactTests(unittest.TestCase):
                 False,
             )
 
-    def test_pinned_copilot_identity_is_authorized_without_collaborator_lookup(self):
-        actor = {"login": "Copilot", "id": 198982749, "type": "Bot"}
-        run = {"actor": actor}
-        detail = {
-            "actor": actor,
-            "repository": {"id": 42, "full_name": "owner/repo"},
-            "head_repository": {"id": 42, "full_name": "owner/repo"},
-        }
-        with patch.object(CACHE, "request_json") as request:
-            with redirect_stdout(io.StringIO()) as output:
-                self.assertTrue(CACHE.trusted_pr_writer(
-                    "https://api.github.com/repos/owner/repo", "token", run, detail,
-                    "owner/repo", 17,
-                ))
-            request.assert_not_called()
-        self.assertIn("authorization=pinned Copilot identity", output.getvalue())
+    def test_pinned_bots_are_authorized_without_collaborator_lookup(self):
+        actors = (
+            ({"login": "Copilot", "id": 198982749, "type": "Bot"},
+             "authorization=pinned Copilot identity"),
+            ({"login": "recipe-db-pr-metadata[bot]", "id": 358222943, "type": "Bot"},
+             "authorization=pinned PR metadata app identity"),
+        )
+        for actor, authorization in actors:
+            with self.subTest(actor=actor), patch.object(CACHE, "request_json") as request:
+                run = {"actor": actor}
+                detail = {
+                    "actor": actor,
+                    "repository": {"id": 42, "full_name": "owner/repo"},
+                    "head_repository": {"id": 42, "full_name": "owner/repo"},
+                }
+                with redirect_stdout(io.StringIO()) as output:
+                    self.assertTrue(CACHE.trusted_pr_writer(
+                        "https://api.github.com/repos/owner/repo", "token", run, detail,
+                        "owner/repo", 17,
+                    ))
+                request.assert_not_called()
+                self.assertIn(authorization, output.getvalue())
 
-    def test_pinned_copilot_rejects_mismatched_malformed_and_unsupported_identities(self):
+    def test_pinned_bots_reject_mismatched_malformed_and_unsupported_identities(self):
         copilot = {"login": "Copilot", "id": 198982749, "type": "Bot"}
         invalid_identities = [
             {"login": "Copilot", "id": 198982748, "type": "Bot"},
             {"login": "other-bot", "id": 198982749, "type": "Bot"},
             {"login": "Copilot", "id": 198982749, "type": "User"},
+            {"login": "recipe-db-pr-metadata[bot]", "id": 358222942, "type": "Bot"},
+            {"login": "other-bot", "id": 358222943, "type": "Bot"},
+            {"login": "recipe-db-pr-metadata[bot]", "id": 358222943, "type": "User"},
             {"login": "other-bot", "id": 14, "type": "Bot"},
             {"login": "Copilot", "id": "198982749", "type": "Bot"},
             {"login": "Copilot", "id": True, "type": "Bot"},
