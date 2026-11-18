@@ -12,8 +12,8 @@ func recipeImageTransitionStyle(id string) string {
 templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	if recipeEdit || (images && imageEdit) {
 		<details class="dropdown sm:ml-auto">
-			<summary role="button" class="outline">Bearbeiten</summary>
-			<ul>
+			<summary role="button" class="outline whitespace-nowrap sm:w-max">Bearbeiten</summary>
+			<ul dir="rtl" class="text-left sm:text-right">
 				if recipeEdit {
 					<li><a href={ "/edit/" + id }>Rezept bearbeiten</a></li>
 				}
