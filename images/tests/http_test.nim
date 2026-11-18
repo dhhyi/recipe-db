@@ -467,6 +467,12 @@ suite "backend HTTP publication contract":
     check empty.code == Http200
     check empty.headers["Cache-Control"] == "no-store"
     check parseJson(empty.body) == newJArray()
+    let invalidRecipe = client.get(base & "/images/invalid..id/meta")
+    check invalidRecipe.code == Http404
+    check parseJson(invalidRecipe.body)["code"].getStr == "image-not-found"
+    let invalidRecipeDefault = client.get(base & "/images/invalid..id/meta/0")
+    check invalidRecipeDefault.code == Http404
+    check parseJson(invalidRecipeDefault.body)["code"].getStr == "image-not-found"
     for path in ["/images/empty/meta/0", "/images/empty/meta/0/"]:
       let missing = client.get(base & path)
       check missing.code == Http404
@@ -496,15 +502,27 @@ suite "backend HTTP publication contract":
       check defaultOnly.headers["Cache-Control"] == "no-store"
       check parseJson(defaultOnly.body) == b
 
-    let malformedId = client.request(base & "/images/collection/not-an-image-id",
-        httpMethod = HttpDelete)
-    check malformedId.code == Http400
-    check parseJson(malformedId.body)["code"].getStr == "invalid-image-id"
-    check parseJson(malformedId.body)["field"].getStr == "imageId"
+    for malformed in ["not-an-image-id", repeat('A', 64)]:
+      let malformedId = client.request(base & "/images/collection/" & malformed,
+          httpMethod = HttpDelete)
+      check malformedId.code == Http400
+      check parseJson(malformedId.body)["code"].getStr == "invalid-image-id"
+      check parseJson(malformedId.body)["field"].getStr == "imageId"
+    let invalidRecipeDelete = client.request(
+        base & "/images/invalid..id/" & a["id"].getStr, httpMethod = HttpDelete)
+    check invalidRecipeDelete.code == Http404
+    check parseJson(invalidRecipeDelete.body)["code"].getStr == "image-not-found"
     let crossRecipe = client.request(base & "/images/other/" & a["id"].getStr,
         httpMethod = HttpDelete)
     check crossRecipe.code == Http404
     check parseJson(client.getContent(base & "/images/collection/meta"))[0] == b
+    let opaqueRecipe = "recipe #?+%:ümlaut"
+    let opaqueUpload = upload(encodeUrl(opaqueRecipe, usePlus = false), "#808080")
+    check opaqueUpload.code == Http201
+    let opaquePath = encodeUrl(opaqueRecipe, usePlus = false)
+    let opaqueMetadata = client.getContent(
+        base & "/images/" & opaquePath & "/meta/0")
+    check parseJson(opaqueMetadata)["recipeId"].getStr == opaqueRecipe
 
     let removedB = client.request(base & "/images/collection/" & b["id"].getStr & "/",
         httpMethod = HttpDelete)

@@ -6,7 +6,7 @@ HTTP 204
 GET {{REST_API}}/images/no-image/meta/
 HTTP 200
 [Asserts]
-jsonpath "$" == []
+jsonpath "$[0]" not exists
 
 GET {{REST_API}}/images/no-image/meta/0
 HTTP 404
@@ -212,7 +212,7 @@ HTTP 204
 GET {{REST_API}}/images/rice-pudding/meta/
 HTTP 200
 [Asserts]
-jsonpath "$" == []
+jsonpath "$[0]" not exists
 
 DELETE {{REST_API}}/images/rice-pudding/{{image_id_a}}
 HTTP 404
@@ -228,7 +228,7 @@ HTTP 204
 GET {{REST_API}}/images/rice-pudding/meta
 HTTP 200
 [Asserts]
-jsonpath "$" == []
+jsonpath "$[0]" not exists
 
 GET {{WEB_API}}{{normal_a}}
 HTTP 404
@@ -270,6 +270,11 @@ DELETE {{REST_API}}/images/
 HTTP 204
 
 GET {{REST_API}}/images/apple-pie/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0]" not exists
+
+GET {{REST_API}}/images/apple-pie/meta/0
 HTTP 404
 
 GET {{WEB_API}}{{wipe_normal}}
@@ -279,7 +284,9 @@ GET {{WEB_API}}{{wipe_thumb}}
 HTTP 404
 
 GET {{REST_API}}/images/rice-pudding-extra/meta
-HTTP 404
+HTTP 200
+[Asserts]
+jsonpath "$[0]" not exists
 
 GET {{WEB_API}}{{neighbor}}
 HTTP 404

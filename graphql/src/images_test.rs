@@ -516,10 +516,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                     extensions.get("code"),
                     Some(&async_graphql::value!("image-limit-reached"))
                 );
-                assert_eq!(
-                    extensions.get("status"),
-                    Some(&async_graphql::value!(409))
-                );
+                assert_eq!(extensions.get("status"), Some(&async_graphql::value!(409)));
             }
             if ["crop-invalid", "crop-outside", "negative-crop"].contains(&id) {
                 let extensions = response.errors[0].extensions.as_ref().unwrap();
