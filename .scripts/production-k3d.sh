@@ -343,12 +343,21 @@ annotate_credentials() {
 routes() {
   jq -n --slurpfile projects "$work/projects.jsonl" --slurpfile config "$work/config.json" \
     '{projects:$projects,googleOAuthClientId:($config[0].runtime.googleOAuthClientId // "")}' > "$work/route-values.json"
+  frontend_routers=$(jq -cs '
+    [.[] | select(.category == "frontend")
+      | (.traefik.labels.http.routers // {}) | to_entries[]
+      | select((.value.entrypoints // "" | split(",") | index("web")) != null)
+      | .key
+    ] | unique
+  ' "$work/projects.jsonl")
   ytt -f "$release_root/.scripts/templates/traefik-template.yml" \
     -f "$release_root/.scripts/templates/browse-maintenance-template.lib.yml" \
     -f "$release_root/.scripts/templates/service-template.lib.yml" \
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
-  jq --arg ns "$namespace" --argjson googleEnabled "$google_enabled" --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
+  jq --arg ns "$namespace" --argjson googleEnabled "$google_enabled" \
+    --argjson frontendRouters "$frontend_routers" \
+    --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
     walk(if type == "string" then
       gsub("http://(?<host>[a-z][a-z0-9-]*)(?=[:/?#]|$)";
         "http://\(.host).\($ns).svc.cluster.local")
@@ -380,12 +389,9 @@ routes() {
                   entrypoints:["websecure"], tls:$tls,
                   middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
               end;
-            preview("browse")
-            | preview("design")
+            reduce $frontendRouters[] as $name (. ; preview($name))
             | preview("images-public")
             | preview("graphql")
-            | preview("recipes-edit")
-            | preview("images-edit")
             | preview("mcp")
             | if $googleEnabled then
                 preview("graphql-cookie")

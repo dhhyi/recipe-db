@@ -4,6 +4,7 @@
 load test_helper
 
 setup() {
+  unset MOCK_FRONTEND_ROUTES
   setup_fixture production-k3d.sh
   export FIXTURE_ROOT
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
@@ -103,6 +104,15 @@ application_project_metadata_to_jsonl() {
     '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","devcontainer":{"ports":[8081],"environment":{}}}' \
     '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"devcontainer":{"ports":[8082],"environment":{}}}' \
     > "$2"
+  if [[ ${MOCK_FRONTEND_ROUTES:-false} == true ]]; then
+    printf '%s\n' \
+      '{"name":"browse","category":"frontend","devcontainer":{"ports":[3000],"environment":{}},"traefik":{"labels":{"http":{"routers":{"browse":{"entrypoints":"web"}}}}}}' \
+      '{"name":"design","category":"frontend","devcontainer":{"ports":[80],"environment":{}},"traefik":{"labels":{"http":{"routers":{"design":{"entrypoints":"web"}}}}}}' \
+      '{"name":"recipes-edit","category":"frontend","devcontainer":{"ports":[3000],"environment":{}},"traefik":{"labels":{"http":{"routers":{"recipes-edit":{"entrypoints":"web"}}}}}}' \
+      '{"name":"images-edit","category":"frontend","devcontainer":{"ports":[3000],"environment":{}},"traefik":{"labels":{"http":{"routers":{"images-edit":{"entrypoints":"web"}}}}}}' \
+      '{"name":"pwa","category":"frontend","devcontainer":{"ports":[80],"environment":{}},"traefik":{"labels":{"http":{"routers":{"pwa":{"entrypoints":"web"},"pwa-internal":{"entrypoints":"rest-internal"}}}}}}' \
+      >> "$2"
+  fi
 }
 EOF
   cat > .scripts/validate-production-release.sh << 'EOF'
@@ -1491,6 +1501,14 @@ http:
       entrypoints: [web]
       service: recipe-db-frontend
       middlewares: [frontend-compress, browse-unavailable]
+    pwa:
+      rule: PathPrefix(`/pwa`)
+      entrypoints: [web]
+      service: recipe-db-pwa
+    pwa-internal:
+      rule: PathPrefix(`/pwa-internal`)
+      entrypoints: [rest-internal]
+      service: recipe-db-pwa
     design:
       rule: PathPrefix(`/design/`)
       entrypoints: [web]
