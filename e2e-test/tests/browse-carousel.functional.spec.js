@@ -92,24 +92,35 @@ test("recipe image carousel follows collection order and navigates locally", asy
   expect(Math.abs(footprint.width / footprint.height - 4 / 3)).toBeLessThan(0.02);
 
   if (isMobile) {
-    await page.evaluate(() => {
-      const carousel = document.querySelector("recipe-image-carousel");
-      const element = carousel.querySelector(".swiper");
-      const rect = element.getBoundingClientRect();
-      const options = (clientX) => ({
-        bubbles: true,
-        cancelable: true,
-        isPrimary: true,
-        pointerId: 1,
-        pointerType: "touch",
-        clientX,
-        clientY: rect.y + rect.height / 2,
-      });
-      element.dispatchEvent(new PointerEvent("pointerdown", options(rect.left + 20)));
-      element.dispatchEvent(new PointerEvent("pointermove", options(rect.right - 20)));
-      element.dispatchEvent(new PointerEvent("pointerup", options(rect.right - 20)));
-    });
+    await previous.click();
     await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[0].id);
+    const box = await carousel.locator(".swiper").boundingBox();
+    const session = await page.context().newCDPSession(page);
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [
+        { x: box.x + box.width * 0.75, y: box.y + box.height / 2, id: 1 },
+      ],
+    });
+    for (let step = 1; step <= 8; step += 1) {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          {
+            x: box.x + box.width * (0.75 - (0.65 * step) / 8),
+            y: box.y + box.height / 2,
+            id: 1,
+          },
+        ],
+      });
+      await page.waitForTimeout(20);
+    }
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await session.detach();
+    await expect(activeImage).toHaveAttribute("data-image-id", recipe.images[1].id);
   }
 });
 
@@ -137,4 +148,123 @@ test("failed carousel images keep their position and use the design fallback", a
     "data-image-id",
     multiImageRecipe.images[1].id,
   );
+});
+
+test("reinserted carousel handles an already-failed image", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  await page.route("**/missing-carousel-image-*.png", async (route) => {
+    await route.fulfill({ status: 404, contentType: "image/png", body: "" });
+  });
+  await page.goto(`/recipe/${multiImageRecipe.id}`);
+  const carousel = page.locator("recipe-image-carousel");
+  await expect(carousel).toHaveAttribute("data-enhanced", "true");
+
+  const failedImageId = multiImageRecipe.images[1].id;
+  await page.evaluate(async (imageId) => {
+    const carousel = document.querySelector("recipe-image-carousel");
+    const parent = carousel.parentElement;
+    const nextSibling = carousel.nextSibling;
+    const image = carousel.querySelector(`[data-image-id="${imageId}"]`);
+    carousel.remove();
+
+    await new Promise((resolve, reject) => {
+      image.addEventListener("error", resolve, { once: true });
+      image.addEventListener(
+        "load",
+        () => reject(new Error("The failure fixture unexpectedly loaded")),
+        { once: true },
+      );
+      image.src = `/missing-carousel-image-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.png`;
+    });
+    if (!image.complete || image.naturalWidth !== 0) {
+      throw new Error("The image must be failed before the carousel reconnects");
+    }
+
+    parent.insertBefore(carousel, nextSibling);
+  }, failedImageId);
+
+  const failed = carousel.locator(`[data-image-id="${failedImageId}"]`);
+  await expect(carousel).toHaveAttribute("data-enhanced", "true");
+  await expect(failed).toHaveAttribute("src", /image-not-available/);
+  await expect(carousel.locator(".swiper-slide")).toHaveCount(2);
+  await carousel.getByRole("button", { name: "Nächstes Bild" }).click();
+  await expect(carousel.locator(".swiper-slide-active img")).toHaveAttribute(
+    "data-image-id",
+    failedImageId,
+  );
+  await expect(failed).toHaveAttribute("src", /image-not-available/);
+});
+
+test("carousel lifecycle survives swaps, reconnection, and history restoration", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const { id, images } = multiImageRecipe;
+  await page.goto(`/recipe/${id}`);
+
+  let carousel = page.locator("recipe-image-carousel");
+  let activeImage = carousel.locator(".swiper-slide-active img");
+  let next = carousel.getByRole("button", { name: "Nächstes Bild" });
+  await expect(carousel).toHaveAttribute("data-enhanced", "true");
+  await next.click();
+  await expect(activeImage).toHaveAttribute("data-image-id", images[1].id);
+
+  const fragment = await page.evaluate(async (recipeId) => {
+    const target = document.createElement("div");
+    target.id = "carousel-unrelated-fragment";
+    target.innerHTML = "<span>before</span>";
+    document.querySelector("main").append(target);
+    await htmx.ajax("GET", `/recipe/${recipeId}/controls`, {
+      target: "#carousel-unrelated-fragment",
+      swap: "innerHTML",
+    });
+    return target.innerHTML;
+  }, id);
+  expect(fragment).not.toContain("before");
+  await expect(activeImage).toHaveAttribute("data-image-id", images[1].id);
+
+  await page.evaluate(() => {
+    const carousel = document.querySelector("recipe-image-carousel");
+    const parent = carousel.parentElement;
+    const nextSibling = carousel.nextSibling;
+    carousel.remove();
+    parent.insertBefore(carousel, nextSibling);
+  });
+  await expect(carousel).toHaveAttribute("data-enhanced", "true");
+  activeImage = carousel.locator(".swiper-slide-active img");
+  next = carousel.getByRole("button", { name: "Nächstes Bild" });
+  await expect(activeImage).toHaveAttribute("data-image-id", images[0].id);
+  await next.click();
+  await expect(activeImage).toHaveAttribute("data-image-id", images[1].id);
+
+  await page.evaluate(async (recipeId) => {
+    await htmx.ajax("GET", `/recipe/${recipeId}`, {
+      target: "main",
+      select: "main > *",
+      swap: "innerHTML",
+    });
+  }, id);
+  carousel = page.locator("recipe-image-carousel");
+  await expect(carousel).toHaveAttribute("data-enhanced", "true");
+  activeImage = carousel.locator(".swiper-slide-active img");
+  next = carousel.getByRole("button", { name: "Nächstes Bild" });
+  await expect(activeImage).toHaveAttribute("data-image-id", images[0].id);
+  await next.click();
+  await expect(activeImage).toHaveAttribute("data-image-id", images[1].id);
+
+  await page.getByRole("link", { name: "Zur Startseite" }).click();
+  await expect(page).toHaveURL("/");
+  await page.goBack();
+  await expect(page).toHaveURL(`/recipe/${id}`);
+  carousel = page.locator("recipe-image-carousel");
+  await expect(carousel).toHaveAttribute("data-enhanced", "true");
+  activeImage = carousel.locator(".swiper-slide-active img");
+  next = carousel.getByRole("button", { name: "Nächstes Bild" });
+  await expect(activeImage).toHaveAttribute("data-image-id", images[0].id);
+  await next.click();
+  await expect(activeImage).toHaveAttribute("data-image-id", images[1].id);
 });
