@@ -1,4 +1,6 @@
 import json
+import os
+import uuid
 from itertools import count
 
 import anyio
@@ -15,6 +17,7 @@ from test_mcp import (
 )
 
 REQUEST_IDS = count(1)
+GRAPHQL_URL = os.environ.get("REST_API", "http://traefik:3000").rstrip("/") + "/graphql"
 
 
 class RedactedAccounts(dict):
@@ -96,6 +99,17 @@ def raw_payload(result):
 def raw_denied(result, code):
     assert result.get("isError") is True
     assert code in result["content"][0]["text"]
+
+
+async def graph_ql(client, query, variables, token=None):
+    headers = {"Authorization": "Bearer " + token} if token else {}
+    response = await client.post(
+        GRAPHQL_URL,
+        headers=headers,
+        json={"query": query, "variables": variables},
+    )
+    assert response.status_code == 200
+    return response.json()
 
 
 @pytest.fixture
@@ -255,6 +269,102 @@ async def test_cookies_do_not_authenticate_and_bearer_wins(accounts, raw_client)
             await call(client, "list_recipes", {}, cookies | bearer("wrong-token")),
             "invalid-credentials",
         )
+
+
+async def test_concurrent_graphql_and_mcp_ratings_preserve_each_identity(
+    accounts, raw_client
+):
+    async with httpx.AsyncClient(timeout=30) as graphql_client, raw_client as mcp_client:
+        recipe = await graph_ql(
+            graphql_client,
+            "mutation($value: RecipeInput!) { createRecipe(value: $value) { id } }",
+            {"value": {"name": "MCP GraphQL rating concurrency " + uuid.uuid4().hex}},
+            accounts["owner"],
+        )
+        assert "errors" not in recipe
+        recipe_id = recipe["data"]["createRecipe"]["id"]
+        try:
+            rate_mutation = (
+                "mutation($id: ID!, $rating: Int!) "
+                "{ rate(id: $id, rating: $rating) { average count myRating } }"
+            )
+            for identity, vote in (("memberOne", 2), ("memberTwo", 4)):
+                seeded = await graph_ql(
+                    graphql_client,
+                    rate_mutation,
+                    {"id": recipe_id, "rating": vote},
+                    accounts[identity],
+                )
+                assert "errors" not in seeded
+
+            await initialize(mcp_client)
+            graphql_results = {}
+            mcp_results = {}
+
+            async def read_rating(identity, token=None):
+                graphql_results[identity] = await graph_ql(
+                    graphql_client,
+                    "query($id: ID!) { rating(id: $id) { average count myRating } }",
+                    {"id": recipe_id},
+                    token,
+                )
+
+            async def add_rating(identity, vote, token=None):
+                mcp_results[identity] = await call(
+                    mcp_client,
+                    "add_rating",
+                    {"recipeId": recipe_id, "rating": vote},
+                    bearer(token) if token else None,
+                )
+
+            async with anyio.create_task_group() as group:
+                for identity, vote in (("memberOne", 2), ("memberTwo", 4)):
+                    group.start_soon(read_rating, identity, accounts[identity])
+                    group.start_soon(add_rating, identity, vote, accounts[identity])
+                group.start_soon(read_rating, "anonymous")
+                group.start_soon(add_rating, "anonymous", 5)
+
+            for identity, vote in (("memberOne", 2), ("memberTwo", 4)):
+                assert "errors" not in graphql_results[identity]
+                assert graphql_results[identity]["data"]["rating"] == {
+                    "average": 3,
+                    "count": 2,
+                    "myRating": vote,
+                }
+                assert raw_payload(mcp_results[identity]) == {
+                    "average": 3,
+                    "count": 2,
+                }
+            anonymous_rating = graphql_results["anonymous"]
+            assert anonymous_rating["data"]["rating"] == {
+                "average": 3,
+                "count": 2,
+                "myRating": None,
+            }
+            assert any(
+                error.get("extensions", {}).get("code") == "authentication-required"
+                for error in anonymous_rating.get("errors", [])
+            )
+            raw_denied(mcp_results["anonymous"], "authentication-required")
+
+            recipe = raw_payload(
+                await call(
+                    mcp_client,
+                    "get_recipe",
+                    {"recipeId": recipe_id},
+                    bearer(accounts["owner"]),
+                )
+            )
+            assert recipe["rating"]["average"] == 3
+            assert recipe["rating"]["count"] == 2
+        finally:
+            deleted = await graph_ql(
+                graphql_client,
+                "mutation($id: ID!) { deleteRecipe(id: $id) }",
+                {"id": recipe_id},
+                accounts["owner"],
+            )
+            assert "errors" not in deleted
 
 
 async def test_concurrent_requests_do_not_share_member_or_owner_identity(accounts, raw_client):
