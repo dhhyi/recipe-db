@@ -5,6 +5,7 @@ load test_helper
 setup() {
   unset FAIL_VERIFY FAIL_DEPLOY FAIL_SEARCH FAIL_RELEASE FAIL_MAINTENANCE FAIL_HTMX FAIL_STORYBOOK \
     FAIL_STORYBOOK_ASSET \
+    FAIL_PWA_MANIFEST FAIL_PWA_MANIFEST_CONTENT_TYPE FAIL_PWA_ICON FAIL_PWA_ICON_CONTENT_TYPE \
     FAIL_BACKEND_EXPOSURE FAIL_MCP_MAINTENANCE FAIL_WRONG_MAINTENANCE FAIL_DELETE FAIL_INIT \
     FAIL_RELEASE_LOCK DELAY_BROWSE_RESTORE
   setup_fixture smoke-production-k3d.sh
@@ -197,6 +198,22 @@ case "$path" in
     printf 'Content-Type: application/javascript\r\n' > "$headers"; printf 'window.storybook={}' > "$output"
     if [[ ${FAIL_STORYBOOK_ASSET:-false} == true ]]; then status=404; fi
     ;;
+  /pwa/manifest.webmanifest)
+    printf 'Content-Type: application/manifest+json\r\n' > "$headers"
+    printf '%s\n' '{"icons":[{"src":"/pwa/icons/chef-hat-192.png"},{"src":"/pwa/icons/chef-hat-512.png"},{"src":"/pwa/icons/chef-hat-maskable-512.png"}]}' > "$output"
+    if [[ ${FAIL_PWA_MANIFEST:-false} == true ]]; then status=404; fi
+    if [[ ${FAIL_PWA_MANIFEST_CONTENT_TYPE:-false} == true ]]; then
+      printf 'Content-Type: application/json\r\n' > "$headers"
+    fi
+    ;;
+  /pwa/icons/*)
+    printf 'Content-Type: image/png\r\n' > "$headers"
+    printf 'png icon' > "$output"
+    if [[ ${FAIL_PWA_ICON:-false} == true && $path == /pwa/icons/chef-hat-512.png ]]; then status=404; fi
+    if [[ ${FAIL_PWA_ICON_CONTENT_TYPE:-false} == true && $path == /pwa/icons/chef-hat-512.png ]]; then
+      printf 'Content-Type: application/octet-stream\r\n' > "$headers"
+    fi
+    ;;
   '/?q='*)
     printf 'Content-Type: text/html\r\n' > "$headers"
     printf '<html><a href="/recipe/own-smoke-id">smoke</a></html>' > "$output" ;;
@@ -256,6 +273,10 @@ prepare_release_state() {
   [ "$status" -eq 1 ]
   grep -qF "driver deploy $ARTIFACT" "$MOCK_LOG"
   grep -qF /design/htmx.min.js "$MOCK_LOG"
+  for path in /pwa/manifest.webmanifest /pwa/icons/chef-hat-192.png \
+    /pwa/icons/chef-hat-512.png /pwa/icons/chef-hat-maskable-512.png; do
+    grep -qF "$SMOKE_ORIGIN$path" "$MOCK_LOG"
+  done
   for path in /recipes /ratings /inspirations /tags /search/reindex /varz /jsz /collections /metrics /healthz /api/v1/namespaces; do
     grep -qF "$SMOKE_ORIGIN$path" "$MOCK_LOG"
   done
@@ -417,6 +438,42 @@ prepare_release_state() {
   run_smoke
   [ "$status" -ne 0 ]
   [ -f deleted ]
+  jq -e '.success == false and .phase == "frontend-and-design"' result.json
+}
+
+@test "missing PWA manifest fails the frontend check and cleans the smoke recipe" {
+  export FAIL_PWA_MANIFEST=true
+  run_smoke
+  [ "$status" -ne 0 ]
+  [ -f deleted ]
+  [[ $output == *'PWA manifest returned HTTP 404'* ]]
+  jq -e '.success == false and .phase == "frontend-and-design"' result.json
+}
+
+@test "incorrect PWA manifest content type fails the frontend check" {
+  export FAIL_PWA_MANIFEST_CONTENT_TYPE=true
+  run_smoke
+  [ "$status" -ne 0 ]
+  [ -f deleted ]
+  [[ $output == *'PWA manifest did not use application/manifest+json'* ]]
+  jq -e '.success == false and .phase == "frontend-and-design"' result.json
+}
+
+@test "missing PWA icon fails the frontend check and cleans the smoke recipe" {
+  export FAIL_PWA_ICON=true
+  run_smoke
+  [ "$status" -ne 0 ]
+  [ -f deleted ]
+  [[ $output == *'PWA icon /pwa/icons/chef-hat-512.png returned HTTP 404'* ]]
+  jq -e '.success == false and .phase == "frontend-and-design"' result.json
+}
+
+@test "incorrect PWA icon content type fails the frontend check" {
+  export FAIL_PWA_ICON_CONTENT_TYPE=true
+  run_smoke
+  [ "$status" -ne 0 ]
+  [ -f deleted ]
+  [[ $output == *'PWA icon /pwa/icons/chef-hat-512.png did not use image/png'* ]]
   jq -e '.success == false and .phase == "frontend-and-design"' result.json
 }
 
