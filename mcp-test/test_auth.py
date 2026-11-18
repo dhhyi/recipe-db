@@ -1,5 +1,4 @@
 import json
-import os
 import uuid
 from itertools import count
 
@@ -17,7 +16,7 @@ from test_mcp import (
 )
 
 REQUEST_IDS = count(1)
-GRAPHQL_URL = os.environ.get("REST_API", "http://traefik:3000").rstrip("/") + "/graphql"
+GRAPHQL_URL = MCP_URL.rstrip("/").rsplit("/", 1)[0] + "/graphql"
 
 
 class RedactedAccounts(dict):
