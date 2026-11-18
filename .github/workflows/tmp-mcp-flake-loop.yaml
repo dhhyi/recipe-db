@@ -40,6 +40,20 @@ jobs:
           mise run --raw generate-docker-compose
           mise run create-intranet
 
+      - name: enable connection diagnostics
+        run: |
+          mise exec -- yq -i '
+            .services.traefik.command += [
+              "--log.level=DEBUG",
+              "--accesslog=true",
+              "--accesslog.format=json",
+              "--accesslog.fields.headers.defaultmode=drop"
+            ] |
+            .services.traefik.command |= map(select(. != "--log.level=INFO")) |
+            .services.mcp.environment["Logging__LogLevel__Microsoft.AspNetCore.Server.Kestrel"] = "Debug" |
+            .services.mcp.environment["Logging__LogLevel__Microsoft.AspNetCore.Server.Kestrel.Connections"] = "Debug"
+          ' docker-compose.yml
+
       - name: build development and test images
         run: docker compose --progress plain --profile development --profile test build
 
@@ -55,8 +69,8 @@ jobs:
           failures=0
           for i in $(seq "$ITERATIONS"); do
             echo "::group::iteration $i"
-            mise run integration-tests -- --development mcp-test
-            status=$?
+            status=0
+            mise run integration-tests -- --development mcp-test || status=$?
             echo "::endgroup::"
             if ((status != 0)); then
               failures=$((failures + 1))
