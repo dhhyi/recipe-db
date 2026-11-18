@@ -21,7 +21,7 @@ const test = base.extend({
 for (const role of ["anonymous", "member", "owner"]) {
   test.describe(role, () => {
     test.use({ visualRole: role });
-    const screenshot = async (page, name) => {
+    const screenshot = async (page, name, { fullPage = true } = {}) => {
       if (
         role === "owner" &&
         /^\/(?:edit|images-edit)\//.test(new URL(page.url()).pathname)
@@ -40,7 +40,7 @@ for (const role of ["anonymous", "member", "owner"]) {
       });
       await expect(page).toHaveScreenshot(
         role === "owner" ? name : `${role}-${name}`,
-        { fullPage: true },
+        { fullPage },
       );
     };
 
@@ -307,7 +307,7 @@ for (const role of ["anonymous", "member", "owner"]) {
             exact: true,
           }),
         );
-        // Settle lazy content behind the modal before taking a full-page screenshot.
+        // Settle lazy content before opening the dialog.
         await page
           .getByRole("link", { name: "Zur Startseite" })
           .scrollIntoViewIfNeeded();
@@ -377,7 +377,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         await updatedAt.evaluate((element) => {
           element.textContent = "Zuletzt aktualisiert: gerade eben";
         });
-        await screenshot(page, "tag-editor.png");
+        await screenshot(page, "tag-editor.png", { fullPage: false });
 
         let assignments = 0;
         page.on("request", (request) => {
