@@ -22,6 +22,8 @@
 @import "@anyblades/blades/components/dropdown";
 @import "@anyblades/blades/components/group";
 @import "@anyblades/blades/components/loading";
+@import "@anyblades/blades/components/modal";
+@import "@anyblades/blades/components/modal-modern";
 @import "@anyblades/blades/components/nav";
 @import "@anyblades/blades/utilities";
 @import "@anyblades/blades/variables-blades";

@@ -118,10 +118,10 @@ func writeTagComponent(w http.ResponseWriter, r *http.Request, status int, compo
 		w.Header().Set("X-Tag-Replace", "true")
 	}
 	if added {
-		w.Header().Set("HX-Trigger-After-Settle", `{"recipe-tags-added":{"target":"#recipe-tags"}}`)
+		w.Header().Set("HX-Trigger-After-Settle", `{"recipe-tags-added":{"target":"#recipe-tags-dialog"}}`)
 	}
 	if removed {
-		w.Header().Set("HX-Trigger-After-Settle", `{"recipe-tag-removed":{"target":"#recipe-tags"}}`)
+		w.Header().Set("HX-Trigger-After-Settle", `{"recipe-tag-removed":{"target":"#recipe-tags-dialog"}}`)
 	}
 	w.WriteHeader(status)
 	if r.Method != http.MethodHead {
@@ -137,6 +137,12 @@ func tagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedback stri
 
 func writeTagFailure(w http.ResponseWriter, r *http.Request, id string, status int, message string, replace bool) {
 	writeTagComponent(w, r, status, tagsWidget(id, nil, false, false, message, true), replace, false, false)
+}
+
+func writeTagEditorFailure(w http.ResponseWriter, r *http.Request, status int, message string) {
+	w.Header().Set("HX-Retarget", "#recipe-tag-feedback")
+	w.Header().Set("HX-Reswap", "outerHTML")
+	writeTagComponent(w, r, status, components.RecipeTagFeedback(message), true, false, false)
 }
 
 func parseTagEditMode(r *http.Request) (bool, error) {
@@ -180,12 +186,19 @@ func recipeTagsHandler(endpoint string) http.HandlerFunc {
 			} else if status == http.StatusUnauthorized || status == http.StatusForbidden {
 				message = "Tags bearbeiten ist nicht erlaubt."
 			}
-			writeTagFailure(w, r, id, status, message, status != http.StatusBadGateway)
+			if edit {
+				if status != http.StatusUnauthorized && status != http.StatusForbidden {
+					message = "Tags konnten nicht geladen werden. Der angezeigte Stand ist möglicherweise nicht aktuell. Bitte erneut laden."
+				}
+				writeTagEditorFailure(w, r, status, message)
+			} else {
+				writeTagFailure(w, r, id, status, message, status != http.StatusBadGateway)
+			}
 			return
 		}
 		if edit && !owner {
 			writeTagComponent(w, r, http.StatusForbidden,
-				tagsWidget(id, tags, false, false, "Tags bearbeiten ist nicht erlaubt.", true),
+				components.RecipeTagAssignments(id, tags, false, "Tags bearbeiten ist nicht erlaubt.", true),
 				true, false, false)
 			return
 		}
@@ -199,7 +212,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 		query, err := tagQuery(r)
 		if err != nil {
 			component := components.TagOptionsError(r.URL.RequestURI(), "Ungültige Suchanfrage.")
-			writeTagComponent(w, r, http.StatusBadRequest, component, false, false, false)
+			writeTagComponent(w, r, http.StatusBadRequest, component, true, false, false)
 			return
 		}
 		client, upstreamStatus := requestScopedClient(endpoint, r, w)
@@ -212,17 +225,14 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 			message := "Tag-Auswahl ist nicht verfügbar."
 			if status == http.StatusUnauthorized || status == http.StatusForbidden {
 				message = "Tags bearbeiten ist nicht erlaubt."
-				w.Header().Set("HX-Retarget", "#recipe-tags")
-				w.Header().Set("HX-Reswap", "outerHTML")
-				writeTagComponent(w, r, status,
-					tagsWidget(id, assigned, false, false, message, true), true, false, false)
+				writeTagEditorFailure(w, r, status, message)
 				return
 			}
 			if status == http.StatusNotFound {
 				message = "Rezept nicht gefunden."
 			}
 			component := components.TagOptionsError(r.URL.RequestURI(), message)
-			writeTagComponent(w, r, status, component, false, false, false)
+			writeTagComponent(w, r, status, component, true, false, false)
 			return
 		}
 		inventory, err := loadTagInventory(r, client)
@@ -230,11 +240,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 			log.Printf("failed to fetch tag inventory: %v", err)
 			status := tagRequestStatus(err, *upstreamStatus)
 			if status == http.StatusUnauthorized || status == http.StatusForbidden {
-				w.Header().Set("HX-Retarget", "#recipe-tags")
-				w.Header().Set("HX-Reswap", "outerHTML")
-				writeTagComponent(w, r, status,
-					tagsWidget(id, assigned, false, false, "Tags bearbeiten ist nicht erlaubt.", true),
-					true, false, false)
+				writeTagEditorFailure(w, r, status, "Tags bearbeiten ist nicht erlaubt.")
 				return
 			}
 			message := "Tag-Auswahl konnte nicht geladen werden."
@@ -242,7 +248,7 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 				message = "Rezept nicht gefunden."
 			}
 			component := components.TagOptionsError(r.URL.RequestURI(), message)
-			writeTagComponent(w, r, status, component, false, false, false)
+			writeTagComponent(w, r, status, component, true, false, false)
 			return
 		}
 		options := unassignedTagOptions(inventory, assigned, query)
@@ -298,14 +304,14 @@ func writeCurrentTagEdit(w http.ResponseWriter, r *http.Request, id string, stat
 
 func writeTagEditDenied(w http.ResponseWriter, r *http.Request, id string, status int, tags []gql.RecipeTag, message string) {
 	writeTagComponent(w, r, status,
-		components.RecipeTagsWidget(id, tags, false, false, message, true), true, false, false)
+		components.RecipeTagAssignments(id, tags, false, message, true), true, false, false)
 }
 
 func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, tagID := r.PathValue("id"), r.PathValue("tagId")
 		if id == "" || remove && tagID == "" {
-			writeTagFailure(w, r, id, http.StatusBadRequest, "Ungültige Tags-Anfrage.", true)
+			writeTagFailure(w, r, id, http.StatusBadRequest, "Ungültige Tags-Anfrage.", false)
 			return
 		}
 		if !sameOriginRequest(r) {
@@ -320,7 +326,7 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 			if status == http.StatusUnauthorized || status == http.StatusForbidden {
 				message = "Tags bearbeiten ist nicht erlaubt."
 			}
-			writeTagFailure(w, r, id, status, message, status != http.StatusBadGateway)
+			writeTagEditorFailure(w, r, status, message)
 			return
 		}
 		if !owner {

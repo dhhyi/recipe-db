@@ -25,25 +25,61 @@ func recipeTagRemovePath(id, tagID string) string {
 }
 
 templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedback string, failed bool) {
+	if edit {
+		@RecipeTagAssignments(id, tags, owner, feedback, failed)
+	} else {
 	<div
 		id="recipe-tags"
 		class="contents"
 		hx-sync="this:replace"
-		hx-on::before-request="if (event.detail.requestConfig.verb !== 'get') { if (this.dataset.pending === 'true') { event.preventDefault(); return; } this.dataset.pending = 'true'; const control = event.detail.triggeringEvent?.submitter || event.detail.triggeringEvent?.target?.closest('button') || event.detail.elt; control?.setAttribute('aria-busy', 'true'); this.querySelectorAll('button, input').forEach(control => control.disabled = true); }"
-		hx-on::after-request="if (event.detail.requestConfig.verb !== 'get') { delete this.dataset.pending; this.querySelectorAll('button, input').forEach(control => { control.disabled = false; control.removeAttribute('aria-busy'); }); }"
-		hx-on::before-swap="if (event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true' || event.detail.target?.id === 'recipe-tag-options'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
-		hx-on::response-error="if (event.detail.target?.id === 'recipe-tag-options') { event.detail.target.innerHTML = '<p role=&quot;alert&quot; class=&quot;feedback error&quot;>Tag-Auswahl konnte nicht geladen werden.</p>'; const retry = this.querySelector('[data-options-retry]'); if (retry) retry.hidden = false; } else { const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } }"
-		hx-on::send-error="if (event.detail.target?.id === 'recipe-tag-options') { event.detail.target.innerHTML = '<p role=&quot;alert&quot; class=&quot;feedback error&quot;>Tag-Auswahl konnte nicht geladen werden.</p>'; const retry = this.querySelector('[data-options-retry]'); if (retry) retry.hidden = false; } else { const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Die Änderung konnte nicht bestätigt werden. Bitte erneut laden oder versuchen.'; status.className = 'feedback error'; } }"
+		hx-get={ recipeTagsPath(id) }
+		hx-trigger="refresh-tags"
+		hx-swap="outerHTML"
+		hx-on::before-request="if (event.detail.elt === this) this.querySelector('[command=show-modal]')?.setAttribute('disabled', '')"
+		hx-on::after-request="if (event.detail.elt === this) this.querySelector('[command=show-modal]')?.removeAttribute('disabled')"
+		hx-on::before-swap="if (event.detail.target?.id === 'recipe-tags' && event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
+		hx-on::response-error="if (!this.querySelector('dialog[open]')) { const status = this.querySelector('[data-detail-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false; }"
+		hx-on::send-error="if (!this.querySelector('dialog[open]')) { const status = this.querySelector('[data-detail-tag-feedback]'); if (status) { status.hidden = false; status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false; }"
 		hx-on::timeout="htmx.trigger(this, 'htmx:sendError', event.detail)"
-		hx-on:recipe-tags-added="this.querySelector('#recipe-tag-search')?.focus()"
-		hx-on:recipe-tag-removed="const control = this.querySelector('[data-tag-remove]') || this.querySelector('#recipe-tag-search'); control?.focus()"
 	>
 		if len(tags) > 0 {
-			@recipeDetailTagList(tags, edit, id)
+			@recipeDetailTagList(tags, false, id)
 		}
 		if owner {
-			if edit {
-				<section aria-label="Tag hinzufügen" class="flex flex-col gap-2">
+			<button
+				type="button"
+				class="outline"
+				command="show-modal"
+				commandfor="recipe-tags-dialog"
+				hx-on:click="const dialog = document.querySelector('#recipe-tags-dialog'); dialog.dataset.loading = 'true'; delete dialog.dataset.loaded; delete dialog.dataset.uncertainty; const search = dialog.querySelector('#recipe-tag-search'); search.value = ''; dialog.querySelector('[data-tag-options-section]').hidden = true; dialog.querySelector('#recipe-tag-options').innerHTML = '<div aria-busy=&quot;true&quot; aria-label=&quot;Verfügbare Tags werden geladen&quot;></div>'; dialog.querySelectorAll('form[data-tag-mutation] button').forEach(button => button.disabled = true); htmx.trigger(dialog.querySelector('#recipe-tag-assigned'), 'load-editor')"
+			>Tags bearbeiten</button>
+			<dialog
+				id="recipe-tags-dialog"
+				closedby="any"
+				aria-labelledby="recipe-tags-dialog-title"
+				hx-on:close="for (const xhr of this.tagRequests || []) xhr.abort(); htmx.trigger(this.closest('#recipe-tags'), 'refresh-tags')"
+				hx-on::before-request="if (event.detail.requestConfig.verb === 'get') { if (this.dataset.pending) { event.preventDefault(); return; } (this.tagRequests ||= new Set()).add(event.detail.xhr); } else { const search = this.querySelector('#recipe-tag-search'); const options = this.querySelector('#recipe-tag-options > ul'); const adding = event.detail.elt.closest('#recipe-tag-options') !== null; if (this.dataset.pending || this.dataset.loading || this.dataset.denied || (adding && options?.dataset.query !== search.value)) { event.preventDefault(); return; } this.dataset.pending = 'true'; this.dataset.clearSearch = String(adding && options.querySelectorAll('button[type=submit]').length === 1); for (const xhr of this.tagRequests || []) xhr.abort(); this.setAttribute('closedby', 'none'); this.querySelectorAll('button, input').forEach(control => control.disabled = true); event.detail.elt.querySelector('button')?.setAttribute('aria-busy', 'true'); }"
+				hx-on::after-request="if (event.detail.requestConfig.verb === 'get') this.tagRequests?.delete(event.detail.xhr); else { if (event.detail.xhr.status === 0 || event.detail.xhr.status >= 400) this.dataset.saveFailed = 'true'; if (event.detail.xhr.status === 0 || (event.detail.xhr.status >= 400 && event.detail.xhr.getResponseHeader('X-Tag-Replace') !== 'true')) htmx.trigger(this, 'tag-save-finished'); }"
+				hx-on::after-settle="if (event.detail.requestConfig?.verb !== 'get' && this.dataset.pending) htmx.trigger(this, 'tag-save-finished')"
+				hx-on:tag-save-finished="delete this.dataset.pending; this.setAttribute('closedby', 'any'); this.querySelectorAll('button, input').forEach(control => { control.disabled = false; control.removeAttribute('aria-busy'); }); if (this.dataset.denied || this.dataset.loading) this.querySelectorAll('form[data-tag-mutation] button').forEach(button => button.disabled = true); if (this.dataset.saveFailed) { delete this.dataset.saveFailed; const search = this.querySelector('[data-tag-options-section]').hidden ? null : this.querySelector('#recipe-tag-search'); (this.querySelector('[data-assignment-retry]:not([hidden])') || search || this.querySelector('[command=close]')).focus(); }"
+				hx-on::before-swap="if (!this.open || (event.detail.requestConfig.verb === 'get' && this.dataset.pending) || (event.detail.requestConfig.elt?.id === 'recipe-tag-search' && (event.detail.requestConfig.parameters.q || '') !== this.querySelector('#recipe-tag-search').value)) { event.detail.shouldSwap = false; event.detail.isError = false; return; } if (event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
+				hx-on::after-swap="if (event.detail.target?.id === 'recipe-tag-assigned' || event.detail.target?.id === 'recipe-tag-feedback') { const feedback = this.querySelector('[data-tag-feedback]'); if (event.detail.requestConfig.verb !== 'get' && event.detail.xhr.status >= 400 && (feedback.textContent.includes('nicht bestätigt') || feedback.textContent.includes('möglicherweise gespeichert'))) this.dataset.uncertainty = feedback.textContent; if (event.detail.requestConfig.verb !== 'get' && event.detail.xhr.status < 400) delete this.dataset.uncertainty; if (event.detail.xhr.status === 401 || event.detail.xhr.status === 403) { this.dataset.denied = 'true'; this.querySelector('[data-tag-options-section]').hidden = true; this.querySelectorAll('form[data-tag-mutation] button').forEach(button => button.disabled = true); } if (event.detail.target?.id === 'recipe-tag-feedback') { if (this.dataset.uncertainty && !feedback.textContent.includes(this.dataset.uncertainty)) feedback.textContent += ' ' + this.dataset.uncertainty; const retry = this.querySelector('[data-assignment-retry]'); if (retry) retry.hidden = false; } else if (event.detail.requestConfig.verb === 'get' && event.detail.xhr.status < 400) { delete this.dataset.loading; delete this.dataset.denied; delete this.dataset.uncertainty; const search = this.querySelector('#recipe-tag-search'); this.querySelector('[data-tag-options-section]').hidden = false; htmx.trigger(search, 'refresh-options'); if (!this.dataset.loaded) { this.dataset.loaded = 'true'; search.focus(); } } }"
+				hx-on::response-error="if (!this.open || (event.detail.requestConfig.verb === 'get' && this.dataset.pending) || (event.detail.requestConfig.elt?.id === 'recipe-tag-search' && (event.detail.requestConfig.parameters.q || '') !== this.querySelector('#recipe-tag-search').value)) return; if (event.detail.xhr.status === 401 || event.detail.xhr.status === 403) { this.dataset.denied = 'true'; if (event.detail.requestConfig.verb !== 'get' && !this.dataset.uncertainty) this.dataset.uncertainty = 'Die Änderung konnte nicht bestätigt werden.'; this.querySelector('[data-tag-options-section]').hidden = true; this.querySelectorAll('form[data-tag-mutation] button').forEach(button => button.disabled = true); const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; status.setAttribute('role', 'alert'); status.textContent = 'Tags bearbeiten ist nicht erlaubt.' + (this.dataset.uncertainty ? ' ' + this.dataset.uncertainty : ''); status.className = 'feedback error'; } const retry = this.querySelector('[data-assignment-retry]'); if (retry) retry.hidden = false; } else if (event.detail.target?.id === 'recipe-tag-options') { event.detail.target.innerHTML = '<p role=&quot;alert&quot; class=&quot;feedback error&quot;>Tag-Auswahl konnte nicht geladen werden.</p>'; this.querySelector('[data-options-retry]').hidden = false; } else { const status = this.querySelector('[data-tag-feedback]'); if (status) { status.hidden = false; const message = event.detail.requestConfig.verb === 'get' ? 'Tags konnten nicht geladen werden. Bitte erneut laden.' : 'Die Änderung konnte nicht bestätigt werden. Bitte erneut laden oder versuchen.'; if (event.detail.requestConfig.verb !== 'get') this.dataset.uncertainty = message; status.textContent = message + (event.detail.requestConfig.verb === 'get' && this.dataset.uncertainty ? ' ' + this.dataset.uncertainty : ''); status.className = 'feedback error'; } const retry = this.querySelector('[data-assignment-retry]'); if (retry) retry.hidden = false; }"
+				hx-on::send-error="htmx.trigger(this, 'htmx:responseError', event.detail)"
+				hx-on::timeout="htmx.trigger(this, 'htmx:sendError', event.detail)"
+				hx-on:recipe-tags-added="const search = this.querySelector('#recipe-tag-search'); if (this.dataset.clearSearch === 'true') search.value = ''; delete this.dataset.clearSearch; this.querySelectorAll('#recipe-tag-options button').forEach(button => button.disabled = true); htmx.trigger(search, 'refresh-options'); search.focus()"
+				hx-on:recipe-tag-removed="const search = this.querySelector('#recipe-tag-search'); this.querySelectorAll('#recipe-tag-options button').forEach(button => button.disabled = true); htmx.trigger(search, 'refresh-options'); (this.querySelector('[data-tag-remove]') || search).focus()"
+			>
+				<article>
+					<header>
+						<button type="button" rel="prev" aria-label="Schließen" command="close" commandfor="recipe-tags-dialog"></button>
+						<h2 id="recipe-tags-dialog-title">Tags bearbeiten</h2>
+					</header>
+					<div id="recipe-tag-assigned" hx-get={ recipeTagsPath(id) + "?edit=1" } hx-trigger="load-editor" hx-target="this" hx-swap="outerHTML">
+						<p id="recipe-tag-feedback" data-tag-feedback role="status" aria-live="polite">Tags werden geladen.</p>
+						<button type="button" class="outline" data-assignment-retry hidden hx-get={ recipeTagsPath(id) + "?edit=1" } hx-target="#recipe-tag-assigned" hx-swap="outerHTML">Tags neu laden</button>
+					</div>
+				<section aria-label="Tag hinzufügen" class="flex flex-col gap-2" data-tag-options-section hidden>
 					<input
 						id="recipe-tag-search"
 						type="search"
@@ -52,90 +88,60 @@ templ RecipeTagsWidget(id string, tags []gql.RecipeTag, owner, edit bool, feedba
 						aria-label="Tag suchen"
 						autocomplete="off"
 						hx-get={ recipeTagsPath(id) + "/options" }
-						hx-trigger="input[!event.isComposing] changed delay:300ms, compositionend delay:300ms, search"
+						hx-trigger="input[!event.isComposing] changed delay:300ms, compositionend delay:300ms, search, refresh-options"
 						hx-target="#recipe-tag-options"
 						hx-swap="innerHTML transition:true"
 						hx-sync="this:replace"
 						hx-on:compositionstart="this.dataset.composing = 'true'; htmx.trigger(this, 'htmx:abort')"
 						hx-on:compositionend="delete this.dataset.composing"
 						hx-on::config-request="if (this.dataset.composing) event.preventDefault()"
-						hx-on:keydown="if (event.key !== 'Enter' || event.isComposing || this.dataset.composing) return; event.preventDefault(); if (event.repeat || this.disabled) return; const options = this.closest('#recipe-tags').querySelector('#recipe-tag-options > ul'); if (options?.dataset.query !== this.value) return; const buttons = options.querySelectorAll('button[type=submit]'); if (buttons.length === 1 && !buttons[0].disabled) buttons[0].click()"
+						hx-on::after-request="this.closest('dialog').querySelectorAll('[data-options-retry]').forEach(control => control.removeAttribute('aria-busy'))"
+						hx-on:keydown="if (event.key !== 'Enter' || event.isComposing || this.dataset.composing) return; event.preventDefault(); if (event.repeat || this.disabled) return; const options = this.closest('dialog').querySelector('#recipe-tag-options > ul'); if (options?.dataset.query !== this.value) return; const buttons = options.querySelectorAll('button[type=submit]'); if (buttons.length === 1 && !buttons[0].disabled) buttons[0].click()"
 					/>
-					<div id="recipe-tag-options" aria-live="polite">
-						<div
-							hx-get={ recipeTagsPath(id) + "/options" }
-							hx-trigger="load"
-							hx-target="#recipe-tag-options"
-							hx-swap="innerHTML"
-							hx-sync="#recipe-tags:drop"
-						>
-							<div aria-busy="true" aria-label="Verfügbare Tags werden geladen"></div>
-						</div>
-					</div>
+					<div id="recipe-tag-options" aria-live="polite"><div aria-busy="true" aria-label="Verfügbare Tags werden geladen"></div></div>
 					<button
 						type="button"
 						class="outline"
 						data-options-retry
 						hidden
-						hx-get={ recipeTagsPath(id) + "/options" }
-						hx-target="#recipe-tag-options"
-						hx-swap="innerHTML"
-						hx-sync="#recipe-tags:drop"
-						hx-disabled-elt="this"
-						hx-on::before-request="this.setAttribute('aria-busy', 'true')"
-						hx-on::after-request="this.removeAttribute('aria-busy')"
+						hx-on:click="this.hidden = true; htmx.trigger(document.querySelector('#recipe-tag-search'), 'refresh-options')"
 					>Tag-Auswahl erneut laden</button>
-					<form
-						action={ recipeTagsPath(id) }
-						method="get"
-						hx-get={ recipeTagsPath(id) }
-						hx-target="#recipe-tags"
-						hx-swap="outerHTML"
-						hx-sync="#recipe-tags:drop"
-						hx-disabled-elt="find button"
-						hx-on::before-request="this.querySelector('button')?.setAttribute('aria-busy', 'true')"
-						hx-on::after-request="this.querySelector('button')?.removeAttribute('aria-busy')"
-					>
-						<button type="submit">Fertig</button>
-					</form>
 				</section>
-			} else {
-				<button
-					type="button"
-					class="outline"
-					hx-get={ recipeTagsPath(id) + "?edit=1" }
-					hx-target="#recipe-tags"
-					hx-swap="outerHTML"
-					hx-sync="#recipe-tags:drop"
-					hx-disabled-elt="this"
-					hx-on::before-request="this.setAttribute('aria-busy', 'true')"
-					hx-on::after-request="this.removeAttribute('aria-busy')"
-				>Tags bearbeiten</button>
-			}
+				</article>
+			</dialog>
 		}
 		if feedback != "" {
 			if failed {
-				<p data-tag-feedback role="alert" class="feedback error" aria-live="polite">{ feedback }</p>
-				if owner && edit {
-					<button
-						type="button"
-						class="outline"
-						hx-get={ recipeTagsPath(id) + "?edit=1" }
-						hx-target="#recipe-tags"
-						hx-swap="outerHTML"
-						hx-sync="#recipe-tags:drop"
-						hx-disabled-elt="this"
-						hx-on::before-request="this.setAttribute('aria-busy', 'true')"
-						hx-on::after-request="this.removeAttribute('aria-busy')"
-					>Tags neu laden</button>
-				}
+				<p data-detail-tag-feedback role="alert" class="feedback error" aria-live="polite">{ feedback }</p>
 			} else {
 				<p data-tag-feedback role="status" class="feedback success" aria-live="polite">{ feedback }</p>
 			}
 		} else {
-			<p data-tag-feedback role="status" aria-live="polite" hidden></p>
+			<p data-detail-tag-feedback role="status" aria-live="polite" hidden></p>
+		}
+		<button type="button" class="outline" data-tag-retry hidden hx-get={ recipeTagsPath(id) } hx-target="#recipe-tags" hx-swap="outerHTML" hx-sync="#recipe-tags:drop">Erneut laden</button>
+	</div>
+	}
+}
+
+templ RecipeTagAssignments(id string, tags []gql.RecipeTag, owner bool, feedback string, failed bool) {
+	<div id="recipe-tag-assigned" hx-get={ recipeTagsPath(id) + "?edit=1" } hx-trigger="load-editor" hx-target="this" hx-swap="outerHTML">
+		if len(tags) > 0 {
+			@recipeDetailTagList(tags, owner, id)
+		}
+		if feedback != "" {
+			@RecipeTagFeedback(feedback)
+		} else {
+			<p id="recipe-tag-feedback" data-tag-feedback role="status" aria-live="polite" hidden></p>
+		}
+		if owner {
+			<button type="button" class="outline" data-assignment-retry hidden?={ !failed } hx-get={ recipeTagsPath(id) + "?edit=1" } hx-target="#recipe-tag-assigned" hx-swap="outerHTML" hx-sync="#recipe-tag-assigned:drop">Tags neu laden</button>
 		}
 	</div>
+}
+
+templ RecipeTagFeedback(message string) {
+	<p id="recipe-tag-feedback" data-tag-feedback role="alert" class="feedback error" aria-live="polite">{ message }</p>
 }
 
 templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
@@ -149,9 +155,9 @@ templ recipeDetailTagList(tags []gql.RecipeTag, edit bool, id string) {
 						data-tag-mutation
 						style={ fmt.Sprintf("--tag-transition-name: recipe-tag-%x", tag.Id) }
 						hx-post={ recipeTagRemovePath(id, tag.Id) }
-						hx-target="#recipe-tags"
+						hx-target="#recipe-tag-assigned"
 						hx-swap="outerHTML transition:true"
-						hx-sync="#recipe-tags:drop"
+						hx-sync="#recipe-tag-assigned:drop"
 					>
 						<span class={ tagClass(tag.Category) } aria-label={ tagCategoryLabel(tag.Category) + ": " + tag.Name }>
 							{ tag.Name }
@@ -192,9 +198,9 @@ templ TagOptions(id, query string, tags []gql.RecipeTag) {
 						data-tag-mutation
 						style={ fmt.Sprintf("--tag-transition-name: recipe-tag-option-%x", tag.Id) }
 						hx-post={ recipeTagsPath(id) }
-						hx-target="#recipe-tags"
+						hx-target="#recipe-tag-assigned"
 						hx-swap="outerHTML transition:true"
-						hx-sync="#recipe-tags:drop"
+						hx-sync="#recipe-tag-assigned:drop"
 					>
 						<input type="hidden" name="tagId" value={ tag.Id }/>
 						<button type="submit" class={ tagClass(tag.Category) }>{ tag.Name }</button>
@@ -210,11 +216,7 @@ templ TagOptionsError(retryURL, message string) {
 	<button
 		type="button"
 		class="outline"
-		hx-get={ retryURL }
-		hx-target="#recipe-tag-options"
-		hx-swap="innerHTML"
-		hx-disabled-elt="this"
-		hx-on::before-request="this.setAttribute('aria-busy', 'true')"
-		hx-on::after-request="this.removeAttribute('aria-busy')"
+		data-options-retry
+		hx-on:click="this.setAttribute('aria-busy', 'true'); htmx.trigger(document.querySelector('#recipe-tag-search'), 'refresh-options')"
 	>Erneut versuchen</button>
 }

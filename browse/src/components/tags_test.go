@@ -101,8 +101,8 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 		{
 			name:   "owner read mode",
 			owner:  true,
-			want:   []string{"Tags bearbeiten", "Vegan"},
-			unwant: []string{"Tag hinzufügen", "hx-post"},
+			want:   []string{"Tags bearbeiten", "Vegan", `command="show-modal"`, `commandfor="recipe-tags-dialog"`, `<dialog`, `closedby="any"`, `aria-label="Schließen"`, `command="close"`, `id="recipe-tag-search"`, `data-tag-options-section`, `hx-trigger="refresh-tags"`},
+			unwant: []string{"Fertig", "hx-post"},
 		},
 		{
 			name:   "empty owner read mode",
@@ -115,7 +115,7 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 			name:   "owner edit mode",
 			owner:  true,
 			edit:   true,
-			want:   []string{`<section aria-label="Tag hinzufügen"`, `id="recipe-tag-search"`, `type="search"`, `name="q"`, `placeholder="Tag suchen"`, `aria-label="Tag suchen"`, `delay:300ms`, `compositionstart`, `aria-label="Verfügbare Tags werden geladen"`, `class="outline"`, `class="recipe-tag-remove"`, `Vegan entfernen`, "×", "Fertig", "aria-live"},
+			want:   []string{`id="recipe-tag-assigned"`, `class="recipe-tag-remove"`, `Vegan entfernen`, "×", "aria-live"},
 			unwant: []string{"recipe-editor", "Save", "Discard", `name="edit"`, "<details", "<summary", "data-tag-summary", "Tag-Zuordnung wird gespeichert", `<label for="recipe-tag-search">`, `id="recipe-tags" class="contents" hx-sync="this:replace" aria-busy`, `href="/?filter_by=`},
 		},
 	} {
@@ -189,7 +189,7 @@ func TestTagEditTransitionsUseSafeDistinctNames(t *testing.T) {
 		t.Fatalf("editable tags need distinct, safe transition names: %s", edit)
 	}
 	read := renderTagComponent(t, RecipeTagsWidget("42", tags, true, false, "", false))
-	if strings.Contains(read, "--tag-transition-name") || strings.Contains(read, "transition:true") {
+	if strings.Contains(read, "--tag-transition-name") || strings.Contains(read, `<form `) {
 		t.Fatalf("read-only tags must not use tag-edit transitions: %s", read)
 	}
 	options := renderTagComponent(t, TagOptions("42", "", tags))
@@ -198,8 +198,71 @@ func TestTagEditTransitionsUseSafeDistinctNames(t *testing.T) {
 		!strings.Contains(options, "--tag-transition-name: recipe-tag-option-61223b20636f6c6f723a20726564") {
 		t.Fatalf("tag additions need distinct transition names: %s", options)
 	}
-	if !strings.Contains(edit, `hx-swap="innerHTML transition:true"`) {
+	if !strings.Contains(read, `hx-swap="innerHTML transition:true"`) {
 		t.Fatalf("tag searches must start a transition: %s", edit)
+	}
+}
+
+func TestTagDialogKeepsShellStableAndGuardsRequests(t *testing.T) {
+	body := renderTagComponent(t, RecipeTagsWidget("42", nil, true, false, "", false)) +
+		renderTagComponent(t, RecipeTagsWidget("42", []gql.RecipeTag{{Id: "a", Name: "A"}}, true, true, "", false))
+	for _, text := range []string{
+		`hx-target="#recipe-tag-assigned"`, `hx-target="#recipe-tag-options"`,
+		`hx-trigger="load-editor"`, `refresh-options`, `compositionstart`,
+		`dataset.query`, `this.dataset.clearSearch`, `buttons.length === 1`,
+		`this.setAttribute('closedby', 'none')`,
+		`this.setAttribute('closedby', 'any')`,
+		`hx-on::after-settle`, `this.tagRequests`, `xhr.abort()`,
+		`event.detail.requestConfig.parameters.q`, `!this.open`,
+		`data-tag-retry`, `data-detail-tag-feedback`,
+	} {
+		if !strings.Contains(body, text) {
+			t.Errorf("missing dialog safeguard %q", text)
+		}
+	}
+}
+
+func TestTagEditorReopensAndPreservesAssignmentsOnFailure(t *testing.T) {
+	read := renderTagComponent(t, RecipeTagsWidget("42", nil, true, false, "", false))
+	for _, text := range []string{
+		`search.value = ''`, `dialog.dataset.loading = 'true'`,
+		`dialog.querySelector('[data-tag-options-section]').hidden = true`,
+		`this.dataset.denied`, `this.dataset.loading`, `event.detail.target?.id === 'recipe-tag-feedback'`,
+		`retry.hidden = false`, `form[data-tag-mutation] button`, `this.dataset.uncertainty`,
+		`feedback.textContent += ' ' + this.dataset.uncertainty`,
+	} {
+		if !strings.Contains(read, text) {
+			t.Errorf("missing reopen or failure safeguard %q", text)
+		}
+	}
+	for _, owner := range []bool{false, true} {
+		assignments := renderTagComponent(t, RecipeTagAssignments("42", []gql.RecipeTag{{Id: "a", Name: "A"}}, owner, "", false))
+		if !strings.Contains(assignments, `hx-get="/recipe/42/tags?edit=1"`) ||
+			!strings.Contains(assignments, `hx-trigger="load-editor"`) ||
+			!strings.Contains(assignments, `id="recipe-tag-feedback"`) ||
+			(owner && (!strings.Contains(assignments, `data-assignment-retry`) || !strings.Contains(assignments, `hidden`))) {
+			t.Fatalf("assignment fragment cannot reload safely (owner=%v): %s", owner, assignments)
+		}
+	}
+}
+
+func TestTagDialogHandlesUnmarkedAuthorizationFailuresWithoutSwapping(t *testing.T) {
+	body := renderTagComponent(t, RecipeTagsWidget("42", nil, true, false, "", false))
+	for _, text := range []string{
+		`const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace`,
+		`event.detail.isError = false; return`,
+		`event.detail.xhr.status === 401 || event.detail.xhr.status === 403`,
+		`this.dataset.denied = 'true'`,
+		`status.textContent = 'Tags bearbeiten ist nicht erlaubt.'`,
+		`this.querySelectorAll('form[data-tag-mutation] button').forEach(button => button.disabled = true)`,
+		`this.setAttribute('closedby', 'any')`,
+	} {
+		if !strings.Contains(body, text) {
+			t.Errorf("missing unmarked authorization failure safeguard %q", text)
+		}
+	}
+	if strings.Contains(body, `|| event.detail.target?.id === 'recipe-tag-options'; event.detail.shouldSwap = replace`) {
+		t.Fatal("an arbitrary options error response must not be swapped into the dialog")
 	}
 }
 

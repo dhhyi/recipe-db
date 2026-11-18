@@ -45,6 +45,8 @@ The Playwright screenshot baselines use Git LFS. Install Git LFS in the environm
 
 The ARM64 CI validation job downloads the baselines; jobs that do not run visual tests leave them as pointers.
 
+The recipe tag dialog uses viewport screenshots so the capture does not extend below the modal backdrop.
+
 E2E fixtures disable View Transitions by default, and the Playwright configuration requests reduced motion. Tests specifically covering View Transitions opt in with `test.extend({ viewTransitions: true })`; tests covering CSS motion also select `reducedMotion: "no-preference"`.
 
 ## Devcontainer synchronization

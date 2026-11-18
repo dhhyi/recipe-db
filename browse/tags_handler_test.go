@@ -30,6 +30,7 @@ type tagHandlerState struct {
 	mutationFailed  bool
 	failNextTags    bool
 	failConfirm     bool
+	tagsHTTPStatus  int
 }
 
 func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +54,11 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 	var response map[string]any
 	switch request.OperationName {
 	case "RecipeTags":
+		if state.tagsHTTPStatus != 0 {
+			w.WriteHeader(state.tagsHTTPStatus)
+			_, _ = w.Write([]byte(`{"errors":[{"message":"access denied"}]}`))
+			return
+		}
 		if state.failNextTags {
 			state.failNextTags = false
 			response = map[string]any{
@@ -195,16 +201,16 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 			owner:  true,
 			path:   "/recipe/42/tags",
 			status: http.StatusOK,
-			want:   []string{"Tags bearbeiten", "Apfelkuchen"},
-			unwant: []string{"Tag hinzufügen", "entfernen"},
+			want:   []string{"Tags bearbeiten", "Apfelkuchen", `id="recipe-tags-dialog"`},
+			unwant: []string{"Apfelkuchen entfernen"},
 		},
 		{
 			name:   "owner edit fragment",
 			owner:  true,
 			path:   "/recipe/42/tags?edit=1",
 			status: http.StatusOK,
-			want:   []string{"Fertig", "Tag hinzufügen", "Apfelkuchen entfernen", `name="q"`},
-			unwant: []string{"Tags bearbeiten"},
+			want:   []string{`id="recipe-tag-assigned"`, "Apfelkuchen entfernen"},
+			unwant: []string{"Fertig", "Tags bearbeiten", `id="recipe-tags-dialog"`, `id="recipe-tag-search"`},
 		},
 		{
 			name:   "non-owner edit denied",
@@ -261,9 +267,15 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 	state.inventoryFailed = true
 	state.mu.Unlock()
 	failed := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=veg", "", true)
-	if failed.Code != http.StatusBadGateway || !strings.Contains(failed.Body.String(), "Tag-Auswahl konnte nicht geladen werden.") ||
+	if failed.Code != http.StatusBadGateway || failed.Header().Get("X-Tag-Replace") != "true" ||
+		!strings.Contains(failed.Body.String(), "Tag-Auswahl konnte nicht geladen werden.") ||
 		!strings.Contains(failed.Body.String(), "Erneut versuchen") {
 		t.Fatalf("inventory dependency failure must be explicit and retryable: %d %s", failed.Code, failed.Body.String())
+	}
+	invalidSearch := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=one&q=two", "", true)
+	if invalidSearch.Code != http.StatusBadRequest || invalidSearch.Header().Get("X-Tag-Replace") != "true" ||
+		!strings.Contains(invalidSearch.Body.String(), "Ungültige Suchanfrage.") {
+		t.Fatalf("server-rendered invalid search feedback must be safe to swap: %d %v %s", invalidSearch.Code, invalidSearch.Header(), invalidSearch.Body.String())
 	}
 	state.mu.Lock()
 	state.inventoryFailed = false
@@ -272,7 +284,8 @@ func TestRecipeTagFragmentsEnforceOwnerCapabilityAndSearchInventory(t *testing.T
 	deniedInventory := tagRequest(handler, http.MethodGet, "/recipe/42/tags/options?q=veg", "", true)
 	if deniedInventory.Code != http.StatusUnauthorized || !strings.Contains(deniedInventory.Body.String(), "Tags bearbeiten ist nicht erlaubt.") ||
 		strings.Contains(deniedInventory.Body.String(), "Tag hinzufügen") ||
-		deniedInventory.Header().Get("HX-Retarget") != "#recipe-tags" {
+		deniedInventory.Header().Get("HX-Retarget") != "#recipe-tag-feedback" ||
+		strings.Contains(deniedInventory.Body.String(), `id="recipe-tags-dialog"`) {
 		t.Fatalf("expired inventory credentials must remove edit controls with an explicit denial: %d %v %s", deniedInventory.Code, deniedInventory.Header(), deniedInventory.Body.String())
 	}
 
@@ -328,7 +341,7 @@ func TestRecipeTagMutationsUseDedicatedGraphQLAndRefreshCache(t *testing.T) {
 	}
 	removeLast := tagRequest(handler, http.MethodPost, "/recipe/42/tags/dessert/remove", "", true)
 	if removeLast.Code != http.StatusOK || strings.Contains(removeLast.Body.String(), "recipe-tags-detail") ||
-		!strings.Contains(removeLast.Body.String(), "Tag hinzufügen") {
+		!strings.Contains(removeLast.Body.String(), `id="recipe-tag-assigned"`) {
 		t.Fatalf("removing the final assignment must leave the empty owner editor: %d %s", removeLast.Code, removeLast.Body.String())
 	}
 	state.mu.Lock()
@@ -353,7 +366,8 @@ func TestRecipeTagMutationFailuresRetainConfirmedAssignments(t *testing.T) {
 	body := response.Body.String()
 	if response.Code != http.StatusBadGateway || !strings.Contains(body, "Apfelkuchen") ||
 		strings.Contains(body, "Dessert") || !strings.Contains(body, "Änderung konnte nicht bestätigt werden") ||
-		!strings.Contains(body, "Tags neu laden") || response.Header().Get("X-Tag-Replace") != "true" {
+		!strings.Contains(body, "Tags neu laden") || response.Header().Get("X-Tag-Replace") != "true" ||
+		strings.Contains(body, `id="recipe-tags-dialog"`) || strings.Contains(body, `id="recipe-tag-search"`) {
 		t.Fatalf("failed write lost the last confirmed state or omitted retry: %d %v %s", response.Code, response.Header(), body)
 	}
 	cache.mu.Lock()
@@ -361,6 +375,53 @@ func TestRecipeTagMutationFailuresRetainConfirmedAssignments(t *testing.T) {
 	cache.mu.Unlock()
 	if cached {
 		t.Fatal("uncertain mutation response left potentially stale recipe HTML cached")
+	}
+}
+
+func TestRecipeTagEditorLoadFailureStaysInsideDialog(t *testing.T) {
+	state := &tagHandlerState{failNextTags: true}
+	handler, _ := newTagHandlerTest(t, state, nil)
+	response := tagRequest(handler, http.MethodGet, "/recipe/42/tags?edit=1", "", true)
+	body := response.Body.String()
+	if response.Code != http.StatusBadGateway || response.Header().Get("X-Tag-Replace") != "true" ||
+		response.Header().Get("HX-Retarget") != "#recipe-tag-feedback" ||
+		response.Header().Get("HX-Reswap") != "outerHTML" ||
+		!strings.Contains(body, `id="recipe-tag-feedback"`) || !strings.Contains(body, "möglicherweise nicht aktuell") ||
+		strings.Contains(body, `id="recipe-tag-assigned"`) ||
+		strings.Contains(body, `id="recipe-tags-dialog"`) || strings.Contains(body, `id="recipe-tag-search"`) {
+		t.Fatalf("editor load failure must preserve assignments and show retryable feedback: %d %v %s", response.Code, response.Header(), body)
+	}
+}
+
+func TestRecipeTagMutationCredentialFailurePreservesAssignments(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			state := &tagHandlerState{
+				assigned:       []testTag{{id: "assigned", category: "CUISINE", name: "Apfelkuchen"}},
+				tagsHTTPStatus: status,
+			}
+			handler, _ := newTagHandlerTest(t, state, nil)
+			for _, request := range []struct{ path, body string }{
+				{"/recipe/42/tags", "tagId=new"},
+				{"/recipe/42/tags/assigned/remove", ""},
+			} {
+				response := tagRequest(handler, http.MethodPost, request.path, request.body, true)
+				if response.Code != status || response.Header().Get("HX-Retarget") != "#recipe-tag-feedback" ||
+					response.Header().Get("HX-Reswap") != "outerHTML" || response.Header().Get("X-Tag-Replace") != "true" ||
+					!strings.Contains(response.Body.String(), "Tags bearbeiten ist nicht erlaubt.") ||
+					strings.Contains(response.Body.String(), `id="recipe-tag-assigned"`) ||
+					strings.Contains(response.Body.String(), "nicht bestätigt") {
+					t.Fatalf("credential failure must preserve assignments and report denial: %d %v %s", response.Code, response.Header(), response.Body.String())
+				}
+			}
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			for _, operation := range state.operations {
+				if operation == "AddRecipeTag" || operation == "RemoveRecipeTag" {
+					t.Fatal("credential failure reached mutation")
+				}
+			}
+		})
 	}
 }
 

@@ -21,7 +21,11 @@ const test = base.extend({
 for (const role of ["anonymous", "member", "owner"]) {
   test.describe(role, () => {
     test.use({ visualRole: role });
-    const screenshot = async (page, name) => {
+    const screenshot = async (
+      page,
+      name,
+      { fullPage = true, maxDiffPixelRatio } = {},
+    ) => {
       if (
         role === "owner" &&
         /^\/(?:edit|images-edit)\//.test(new URL(page.url()).pathname)
@@ -40,7 +44,10 @@ for (const role of ["anonymous", "member", "owner"]) {
       });
       await expect(page).toHaveScreenshot(
         role === "owner" ? name : `${role}-${name}`,
-        { fullPage: true },
+        {
+          fullPage,
+          ...(maxDiffPixelRatio === undefined ? {} : { maxDiffPixelRatio }),
+        },
       );
     };
 
@@ -259,6 +266,9 @@ for (const role of ["anonymous", "member", "owner"]) {
         page.getByRole("button", { name: "Bearbeiten", exact: true }),
       ).toHaveCount(role === "owner" ? 1 : 0);
       await expect(
+        page.getByRole("button", { name: "Tags bearbeiten", exact: true }),
+      ).toHaveCount(role === "owner" ? 1 : 0);
+      await expect(
         page.getByRole("heading", { name: "Zubereitung", exact: true }),
       ).toBeVisible();
       await expect(
@@ -284,7 +294,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await page
         .getByRole("link", { name: "Zur Startseite" })
         .scrollIntoViewIfNeeded();
-      await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+      await expect(
+        page.locator("main [aria-busy='true']:not(dialog:not([open]) *)"),
+      ).toHaveCount(0);
       await updatedAt.evaluate((element) => {
         element.textContent = "Zuletzt aktualisiert: gerade eben";
       });
@@ -296,6 +308,19 @@ for (const role of ["anonymous", "member", "owner"]) {
       test("recipe tag editor", async ({ page, taggedDemoRecipe }) => {
         await page.goto(`/recipe/${taggedDemoRecipe.id}`);
         await expectHeader(page, role);
+        await waitForImageDecoded(
+          page.getByRole("img", {
+            name: taggedDemoRecipe.name,
+            exact: true,
+          }),
+        );
+        // Settle lazy content before opening the dialog.
+        await page
+          .getByRole("link", { name: "Zur Startseite" })
+          .scrollIntoViewIfNeeded();
+        await expect(
+          page.locator("main [aria-busy='true']:not(dialog:not([open]) *)"),
+        ).toHaveCount(0);
 
         const editButton = page.getByRole("button", {
           name: "Tags bearbeiten",
@@ -303,59 +328,54 @@ for (const role of ["anonymous", "member", "owner"]) {
         });
         await expect(editButton).toBeVisible();
         await editButton.click();
-
+        const dialog = page.getByRole("dialog", { name: "Tags bearbeiten" });
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toHaveAttribute("closedby", "any");
         await expect(
-          page.getByRole("searchbox", { name: "Tag suchen", exact: true }),
+          dialog.getByRole("searchbox", { name: "Tag suchen", exact: true }),
         ).toBeVisible();
         await expect(
           page.getByRole("button", { name: "Fertig", exact: true }),
-        ).toBeVisible();
-        await expect(
-          page.locator("#recipe-tags [data-tag-remove]"),
-        ).toHaveCount(3);
-        await expect(page.locator("#recipe-tags details")).toHaveCount(0);
+        ).toHaveCount(0);
+        await expect(dialog.locator("[data-tag-remove]")).toHaveCount(3);
+        await expect(dialog.locator("details")).toHaveCount(0);
         await expect(page.locator("#recipe-tag-options > ul")).toHaveCount(1);
         await expect(
           page.locator(
             "#recipe-tag-options fieldset, #recipe-tag-options legend",
           ),
         ).toHaveCount(0);
-        const pill = page.locator("#recipe-tags .recipe-tag").first();
+        const pill = dialog.locator(".recipe-tag").first();
         const editHeight = (await pill.boundingBox()).height;
         const removeButton = pill.getByRole("button");
         expect((await removeButton.boundingBox()).height).toBeLessThanOrEqual(
           editHeight,
         );
-        await page.getByRole("button", { name: "Fertig", exact: true }).click();
+        const detailBeforeClose = await page
+          .locator("#recipe-tags")
+          .elementHandle();
+        await dialog.getByRole("button", { name: /schließen/i }).click();
+        await expect(dialog).toBeHidden();
+        await expect
+          .poll(() =>
+            detailBeforeClose.evaluate((element) => element.isConnected),
+          )
+          .toBe(false);
         await expect(editButton).toBeVisible();
-        await expect(page.locator("#recipe-tag-search")).toHaveCount(0);
-        expect((await pill.boundingBox()).height).toBeCloseTo(editHeight, 1);
         await editButton.click();
-        const search = page.getByRole("searchbox", {
+        const search = dialog.getByRole("searchbox", {
           name: "Tag suchen",
           exact: true,
         });
+        const optionList = dialog.locator("#recipe-tag-options > ul");
+        const options = optionList.locator("button[type='submit']");
         await search.fill("Deutsch");
-        const option = page
-          .locator("#recipe-tag-options button[type='submit']")
-          .first();
-        await expect(option).toBeVisible();
-        await expect(option).toHaveText("Deutsch");
+        await expect(optionList).toHaveAttribute("data-query", "Deutsch");
+        await expect(options).toHaveText(["Deutsch"]);
 
         await search.fill("");
-        await expect(
-          page.locator("#recipe-tag-options button[type='submit']"),
-        ).not.toHaveCount(1);
-        await waitForImageDecoded(
-          page.getByRole("img", {
-            name: taggedDemoRecipe.name,
-            exact: true,
-          }),
-        );
-        await page
-          .getByRole("link", { name: "Zur Startseite" })
-          .scrollIntoViewIfNeeded();
-        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(optionList).toHaveAttribute("data-query", "");
+        await expect(dialog.locator("[aria-busy='true']")).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
         const updatedAt = page.getByText(
           /^Zuletzt aktualisiert: (gerade eben|vor .+|in diesem Jahr|letztes Jahr)$/,
@@ -364,8 +384,10 @@ for (const role of ["anonymous", "member", "owner"]) {
         await updatedAt.evaluate((element) => {
           element.textContent = "Zuletzt aktualisiert: gerade eben";
         });
-        await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
-        await screenshot(page, "tag-editor.png");
+        await screenshot(page, "tag-editor.png", {
+          fullPage: false,
+          maxDiffPixelRatio: 0.02,
+        });
 
         let assignments = 0;
         page.on("request", (request) => {
@@ -377,18 +399,15 @@ for (const role of ["anonymous", "member", "owner"]) {
             assignments += 1;
           }
         });
-        const options = page.locator(
-          "#recipe-tag-options button[type='submit']",
-        );
         await search.fill("de");
+        await expect(optionList).toHaveAttribute("data-query", "de");
         await expect(options).toHaveCount(2);
         await search.press("Enter");
         expect(assignments).toBe(0);
-        await expect(
-          page.locator("#recipe-tags [data-tag-remove]"),
-        ).toHaveCount(3);
+        await expect(dialog.locator("[data-tag-remove]")).toHaveCount(3);
 
         await search.fill(" Deutsch ");
+        await expect(optionList).toHaveAttribute("data-query", " Deutsch ");
         await expect(options).toHaveCount(1);
         await expect(options).toHaveText("Deutsch");
         await search.dispatchEvent("keydown", {
@@ -409,15 +428,15 @@ for (const role of ["anonymous", "member", "owner"]) {
         expect(assignments).toBe(0);
 
         await search.fill(" Deutsch ");
+        await expect(optionList).toHaveAttribute("data-query", " Deutsch ");
         await expect(options).toHaveCount(1);
         await search.press("Enter");
         await expect(
           page.getByRole("button", { name: "Deutsch entfernen", exact: true }),
         ).toBeVisible();
-        await expect(
-          page.locator("#recipe-tags [data-tag-remove]"),
-        ).toHaveCount(4);
+        await expect(dialog.locator("[data-tag-remove]")).toHaveCount(4);
         expect(assignments).toBe(1);
+        await expect(search).toHaveValue("");
         await expect(search).toBeFocused();
       });
     }
@@ -510,7 +529,9 @@ for (const role of ["anonymous", "member", "owner"]) {
             card.locator("[data-recipe-tag]:visible"),
           ).not.toHaveCount(0);
         }
-        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(
+          page.locator("main [aria-busy='true']:not(dialog:not([open]) *)"),
+        ).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
         await screenshot(page, `recipe-related-${count}.png`);
       }
