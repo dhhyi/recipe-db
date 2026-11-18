@@ -464,7 +464,7 @@ async def test_recipe_images_reorder_and_reject_invalid_or_stale_membership():
             )
             assert result.is_error is True
             assert code in result.content[0].text
-            assert "(field: imageIds)" in result.content[0].text
+            assert "(field: order)" in result.content[0].text
             assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == reordered
 
         removed = await call_image_tool(
