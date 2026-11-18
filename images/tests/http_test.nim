@@ -431,6 +431,14 @@ suite "backend HTTP publication contract":
     check blockedImageDelete.code == Http503
     check parseJson(blockedImageDelete.body)["code"].getStr == "maintenance-mode"
     check store.collection("recipe-a").len == 2
+    let manifestBeforeBlockedReorder = readFile(store.manifestPath("recipe-a"))
+    let blockedOrder = %*[superseded["id"], current["id"]]
+    let blockedReorder = client.request(base & "/images/recipe-a/order",
+        httpMethod = HttpPut, body = $blockedOrder,
+        headers = newHttpHeaders({"Content-Type": "application/json"}))
+    check blockedReorder.code == Http503
+    check parseJson(blockedReorder.body)["code"].getStr == "maintenance-mode"
+    check readFile(store.manifestPath("recipe-a")) == manifestBeforeBlockedReorder
     let blockedReset = client.request(base & "/images", httpMethod = HttpDelete)
     check blockedReset.code == Http404
     check fileExists(store.manifestPath("recipe-a"))
@@ -585,3 +593,103 @@ suite "backend HTTP publication contract":
     for _, _ in walkDir(ImageStorage(root: root).publicFolder):
       inc fileCountAfterOverflow
     check fileCountAfterOverflow == fileCountBeforeOverflow
+
+  test "reorder route persists complete order and rejects stale or invalid membership":
+    if dirExists(root):
+      removeDir(root)
+    var server = startServer()
+    var client = newHttpClient(timeout = 5000)
+    defer:
+      client.close()
+      server.stopServer()
+      if dirExists(root):
+        removeDir(root)
+
+    proc imageBytes(color: string): string =
+      let image = newImage(70, 40)
+      image.fill(parseHtmlColor(color))
+      image.encodeImage(PngFormat)
+
+    proc upload(recipeId, color: string): JsonNode =
+      let response = client.request(base & "/images/" & recipeId,
+          httpMethod = HttpPost, body = imageBytes(color),
+          headers = newHttpHeaders({"Content-Type": "image/png"}))
+      check response.code == Http201
+      parseJson(response.body)
+
+    proc reorder(recipeId: string, ids: JsonNode): Response =
+      client.request(base & "/images/" & recipeId & "/order",
+          httpMethod = HttpPut, body = $ids,
+          headers = newHttpHeaders({"Content-Type": "application/json"}))
+
+    let empty = reorder("empty", newJArray())
+    check empty.code == Http200
+    check parseJson(empty.body) == newJArray()
+
+    let
+      imageA = upload("reorder", "#ff0000")
+      imageB = upload("reorder", "#0000ff")
+      imageC = upload("other-recipe", "#00ff00")
+      store = ImageStorage(root: root)
+      filesBefore = toSeq(walkDir(store.publicFolder))
+          .mapIt((extractFilename(it.path), readFile(it.path)))
+    let currentOrder = %*[imageB["id"], imageA["id"]]
+    let savedManifest = readFile(store.manifestPath("reorder"))
+    for invalid in [
+        newJArray(),
+        %*[imageB["id"]],
+        %*[imageB["id"], imageB["id"]],
+        %*[imageB["id"], %("f".repeat(64))],
+        %*[imageB["id"], imageC["id"]],
+    ]:
+      let rejected = reorder("reorder", invalid)
+      check rejected.code == Http400
+      check rejected.headers["Content-Type"] == "application/problem+json"
+      check rejected.headers["Cache-Control"] == "no-store"
+      check parseJson(rejected.body)["code"].getStr == "invalid-image-order"
+      check readFile(store.manifestPath("reorder")) == savedManifest
+
+    let changedOrder = %*[imageA["id"], imageB["id"]]
+    let success = reorder("reorder", changedOrder)
+    check success.code == Http200
+    check success.headers["Content-Type"] == "application/json"
+    check success.headers["Cache-Control"] == "no-store"
+    check parseJson(success.body) == %*[imageA, imageB]
+    check parseJson(client.getContent(base & "/images/reorder/meta/0")) == imageA
+    check toSeq(walkDir(store.publicFolder))
+        .mapIt((extractFilename(it.path), readFile(it.path))) == filesBefore
+
+    let noOpManifest = readFile(store.manifestPath("reorder"))
+    check parseJson(reorder("reorder", changedOrder).body) == %*[imageA, imageB]
+    check readFile(store.manifestPath("reorder")) == noOpManifest
+    let laterOrder = reorder("reorder", currentOrder)
+    check laterOrder.code == Http200
+    check parseJson(laterOrder.body) == %*[imageB, imageA]
+    check parseJson(client.getContent(base & "/images/reorder/meta/0")) == imageB
+    server.stopServer()
+    server = startServer()
+    client.close()
+    client = newHttpClient(timeout = 5000)
+    check parseJson(client.getContent(base & "/images/reorder/meta")) ==
+        %*[imageB, imageA]
+    let staleOrder = currentOrder
+    let imageD = upload("reorder", "#ffff00")
+    let manifestAfterAdd = readFile(store.manifestPath("reorder"))
+    let staleAfterAdd = reorder("reorder", staleOrder)
+    check staleAfterAdd.code == Http400
+    check readFile(store.manifestPath("reorder")) == manifestAfterAdd
+
+    let removed = client.request(base & "/images/reorder/" & imageD["id"].getStr,
+        httpMethod = HttpDelete)
+    check removed.code == Http204
+    let manifestAfterDelete = readFile(store.manifestPath("reorder"))
+    let staleAfterDelete = reorder("reorder", %*[imageA["id"], imageD["id"],
+        imageB["id"]])
+    check staleAfterDelete.code == Http400
+    check readFile(store.manifestPath("reorder")) == manifestAfterDelete
+
+    let invalidJson = client.request(base & "/images/reorder/order",
+        httpMethod = HttpPut, body = "{",
+        headers = newHttpHeaders({"Content-Type": "application/json"}))
+    check invalidJson.code == Http400
+    check parseJson(invalidJson.body)["code"].getStr == "invalid-input"

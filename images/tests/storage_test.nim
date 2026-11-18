@@ -172,6 +172,53 @@ suite "immutable image storage":
     expect ImageNotFound:
       discard restarted.metadata("recipe")
 
+  test "reorder requires exact membership and persists without changing outputs":
+    let
+      a = outputs("#ff0000")
+      b = outputs("#0000ff")
+      c = outputs("#00ff00")
+      imageA = store.publish("recipe", a.normal, a.thumb)
+      imageB = store.publish("recipe", b.normal, b.thumb)
+      imageC = store.publish("recipe", c.normal, c.thumb)
+      originalFiles = toSeq(walkDir(store.publicFolder))
+          .mapIt((extractFilename(it.path), readFile(it.path)))
+      requested = %*[imageB["id"], imageA["id"], imageC["id"]]
+    let reordered = store.reorder("recipe", requested)
+    check reordered == %*[imageB, imageA, imageC]
+    check store.metadata("recipe") == imageB
+    check toSeq(walkDir(store.publicFolder))
+        .mapIt((extractFilename(it.path), readFile(it.path))) == originalFiles
+
+    let manifest = readFile(store.manifestPath("recipe"))
+    for invalid in [
+        %*[imageB["id"], imageA["id"]],
+        %*[imageB["id"], imageB["id"], imageC["id"]],
+        %*[imageB["id"], imageA["id"], repeat('f', 64)],
+        %*[imageB["id"], imageA["id"], %1],
+    ]:
+      expect ImageOrderInvalid:
+        discard store.reorder("recipe", invalid)
+      check readFile(store.manifestPath("recipe")) == manifest
+
+    let restarted = ImageStorage(root: testRoot)
+    check restarted.collection("recipe") == reordered
+    check restarted.reorder("recipe", requested) == reordered
+    check readFile(store.manifestPath("recipe")) == manifest
+
+    let staleOrder = %*[imageB["id"], imageA["id"], imageC["id"]]
+    let d = outputs("#ffff00")
+    discard restarted.publish("recipe", d.normal, d.thumb)
+    let changedManifest = readFile(store.manifestPath("recipe"))
+    expect ImageOrderInvalid:
+      discard restarted.reorder("recipe", staleOrder)
+    check readFile(store.manifestPath("recipe")) == changedManifest
+
+    let emptyStore = ImageStorage(root: testRoot / "empty")
+    emptyStore.initialize()
+    check emptyStore.reorder("empty", newJArray()) == newJArray()
+    expect ImageOrderInvalid:
+      discard store.reorder("recipe", newJArray())
+
   test "default metadata reads validate only the first image's files":
     let
       a = outputs("#ff0000")

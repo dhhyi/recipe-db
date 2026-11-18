@@ -9,6 +9,7 @@ type
   StorageError* = object of CatchableError
   ImageNotFound* = object of CatchableError
   ImageLimitReached* = object of CatchableError
+  ImageOrderInvalid* = object of CatchableError
   ImageStateInvalid* = object of CatchableError
 
 const maxImagesPerRecipe* = 10
@@ -246,6 +247,50 @@ proc metadata*(store: ImageStorage, id: string): JsonNode =
   if images.len == 0:
     raise newException(ImageNotFound, "Image not found")
   store.validateMetadata(id, images[0])
+
+proc reorder*(store: ImageStorage, id: string,
+    requestedIds: JsonNode): JsonNode =
+  if requestedIds.kind != JArray:
+    raise newException(ImageOrderInvalid,
+        "Image order must be an array of image IDs")
+
+  let images = store.collection(id)
+  if requestedIds.len != images.len:
+    raise newException(ImageOrderInvalid,
+        "Image order must contain each current image exactly once")
+
+  var currentIds: seq[string]
+  for image in images:
+    currentIds.add(image["id"].getStr)
+
+  var seen: seq[string]
+  result = newJArray()
+  var changed = false
+  for index in 0 ..< requestedIds.len:
+    let requested = requestedIds[index]
+    if requested.kind != JString:
+      raise newException(ImageOrderInvalid,
+          "Image order must contain only image IDs")
+    let imageId = requested.getStr
+    if imageId in seen:
+      raise newException(ImageOrderInvalid,
+          "Image order must contain each current image exactly once")
+    seen.add(imageId)
+
+    var found = false
+    for image in images:
+      if image["id"].getStr == imageId:
+        result.add(image)
+        found = true
+        break
+    if not found:
+      raise newException(ImageOrderInvalid,
+          "Image order must contain each current image exactly once")
+    if currentIds[index] != imageId:
+      changed = true
+
+  if changed:
+    writeAtomic(store.manifestPath(id), $result)
 
 proc publish*(store: ImageStorage, id, normal, thumbnail: string): JsonNode =
   if not validRecipeId(id):

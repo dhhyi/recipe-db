@@ -174,6 +174,36 @@ router imagesRouter:
       respProblem(Http500, "Internal Server Error",
           "Cannot read image metadata", "metadata-error")
 
+  put "/images/@recipeId/order":
+    let recipeId = decodeUrl(@"recipeId", decodePlus = false)
+    if not validRecipeId(recipeId):
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    if runtimeMode == "backup":
+      respProblem(Http503, "Service Unavailable",
+          "Application writes are unavailable during backup maintenance",
+          "maintenance-mode")
+    let contentType = ($request.headers.getOrDefault("Content-Type"))
+      .split(';')[0].strip().toLowerAscii()
+    if contentType != "application/json":
+      respProblem(Http415, "Unsupported Media Type",
+          "Expected application/json", "unsupported-content-type")
+    var requestedIds: JsonNode
+    try:
+      requestedIds = parseJson(request.body)
+    except CatchableError:
+      respProblem(Http400, "Bad Request", "Invalid JSON", "invalid-input")
+    try:
+      let metadata = store.reorder(recipeId, requestedIds)
+      resp Http200, @[("Content-Type", "application/json"),
+          ("Cache-Control", "no-store")], $metadata
+    except ImageOrderInvalid as invalid:
+      respProblem(Http400, "Bad Request", invalid.msg, "invalid-image-order",
+          "order")
+    except CatchableError:
+      error "Reorder of '", recipeId, "' failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error",
+          "Cannot reorder images", "storage-error")
+
   delete "/images/@recipeId/@imageId/?":
     if runtimeMode == "backup":
       respProblem(Http503, "Service Unavailable",
