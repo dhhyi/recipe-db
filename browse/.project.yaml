@@ -9,9 +9,11 @@ devcontainer:
   build:
     packages:
       - build-essential
+    args:
+      TEMPL_VERSION: "v0.3.1020" # Keep in sync with the templ runtime in go.mod.
     user:
       - RUN mise use -g go@1.25 watchexec
-      - RUN go install github.com/a-h/templ/cmd/templ@latest
+      - RUN go install "github.com/a-h/templ/cmd/templ@$TEMPL_VERSION"
       - RUN go install golang.org/x/tools/gopls@latest
   ports:
     - 3000
@@ -94,6 +96,9 @@ format:
     apply: gofmt -w $argv
     files: ["**/*.go"]
 check: |
+  set templ_generator (templ version)
+  set templ_runtime (go list -m -f '{{.Version}}' github.com/a-h/templ)
+  if test "$templ_generator" != "$templ_runtime"; echo "templ version mismatch: generator $templ_generator, go.mod runtime $templ_runtime. Sync TEMPL_VERSION in .project.yaml and rebuild the Browse devcontainer." >&2; exit 1; end
   go version
   go vet ./...
   env CGO_ENABLED=1 go test -race ./...

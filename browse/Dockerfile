@@ -6,9 +6,18 @@ WORKDIR /ws
 COPY go.mod go.sum /ws/
 RUN --mount=type=cache,id=browse-go-mod,target=/go/pkg/mod,sharing=locked \
   go mod download
+ARG TEMPL_VERSION
 RUN --mount=type=cache,id=browse-go-mod,target=/go/pkg/mod,sharing=locked \
   --mount=type=cache,id=browse-go-build-${TARGETARCH},target=/root/.cache/go-build,sharing=locked \
-  go install github.com/a-h/templ/cmd/templ@v0.3.1020
+  << 'EOF'
+set -eu
+runtime_version="$(go list -m -f '{{.Version}}' github.com/a-h/templ)"
+if [ "${TEMPL_VERSION}" != "${runtime_version}" ]; then
+  echo "templ version mismatch: TEMPL_VERSION=${TEMPL_VERSION}, go.mod runtime=${runtime_version}" >&2
+  exit 1
+fi
+go install "github.com/a-h/templ/cmd/templ@${TEMPL_VERSION}"
+EOF
 
 COPY *.go *.templ genqlient.yaml recipe-db.graphqls operations.graphql /ws/
 COPY page_metadata /ws/page_metadata
