@@ -10,6 +10,7 @@ from test_mcp import (
     AUTH_TOKENS,
     FIXTURE_API,
     MCP_URL,
+    TRAEFIK_HEADERS,
     create_recipe,
     fixture_server_ready,
     mcp_session,
@@ -117,6 +118,7 @@ def raw_client():
         headers={
             "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": "2025-03-26",
+            **TRAEFIK_HEADERS,
         },
         timeout=30,
     )
@@ -273,7 +275,9 @@ async def test_cookies_do_not_authenticate_and_bearer_wins(accounts, raw_client)
 async def test_concurrent_graphql_and_mcp_ratings_preserve_each_identity(
     accounts, raw_client
 ):
-    async with httpx.AsyncClient(timeout=30) as graphql_client, raw_client as mcp_client:
+    async with httpx.AsyncClient(
+        headers=TRAEFIK_HEADERS, timeout=30
+    ) as graphql_client, raw_client as mcp_client:
         recipe = await graph_ql(
             graphql_client,
             "mutation($value: RecipeInput!) { createRecipe(value: $value) { id } }",
