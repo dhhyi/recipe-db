@@ -50,7 +50,7 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 
 func TestRecipeDetailUsesOrderedImageCollectionAndPlainSingleImages(t *testing.T) {
 	recipe := &gql.RecipeDetail{
-		Id: "42",
+		Id:   "42",
 		Name: "Kuchen",
 		Images: []gql.RecipeDetailImagesImageMetadata{
 			{Id: "first-id", Url: "/first.png"},
