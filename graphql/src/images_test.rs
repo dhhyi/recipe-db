@@ -447,7 +447,10 @@ async fn image_collections_ids_deletion_and_authorization() {
     assert_eq!(
         *reorder_requests.lock().unwrap(),
         vec![
-            ("present".to_string(), vec![second_id.clone(), first_id.clone()]),
+            (
+                "present".to_string(),
+                vec![second_id.clone(), first_id.clone()]
+            ),
             ("present".to_string(), vec![first_id.clone()]),
             (
                 "present".to_string(),
@@ -461,10 +464,7 @@ async fn image_collections_ids_deletion_and_authorization() {
         ]
     );
     let event_status = serde_json::to_value(publisher.status()).unwrap();
-    assert_eq!(
-        event_status["failed"],
-        failed_events_before_reorder + 1
-    );
+    assert_eq!(event_status["failed"], failed_events_before_reorder + 1);
     assert_eq!(event_status["published"], 0);
 
     task.abort();
