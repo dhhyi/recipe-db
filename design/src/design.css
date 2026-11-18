@@ -343,7 +343,39 @@ header-component > header:focus-within {
 }
 
 recipe-image-carousel {
+  --swiper-pagination-color: transparent;
+  --swiper-pagination-bullet-inactive-color: transparent;
+  --swiper-pagination-bullet-inactive-opacity: 1;
   display: block;
+}
+
+recipe-image-carousel .swiper-pagination-bullet {
+  border-color: transparent;
+  box-shadow: none;
+  outline: none;
+  position: relative;
+}
+
+recipe-image-carousel .swiper-pagination-bullet:focus-visible::before {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+recipe-image-carousel .swiper-pagination-bullet::before {
+  background: var(--pico-primary);
+  border-radius: 50%;
+  content: "";
+  height: 14px;
+  inset: 0;
+  margin: auto;
+  opacity: 0.5;
+  pointer-events: none;
+  position: absolute;
+  width: 14px;
+}
+
+recipe-image-carousel .swiper-pagination-bullet-active::before {
+  opacity: 1;
 }
 
 recipe-image-carousel .swiper,
