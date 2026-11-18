@@ -185,7 +185,9 @@ test("screenshot styling hides auth controls only in captured images", async ({
   ownerIdentity,
 }) => {
   const page = await ownerIdentity.browserContext.newPage();
-  const stylePath = fileURLToPath(new URL("../screenshot.css", import.meta.url));
+  const stylePath = fileURLToPath(
+    new URL("../screenshot.css", import.meta.url),
+  );
   const style = await readFile(stylePath, "utf8");
   await page.route("**/identity", (route) =>
     route.fulfill({
