@@ -266,7 +266,7 @@ export async function saveSource(page) {
   expect(result.errors).toBeUndefined();
   await expect(saveButton(page)).toHaveCount(0);
   await expect(selection(page)).toHaveCount(0);
-  await expect(galleryHeading(page)).toBeFocused();
+  await expect(galleryHeading(page)).not.toBeFocused();
   await expect(
     page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
   ).toBeVisible();
