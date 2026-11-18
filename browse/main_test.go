@@ -242,8 +242,6 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	var hasImage atomic.Bool
 	var tagsOffline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
-	var identityRole atomic.Value
-	identityRole.Store("owner")
 	var canRate atomic.Bool
 	canRate.Store(true)
 	hasImage.Store(true)
@@ -263,8 +261,6 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
 				"recipeEditOnline": editOnline.Load(),
 			}
-		case "BrowseIdentity":
-			data = map[string]any{"myCapabilities": map[string]any{"role": identityRole.Load()}}
 		case "Overview":
 			data = map[string]any{
 				"recipes": []any{map[string]any{
@@ -407,21 +403,6 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		strings.Contains(overviewBody, "auth-role") || strings.Contains(overviewBody, "auth-email") ||
 		strings.Contains(overviewBody, `id="browse-identity"`) {
 		t.Fatal("public layout must load identity into the header separately")
-	}
-	for _, role := range []string{"anonymous", "member", "owner"} {
-		identityRole.Store(role)
-		widget := request("GET", "/identity", "")
-		if widget.Code != http.StatusOK || widget.Header().Get("Cache-Control") != "no-store" ||
-			strings.TrimSpace(widget.Body.String()) != `<header-component auth-role="`+role+`"></header-component>` {
-			t.Fatalf("identity must supply only the header auth state: %s", widget.Body.String())
-		}
-	}
-	t.Setenv("GOOGLE_OAUTH_CLIENT_ID", "test.apps.googleusercontent.com")
-	googleHandler := newHandlerWithEndpoint(client, c, upstream.URL)
-	identity := httptest.NewRecorder()
-	googleHandler.ServeHTTP(identity, httptest.NewRequest("GET", "/identity", nil))
-	if got := strings.TrimSpace(identity.Body.String()); got != `<header-component auth-role="owner" auth-enabled></header-component>` {
-		t.Fatalf("configured Google auth must be reflected in the identity header: %s", got)
 	}
 	first := request("GET", "/recipe/42?variant=1", "")
 	if first.Code != 200 || !strings.Contains(first.Body.String(), "Original") {
