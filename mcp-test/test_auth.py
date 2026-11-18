@@ -128,6 +128,9 @@ async def test_anonymous_reads_and_denied_writes_leave_data_unchanged(accounts):
         image = payload(await owner.call_tool(
             "add_recipe_image", {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/test.jpg"}
         ))
+        second_image = payload(await owner.call_tool(
+            "add_recipe_image", {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/landscape.jpg"}
+        ))
     async with mcp_session(authenticated=False) as anonymous:
         tools = await anonymous.list_tools()
         assert "get_recipe_schema" in {tool.name for tool in tools.tools}
@@ -140,12 +143,24 @@ async def test_anonymous_reads_and_denied_writes_leave_data_unchanged(accounts):
             ("change_recipe", {"recipeId": recipe_id, "recipeJson": '{"name":"Denied"}'}),
             ("add_recipe_image", {"recipeId": recipe_id, "imageUrl": f"{FIXTURE_API}/missing.jpg"}),
             ("delete_recipe_image", {"recipeId": recipe_id, "imageId": image["id"]}),
+            ("reorder_recipe_images", {"recipeId": recipe_id, "imageIds": [image["id"], second_image["id"]]}),
             ("add_rating", {"recipeId": recipe_id, "rating": 5}),
         ):
             denied(await anonymous.call_tool(name, arguments), "authentication-required")
         after = payload(await anonymous.call_tool("get_recipe", {"recipeId": recipe_id}))
         assert after == before
         assert payload(await anonymous.call_tool("list_recipes", {})) == before_list
+
+    async with mcp_session(account="memberOne") as member:
+        denied(
+            await member.call_tool(
+                "reorder_recipe_images",
+                {"recipeId": recipe_id, "imageIds": [image["id"], second_image["id"]]},
+            ),
+            "forbidden",
+        )
+        after = payload(await member.call_tool("get_recipe", {"recipeId": recipe_id}))
+        assert after["images"] == before["images"]
 
 
 async def test_member_ratings_are_distinct_replaceable_and_cannot_impersonate(accounts):

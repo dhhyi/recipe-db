@@ -27,6 +27,17 @@ mutation DeleteImage($recipeId: ID!, $imageId: ID!) {
   deleteImage(recipeId: $recipeId, imageId: $imageId)
 }
 
+mutation ReorderImages($recipeId: ID!, $imageIds: [ID!]!) {
+  reorderImages(recipeId: $recipeId, imageIds: $imageIds) {
+    id
+    url
+    thumbUrl
+    width
+    height
+    size
+  }
+}
+
 query ImageManagementCapability {
   myCapabilities {
     role
