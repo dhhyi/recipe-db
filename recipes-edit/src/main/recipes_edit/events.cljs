@@ -286,24 +286,28 @@
 
        (= :new (get-in db [:route :page]))
        (if-let [id (get-in data [:createRecipe :id])]
-         {:db (assoc db
-                     :status :idle
-                     :name-error? false
-                     :route (assoc (:route db) :page :edit :id id)
-                     :baseline (:form db)
-                     :save-failed? false
-                     :feedback {:kind :success :message "Gespeichert"})
-          ::replace-url (str "/edit/" id)}
+         (let [form (model/saved-form (:form db))]
+           {:db (assoc db
+                       :status :idle
+                       :name-error? false
+                       :route (assoc (:route db) :page :edit :id id)
+                       :form form
+                       :baseline form
+                       :save-failed? false
+                       :feedback {:kind :success :message "Gespeichert"})
+            ::replace-url (str "/edit/" id)})
          {:db (assoc db :status :idle
                      :save-failed? true
                      :feedback {:kind :error :message "no recipe created"})})
 
        (get-in data [:updateRecipe :id])
-       {:db (assoc db :status :idle
-                   :name-error? false
-                   :baseline (:form db)
-                   :save-failed? false
-                   :feedback {:kind :success :message "Gespeichert"})}
+       (let [form (model/saved-form (:form db))]
+         {:db (assoc db :status :idle
+                     :name-error? false
+                     :form form
+                     :baseline form
+                     :save-failed? false
+                     :feedback {:kind :success :message "Gespeichert"})})
 
        :else
        {:db (assoc db :status :idle

@@ -258,6 +258,26 @@
     (is (= {:kind :success :message "Gespeichert"} (:feedback next-db)))
     (is (= "/edit/321" (::events/replace-url effects)))))
 
+(deftest successful-save-removes-unnamed-rows-from-form-and-baseline
+  (doseq [[page response] [[:new {:createRecipe {:id "321"}}]
+                           [:edit {:updateRecipe {:id "321"}}]]]
+    (let [form (assoc (model/blank-form)
+                      :name "Soup"
+                      :ingredients [{:name "" :amount "2" :unit "g" :optional true}
+                                    {:name " \t " :amount "" :unit "" :optional true}
+                                    {:name "Salt" :amount "1" :unit "tl" :optional true}
+                                    model/blank-ingredient])
+          db {:status :saving :route {:page page :id "321"} :form form}
+          saved (event-db db [::events/saved {:response {:data response :errors []}}])
+          expected [{:name "Salt" :amount "1" :unit "tl" :optional true}
+                    model/blank-ingredient]
+          edited (event-db saved [::events/set-ingredient-name 0 "Pepper"])
+          discarded (event-db edited [::events/discard])]
+      (is (= expected (get-in saved [:form :ingredients])) (str page))
+      (is (= (:form saved) (:baseline saved)) (str page))
+      (is (not (model/dirty? (:form saved) (:baseline saved))) (str page))
+      (is (= expected (get-in discarded [:form :ingredients])) (str page)))))
+
 (deftest saved-event-partial-create-opens-the-confirmed-recipe
   (let [db {:status :saving
             :route {:page :new}

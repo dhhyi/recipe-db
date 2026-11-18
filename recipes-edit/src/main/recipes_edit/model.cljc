@@ -14,6 +14,9 @@
 (defn normalize-ingredients [ingredients]
   (conj (vec (remove blank-ingredient? ingredients)) blank-ingredient))
 
+(defn saved-form [form]
+  (update form :ingredients #(normalize-ingredients (remove (comp str/blank? :name) %))))
+
 (defn normalize-inspirations [inspirations]
   (conj (vec (remove str/blank? inspirations)) ""))
 
