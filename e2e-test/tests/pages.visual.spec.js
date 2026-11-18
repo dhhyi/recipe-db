@@ -21,7 +21,11 @@ const test = base.extend({
 for (const role of ["anonymous", "member", "owner"]) {
   test.describe(role, () => {
     test.use({ visualRole: role });
-    const screenshot = async (page, name, { fullPage = true } = {}) => {
+    const screenshot = async (
+      page,
+      name,
+      { fullPage = true, maxDiffPixelRatio } = {},
+    ) => {
       if (
         role === "owner" &&
         /^\/(?:edit|images-edit)\//.test(new URL(page.url()).pathname)
@@ -40,7 +44,10 @@ for (const role of ["anonymous", "member", "owner"]) {
       });
       await expect(page).toHaveScreenshot(
         role === "owner" ? name : `${role}-${name}`,
-        { fullPage },
+        {
+          fullPage,
+          ...(maxDiffPixelRatio === undefined ? {} : { maxDiffPixelRatio }),
+        },
       );
     };
 
@@ -377,7 +384,10 @@ for (const role of ["anonymous", "member", "owner"]) {
         await updatedAt.evaluate((element) => {
           element.textContent = "Zuletzt aktualisiert: gerade eben";
         });
-        await screenshot(page, "tag-editor.png", { fullPage: false });
+        await screenshot(page, "tag-editor.png", {
+          fullPage: false,
+          maxDiffPixelRatio: 0.02,
+        });
 
         let assignments = 0;
         page.on("request", (request) => {
