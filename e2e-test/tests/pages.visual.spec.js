@@ -84,7 +84,12 @@ for (const role of ["anonymous", "member", "owner"]) {
         role === "owner" ? 1 : 0,
       );
       await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+      await page
+        .locator("header-component")
+        .evaluate((header) => header.setAttribute("auth-enabled", ""));
+      await expectHeader(page, role);
       await screenshot(page, "overview.png");
+      await expectHeader(page, role);
     });
 
     test("single-tag search", async ({ page, request, taggedDemoRecipe }) => {
