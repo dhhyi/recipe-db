@@ -3,7 +3,8 @@ set -euo pipefail
 
 printf 'mise %s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
-  'run --raw generate-bazel-build' | 'run --raw create-intranet') ;;
+  'run --raw generate-bazel-build') exit "${GENERATION_STATUS:-0}" ;;
+  'run --raw create-intranet') ;;
   'exec -- yq eval-all -r '*)
     if [[ "$*" == *'.check // ""'* ]]; then
       printf '%s\n' 'echo checked'

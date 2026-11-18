@@ -225,6 +225,7 @@ EOF
   run env UP_STATUS=23 mise run --raw dev-up --wait-timeout 120 "two words"
   [ "$status" -eq 23 ]
   [ "$(cat up-arguments)" = $'<compose>\n<up>\n<-d>\n<--wait>\n<--wait-timeout>\n<120>\n<two words>' ]
+  [ ! -e BUILD.bazel ]
 }
 
 @test "development without Google creates only the private ingress secret" {
@@ -831,9 +832,18 @@ EOF
 
   [ "$status" -eq 0 ]
   [ -f generate-docker-compose.done ]
+  [ ! -e generate-bazel-build.done ]
+  [ ! -e BUILD.bazel ]
   [ -s .secrets/typesense-api-key ]
   [ -s .secrets/auth-accounts.json ]
   [ -s e2e-test/.secrets/auth-tokens.json ]
+
+  printf '%s\n' existing > BUILD.bazel
+  run mise run sync
+
+  [ "$status" -eq 0 ]
+  [ "$(cat BUILD.bazel)" = existing ]
+  [ ! -e generate-bazel-build.done ]
 }
 
 @test "development auth accounts are private and preserved across setup runs" {

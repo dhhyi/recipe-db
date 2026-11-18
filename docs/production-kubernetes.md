@@ -591,8 +591,10 @@ Mocks exercise guard ordering, HTTP protocol sequencing, private credential hand
 ```sh
 cd /home/runner/work/recipe-db/recipe-db
 mise run test-scripts
-mise exec -- bazelisk build --action_env=PATH --jobs=1 //:shellcheck
+mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck
 mise run test-migrations-k3d
 ```
+
+Use the supported Bazel wrapper shown above: it generates `BUILD.bazel` if missing but does not refresh an existing file. Run `mise run --raw generate-bazel-build` when current rules are required; direct Bazelisk invocation bypasses this safeguard.
 
 `test-migrations-k3d` builds a synthetic worker and uses a uniquely named disposable cluster to verify read-only PVC inspection, suspended/activated Jobs, asynchronous execution, sequential exclusion and Kubernetes deadlines. It deletes only its own cluster and test image; on failure it retains logs for diagnosis. It uses no production values or data.

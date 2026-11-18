@@ -4,6 +4,9 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
 
 mise_bin=$(command -v mise)
+if [[ ! -f BUILD.bazel ]]; then
+  "$mise_bin" run --raw generate-bazel-build >&2
+fi
 tool_paths=$("$mise_bin" env --paths)
 PATH="${tool_paths//$'\n'/:}:$(dirname -- "$mise_bin"):/usr/local/bin:/usr/bin:/bin"
 export PATH
