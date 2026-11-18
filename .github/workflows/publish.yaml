@@ -459,6 +459,16 @@ jobs:
       - name: verify production ingress trust
         run: mise run test-auth-ingress
 
+      - name: enable CI-only Traefik access logging
+        run: |
+          mise exec -- yq -i '
+            .services.traefik.command += [
+              "--accesslog=true",
+              "--accesslog.format=json",
+              "--accesslog.fields.headers.defaultmode=drop"
+            ]
+          ' docker-compose.yml
+
       - name: start development stack and run standalone integration tests
         id: integration-tests
         env:
@@ -481,7 +491,7 @@ jobs:
           name: arm64-compose-logs
           path: ${{ runner.temp }}/compose.log
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 10
 
       - name: upload ARM64 end-to-end screenshots, ARIA snapshots and reports
         if: failure() && steps.integration-tests.outcome == 'failure'
