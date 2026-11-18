@@ -69,6 +69,23 @@ EOF
   [ "$(grep -c 'mise run --raw bazel' "$MOCK_LOG")" -eq 0 ]
 }
 
+@test "precommit stops before retrying Bazel when post-format generation fails" {
+  touch example/main.txt
+  git add example/main.txt
+
+  run env UNFORMATTED=true GENERATION_FAIL_ON=2 GENERATION_STATUS=23 bash .scripts/precommit.sh
+
+  [ "$status" -eq 23 ]
+  grep -E 'generate-bazel-build|bazel build.*format_check|in-devcontainer.*format$' "$MOCK_LOG" > format-calls
+  cat > expected-calls << 'EOF'
+mise run --raw generate-bazel-build
+mise run --raw bazel build --action_env=PATH --jobs=1 //:example_format_check
+mise run --raw in-devcontainer example format
+mise run --raw generate-bazel-build
+EOF
+  cmp expected-calls format-calls
+}
+
 @test "precommit checks formatted projects without applying before project checks" {
   touch example/main.txt
   mkdir other

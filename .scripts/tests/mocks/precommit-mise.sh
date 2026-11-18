@@ -3,7 +3,12 @@ set -euo pipefail
 
 printf 'mise %s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
-  'run --raw generate-bazel-build') exit "${GENERATION_STATUS:-0}" ;;
+  'run --raw generate-bazel-build')
+    generation_count=$(grep -c '^mise run --raw generate-bazel-build$' "$MOCK_LOG")
+    if [[ -n ${GENERATION_STATUS:-} && ${GENERATION_FAIL_ON:-1} == "$generation_count" ]]; then
+      exit "$GENERATION_STATUS"
+    fi
+    ;;
   'run --raw create-intranet') ;;
   'exec -- yq eval-all -r '*)
     if [[ "$*" == *'.check // ""'* ]]; then
