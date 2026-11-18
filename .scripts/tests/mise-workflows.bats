@@ -472,30 +472,17 @@ EOF
   done
 }
 
-@test "ARM64 diagnostics enable redacted Traefik access logs and retain the Compose artifact for ten days" {
+@test "ARM64 diagnostic artifacts use failure conditions and seven-day retention" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   steps=$(yq -o=json '.jobs.arm64-validation.steps' "$workflow")
 
-  jq -e '
-    .[] | select(.name == "enable CI-only Traefik access logging") |
-    (.run | contains("--accesslog=true")) and
-    (.run | contains("--accesslog.format=json")) and
-    (.run | contains("--accesslog.fields.headers.defaultmode=drop"))
-  ' <<< "$steps"
-  jq -e '
-    (map(.name) | index("enable CI-only Traefik access logging")) <
-    (map(.name) | index("start development stack and run standalone integration tests"))
-  ' <<< "$steps"
-  jq -e '
-    .[] | select(.with.name == "arm64-compose-logs") |
-    .if == "failure() && steps.integration-tests.outcome == '\''failure'\''" and
-    .with["retention-days"] == 10
-  ' <<< "$steps"
-  jq -e '
-    .[] | select(.with.name == "arm64-e2e-reports") |
-    .if == "failure() && steps.integration-tests.outcome == '\''failure'\''" and
-    .with["retention-days"] == 7
-  ' <<< "$steps"
+  for artifact in arm64-compose-logs arm64-e2e-reports; do
+    jq -e --arg artifact "$artifact" '
+      .[] | select(.with.name == $artifact) |
+      .if == "failure() && steps.integration-tests.outcome == '\''failure'\''" and
+      .with["retention-days"] == 7
+    ' <<< "$steps"
+  done
   jq -e '
     .[] | select(.with.name == "arm64-integration-reports") |
     .if == "failure()" and .with["retention-days"] == 7
