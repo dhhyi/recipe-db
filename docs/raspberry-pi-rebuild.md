@@ -34,7 +34,7 @@ In Raspberry Pi Imager:
 
 Use the dedicated SSH key at `~/.config/recipe-db/ssh/recipe-db-pi`; preserve it across a rebuild unless intentionally replacing it. Configure its public key in Pi Imager.
 
-Boot from USB and connect to the Pi using its configured hostname:
+Boot from USB and make the first SSH connection directly from the workstation. This is a one-time host-key enrollment step, not the routine connection method:
 
 ```sh
 ssh -i ~/.config/recipe-db/ssh/recipe-db-pi -o IdentitiesOnly=yes piadmin@recipe-pi.home
@@ -48,6 +48,8 @@ ssh-keygen -F recipe-pi.home -f ~/.ssh/known_hosts \
   > ~/.config/recipe-db/ssh/known_hosts
 chmod 600 ~/.config/recipe-db/ssh/known_hosts
 ```
+
+After enrollment, use `mise run pi-ssh` for routine interactive access.
 
 ## 3. Record the new host identity
 
@@ -138,12 +140,13 @@ Every `site.yml` run disables scheduled backups. After maintenance, [verify a ba
 
 ## 6. Verify cluster access and host safety
 
-In a terminal, open a loopback-only SSH tunnel:
+From a workstation terminal, open the loopback-only Kubernetes API tunnel:
 
-```sh
-ssh -i ~/.config/recipe-db/ssh/recipe-db-pi -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
-  -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home
+```fish
+mise run pi-kubernetes-tunnel
 ```
+
+Keep the task running in the foreground. It uses the dedicated Pi key and verified host key in the central SSH directory; stop if host-key verification fails.
 
 In another terminal, check that the node and system pods are ready:
 

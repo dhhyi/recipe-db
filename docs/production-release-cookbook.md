@@ -171,12 +171,10 @@ Record the currently deployed release separately as `OLD_RELEASE`. Backup operat
 Keep a loopback-only SSH tunnel open to the Pi Kubernetes API. In a separate terminal:
 
 ```fish
-ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
-  -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
-  -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home
+mise run pi-kubernetes-tunnel
 ```
 
-The tunnel command must remain running. If the Pi hostname or SSH user differs, use the values in the private provisioning inventory and verified `known_hosts`; do not bypass host-key checking.
+Keep the task running in the foreground. It uses the dedicated Pi key and verified host key in the central SSH directory; stop if host-key verification fails.
 
 ### Check Pi infrastructure before rehearsal
 
