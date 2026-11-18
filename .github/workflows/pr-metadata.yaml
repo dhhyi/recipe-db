@@ -1,0 +1,100 @@
+name: PR metadata
+
+on:
+  pull_request_target:
+    types:
+      [
+        opened,
+        reopened,
+        synchronize,
+        edited,
+        converted_to_draft,
+        ready_for_review,
+      ]
+
+permissions:
+  issues: read
+  pull-requests: write
+
+concurrency:
+  group: pr-metadata-${{ github.event.pull_request.number }}
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      # Use only GitHub API data; never check out or execute PR code in this workflow.
+      - name: Normalize title and check readiness
+        id: metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # shellcheck disable=SC2016 # GraphQL variables must reach the API literally.
+          pages=$(gh api graphql --paginate --slurp \
+            -f owner="${GITHUB_REPOSITORY%/*}" -f repo="${GITHUB_REPOSITORY#*/}" \
+            -F number="$PR_NUMBER" -f query='
+              query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    title
+                    state
+                    isDraft
+                    closingIssuesReferences(first: 100, after: $endCursor) {
+                      nodes { number repository { nameWithOwner } }
+                      pageInfo { hasNextPage endCursor }
+                    }
+                  }
+                }
+              }')
+          metadata=$(jq -ce --arg repo "$GITHUB_REPOSITORY" '
+            map(.data.repository.pullRequest) as $prs
+            | $prs[0] as $pr
+            | if $pr == null then error("Pull request not found") else $pr end
+            | ([ $prs[].closingIssuesReferences.nodes[]
+                 | select((.repository.nameWithOwner | ascii_downcase) == ($repo | ascii_downcase))
+                 | .number ] | unique | map("#\(.)") | join(", ")) as $issues
+            | {
+                title,
+                open: (.state == "OPEN"),
+                promote: (.isDraft and (.title | ascii_downcase | contains("[wip]") | not)),
+                normalized: (
+                  (.title | sub(" \\(#[0-9]+(, *#[0-9]+)*\\)$"; ""))
+                  + (if $issues == "" then "" else " (\($issues))" end)
+                )
+              }' <<< "$pages")
+          if [[ $(jq -r '.open' <<< "$metadata") != true ]]; then
+            exit 0
+          fi
+          title=$(jq -r '.title' <<< "$metadata")
+          normalized=$(jq -r '.normalized' <<< "$metadata")
+          if [[ "$title" != "$normalized" ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+              --method PATCH --silent -f title="$normalized"
+          fi
+          printf 'promote=%s\n' "$(jq -r '.promote' <<< "$metadata")" >> "$GITHUB_OUTPUT"
+
+      # The default token cannot trigger Publish through ready_for_review.
+      - name: Create PR metadata App token
+        id: app-token
+        if: steps.metadata.outputs.promote == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.PR_METADATA_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PR_METADATA_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+
+      - name: Mark draft ready for review
+        if: steps.metadata.outputs.promote == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          promote=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '
+            .state == "open" and .draft and (.title | ascii_downcase | contains("[wip]") | not)
+          ')
+          if [[ "$promote" == true ]]; then
+            gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+          fi

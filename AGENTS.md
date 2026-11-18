@@ -116,7 +116,7 @@ When `RECIPE_DB_SKIP_PRECOMMIT=1` is already configured, and the user has not as
 - Run targeted tests during development; leave exhaustive checks to CI rather than manually running the skipped hook.
 - Before ending the session, commit and publish remaining useful changes and report unfinished work and validation.
 
-CI checks remain required before merging. The Publish workflow skips validation while the PR title contains `[WIP]`; remove that marker when requesting CI feedback.
+CI checks remain required before merging. Keep `[WIP]` in the title while a PR should stay in draft. Remove it when requesting CI feedback: the PR metadata workflow marks the PR ready, and Publish validates ready PRs.
 
 ## Modifying .project.yaml files
 
