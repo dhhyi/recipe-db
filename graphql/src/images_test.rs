@@ -12,6 +12,7 @@ use std::collections::HashMap;
 fn metadata() -> serde_json::Value {
     json!({
         "recipeId": "present",
+        "id": "a".repeat(64),
         "modified": "2026-10-23T10:00:00Z",
         "url": "https://cdn.example.test/opaque/full-token.png?signature=abc&version=two",
         "thumbUrl": "/assets/unrelated/thumb-token.png?rev=opaque",
@@ -22,6 +23,7 @@ fn metadata() -> serde_json::Value {
 fn uploaded_metadata() -> serde_json::Value {
     json!({
         "recipeId": "present",
+        "id": "b".repeat(64),
         "modified": "2026-10-23T11:00:00Z",
         "url": "/opaque/new-upload.png?signature=xyz&version=three",
         "thumbUrl": "https://cdn.example.test/new-thumbnail.png?rev=upload",
@@ -56,7 +58,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
             }),
         )
         .route(
-            "/images/{id}/meta",
+            "/images/{id}/meta/0",
             get(|Path(id): Path<String>| async move {
                 match id.as_str() {
                     "absent" => (
@@ -65,6 +67,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                     ),
                     "unrouted-image" => (StatusCode::NOT_FOUND, Json(json!({}))),
                     "offline" => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({}))),
+                    "malformed-metadata" => (StatusCode::OK, Json(json!({}))),
                     _ => (
                         StatusCode::OK,
                         Json(metadata()),
@@ -181,6 +184,11 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                     "type": "about:blank", "title": "Bad Request", "status": 400,
                     "detail": "Unsupported image", "code": "invalid-image", "field": "file"
                 }))),
+                "limit" => (StatusCode::CONFLICT, Json(json!({
+                    "type": "about:blank", "title": "Conflict", "status": 409,
+                    "detail": "A recipe can have at most 10 images",
+                    "code": "image-limit-reached"
+                }))),
                 "crop-invalid" | "negative-crop" => (StatusCode::BAD_REQUEST, Json(json!({
                     "type": "about:blank", "title": "Bad Request", "status": 400,
                     "detail": "Invalid crop rectangle", "code": "invalid-crop", "field": "crop"
@@ -208,6 +216,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
         ("absent", false),
         ("offline", true),
         ("unrouted-image", true),
+        ("malformed-metadata", true),
     ] {
         let result = schema
             .execute(
@@ -445,6 +454,7 @@ async fn image_metadata_passthrough_and_upstream_errors() {
     let mut successful_uploads = 0;
     for id in [
         "invalid",
+        "limit",
         "malformed",
         "crop-invalid",
         "crop-outside",
@@ -498,6 +508,17 @@ async fn image_metadata_passthrough_and_upstream_errors() {
                 assert_eq!(
                     extensions.get("field"),
                     Some(&async_graphql::value!("file"))
+                );
+            }
+            if id == "limit" {
+                let extensions = response.errors[0].extensions.as_ref().unwrap();
+                assert_eq!(
+                    extensions.get("code"),
+                    Some(&async_graphql::value!("image-limit-reached"))
+                );
+                assert_eq!(
+                    extensions.get("status"),
+                    Some(&async_graphql::value!(409))
                 );
             }
             if ["crop-invalid", "crop-outside", "negative-crop"].contains(&id) {

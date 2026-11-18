@@ -128,7 +128,7 @@ suite "backend HTTP publication contract":
       check problem["code"].getStr == code
       if field.len > 0:
         check problem["field"].getStr == field
-      check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+      check parseJson(client.getContent(base & "/images/crop/meta")) == %*[saved]
     for (bytes, mime, code) in [
         ("not an image", "image/png", "unsupported-content-type"),
         ("\x89PNG\r\n\x1A\nbroken", "image/png", "invalid-image"),
@@ -146,7 +146,7 @@ suite "backend HTTP publication contract":
         replacement.encodeImage(PngFormat))
     check failed.code == Http500
     check parseJson(failed.body)["code"].getStr == "storage-error"
-    check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+    check parseJson(client.getContent(base & "/images/crop/meta")) == %*[saved]
     for i, key in ["url", "thumbUrl"]:
       check client.getContent(base & saved[key].getStr) == savedBytes[i]
     for kind, path in walkDir(store.publicFolder):
@@ -159,14 +159,14 @@ suite "backend HTTP publication contract":
     let tooManyPixels = upload(query)
     check tooManyPixels.code == Http400
     check parseJson(tooManyPixels.body)["code"].getStr == "image-too-large"
-    check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+    check parseJson(client.getContent(base & "/images/crop/meta")) == %*[saved]
     client.close()
     server.stopServer()
     server = startServer(maxUploadBytes = 64)
     let tooManyBytes = upload(query)
     check tooManyBytes.code == Http413
     discard tooManyBytes.body
-    check parseJson(client.getContent(base & "/images/crop/meta")) == saved
+    check parseJson(client.getContent(base & "/images/crop/meta")) == %*[saved]
 
   test "metadata, immutable headers, private files, errors, restart and production wipe guard":
     if dirExists(root):

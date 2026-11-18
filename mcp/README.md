@@ -8,7 +8,7 @@ Tools:
 - `add_recipe` validates the recipe JSON against a schema generated depending on which backend services are currently online (`inspirations`/`imageUrl` are only accepted while the inspirations/images service, respectively, is up); an included `imageUrl` is fetched and attached to the new recipe.
 - `list_recipes` lists all recipes with their id and name.
 - `get_recipe` returns the full details of a single recipe (name, method, ingredients, rating, image, inspirations) by id.
-- `change_recipe` patches an existing recipe; only fields present in the JSON are changed, the rest are left untouched. An included `imageUrl` (only accepted while the images service is online) replaces the recipe's image, fetched by the server.
+- `change_recipe` patches an existing recipe; only fields present in the JSON are changed, the rest are left untouched. An included `imageUrl` (only accepted while the images service is online) is fetched by the server and added as the default image, retaining earlier images.
 - `add_rating` rates an existing recipe.
 
 There is intentionally no tool for deleting recipes.
@@ -23,4 +23,4 @@ Any suitable host works. For example, upload to [Tmpfiles](https://tmpfiles.org/
 curl -F "file=@photo.jpg" -F "expire=3600" https://tmpfiles.org/api/v1/upload
 ```
 
-Read the returned sharing page and extract its actual download link, including any token; do not guess a `/dl/` transformation. Check current [terms](https://tmpfiles.org/tos). Before expiry, pass that URL as `imageUrl` to `add_recipe`, or to `change_recipe` to replace an existing image. Verify with `get_recipe` and its image URL; successful imports are stored locally and survive source expiry. Report failures and check state before retrying uncertain outcomes.
+Read the returned sharing page and extract its actual download link, including any token; do not guess a `/dl/` transformation. Check current [terms](https://tmpfiles.org/tos). Before expiry, pass that URL as `imageUrl` to `add_recipe`, or to `change_recipe` to add a new default image while retaining earlier images. Verify with `get_recipe` and its image URL; successful imports are stored locally and survive source expiry. Report failures and check state before retrying uncertain outcomes.

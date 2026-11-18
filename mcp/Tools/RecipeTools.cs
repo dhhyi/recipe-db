@@ -200,13 +200,15 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         "Patches an existing recipe from JSON; only fields present in the JSON are changed, omitted " +
         "fields are left untouched. The 'inspirations' field (array of URLs) and 'imageUrl' field are " +
         "only accepted while the inspirations/images services (respectively) are online; if 'imageUrl' " +
-        "is given, the server fetches it and replaces the recipe's image." + ImageUrlGuidance
+        "is given, the server fetches it and adds it as the new default image, retaining earlier images." +
+        ImageUrlGuidance
     )]
     public async Task<string> ChangeRecipe(
         [Description("Recipe id")] string recipeId,
         [Description(
             "Partial recipe JSON object matching 'get_recipe_schema'; only included fields change. " +
-            "'imageUrl' alone replaces the image using a direct download URL, not a local path or sharing page."
+            "'imageUrl' alone adds a new default image using a direct download URL, not a local path or " +
+            "sharing page; earlier images are retained."
         )] string recipeJson
     )
     {

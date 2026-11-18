@@ -3,6 +3,16 @@
 DELETE {{REST_API}}/images
 HTTP 204
 
+GET {{REST_API}}/images/no-image/meta/
+HTTP 200
+[Asserts]
+jsonpath "$" == []
+
+GET {{REST_API}}/images/no-image/meta/0
+HTTP 404
+[Asserts]
+jsonpath "$.code" == "image-not-found"
+
 POST {{REST_API}}/images/rice-pudding
 Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
@@ -14,6 +24,7 @@ normal_hash_a: jsonpath "$.url" regex /-([0-9a-f]{64})\.png$/
 thumb_hash_a: jsonpath "$.thumbUrl" regex /-([0-9a-f]{64})-thumb\.png$/
 size_a: jsonpath "$.size"
 modified_a: jsonpath "$.modified"
+image_id_a: jsonpath "$.id"
 [Asserts]
 header "Content-Type" contains "application/json"
 header "Cache-Control" == "no-store"
@@ -22,22 +33,31 @@ jsonpath "$.width" == 648
 jsonpath "$.height" == 486
 jsonpath "$.url" matches /^\/public\/rice-pudding-[0-9a-f]{64}\.png$/
 jsonpath "$.thumbUrl" matches /^\/public\/rice-pudding-[0-9a-f]{64}-thumb\.png$/
+jsonpath "$.id" matches /^[0-9a-f]{64}$/
+jsonpath "$.id" == "{{normal_hash_a}}"
 
 GET {{REST_API}}/images/rice-pudding/meta
 HTTP 200
 [Asserts]
 header "Content-Type" contains "application/json"
 header "Cache-Control" == "no-store"
-jsonpath "$.recipeId" == "rice-pudding"
-jsonpath "$.width" == 648
-jsonpath "$.height" == 486
-jsonpath "$.size" isInteger
-jsonpath "$.size" > 0
-jsonpath "$.modified" matches /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/
+jsonpath "$[0].recipeId" == "rice-pudding"
+jsonpath "$[0].id" == "{{image_id_a}}"
+jsonpath "$[0].width" == 648
+jsonpath "$[0].height" == 486
+jsonpath "$[0].size" isInteger
+jsonpath "$[0].size" > 0
+jsonpath "$[0].modified" matches /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}$/
+jsonpath "$[0].url" == "{{normal_a}}"
+jsonpath "$[0].thumbUrl" == "{{thumb_a}}"
+jsonpath "$[0].size" == {{size_a}}
+jsonpath "$[0].modified" == "{{modified_a}}"
+
+GET {{REST_API}}/images/rice-pudding/meta/0/
+HTTP 200
+[Asserts]
+jsonpath "$.id" == "{{image_id_a}}"
 jsonpath "$.url" == "{{normal_a}}"
-jsonpath "$.thumbUrl" == "{{thumb_a}}"
-jsonpath "$.size" == {{size_a}}
-jsonpath "$.modified" == "{{modified_a}}"
 
 # The stored files are delivered on the public entrypoint.
 
@@ -94,6 +114,7 @@ normal_b: jsonpath "$.url"
 thumb_b: jsonpath "$.thumbUrl"
 normal_hash_b: jsonpath "$.url" regex /-([0-9a-f]{64})\.png$/
 thumb_hash_b: jsonpath "$.thumbUrl" regex /-([0-9a-f]{64})-thumb\.png$/
+image_id_b: jsonpath "$.id"
 [Asserts]
 jsonpath "$.url" != "{{normal_a}}"
 jsonpath "$.thumbUrl" != "{{thumb_a}}"
@@ -101,10 +122,17 @@ jsonpath "$.thumbUrl" != "{{thumb_a}}"
 GET {{REST_API}}/images/rice-pudding/meta
 HTTP 200
 [Asserts]
-jsonpath "$.width" == 648
-jsonpath "$.height" == 486
+jsonpath "$[0].id" == "{{image_id_b}}"
+jsonpath "$[0].url" == "{{normal_b}}"
+jsonpath "$[0].thumbUrl" == "{{thumb_b}}"
+jsonpath "$[1].id" == "{{image_id_a}}"
+jsonpath "$[1].url" == "{{normal_a}}"
+
+GET {{REST_API}}/images/rice-pudding/meta/0
+HTTP 200
+[Asserts]
+jsonpath "$.id" == "{{image_id_b}}"
 jsonpath "$.url" == "{{normal_b}}"
-jsonpath "$.thumbUrl" == "{{thumb_b}}"
 
 GET {{WEB_API}}{{normal_b}}
 HTTP 200
@@ -137,8 +165,8 @@ HTTP 400
 GET {{REST_API}}/images/rice-pudding/meta
 HTTP 200
 [Asserts]
-jsonpath "$.url" == "{{normal_b}}"
-jsonpath "$.thumbUrl" == "{{thumb_b}}"
+jsonpath "$[0].url" == "{{normal_b}}"
+jsonpath "$[0].thumbUrl" == "{{thumb_b}}"
 
 # A -> B -> A returns to the original URLs.
 
@@ -147,8 +175,15 @@ Content-Type: image/jpeg
 file,fixtures/landscape.jpg;
 HTTP 201
 [Asserts]
+jsonpath "$.id" == "{{image_id_a}}"
 jsonpath "$.url" == "{{normal_a}}"
-jsonpath "$.thumbUrl" == "{{thumb_a}}"
+
+GET {{REST_API}}/images/rice-pudding/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0].id" == "{{image_id_a}}"
+jsonpath "$[0].url" == "{{normal_a}}"
+jsonpath "$[1].id" == "{{image_id_b}}"
 
 # A similarly prefixed recipe must survive deletion.
 
@@ -160,13 +195,40 @@ HTTP 201
 neighbor: jsonpath "$.url"
 neighbor_thumb: jsonpath "$.thumbUrl"
 
+DELETE {{REST_API}}/images/rice-pudding/{{image_id_a}}/
+HTTP 204
+
+GET {{REST_API}}/images/rice-pudding/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0].id" == "{{image_id_b}}"
+
+GET {{WEB_API}}{{normal_a}}
+HTTP 200
+
+DELETE {{REST_API}}/images/rice-pudding/{{image_id_b}}
+HTTP 204
+
+GET {{REST_API}}/images/rice-pudding/meta/
+HTTP 200
+[Asserts]
+jsonpath "$" == []
+
+DELETE {{REST_API}}/images/rice-pudding/{{image_id_a}}
+HTTP 404
+[Asserts]
+jsonpath "$.code" == "image-not-found"
+
+GET {{WEB_API}}{{normal_b}}
+HTTP 200
+
 DELETE {{REST_API}}/images/rice-pudding
 HTTP 204
 
 GET {{REST_API}}/images/rice-pudding/meta
-HTTP 404
+HTTP 200
 [Asserts]
-header "Cache-Control" == "no-store"
+jsonpath "$" == []
 
 GET {{WEB_API}}{{normal_a}}
 HTTP 404
