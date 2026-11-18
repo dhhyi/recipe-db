@@ -154,7 +154,7 @@ The maintenance API is private and available only in backup mode:
 | recipes, images, ratings, inspirations, tags | `GET /maintenance/status` | Verify API version, service identity, and backup mode |
 | recipes, images, ratings, inspirations, tags | `GET /maintenance/recipe-ids` | Enumerate authoritative or referenced recipe IDs |
 | images, ratings, inspirations, tags | `POST /maintenance/recipes/purge` | Idempotently remove data owned by one absent recipe |
-| images | `POST /maintenance/images/compact` | Keep only the manifest-selected current image and thumbnail |
+| images | `POST /maintenance/images/compact` | Keep the union of normal and thumbnail files referenced by every collection entry |
 
 Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}`. Purges and compaction return `204`; ID lists are complete, distinct, and ordered. In production/testing these routes return `404` without touching stored data. Unsafe image state fails cleanup rather than guessing which outputs are current.
 
