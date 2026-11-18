@@ -1,0 +1,7 @@
+[pi-kubernetes-tunnel]
+description = "Open a foreground SSH tunnel to the Pi Kubernetes API"
+run = 'ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.config/recipe-db/ssh/known_hosts" -o ExitOnForwardFailure=yes -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home'
+
+[pi-ssh]
+description = "Open an interactive SSH session to the Pi"
+run = 'ssh -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.config/recipe-db/ssh/known_hosts" piadmin@recipe-pi.home'

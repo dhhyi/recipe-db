@@ -59,6 +59,38 @@ mock_task_body() {
   printf '%s' "$output" | jq -e 'all(.[]; .description | length > 0)'
 }
 
+@test "Pi SSH tasks use fixed destinations and central strict host keys" {
+  cat > bin/ssh << 'EOF'
+#!/bin/sh
+printf '%s\n' "$@" > "$SSH_LOG"
+EOF
+  chmod +x bin/ssh
+  export SSH_LOG="$FIXTURE_ROOT/ssh-arguments"
+  export HOME="$FIXTURE_ROOT/operator home"
+  mkdir -p "$HOME/.config/recipe-db/ssh"
+
+  run mise run --raw pi-kubernetes-tunnel
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SSH_LOG")" = "$(printf '%s\n' \
+    -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o "UserKnownHostsFile=$HOME/.config/recipe-db/ssh/known_hosts" \
+    -o ExitOnForwardFailure=yes \
+    -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home)" ]
+
+  run mise run --raw pi-ssh
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SSH_LOG")" = "$(printf '%s\n' \
+    -i "$HOME/.config/recipe-db/ssh/recipe-db-pi" \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o "UserKnownHostsFile=$HOME/.config/recipe-db/ssh/known_hosts" \
+    piadmin@recipe-pi.home)" ]
+}
+
 @test "root tasks are wildcard-discovered from separate task files" {
   root="$BATS_TEST_DIRNAME/../../mise.toml"
   run yq -p toml -e 'has("tasks") | not' "$root"

@@ -11,7 +11,7 @@ This guide is the source of truth for operator-held production inputs, their own
 
 ## Private workstation directory
 
-Keep operator configuration outside the checkout in `~/.config/recipe-db/`. Restrict it to the operator (`umask 077`, directories mode `0700`, private files mode `0600`). The provisioning devcontainer bind-mounts this directory at `/home/vscode/.config/recipe-db`; create it before starting that container.
+Keep operator configuration outside the checkout in `~/.config/recipe-db/`. This central directory is authoritative for workstation Pi SSH access, including the dedicated key and verified host key. Restrict it to the operator (`umask 077`, directories mode `0700`, private files mode `0600`). The provisioning devcontainer bind-mounts this directory at `/home/vscode/.config/recipe-db`; create it before starting that container.
 
 ```text
 ~/.config/recipe-db/
