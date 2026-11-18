@@ -141,6 +141,39 @@ async fn mock_backend() -> tokio::task::JoinHandle<()> {
         )
         .route("/images", delete(|| async { StatusCode::NO_CONTENT }))
         .route(
+            "/images/{id}/order",
+            put(|Path(id): Path<String>, Json(image_ids): Json<Vec<String>>| async move {
+                if id == "42" && image_ids == ["b", "a"] {
+                    (
+                        StatusCode::OK,
+                        Json(json!([
+                            {
+                                "recipeId": "42", "id": "b",
+                                "modified": "2026-10-23T11:00:00Z",
+                                "url": "/opaque/second.png", "thumbUrl": "/opaque/second-thumb.png",
+                                "width": 640, "height": 480, "size": 12345
+                            },
+                            {
+                                "recipeId": "42", "id": "a",
+                                "modified": "2026-10-23T10:00:00Z",
+                                "url": "/opaque/full.png", "thumbUrl": "/opaque/thumb.png",
+                                "width": 640, "height": 480, "size": 12345
+                            }
+                        ])),
+                    )
+                } else {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "type": "about:blank", "title": "Bad Request", "status": 400,
+                            "detail": "Invalid image order", "code": "invalid-image-order",
+                            "field": "imageIds"
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
             "/images/{recipe_id}/{image_id}",
             delete(
                 |Path((_recipe_id, image_id)): Path<(String, String)>| async move {
@@ -243,6 +276,11 @@ async fn denied_mutations_have_no_backend_side_effects() {
         (
             "member",
             r#"mutation { deleteImage(recipeId: "42", imageId: "a") }"#,
+            403,
+        ),
+        (
+            "member",
+            r#"mutation { reorderImages(recipeId: "42", imageIds: ["a", "b"]) { id } }"#,
             403,
         ),
         (
@@ -524,6 +562,35 @@ async fn bus_contract() {
         response.data.into_json().unwrap(),
         json!({"deleteImage": false})
     );
+    let response = schema
+        .execute(
+            Request::new(
+                r#"mutation { reorderImages(recipeId: "42", imageIds: ["b", "a"]) { id url } }"#,
+            )
+            .data(crate::test_context("owner")),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{response:?}");
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"reorderImages": [
+            {"id": "b", "url": "/opaque/second.png"},
+            {"id": "a", "url": "/opaque/full.png"}
+        ]})
+    );
+    let response = schema
+        .execute(
+            Request::new(
+                r#"mutation { reorderImages(recipeId: "42", imageIds: ["a", "a"]) { id } }"#,
+            )
+            .data(crate::test_context("owner")),
+        )
+        .await;
+    assert_eq!(response.errors.len(), 1, "{response:?}");
+    assert_eq!(
+        response.errors[0].extensions.as_ref().unwrap().get("code"),
+        Some(&async_graphql::value!("invalid-image-order"))
+    );
 
     execute(&schema, r#"mutation { deleteRecipe(id: "42") }"#, true).await;
     execute(&schema, r#"mutation { deleteRecipe(id: "missing") }"#, true).await;
@@ -595,6 +662,7 @@ async fn bus_contract() {
         ("42", EventKind::InspirationsChanged),
         ("42", EventKind::RecipeChanged),
         ("42", EventKind::RatingChanged),
+        ("42", EventKind::ImageChanged),
         ("42", EventKind::ImageChanged),
         ("42", EventKind::ImageChanged),
         ("42", EventKind::RecipeDeleted),
