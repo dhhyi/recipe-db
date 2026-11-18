@@ -362,7 +362,9 @@ async fn image_collections_ids_deletion_and_authorization() {
     let second_id = second_metadata["id"].as_str().unwrap().to_string();
     let reorder_query = "mutation($recipeId: ID!, $imageIds: [ID!]!) { reorderImages(recipeId: $recipeId, imageIds: $imageIds) { id url } }";
     let desired_order = vec![second_id.clone(), first_id.clone()];
-    let failed_events_before_reorder = publisher.status().failed;
+    let failed_events_before_reorder = serde_json::to_value(publisher.status()).unwrap()["failed"]
+        .as_u64()
+        .unwrap();
     let response = schema
         .execute(
             Request::new(reorder_query)
@@ -381,7 +383,10 @@ async fn image_collections_ids_deletion_and_authorization() {
             {"id": first_id, "url": metadata()["url"]}
         ]})
     );
-    assert_eq!(publisher.status().failed, failed_events_before_reorder + 1);
+    assert_eq!(
+        serde_json::to_value(publisher.status()).unwrap()["failed"],
+        failed_events_before_reorder + 1
+    );
     for (recipe_id, image_ids, expected_status, expected_code) in [
         (
             "present",
@@ -435,7 +440,10 @@ async fn image_collections_ids_deletion_and_authorization() {
             );
         }
     }
-    assert_eq!(publisher.status().failed, failed_events_before_reorder + 1);
+    assert_eq!(
+        serde_json::to_value(publisher.status()).unwrap()["failed"],
+        failed_events_before_reorder + 1
+    );
     assert_eq!(
         *reorder_requests.lock().unwrap(),
         vec![
@@ -453,7 +461,10 @@ async fn image_collections_ids_deletion_and_authorization() {
         ]
     );
     let event_status = serde_json::to_value(publisher.status()).unwrap();
-    assert_eq!(event_status["failed"], failed_events_before_reorder + 1);
+    assert_eq!(
+        event_status["failed"],
+        failed_events_before_reorder + 1
+    );
     assert_eq!(event_status["published"], 0);
 
     task.abort();
