@@ -36,6 +36,14 @@ proc matchesContentType(body, contentType: string): bool =
   of "image/jpeg", "image/jpg": body.startsWith(jpegSignature)
   else: false
 
+proc validImageId(imageId: string): bool =
+  if imageId.len != 64:
+    return false
+  for c in imageId:
+    if c notin {'0'..'9', 'a'..'f'}:
+      return false
+  true
+
 proc problemDetails(status: HttpCode, title, detail, code: string,
     field = ""): string =
   ## RFC 9457 Problem Details body, mirroring the recipes service's error shape.
@@ -128,17 +136,19 @@ router imagesRouter:
       info "POST upload of '", recipeId, "' succeeded"
       resp Http201, @[("Content-Type", "application/json"),
           ("Cache-Control", "no-store")], $metadata
+    except ImageLimitReached as limit:
+      respProblem(Http409, "Conflict", limit.msg, "image-limit-reached")
     except CatchableError:
       error "Publication of '", recipeId, "' failed: ", getCurrentExceptionMsg()
       respProblem(Http500, "Internal Server Error", "Cannot publish image", "storage-error")
 
-  get "/images/@recipeId/meta":
+  get "/images/@recipeId/meta/?":
     let recipeId = decodeUrl(@"recipeId", decodePlus = false)
     if not validRecipeId(recipeId):
       respProblem(Http404, "Not Found", "Image not found", "image-not-found")
     info "GET meta for '", recipeId, "'"
     try:
-      let metadata = store.metadata(recipeId)
+      let metadata = store.collection(recipeId)
       resp Http200, @[("Content-Type", "application/json"),
           ("Cache-Control", "no-store")], $metadata
     except ImageNotFound:
@@ -147,6 +157,45 @@ router imagesRouter:
       error "Meta of '", recipeId, "' failed: ", getCurrentExceptionMsg()
       respProblem(Http500, "Internal Server Error",
           "Cannot read image metadata", "metadata-error")
+
+  get "/images/@recipeId/meta/0/?":
+    let recipeId = decodeUrl(@"recipeId", decodePlus = false)
+    if not validRecipeId(recipeId):
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    info "GET default meta for '", recipeId, "'"
+    try:
+      let metadata = store.metadata(recipeId)
+      resp Http200, @[("Content-Type", "application/json"),
+          ("Cache-Control", "no-store")], $metadata
+    except ImageNotFound:
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    except CatchableError:
+      error "Default meta of '", recipeId, "' failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error",
+          "Cannot read image metadata", "metadata-error")
+
+  delete "/images/@recipeId/@imageId/?":
+    if runtimeMode == "backup":
+      respProblem(Http503, "Service Unavailable",
+          "Application writes are unavailable during backup maintenance",
+          "maintenance-mode")
+    let
+      recipeId = decodeUrl(@"recipeId", decodePlus = false)
+      imageId = decodeUrl(@"imageId", decodePlus = false)
+    if not validRecipeId(recipeId):
+      respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    if not validImageId(imageId):
+      respProblem(Http400, "Bad Request", "Invalid image id",
+          "invalid-image-id", "imageId")
+    try:
+      if not store.deleteImage(recipeId, imageId):
+        respProblem(Http404, "Not Found", "Image not found", "image-not-found")
+    except CatchableError:
+      error "Delete image '", imageId, "' from '", recipeId,
+          "' failed: ", getCurrentExceptionMsg()
+      respProblem(Http500, "Internal Server Error",
+          "Cannot delete image", "storage-error")
+    resp Http204, ""
 
   delete "/images/?":
     if runtimeMode != "testing":

@@ -58,8 +58,8 @@ jsonpath "$.code" == "crop-out-of-bounds"
 GET {{REST_API}}/images/cropped/meta
 HTTP 200
 [Asserts]
-jsonpath "$.url" == "{{normal}}"
-jsonpath "$.thumbUrl" == "{{thumb}}"
+jsonpath "$[0].url" == "{{normal}}"
+jsonpath "$[0].thumbUrl" == "{{thumb}}"
 
 DELETE {{REST_API}}/images
 HTTP 204

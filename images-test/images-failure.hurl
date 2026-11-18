@@ -33,9 +33,16 @@ HTTP 400
 # None of the rejected uploads stored anything.
 
 GET {{REST_API}}/images/broken/meta
-HTTP 404
+HTTP 200
+[Asserts]
+jsonpath "$[0]" not exists
 
 GET {{REST_API}}/images/unknown/meta
+HTTP 200
+[Asserts]
+jsonpath "$[0]" not exists
+
+GET {{REST_API}}/images/unknown/meta/0
 HTTP 404
 [Asserts]
 header "Content-Type" contains "application/problem+json"

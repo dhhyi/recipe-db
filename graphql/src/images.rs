@@ -46,7 +46,7 @@ impl ImagesApi {
         &self,
         recipe_id: &str,
     ) -> Result<Option<ImageMetadata>, Error> {
-        match self.client.get(&format!("{recipe_id}/meta")).await {
+        match self.client.get(&format!("{recipe_id}/meta/0")).await {
             Ok(meta) => Ok(Some(meta)),
             Err(err) if err.confirms_absence("image-not-found") => Ok(None),
             Err(err) => Err(err.into_error()),
