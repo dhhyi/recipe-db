@@ -102,6 +102,22 @@ impl ImagesApi {
             Err(err) => Err(err.into_error()),
         }
     }
+
+    pub async fn reorder_images(
+        &self,
+        recipe_id: &str,
+        image_ids: &[String],
+        publisher: &EventPublisher,
+    ) -> Result<Vec<ImageMetadata>, Error> {
+        let recipe_id_path = RestClient::encode_path_segment(recipe_id);
+        let images = self
+            .client
+            .put::<_, Vec<ImageMetadata>>(&format!("{recipe_id_path}/order"), &image_ids)
+            .await
+            .map_err(RestError::into_error)?;
+        publisher.notify(recipe_id, EventKind::ImageChanged).await;
+        Ok(images)
+    }
 }
 
 #[derive(Default)]
@@ -157,6 +173,28 @@ impl ImagesMutation {
             .delete_image(
                 recipe_id.as_str(),
                 image_id.as_str(),
+                ctx.data::<EventPublisher>()?,
+            )
+            .await
+    }
+
+    async fn reorder_images(
+        &self,
+        ctx: &Context<'_>,
+        recipe_id: ID,
+        image_ids: Vec<ID>,
+    ) -> Result<Vec<ImageMetadata>, Error> {
+        ctx.data::<crate::auth::RequestContext>()?
+            .require(crate::auth::Capability::ManageImages)
+            .map_err(crate::auth::AuthorizationError::into_graphql_error)?;
+        let image_ids = image_ids
+            .into_iter()
+            .map(|image_id| image_id.to_string())
+            .collect::<Vec<_>>();
+        ctx.data::<ImagesApi>()?
+            .reorder_images(
+                recipe_id.as_str(),
+                &image_ids,
                 ctx.data::<EventPublisher>()?,
             )
             .await

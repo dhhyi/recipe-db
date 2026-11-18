@@ -275,7 +275,10 @@ test("each save sends the original and crop, then returns to the gallery", async
     .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-  const image = page.getByRole("img", { name: demoRecipe.name, exact: true });
+  const image = page
+    .locator("recipe-image-carousel")
+    .getByRole("img", { name: demoRecipe.name, exact: true })
+    .first();
   await expect(image).toHaveAttribute("src", second.metadata.url);
   await expectCropPixels(image, file, secondCrop, 648, 486);
   await page.getByRole("link", { name: "Zur Startseite" }).click();

@@ -14,7 +14,7 @@ devcontainer:
     user:
       - RUN mise use -g node@26 python@$PYTHON_VERSION
       - RUN npm i -g cspell@6 @cspell/dict-de-de && cspell link add @cspell/dict-de-de
-      - RUN pip install ariadne-codegen black pylint --break-system-packages
+      - RUN pip install ariadne-codegen black pylint pillow --break-system-packages
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
   initialize: ariadne-codegen

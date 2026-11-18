@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using Mcp;
 using ModelContextProtocol;
 using ModelContextProtocol.AspNetCore;
 
@@ -12,10 +13,8 @@ if (mode is not ("production" or "testing" or "backup"))
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddTransient<ForwardAuthorizationHandler>();
 
-builder.Services.AddHttpClient()
-    .ConfigureHttpClientDefaults(client => client.ConfigurePrimaryHttpMessageHandler(
-        () => new HttpClientHandler { UseCookies = false }
-    ));
+builder.Services.AddHttpClient(ImageSource.ClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => ImageSource.CreateHandler(mode == "testing"));
 
 builder.Services.AddMcpClient()
     .ConfigureHttpClient(

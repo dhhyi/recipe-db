@@ -16,6 +16,7 @@
     "lit": "^3.3.3",
     "lorem-ipsum": "^3.0.0",
     "postcss": "^8.5.26",
+    "swiper": "14.4.0",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

@@ -3,11 +3,12 @@ use axum::{
     extract::{Path, Query},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 fn metadata() -> serde_json::Value {
     json!({
@@ -40,6 +41,7 @@ async fn image_collections_ids_deletion_and_authorization() {
         metadata["url"] = json!("/opaque/second.png");
         metadata
     };
+    let reorder_requests = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
         .route(
             "/recipes/{id}",
@@ -113,6 +115,80 @@ async fn image_collections_ids_deletion_and_authorization() {
             }),
         )
         .route(
+            "/images/{id}/order",
+            put({
+                let reorder_requests = reorder_requests.clone();
+                let second_metadata = second_metadata.clone();
+                move |Path(id): Path<String>, Json(image_ids): Json<Vec<String>>| {
+                    let reorder_requests = reorder_requests.clone();
+                    let second_metadata = second_metadata.clone();
+                    async move {
+                        reorder_requests
+                            .lock()
+                            .unwrap()
+                            .push((id.clone(), image_ids.clone()));
+                        if id == "conflict" {
+                            return (
+                                StatusCode::CONFLICT,
+                                Json(json!({
+                                    "type": "about:blank",
+                                    "title": "Conflict",
+                                    "status": 409,
+                                    "detail": "Image collection changed",
+                                    "code": "image-order-conflict"
+                                })),
+                            )
+                                .into_response();
+                        }
+                        if id == "offline" {
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(json!({
+                                    "type": "about:blank",
+                                    "title": "Service Unavailable",
+                                    "status": 503,
+                                    "detail": "Images unavailable",
+                                    "code": "unavailable"
+                                })),
+                            )
+                                .into_response();
+                        }
+                        let first_id = metadata()["id"].as_str().unwrap().to_string();
+                        let second_id = second_metadata["id"].as_str().unwrap().to_string();
+                        let mut expected_ids = vec![first_id.clone(), second_id.clone()];
+                        expected_ids.sort();
+                        let mut supplied_ids = image_ids.clone();
+                        supplied_ids.sort();
+                        if supplied_ids != expected_ids {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({
+                                    "type": "about:blank",
+                                    "title": "Bad Request",
+                                    "status": 400,
+                                    "detail": "Invalid image order",
+                                    "code": "invalid-image-order",
+                                    "field": "imageIds"
+                                })),
+                            )
+                                .into_response();
+                        }
+                        let ordered = image_ids
+                            .iter()
+                            .map(|image_id| {
+                                if image_id == &first_id {
+                                    metadata()
+                                } else {
+                                    second_metadata.clone()
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        (StatusCode::OK, Json(json!(ordered))).into_response()
+                    }
+                }
+            }),
+        )
+        .route(
             "/images/{recipe_id}/{image_id}",
             delete(
                 |Path((recipe_id, image_id)): Path<(String, String)>| async move {
@@ -165,6 +241,7 @@ async fn image_collections_ids_deletion_and_authorization() {
     assert!(sdl.contains("images: [ImageMetadata!]"));
     assert!(sdl.contains("addImage("));
     assert!(sdl.contains("deleteImage("));
+    assert!(sdl.contains("reorderImages(recipeId: ID!, imageIds: [ID!]!): [ImageMetadata!]!"));
     assert!(!sdl.contains("setImage"));
 
     let response = schema
@@ -294,8 +371,126 @@ async fn image_collections_ids_deletion_and_authorization() {
             }
         }
     }
+    let first_id = metadata()["id"].as_str().unwrap().to_string();
+    let second_id = second_metadata["id"].as_str().unwrap().to_string();
+    let reorder_query = "mutation($recipeId: ID!, $imageIds: [ID!]!) { reorderImages(recipeId: $recipeId, imageIds: $imageIds) { id url } }";
+    let desired_order = vec![second_id.clone(), first_id.clone()];
+    let failed_events_before_reorder = serde_json::to_value(publisher.status()).unwrap()["failed"]
+        .as_u64()
+        .unwrap();
+    let response = schema
+        .execute(
+            Request::new(reorder_query)
+                .variables(Variables::from_json(json!({
+                    "recipeId": "present",
+                    "imageIds": desired_order
+                })))
+                .data(crate::test_context("owner")),
+        )
+        .await;
+    assert!(response.errors.is_empty(), "{response:?}");
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"reorderImages": [
+            {"id": second_id, "url": second_metadata["url"]},
+            {"id": first_id, "url": metadata()["url"]}
+        ]})
+    );
+    assert_eq!(
+        serde_json::to_value(publisher.status()).unwrap()["failed"],
+        failed_events_before_reorder + 1
+    );
+    for (recipe_id, image_ids, expected_status, expected_code) in [
+        (
+            "present",
+            vec![first_id.clone()],
+            400,
+            "invalid-image-order",
+        ),
+        (
+            "present",
+            vec![first_id.clone(), first_id.clone()],
+            400,
+            "invalid-image-order",
+        ),
+        (
+            "present",
+            vec!["unknown".to_string(), second_id.clone()],
+            400,
+            "invalid-image-order",
+        ),
+        (
+            "conflict",
+            vec![second_id.clone(), first_id.clone()],
+            409,
+            "image-order-conflict",
+        ),
+        (
+            "offline",
+            vec![second_id.clone(), first_id.clone()],
+            503,
+            "service-unavailable",
+        ),
+    ] {
+        let response = schema
+            .execute(
+                Request::new(reorder_query)
+                    .variables(Variables::from_json(json!({
+                        "recipeId": recipe_id,
+                        "imageIds": image_ids
+                    })))
+                    .data(crate::test_context("owner")),
+            )
+            .await;
+        assert_eq!(response.errors.len(), 1, "{response:?}");
+        let extensions = response.errors[0].extensions.as_ref().unwrap();
+        assert_eq!(
+            extensions.get("status"),
+            Some(&async_graphql::value!(expected_status))
+        );
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::value!(expected_code))
+        );
+        if expected_status == 400 {
+            assert_eq!(
+                extensions.get("field"),
+                Some(&async_graphql::value!("imageIds"))
+            );
+        }
+    }
+    assert_eq!(
+        serde_json::to_value(publisher.status()).unwrap()["failed"],
+        failed_events_before_reorder + 1
+    );
+    assert_eq!(
+        *reorder_requests.lock().unwrap(),
+        vec![
+            (
+                "present".to_string(),
+                vec![second_id.clone(), first_id.clone()]
+            ),
+            ("present".to_string(), vec![first_id.clone()]),
+            (
+                "present".to_string(),
+                vec![first_id.clone(), first_id.clone()]
+            ),
+            (
+                "present".to_string(),
+                vec!["unknown".to_string(), second_id.clone()]
+            ),
+            (
+                "conflict".to_string(),
+                vec![second_id.clone(), first_id.clone()],
+            ),
+            (
+                "offline".to_string(),
+                vec![second_id.clone(), first_id.clone()],
+            ),
+        ]
+    );
     let event_status = serde_json::to_value(publisher.status()).unwrap();
-    assert_eq!(event_status["failed"], 1);
+    assert_eq!(event_status["failed"], failed_events_before_reorder + 1);
     assert_eq!(event_status["published"], 0);
 
     task.abort();

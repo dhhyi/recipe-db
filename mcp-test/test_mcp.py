@@ -3,6 +3,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from urllib.parse import urljoin
 
 import anyio
 import httpx
@@ -12,7 +13,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
-FIXTURE_API = os.environ.get("FIXTURE_API", "http://traefik:3000/mcp-test-fixture")
+FIXTURE_API = os.environ.get("FIXTURE_API", "http://fixtures/mcp-test-fixture")
 MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
 AUTH_TOKENS = json.loads(os.environ.get("E2E_AUTH_TOKENS", "{}"))
 MCP_REQUEST_TIMEOUT = 30
@@ -120,7 +121,7 @@ async def create_recipe(session, name):
     return json.loads(result.content[0].text)["id"]
 
 
-async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
+async def test_lists_exactly_the_expected_tools():
     async with mcp_session() as session:
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
@@ -131,6 +132,9 @@ async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
             "list_recipes",
             "get_recipe",
             "change_recipe",
+            "add_recipe_image",
+            "delete_recipe_image",
+            "reorder_recipe_images",
             "list_tags",
             "create_tag",
             "delete_tag",
@@ -138,14 +142,13 @@ async def test_lists_exactly_the_expected_tools_and_no_delete_tool():
         }
 
 
-@pytest.mark.parametrize("tool_name", ["add_recipe", "change_recipe"])
-async def test_image_import_guidance_is_available_in_tool_discovery(tool_name):
+async def test_image_collection_tools_and_import_guidance_are_discoverable():
     async with mcp_session(authenticated=False) as session:
         tools = {tool.name: tool for tool in (await session.list_tools()).tools}
-        tool = tools[tool_name]
+        tool = tools["add_recipe_image"]
         description = tool.description.lower()
         for guidance in (
-            "direct image url",
+            "direct http(s) image url",
             "without browser authentication",
             "file/browser access and http upload",
             "do not invent missing capabilities",
@@ -158,15 +161,26 @@ async def test_image_import_guidance_is_available_in_tool_discovery(tool_name):
             "multipart 'file' and 'expire=3600'",
             "actual download link",
             "never guess a '/dl/'",
-            "verify with 'get_recipe'",
+            "verify the added image in 'get_recipe'",
             "check state before retrying",
+            "first (default) image without replacing",
         ):
             assert guidance in description
-        parameter = tool.input_schema["properties"]["recipeJson"]["description"]
-        assert "get_recipe_schema" in parameter
+        assert set(tool.input_schema["required"]) == {"recipeId", "imageUrl"}
+        parameter = tool.input_schema["properties"]["imageUrl"]["description"]
         assert "not a local path or sharing page" in parameter
-        if tool_name == "change_recipe":
-            assert "retaining earlier images" in description
+        delete = tools["delete_recipe_image"]
+        assert set(delete.input_schema["required"]) == {"recipeId", "imageId"}
+        assert "stable ID" in delete.description and "false if already absent" in delete.description
+        reorder = tools["reorder_recipe_images"]
+        assert set(reorder.input_schema["required"]) == {"recipeId", "imageIds"}
+        assert reorder.input_schema["properties"]["imageIds"]["type"] == "array"
+        assert reorder.input_schema["properties"]["imageIds"]["items"]["type"] == "string"
+        assert "complete image order" in reorder.description
+        assert "first image is the default" in reorder.description
+        assert "ordered images" in tools["get_recipe"].description
+        for name in ("get_recipe_schema", "add_recipe", "change_recipe"):
+            assert "imageUrl" not in tools[name].description
 
 
 async def test_tag_tools_describe_categories_and_optional_bulk_lists():
@@ -269,6 +283,8 @@ async def test_get_recipe_schema_describes_name_as_required_for_add_recipe():
         schema = json.loads(result.content[0].text)
         assert schema["addRecipe"]["required"] == ["name"]
         assert "required" not in schema["changeRecipe"]
+        for recipe_schema in schema.values():
+            assert "imageUrl" not in recipe_schema["properties"]
 
 
 async def test_add_recipe_without_an_api_token_is_rejected():
@@ -293,16 +309,33 @@ async def test_add_recipe_with_valid_json_creates_a_recipe():
 async def test_add_recipe_without_a_name_fails_schema_validation():
     async with mcp_session() as session:
         result = await session.call_tool("add_recipe", {"recipeJson": json.dumps({"method": "Mix"})})
+        assert result.is_error is True
         assert "validation" in result.content[0].text.lower()
 
 
-async def test_add_recipe_with_image_url_attaches_the_image():
+async def test_add_recipe_rejects_image_url_without_creating_a_recipe():
     async with mcp_session() as session:
+        name = f"Rejected recipe {uuid.uuid4()}"
         result = await session.call_tool(
             "add_recipe",
-            {"recipeJson": json.dumps({"name": "Recipe With Image", "imageUrl": f"{FIXTURE_API}/test.jpg"})},
+            {"recipeJson": json.dumps({"name": name, "imageUrl": f"{FIXTURE_API}/test.jpg"})},
         )
-        assert "Image uploaded" in result.content[0].text
+        assert result.is_error is True
+        assert "schema validation" in result.content[0].text
+        recipes = await session.call_tool("list_recipes", {})
+        assert not any(recipe["name"] == name for recipe in json.loads(recipes.content[0].text))
+
+
+async def test_recipe_tools_report_malformed_json_as_tool_errors():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Malformed JSON sentinel")
+        for tool, arguments in (
+            ("add_recipe", {}),
+            ("change_recipe", {"recipeId": recipe_id}),
+        ):
+            result = await session.call_tool(tool, {**arguments, "recipeJson": "{"})
+            assert result.is_error is True
+            assert "Invalid JSON" in result.content[0].text
 
 
 async def test_list_recipes_includes_a_created_recipe():
@@ -325,6 +358,8 @@ async def test_get_recipe_returns_full_details():
         assert payload["id"] == recipe_id
         assert payload["name"] == "Detailed Recipe"
         assert payload["method"] == "Simmer gently"
+        assert payload["images"] == []
+        assert "image" not in payload
 
 
 async def test_get_recipe_with_unknown_id_reports_not_found():
@@ -344,14 +379,191 @@ async def test_change_recipe_updates_only_the_given_fields():
         assert payload["name"] == "Original Name"
 
 
-async def test_change_recipe_with_image_url_uploads_an_image():
+async def test_change_recipe_rejects_image_url_without_changing_fields():
     async with mcp_session() as session:
-        recipe_id = await create_recipe(session, "Recipe To Get An Image")
+        name = "Unchanged recipe"
+        recipe_id = await create_recipe(session, name)
         result = await session.call_tool(
             "change_recipe",
-            {"recipeId": recipe_id, "recipeJson": json.dumps({"imageUrl": f"{FIXTURE_API}/test.jpg"})},
+            {
+                "recipeId": recipe_id,
+                "recipeJson": json.dumps({"name": "Changed recipe", "imageUrl": f"{FIXTURE_API}/test.jpg"}),
+            },
         )
-        assert "Image uploaded" in result.content[0].text
+        assert result.is_error is True
+        assert "schema validation" in result.content[0].text
+        recipe = await call_image_tool(session, "get_recipe", recipe_id)
+        assert recipe["name"] == name
+        assert recipe["images"] == []
+
+
+async def call_image_tool(session, tool, recipe_id, **arguments):
+    result = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
+    assert result.is_error is False, result.content
+    return json.loads(result.content[0].text)
+
+
+async def test_recipe_image_collection_prepend_and_delete_promote_default():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Ordered image collection")
+        first = await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/test.jpg"
+        )
+        second = await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        for image in (first, second):
+            assert set(image) == {"id", "url", "thumbUrl", "width", "height", "size"}
+            assert image["id"] and image["url"] and image["thumbUrl"]
+            assert all(image[field] > 0 for field in ("width", "height", "size"))
+        assert first["id"] != second["id"]
+
+        recipe = await call_image_tool(session, "get_recipe", recipe_id)
+        assert "image" not in recipe
+        assert recipe["images"] == [second, first]
+        assert await call_image_tool(session, "delete_recipe_image", recipe_id, imageId=second["id"]) is True
+        assert await call_image_tool(session, "delete_recipe_image", recipe_id, imageId=second["id"]) is False
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [first]
+        assert await call_image_tool(session, "delete_recipe_image", recipe_id, imageId=first["id"]) is True
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == []
+
+
+async def test_recipe_images_reorder_and_reject_invalid_or_stale_membership():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Reorder image collection")
+        first = await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/test.jpg"
+        )
+        second = await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [second, first]
+
+        reordered = await call_image_tool(
+            session, "reorder_recipe_images", recipe_id, imageIds=[first["id"], second["id"]]
+        )
+        assert reordered == [first, second]
+        recipe = await call_image_tool(session, "get_recipe", recipe_id)
+        assert recipe["images"] == reordered
+        assert recipe["images"][0] == first
+
+        other_recipe_id = await create_recipe(session, "Other recipe image IDs")
+        other_image = await call_image_tool(
+            session, "add_recipe_image", other_recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        assert other_image["id"] == second["id"]
+
+        invalid_orders = (
+            ([first["id"]], "invalid-image-order"),
+            ([first["id"], first["id"]], "invalid-image-order"),
+            (["unknown-image-id", first["id"]], "invalid-image-order"),
+        )
+        for image_ids, code in invalid_orders:
+            result = await session.call_tool(
+                "reorder_recipe_images", {"recipeId": recipe_id, "imageIds": image_ids}
+            )
+            assert result.is_error is True
+            assert code in result.content[0].text
+            assert "(field: order)" in result.content[0].text
+            assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == reordered
+
+        removed = await call_image_tool(
+            session, "delete_recipe_image", recipe_id, imageId=second["id"]
+        )
+        assert removed is True
+        result = await session.call_tool(
+            "reorder_recipe_images",
+            {"recipeId": recipe_id, "imageIds": [other_image["id"]]},
+        )
+        assert result.is_error is True
+        assert "invalid-image-order" in result.content[0].text
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [first]
+
+        await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        result = await session.call_tool(
+            "reorder_recipe_images", {"recipeId": recipe_id, "imageIds": [first["id"]]}
+        )
+        assert result.is_error is True
+        assert any(
+            code in result.content[0].text
+            for code in ("image-order-conflict", "invalid-image-order")
+        )
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [
+            second,
+            first,
+        ]
+
+
+async def test_recipe_image_failures_do_not_return_success():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Image error handling")
+        for tool, arguments, message in (
+            ("add_recipe_image", {"imageUrl": "file:///photo.jpg"}, "Invalid imageUrl"),
+            ("add_recipe_image", {"imageUrl": "http://127.0.0.1:5000/health"}, "could not download"),
+            ("add_recipe_image", {"imageUrl": "http://traefik:3000/images"}, "could not download"),
+            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/private-redirect.jpg"}, "could not download"),
+            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/missing.jpg"}, "Failed to fetch image: HTTP 404"),
+            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/oversized.jpg"}, "10 MiB download limit"),
+            (
+                "add_recipe_image",
+                {"imageUrl": urljoin(f"{FIXTURE_API}/", "../image-inline-test-fixture/tiny.png")},
+                "invalid-image",
+            ),
+            ("delete_recipe_image", {"imageId": "not-an-image-id"}, "invalid-image-id"),
+        ):
+            result = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
+            assert result.is_error is True
+            assert message in result.content[0].text
+            if message.startswith("invalid-image"):
+                assert "(status: 400)" in result.content[0].text
+            if tool == "delete_recipe_image":
+                assert "(field: imageId)" in result.content[0].text
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == []
+
+
+async def test_recipe_image_stream_is_bounded_without_content_length():
+    source = f"{FIXTURE_API}/oversized-stream.jpg"
+    async with httpx.AsyncClient() as http:
+        async with http.stream("GET", source) as response:
+            assert response.status_code == 200
+            assert "content-length" not in response.headers
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Oversized streamed image")
+        result = await session.call_tool(
+            "add_recipe_image", {"recipeId": recipe_id, "imageUrl": source}
+        )
+        assert result.is_error is True
+        assert "10 MiB download limit" in result.content[0].text
+
+
+@pytest.mark.skipif(
+    os.environ.get("MCP_TEST_IMAGES_OUTAGE") != "1",
+    reason="Set MCP_TEST_IMAGES_OUTAGE=1 and select this test with images stopped in the isolated testing stack",
+)
+async def test_recipe_images_outage_preserves_recipe_and_reports_write_failure():
+    async with mcp_session() as session:
+        name = "Image service outage"
+        recipe_id = await create_recipe(session, name)
+        result = await call_image_tool(session, "get_recipe", recipe_id)
+        assert result["recipe"]["name"] == name
+        assert result["recipe"]["images"] is None
+        assert "image" not in result["recipe"]
+        error = next(error for error in result["errors"] if error["path"] == ["recipe", "images"])
+        assert error["code"] == "service-unavailable"
+        assert error["service"] == "images"
+        assert error["status"] == 503
+
+        for tool, arguments in (
+            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/test.jpg"}),
+            ("delete_recipe_image", {"imageId": "a" * 64}),
+            ("reorder_recipe_images", {"imageIds": []}),
+        ):
+            failure = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
+            assert failure.is_error is True
+            assert "service-unavailable" in failure.content[0].text
+            assert "(status: 503)" in failure.content[0].text
 
 
 async def test_add_rating_updates_the_recipe_rating():
