@@ -1,4 +1,6 @@
 import { test, expect, waitForRecipeIndexed } from "./fixtures.js";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 test("shared page shells preserve container widths and full-height layout", async ({
   authContexts,
@@ -183,7 +185,8 @@ test("screenshot styling hides auth controls only in captured images", async ({
   ownerIdentity,
 }) => {
   const page = await ownerIdentity.browserContext.newPage();
-  const stylePath = test.info().config.expect.toHaveScreenshot.stylePath;
+  const stylePath = fileURLToPath(new URL("../screenshot.css", import.meta.url));
+  const style = await readFile(stylePath, "utf8");
   await page.route("**/identity", (route) =>
     route.fulfill({
       contentType: "text/html",
@@ -209,13 +212,16 @@ test("screenshot styling hides auth controls only in captured images", async ({
     const login = page.getByRole("link", { name: "Anmelden", exact: true });
     await expect(login).toBeVisible();
     await expect(login).toHaveAttribute("data-screenshot-hide", "");
-    const loginCapture = await page.screenshot({ stylePath });
+    const loginCapture = await page.screenshot({ style });
     const loginPage = await page.screenshot();
     expect(loginCapture).not.toEqual(loginPage);
     await expect(login).toBeVisible();
+    const returnTo = await page.evaluate(
+      () => `${location.pathname}${location.search}${location.hash}`,
+    );
     await login.click();
     const loginURL = new URL(await login.getAttribute("href"), page.url());
-    expect(loginURL.searchParams.get("rd")).toBe("/?from=visual#header");
+    expect(loginURL.searchParams.get("rd")).toBe(returnTo);
 
     await header.evaluate((element) => {
       element.setAttribute("auth-role", "owner");
@@ -228,7 +234,7 @@ test("screenshot styling hides auth controls only in captured images", async ({
     await expect(menu).toHaveAttribute("data-screenshot-hide", "");
     await profile.locator("summary").click();
     await expect(menu).toBeVisible();
-    const profileCapture = await page.screenshot({ stylePath });
+    const profileCapture = await page.screenshot({ style });
     const profilePage = await page.screenshot();
     expect(profileCapture).not.toEqual(profilePage);
     await expect(menu).toBeVisible();
