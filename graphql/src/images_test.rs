@@ -129,7 +129,7 @@ async fn image_collections_ids_deletion_and_authorization() {
                         )
                             .into_response(),
                         "unrouted" => (StatusCode::NOT_FOUND, Json(json!({}))).into_response(),
-                        "invalid" => (
+                        "invalid" | "%2E" | "%2E%2E" => (
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "type": "about:blank",
@@ -258,6 +258,8 @@ async fn image_collections_ids_deletion_and_authorization() {
             Some("downstream-request-failed"),
         ),
         ("present", "invalid", None, Some("invalid-image-id")),
+        ("present", ".", None, Some("invalid-image-id")),
+        ("present", "..", None, Some("invalid-image-id")),
         ("present", "offline", None, Some("service-unavailable")),
     ] {
         let response = schema
@@ -283,7 +285,7 @@ async fn image_collections_ids_deletion_and_authorization() {
                 extensions.get("code"),
                 Some(&async_graphql::Value::from(error_code.unwrap()))
             );
-            if image_id == "invalid" {
+            if matches!(image_id, "invalid" | "." | "..") {
                 assert_eq!(extensions.get("status"), Some(&async_graphql::value!(400)));
                 assert_eq!(
                     extensions.get("field"),
