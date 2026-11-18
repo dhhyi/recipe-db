@@ -197,7 +197,14 @@ galleryView model =
     editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
             [ h1
-                [ id "gallery-heading" ]
+                (id "gallery-heading"
+                    :: (if model.savedFeedback then
+                            [ attribute "aria-describedby" "editor-status" ]
+
+                        else
+                            []
+                       )
+                )
                 [ text (model.recipeName |> Maybe.map (\name -> "Bilder für " ++ name ++ " verwalten") |> Maybe.withDefault "Rezeptbilder verwalten") ]
             , label [ class "gallery-add" ]
                 [ text "Bild hinzufügen"
