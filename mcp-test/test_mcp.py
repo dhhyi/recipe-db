@@ -134,6 +134,7 @@ async def test_lists_exactly_the_expected_tools():
             "change_recipe",
             "add_recipe_image",
             "delete_recipe_image",
+            "reorder_recipe_images",
             "list_tags",
             "create_tag",
             "delete_tag",
@@ -171,6 +172,12 @@ async def test_image_collection_tools_and_import_guidance_are_discoverable():
         delete = tools["delete_recipe_image"]
         assert set(delete.input_schema["required"]) == {"recipeId", "imageId"}
         assert "stable ID" in delete.description and "false if already absent" in delete.description
+        reorder = tools["reorder_recipe_images"]
+        assert set(reorder.input_schema["required"]) == {"recipeId", "imageIds"}
+        assert reorder.input_schema["properties"]["imageIds"]["type"] == "array"
+        assert reorder.input_schema["properties"]["imageIds"]["items"]["type"] == "string"
+        assert "complete image order" in reorder.description
+        assert "first image is the default" in reorder.description
         assert "ordered images" in tools["get_recipe"].description
         for name in ("get_recipe_schema", "add_recipe", "change_recipe"):
             assert "imageUrl" not in tools[name].description
@@ -421,6 +428,74 @@ async def test_recipe_image_collection_prepend_and_delete_promote_default():
         assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == []
 
 
+async def test_recipe_images_reorder_and_reject_invalid_or_stale_membership():
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Reorder image collection")
+        first = await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/test.jpg"
+        )
+        second = await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [second, first]
+
+        reordered = await call_image_tool(
+            session, "reorder_recipe_images", recipe_id, imageIds=[first["id"], second["id"]]
+        )
+        assert reordered == [first, second]
+        recipe = await call_image_tool(session, "get_recipe", recipe_id)
+        assert recipe["images"] == reordered
+        assert recipe["images"][0] == first
+
+        other_recipe_id = await create_recipe(session, "Other recipe image IDs")
+        other_image = await call_image_tool(
+            session, "add_recipe_image", other_recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        assert other_image["id"] == second["id"]
+
+        invalid_orders = (
+            ([first["id"]], "invalid-image-order"),
+            ([first["id"], first["id"]], "invalid-image-order"),
+            (["unknown-image-id", first["id"]], "invalid-image-order"),
+        )
+        for image_ids, code in invalid_orders:
+            result = await session.call_tool(
+                "reorder_recipe_images", {"recipeId": recipe_id, "imageIds": image_ids}
+            )
+            assert result.is_error is True
+            assert code in result.content[0].text
+            assert "(field: order)" in result.content[0].text
+            assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == reordered
+
+        removed = await call_image_tool(
+            session, "delete_recipe_image", recipe_id, imageId=second["id"]
+        )
+        assert removed is True
+        result = await session.call_tool(
+            "reorder_recipe_images",
+            {"recipeId": recipe_id, "imageIds": [other_image["id"]]},
+        )
+        assert result.is_error is True
+        assert "invalid-image-order" in result.content[0].text
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [first]
+
+        await call_image_tool(
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
+        )
+        result = await session.call_tool(
+            "reorder_recipe_images", {"recipeId": recipe_id, "imageIds": [first["id"]]}
+        )
+        assert result.is_error is True
+        assert any(
+            code in result.content[0].text
+            for code in ("image-order-conflict", "invalid-image-order")
+        )
+        assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == [
+            second,
+            first,
+        ]
+
+
 async def test_recipe_image_failures_do_not_return_success():
     async with mcp_session() as session:
         recipe_id = await create_recipe(session, "Image error handling")
@@ -483,6 +558,7 @@ async def test_recipe_images_outage_preserves_recipe_and_reports_write_failure()
         for tool, arguments in (
             ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/test.jpg"}),
             ("delete_recipe_image", {"imageId": "a" * 64}),
+            ("reorder_recipe_images", {"imageIds": []}),
         ):
             failure = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
             assert failure.is_error is True

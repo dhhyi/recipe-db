@@ -500,6 +500,42 @@ public class RecipeTools(
         return JsonSerializer.Serialize(deleted, JsonOptions);
     }
 
+    [McpServerTool(Name = "reorder_recipe_images")]
+    [Description(
+        "Sets the recipe's complete image order using stable IDs from 'get_recipe'. " +
+        "Include every current image ID exactly once; if membership changed since the order was read, " +
+        "the mutation fails. Do not retry automatically; check 'get_recipe' before trying again. " +
+        "The first image is the default."
+    )]
+    public async Task<string> ReorderRecipeImages(
+        [Description("Recipe id")] string recipeId,
+        [Description("Complete desired image order: every stable image ID from the recipe's images array, exactly once.")] string[] imageIds,
+        CancellationToken cancellationToken
+    )
+    {
+        await RequireImageManagementAsync(cancellationToken);
+        var response = await client.ReorderImages.ExecuteAsync(recipeId, imageIds, cancellationToken);
+        if (response.Errors.Count > 0)
+        {
+            throw GraphQLError(response.Errors);
+        }
+
+        var images = response.Data?.ReorderImages
+            ?? throw new McpException("Failed to reorder images: no ordered metadata returned");
+        return JsonSerializer.Serialize(
+            images.Select(image => new
+            {
+                image.Id,
+                image.Url,
+                image.ThumbUrl,
+                image.Width,
+                image.Height,
+                image.Size,
+            }),
+            JsonOptions
+        );
+    }
+
     [McpServerTool(Name = "add_rating")]
     [Description("Adds a rating for an existing recipe.")]
     public async Task<string> AddRating(
