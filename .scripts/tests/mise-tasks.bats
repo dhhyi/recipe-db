@@ -69,7 +69,7 @@ EOF
   export HOME="$FIXTURE_ROOT/operator home"
   mkdir -p "$HOME/.config/recipe-db/ssh"
 
-  run mise run --raw pi-kubernetes-tunnel
+  run mise run pi-kubernetes-tunnel
 
   [ "$status" -eq 0 ]
   [ "$(cat "$SSH_LOG")" = "$(printf '%s\n' \
@@ -81,7 +81,7 @@ EOF
     -o ExitOnForwardFailure=yes \
     -N -L 127.0.0.1:6445:127.0.0.1:6443 piadmin@recipe-pi.home)" ]
 
-  run mise run --raw pi-ssh
+  run mise run pi-ssh
 
   [ "$status" -eq 0 ]
   [ "$(cat "$SSH_LOG")" = "$(printf '%s\n' \

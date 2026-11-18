@@ -171,7 +171,7 @@ Record the currently deployed release separately as `OLD_RELEASE`. Backup operat
 Keep a loopback-only SSH tunnel open to the Pi Kubernetes API. In a separate terminal:
 
 ```fish
-mise run --raw pi-kubernetes-tunnel
+mise run pi-kubernetes-tunnel
 ```
 
 Keep the task running in the foreground. It uses the dedicated Pi key and verified host key in the central SSH directory; stop if host-key verification fails.

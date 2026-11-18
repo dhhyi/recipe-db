@@ -49,7 +49,7 @@ ssh-keygen -F recipe-pi.home -f ~/.ssh/known_hosts \
 chmod 600 ~/.config/recipe-db/ssh/known_hosts
 ```
 
-After enrollment, use `mise run --raw pi-ssh` for routine interactive access.
+After enrollment, use `mise run pi-ssh` for routine interactive access.
 
 ## 3. Record the new host identity
 
@@ -143,7 +143,7 @@ Every `site.yml` run disables scheduled backups. After maintenance, [verify a ba
 From a workstation terminal, open the loopback-only Kubernetes API tunnel:
 
 ```fish
-mise run --raw pi-kubernetes-tunnel
+mise run pi-kubernetes-tunnel
 ```
 
 Keep the task running in the foreground. It uses the dedicated Pi key and verified host key in the central SSH directory; stop if host-key verification fails.
