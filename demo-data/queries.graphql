@@ -27,7 +27,7 @@ mutation AddRating($id: ID!, $rating: Int!) {
 }
 
 mutation AddImage($id: ID!, $file: Upload!) {
-  setImage(recipeId: $id, file: $file) {
+  addImage(recipeId: $id, file: $file) {
     url
   }
 }

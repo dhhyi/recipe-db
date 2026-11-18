@@ -31,7 +31,7 @@ Feature: images
     * def operations =
       """
       {
-        "query": "mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl width height size } }",
+        "query": "mutation($id: ID!, $file: Upload!) { addImage(recipeId: $id, file: $file) { id url thumbUrl width height size } }",
         "variables": { "id": "#(recipeId)", "file": null }
       }
       """
@@ -41,8 +41,8 @@ Feature: images
     * method post
     * status 200
     * match response.errors == '#notpresent'
-    * def uploaded = response.data.setImage
-    * match uploaded == { url: '#string', thumbUrl: '#string', width: '#number', height: '#number', size: '#number' }
+    * def uploaded = response.data.addImage
+    * match uploaded == { id: '#regex [0-9a-f]{64}', url: '#string', thumbUrl: '#string', width: '#number', height: '#number', size: '#number' }
     * match uploaded.width == 648
     * match uploaded.height == 486
     * match uploaded.size == '#? _ > 0'
@@ -75,7 +75,7 @@ Feature: images
     * def operations =
       """
       {
-        "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url } }",
+        "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { url } }",
         "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": <x>, "y": 0, "width": <width>, "height": <height> } }
       }
       """
@@ -104,7 +104,7 @@ Feature: images
     * def operations =
       """
       {
-        "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { setImage(recipeId: $id, file: $file, crop: $crop) { url thumbUrl width height size } }",
+        "query": "mutation($id: ID!, $file: Upload!, $crop: ImageCropInput) { addImage(recipeId: $id, file: $file, crop: $crop) { id url thumbUrl width height size } }",
         "variables": { "id": "#(recipeId)", "file": null, "crop": { "x": 0, "y": 0, "width": 400, "height": 300 } }
       }
       """
@@ -114,7 +114,7 @@ Feature: images
     * method post
     * status 200
     * match response.errors == '#notpresent'
-    * def first = response.data.setImage
+    * def first = response.data.addImage
     * match first.width == 648
     * match first.height == 486
 
@@ -125,7 +125,7 @@ Feature: images
     * method post
     * status 200
     * match response.errors == '#notpresent'
-    * def uploaded = response.data.setImage
+    * def uploaded = response.data.addImage
     * match uploaded.width == 648
     * match uploaded.height == 486
     * match uploaded.url != first.url

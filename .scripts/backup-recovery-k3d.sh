@@ -263,14 +263,14 @@ jq -n --arg id "$recipe_id" --arg tag "$tag_id" --arg name "$recipe_name" \
   > "$result_directory/test-record.json"
 upload_request="$result_directory/upload-request.json"
 jq -n --arg id "$recipe_id" \
-  '{query:"mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl } }",
+  '{query:"mutation($id: ID!, $file: Upload!) { addImage(recipeId: $id, file: $file) { url thumbUrl } }",
     variables:{id:$id,file:null}}' > "$upload_request"
 curl --silent --show-error --fail --connect-timeout 5 --max-time 60 \
   --config "$curl_config" --header 'Accept: application/json' \
   --form "operations=<$upload_request" --form 'map={"0":["variables.file"]}' \
   --form "0=@$root/graphql-test/fixtures/test.jpg;type=image/jpeg" \
   --output "$response" "$(yq -r '.origin' "$source_values")/graphql"
-jq -e '(.errors // [] | length) == 0 and .data.setImage.url != null' "$response" > /dev/null
+jq -e '(.errors // [] | length) == 0 and .data.addImage.url != null' "$response" > /dev/null
 verify_fixture_recipe "$source_values" "$recipe_name"
 mark
 

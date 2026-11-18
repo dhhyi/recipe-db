@@ -465,7 +465,7 @@ test.describe("first image", () => {
         .click();
       const result = await (await uploaded).json();
       expect(result.errors).toBeUndefined();
-      const metadata = result.data.setImage;
+      const metadata = result.data.addImage;
       expectImmutableUrl(metadata.url, demoRecipe.id);
       expectImmutableUrl(metadata.thumbUrl, demoRecipe.id, true);
       expect(metadata).toMatchObject({ width: 648, height: 486 });
@@ -550,7 +550,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
       await route.fulfill({
         status: 200,
         contentType: "application/graphql-response+json",
-        body: JSON.stringify({ data: { setImage: metadata } }),
+        body: JSON.stringify({ data: { addImage: metadata } }),
       });
     } else {
       await route.fallback();
@@ -595,7 +595,7 @@ test("replace a recipe image in the image editor and view the uploaded image", a
     await page.getByRole("button", { name: "Speichern", exact: true }).click();
     const result = await (await uploaded).json();
     expect(result.errors).toBeUndefined();
-    const metadata = result.data.setImage;
+    const metadata = result.data.addImage;
     expect(metadata).toMatchObject({ width: 648, height: 486 });
     expect(metadata.size).toBeGreaterThan(0);
     expectImmutableUrl(metadata.url, demoRecipe.id);
@@ -672,7 +672,7 @@ test("a late initial recipe response cannot overwrite a successful upload", asyn
       await route.fulfill({
         status: 200,
         contentType: "application/graphql-response+json",
-        body: JSON.stringify({ data: { setImage: metadata } }),
+        body: JSON.stringify({ data: { addImage: metadata } }),
       });
       return;
     }
@@ -721,7 +721,7 @@ test("a late initial recipe response cannot overwrite a successful upload", asyn
     );
     await page.getByRole("button", { name: "Schließen", exact: true }).click();
     const image = page.locator("img.recipe-image");
-    await expect(image).toHaveAttribute("src", result.data.setImage.url);
+    await expect(image).toHaveAttribute("src", result.data.addImage.url);
     await expectPixels(image, pattern, { width: 648, height: 486 });
   } finally {
     releaseInitial.resolve();
@@ -780,7 +780,7 @@ test("the image editor disables file selection while an upload is pending", asyn
         contentType: "application/graphql-response+json",
         body: JSON.stringify({
           data: {
-            setImage: {
+            addImage: {
               url: "/public/pending.png",
               thumbUrl: "/public/pending-thumb.png",
               size: 1,

@@ -170,6 +170,27 @@ impl Recipe {
         )
     }
 
+    async fn images(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Option<async_graphql::Result<Vec<crate::images::ImageMetadata>>> {
+        let request = match ctx.data::<crate::auth::RequestContext>() {
+            Ok(request) => request,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Err(error) = request.require(crate::auth::Capability::ReadPublic) {
+            return Some(Err(error.into_graphql_error()));
+        }
+        Some(
+            async {
+                ctx.data::<ImagesApi>()?
+                    .get_image_collection(self.id.as_str())
+                    .await
+            }
+            .await,
+        )
+    }
+
     /// `null` means the inspirations service is unavailable (as opposed to `[]`, which means the
     /// service is up and the recipe simply has no inspirations).
     async fn inspirations(

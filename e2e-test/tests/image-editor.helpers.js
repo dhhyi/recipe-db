@@ -166,7 +166,7 @@ export async function fulfillImageUpload(route, page, request, recipe) {
   await route.fulfill({
     status: 200,
     contentType: "application/graphql-response+json",
-    body: JSON.stringify({ data: { setImage: metadata } }),
+    body: JSON.stringify({ data: { addImage: metadata } }),
   });
 }
 
@@ -257,7 +257,7 @@ export async function saveSource(page) {
     )
     .toBe(true);
   const upload = await page.evaluate(() => window.imageEditorUploads.at(-1));
-  return { metadata: result.data.setImage, upload };
+  return { metadata: result.data.addImage, upload };
 }
 
 export function uploadedCrop(upload) {

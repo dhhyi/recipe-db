@@ -105,7 +105,7 @@ case "$path" in
   /graphql)
     if $upload; then
       jq -nc --arg url "/public/smoke-$IMAGE_SHA.png" --arg thumb "/public/smoke-$IMAGE_SHA-thumb.png" \
-        '{data:{setImage:{url:$url,thumbUrl:$thumb}}}' > "$output"
+        '{data:{addImage:{url:$url,thumbUrl:$thumb}}}' > "$output"
       touch "$SMOKE_ROOT/image-created"
     else
       query=$(jq -r .query "$data")

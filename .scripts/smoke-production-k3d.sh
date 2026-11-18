@@ -227,13 +227,13 @@ mark
 
 phase=image-upload-read
 jq -n --arg id "$recipe_id" \
-  '{query:"mutation($id: ID!, $file: Upload!) { setImage(recipeId: $id, file: $file) { url thumbUrl } }",variables:{id:$id,file:null}}' > "$work/upload.json"
+  '{query:"mutation($id: ID!, $file: Upload!) { addImage(recipeId: $id, file: $file) { url thumbUrl } }",variables:{id:$id,file:null}}' > "$work/upload.json"
 request /graphql --form "operations=<$work/upload.json" --form 'map={"0":["variables.file"]}' \
   --form "0=@$root/graphql-test/fixtures/test.jpg;type=image/jpeg"
 expect_status 200
 jq -e '(.errors // [] | length) == 0' "$work/body" > /dev/null
-image_url=$(jq -er '.data.setImage.url | select(test("^/public/[^/]+-[a-f0-9]{64}\\.png$"))' "$work/body")
-thumb_url=$(jq -er '.data.setImage.thumbUrl | select(test("^/public/[^/]+-[a-f0-9]{64}-thumb\\.png$"))' "$work/body")
+image_url=$(jq -er '.data.addImage.url | select(test("^/public/[^/]+-[a-f0-9]{64}\\.png$"))' "$work/body")
+thumb_url=$(jq -er '.data.addImage.thumbUrl | select(test("^/public/[^/]+-[a-f0-9]{64}-thumb\\.png$"))' "$work/body")
 request "$image_url"
 expect_status 200
 grep -qi '^content-type: image/png' "$work/headers"

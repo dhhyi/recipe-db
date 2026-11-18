@@ -110,7 +110,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         var result = JsonSerializer.Serialize(new { created.Id, created.Name }, JsonOptions);
         if (recipe.TryGetPropertyValue("imageUrl", out var imageUrlNode) && (string?)imageUrlNode is { } imageUrl)
         {
-            result = $"{result}; {await FetchAndSetImageAsync(created.Id, imageUrl)}";
+            result = $"{result}; {await FetchAndAddImageAsync(created.Id, imageUrl)}";
         }
 
         return result;
@@ -262,7 +262,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
 
         if (recipe.TryGetPropertyValue("imageUrl", out var imageUrlNode) && (string?)imageUrlNode is { } imageUrl)
         {
-            result = $"{result}; {await FetchAndSetImageAsync(recipeId, imageUrl)}";
+            result = $"{result}; {await FetchAndAddImageAsync(recipeId, imageUrl)}";
         }
 
         return result;
@@ -404,7 +404,7 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
         };
     }
 
-    private async Task<string> FetchAndSetImageAsync(string recipeId, string imageUrl)
+    private async Task<string> FetchAndAddImageAsync(string recipeId, string imageUrl)
     {
         using var http = httpClientFactory.CreateClient();
         HttpResponseMessage imageResponse;
@@ -427,13 +427,13 @@ public class RecipeTools(IMcpClient client, IHttpClientFactory httpClientFactory
 
         await using var stream = await imageResponse.Content.ReadAsStreamAsync();
         var file = new Upload(stream, filename, contentType);
-        var response = await client.SetImage.ExecuteAsync(recipeId, file);
+        var response = await client.AddImage.ExecuteAsync(recipeId, file);
         if (response.Errors.Count > 0)
         {
             throw GraphQLError(response.Errors);
         }
 
-        return response.Data?.SetImage is not null ? "Image uploaded" : "Failed to upload image";
+        return response.Data?.AddImage is not null ? "Image uploaded" : "Failed to upload image";
     }
 
     [McpServerTool(Name = "add_rating")]

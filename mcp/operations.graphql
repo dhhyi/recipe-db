@@ -12,8 +12,8 @@ mutation UpdateRecipe($id: ID!, $value: RecipeInput!) {
   }
 }
 
-mutation SetImage($recipeId: ID!, $file: Upload!) {
-  setImage(recipeId: $recipeId, file: $file) {
+mutation AddImage($recipeId: ID!, $file: Upload!) {
+  addImage(recipeId: $recipeId, file: $file) {
     url
     thumbUrl
     width
