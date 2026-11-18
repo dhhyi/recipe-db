@@ -125,15 +125,20 @@ export class HeaderComponent extends LitElement {
   private renderAuth() {
     if (!this.authRole || !this.authEnabled) return null;
     if (this.authRole === "anonymous") {
-      return html`<ul>
+      return html`<ul data-screenshot-hide>
         <li>
-          <a href="/oauth2/start?rd=%2F" @click=${this.startLogin}>Anmelden</a>
+          <a
+            href="/oauth2/start?rd=%2F"
+            data-screenshot-hide
+            @click=${this.startLogin}
+            >Anmelden</a
+          >
         </li>
       </ul>`;
     }
-    return html`<ul>
+    return html`<ul data-screenshot-hide>
       <li>
-        <details class="dropdown">
+        <details class="dropdown" data-screenshot-hide>
           <summary aria-label="Profil">
             <span class="profile-caption hidden sm:inline">Profil</span>
             <span
@@ -144,6 +149,7 @@ export class HeaderComponent extends LitElement {
           </summary>
           <ul
             class="profile-menu w-max min-w-0 max-w-[calc(100vw-3rem)] text-right whitespace-normal"
+            data-screenshot-hide
             dir="rtl"
           >
             ${

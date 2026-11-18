@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 
 console.warn(
   "WARNING: E2E tests reset shared test data and must run sequentially. Do not run another suite or use the same stack concurrently; unexpected behaviour is expected otherwise.",
@@ -13,7 +14,10 @@ export default defineConfig({
   timeout: 45_000,
   expect: {
     timeout: 15_000,
-    toHaveScreenshot: { animations: "disabled" },
+    toHaveScreenshot: {
+      animations: "disabled",
+      stylePath: fileURLToPath(new URL("./screenshot.css", import.meta.url)),
+    },
   },
   snapshotPathTemplate:
     "{testDir}/__screenshots__/{projectName}/{testFilePath}/{arg}{ext}",

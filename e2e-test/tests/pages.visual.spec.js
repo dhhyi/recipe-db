@@ -84,7 +84,12 @@ for (const role of ["anonymous", "member", "owner"]) {
         role === "owner" ? 1 : 0,
       );
       await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+      await page
+        .locator("header-component")
+        .evaluate((header) => header.setAttribute("auth-enabled", ""));
+      await expectHeader(page, role);
       await screenshot(page, "overview.png");
+      await expectHeader(page, role);
     });
 
     test("single-tag search", async ({ page, request, taggedDemoRecipe }) => {
@@ -677,9 +682,25 @@ for (const role of ["anonymous", "member", "owner"]) {
 async function expectHeader(page, role) {
   const header = page.locator("header-component");
   await expect(header).toHaveAttribute("auth-role", role);
-  await expect(header).not.toHaveAttribute("auth-enabled");
-  await expect(header.locator("a[href^='/oauth2/']")).toHaveCount(0);
-  await expect(header.locator("details.dropdown")).toHaveCount(0);
+  if ((await header.getAttribute("auth-enabled")) === null) {
+    await expect(header.locator("a[href^='/oauth2/']")).toHaveCount(0);
+    await expect(header.locator("details.dropdown")).toHaveCount(0);
+  } else if (role === "anonymous") {
+    const login = header.getByRole("link", {
+      name: "Anmelden",
+      exact: true,
+    });
+    await expect(login).toBeVisible();
+    await expect(login).toHaveAttribute("data-screenshot-hide", "");
+  } else {
+    const profile = header.locator("details.dropdown");
+    await expect(profile).toBeVisible();
+    await expect(profile).toHaveAttribute("data-screenshot-hide", "");
+    await expect(profile.locator(".profile-menu")).toHaveAttribute(
+      "data-screenshot-hide",
+      "",
+    );
+  }
 }
 
 async function expectEditorDenied(page, role) {
