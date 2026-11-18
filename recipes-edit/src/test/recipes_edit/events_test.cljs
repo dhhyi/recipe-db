@@ -163,6 +163,36 @@
     (doseq [event events]
       (is (= db (event-db db event)) (str "expected no-op for " event)))))
 
+(deftest optional-quantity-before-ingredient-name
+  (let [baseline (model/blank-form)
+        initial {:status :idle
+                 :route {:page :new}
+                 :authorization :allowed
+                 :inspirations-online true
+                 :form (assoc baseline :name "Soup")
+                 :baseline baseline}
+        typed (reduce (fn [db character]
+                        (let [value (str (model/format-amount-unit
+                                          (get-in db [:form :ingredients 0]))
+                                         character)
+                              next-db (event-db db [::events/set-ingredient-amount-unit 0 value])
+                              rows (get-in next-db [:form :ingredients])]
+                          (is (= 2 (count rows)) value)
+                          (is (= "" (:name (first rows))) value)
+                          (is (= (if (= value "Optional") "optional" value)
+                                 (model/format-amount-unit (first rows)))
+                              value)
+                          next-db))
+                      initial
+                      "Optional")
+        named (event-db typed [::events/set-ingredient-name 0 "Salt"])
+        ingredient (get-in named [:form :ingredients 0])
+        effects (event-effects named [::events/save])]
+    (is (= {:name "Salt" :amount "" :unit "" :optional true} ingredient))
+    (is (= "optional" (model/format-amount-unit ingredient)))
+    (is (= [{:name "Salt" :optional true}]
+           (get-in effects [:dispatch 1 :variables :input :ingredients])))))
+
 (deftest save-event-guards-and-builds-mutation-request
   (testing "no-op when state is not saveable"
     (doseq [status [:saving :loading :not-found :error :outcome-unknown]]

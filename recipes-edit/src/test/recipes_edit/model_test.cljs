@@ -49,6 +49,25 @@
                            model/blank-ingredient]}
             {:inspirations-online false})))))
 
+(deftest omits-unnamed-ingredients-from-input
+  (let [form {:name "Soup"
+              :method ""
+              :inspirations []
+              :ingredients [{:name "" :amount "2" :unit "" :optional false}
+                            {:name "" :amount "" :unit "g" :optional false}
+                            {:name "" :amount "" :unit "" :optional true}
+                            {:name " \t " :amount "3" :unit "ml" :optional true}
+                            {:name "Salt" :amount "1" :unit "tl" :optional true}
+                            {:name "Pepper" :amount "" :unit "" :optional false}
+                            model/blank-ingredient]}
+        input (model/form->input form)]
+    (is (= [{:name "Salt" :amount "1" :unit "tl" :optional true}
+            {:name "Pepper" :optional false}]
+           (:ingredients input)))
+    (is (= [] (:ingredients (model/form->input (assoc form :ingredients [])))))
+    (is (= [] (:ingredients (model/form->input
+                             (assoc form :ingredients (take 4 (:ingredients form)))))))))
+
 (deftest classifies-empty-name-errors
   (is (model/empty-name-error?
        {:extensions {:code "required-field" :field "name"}}))
