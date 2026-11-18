@@ -343,10 +343,10 @@ annotate_credentials() {
 routes() {
   jq -n --slurpfile projects "$work/projects.jsonl" --slurpfile config "$work/config.json" \
     '{projects:$projects,googleOAuthClientId:($config[0].runtime.googleOAuthClientId // "")}' > "$work/route-values.json"
-  frontend_routers=$(jq -cs '
-    [.[] | select(.category == "frontend")
-      | (.traefik.labels.http.routers // {}) | to_entries[]
+  web_routers=$(jq -cs --argjson googleEnabled "$google_enabled" '
+    [.[] | (.traefik.labels.http.routers // {}) | to_entries[]
       | select((.value.entrypoints // "" | split(",") | index("web")) != null)
+      | select(.key != "graphql-cookie" or $googleEnabled)
       | .key
     ] | unique
   ' "$work/projects.jsonl")
@@ -356,7 +356,7 @@ routes() {
     --data-values-file "$work/route-values.json" > "$work/routes-base.yml"
   yq -o=json '.' "$work/routes-base.yml" > "$work/routes-base.json"
   jq --arg ns "$namespace" --argjson googleEnabled "$google_enabled" \
-    --argjson frontendRouters "$frontend_routers" \
+    --argjson webRouters "$web_routers" \
     --slurpfile config "$work/config.json" --rawfile secret "$work/graphql-ingress-secret" '
     walk(if type == "string" then
       gsub("http://(?<host>[a-z][a-z0-9-]*)(?=[:/?#]|$)";
@@ -389,15 +389,8 @@ routes() {
                   entrypoints:["websecure"], tls:$tls,
                   middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
               end;
-            reduce $frontendRouters[] as $name (. ; preview($name))
-            | preview("images-public")
-            | preview("graphql")
-            | preview("mcp")
-            | if $googleEnabled then
-                preview("graphql-cookie")
-                | preview("graphql-bearer")
-                | preview("oauth2-public")
-              else preview("graphql-bearer") end
+            reduce $webRouters[] as $name (. ; preview($name))
+            | if $googleEnabled then preview("oauth2-public") else . end
           else
             .http.routers["https-staging"] = {
               rule:($host + " && Path(`/`)"), entrypoints:["websecure"],

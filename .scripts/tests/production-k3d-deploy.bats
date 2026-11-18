@@ -113,7 +113,7 @@ google_https_values() {
 
 @test "Google HTTPS preserves optional authentication priorities and private ingress" {
   google_https_values
-  export MOCK_FRONTEND_ROUTES=true
+  export MOCK_WEB_ROUTES=true
   export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
@@ -208,7 +208,7 @@ google_https_values() {
 
 @test "application exposure is independent of authorization policy" {
   no_google_values
-  export MOCK_FRONTEND_ROUTES=true
+  export MOCK_WEB_ROUTES=true
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
   export MOCK_LAN=true MOCK_HTTPS=true
@@ -288,7 +288,7 @@ google_https_values() {
 
 @test "application exposure preserves client routes with sanitized trusted ingress" {
   no_google_values
-  export MOCK_FRONTEND_ROUTES=true
+  export MOCK_WEB_ROUTES=true
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'
@@ -305,8 +305,14 @@ google_https_values() {
     and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
     and .["preview-browse"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
     and .["preview-pwa"].rule == "Host(`recipes.example.org`) && (PathPrefix(`/pwa`))"
+    and .["images-public"].entrypoints == ["web"]
+    and .["images"].entrypoints == ["rest-internal"]
+    and .["preview-images-public"].service == .["images-public"].service
+    and .["preview-images"] == null
     and .["pwa-internal"].entrypoints == ["rest-internal"]
     and .["preview-pwa-internal"] == null
+    and .["browse-maintenance"].entrypoints == ["web"]
+    and .["preview-browse-maintenance"] == null
     and all($secure[]; .key as $name |
       .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
     and .["preview-recipes-edit"].middlewares == ["identity-strip","recipes-edit-strip"]
@@ -323,7 +329,7 @@ google_https_values() {
 
 @test "anonymous-only policy deploys without extra flags and survives public shutdown" {
   no_google_values
-  export MOCK_FRONTEND_ROUTES=true
+  export MOCK_WEB_ROUTES=true
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
   set_value '.origin="http://recipe-pi.home" | .runtime.ingressMode="private-lan" |
     .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}'

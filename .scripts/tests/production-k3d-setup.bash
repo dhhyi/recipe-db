@@ -4,7 +4,7 @@
 load test_helper
 
 setup() {
-  unset MOCK_FRONTEND_ROUTES
+  unset MOCK_WEB_ROUTES
   setup_fixture production-k3d.sh
   export FIXTURE_ROOT
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
@@ -102,9 +102,19 @@ application_project_metadata_to_jsonl() {
   fi
   printf '%s\n' \
     '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","devcontainer":{"ports":[8081],"environment":{}}}' \
-    '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"devcontainer":{"ports":[8082],"environment":{}}}' \
     > "$2"
-  if [[ ${MOCK_FRONTEND_ROUTES:-false} == true ]]; then
+  if [[ ${MOCK_WEB_ROUTES:-false} == true ]]; then
+    printf '%s\n' \
+      '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"devcontainer":{"ports":[8082],"environment":{}},"traefik":{"labels":{"http":{"routers":{"images":{"entrypoints":"rest-internal"},"images-public":{"entrypoints":"web"}}}}}}' \
+      '{"name":"graphql","category":"api","devcontainer":{"ports":[4000],"environment":{}},"traefik":{"labels":{"http":{"routers":{"graphql":{"entrypoints":"web"},"graphql-cookie":{"entrypoints":"web"},"graphql-bearer":{"entrypoints":"web"}}}}}}' \
+      '{"name":"mcp","category":"frontend","devcontainer":{"ports":[8080],"environment":{}},"traefik":{"labels":{"http":{"routers":{"mcp":{"entrypoints":"web"}}}}}}' \
+      >> "$2"
+  else
+    printf '%s\n' \
+      '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"devcontainer":{"ports":[8082],"environment":{}}}' \
+      >> "$2"
+  fi
+  if [[ ${MOCK_WEB_ROUTES:-false} == true ]]; then
     printf '%s\n' \
       '{"name":"browse","category":"frontend","devcontainer":{"ports":[3000],"environment":{}},"traefik":{"labels":{"http":{"routers":{"browse":{"entrypoints":"web"}}}}}}' \
       '{"name":"design","category":"frontend","devcontainer":{"ports":[80],"environment":{}},"traefik":{"labels":{"http":{"routers":{"design":{"entrypoints":"web"}}}}}}' \
@@ -1509,6 +1519,10 @@ http:
       rule: PathPrefix(`/pwa-internal`)
       entrypoints: [rest-internal]
       service: recipe-db-pwa
+    images:
+      rule: PathPrefix(`/images`)
+      entrypoints: [rest-internal]
+      service: recipe-db-images
     design:
       rule: PathPrefix(`/design/`)
       entrypoints: [web]
@@ -1530,6 +1544,10 @@ http:
       rule: PathPrefix(`/mcp`)
       entrypoints: [web]
       service: recipe-db-mcp
+    browse-maintenance:
+      rule: PathPrefix(`/`) && HeaderRegexp(`Accept`, `(?i)text/html`)
+      entrypoints: [web]
+      service: browse-maintenance
   middlewares:
     oauth2-forward-auth:
       forwardAuth:
