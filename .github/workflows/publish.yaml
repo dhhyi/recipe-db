@@ -1,15 +1,11 @@
 name: Publish
 concurrency:
-  group: publish-${{ github.event.pull_request.number || github.ref }}
+  group: publish-${{ github.event.pull_request.number || github.ref }}${{ github.event.pull_request.draft && '-draft' || '' }}
   queue: ${{ github.event_name == 'push' && 'max' || 'single' }}
-  cancel-in-progress: >-
-    ${{ github.event_name == 'pull_request' &&
-        (github.event.action != 'edited' ||
-         (contains(github.event.changes.title.from, '[WIP]') &&
-          !contains(github.event.pull_request.title, '[WIP]'))) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main
@@ -22,12 +18,7 @@ env:
 
 jobs:
   quality-checks:
-    # Only removing [WIP] retriggers validation on edits, without another commit.
-    if: >-
-      (github.event_name != 'pull_request' ||
-       !contains(github.event.pull_request.title, '[WIP]')) &&
-      (github.event.action != 'edited' ||
-       contains(github.event.changes.title.from, '[WIP]'))
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     outputs:
       cache_restore_outcome: ${{ steps.cache-outcomes.outputs.restore_outcome }}
       cache_inspect_outcome: ${{ steps.cache-outcomes.outputs.inspect_outcome }}
@@ -389,11 +380,7 @@ jobs:
           fi
 
   arm64-validation:
-    if: >-
-      (github.event_name != 'pull_request' ||
-       !contains(github.event.pull_request.title, '[WIP]')) &&
-      (github.event.action != 'edited' ||
-       contains(github.event.changes.title.from, '[WIP]'))
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     permissions:
       contents: read
       packages: write

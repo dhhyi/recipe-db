@@ -271,6 +271,7 @@ workflows:
       - .github/workflows/publish.yaml
       - .github/workflows/bazel-cache-cleanup.yaml
     .scripts/tests/mise-workflows.bats:
+      - .github/workflows/pr-metadata.yaml
       - .github/workflows/publish.yaml
       - .mise/tasks/validation.toml
       - mise.toml

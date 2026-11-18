@@ -2,7 +2,11 @@
 
 ## Commit and pull request titles
 
-Use plain, short descriptions that start with a capital letter. Do not add prefix labels or groups such as `backend:`, `chore:`, or `fix:`. For pull request titles, include the related issue number in parentheses.
+Use plain, short descriptions that start with a capital letter. Do not add prefix labels or groups such as `backend:`, `chore:`, or `fix:`.
+
+Link issues through the pull request's Development sidebar or use `Closes #<number>` in the description for issues the PR fully resolves. The PR metadata workflow adds same-repository linked issues to the title, for example `Add recipe filters (#123, #456)`.
+
+To keep a pull request in draft, open it as a draft with `[WIP]` in the title. Remove `[WIP]` when it is ready: the metadata workflow automatically marks drafts without this marker ready for review. Publish validates ready PRs, not drafts. To put a ready PR back into draft, add `[WIP]` before converting it to draft.
 
 ## Documentation
 

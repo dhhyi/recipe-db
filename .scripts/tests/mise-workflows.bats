@@ -1,4 +1,6 @@
 #!/usr/bin/env bats
+# Bats runs each test in its own process; its test-local exports do not need to persist.
+# shellcheck disable=SC2030,SC2031
 
 load test_helper
 
@@ -226,46 +228,110 @@ EOF
   [[ "$script" == *"docker compose --progress plain --profile development --profile test build"* ]]
 }
 
-@test "Publish validates title edits only when WIP is removed without cancelling on other edits" {
+@test "Publish validates ready PRs and main pushes without listening to title edits" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   run env WORKFLOW="$(yq -o=json "$workflow")" node << 'EOF'
 const assert = require("node:assert/strict");
 const workflow = JSON.parse(process.env.WORKFLOW);
-const contains = (value, search) =>
-  String(value ?? "").toLowerCase().includes(search.toLowerCase());
 const evaluate = (expression, github) =>
-  new Function("github", "contains", `return (${expression.replace(/\$\{\{|\}\}/g, "")});`)(github, contains);
-const cases = [
-  // Event, action, previous title, current title, validate, cancel.
-  ["pull_request", "edited", "[WIP] Feature", "Feature", true, true],
-  ["pull_request", "edited", "[wip] Feature", "Feature", true, true],
-  ["pull_request", "edited", "Feature", "Renamed feature", false, false],
-  ["pull_request", "edited", "Feature", "[WIP] Feature", false, false],
-  ["pull_request", "edited", "[WIP] Feature", "[WIP] Renamed", false, false],
-  ["pull_request", "edited", "[WIP] Feature", "[WIP] Feature", false, false],
-  ["pull_request", "edited", "", "Feature", false, false],
-  ["pull_request", "edited", "", "[WIP] Feature", false, false],
-  ["pull_request", "opened", "", "Feature", true, true],
-  ["pull_request", "opened", "", "[WIP] Feature", false, true],
-  ["pull_request", "synchronize", "", "Feature", true, true],
-  ["pull_request", "synchronize", "", "[WIP] Feature", false, true],
-  ["pull_request", "reopened", "", "Feature", true, true],
-  ["pull_request", "reopened", "", "[WIP] Feature", false, true],
-  ["push", "", "", "", true, false],
+  new Function("github", `return (${expression.replace(/\$\{\{|\}\}/g, "")});`)(github);
+assert.deepEqual(workflow.on.pull_request.types.sort(), ["opened", "ready_for_review", "reopened", "synchronize"]);
+assert.deepEqual(workflow.on.push.branches, ["main"]);
+const events = [
+  // Event, payload, validate, cancel, concurrency group.
+  ["pull_request", { pull_request: {number: 7, draft: true, title: "Feature"} }, false, true, "publish-7-draft"],
+  ["pull_request", { pull_request: {number: 7, draft: false, title: "[WIP] Feature"} }, true, true, "publish-7"],
+  ["push", {}, true, false, "publish-refs/heads/main"],
 ];
-for (const [event, action, from, title, validate, cancel] of cases) {
-  const github = {
-    event_name: event,
-    event: { action, changes: { title: { from } }, pull_request: { title } },
-  };
+for (const [event_name, event, validate, cancel, group] of events) {
+  const github = { event_name, event, ref: "refs/heads/main" };
   for (const job of ["quality-checks", "arm64-validation"]) {
     assert.equal(evaluate(workflow.jobs[job].if, github), validate, `${job}: ${JSON.stringify(github)}`);
   }
   assert.equal(evaluate(workflow.concurrency["cancel-in-progress"], github), cancel, `cancel: ${JSON.stringify(github)}`);
+  assert.equal(workflow.concurrency.group.replace(/\$\{\{(.*?)\}\}/g, (_, expr) =>
+    evaluate(expr.replaceAll("pull_request.", "pull_request?."), github)), group);
 }
 EOF
 
   [ "$status" -eq 0 ]
+}
+
+@test "PR metadata normalizes linked local issues and only promotes open drafts without WIP" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/pr-metadata.yaml"
+  script=$(yq '.jobs.reconcile.steps[] | select(.id == "metadata") | .run' "$workflow")
+  # The extracted workflow script invokes this exported mock in a child shell.
+  # shellcheck disable=SC2329
+  gh() {
+    if [[ "$*" == "api graphql "* ]]; then
+      jq -nc --arg title "$TITLE" --arg state "$STATE" --argjson draft "$DRAFT" --argjson nodes "$ISSUES" '
+        ($nodes | [.[0:2], .[2:]]) | map({
+          data: {repository: {pullRequest: {
+            $title, $state, isDraft: $draft, closingIssuesReferences: {nodes: .}
+          }}}
+        })'
+    else
+      printf '%s\n' "$*" >> "$CALLS"
+    fi
+  }
+  export -f gh
+  export GITHUB_REPOSITORY=owner/repo PR_NUMBER=42 GITHUB_OUTPUT="$FIXTURE_ROOT/outputs" CALLS="$FIXTURE_ROOT/calls"
+  export STATE=OPEN DRAFT=true ISSUES='[
+    {"number":12,"repository":{"nameWithOwner":"owner/repo"}},
+    {"number":2,"repository":{"nameWithOwner":"owner/repo"}},
+    {"number":1,"repository":{"nameWithOwner":"other/repo"}},
+    {"number":12,"repository":{"nameWithOwner":"owner/repo"}}
+  ]'
+
+  run env TITLE='[wip] Feature (#99)' bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CALLS")" = 'api repos/owner/repo/pulls/42 --method PATCH --silent -f title=[wip] Feature (#2, #12)' ]
+  [ "$(cat "$GITHUB_OUTPUT")" = 'promote=false' ]
+
+  : > "$CALLS"
+  : > "$GITHUB_OUTPUT"
+  run env TITLE='Feature (#2, #12)' bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ ! -s "$CALLS" ]
+  [ "$(cat "$GITHUB_OUTPUT")" = 'promote=true' ]
+
+  : > "$GITHUB_OUTPUT"
+  run env TITLE='Feature (#2, #12)' ISSUES='[]' DRAFT=false bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$CALLS")" = 'api repos/owner/repo/pulls/42 --method PATCH --silent -f title=Feature' ]
+  [ "$(cat "$GITHUB_OUTPUT")" = 'promote=false' ]
+
+  : > "$CALLS"
+  : > "$GITHUB_OUTPUT"
+  run env TITLE='Feature' STATE=CLOSED bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ ! -s "$CALLS" ]
+  [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "PR metadata rechecks draft status after minting the App token" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/pr-metadata.yaml"
+  script=$(yq '.jobs.reconcile.steps[] | select(.name == "Mark draft ready for review") | .run' "$workflow")
+  gh() {
+    if [[ "$1" == api ]]; then
+      jq -nc --arg state "$STATE" --arg title "$TITLE" --argjson draft "$DRAFT" \
+        '{$state, $title, $draft}' | jq -r "$4"
+    else
+      printf '%s\n' "$*"
+    fi
+  }
+  export -f gh
+  export GITHUB_REPOSITORY=owner/repo PR_NUMBER=42 STATE=open DRAFT=true TITLE=Feature
+
+  run bash -eo pipefail -c "$script"
+  [ "$status" -eq 0 ]
+  [ "$output" = 'pr ready 42 --repo owner/repo' ]
+
+  for change in 'TITLE=[WIP] Feature' DRAFT=false STATE=closed; do
+    run env "$change" bash -eo pipefail -c "$script"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+  done
 }
 
 @test "CI reuses mise development secrets without coupling production image builds to Compose" {
