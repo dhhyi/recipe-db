@@ -205,6 +205,18 @@ suite "immutable image storage":
     check restarted.reorder("recipe", requested) == reordered
     check readFile(store.manifestPath("recipe")) == manifest
 
+    let originalPermissions = getFilePermissions(store.manifestFolder)
+    setFilePermissions(store.manifestFolder, originalPermissions -
+        {fpUserWrite, fpGroupWrite, fpOthersWrite})
+    try:
+      expect OSError, IOError:
+        discard store.reorder("recipe",
+            %*[imageA["id"], imageB["id"], imageC["id"]])
+    finally:
+      setFilePermissions(store.manifestFolder, originalPermissions)
+    check readFile(store.manifestPath("recipe")) == manifest
+    check store.collection("recipe") == reordered
+
     let staleOrder = %*[imageB["id"], imageA["id"], imageC["id"]]
     let d = outputs("#ffff00")
     discard restarted.publish("recipe", d.normal, d.thumb)
