@@ -343,10 +343,27 @@ header-component > header:focus-within {
 }
 
 recipe-image-carousel {
+  --swiper-navigation-color: var(--pico-primary-inverse);
   --swiper-pagination-color: transparent;
   --swiper-pagination-bullet-inactive-color: transparent;
   --swiper-pagination-bullet-inactive-opacity: 1;
   display: block;
+}
+
+recipe-image-carousel :is(.swiper-button-prev, .swiper-button-next) {
+  opacity: 0.7;
+}
+
+recipe-image-carousel
+  :is(.swiper-button-prev, .swiper-button-next):enabled:is(
+    :hover,
+    :focus-visible
+  ) {
+  opacity: 1;
+}
+
+recipe-image-carousel :is(.swiper-button-prev, .swiper-button-next):disabled {
+  opacity: 0;
 }
 
 recipe-image-carousel .swiper-pagination-bullet {
