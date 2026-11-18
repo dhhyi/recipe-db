@@ -211,7 +211,9 @@ tasks:
   suite_inputs:
     .scripts/tests/bazel.bats:
       - .scripts/bazel.sh
+      - .scripts/generate-bazel-build.sh
       - .scripts/bazel-cache-artifacts.py
+      - .mise/tasks/bazel.toml
       - .bazelversion
     .scripts/tests/mise-tasks.bats:
       - ":(glob).scripts/*.sh"

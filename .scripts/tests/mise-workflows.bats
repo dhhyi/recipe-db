@@ -155,7 +155,18 @@ EOF
 
 @test "CI builds all Bazel targets including cacheable validations and script regression tests" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  format=$(yq '.jobs.quality-checks.steps[] | select(.name == "check project formatting") | .run' "$workflow")
   script=$(yq '.jobs.quality-checks.steps[] | select(.name == "Bazel precommit checks, unit tests, and cacheable validations") | .run' "$workflow")
+
+  format_generation=$(grep -nF 'mise run --raw generate-bazel-build' <<< "$format" | cut -d: -f1)
+  format_query=$(grep -nF 'mise run --raw bazel query' <<< "$format" | cut -d: -f1)
+  format_build=$(grep -nF 'mise run --raw bazel build' <<< "$format" | cut -d: -f1)
+  checks_generation=$(grep -nF 'mise run --raw generate-bazel-build' <<< "$script" | cut -d: -f1)
+  checks_build=$(grep -nF 'mise run --raw bazel build' <<< "$script" | cut -d: -f1)
+
+  [ "$format_generation" -lt "$format_query" ]
+  [ "$format_query" -lt "$format_build" ]
+  [ "$checks_generation" -lt "$checks_build" ]
 
   [[ "$script" == *"mise run --raw generate-bazel-build"* ]]
   [[ "$script" == *"mise run --raw bazel build"* ]]

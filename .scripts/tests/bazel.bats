@@ -5,11 +5,21 @@ load test_helper
 setup() {
   setup_fixture bazel.sh
   setup_mock_bin
+  touch BUILD.bazel
   export BAZEL_DIAGNOSTICS_DIR="$BATS_TEST_TMPDIR/diagnostics with spaces"
   cat > bin/mise << 'EOF'
 #!/bin/bash
 set -euo pipefail
 case "$*" in
+  'run --raw generate-bazel-build')
+    printf '%s\n' generate >> "$MOCK_LOG"
+    printf '%s\n' 'Generating Bazel rules'
+    printf '%s\n' 'Generation diagnostic' >&2
+    if [[ ${GENERATION_STATUS:-0} != 0 ]]; then
+      exit "$GENERATION_STATUS"
+    fi
+    touch BUILD.bazel
+    ;;
   'env --paths')
     if [[ ${FAIL_PATHS:-false} == true ]]; then
       echo "Cannot resolve tool paths" >&2
@@ -18,6 +28,7 @@ case "$*" in
     printf '%s\n' /tools/first/bin /tools/second/bin
     ;;
   'exec -- bazelisk '*)
+    printf '%s\n' bazel >> "$MOCK_LOG"
     printf '%s\n' "$PATH" "$@"
     for arg in "$@"; do
       if [[ "$arg" == --explain=* ]]; then
@@ -60,6 +71,42 @@ EOF
   [ "${lines[5]}" = //:all ]
   [ "${#lines[@]}" -eq 6 ]
   [ ! -d "$BAZEL_DIAGNOSTICS_DIR" ]
+}
+
+@test "missing BUILD.bazel is generated before Bazel without contaminating stdout" {
+  rm BUILD.bazel
+
+  run --separate-stderr bash .scripts/bazel.sh query 'attr(name, "_check$", //:all)'
+
+  [ "$status" -eq 0 ]
+  [ -f BUILD.bazel ]
+  [ "$(cat "$MOCK_LOG")" = $'generate\nbazel' ]
+  [[ "$output" != *"Generating Bazel rules"* ]]
+  [[ "$output" == *$'\nquery\nattr(name, "_check$", //:all)' ]]
+  [[ "$stderr" == *"Generating Bazel rules"* ]]
+  [[ "$stderr" == *"Generation diagnostic"* ]]
+}
+
+@test "failed BUILD.bazel generation stops before Bazel" {
+  rm BUILD.bazel
+
+  run env GENERATION_STATUS=23 bash .scripts/bazel.sh query //:all
+
+  [ "$status" -eq 23 ]
+  [ ! -e BUILD.bazel ]
+  [ "$(cat "$MOCK_LOG")" = generate ]
+  [[ "$output" == *"Generating Bazel rules"* ]]
+  [[ "$output" != *bazelisk* ]]
+}
+
+@test "existing BUILD.bazel is reused without regeneration" {
+  printf '%s\n' existing > BUILD.bazel
+
+  run bash .scripts/bazel.sh query //:all
+
+  [ "$status" -eq 0 ]
+  [ "$(cat BUILD.bazel)" = existing ]
+  [ "$(cat "$MOCK_LOG")" = bazel ]
 }
 
 @test "Bazel builds with diagnostics retain unique explanation logs without printing them" {

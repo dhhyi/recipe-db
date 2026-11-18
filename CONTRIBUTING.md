@@ -69,6 +69,10 @@ Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project cov
 
 `mise run sync-tailwind` tracks project metadata and the design Dockerfile, generating the shared stylesheet and Docker COPY block only when needed. Its `check-tailwind-sources` prerequisite always validates declared paths with one metadata read. Editing source contents does not regenerate the path lists; removing a declared file or directory still fails validation, even on a generation cache hit.
 
+## Bazel rule freshness
+
+Run Bazel through `mise run --raw bazel ...`. The wrapper generates `BUILD.bazel` only when it is missing; it does not check whether an existing file is current. After switching branches or changing project metadata, file membership, generator logic, or other generation inputs, run `mise run --raw generate-bazel-build` when current rules are required. Pre-commit and CI regenerate rules explicitly before their checks. Direct Bazel or Bazelisk invocations bypass the missing-file safeguard.
+
 ## Project formatting
 
 Declare formatting in the second document of `.project.yaml`:
