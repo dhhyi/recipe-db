@@ -5,6 +5,7 @@ import File exposing (File)
 import Json.Decode as D
 import RecipeDB
 import RemoteData
+import Set exposing (Set)
 
 
 type Phase
@@ -34,6 +35,7 @@ type alias Model =
     , recipe : RecipeDB.RecipeModel
     , capabilities : RecipeDB.CapabilitiesModel
     , recipeName : Maybe String
+    , failedThumbnails : Set String
     , phase : Phase
     , session : Maybe Session
     , pending : Maybe File
@@ -49,6 +51,7 @@ type Msg
     = GotRecipe RecipeDB.RecipeModel
     | GotCapabilities RecipeDB.CapabilitiesModel
     | RetryGallery
+    | ThumbnailFailed String
     | GotFile File
     | Bridge D.Value
     | PreviewReady Int
@@ -65,6 +68,7 @@ init recipeId =
     , recipe = RemoteData.Loading
     , capabilities = RemoteData.Loading
     , recipeName = Nothing
+    , failedThumbnails = Set.empty
     , phase = Viewing
     , session = Nothing
     , pending = Nothing

@@ -10,6 +10,7 @@ import Html.Keyed
 import Json.Decode as D
 import RecipeDB
 import RemoteData
+import Set exposing (Set)
 
 
 view : Model -> Html Msg
@@ -55,7 +56,7 @@ editorView model =
         busy =
             model.phase == Saving
     in
-    Html.main_ [ class "image-editor" ]
+    editorPage model
         [ h1 [] [ text (model.recipeName |> Maybe.map (\name -> "Bild für " ++ name ++ " bearbeiten") |> Maybe.withDefault "Bild bearbeiten") ]
         , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
         , if model.phase == Editing then
@@ -145,6 +146,35 @@ loadingPlaceholder loadingLabel =
         []
 
 
+editorPage : Model -> List (Html Msg) -> Html Msg
+editorPage model content =
+    Html.main_ [ class "image-editor" ]
+        (p
+            [ id "editor-status"
+            , attribute "role" "status"
+            , class
+                (if model.phase == Viewing && model.savedFeedback then
+                    "feedback success save-feedback"
+
+                 else
+                    "editor-announcement"
+                )
+            ]
+            [ text
+                (if model.phase == Viewing && model.savedFeedback then
+                    "Bild gespeichert."
+
+                 else if model.phase == Viewing && model.recipe == RemoteData.Loading then
+                    "Rezeptbilder werden geladen."
+
+                 else
+                    ""
+                )
+            ]
+            :: content
+        )
+
+
 galleryView : Model -> Html Msg
 galleryView model =
     let
@@ -161,9 +191,17 @@ galleryView model =
                 _ ->
                     Nothing
     in
-    Html.main_ [ class "image-editor" ]
+    editorPage model
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
-            [ h1 [ id "gallery-heading", tabindex -1 ]
+            [ h1
+                ([ id "gallery-heading", tabindex -1 ]
+                    ++ (if model.savedFeedback then
+                            [ attribute "aria-describedby" "editor-status" ]
+
+                        else
+                            []
+                       )
+                )
                 [ text (model.recipeName |> Maybe.map (\name -> "Bilder für " ++ name ++ " verwalten") |> Maybe.withDefault "Rezeptbilder verwalten") ]
             , label [ class "gallery-add" ]
                 [ text "Bild hinzufügen"
@@ -181,38 +219,13 @@ galleryView model =
         , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
         , Maybe.withDefault (text "") (Maybe.map (\warning -> p [ class "feedback warning", attribute "role" "status" ] [ text warning ]) (Editor.Types.capacityWarning images))
         , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
-        , p
-            [ attribute "role" "status"
-            , class
-                (if model.savedFeedback then
-                    "feedback success save-feedback"
-
-                 else
-                    "m-0"
-                )
-            ]
-            [ text
-                (if model.savedFeedback then
-                    "Bild gespeichert."
-
-                 else
-                    ""
-                )
-            ]
-        , div [ attribute "role" "status" ]
-            [ if model.recipe == RemoteData.Loading then
-                div [ attribute "aria-busy" "true" ] [ text "Rezeptbilder werden geladen …" ]
-
-              else
-                text ""
-            ]
-        , galleryContent model.recipe images
+        , galleryContent model.recipe images model.failedThumbnails
         , p [] [ a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ] ]
         ]
 
 
-galleryContent : RecipeDB.RecipeModel -> Maybe (List RecipeDB.GalleryImage) -> Html Msg
-galleryContent recipe images =
+galleryContent : RecipeDB.RecipeModel -> Maybe (List RecipeDB.GalleryImage) -> Set String -> Html Msg
+galleryContent recipe images failed =
     case ( recipe, images ) of
         ( RemoteData.Success (Just _), Just entries ) ->
             div []
@@ -223,14 +236,14 @@ galleryContent recipe images =
                   else
                     Html.Keyed.node "ol"
                         [ class "gallery-list", attribute "aria-label" "Rezeptbilder" ]
-                        (List.indexedMap galleryRow entries)
+                        (List.indexedMap (galleryRow failed) entries)
                 ]
 
         ( RemoteData.Success Nothing, _ ) ->
             errorMessage "Rezept nicht gefunden."
 
         ( RemoteData.Loading, _ ) ->
-            text ""
+            div [ attribute "aria-busy" "true", attribute "aria-label" "Rezeptbilder werden geladen" ] []
 
         _ ->
             div []
@@ -239,11 +252,31 @@ galleryContent recipe images =
                 ]
 
 
-galleryRow : Int -> RecipeDB.GalleryImage -> ( String, Html Msg )
-galleryRow index image =
+galleryRow : Set String -> Int -> RecipeDB.GalleryImage -> ( String, Html Msg )
+galleryRow failed index image =
+    let
+        description : String
+        description =
+            "Rezeptbild " ++ String.fromInt (index + 1)
+    in
     ( image.id
     , li [ class "gallery-row" ]
-        [ img [ src image.thumbUrl, alt ("Rezeptbild " ++ String.fromInt (index + 1)), class "gallery-thumbnail" ] []
+        [ if Set.member image.id failed then
+            span
+                [ class "gallery-thumbnail gallery-thumbnail-unavailable"
+                , attribute "role" "img"
+                , attribute "aria-label" description
+                ]
+                [ text "Vorschaubild nicht verfügbar" ]
+
+          else
+            img
+                [ src image.thumbUrl
+                , alt description
+                , class "gallery-thumbnail"
+                , on "error" (D.succeed (ThumbnailFailed image.id))
+                ]
+                []
         , if index == 0 then
             span [] [ text "Standardbild" ]
 

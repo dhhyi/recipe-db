@@ -1,4 +1,4 @@
-import { test as base, expect, graphql } from "./fixtures.js";
+import { test as base, expect, graphql, uploadImage } from "./fixtures.js";
 import {
   addInput,
   chooseSource,
@@ -41,6 +41,18 @@ test.beforeEach(async ({ page, request, demoRecipe }) => {
   );
 });
 
+async function observeBlobReleases(page) {
+  await page.addInitScript(() => {
+    window.revokedImageEditorUrls = [];
+    const revoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url) => {
+      window.revokedImageEditorUrls.push(url);
+      revoke.call(URL, url);
+    };
+  });
+  return () => page.evaluate(() => window.revokedImageEditorUrls);
+}
+
 test("selecting a local source does not upload, and Cancel keeps the saved image", async ({
   page,
   demoRecipe,
@@ -49,8 +61,11 @@ test("selecting a local source does not upload, and Cancel keeps the saved image
   page.on("request", (request) => {
     if (isImageUpload(request)) uploads.push(request);
   });
+  const revokedUrls = await observeBlobReleases(page);
   await selectSource(page, demoRecipe);
   await expect(sourceImage(page)).toHaveAttribute("src", /^blob:/);
+  const blobUrl = await sourceImage(page).getAttribute("src");
+  expect(await revokedUrls()).not.toContain(blobUrl);
   expect(await crop(page)).toEqual({ x: 0, y: 0, width: 1200, height: 900 });
   await expect(page.locator(".crop-handle")).toHaveCount(8);
   await expect(addInput(page)).toHaveCount(0);
@@ -68,6 +83,7 @@ test("selecting a local source does not upload, and Cancel keeps the saved image
     await expect(selection(page)).toHaveCount(0);
     await expect(addInput(page)).toBeDisabled();
     await expect(galleryImages(page)).toHaveCount(0);
+    await expect.poll(revokedUrls).toContain(blobUrl);
     releaseRead.resolve();
     await expect(galleryImages(page)).toBeVisible();
     await expect(addInput(page)).toBeEnabled();
@@ -213,10 +229,15 @@ test("each save sends the original and crop, then returns to the gallery", async
   page,
   demoRecipe,
 }) => {
+  const revokedUrls = await observeBlobReleases(page);
   await selectSource(page, demoRecipe);
   await drag(page, handle(page, "se"), -65, -48);
   const firstCrop = await crop(page);
+  const blobUrl = await sourceImage(page).getAttribute("src");
+  expect(blobUrl).toMatch(/^blob:/);
+  expect(await revokedUrls()).not.toContain(blobUrl);
   const first = await saveSource(page);
+  await expect.poll(revokedUrls).toContain(blobUrl);
   expect(uploadedCrop(first.upload)).toEqual(firstCrop);
   await expect(galleryImages(page).first()).toHaveAttribute(
     "src",
@@ -473,7 +494,14 @@ test("a failed post-save gallery read keeps success and Retry does not upload ag
     await expect.poll(() => galleryReads).toBe(1);
     await expect(saved).toBeVisible();
     await expect(addInput(page)).toBeDisabled();
-    await expect(page.locator('[aria-busy="true"]')).toBeVisible();
+    await expect(
+      page.locator(
+        '[aria-busy="true"][aria-label="Rezeptbilder werden geladen"]',
+      ),
+    ).toHaveCount(1);
+    await expect(galleryHeading(page)).toHaveAccessibleDescription(
+      "Bild gespeichert.",
+    );
     await expect(empty).toHaveCount(0);
     await expect(galleryImages(page)).toHaveCount(0);
     releaseRead.resolve();
@@ -504,6 +532,93 @@ test("a failed post-save gallery read keeps success and Retry does not upload ag
   } finally {
     releaseRead.resolve();
   }
+});
+
+test("a broken thumbnail keeps its accessible name and does not hide the other row", async ({
+  page,
+  request,
+  demoRecipe,
+}) => {
+  const newest = await uploadImage(request, demoRecipe, "image-b.png");
+  await page.route(
+    (url) => url.pathname === new URL(newest.thumbUrl, url.origin).pathname,
+    (route) => route.abort(),
+  );
+  await page.goto(`/images-edit/${demoRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  await expect(
+    rows.first().getByRole("img", { name: "Rezeptbild 1" }),
+  ).toBeVisible();
+  await expect(
+    rows.first().getByText("Vorschaubild nicht verfügbar"),
+  ).toBeVisible();
+  await expect(rows.first().getByText("Standardbild")).toBeVisible();
+  await expect(
+    rows.last().getByRole("img", { name: "Rezeptbild 2" }),
+  ).toHaveJSProperty("naturalWidth", 300);
+  await expect(
+    rows.last().getByText("Vorschaubild nicht verfügbar"),
+  ).toHaveCount(0);
+  await expect(addInput(page)).toBeEnabled();
+});
+
+test("a missing recipe is not an empty gallery", async ({ page }) => {
+  await page.goto("/images-edit/00000000-0000-4000-8000-000000000000");
+  await expect(page.getByRole("alert")).toHaveText("Rezept nicht gefunden.");
+  await expect(page.getByText("Kein Bild vorhanden.")).toHaveCount(0);
+  await expect(addInput(page)).toBeDisabled();
+});
+
+test("malformed capabilities do not enable image management", async ({
+  page,
+  demoRecipe,
+}) => {
+  await page.route("**/graphql", async (route) => {
+    if (
+      /\bmyCapabilities\b/.test(route.request().postDataJSON()?.query ?? "")
+    ) {
+      await route.fulfill({
+        json: {
+          data: { myCapabilities: { role: "owner", canManageImages: "true" } },
+        },
+      });
+    } else {
+      await route.fallback();
+    }
+  });
+  await page.goto(`/images-edit/${demoRecipe.id}`);
+  await expect(
+    page.getByRole("heading", { name: "Zugriff nicht verfügbar" }),
+  ).toBeVisible();
+  await expect(addInput(page)).toHaveCount(0);
+  await expect(page.getByText("Kein Bild vorhanden.")).toHaveCount(0);
+});
+
+test("Cancel focuses the gallery heading when a malformed read prevents Add", async ({
+  page,
+  demoRecipe,
+}) => {
+  await selectSource(page, demoRecipe);
+  await page.route("**/graphql", async (route) => {
+    if (isGalleryRead(route.request())) {
+      await route.fulfill({
+        json: { data: { recipe: { name: demoRecipe.name, images: {} } } },
+      });
+    } else {
+      await route.fallback();
+    }
+  });
+  await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
+  await expect(
+    page.getByText("Rezeptbilder konnten nicht geladen werden."),
+  ).toBeVisible();
+  await expect(addInput(page)).toBeDisabled();
+  await expect(galleryHeading(page)).toBeFocused();
+  await expect(page.getByText("Kein Bild vorhanden.")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Erneut laden" }),
+  ).toBeVisible();
 });
 
 test("header home navigation respects unsaved crop confirmation", async ({

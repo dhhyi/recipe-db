@@ -613,7 +613,11 @@ test("Add stays disabled until the initial gallery read completes", async ({
     await page.goto(`/images-edit/${recipeWithoutImage.id}`);
     await readStarted;
     await expect(addInput(page)).toBeDisabled();
-    await expect(page.locator('main [aria-busy="true"]')).toBeVisible();
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: "Rezeptbilder werden geladen." }),
+    ).toBeVisible();
     await expect(empty).toHaveCount(0);
     releaseRead.resolve();
     await expect(empty).toBeVisible();

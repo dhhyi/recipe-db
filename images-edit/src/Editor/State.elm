@@ -10,6 +10,7 @@ import Json.Decode as D
 import Json.Encode as E
 import RecipeDB
 import RemoteData
+import Set
 import Task
 
 
@@ -67,6 +68,13 @@ step msg model =
         RetryGallery ->
             if model.phase == Viewing && model.recipe /= RemoteData.Loading then
                 loadGallery model
+
+            else
+                ( model, Cmd.none )
+
+        ThumbnailFailed id ->
+            if model.phase == Viewing && model.recipe /= RemoteData.Loading then
+                ( { model | failedThumbnails = Set.insert id model.failedThumbnails }, Cmd.none )
 
             else
                 ( model, Cmd.none )
@@ -202,7 +210,7 @@ step msg model =
 
 loadGallery : Model -> ( Model, Cmd Msg )
 loadGallery model =
-    ( { model | recipe = RemoteData.Loading, error = Nothing }
+    ( { model | recipe = RemoteData.Loading, error = Nothing, failedThumbnails = Set.empty }
     , RecipeDB.makeRecipeRequest model.recipeId GotRecipe
     )
 

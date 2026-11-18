@@ -1,4 +1,5 @@
 import { test, expect, graphql } from "./fixtures.js";
+import { chooseSource } from "./image-editor.helpers.js";
 import { readFile } from "node:fs/promises";
 
 test.use({ trace: "off", resetApplicationData: false });
@@ -456,11 +457,10 @@ test("an invalid image-upload credential never replays a mutation after recovery
     page.on("dialog", (dialog) => dialog.accept());
     try {
       await page.goto(`${baseURL}/images-edit/${id}`);
-      await page
-        .locator("#upload-image")
-        .setInputFiles(
-          new URL("./assets/milchreis.png", import.meta.url).pathname,
-        );
+      await chooseSource(
+        page,
+        new URL("./assets/milchreis.png", import.meta.url).pathname,
+      );
       const save = page.getByRole("button", { name: "Speichern", exact: true });
       await expect(save).toBeEnabled();
       invalid = true;
