@@ -123,6 +123,15 @@ export function isImageUpload(request) {
   );
 }
 
+export function isGalleryRead(request) {
+  return (
+    new URL(request.url()).pathname === "/graphql" &&
+    !isImageUpload(request) &&
+    /\brecipe\s*\(/.test(request.postDataJSON()?.query ?? "") &&
+    /\bimages\s*\{/.test(request.postDataJSON()?.query ?? "")
+  );
+}
+
 export async function observeUploads(page) {
   await page.addInitScript(() => {
     window.imageEditorUploads = [];
@@ -172,6 +181,10 @@ export async function fulfillImageUpload(route, page, request, recipe) {
 
 export const selection = (page) => page.locator(".crop-selection");
 export const sourceImage = (page) => page.locator(".crop-stage > img");
+export const addInput = (page) => page.locator("#upload-image");
+export const galleryHeading = (page) => page.locator("#gallery-heading");
+export const galleryImages = (page) =>
+  page.getByRole("img", { name: /^Rezeptbild \d+$/ });
 export const handle = (page, name) =>
   page.locator(`.crop-handle[data-handle="${name}"]`);
 export const saveButton = (page) =>
@@ -207,15 +220,21 @@ export function expectValidCrop(value, width = 1200, height = 900) {
   expect(value.y + value.height).toBeLessThanOrEqual(height);
 }
 
-export async function selectSource(page, recipe, file = pngFile()) {
-  await page.goto(`/images-edit/${recipe.id}`);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-    `Bild für ${recipe.name} bearbeiten`,
-  );
-  await page.locator("#upload-image").setInputFiles(file);
+export async function chooseSource(page, file = pngFile()) {
+  const input = addInput(page);
+  await expect(input).toBeEnabled();
+  await input.setInputFiles(file);
   await expect(selection(page)).toBeVisible();
   await expect(sourceImage(page)).toHaveJSProperty("complete", true);
   await expect(saveButton(page)).toBeEnabled();
+}
+
+export async function selectSource(page, recipe, file = pngFile()) {
+  await page.goto(`/images-edit/${recipe.id}`);
+  await expect(galleryHeading(page)).toHaveText(
+    `Bilder für ${recipe.name} verwalten`,
+  );
+  await chooseSource(page, file);
 }
 
 export async function drag(page, locator, dx, dy) {
@@ -245,7 +264,9 @@ export async function saveSource(page) {
   expect(response.ok()).toBe(true);
   const result = await response.json();
   expect(result.errors).toBeUndefined();
-  await expect(saveButton(page)).toBeDisabled();
+  await expect(saveButton(page)).toHaveCount(0);
+  await expect(selection(page)).toHaveCount(0);
+  await expect(galleryHeading(page)).toBeFocused();
   await expect(
     page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
   ).toBeVisible();

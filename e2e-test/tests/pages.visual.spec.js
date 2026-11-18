@@ -2,9 +2,17 @@ import {
   test as base,
   expect,
   graphql,
+  uploadImage,
   waitForImageDecoded,
 } from "./fixtures.js";
-import { saveButton, selectSource, selection } from "./image-editor.helpers.js";
+import {
+  addInput,
+  galleryHeading,
+  galleryImages,
+  saveButton,
+  selectSource,
+  selection,
+} from "./image-editor.helpers.js";
 import { fileURLToPath } from "node:url";
 
 const test = base.extend({
@@ -591,20 +599,25 @@ for (const role of ["anonymous", "member", "owner"]) {
       }
       await assertNoHorizontalOverflow(page);
       await screenshot(page, "degraded-new-recipe.png");
+    });
 
+    test("image gallery with the images service unavailable", async ({
+      page,
+      degradedRecipes,
+    }) => {
+      const recipe = degradedRecipes[0];
       await page.goto(`/images-edit/${recipe.id}`);
       await expectHeader(page, role);
       if (role === "owner") {
-        await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-          "Bild bearbeiten",
-        );
-        await expect(page.getByRole("status")).toHaveText(
-          "Rezept konnte nicht geladen werden.",
+        await expect(galleryHeading(page)).toBeVisible();
+        await expect(page.getByRole("alert")).toHaveText(
+          "Rezeptbilder konnten nicht geladen werden.",
         );
         await expect(
-          page.getByLabel("JPEG- oder PNG-Bild auswählen (maximal 10 MiB)"),
+          page.getByRole("button", { name: "Erneut laden" }),
         ).toBeVisible();
-        await expect(page.locator("main img")).toHaveCount(0);
+        await expect(addInput(page)).toBeDisabled();
+        await expect(galleryImages(page)).toHaveCount(0);
       } else {
         await expectEditorDenied(page, role);
       }
@@ -629,20 +642,31 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "new-recipe.png");
     });
 
-    test("image editor", async ({ page, demoRecipe }) => {
+    test("image gallery", async ({ page, request, demoRecipe }) => {
+      const newest =
+        role === "owner"
+          ? await uploadImage(request, demoRecipe, "image-b.png")
+          : null;
       await page.goto(`/images-edit/${demoRecipe.id}`);
       await expectHeader(page, role);
       if (role === "owner") {
-        await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-          `Bild für ${demoRecipe.name} bearbeiten`,
+        await expect(galleryHeading(page)).toHaveText(
+          `Bilder für ${demoRecipe.name} verwalten`,
         );
-        await expect(
-          page.getByLabel("JPEG- oder PNG-Bild auswählen (maximal 10 MiB)"),
-        ).toBeVisible();
-        await waitForImageDecoded(page.locator("main img"));
+        await expect(addInput(page)).toBeEnabled();
+        const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+        await expect(rows).toHaveCount(2);
+        const firstImage = galleryImages(page).first();
+        await expect(firstImage).toHaveAttribute("src", newest.thumbUrl);
+        await expect(rows.first()).toHaveText("Standardbild");
+        await expect(rows.last()).toHaveText("");
+        for (const thumbnail of await galleryImages(page).all()) {
+          await waitForImageDecoded(thumbnail);
+        }
       } else {
         await expectEditorDenied(page, role);
       }
+      await assertNoHorizontalOverflow(page);
       await screenshot(page, "image-editor.png");
     });
 
@@ -656,6 +680,8 @@ for (const role of ["anonymous", "member", "owner"]) {
           demoRecipe,
           fileURLToPath(new URL("./assets/milchreis.png", import.meta.url)),
         );
+        await expect(galleryImages(page)).toHaveCount(0);
+        await expect(addInput(page)).toHaveCount(0);
         await expect(page.locator(".crop-handle")).toHaveCount(8);
         await selection(page).scrollIntoViewIfNeeded();
         const area = await page.locator(".editor-image-area").boundingBox();

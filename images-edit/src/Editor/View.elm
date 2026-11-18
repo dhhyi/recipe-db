@@ -1,12 +1,14 @@
 module Editor.View exposing (view)
 
 import Crop exposing (Crop)
-import Editor.Types exposing (Model, Msg(..), Phase(..), Session, dirty)
+import Editor.Types exposing (Model, Msg(..), Phase(..), Session, canAdd, imageLimit)
 import File exposing (File)
-import Html exposing (Html, a, button, div, h1, img, input, label, p, span, text)
-import Html.Attributes exposing (accept, alt, attribute, class, disabled, for, href, id, src, style, type_)
+import Html exposing (Html, a, button, div, h1, img, input, label, li, p, span, text)
+import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, tabindex, type_)
 import Html.Events exposing (on, onClick)
+import Html.Keyed
 import Json.Decode as D
+import RecipeDB
 import RemoteData
 
 
@@ -15,7 +17,11 @@ view model =
     case model.capabilities of
         RemoteData.Success capabilities ->
             if capabilities.canManageImages then
-                editorView model
+                if model.phase == Viewing then
+                    galleryView model
+
+                else
+                    editorView model
 
             else if capabilities.role == "anonymous" then
                 accessPage model "Anmeldung erforderlich" "Zum Verwalten von Bildern ist eine Anmeldung erforderlich."
@@ -45,104 +51,49 @@ accessPage model title message =
 editorView : Model -> Html Msg
 editorView model =
     let
-        title : String
-        title =
-            case model.recipe of
-                RemoteData.Success (Just recipe) ->
-                    "Bild für " ++ recipe.name ++ " bearbeiten"
-
-                _ ->
-                    "Bild bearbeiten"
-
-        canSelect : Bool
-        canSelect =
-            model.phase == Viewing || model.phase == SavedOpen
-
         busy : Bool
         busy =
             model.phase == Saving
-
-        fileDecoder : D.Decoder File
-        fileDecoder =
-            D.at [ "target", "files", "0" ] File.decoder
     in
     Html.main_ [ class "image-editor" ]
-        [ h1 [] [ text title ]
-        , case model.error of
-            Just error ->
-                errorMessage error
-
-            Nothing ->
-                text ""
-        , if model.savedFeedback then
-            text ""
+        [ h1 [] [ text (model.recipeName |> Maybe.map (\name -> "Bild für " ++ name ++ " bearbeiten") |> Maybe.withDefault "Bild bearbeiten") ]
+        , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
+        , if model.phase == Editing then
+            p [ attribute "role" "status", class "feedback warning" ]
+                [ text "Ungespeicherter Zuschnitt. Verschieben Sie die Auswahl oder ziehen Sie an einem der acht Griffe." ]
 
           else
-            p [ attribute "role" "status", attribute "aria-live" "polite", class (statusClass model) ] [ text (status model) ]
+            text ""
         , case model.session of
             Just session ->
                 sourceView model session
 
             Nothing ->
-                case ( model.phase, model.recipe ) of
-                    ( Loading, _ ) ->
-                        loadingPlaceholder "Bild wird geladen"
+                loadingPlaceholder "Bild wird geladen"
+        , div [ class "flex flex-wrap gap-2" ]
+            [ button
+                ([ type_ "button"
+                 , disabled (not ((model.phase == Editing || model.phase == SaveFailed) && (model.session |> Maybe.map .previewReady |> Maybe.withDefault False)))
+                 , onClick Save
+                 ]
+                    ++ (if busy then
+                            [ attribute "aria-busy" "true" ]
 
-                    ( _, RemoteData.Loading ) ->
-                        loadingPlaceholder "Rezept wird geladen"
+                        else
+                            []
+                       )
+                )
+                [ text
+                    (if model.phase == SaveFailed then
+                        "Erneut speichern"
 
-                    _ ->
-                        savedView model
-        , label [ for "upload-image" ] [ text "JPEG- oder PNG-Bild auswählen (maximal 10 MiB)" ]
-        , input
-            [ id "upload-image"
-            , class "max-w-full"
-            , type_ "file"
-            , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
-            , disabled (not canSelect)
-            , on "change" (D.map GotFile fileDecoder)
-            ]
-            []
-        , if model.savedFeedback then
-            p [ attribute "role" "status", attribute "aria-live" "polite", class (statusClass model) ] [ text (status model) ]
-
-          else
-            text ""
-        , if model.session /= Nothing || model.phase == Loading then
-            div [ class "flex flex-wrap gap-2" ]
-                [ button
-                    ([ type_ "button"
-                     , disabled (not (dirty model && (model.phase == Editing || model.phase == SaveFailed) && (model.session |> Maybe.map .previewReady |> Maybe.withDefault False)))
-                     , onClick Save
-                     ]
-                        ++ (if busy then
-                                [ attribute "aria-busy" "true" ]
-
-                            else
-                                []
-                           )
+                     else
+                        "Speichern"
                     )
-                    [ text
-                        (if model.phase == SaveFailed then
-                            "Erneut speichern"
-
-                         else
-                            "Speichern"
-                        )
-                    ]
-                , button [ type_ "button", class "outline", disabled (busy || model.phase == Loading), onClick Close ]
-                    [ text
-                        (if dirty model then
-                            "Abbrechen"
-
-                         else
-                            "Schließen"
-                        )
-                    ]
                 ]
-
-          else
-            text ""
+            , button [ type_ "button", class "outline", disabled (busy || model.phase == Loading), onClick Close ]
+                [ text "Abbrechen" ]
+            ]
         , p []
             [ a
                 [ href ("/recipe/" ++ model.recipeId)
@@ -184,68 +135,6 @@ boolString value =
         "false"
 
 
-status : Model -> String
-status model =
-    case model.phase of
-        Viewing ->
-            case model.recipe of
-                RemoteData.Failure _ ->
-                    "Rezept konnte nicht geladen werden."
-
-                RemoteData.Success Nothing ->
-                    "Rezept nicht gefunden."
-
-                _ ->
-                    ""
-
-        Loading ->
-            ""
-
-        Editing ->
-            "Ungespeicherter Zuschnitt. Verschieben Sie die Auswahl oder ziehen Sie an einem der acht Griffe."
-
-        Saving ->
-            ""
-
-        SaveFailed ->
-            ""
-
-        SavedOpen ->
-            if model.savedFeedback then
-                "Bild gespeichert. Für einen weiteren Zuschnitt bleibt das Original geöffnet."
-
-            else
-                ""
-
-
-statusClass : Model -> String
-statusClass model =
-    case model.phase of
-        Viewing ->
-            case model.recipe of
-                RemoteData.Failure _ ->
-                    "feedback error"
-
-                RemoteData.Success Nothing ->
-                    "feedback error"
-
-                _ ->
-                    ""
-
-        Editing ->
-            "feedback warning"
-
-        SavedOpen ->
-            if model.savedFeedback then
-                "feedback success save-feedback"
-
-            else
-                ""
-
-        _ ->
-            ""
-
-
 loadingPlaceholder : String -> Html Msg
 loadingPlaceholder loadingLabel =
     div
@@ -256,24 +145,112 @@ loadingPlaceholder loadingLabel =
         []
 
 
-savedView : Model -> Html Msg
-savedView model =
+galleryView : Model -> Html Msg
+galleryView model =
     let
-        recipeUrl : Maybe String
-        recipeUrl =
+        fileDecoder : D.Decoder File
+        fileDecoder =
+            D.at [ "target", "files", "0" ] File.decoder
+
+        images : Maybe (List RecipeDB.GalleryImage)
+        images =
             case model.recipe of
                 RemoteData.Success (Just recipe) ->
-                    recipe.url
+                    recipe.images
 
                 _ ->
                     Nothing
     in
-    case model.latestUrl |> Maybe.map Just |> Maybe.withDefault recipeUrl of
-        Just url ->
-            img [ src url, alt "Gespeichertes Rezeptbild", class "recipe-image" ] []
+    Html.main_ [ class "image-editor" ]
+        [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
+            [ h1 [ id "gallery-heading", tabindex -1 ]
+                [ text (model.recipeName |> Maybe.map (\name -> "Bilder für " ++ name ++ " verwalten") |> Maybe.withDefault "Rezeptbilder verwalten") ]
+            , label [ class "gallery-add" ]
+                [ text "Bild hinzufügen"
+                , input
+                    [ id "upload-image"
+                    , type_ "file"
+                    , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
+                    , attribute "aria-describedby" "gallery-file-help"
+                    , disabled (not (canAdd model))
+                    , on "change" (D.map GotFile fileDecoder)
+                    ]
+                    []
+                ]
+            ]
+        , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
+        , Maybe.withDefault (text "") (Maybe.map (\warning -> p [ class "feedback warning", attribute "role" "status" ] [ text warning ]) (Editor.Types.capacityWarning images))
+        , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
+        , p
+            [ attribute "role" "status"
+            , class
+                (if model.savedFeedback then
+                    "feedback success save-feedback"
 
-        Nothing ->
-            p [] [ text "Kein Bild vorhanden." ]
+                 else
+                    "m-0"
+                )
+            ]
+            [ text
+                (if model.savedFeedback then
+                    "Bild gespeichert."
+
+                 else
+                    ""
+                )
+            ]
+        , div [ attribute "role" "status" ]
+            [ if model.recipe == RemoteData.Loading then
+                div [ attribute "aria-busy" "true" ] [ text "Rezeptbilder werden geladen …" ]
+
+              else
+                text ""
+            ]
+        , galleryContent model.recipe images
+        , p [] [ a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ] ]
+        ]
+
+
+galleryContent : RecipeDB.RecipeModel -> Maybe (List RecipeDB.GalleryImage) -> Html Msg
+galleryContent recipe images =
+    case ( recipe, images ) of
+        ( RemoteData.Success (Just _), Just entries ) ->
+            div []
+                [ p [] [ text (String.fromInt (List.length entries) ++ " / " ++ String.fromInt imageLimit) ]
+                , if List.isEmpty entries then
+                    p [] [ text "Kein Bild vorhanden." ]
+
+                  else
+                    Html.Keyed.node "ol"
+                        [ class "gallery-list", attribute "aria-label" "Rezeptbilder" ]
+                        (List.indexedMap galleryRow entries)
+                ]
+
+        ( RemoteData.Success Nothing, _ ) ->
+            errorMessage "Rezept nicht gefunden."
+
+        ( RemoteData.Loading, _ ) ->
+            text ""
+
+        _ ->
+            div []
+                [ errorMessage "Rezeptbilder konnten nicht geladen werden."
+                , button [ type_ "button", class "outline", onClick RetryGallery ] [ text "Erneut laden" ]
+                ]
+
+
+galleryRow : Int -> RecipeDB.GalleryImage -> ( String, Html Msg )
+galleryRow index image =
+    ( image.id
+    , li [ class "gallery-row" ]
+        [ img [ src image.thumbUrl, alt ("Rezeptbild " ++ String.fromInt (index + 1)), class "gallery-thumbnail" ] []
+        , if index == 0 then
+            span [] [ text "Standardbild" ]
+
+          else
+            text ""
+        ]
+    )
 
 
 sourceView : Model -> Session -> Html Msg
