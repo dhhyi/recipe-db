@@ -287,7 +287,9 @@ for (const role of ["anonymous", "member", "owner"]) {
       await page
         .getByRole("link", { name: "Zur Startseite" })
         .scrollIntoViewIfNeeded();
-      await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+      await expect(
+        page.locator("main [aria-busy='true']:not(dialog:not([open]) *)"),
+      ).toHaveCount(0);
       await updatedAt.evaluate((element) => {
         element.textContent = "Zuletzt aktualisiert: gerade eben";
       });
@@ -305,6 +307,13 @@ for (const role of ["anonymous", "member", "owner"]) {
             exact: true,
           }),
         );
+        // Settle lazy content behind the modal before taking a full-page screenshot.
+        await page
+          .getByRole("link", { name: "Zur Startseite" })
+          .scrollIntoViewIfNeeded();
+        await expect(
+          page.locator("main [aria-busy='true']:not(dialog:not([open]) *)"),
+        ).toHaveCount(0);
 
         const editButton = page.getByRole("button", {
           name: "Tags bearbeiten",
@@ -312,7 +321,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         });
         await expect(editButton).toBeVisible();
         await editButton.click();
-        const dialog = page.getByRole("dialog");
+        const dialog = page.getByRole("dialog", { name: "Tags bearbeiten" });
         await expect(dialog).toBeVisible();
         await expect(dialog).toHaveAttribute("closedby", "any");
         await expect(
@@ -351,17 +360,14 @@ for (const role of ["anonymous", "member", "owner"]) {
           name: "Tag suchen",
           exact: true,
         });
+        const optionList = dialog.locator("#recipe-tag-options > ul");
+        const options = optionList.locator("button[type='submit']");
         await search.fill("Deutsch");
-        const option = page
-          .locator("#recipe-tag-options button[type='submit']")
-          .first();
-        await expect(option).toBeVisible();
-        await expect(option).toHaveText("Deutsch");
+        await expect(optionList).toHaveAttribute("data-query", "Deutsch");
+        await expect(options).toHaveText(["Deutsch"]);
 
         await search.fill("");
-        await expect(
-          page.locator("#recipe-tag-options button[type='submit']"),
-        ).not.toHaveCount(1);
+        await expect(optionList).toHaveAttribute("data-query", "");
         await expect(dialog.locator("[aria-busy='true']")).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
         const updatedAt = page.getByText(
@@ -383,16 +389,15 @@ for (const role of ["anonymous", "member", "owner"]) {
             assignments += 1;
           }
         });
-        const options = page.locator(
-          "#recipe-tag-options button[type='submit']",
-        );
         await search.fill("de");
+        await expect(optionList).toHaveAttribute("data-query", "de");
         await expect(options).toHaveCount(2);
         await search.press("Enter");
         expect(assignments).toBe(0);
         await expect(dialog.locator("[data-tag-remove]")).toHaveCount(3);
 
         await search.fill(" Deutsch ");
+        await expect(optionList).toHaveAttribute("data-query", " Deutsch ");
         await expect(options).toHaveCount(1);
         await expect(options).toHaveText("Deutsch");
         await search.dispatchEvent("keydown", {
@@ -413,6 +418,7 @@ for (const role of ["anonymous", "member", "owner"]) {
         expect(assignments).toBe(0);
 
         await search.fill(" Deutsch ");
+        await expect(optionList).toHaveAttribute("data-query", " Deutsch ");
         await expect(options).toHaveCount(1);
         await search.press("Enter");
         await expect(
@@ -513,7 +519,9 @@ for (const role of ["anonymous", "member", "owner"]) {
             card.locator("[data-recipe-tag]:visible"),
           ).not.toHaveCount(0);
         }
-        await expect(page.locator("main [aria-busy='true']")).toHaveCount(0);
+        await expect(
+          page.locator("main [aria-busy='true']:not(dialog:not([open]) *)"),
+        ).toHaveCount(0);
         await expect(page.locator(".htmx-settling")).toHaveCount(0);
         await screenshot(page, `recipe-related-${count}.png`);
       }

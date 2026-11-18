@@ -346,6 +346,13 @@ function tagOptions(dialog) {
   return dialog.locator("#recipe-tag-options button[type='submit']");
 }
 
+async function expectTagQuery(dialog, query) {
+  await expect(dialog.locator("#recipe-tag-options > ul")).toHaveAttribute(
+    "data-query",
+    query,
+  );
+}
+
 test("dialog closes refresh detail tags and reopening loads fresh data with an empty search", async ({
   page,
   request,
@@ -356,6 +363,7 @@ test("dialog closes refresh detail tags and reopening loads fresh data with an e
   const dialog = await openTagDialog(page);
   const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
   await search.fill("Frisch");
+  await expectTagQuery(dialog, "Frisch");
   await expect(tagOptions(dialog)).toHaveCount(1);
   await assignTag(request, recipe, tag);
 
@@ -365,7 +373,7 @@ test("dialog closes refresh detail tags and reopening loads fresh data with an e
       response.request().method() === "GET" &&
       !new URL(response.url()).searchParams.has("edit"),
   );
-  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", { name: "Schließen" }).press("Escape");
   await expect(dialog).toBeHidden();
   expect((await detailReload).status()).toBe(200);
   await expect(page.locator("#recipe-tags [data-recipe-tag]")).toHaveText(
@@ -498,6 +506,7 @@ test("single-result click and Enter clear search; multi-result click preserves i
   });
 
   await search.fill("e2e einzig");
+  await expectTagQuery(dialog, "e2e einzig");
   await expect(options).toHaveCount(1);
   await options.first().click();
   await expect(
@@ -510,6 +519,7 @@ test("single-result click and Enter clear search; multi-result click preserves i
   ).toHaveCount(0);
 
   await search.fill("E2E Paar");
+  await expectTagQuery(dialog, "E2E Paar");
   await expect(options).toHaveCount(2);
   await search.press("Enter");
   await expect(dialog.locator("[data-tag-remove]")).toHaveCount(1);
@@ -580,6 +590,7 @@ test("reopening after a failed detail refresh fetches fresh assignments and clea
   const dialog = await openTagDialog(page);
   const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
   await search.fill("E2E Danach");
+  await expectTagQuery(dialog, "E2E Danach");
   await expect(tagOptions(dialog)).toHaveCount(1);
   await assignTag(request, recipe, added);
 
@@ -638,6 +649,7 @@ test("failed assignment reload after an uncertain save retains confirmed tags an
   const dialog = await openTagDialog(page);
   const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
   await search.fill("E2E Ungewiss");
+  await expectTagQuery(dialog, "E2E Ungewiss");
   await expect(tagOptions(dialog)).toHaveCount(1);
   await page.route(`**/recipe/${recipe.id}/tags`, async (route) => {
     if (route.request().method() === "POST") return route.abort("failed");
@@ -774,10 +786,8 @@ for (const status of [401, 403]) {
       );
       await search.fill("E2E Auswahl");
       if (phase === "mutation") {
+        await expectTagQuery(dialog, "E2E Auswahl");
         await expect(tagOptions(dialog)).toHaveCount(1);
-        await expect(
-          dialog.locator("#recipe-tag-options > ul"),
-        ).toHaveAttribute("data-query", "E2E Auswahl");
         await tagOptions(dialog).first().click();
       }
       const response = await denied;
@@ -789,12 +799,9 @@ for (const status of [401, 403]) {
           /änderung konnte nicht bestätigt werden/i,
         );
       }
-      await expect(
-        dialog.locator("#recipe-tag-assigned .recipe-tag"),
-      ).toContainText(confirmed.name);
-      await expect(
-        dialog.locator("#recipe-tag-assigned .recipe-tag"),
-      ).not.toContainText("E2E Auswahl");
+      const assigned = dialog.locator("#recipe-tag-assigned");
+      await expect(assigned).toContainText(confirmed.name);
+      await expect(assigned).not.toContainText("E2E Auswahl");
       await dialog.getByRole("button", { name: "Schließen" }).click();
       await expect(dialog).toBeHidden();
     });
@@ -847,6 +854,7 @@ test("saving blocks dismissal and competing changes without changing the backdro
   const dialog = await openTagDialog(page);
   const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
   await search.fill("E2E Langsam");
+  await expectTagQuery(dialog, "E2E Langsam");
   await expect(tagOptions(dialog)).toHaveCount(1);
   const mutationSource = await tagOptions(dialog).first().elementHandle();
 
@@ -867,7 +875,7 @@ test("saving blocks dismissal and competing changes without changing the backdro
     if (route.request().method() !== "POST") return route.fallback();
     started();
     await gate;
-    await route.continue();
+    await route.fallback();
   });
   try {
     await tagOptions(dialog).first().click();
@@ -921,6 +929,7 @@ test("uncertain save failure keeps search and confirmed tags, permits retry and 
   const dialog = await openTagDialog(page);
   const search = dialog.getByRole("searchbox", { name: "Tag suchen" });
   await search.fill("E2E Fehler");
+  await expectTagQuery(dialog, "E2E Fehler");
   await expect(tagOptions(dialog)).toHaveCount(1);
   let fail = true;
   await page.route(`**/recipe/${recipe.id}/tags`, async (route) => {
