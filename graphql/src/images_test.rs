@@ -140,6 +140,19 @@ async fn image_collections_ids_deletion_and_authorization() {
                             )
                                 .into_response();
                         }
+                        if id == "offline" {
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(json!({
+                                    "type": "about:blank",
+                                    "title": "Service Unavailable",
+                                    "status": 503,
+                                    "detail": "Images unavailable",
+                                    "code": "unavailable"
+                                })),
+                            )
+                                .into_response();
+                        }
                         let first_id = metadata()["id"].as_str().unwrap().to_string();
                         let second_id = second_metadata["id"].as_str().unwrap().to_string();
                         let mut expected_ids = vec![first_id.clone(), second_id.clone()];
@@ -412,6 +425,12 @@ async fn image_collections_ids_deletion_and_authorization() {
             409,
             "image-order-conflict",
         ),
+        (
+            "offline",
+            vec![second_id.clone(), first_id.clone()],
+            503,
+            "service-unavailable",
+        ),
     ] {
         let response = schema
             .execute(
@@ -460,7 +479,14 @@ async fn image_collections_ids_deletion_and_authorization() {
                 "present".to_string(),
                 vec!["unknown".to_string(), second_id.clone()]
             ),
-            ("conflict".to_string(), vec![second_id, first_id]),
+            (
+                "conflict".to_string(),
+                vec![second_id.clone(), first_id.clone()],
+            ),
+            (
+                "offline".to_string(),
+                vec![second_id.clone(), first_id.clone()],
+            ),
         ]
     );
     let event_status = serde_json::to_value(publisher.status()).unwrap();
