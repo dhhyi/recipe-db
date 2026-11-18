@@ -7,11 +7,15 @@
 (def blank-ingredient
   {:amount "" :unit "" :name "" :optional false})
 
-(defn blank-ingredient? [{:keys [amount unit name]}]
-  (every? str/blank? [amount unit name]))
+(defn blank-ingredient? [{:keys [amount unit name optional]}]
+  (and (every? str/blank? [amount unit name])
+       (not optional)))
 
 (defn normalize-ingredients [ingredients]
   (conj (vec (remove blank-ingredient? ingredients)) blank-ingredient))
+
+(defn saved-form [form]
+  (update form :ingredients #(normalize-ingredients (remove (comp str/blank? :name) %))))
 
 (defn normalize-inspirations [inspirations]
   (conj (vec (remove str/blank? inspirations)) ""))
@@ -62,7 +66,7 @@
    (cond-> {:name name
             :method (when (seq method) method)
             :ingredients (->> ingredients
-                              (remove blank-ingredient?)
+                              (remove #(str/blank? (:name %)))
                               (mapv (fn [{:keys [amount unit name optional]}]
                                       (cond-> {:name name :optional optional}
                                         (seq amount) (assoc :amount amount)

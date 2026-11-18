@@ -163,6 +163,36 @@
     (doseq [event events]
       (is (= db (event-db db event)) (str "expected no-op for " event)))))
 
+(deftest optional-quantity-before-ingredient-name
+  (let [baseline (model/blank-form)
+        initial {:status :idle
+                 :route {:page :new}
+                 :authorization :allowed
+                 :inspirations-online true
+                 :form (assoc baseline :name "Soup")
+                 :baseline baseline}
+        typed (reduce (fn [db character]
+                        (let [value (str (model/format-amount-unit
+                                          (get-in db [:form :ingredients 0]))
+                                         character)
+                              next-db (event-db db [::events/set-ingredient-amount-unit 0 value])
+                              rows (get-in next-db [:form :ingredients])]
+                          (is (= 2 (count rows)) value)
+                          (is (= "" (:name (first rows))) value)
+                          (is (= (if (= value "Optional") "optional" value)
+                                 (model/format-amount-unit (first rows)))
+                              value)
+                          next-db))
+                      initial
+                      "Optional")
+        named (event-db typed [::events/set-ingredient-name 0 "Salt"])
+        ingredient (get-in named [:form :ingredients 0])
+        effects (event-effects named [::events/save])]
+    (is (= {:name "Salt" :amount "" :unit "" :optional true} ingredient))
+    (is (= "optional" (model/format-amount-unit ingredient)))
+    (is (= [{:name "Salt" :optional true}]
+           (get-in effects [:dispatch 1 :variables :input :ingredients])))))
+
 (deftest save-event-guards-and-builds-mutation-request
   (testing "no-op when state is not saveable"
     (doseq [status [:saving :loading :not-found :error :outcome-unknown]]
@@ -227,6 +257,26 @@
     (is (= form (:baseline next-db)))
     (is (= {:kind :success :message "Gespeichert"} (:feedback next-db)))
     (is (= "/edit/321" (::events/replace-url effects)))))
+
+(deftest successful-save-removes-unnamed-rows-from-form-and-baseline
+  (doseq [[page response] [[:new {:createRecipe {:id "321"}}]
+                           [:edit {:updateRecipe {:id "321"}}]]]
+    (let [form (assoc (model/blank-form)
+                      :name "Soup"
+                      :ingredients [{:name "" :amount "2" :unit "g" :optional true}
+                                    {:name " \t " :amount "" :unit "" :optional true}
+                                    {:name "Salt" :amount "1" :unit "tl" :optional true}
+                                    model/blank-ingredient])
+          db {:status :saving :route {:page page :id "321"} :form form}
+          saved (event-db db [::events/saved {:response {:data response :errors []}}])
+          expected [{:name "Salt" :amount "1" :unit "tl" :optional true}
+                    model/blank-ingredient]
+          edited (event-db saved [::events/set-ingredient-name 0 "Pepper"])
+          discarded (event-db edited [::events/discard])]
+      (is (= expected (get-in saved [:form :ingredients])) (str page))
+      (is (= (:form saved) (:baseline saved)) (str page))
+      (is (not (model/dirty? (:form saved) (:baseline saved))) (str page))
+      (is (= expected (get-in discarded [:form :ingredients])) (str page)))))
 
 (deftest saved-event-partial-create-opens-the-confirmed-recipe
   (let [db {:status :saving
