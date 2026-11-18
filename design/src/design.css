@@ -335,8 +335,6 @@ header-component > header:focus-within {
 
 .recipe-image-frame {
   aspect-ratio: 4 / 3;
-  margin: 0 auto;
-  max-width: min(650px, 100%);
   overflow: hidden;
   position: relative;
   width: 100%;
@@ -344,9 +342,6 @@ header-component > header:focus-within {
 
 recipe-image-carousel {
   --swiper-navigation-color: var(--pico-primary-inverse);
-  --swiper-pagination-color: transparent;
-  --swiper-pagination-bullet-inactive-color: transparent;
-  --swiper-pagination-bullet-inactive-opacity: 1;
   display: block;
 }
 
@@ -367,8 +362,10 @@ recipe-image-carousel :is(.swiper-button-prev, .swiper-button-next):disabled {
 }
 
 recipe-image-carousel .swiper-pagination-bullet {
+  background: transparent;
   border-color: transparent;
   box-shadow: none;
+  opacity: 1;
   outline: none;
   position: relative;
 }
@@ -386,7 +383,6 @@ recipe-image-carousel .swiper-pagination-bullet::before {
   inset: 0;
   margin: auto;
   opacity: 0.5;
-  pointer-events: none;
   position: absolute;
   width: 14px;
 }
@@ -395,17 +391,8 @@ recipe-image-carousel .swiper-pagination-bullet-active::before {
   opacity: 1;
 }
 
-recipe-image-carousel .swiper,
-recipe-image-carousel .swiper-wrapper,
-recipe-image-carousel .swiper-slide {
+recipe-image-carousel .swiper {
   height: 100%;
-  width: 100%;
-}
-
-recipe-image-carousel .swiper-slide {
-  align-items: center;
-  display: flex;
-  justify-content: center;
 }
 
 .recipe-image-content {
