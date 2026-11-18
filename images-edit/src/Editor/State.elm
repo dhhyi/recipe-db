@@ -230,7 +230,7 @@ returnToGallery saved model token =
                     , focusAfterCancel = not saved
                 }
     in
-    ( next, Cmd.batch [ release token, request, focus "gallery-heading" ] )
+    ( next, Cmd.batch [ release token, request ] )
 
 
 focus : String -> Cmd Msg

@@ -4,7 +4,7 @@ import Crop exposing (Crop)
 import Editor.Types exposing (Model, Msg(..), Phase(..), Session, canAdd, imageLimit)
 import File exposing (File)
 import Html exposing (Html, a, button, div, h1, img, input, label, li, p, span, text)
-import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, tabindex, type_)
+import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
 import Html.Events exposing (on, onClick)
 import Html.Keyed
 import Json.Decode as D
@@ -197,14 +197,7 @@ galleryView model =
     editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
             [ h1
-                ([ id "gallery-heading", tabindex -1 ]
-                    ++ (if model.savedFeedback then
-                            [ attribute "aria-describedby" "editor-status" ]
-
-                        else
-                            []
-                       )
-                )
+                [ id "gallery-heading" ]
                 [ text (model.recipeName |> Maybe.map (\name -> "Bilder für " ++ name ++ " verwalten") |> Maybe.withDefault "Rezeptbilder verwalten") ]
             , label [ class "gallery-add" ]
                 [ text "Bild hinzufügen"

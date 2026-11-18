@@ -237,6 +237,7 @@ test("each save sends the original and crop, then returns to the gallery", async
   expect(blobUrl).toMatch(/^blob:/);
   expect(await revokedUrls()).not.toContain(blobUrl);
   const first = await saveSource(page);
+  await expect(galleryHeading(page)).not.toBeFocused();
   await expect.poll(revokedUrls).toContain(blobUrl);
   expect(uploadedCrop(first.upload)).toEqual(firstCrop);
   await expect(galleryImages(page).first()).toHaveAttribute(
@@ -598,7 +599,7 @@ test("malformed capabilities do not enable image management", async ({
   await expect(page.getByText("Kein Bild vorhanden.")).toHaveCount(0);
 });
 
-test("Cancel focuses the gallery heading when a malformed read prevents Add", async ({
+test("Cancel does not focus the gallery heading when a malformed read prevents Add", async ({
   page,
   demoRecipe,
 }) => {
@@ -617,7 +618,7 @@ test("Cancel focuses the gallery heading when a malformed read prevents Add", as
     page.getByText("Rezeptbilder konnten nicht geladen werden."),
   ).toBeVisible();
   await expect(addInput(page)).toBeDisabled();
-  await expect(galleryHeading(page)).toBeFocused();
+  await expect(galleryHeading(page)).not.toBeFocused();
   await expect(page.getByText("Kein Bild vorhanden.")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Erneut laden" }),
