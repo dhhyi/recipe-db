@@ -56,7 +56,7 @@ editorView model =
         busy =
             model.phase == Saving
     in
-    editorPage model
+    editorPage
         [ h1 [] [ text (model.recipeName |> Maybe.map (\name -> "Bild für " ++ name ++ " bearbeiten") |> Maybe.withDefault "Bild bearbeiten") ]
         , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
         , if model.phase == Editing then
@@ -146,33 +146,36 @@ loadingPlaceholder loadingLabel =
         []
 
 
-editorPage : Model -> List (Html Msg) -> Html Msg
-editorPage model content =
+editorPage : List (Html Msg) -> Html Msg
+editorPage content =
     Html.main_ [ class "image-editor" ]
-        (p
-            [ id "editor-status"
-            , attribute "role" "status"
-            , class
-                (if model.phase == Viewing && model.savedFeedback then
-                    "feedback success save-feedback"
+        content
 
-                 else
-                    "editor-announcement"
-                )
-            ]
-            [ text
-                (if model.phase == Viewing && model.savedFeedback then
-                    "Bild gespeichert."
 
-                 else if model.phase == Viewing && model.recipe == RemoteData.Loading then
-                    "Rezeptbilder werden geladen."
+editorStatus : Model -> Html Msg
+editorStatus model =
+    p
+        [ id "editor-status"
+        , attribute "role" "status"
+        , class
+            (if model.phase == Viewing && model.savedFeedback then
+                "feedback success save-feedback"
 
-                 else
-                    ""
-                )
-            ]
-            :: content
-        )
+             else
+                "editor-announcement"
+            )
+        ]
+        [ text
+            (if model.phase == Viewing && model.savedFeedback then
+                "Bild gespeichert."
+
+             else if model.phase == Viewing && model.recipe == RemoteData.Loading then
+                "Rezeptbilder werden geladen."
+
+             else
+                ""
+            )
+        ]
 
 
 galleryView : Model -> Html Msg
@@ -191,7 +194,7 @@ galleryView model =
                 _ ->
                     Nothing
     in
-    editorPage model
+    editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
             [ h1
                 ([ id "gallery-heading", tabindex -1 ]
@@ -216,6 +219,7 @@ galleryView model =
                     []
                 ]
             ]
+        , editorStatus model
         , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
         , Maybe.withDefault (text "") (Maybe.map (\warning -> p [ class "feedback warning", attribute "role" "status" ] [ text warning ]) (Editor.Types.capacityWarning images))
         , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
