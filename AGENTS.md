@@ -8,6 +8,8 @@ Do not add new content to README.md files unless the user explicitly asks for it
 
 Follow the [documentation guidelines in CONTRIBUTING.md](CONTRIBUTING.md#documentation) when writing or revising documentation.
 
+Do not add or change documentation about specific migrators in the `docs/` folder.
+
 ## Local demo Compose cluster
 
 - The local development/demo Docker Compose project is disposable: agents may independently reset, destroy, and [reseed its demo data](demo-data/README.md), which can be reconstructed.
