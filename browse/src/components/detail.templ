@@ -61,11 +61,8 @@ templ imageCarousel(recipe *gql.RecipeDetail) {
 	<recipe-image-carousel
 		class="recipe-image recipe-image-frame"
 		style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
-		role="region"
-		aria-label="Rezeptbilder"
-		aria-roledescription="Karussell"
 	>
-		<div class="swiper">
+		<div class="swiper" role="region" aria-label="Rezeptbilder" aria-roledescription="Karussell">
 			<div class="swiper-wrapper">
 				for index, recipeImage := range recipe.Images {
 					<div class="swiper-slide">

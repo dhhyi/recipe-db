@@ -18,11 +18,13 @@ test("recipe image carousel follows collection order and navigates locally", asy
   expect(recipe.image.url).toBe(recipe.images[0].url);
 
   await page.goto(`/recipe/${multiImageRecipe.id}`);
-  const carousel = page.getByRole("region", {
+  const carousel = page.locator("recipe-image-carousel");
+  const region = page.getByRole("region", {
     name: "Rezeptbilder",
     exact: true,
   });
   await expect(carousel).toHaveAttribute("data-enhanced", "true");
+  await expect(region).toHaveCount(1);
   const slides = carousel.locator(".swiper-slide");
   const images = carousel.locator(".swiper-slide img");
   const activeImage = carousel.locator(".swiper-slide-active img");
