@@ -388,8 +388,7 @@ async def test_recipe_image_collection_prepend_and_delete_promote_default():
             session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/test.jpg"
         )
         second = await call_image_tool(
-            session, "add_recipe_image", recipe_id,
-            imageUrl=urljoin(f"{FIXTURE_API}/", "../image-inline-test-fixture/tiny.png"),
+            session, "add_recipe_image", recipe_id, imageUrl=f"{FIXTURE_API}/landscape.jpg"
         )
         for image in (first, second):
             assert set(image) == {"id", "url", "thumbUrl", "width", "height", "size"}
@@ -413,14 +412,20 @@ async def test_recipe_image_failures_do_not_return_success():
         for tool, arguments, message in (
             ("add_recipe_image", {"imageUrl": "file:///photo.jpg"}, "Invalid imageUrl"),
             ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/missing.jpg"}, "Failed to fetch image: HTTP 404"),
+            (
+                "add_recipe_image",
+                {"imageUrl": urljoin(f"{FIXTURE_API}/", "../image-inline-test-fixture/tiny.png")},
+                "invalid-image",
+            ),
             ("delete_recipe_image", {"imageId": "not-an-image-id"}, "invalid-image-id"),
         ):
             result = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
             assert result.is_error is True
             assert message in result.content[0].text
+            if message.startswith("invalid-image"):
+                assert "(status: 400)" in result.content[0].text
             if tool == "delete_recipe_image":
                 assert "(field: imageId)" in result.content[0].text
-                assert "(status: 400)" in result.content[0].text
         assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == []
 
 
