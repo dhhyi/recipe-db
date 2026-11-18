@@ -137,7 +137,7 @@ async def test_anonymous_reads_and_denied_writes_leave_data_unchanged(accounts):
         assert payload(await anonymous.call_tool("get_recipe_schema", {}))["addRecipe"]
         before_list = payload(await anonymous.call_tool("list_recipes", {}))
         before = payload(await anonymous.call_tool("get_recipe", {"recipeId": recipe_id}))
-        assert before["images"] == [image]
+        assert before["images"] == [second_image, image]
         for name, arguments in (
             ("add_recipe", {"recipeJson": json.dumps({"name": "Denied anonymous recipe"})}),
             ("change_recipe", {"recipeId": recipe_id, "recipeJson": '{"name":"Denied"}'}),
