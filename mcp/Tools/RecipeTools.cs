@@ -26,7 +26,7 @@ public class RecipeTools(
 )
 {
     private const string ImageUrlGuidance =
-        " 'imageUrl' must be a direct HTTP(S) image URL reachable by this server " +
+        " 'imageUrl' must be a direct HTTP(S) image URL on a public host, reachable by this server " +
         "without browser authentication, not a local path or sharing page. For local/private photos, " +
         "use client file/browser access and HTTP upload, or ask the user for a hosted URL if unavailable. " +
         "Do not invent missing capabilities or claim success from hosting alone. " +
@@ -88,7 +88,7 @@ public class RecipeTools(
             var errors = (validation.Details ?? [])
                 .Where(d => d.Errors is { Count: > 0 })
                 .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}"));
-            return $"Recipe failed schema validation: {string.Join("; ", errors)}";
+            throw new McpException($"Recipe failed schema validation: {string.Join("; ", errors)}");
         }
 
         var recipe = JsonNode.Parse(recipeJson)!.AsObject();
@@ -221,7 +221,7 @@ public class RecipeTools(
             var errors = (validation.Details ?? [])
                 .Where(d => d.Errors is { Count: > 0 })
                 .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}"));
-            return $"Recipe failed schema validation: {string.Join("; ", errors)}";
+            throw new McpException($"Recipe failed schema validation: {string.Join("; ", errors)}");
         }
 
         var recipe = JsonNode.Parse(recipeJson)!.AsObject();
@@ -398,18 +398,9 @@ public class RecipeTools(
             throw new McpException("Invalid imageUrl: provide a direct HTTP(S) image URL without embedded credentials.");
         }
 
-        using var http = httpClientFactory.CreateClient();
-        using var imageResponse = await FetchImageAsync(http, source, cancellationToken);
-
-        if (!imageResponse.IsSuccessStatusCode)
-        {
-            throw new McpException($"Failed to fetch image: HTTP {(int)imageResponse.StatusCode}");
-        }
-
-        var contentType = imageResponse.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+        var (stream, contentType) = await FetchImageAsync(source, cancellationToken);
+        using var image = stream;
         var filename = source.AbsolutePath.Split('/').LastOrDefault(segment => segment.Length > 0) ?? "image";
-
-        await using var stream = await imageResponse.Content.ReadAsStreamAsync(cancellationToken);
         var file = new Upload(stream, filename, contentType);
         var response = await client.AddImage.ExecuteAsync(recipeId, file, cancellationToken);
         if (response.Errors.Count > 0)
@@ -421,15 +412,45 @@ public class RecipeTools(
         return JsonSerializer.Serialize(new { added.Id, added.Url, added.ThumbUrl, added.Width, added.Height, added.Size }, JsonOptions);
     }
 
-    private static async Task<HttpResponseMessage> FetchImageAsync(
-        HttpClient http, Uri source, CancellationToken cancellationToken
+    private async Task<(MemoryStream Stream, string ContentType)> FetchImageAsync(
+        Uri source, CancellationToken cancellationToken
     )
     {
+        using var http = httpClientFactory.CreateClient(ImageSource.ClientName);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(http.Timeout);
+        var token = deadline.Token;
+        const string tooLarge = "Failed to fetch image: source exceeds the 10 MiB download limit";
         try
         {
-            return await http.GetAsync(source, cancellationToken);
+            using var response = await http.GetAsync(source, HttpCompletionOption.ResponseHeadersRead, token);
+            if (!response.IsSuccessStatusCode)
+                throw new McpException($"Failed to fetch image: HTTP {(int)response.StatusCode}");
+            if (response.Content.Headers.ContentLength > ImageSource.MaxBytes)
+                throw new McpException(tooLarge);
+
+            using var body = await response.Content.ReadAsStreamAsync(token);
+            var image = new MemoryStream();
+            try
+            {
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await body.ReadAsync(buffer, token)) > 0)
+                {
+                    if (image.Length + read > ImageSource.MaxBytes)
+                        throw new McpException(tooLarge);
+                    image.Write(buffer, 0, read);
+                }
+                image.Position = 0;
+                return (image, response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream");
+            }
+            catch
+            {
+                image.Dispose();
+                throw;
+            }
         }
-        catch (HttpRequestException)
+        catch (Exception e) when (e is HttpRequestException or IOException)
         {
             throw new McpException("Failed to fetch image: could not download the source URL");
         }

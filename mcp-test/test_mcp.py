@@ -302,6 +302,7 @@ async def test_add_recipe_with_valid_json_creates_a_recipe():
 async def test_add_recipe_without_a_name_fails_schema_validation():
     async with mcp_session() as session:
         result = await session.call_tool("add_recipe", {"recipeJson": json.dumps({"method": "Mix"})})
+        assert result.is_error is True
         assert "validation" in result.content[0].text.lower()
 
 
@@ -312,6 +313,7 @@ async def test_add_recipe_rejects_image_url_without_creating_a_recipe():
             "add_recipe",
             {"recipeJson": json.dumps({"name": name, "imageUrl": f"{FIXTURE_API}/test.jpg"})},
         )
+        assert result.is_error is True
         assert "schema validation" in result.content[0].text
         recipes = await session.call_tool("list_recipes", {})
         assert not any(recipe["name"] == name for recipe in json.loads(recipes.content[0].text))
@@ -369,6 +371,7 @@ async def test_change_recipe_rejects_image_url_without_changing_fields():
                 "recipeJson": json.dumps({"name": "Changed recipe", "imageUrl": f"{FIXTURE_API}/test.jpg"}),
             },
         )
+        assert result.is_error is True
         assert "schema validation" in result.content[0].text
         recipe = await call_image_tool(session, "get_recipe", recipe_id)
         assert recipe["name"] == name
@@ -411,7 +414,10 @@ async def test_recipe_image_failures_do_not_return_success():
         recipe_id = await create_recipe(session, "Image error handling")
         for tool, arguments, message in (
             ("add_recipe_image", {"imageUrl": "file:///photo.jpg"}, "Invalid imageUrl"),
+            ("add_recipe_image", {"imageUrl": "http://127.0.0.1:5000/health"}, "could not download"),
+            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/private-redirect.jpg"}, "could not download"),
             ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/missing.jpg"}, "Failed to fetch image: HTTP 404"),
+            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/oversized.jpg"}, "10 MiB download limit"),
             (
                 "add_recipe_image",
                 {"imageUrl": urljoin(f"{FIXTURE_API}/", "../image-inline-test-fixture/tiny.png")},
