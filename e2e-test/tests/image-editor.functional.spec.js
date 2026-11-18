@@ -228,7 +228,10 @@ test("repeated saves send the original and crop; Close shows the latest immutabl
     .click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
   await expect(
-    page.getByRole("img", { name: demoRecipe.name, exact: true }),
+    page
+      .locator("recipe-image-carousel")
+      .getByRole("img", { name: demoRecipe.name, exact: true })
+      .first(),
   ).toHaveAttribute("src", second.metadata.url);
   await page.getByRole("link", { name: "Zur Startseite" }).click();
   const thumbnail = page

@@ -50,7 +50,7 @@ func invalidSearchOptions(err error) bool {
 func optionalServiceErrors(err error) bool {
 	return serviceUnavailableOnly(err, map[string]string{
 		"ratings":      "rating,myRating",
-		"images":       "image",
+		"images":       "image,images",
 		"inspirations": "inspirations",
 		"tags":         "tags",
 		"link-extract": "extracted",

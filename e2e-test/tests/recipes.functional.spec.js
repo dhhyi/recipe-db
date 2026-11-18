@@ -498,10 +498,10 @@ test.describe("first image", () => {
       .getByRole("link", { name: "Zurück zum Rezept", exact: true })
       .click();
     await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-    const detailImage = page.getByRole("img", {
-      name: demoRecipe.name,
-      exact: true,
-    });
+    const detailImage = page
+      .locator("recipe-image-carousel")
+      .getByRole("img", { name: demoRecipe.name, exact: true })
+      .first();
     await expectPixels(detailImage, patterns.B, { width: 648, height: 486 });
     await expect(detailImage).toHaveAttribute("src", urls.B);
 
@@ -636,10 +636,10 @@ test("replace a recipe image in the image editor and view the uploaded image", a
   await page
     .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
-  const detailImage = page.getByRole("img", {
-    name: demoRecipe.name,
-    exact: true,
-  });
+  const detailImage = page
+    .locator("recipe-image-carousel")
+    .getByRole("img", { name: demoRecipe.name, exact: true })
+    .first();
   await expectPixels(detailImage, uploadedImage, { width: 648, height: 486 });
   await expect(detailImage).toHaveAttribute("src", repeated.url);
   await page.getByRole("link", { name: "Zur Startseite" }).click();

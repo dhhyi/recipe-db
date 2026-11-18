@@ -3,8 +3,10 @@ import json
 import os
 import sys
 import random
+from io import BytesIO
 
 import httpx
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from graphql_client import Client
 from graphql_client.base_model import Upload
 from graphql_client.enums import TagCategory
@@ -166,16 +168,38 @@ async def assign_demo_tags(recipe_id, tag_ids, graphql_client=None):
         raise Exception(f"Failed to assign tags to recipe {recipe_id}")
 
 
-async def maybe_add_image(number, recipe_id):
+async def upload_image(recipe_id, upload):
+    print(f"Adding {upload.filename} to recipe {recipe_id}")
+    result = await client.add_image(recipe_id, upload)
+    print(f"-> {result.add_image.url}")
+
+
+async def maybe_add_image(number, recipe_id, *, numbered_images=0):
+    if numbered_images:
+        with Image.open(f"recipe{number}.jpg") as source:
+            photo = ImageOps.fit(ImageOps.exif_transpose(source), (648, 486)).convert(
+                "RGB"
+            )
+        font = ImageFont.load_default(size=44)
+        # Uploads are prepended, so seed in reverse carousel order.
+        for slide in range(numbered_images, 0, -1):
+            image = photo.copy()
+            draw = ImageDraw.Draw(image)
+            draw.rounded_rectangle((564, 24, 624, 84), radius=10, fill="black")
+            draw.text((594, 54), str(slide), font=font, fill="white", anchor="mm")
+            with BytesIO() as content:
+                image.save(content, format="JPEG", quality=92)
+                upload = Upload(
+                    f"recipe{number}.slide{slide}.jpg", content.getvalue(), "image/jpeg"
+                )
+            await upload_image(recipe_id, upload)
+        return
     for extension, content_type in [("jpg", "image/jpeg"), ("png", "image/png")]:
         image_file = f"recipe{number}.{extension}"
         if file_exists(image_file):
-            print(f"Adding image to recipe {recipe_id}")
             with open(image_file, mode="rb") as content:
-                content = content.read()
-                upload = Upload(image_file, content, content_type)
-                result = await client.add_image(recipe_id, upload)
-                print(f"-> {result.add_image.url}")
+                upload = Upload(image_file, content.read(), content_type)
+            await upload_image(recipe_id, upload)
             return
 
 
@@ -192,15 +216,15 @@ async def main():
         await import_demo_tags()
 
         recipe_id = await insert_recipe(1)
-        await maybe_add_image(1, recipe_id)
+        await maybe_add_image(1, recipe_id, numbered_images=3)
         await rate_recipe(recipe_id, 4)
 
         recipe_id = await insert_recipe(2)
-        await maybe_add_image(2, recipe_id)
+        await maybe_add_image(2, recipe_id, numbered_images=4)
         await random_rate_recipe(recipe_id)
 
         recipe_id = await insert_recipe(3)
-        await maybe_add_image(3, recipe_id)
+        await maybe_add_image(3, recipe_id, numbered_images=2)
         await random_rate_recipe(recipe_id)
 
         recipe_id = await insert_recipe(4)

@@ -238,7 +238,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	const thumbURL = "/assets/unrelated/thumb-token.png?rev=opaque&size=small"
 	var recipeCalls atomic.Int32
 	var version atomic.Int32
-	var deleted, ratingsOffline, imagesOffline, editOnline atomic.Bool
+	var deleted, ratingsOffline, imagesOffline, malformedImages, editOnline atomic.Bool
 	var hasImage atomic.Bool
 	var tagsOffline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
@@ -279,11 +279,20 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 					rating = nil
 				}
 				var image any
+				var images any = []any{
+					map[string]any{"id": "default-image-id", "url": imageURL},
+					map[string]any{"id": "older-image-id", "url": "https://cdn.example.test/opaque/older.png"},
+				}
 				if hasImage.Load() {
 					image = map[string]any{"url": imageURL, "thumbUrl": thumbURL}
+				} else {
+					images = []any{}
 				}
 				if imagesOffline.Load() {
 					image = nil
+					images = nil
+				} else if malformedImages.Load() {
+					images = nil
 				}
 				name := "Original"
 				if version.Load() > 0 {
@@ -295,7 +304,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 					},
 					"tags":      []any{},
 					"createdAt": "2020-01-01T00:00:00.123456Z", "updatedAt": "2020-01-01T00:00:00.123456Z",
-					"rating": rating, "image": image,
+					"rating": rating, "image": image, "images": images,
 				}
 				if tagsOffline.Load() {
 					recipe.(map[string]any)["tags"] = nil
@@ -348,6 +357,12 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			errors = append(errors, map[string]any{
 				"message": "images unavailable",
 				"path":    []any{"recipe", "image"},
+				"extensions": map[string]any{
+					"code": "service-unavailable", "status": 503, "service": "images",
+				},
+			}, map[string]any{
+				"message": "image collection unavailable",
+				"path":    []any{"recipe", "images"},
 				"extensions": map[string]any{
 					"code": "service-unavailable", "status": 503, "service": "images",
 				},
@@ -431,6 +446,11 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	if !strings.Contains(html.UnescapeString(pageHTML), `src="`+imageURL+`"`) {
 		t.Fatal("detail did not preserve opaque backend image URL")
+	}
+	if !strings.Contains(pageHTML, `data-image-id="default-image-id"`) ||
+		!strings.Contains(pageHTML, `data-image-id="older-image-id"`) ||
+		strings.Index(pageHTML, `data-image-id="default-image-id"`) > strings.Index(pageHTML, `data-image-id="older-image-id"`) {
+		t.Fatal("detail did not render the ordered image collection with its backend identities")
 	}
 	if !strings.Contains(pageHTML, "Zuletzt aktualisiert: vor langer Zeit") {
 		t.Fatal("recipe update time must be displayed in German")
@@ -592,6 +612,16 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		recovered.Header().Get("ETag") == "" || recipeCalls.Load() != callsBeforeDegraded+3 {
 		t.Fatal("tag display did not recover to cacheable HTML")
 	}
+	malformedImages.Store(true)
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	malformedCollection := request("GET", "/recipe/42", "")
+	if malformedCollection.Code != http.StatusInternalServerError ||
+		strings.Contains(malformedCollection.Body.String(), "recipe-image-frame") {
+		t.Fatalf("a null collection without an outage error must not render as a successful empty collection: %d %s", malformedCollection.Code, malformedCollection.Body.String())
+	}
+	malformedImages.Store(false)
 	hasImage.Store(false)
 	if err := c.invalidate("42"); err != nil {
 		t.Fatal(err)

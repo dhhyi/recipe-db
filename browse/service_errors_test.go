@@ -86,6 +86,13 @@ func TestOptionalServiceErrorsAcceptsIndependentRecipeEnrichmentOutages(t *testi
 			Path: ast.Path{ast.PathName("searchRecipes"), ast.PathName("recipes"), ast.PathIndex(2), ast.PathName("image")},
 		},
 		{
+			Message: "image collection unavailable",
+			Extensions: map[string]interface{}{
+				"code": "service-unavailable", "status": 503, "service": "images",
+			},
+			Path: ast.Path{ast.PathName("recipe"), ast.PathName("images")},
+		},
+		{
 			Message: "recipe unavailable",
 			Extensions: map[string]interface{}{
 				"code": "service-unavailable", "status": 503, "service": "recipes",

@@ -309,6 +309,34 @@ for (const role of ["anonymous", "member", "owner"]) {
       await screenshot(page, "recipe.png");
     });
 
+    if (role === "anonymous") {
+      test("ordered recipe carousel detail", async ({
+        page,
+        multiImageRecipe,
+      }) => {
+        await page.goto(`/recipe/${multiImageRecipe.id}`);
+        const carousel = page.locator("recipe-image-carousel");
+        const region = carousel.getByRole("region", {
+          name: "Rezeptbilder",
+          exact: true,
+        });
+        await expect(carousel).toHaveAttribute("data-enhanced", "true");
+        await expect(carousel.locator(".swiper-slide")).toHaveCount(2);
+        await waitForImageDecoded(region.locator(".swiper-slide-active img"));
+        await screenshot(page, "recipe-carousel.png", {
+          fullPage: false,
+        });
+
+        await carousel
+          .getByRole("button", { name: "Nächstes Bild", exact: true })
+          .click();
+        await waitForImageDecoded(region.locator(".swiper-slide-active img"));
+        await screenshot(page, "recipe-carousel-next.png", {
+          fullPage: false,
+        });
+      });
+    }
+
     if (role === "owner") {
       test("recipe tag editor", async ({ page, taggedDemoRecipe }) => {
         await page.goto(`/recipe/${taggedDemoRecipe.id}`);

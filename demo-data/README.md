@@ -2,7 +2,7 @@
 
 Generates demo recipes, ratings, inspirations and images via the GraphQL API. Implemented in Python using a codegen'd GraphQL client ([ariadne-codegen](https://github.com/mirumee/ariadne-codegen)).
 
-Run it on demand against an already-running deployment with:
+Run it on demand from the repository root against the running local demo cluster:
 
 ```sh
 mise run seed-demodata

@@ -9,6 +9,13 @@ func recipeImageTransitionStyle(id string) string {
 	return fmt.Sprintf("view-transition-name: recipe-image-%x", id)
 }
 
+func recipeImageLoading(index int) string {
+	if index == 0 {
+		return "eager"
+	}
+	return "lazy"
+}
+
 templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 	if recipeEdit || (images && imageEdit) {
 		<details class="dropdown sm:ml-auto">
@@ -34,16 +41,48 @@ templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
 	)
 }
 
-templ image(recipe *gql.RecipeDetail) {
-	<figure class="contents">
+templ image(recipe *gql.RecipeDetail, imageURL string, imageID string) {
+	<recipe-image-carousel
+		class="recipe-image recipe-image-frame"
+		style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
+	>
 		<img
-			class="recipe-image"
-			style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
-			src={ recipe.Image.Url }
+			class="recipe-image-content"
+			data-image-id={ imageID }
+			src={ imageURL }
 			alt={ recipe.Name }
 			itemprop="image"
+			loading="eager"
 		/>
-	</figure>
+	</recipe-image-carousel>
+}
+
+templ imageCarousel(recipe *gql.RecipeDetail) {
+	<recipe-image-carousel
+		class="recipe-image recipe-image-frame"
+		style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
+	>
+		<div class="swiper" role="region" aria-label="Rezeptbilder" aria-roledescription="Karussell">
+			<div class="swiper-wrapper">
+				for index, recipeImage := range recipe.Images {
+					<div class="swiper-slide">
+						<img
+							class="recipe-image-content"
+							data-image-id={ recipeImage.Id }
+							src={ recipeImage.Url }
+							alt={ recipe.Name }
+							itemprop="image"
+							decoding="async"
+							loading={ recipeImageLoading(index) }
+						/>
+					</div>
+				}
+			</div>
+			<button class="swiper-button-prev" type="button" aria-label="Vorheriges Bild" data-carousel-prev hidden></button>
+			<button class="swiper-button-next" type="button" aria-label="Nächstes Bild" data-carousel-next hidden></button>
+			<div class="swiper-pagination" data-carousel-pagination hidden></div>
+		</div>
+	</recipe-image-carousel>
 }
 
 templ ingredients(recipe *gql.RecipeDetail, publicURL string) {
@@ -122,9 +161,19 @@ templ Detail(resp *gql.RecipeByIdResponse, publicURL string) {
 			<div class="contents" hx-get={ "/recipe/" + recipe.Id + "/controls" } hx-trigger="load" hx-swap="outerHTML"></div>
 		</div>
 		<section class="grid grid-cols-1 gap-3 md:grid-cols-2">
-			if recipe.Image != nil {
+			if len(recipe.Images) > 1 {
 				<div class="flex flex-col gap-2">
-					@image(recipe)
+					@imageCarousel(recipe)
+					@recipeDetailTags(recipe.Id, recipe.Tags)
+				</div>
+			} else if len(recipe.Images) == 1 {
+				<div class="flex flex-col gap-2">
+					@image(recipe, recipe.Images[0].Url, recipe.Images[0].Id)
+					@recipeDetailTags(recipe.Id, recipe.Tags)
+				</div>
+			} else if recipe.Images == nil && recipe.Image != nil {
+				<div class="flex flex-col gap-2">
+					@image(recipe, recipe.Image.Url, "")
 					@recipeDetailTags(recipe.Id, recipe.Tags)
 				</div>
 			} else {

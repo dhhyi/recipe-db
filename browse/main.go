@@ -40,6 +40,9 @@ func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte
 	if resp.Recipe == nil {
 		return nil, errRecipeNotFound
 	}
+	if resp.Recipe.Images == nil && !serviceUnavailableField(err, "images", "images") {
+		return nil, errors.New("recipe images were null without an images outage error")
+	}
 	if resp.Recipe.Rating == nil && !serviceUnavailableField(err, "ratings", "rating") {
 		return nil, errors.New("recipe rating was null without a ratings outage error")
 	}

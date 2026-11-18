@@ -14,7 +14,6 @@ import (
 )
 
 func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
-	imageTag := regexp.MustCompile(`<img\b[^>]*>`)
 	transitionStyle := regexp.MustCompile(`view-transition-name:\s*(recipe-image-[0-9a-f]+)`)
 	tileStyle := regexp.MustCompile(`--recipe-tile-transition-name:\s*(recipe-tile-[0-9a-f]+)`)
 	seen := map[string]bool{}
@@ -26,9 +25,9 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 		hero := renderTagComponent(t, image(&gql.RecipeDetail{
 			Id: id, Name: "Kuchen",
 			Image: &gql.RecipeDetailImageImageMetadata{Url: "/full.png"},
-		}))
-		thumbnailName := transitionStyle.FindStringSubmatch(imageTag.FindString(tile))
-		heroName := transitionStyle.FindStringSubmatch(imageTag.FindString(hero))
+		}, "/full.png", ""))
+		thumbnailName := transitionStyle.FindStringSubmatch(tile)
+		heroName := transitionStyle.FindStringSubmatch(hero)
 		if len(thumbnailName) != 2 || len(heroName) != 2 || thumbnailName[1] != heroName[1] {
 			t.Fatalf("recipe %q must match its thumbnail and hero with CSS-safe names: tile=%s hero=%s", id, tile, hero)
 		}
@@ -46,6 +45,59 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 	withoutImage := renderTagComponent(t, recipeTile(gql.RecipeStub{Id: "42", Name: "Kuchen"}, false, false))
 	if strings.Contains(withoutImage, "view-transition-name") {
 		t.Fatal("an imageless tile must not claim an image transition")
+	}
+}
+
+func TestRecipeDetailUsesOrderedImageCollectionAndPlainSingleImages(t *testing.T) {
+	recipe := &gql.RecipeDetail{
+		Id:   "42",
+		Name: "Kuchen",
+		Images: []gql.RecipeDetailImagesImageMetadata{
+			{Id: "first-id", Url: "/first.png"},
+			{Id: "second-id", Url: "/second.png"},
+		},
+	}
+	carousel := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{Recipe: recipe}, ""))
+	first := strings.Index(carousel, `data-image-id="first-id"`)
+	second := strings.Index(carousel, `data-image-id="second-id"`)
+	if first < 0 || second < 0 || first > second ||
+		!strings.Contains(carousel, `loading="eager"`) ||
+		!strings.Contains(carousel, `loading="lazy"`) ||
+		!strings.Contains(carousel, `data-carousel-prev hidden`) ||
+		!strings.Contains(carousel, `data-carousel-next hidden`) {
+		t.Fatalf("detail must preserve collection order and progressive carousel controls: %s", carousel)
+	}
+
+	recipe.Images = recipe.Images[:1]
+	single := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{Recipe: recipe}, ""))
+	if !strings.Contains(single, "recipe-image-carousel") ||
+		strings.Contains(single, "data-carousel-prev") ||
+		strings.Contains(single, "data-carousel-next") ||
+		strings.Contains(single, "swiper-pagination") ||
+		strings.Contains(single, `aria-roledescription="Karussell"`) ||
+		!strings.Contains(single, `data-image-id="first-id"`) {
+		t.Fatalf("one image must retain fallback handling without carousel controls: %s", single)
+	}
+}
+
+func TestRecipeDetailDistinguishesEmptyAndUnavailableImageCollections(t *testing.T) {
+	empty := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{
+		Recipe: &gql.RecipeDetail{Id: "42", Name: "Kuchen", Images: []gql.RecipeDetailImagesImageMetadata{}},
+	}, ""))
+	if strings.Contains(empty, "recipe-image") || strings.Contains(empty, "data-carousel") {
+		t.Fatalf("a confirmed empty collection must retain the no-image layout: %s", empty)
+	}
+
+	unavailable := renderTagComponent(t, Detail(&gql.RecipeByIdResponse{
+		Recipe: &gql.RecipeDetail{
+			Id: "42", Name: "Kuchen",
+			Image: &gql.RecipeDetailImageImageMetadata{Url: "/default.png"},
+		},
+	}, ""))
+	if !strings.Contains(unavailable, "recipe-image-carousel") ||
+		strings.Contains(unavailable, "data-carousel-prev") ||
+		!strings.Contains(unavailable, `src="/default.png"`) {
+		t.Fatalf("a null collection must not be treated as confirmed empty when a default remains available: %s", unavailable)
 	}
 }
 
