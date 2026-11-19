@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
-# Bats fixtures invoke sourced helpers indirectly and isolate each test in a subshell.
-# shellcheck disable=SC2030,SC2031,SC2034,SC2218,SC2329
+# Bats fixtures invoke sourced helpers indirectly, generate literal shell expressions, and isolate tests in subshells.
+# shellcheck disable=SC2016,SC2030,SC2031,SC2034,SC2218,SC2329
 
 load test_helper
 

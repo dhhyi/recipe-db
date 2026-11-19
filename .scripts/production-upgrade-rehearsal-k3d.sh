@@ -642,7 +642,7 @@ prepare_fake_upload() {
       captureCommand:$capture,captureTimeoutSeconds:600,maxStagingBytes:8589934592
     }' > "$work/$label-backup-config.json"
   chmod 600 "$work/$label-backup-config.json"
-  mkdir -m 700 -p -- "$work/uploader/$label" "$work/uploader/staging-$label"
+  mkdir -p -- "$work/uploader/$label" "$work/uploader/staging-$label"
   run_logged "$work/logs/$label-upload.log" \
     python3 "$upload" nightly --config "$work/$label-backup-config.json"
   jq -e '.status == "verified-upload"' "$work/uploader/$label/status.json" > /dev/null \
@@ -825,7 +825,7 @@ run_scenario() {
   local package_manifest package_archive migration_digest migration_image job lease transition
   state="$work/state/$label"
   if [[ $label == successful-upgrade ]]; then
-    mkdir -m 700 -p -- "$work/uploader/$label"
+    mkdir -p -- "$work/uploader/$label"
     state="$work/uploader/$label/maintenance"
   fi
   take_sample "$source_values"
