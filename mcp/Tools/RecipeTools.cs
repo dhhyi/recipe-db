@@ -85,6 +85,7 @@ public class RecipeTools(
         var validation = schema.Evaluate(element, new EvaluationOptions { OutputFormat = OutputFormat.List });
         if (!validation.IsValid)
         {
+            ValidateIngredientAmounts(element);
             var errors = (validation.Details ?? [])
                 .Where(d => d.Errors is { Count: > 0 })
                 .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}"));
@@ -218,6 +219,7 @@ public class RecipeTools(
         var validation = schema.Evaluate(element, new EvaluationOptions { OutputFormat = OutputFormat.List });
         if (!validation.IsValid)
         {
+            ValidateIngredientAmounts(element);
             var errors = (validation.Details ?? [])
                 .Where(d => d.Errors is { Count: > 0 })
                 .SelectMany(d => d.Errors!.Select(e => $"{d.InstanceLocation}: {e.Value}"));
@@ -370,13 +372,36 @@ public class RecipeTools(
     private static IngredientInput MapIngredient(JsonNode? node)
     {
         var ingredient = node!.AsObject();
+        var amount = ingredient["amount"];
         return new IngredientInput
         {
             Name = (string)ingredient["name"]!,
-            Amount = (string?)ingredient["amount"],
+            Amount = amount is JsonValue value && value.GetValueKind() == JsonValueKind.Number
+                ? value.GetValue<JsonElement>().GetRawText()
+                : (string?)amount,
             Unit = (string?)ingredient["unit"],
             Optional = (bool?)ingredient["optional"],
         };
+    }
+
+    private static void ValidateIngredientAmounts(JsonElement recipe)
+    {
+        if (recipe.ValueKind != JsonValueKind.Object
+            || !recipe.TryGetProperty("ingredients", out var ingredients)
+            || ingredients.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var ingredient in ingredients.EnumerateArray())
+        {
+            if (ingredient.ValueKind == JsonValueKind.Object
+                && ingredient.TryGetProperty("amount", out var amount)
+                && amount.ValueKind is not (JsonValueKind.String or JsonValueKind.Number))
+            {
+                throw new McpException("Recipe failed schema validation: ingredient amount expects a string or number.");
+            }
+        }
     }
 
     [McpServerTool(Name = "add_recipe_image")]
