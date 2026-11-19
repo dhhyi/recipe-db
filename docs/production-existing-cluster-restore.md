@@ -38,6 +38,14 @@ Stop if a command fails. Confirm the values identify the intended Pi, cluster/co
 - **Retained failed-release lock:** close out only a recognized terminal failure, as described below. An unknown phase or an in-flight operation is a refusal, not permission to delete the Lease.
 - **Failed restore or reset:** stop the old operator process before starting another command. Keep access blocked and reuse its original private state directory for reset. Do not rerun restore into partially imported data.
 
+For the failed-restore/reset path, replace the new directory chosen in step 1 with the original operation directory:
+
+```fish
+set -g STATE /absolute/path/to/original-failed-restore-state
+```
+
+Keep its original backup pair and backup ID. To choose a different backup after failure, first follow the abandonment path in step 5, then start a new reset preview with a new private state directory. Abandonment leaves the old data and access barrier intact.
+
 For a retained failed release, use the [managed workstation release controller](production-release-cookbook.md#5-stage-the-candidate-without-starting-normal-workloads), which writes progress through to the authoritative private state on the Pi. The reviewed tooling and installed private file helpers must include closeout support and match the workstation; do not bypass their revision or helper-integrity checks. Read the holder and compare it with `lock-status`:
 
 ```fish
@@ -55,16 +63,36 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-closeout "
 
 Success archives the operation's closed status and releases only that holder's Lease, with application access blocked and workloads stopped. It does not erase data or run reset. If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease.
 
+On the Pi, confirm the uploader no longer considers the closed operation active:
+
+```sh
+sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
+```
+
+Require `maintenanceActive: false`; keep the timer disabled. Closed operation metadata is archived privately on the Pi, not in the temporary workstation view.
+
 ## 3. Approve the data reset
 
 On the workstation, preview reset without approving data deletion:
+
+```fish
+umask 077
+set -g CATALOG "$STATE.catalog.json"
+mise run --raw retrieve-verified-backup --catalog > "$CATALOG"
+and mise run production-k3d recovery-plan "$VALUES" "$MANIFEST" "$ARCHIVE" \
+  "$BACKUP_ID" "$STATE" "$CATALOG"
+```
+
+The catalog uses the same Pi SSH and sudo authentication as backup retrieval; add `--pi user@hostname` for a different configured host. It lists and reads off-device objects, verifies archive and manifest hashes, and returns only backup metadata. It may take time because verification streams the remote archives through the Pi, without staging files there, copying authorization or pruning backups. Keep the workstation catalog private.
+
+If the remote backup path is unavailable, you may still recover from the independently verified package. Run the preview without a catalog:
 
 ```fish
 mise run production-k3d recovery-plan "$VALUES" "$MANIFEST" "$ARCHIVE" \
   "$BACKUP_ID" "$STATE"
 ```
 
-The preview verifies the selected backup, its archive hashes and exact immutable release before touching application storage. Review its discard summary: capture time, selected release, current release, newer known backups and any partial-restore warning. A warning that there is no recent verified backup deserves particular attention. Do not proceed if you chose the wrong restore point.
+The preview verifies the selected backup, its archive hashes and exact immutable release before touching application storage. Review its discard summary: capture time, selected release, current release, newer verified catalog points and any partial-restore warning. Without a catalog, treat newer backups as **unknown**, not absent. A warning that there is no recent verified backup deserves particular attention. Do not proceed if you chose the wrong restore point.
 
 Approve discarding application data with a separate command:
 
@@ -92,7 +120,7 @@ Keep the backup timer disabled. Align the backup service's immutable release ref
 
 ## 5. Recover from a failure
 
-A nonzero exit is not partial success. Leave application access blocked, stop the old operator process, inspect the reported phase and `lock-status`, and keep the original private state directory. Failure handling stops workers and retains the recovery Lease; if the barrier or termination cannot be verified, investigate before attempting another command.
+A nonzero exit is not partial success. Leave application access blocked, stop the old operator process, inspect the reported phase and `lock-status`, and keep the original private state directory. After an abrupt interruption, allow at least 45 seconds for the separate recovery-command heartbeat claim to expire before retrying; this never expires or releases the retained operation Lease. Failure handling stops workers and retains the recovery Lease; if the barrier or termination cannot be verified, investigate before attempting another command.
 
 Choose one action:
 

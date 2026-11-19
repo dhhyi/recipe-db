@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream the Pi's verified Drive baseline into a new private local directory."""
+"""Retrieve the Pi's verified Drive baseline or read-only backup catalog."""
 
 import argparse
 from contextlib import contextmanager
@@ -35,6 +35,12 @@ import json, runpy, subprocess, sys
 try:
     tool = runpy.run_path("/usr/local/sbin/recipe-db-backup-upload")
     config = tool["safe_config"]("/etc/recipe-db/backup.json")
+    if sys.argv[1] == "catalog":
+        try:
+            print(json.dumps(tool["verified_remote_catalog"](config)))
+        except tool["BackupError"] as error:
+            raise ValueError("remote catalog verification failed") from error
+        sys.exit(0)
     path = tool["baseline_path"](config)
     baseline = tool["read_json"](path)
     status = tool["report_status"](config)
@@ -297,11 +303,41 @@ def ssh_session(args):
                             "SSH connection cleanup timed out; check destination before retrying")
 
 
+def retrieve_catalog(args):
+    document = parse_json(receive(args, ("catalog",), MAX_METADATA))
+    if not isinstance(document, dict) \
+            or document.get("format") != "recipe-db-backup-catalog" \
+            or document.get("formatVersion") != 1 \
+            or not isinstance(document.get("deploymentId"), str) \
+            or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", document["deploymentId"]) \
+            or not isinstance(document.get("points"), list):
+        raise ValueError("invalid remote backup catalog")
+    upload["validate_timestamp"](document.get("checkedAt"))
+    identities = set()
+    for point in document["points"]:
+        if not isinstance(point, dict) \
+                or not isinstance(point.get("backupId"), str) \
+                or not upload["BACKUP_ID_PATTERN"].fullmatch(point["backupId"]) \
+                or point["backupId"] in identities \
+                or not isinstance(point.get("source"), dict) \
+                or not re.fullmatch(r"ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}",
+                                    str(point["source"].get("artifact", ""))) \
+                or not re.fullmatch(r"[0-9a-f]{40}", str(point["source"].get("revision", ""))):
+            raise ValueError("invalid remote backup catalog point")
+        upload["validate_timestamp"](point.get("capturedAt"))
+        identities.add(point["backupId"])
+    return document
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("destination", help="new directory under an existing symlink-free parent")
+    parser.add_argument("destination", nargs="?", help="new directory under an existing symlink-free parent")
     parser.add_argument("--pi", default="piadmin@recipe-pi.home", help="SSH user@host for the Pi")
+    parser.add_argument("--catalog", action="store_true",
+                        help="verify off-device backup points and print metadata without saving packages")
     args = parser.parse_args()
+    if args.catalog == (args.destination is not None):
+        parser.error("choose either DESTINATION or --catalog")
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi):
         parser.error("--pi must be an SSH user@hostname")
 
@@ -312,7 +348,7 @@ def main():
         signal.signal(signum, interrupt)
     os.umask(0o077)
     with ssh_session(args):
-        result = retrieve(args)
+        result = retrieve_catalog(args) if args.catalog else retrieve(args)
     print(json.dumps(result, sort_keys=True))
 
 

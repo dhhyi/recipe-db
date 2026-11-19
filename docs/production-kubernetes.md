@@ -113,15 +113,16 @@ Local Traefik uses a LoadBalancer Service so k3s ServiceLB forwards the k3d load
 
 ### End-to-end backup and recovery rehearsal
 
-The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It checks populated-target refusal without changing a marker, validates recipe/rating/inspiration/tag and image-pair reads, confirms a post-restore change reaches fresh search consumers, and cleans up its own records through the backup lifecycle. It uses owner-token authentication with Google sign-in disabled, matching `deploy/local.yaml` without OAuth2 Proxy or Redis. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
+The end-to-end runner creates two uniquely named, loopback-only k3d clusters, generates synthetic application credentials and records, captures the source PVCs, packages the snapshot, uploads it through a filesystem-backed fake `rclone` remote, and restores the verified package into a separately fresh target. It also exercises existing-cluster reset, failed-release closeout and interrupted recovery while checking that unrelated application-namespace and `kube-system` ACME storage are preserved. It validates restored reads and propagation and cleans up its own records through the backup lifecycle. It uses owner-token authentication with Google sign-in disabled, matching `deploy/local.yaml` without OAuth2 Proxy or Redis. It never uses Google OAuth or Drive credentials, accesses the Pi, or contacts a real remote.
 
-Use an immutable release artifact whose revision matches the checkout, after ensuring the host has the production-k3d prerequisites above:
+Use an immutable release artifact whose revision matches the checkout and a distinct immutable candidate for the retained failed-release scenario, after ensuring the host has the production-k3d prerequisites above. On the workstation in fish:
 
-```sh
+```fish
 mkdir -p "$PWD/.backups"
-RESULT="$PWD/.backups/backup-recovery-$(date -u +%Y%m%dT%H%M%SZ)"
-RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-mise run production-backup-recovery-k3d "$RELEASE" "$RESULT"
+set -g RESULT "$PWD/.backups/backup-recovery-"(date -u +%Y%m%dT%H%M%SZ)
+set -g RELEASE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
+set -g CANDIDATE 'ghcr.io/dhhyi/recipe-db-releases@sha256:<different-64-hex-artifact-digest>'
+mise run production-backup-recovery-k3d "$RELEASE" "$RESULT" "$CANDIDATE"
 ```
 
 The runner preserves both clusters and private diagnostics on success and failure; generated credentials and values are under `$RESULT/secrets`. Inspect the result JSON and logs before removing the result directory. To remove either cluster, use its saved values file with `production-k3d delete` and the exact `DELETE-<cluster>-AND-ALL-DATA` confirmation. Read-only checks wait through bounded route convergence; mutations are never automatically replayed. Restore waits for verified reads and a ready GraphQL route before its propagation probe, retaining blocked ingress and its recovery Lease if readiness fails. The other injected lifecycle, packaging, upload, and restore failure contracts are exercised by the `deploy` script regression group.

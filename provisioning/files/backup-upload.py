@@ -763,7 +763,7 @@ def verify_baseline(config, baseline, names):
         return False
 
 
-def complete_remote_points(config, names):
+def complete_remote_points(config, names, catalog=None):
     points = []
     prefix = f"recipe-db-{config['deploymentId']}-"
     for name in sorted(names):
@@ -818,7 +818,21 @@ def complete_remote_points(config, names):
                 or archive_hash != archive["sha256"]:
             raise BackupError("retention-failure", "remote-point-integrity")
         points.append((captured, backup_id, archive["name"], name))
+        if catalog is not None:
+            catalog.append({"backupId": backup_id, "capturedAt": document["capturedAt"],
+                            "source": source})
     return points
+
+
+def verified_remote_catalog(config):
+    catalog = []
+    complete_remote_points(config, remote_names(config), catalog)
+    return {
+        "format": "recipe-db-backup-catalog", "formatVersion": 1,
+        "deploymentId": config["deploymentId"],
+        "checkedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "points": catalog,
+    }
 
 
 def prune(config, names, current_archive, current_manifest):
