@@ -347,15 +347,35 @@ async def test_recipe_tools_preserve_ingredient_amounts():
         '{"name":"precise","amount":12345678901234567890.12300},'
         '{"name":"exponent","amount":1.20e-3},'
         '{"name":"text","amount":"a pinch"},'
-        '{"name":"omitted"}]'
+        '{"name":"omitted"},'
+        '{"name":"cleared","amount":"previous"}]'
     )
-    expected = {
+    added_amounts = {
         "integer": "2",
         "fraction": "0.5",
         "precise": "12345678901234567890.12300",
         "exponent": "1.20e-3",
         "text": "a pinch",
         "omitted": None,
+        "cleared": "previous",
+    }
+    updated_ingredients_json = (
+        '[{"name":"integer","amount":3},'
+        '{"name":"fraction","amount":0.75},'
+        '{"name":"precise","amount":98765432109876543210.98700},'
+        '{"name":"exponent","amount":2.30e-4},'
+        '{"name":"text","amount":"to taste"},'
+        '{"name":"omitted"},'
+        '{"name":"cleared"}]'
+    )
+    updated_amounts = {
+        "integer": "3",
+        "fraction": "0.75",
+        "precise": "98765432109876543210.98700",
+        "exponent": "2.30e-4",
+        "text": "to taste",
+        "omitted": None,
+        "cleared": None,
     }
     async with mcp_session() as session:
         added = await session.call_tool(
@@ -365,9 +385,13 @@ async def test_recipe_tools_preserve_ingredient_amounts():
         assert added.is_error is False, added.content
         recipe_id = json.loads(added.content[0].text)["id"]
 
-        for tool, arguments in (
-            (None, {}),
-            ("change_recipe", {"recipeId": recipe_id, "recipeJson": '{"ingredients":' + ingredients_json + "}"}),
+        for tool, arguments, expected in (
+            (None, {}, added_amounts),
+            (
+                "change_recipe",
+                {"recipeId": recipe_id, "recipeJson": '{"ingredients":' + updated_ingredients_json + "}"},
+                updated_amounts,
+            ),
         ):
             if tool:
                 changed = await session.call_tool(tool, arguments)
