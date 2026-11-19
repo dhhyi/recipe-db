@@ -74,11 +74,11 @@ def validate_processes(checkout, proc, ignored_pids=()):
             raise ValueError("a process is using the managed checkout; stop it before changing revision")
 
 
-def private_json(path):
+def private_json(path, owner=None):
     if any(parent.is_symlink() for parent in (path, *path.parents)):
         raise ValueError("private preparation files must not traverse symlinks")
     info = path.stat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() \
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != (os.geteuid() if owner is None else owner) \
             or info.st_mode & 0o077 or info.st_size > 16 * 1024 * 1024:
         raise ValueError("preparation requires private owned regular files")
     raw = path.read_bytes()
@@ -86,6 +86,30 @@ def private_json(path):
     if not isinstance(value, dict):
         raise ValueError("private preparation state must be an object")
     return value, hashlib.sha256(raw).hexdigest()
+
+
+def inspect_closeout_claim(state_path=STATE):
+    state, state_hash = private_json(state_path, owner=0)
+    claim, _ = private_json(state_path.parent.parent / "release-command.json", owner=0)
+    holder, token = claim.get("holder"), claim.get("token")
+    source = state.get("source")
+    if not isinstance(holder, str) or not re.fullmatch(r"backup-[0-9]+-[0-9]+", holder) \
+            or not isinstance(token, str) \
+            or not re.fullmatch(r"[0-9a-f]{48}:[A-Za-z0-9-]+:[0-9a-f]{64}:[0-9a-f]{40}", token) \
+            or token.split(":")[2] != state_hash \
+            or state.get("backupId") != holder or state.get("stateVersion") != 2 \
+            or state.get("status") != "recovery-required" or state.get("phase") not in TERMINAL_FAILURES \
+            or not isinstance(source, dict) or claim.get("source") != source \
+            or source.get("target") != "pi" \
+            or not isinstance(source.get("artifact"), str) \
+            or not re.fullmatch(r"ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}", source["artifact"]) \
+            or not isinstance(source.get("revision"), str) \
+            or not re.fullmatch(r"[0-9a-f]{40}", source["revision"]) \
+            or not isinstance(state.get("configSha256"), str) \
+            or not re.fullmatch(r"[0-9a-f]{64}", state["configSha256"]) \
+            or claim.get("configSha256") != state["configSha256"]:
+        raise ValueError("private claim does not match an interrupted closeout tooling preparation")
+    return {"holder": holder, "token": token}
 
 
 def output(arguments):
@@ -265,27 +289,38 @@ def main():
             print(f"checkout guard: {error}", file=sys.stderr)
             return 1
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--revision", required=True)
-    parser.add_argument("--maintenance-holder", default="")
+    parser.add_argument("--revision")
+    parser.add_argument("--maintenance-holder")
     parser.add_argument("--prepare-closeout", action="store_true")
-    parser.add_argument("--closeout-holder", default="")
-    parser.add_argument("--closeout-confirmation", default="")
-    parser.add_argument("--closeout-token", default="")
+    parser.add_argument("--closeout-holder")
+    parser.add_argument("--closeout-confirmation")
+    parser.add_argument("--closeout-token")
+    parser.add_argument("--inspect-closeout-claim", action="store_true")
     args = parser.parse_args()
+    if args.inspect_closeout_claim:
+        if args.prepare_closeout or any(value is not None for value in (
+            args.revision, args.maintenance_holder, args.closeout_holder,
+            args.closeout_confirmation, args.closeout_token,
+        )):
+            parser.error("--inspect-closeout-claim cannot be combined with preparation or checkout arguments")
+    elif args.revision is None:
+        parser.error("--revision is required outside read-only claim inspection")
     try:
-        if args.prepare_closeout:
+        if args.inspect_closeout_claim:
+            print(json.dumps(inspect_closeout_claim()))
+        elif args.prepare_closeout:
             if args.maintenance_holder or args.closeout_token:
                 raise ValueError("preparation cannot reuse an existing command claim")
             print(json.dumps(prepare_closeout(
-                args.revision, args.closeout_holder, args.closeout_confirmation,
+                args.revision, args.closeout_holder or "", args.closeout_confirmation or "",
             )))
         elif args.closeout_holder or args.closeout_confirmation or args.closeout_token:
             if args.maintenance_holder or not args.closeout_token:
                 raise ValueError("dedicated closeout validation requires its own exact claim")
-            validate_closeout(args.revision, args.closeout_holder,
-                              args.closeout_confirmation, args.closeout_token)
+            validate_closeout(args.revision, args.closeout_holder or "",
+                              args.closeout_confirmation or "", args.closeout_token)
         else:
-            validate(args.revision, args.maintenance_holder)
+            validate(args.revision, args.maintenance_holder or "")
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
         print(f"checkout guard: {error}", file=sys.stderr)
         return 1

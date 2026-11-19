@@ -1,6 +1,8 @@
 import copy
+from contextlib import redirect_stderr, redirect_stdout
 import fcntl
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -116,6 +118,125 @@ class CloseoutPreparationTests(unittest.TestCase):
             self.revision, self.holder, self.confirmation, token,
             self.checkout, self.state_path, self.proc,
         )
+
+    def inspect(self, wrong_owner=None):
+        original_stat = Path.stat
+
+        def root_owned(path, **kwargs):
+            info = original_stat(path, **kwargs)
+            if path in {self.marker, self.state_path}:
+                fields = list(info)
+                fields[4] = 12345 if path == wrong_owner else 0
+                return os.stat_result(fields)
+            return info
+
+        with patch.object(Path, "stat", root_owned):
+            return guard.inspect_closeout_claim(self.state_path)
+
+    def test_interrupted_preparation_claim_can_only_be_inspected_then_explicitly_abandoned(self):
+        original_state = self.state_path.read_bytes()
+        original_lease = copy.deepcopy(self.lease)
+        begin = release_files.handle
+
+        def interrupted(request, config):
+            begin(request, config)
+            raise RuntimeError("installer disappeared after claiming preparation")
+
+        with patch.object(release_files, "handle", side_effect=interrupted):
+            with self.assertRaisesRegex(RuntimeError, "installer disappeared"):
+                self.prepare()
+        original_marker = self.marker.read_bytes()
+        claim = json.loads(original_marker)
+        with patch.object(guard, "installed_release_files") as helper, \
+                patch.object(guard, "output") as command:
+            self.assertEqual(self.inspect(), {
+                "holder": self.holder, "token": claim["token"],
+            })
+            helper.assert_not_called()
+            command.assert_not_called()
+        self.assertEqual(self.marker.read_bytes(), original_marker)
+        self.assertEqual(self.state_path.read_bytes(), original_state)
+        self.assertEqual(self.lease, original_lease)
+        request = {"operation": "abandon", "token": claim["token"], "confirmation": "STOPPED"}
+        with self.assertRaisesRegex(ValueError, "stopped-command confirmation"):
+            release_files.handle(request, self.config)
+        self.assertEqual(self.marker.read_bytes(), original_marker)
+        request["confirmation"] = (
+            f"ABANDON-{self.holder}-{claim['token']}-AFTER-COMMAND-STOPPED"
+        )
+        self.assertEqual(release_files.handle(request, self.config), {})
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(self.state_path.read_bytes(), original_state)
+        self.assertEqual(self.lease, original_lease)
+
+    def test_inspection_rejects_non_preparation_or_mismatched_private_claims(self):
+        self.prepare()
+        original = json.loads(self.marker.read_text())
+        for change in (
+            {"token": "ordinary-workstation-command"},
+            {"token": "a" * 48 + ":uid:not-a-state-hash:" + self.revision},
+            {"token": original["token"].replace(":original-uid:", "::")},
+            {"holder": "backup-1-2"},
+            {"source": self.source | {"revision": "0" * 40}},
+            {"configSha256": "2" * 64},
+        ):
+            with self.subTest(change=change):
+                self.marker.write_text(json.dumps(original | change))
+                before = self.marker.read_bytes()
+                with self.assertRaisesRegex(ValueError, "interrupted closeout"):
+                    self.inspect()
+                self.assertEqual(self.marker.read_bytes(), before)
+        self.marker.write_text(json.dumps(original))
+        self.state["candidate"]["revision"] = "0" * 40
+        self.save_state()
+        with self.assertRaisesRegex(ValueError, "interrupted closeout"):
+            self.inspect()
+
+    def test_inspection_requires_root_owned_private_bounded_symlink_free_files(self):
+        self.prepare()
+        for path in (self.marker, self.state_path):
+            with self.subTest(path=path, invalid="owner"):
+                with self.assertRaisesRegex(ValueError, "private owned"):
+                    self.inspect(wrong_owner=path)
+            with self.subTest(path=path, invalid="permissions"):
+                path.chmod(0o644)
+                with self.assertRaisesRegex(ValueError, "private owned"):
+                    self.inspect()
+                path.chmod(0o600)
+        original = self.marker.read_bytes()
+        with self.marker.open("wb") as stream:
+            stream.truncate(16 * 1024 * 1024 + 1)
+        with self.assertRaisesRegex(ValueError, "private owned"):
+            self.inspect()
+        self.marker.write_bytes(original)
+        retained = self.marker.with_suffix(".retained")
+        self.marker.rename(retained)
+        self.marker.symlink_to(retained)
+        with self.assertRaisesRegex(ValueError, "symlinks"):
+            self.inspect()
+        self.assertEqual(retained.read_bytes(), original)
+
+    def test_inspection_cli_needs_no_revision_and_rejects_all_mutation_arguments(self):
+        identity = {"holder": self.holder, "token": "diagnostic-fixture"}
+        arguments = ["checkout-guard.py", "--inspect-closeout-claim"]
+        with patch.object(guard.sys, "argv", arguments), \
+                patch.object(guard, "inspect_closeout_claim", return_value=identity) as inspect, \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(guard.main(), 0)
+            self.assertEqual(json.loads(output.getvalue()), identity)
+            inspect.assert_called_once_with()
+        for extra in (
+            ["--revision", self.revision], ["--prepare-closeout"],
+            ["--maintenance-holder", ""], ["--closeout-holder", self.holder],
+            ["--closeout-confirmation", self.confirmation], ["--closeout-token", "token"],
+        ):
+            with self.subTest(extra=extra), patch.object(guard.sys, "argv", arguments + extra), \
+                    patch.object(guard, "inspect_closeout_claim") as inspect, \
+                    redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    guard.main()
+                self.assertEqual(error.exception.code, 2)
+                inspect.assert_not_called()
 
     def test_historical_tooling_is_preserved_and_real_old_begin_claim_is_held_under_lock(self):
         original = self.state_path.read_bytes()
