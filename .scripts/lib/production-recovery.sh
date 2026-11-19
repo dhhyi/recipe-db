@@ -194,7 +194,7 @@ recovery_install_barrier() {
 # Stop every owned controller, not just the normal Deployments. Foreign workloads
 # are never changed; any foreign mount prevents clearing.
 recovery_stop_workers() {
-  local kind name pod deadline
+  local kind name pod deadline resource
   kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods \
     -o json > "$work/reset-workers.json" || return 1
   jq -e --argjson claims "$(jq -c '.volumes | keys' "$work/config.json")" '
@@ -203,17 +203,18 @@ recovery_stop_workers() {
       and all((.spec.template.spec.volumes[]?, .spec.jobTemplate.spec.template.spec.volumes[]?) |
         .persistentVolumeClaim.claimName // empty;
         . as $claim | ($claims | index($claim)) == null))' "$work/reset-workers.json" > /dev/null \
-    || production_fail "foreign controller can restart an application storage user; isolate it before recovery"
+    || { printf 'production: foreign controller can restart an application storage user; isolate it before recovery\n' >&2; return 1; }
   for kind in HorizontalPodAutoscaler Deployment StatefulSet ReplicaSet ReplicationController CronJob Job DaemonSet; do
+    resource=${kind,,}
     while IFS= read -r name; do
       case "$kind" in
-        HorizontalPodAutoscaler) kube delete "$kind/$name" --wait=true > /dev/null || return 1 ;;
+        HorizontalPodAutoscaler) kube delete "$resource/$name" --wait=true > /dev/null || return 1 ;;
         Deployment | StatefulSet | ReplicaSet | ReplicationController)
-          kube scale "$kind/$name" --replicas=0 > /dev/null || return 1 ;;
+          kube scale "$resource/$name" --replicas=0 > /dev/null || return 1 ;;
         CronJob | Job)
-          kube patch "$kind/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1 ;;
+          kube patch "$resource/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1 ;;
         DaemonSet)
-          kube patch "$kind/$name" --type=merge \
+          kube patch "$resource/$name" --type=merge \
             -p '{"spec":{"template":{"spec":{"nodeSelector":{"recipe-db/recovery-stopped":"true"}}}}}' > /dev/null || return 1 ;;
       esac
     done < <(jq -r --arg kind "$kind" --arg guard "recovery-guard-${backup_id:-}" '.items[] |
@@ -233,7 +234,10 @@ recovery_stop_workers() {
       elif .kind == "CronJob" then .spec.suspend == true
       elif .kind == "DaemonSet" then (.status.desiredNumberScheduled // 1) == 0
       else false end)' "$work/reset-stopped-controllers.json" > /dev/null; then break; fi
-    ((SECONDS < deadline)) || production_fail "restartable workload controllers remain; wait for shutdown before retrying"
+    ((SECONDS < deadline)) || {
+      printf 'production: restartable workload controllers remain; wait for shutdown before retrying\n' >&2
+      return 1
+    }
     sleep 1
   done
   kube get pods -o json > "$work/reset-worker-pods.json" || return 1
@@ -288,22 +292,105 @@ recovery_summary() {
     "$1" "$(jq -r .capturedAt "$work/restore-manifest.json")" "$artifact" "$revision"
   printf 'Target: %s / %s / %s. All current application data, partial imports and changes newer than this backup will be lost; newer backups are NOT deleted or selected automatically.\n' "$context" "$cluster" "$namespace"
   printf 'Preserve a manual backup and incident evidence before reset. No recent verified backup is inferred from this local package; verify off-host backup freshness yourself.\n'
-  printf 'Newer backup catalog: unavailable (off-device backups are not queried). Do not assume this is the latest backup; inspect the off-device catalog and known local verified manifests before approving.\n'
+  if jq -e '.reset.catalog != null' "$restore_state/restore-state.json" > /dev/null; then
+    printf 'Verified remote catalog checked at %s (saved preview, not a live reset-time query). Newer points:\n' \
+      "$(jq -er .reset.catalog.checkedAt "$restore_state/restore-state.json")"
+    jq -c --slurpfile selected "$work/restore-manifest.json" '
+      [.reset.catalog.points[] | select((.capturedAt | fromdateiso8601) >
+        ($selected[0].capturedAt | fromdateiso8601)) | {backupId,capturedAt,source}] |
+      if length == 0 then {newerPoints:[],scope:"provided remote catalog only"} else .[] end' \
+      "$restore_state/restore-state.json"
+  else
+    printf 'Newer backup catalog: unavailable (off-device backups are not queried). Do not assume this is the latest backup; inspect the off-device catalog and known local verified manifests before approving.\n'
+  fi
+  recovery_known_backups "$recovery_selected_manifest"
+  if [[ -f $restore_state/restore-state.json ]]; then
+    printf 'Existing local recovery state (partial/failed restore data will also be discarded): '
+    jq -c '{status,phase,probeRecipeId,adoptedStandaloneRestore:.reset.adoptedStandaloneRestore}' \
+      "$restore_state/restore-state.json"
+  fi
   kube get deployments -o json > "$work/reset-current-release.json" || return 1
   printf 'Current workload release artifacts to discard: '
   jq -cr '[.items[].spec.template.metadata.annotations["recipe-db/release"] // "unknown"] | unique' \
     "$work/reset-current-release.json"
   if jq -e --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    'try (($now | fromdateiso8601) - (.capturedAt | fromdateiso8601) > 86400) catch true' \
+    'try ((($now | fromdateiso8601) - (.capturedAt | fromdateiso8601)) as $age |
+      $age < 0 or $age > 86400) catch true' \
     "$work/restore-manifest.json" > /dev/null; then
     printf 'WARNING: NO RECENT VERIFIED BACKUP SELECTED: capture is older than 24 hours or freshness is unknown. Expect permanent loss of newer changes.\n'
   fi
 }
 
+recovery_known_backups() {
+  python3 - "$1" << 'PY'
+import datetime
+import hashlib
+import json
+from pathlib import Path
+import stat
+import sys
+
+selected = Path(sys.argv[1])
+def timestamp(value):
+    parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include a timezone")
+    return parsed
+capture = timestamp(json.loads(selected.read_text())["capturedAt"])
+folders = [selected.parent]
+for child in sorted(selected.parent.parent.iterdir()):
+    if child.is_dir() and not child.is_symlink() and child != selected.parent:
+        folders.append(child)
+    if len(folders) >= 64:
+        break
+found = 0
+seen = 0
+print("Newer known local packages (bounded sibling-directory scan; NOT an off-device catalog):")
+for folder in folders:
+    for candidate in sorted(folder.glob("*.manifest.json")):
+        seen += 1
+        if seen > 256:
+            break
+        try:
+            info = candidate.lstat()
+            if candidate == selected or not stat.S_ISREG(info.st_mode) or info.st_size > 4 * 1024**2:
+                continue
+            package = json.loads(candidate.read_text())
+            if package.get("format") != "recipe-db-backup" or package.get("formatVersion") != 1 \
+                    or timestamp(package["capturedAt"]) <= capture:
+                continue
+            archive = package["archive"]
+            archive_name = archive["name"]
+            if not isinstance(archive_name, str) or Path(archive_name).name != archive_name:
+                continue
+            archive_path = folder / archive_name
+            integrity = "UNVERIFIED: archive absent, too large for preview, or mismatched"
+            if archive_path.is_file() and not archive_path.is_symlink() \
+                    and archive_path.stat().st_size == archive["sizeBytes"] <= 1024**3:
+                digest = hashlib.sha256()
+                with archive_path.open("rb") as stream:
+                    for block in iter(lambda: stream.read(1024**2), b""):
+                        digest.update(block)
+                if digest.hexdigest() == archive["sha256"]:
+                    integrity = "local archive hash matches; restore compatibility/off-device verification NOT checked"
+            print(json.dumps({"backupId": package["backupId"], "capturedAt": package["capturedAt"],
+                              "manifest": str(candidate), "integrity": integrity}, separators=(",", ":")))
+            found += 1
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+if not found:
+    print("No newer packages found in the scanned local scope; newer off-device or unscanned backups may exist.")
+if seen > 256 or len(folders) >= 64:
+    print("WARNING: local preview scan limit reached; inspect the remaining catalog manually.")
+PY
+}
+
 recovery_plan() {
-  local manifest=$1 archive=$2 expected=$3 state=$4
+  local manifest=$1 archive=$2 expected=$3 state=$4 catalog=${5:-}
   recovery_private_state "$state"
   recovery_validate_package "$manifest" "$archive" "$expected"
+  recovery_selected_manifest=$manifest
+  restore_state=$state
   connect
   recovery_identity || production_fail "cannot pin configured application storage identities before reset"
   if [[ -e $state ]]; then
@@ -343,6 +430,46 @@ recovery_plan() {
         .reset.manifestSha256 == $manifest and .reset.archiveSha256 == $archive' \
         "$state/restore-state.json" > /dev/null || production_fail "replan backup package differs from the original"
     fi
+    if [[ -n $catalog ]]; then
+      [[ $catalog == /* && -f $catalog && ! -L $catalog &&
+        $(realpath -e "$catalog") == "$catalog" && $(stat -c %u "$catalog") == "$EUID" &&
+        $((8#$(stat -c %a "$catalog") & 077)) == 0 && $(stat -c %s "$catalog") -le 4194304 ]] \
+        || production_fail "catalog must be an absolute bounded private operator-owned regular file"
+    python3 - "$catalog" > "$work/recovery-catalog.json" << 'PY'
+import datetime
+import json
+import sys
+with open(sys.argv[1]) as source:
+    catalog = json.load(source)
+def canonical(value):
+    parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+          raise ValueError("catalog timestamp requires a timezone")
+    return parsed.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+catalog["checkedAt"] = canonical(catalog["checkedAt"])
+for point in catalog["points"]:
+    point["capturedAt"] = canonical(point["capturedAt"])
+print(json.dumps(catalog))
+PY
+      jq -e --slurpfile selected "$manifest" '
+        .format == "recipe-db-backup-catalog" and .formatVersion == 1
+        and (.deploymentId | type == "string" and length > 0)
+        and .deploymentId == $selected[0].deploymentId
+        and (.checkedAt | fromdateiso8601 | type == "number")
+        and (.points | type == "array" and length <= 10000)
+        and ([.points[].backupId] | unique | length) == (.points | length)
+        and all(.points[];
+          (.backupId | type == "string" and test("^backup-[0-9]{14}-[0-9]+$"))
+          and (.capturedAt | fromdateiso8601 | type == "number")
+          and (.source.artifact | type == "string" and
+            test("^ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$"))
+          and (.source.revision | type == "string" and test("^[0-9a-f]{40}$")))
+      ' "$work/recovery-catalog.json" > /dev/null || production_fail "catalog is malformed or belongs to a different deployment"
+      jq --slurpfile catalog "$work/recovery-catalog.json" --arg sha "$(sha256sum "$catalog" | cut -d ' ' -f 1)" \
+        '.reset.catalog=$catalog[0] | .reset.catalogSha256=$sha' \
+        "$state/restore-state.json" > "$state/restore-state.next"
+      mv "$state/restore-state.next" "$state/restore-state.json"
+    fi
   else
     mkdir -m 700 "$state"
     jq -n --arg id "$expected" --arg artifact "$artifact" --arg revision "$revision" \
@@ -368,6 +495,7 @@ recovery_reset() {
   [[ -f $state/restore-state.json ]] \
     || production_fail "run recovery-plan first to review and save the mandatory discard summary"
   recovery_validate_package "$manifest" "$archive" "$expected"
+  recovery_selected_manifest=$manifest
   backup_id=$expected
   production_secrets
   render
@@ -414,9 +542,11 @@ recovery_reset() {
   restore_state_write in-progress "$restore_current_phase"
   recovery_summary "$expected"
   recovery_install_barrier
+  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods \
+    -o json > "$work/recovery-controller-inventory.json"
+  restore_guard_start || production_fail "cannot arm recovery shutdown guard before worker shutdown"
   recovery_stop_workers || production_fail "every application storage user must stop before reset"
   recovery_assert_identity
-  restore_guard_start || production_fail "cannot arm recovery shutdown guard before reset"
   restore_current_phase=reset-clearing-application-data
   restore_state_write in-progress "$restore_current_phase"
   restore_clear_migration_target

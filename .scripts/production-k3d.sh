@@ -67,7 +67,7 @@ case "$command" in
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
   release-closeout) [[ $# = 3 ]] || production_fail "release-closeout requires release state, exact holder and CLOSEOUT-<holder>" ;;
   recovery-reset) [[ $# = 5 ]] || production_fail "recovery-reset requires manifest, archive, backup ID, private state directory and RESET-<backup-id>" ;;
-  recovery-plan) [[ $# = 4 ]] || production_fail "recovery-plan requires manifest, archive, backup ID and private state directory" ;;
+  recovery-plan) [[ $# = 4 || $# = 5 ]] || production_fail "recovery-plan requires manifest, archive, backup ID, private state directory and optional private verified catalog" ;;
   recovery-restore) [[ $# = 5 ]] || production_fail "recovery-restore requires reset state, manifest, archive, backup ID and RESTORE-<backup-id>" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;

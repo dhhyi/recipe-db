@@ -689,6 +689,23 @@ restore_validate_migration_secrets() {
 
 restore_guard_manifest() {
   local name="recovery-guard-$backup_id"
+  if [[ ! -f $work/recovery-controller-inventory.json ]]; then
+    if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]]; then
+      jq '.reset.guardInventory // {items:[]}' "$restore_state/restore-state.json" \
+        > "$work/recovery-controller-inventory.json" || return 1
+    else
+      printf '{"items":[]}\n' > "$work/recovery-controller-inventory.json"
+    fi
+  fi
+  if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]] &&
+    jq -e '.reset != null' "$restore_state/restore-state.json" > /dev/null; then
+    jq --slurpfile inventory "$work/recovery-controller-inventory.json" \
+      '.reset.guardInventory={items:[$inventory[0].items[] |
+        select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
+        {kind,metadata:{name:.metadata.name,labels:{"app.kubernetes.io/part-of":"recipe-db"}}}]}' \
+      "$restore_state/restore-state.json" > "$restore_state/restore-state.next" || return 1
+    mv "$restore_state/restore-state.next" "$restore_state/restore-state.json" || return 1
+  fi
   cat > "$work/restore-guard.sh" << 'EOF'
 set -eu
 trap 'exit 0' TERM INT QUIT
@@ -742,13 +759,44 @@ while :; do
     stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$name/scale" \
       '{"spec":{"replicas":0}}' || failed=true
   done
+  for name in ${STATEFULSETS:-}; do
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/statefulsets/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${REPLICASETS:-}; do
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/replicasets/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${REPLICATIONCONTROLLERS:-}; do
+    stop_patch "/api/v1/namespaces/$NAMESPACE/replicationcontrollers/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${DAEMONSETS:-}; do
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/daemonsets/$name" \
+      '{"spec":{"template":{"spec":{"nodeSelector":{"recipe-db/recovery-stopped":"true"}}}}}' || failed=true
+  done
+  for name in ${JOBS:-}; do
+    stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/$name" \
+      '{"spec":{"suspend":true}}' || failed=true
+  done
+  for name in ${CRONJOBS:-}; do
+    stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/cronjobs/$name" \
+      '{"spec":{"suspend":true}}' || failed=true
+  done
+  for name in ${AUTOSCALERS:-}; do
+    code=$(request -X DELETE --data '{"kind":"DeleteOptions","apiVersion":"v1"}' \
+      -H 'Content-Type: application/json' -o /dev/null -w '%{http_code}' \
+      "$api/apis/autoscaling/v2/namespaces/$NAMESPACE/horizontalpodautoscalers/$name") || {
+      [ "$code" = 404 ] || failed=true
+    }
+  done
   # Suspension retains completed Pods. The TTL controller removes this owned Job and its Pods.
   stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/nats-init" \
     '[{"op":"test","path":"/metadata/labels/app.kubernetes.io~1part-of","value":"recipe-db"},
       {"op":"add","path":"/spec/suspend","value":true},
       {"op":"add","path":"/spec/ttlSecondsAfterFinished","value":0}]' \
     application/json-patch+json || failed=true
-  for name in $HELPERS; do
+  for name in $HELPERS ${WORKER_PODS:-}; do
     # A missing helper is already stopped. Never force-delete a running storage Pod.
     code=$(request -X DELETE --data '{"kind":"DeleteOptions","apiVersion":"v1"}' \
       -H 'Content-Type: application/json' -o /dev/null -w '%{http_code}' \
@@ -778,16 +826,31 @@ EOF
     --arg image "$(jq -r '.infrastructure.maintenance' "$work/config.json")" \
     --argjson workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" \
     --argjson helpers "$(jq -c '[.volumes | keys[] | "restore-volume-" + .]' "$work/config.json")" \
+    --slurpfile inventory "$work/recovery-controller-inventory.json" \
     --rawfile script "$work/restore-guard.sh" '
+    def names($kind): [$inventory[0].items[] |
+      select(.kind == $kind and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
+      .metadata.name | select(type == "string" and test("^[a-z0-9][a-z0-9.-]*$"))] | unique;
+    (names("Deployment") + $workloads | unique) as $allWorkloads |
+    names("StatefulSet") as $statefulSets | names("ReplicaSet") as $replicaSets |
+    names("ReplicationController") as $replicationControllers | names("DaemonSet") as $daemonSets |
+    names("Job") as $jobs | names("CronJob") as $cronJobs |
+    names("HorizontalPodAutoscaler") as $autoscalers | names("Pod") as $workerPods |
     def meta: {name:$name,namespace:$ns,labels:{"app.kubernetes.io/part-of":"recipe-db",
       "recipe-db/restore-holder":$holder}};
     {apiVersion:"v1",kind:"List",items:[
       {apiVersion:"v1",kind:"ServiceAccount",metadata:meta},
       {apiVersion:"rbac.authorization.k8s.io/v1",kind:"Role",metadata:meta,rules:[
         {apiGroups:[""],resources:["configmaps"],resourceNames:[$name],verbs:["get","patch"]},
-        {apiGroups:["apps"],resources:["deployments/scale"],resourceNames:$workloads,verbs:["patch"]},
-        {apiGroups:["batch"],resources:["jobs"],resourceNames:["nats-init"],verbs:["patch"]},
-        {apiGroups:[""],resources:["pods"],resourceNames:$helpers,verbs:["delete"]},
+        {apiGroups:["apps"],resources:["deployments/scale"],resourceNames:$allWorkloads,verbs:["patch"]},
+        {apiGroups:["apps"],resources:["statefulsets/scale"],resourceNames:$statefulSets,verbs:["patch"]},
+        {apiGroups:["apps"],resources:["replicasets/scale"],resourceNames:$replicaSets,verbs:["patch"]},
+        {apiGroups:[""],resources:["replicationcontrollers/scale"],resourceNames:$replicationControllers,verbs:["patch"]},
+        {apiGroups:["apps"],resources:["daemonsets"],resourceNames:$daemonSets,verbs:["patch"]},
+        {apiGroups:["batch"],resources:["jobs"],resourceNames:(["nats-init"] + $jobs | unique),verbs:["patch"]},
+        {apiGroups:["batch"],resources:["cronjobs"],resourceNames:$cronJobs,verbs:["patch"]},
+        {apiGroups:["autoscaling"],resources:["horizontalpodautoscalers"],resourceNames:$autoscalers,verbs:["delete"]},
+        {apiGroups:[""],resources:["pods"],resourceNames:($helpers + $workerPods | unique),verbs:["delete"]},
         {apiGroups:[""],resources:["pods"],verbs:["list"]}]},
       {apiVersion:"rbac.authorization.k8s.io/v1",kind:"RoleBinding",metadata:meta,
         roleRef:{apiGroup:"rbac.authorization.k8s.io",kind:"Role",name:$name},
@@ -799,9 +862,20 @@ EOF
           containers:[{name:"guard",image:$image,command:["sh","-ec",$script],
             env:[{name:"NAMESPACE",value:$ns},{name:"GUARD",value:$name},
               {name:"HOLDER",value:$holder},
-              {name:"WORKLOADS",value:($workloads | join(" "))},
+              {name:"WORKLOADS",value:($allWorkloads | join(" "))},
+              {name:"STATEFULSETS",value:($statefulSets | join(" "))},
+              {name:"REPLICASETS",value:($replicaSets | join(" "))},
+              {name:"REPLICATIONCONTROLLERS",value:($replicationControllers | join(" "))},
+              {name:"DAEMONSETS",value:($daemonSets | join(" "))},
+              {name:"JOBS",value:($jobs | join(" "))},
+              {name:"CRONJOBS",value:($cronJobs | join(" "))},
+              {name:"AUTOSCALERS",value:($autoscalers | join(" "))},
+              {name:"WORKER_PODS",value:($workerPods | join(" "))},
               {name:"HELPERS",value:($helpers | join(" "))}],
-            resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]}' \
+            resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]} |
+      .items |= map(if .kind == "Role" then
+        .rules |= map(select(.resourceNames == null or (.resourceNames | length) > 0))
+        else . end)' \
     > "$work/restore-guard.json" || return 1
 }
 

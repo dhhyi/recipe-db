@@ -273,7 +273,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           echo '{"items":[{"kind":"Deployment","spec":{"replicas":1},"status":{"replicas":1}}]}'
         elif [[ ${MOCK_ABANDON_JOB:-false} == true ]]; then
           echo '{"items":[{"kind":"Job","spec":{"suspend":false},"status":{"active":0}}]}'
+        elif [[ -f $MOCK_LOG.restore-deployments ]]; then
+          cat "$MOCK_LOG.restore-deployments"
         else echo '{"items":[{"kind":"Deployment","spec":{"replicas":0},"status":{"replicas":0}},{"kind":"Job","spec":{"suspend":true},"status":{"active":0}}]}'; fi
+        exit ;;
+      *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers -o json")
+        if [[ -f $MOCK_LOG.restore-deployments ]]; then cat "$MOCK_LOG.restore-deployments"
+        else echo '{"items":[]}'; fi
         exit ;;
       *"get secret recipe-db-routes -o json")
         jq --arg bad "${MOCK_ABANDON_BAD_BARRIER:-false}" '
