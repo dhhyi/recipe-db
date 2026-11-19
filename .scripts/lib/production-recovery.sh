@@ -304,7 +304,8 @@ recovery_stop_workers() {
 
 recovery_cleanup() {
   local result=$1 current
-  if [[ ${recovery_initializing:-false} == true && $result != 0 ]]; then
+  if [[ ${recovery_initializing:-false} == true &&
+    ${recovery_started:-false} != true && $result != 0 ]]; then
     current=$(cluster_operation_lock_status) || current=
     if ! jq -e --arg holder "$lock_holder" --arg artifact "$artifact" \
       --slurpfile state "$restore_state/restore-state.json" '
@@ -599,7 +600,6 @@ recovery_reset() {
     recovery_assert_lease
     retain_lock=true
     locked=true
-    recovery_initializing=true
   else
     recovery_identity || production_fail "cannot pin configured application storage identities before reset"
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect operation Lease"
@@ -630,6 +630,7 @@ recovery_reset() {
       if [[ $(jq -r '.metadata.annotations["recipe-db/phase"]' <<< "$current") == recovery-ready ]]; then
         recovery_replace_lease "$current" restore reset-prepared "$artifact"
       fi
+      recovery_initializing=true
     else
       lock_holder="reset-$expected-$(date -u +%s%N)-$$"
       jq --arg holder "$lock_holder" '.holder=$holder | .reset.acquisitionPending=true' \
@@ -669,6 +670,7 @@ recovery_reset() {
   fi
   restore_cluster_state=true
   recovery_started=true
+  recovery_initializing=false
   jq 'del(.reset.previewedAt)' "$state/restore-state.json" > "$state/restore-state.next"
   mv "$state/restore-state.next" "$state/restore-state.json"
   restore_current_phase=reset-stopping-workers

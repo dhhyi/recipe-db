@@ -343,6 +343,18 @@ EOF
     [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 1 ]
     [ "$(grep -c '^workers-stopped$' "$MOCK_LOG")" -eq 1 ]
     ! grep -q '^wipe$' "$MOCK_LOG"
+    mkdir -p work
+    printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
+    : > "$MOCK_LOG"
+    run bash harness.sh
+    [ "$status" -ne 0 ]
+    jq -e --arg holder "$holder" '.spec.holderIdentity == $holder and .metadata.uid == "lease-1"
+      and .metadata.annotations["recipe-db/phase"] == "acquired"' lease.json
+    jq -e '.status == "reset-planned" and .reset.acquisitionPending == true
+      and .reset.leaseUid == null' "$RECOVERY_STATE/restore-state.json"
+    [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 1 ]
+    [ "$(grep -c '^workers-stopped$' "$MOCK_LOG")" -eq 1 ]
+    ! grep -q '^wipe$' "$MOCK_LOG"
     rm "$failure"
     mkdir -p work
     printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
@@ -578,6 +590,38 @@ EOF
   holder=$(jq -r .holder "$RECOVERY_STATE/restore-state.json")
   jq -e --arg holder "$holder" '.spec.holderIdentity == $holder
     and .metadata.annotations["recipe-db/phase"] == "recovery-required"' lease.json
+  [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^workers-stopped$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^wipe$' "$MOCK_LOG")" -eq 1 ]
+  : > "$MOCK_LOG"
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"Reset again"* ]]
+  jq -e '.status == "recovery-required" and .phase == "reset-clearing-application-data"
+    and .reset.leaseUid == "lease-1"' "$RECOVERY_STATE/restore-state.json"
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder and .metadata.uid == "lease-1"
+    and .metadata.annotations["recipe-db/phase"] == "recovery-required"' lease.json
+  [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^workers-stopped$' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -c '^wipe$' "$MOCK_LOG")" -eq 1 ]
+}
+
+@test "reset-ready retry failure uses active recovery cleanup rather than initialization cleanup" {
+  state_machine_fixture
+  cat >> harness.sh << 'EOF'
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+: > "$MOCK_LOG"
+FAIL_WIPE=true
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"Reset again"* ]]
+  jq -e '.status == "recovery-required" and .phase == "reset-clearing-application-data"
+    and .reset.leaseUid == "lease-1"' "$RECOVERY_STATE/restore-state.json"
+  jq -e '.metadata.uid == "lease-1" and .metadata.annotations["recipe-db/phase"] == "recovery-required"' lease.json
   [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 2 ]
   [ "$(grep -c '^workers-stopped$' "$MOCK_LOG")" -eq 2 ]
   [ "$(grep -c '^wipe$' "$MOCK_LOG")" -eq 1 ]
