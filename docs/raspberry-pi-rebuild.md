@@ -196,4 +196,4 @@ After restore, verify:
 
 ## 8. Configure automated backups
 
-After restore acceptance, [authorize Drive](google-drive-authorization.md#1-authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow [Align backups and record the result](production-release-cookbook.md#10-align-backups-and-record-the-result) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. That procedure also updates the capture checkout and immutable release reference to match the deployed application.
+After restore acceptance, [authorize Drive](google-drive-authorization.md#1-authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups with inputs matching the deployed application.

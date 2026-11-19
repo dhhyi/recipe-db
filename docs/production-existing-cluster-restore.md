@@ -48,7 +48,29 @@ set -g STATE /absolute/path/to/original-failed-restore-state
 
 Keep its original backup pair and backup ID. To choose a different backup after failure, first follow the abandonment path in step 5, then start a new reset preview with a new private state directory. Abandonment leaves the old data and access barrier intact.
 
-For a retained failed release, use the [managed workstation release controller](production-release-cookbook.md#5-stage-the-candidate-without-starting-normal-workloads), which writes progress through to the authoritative private state on the Pi. The reviewed tooling and installed private file helpers must include closeout support and match the workstation; do not bypass their revision or helper-integrity checks. Read the holder and compare it with `lock-status`:
+For an idle site whose installed tools need updating, use the ordinary [managed-tool preparation](production-release-cookbook.md#prepare-the-managed-release-tools) before reset. A new backup of the current data remains optional for this recovery.
+
+For a retained failed release, the installed tools may predate closeout support. Read its exact holder from `lock-status`; do not infer it from website availability. To prepare reviewed closeout tooling while retaining that operation, open the provisioning container from workstation fish:
+
+```fish
+mise run --raw in-devcontainer provisioning ssh-agent bash
+```
+
+In that **Bash shell**, set the holder from the observed Lease and separately approve tooling preparation:
+
+```sh
+HOLDER='<exact retained holder from lock-status>'
+TOOLING_REVISION=$(git rev-parse HEAD) \
+  && ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    release-prepare.yml -e "checkout_revision=$TOOLING_REVISION" \
+    -e "release_closeout_holder=$HOLDER" \
+    -e "release_closeout_confirmation=PREPARE-CLOSEOUT-$HOLDER" --ask-become-pass
+```
+
+Require a successful play recap. This narrowly admits recognized terminal failures under the exact retained Lease and an exclusive private command claim. It updates tooling only: no data is cleared, no operation Lease is released, and access is not reopened. Ordinary preparation still refuses retained maintenance. If preparation is interrupted, stop the old installer and follow the reported private-claim recovery instructions; do not delete any Lease or alter operation state. Exit the container shell before continuing.
+
+Now use the [managed workstation release controller](production-release-cookbook.md#5-stage-the-candidate-without-starting-normal-workloads), which writes progress through to the authoritative private state on the Pi. The reviewed tooling and installed private file helpers must match the workstation; do not bypass their revision or helper-integrity checks. Read the holder and compare it with `lock-status`:
 
 ```fish
 set -g RELEASE_STATE (mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES")
@@ -118,7 +140,7 @@ The handoff runs the existing restore pipeline with its own separate `RESTORE-$B
 
 Require restore to finish successfully: it verifies stored data, search readiness, representative reads and change propagation before reopening access. Then check the normal website, recipe images, search, editing and configured sign-in. A reachable home page alone is not acceptance.
 
-Keep the backup timer disabled. Align the backup service's immutable release reference and managed capture inputs with the restored release, following the [backup configuration contract](production-configuration.md) and [backup alignment procedure](production-release-cookbook.md#10-align-backups-and-record-the-result). This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Verify a **fresh off-device backup** of the restored site, then follow [backup schedule re-enable](production-release-cookbook.md#verify-a-backup-then-re-enable-its-schedule). Preserve an intentionally paused schedule.
+Keep the backup timer disabled. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to match the restored release, record a new configuration timestamp and verify a **fresh off-device backup** before schedule re-enable. This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Preserve an intentionally paused schedule.
 
 ## 5. Recover from a failure
 
