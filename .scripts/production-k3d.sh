@@ -14,6 +14,8 @@ source "$root/.scripts/lib/cluster-operation-lock.sh"
 source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
+# shellcheck source=.scripts/lib/production-recovery.sh
+source "$root/.scripts/lib/production-recovery.sh"
 
 release_sources_from_git=false
 if [[ ${1:-} == --release-sources-from-git ]]; then
@@ -26,7 +28,7 @@ values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == backup-enter ||
-    $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore ]] \
+    $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
@@ -63,6 +65,10 @@ case "$command" in
   release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
   release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  release-closeout) [[ $# = 3 ]] || production_fail "release-closeout requires release state, exact holder and CLOSEOUT-<holder>" ;;
+  recovery-reset) [[ $# = 5 ]] || production_fail "recovery-reset requires manifest, archive, backup ID, private state directory and RESET-<backup-id>" ;;
+  recovery-plan) [[ $# = 4 ]] || production_fail "recovery-plan requires manifest, archive, backup ID and private state directory" ;;
+  recovery-restore) [[ $# = 5 ]] || production_fail "recovery-restore requires reset state, manifest, archive, backup ID and RESTORE-<backup-id>" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
   backup-exit) [[ $# = 3 ]] || production_fail "backup-exit requires the absolute state directory, exact holder and EXIT-<holder> confirmation" ;;
@@ -120,6 +126,7 @@ cleanup() {
   local result=$?
   trap - EXIT
   restore_cleanup "$result"
+  recovery_cleanup "$result"
   if ! release_recovery_reopen_cleanup "$result"; then
     result=1
   fi
@@ -533,7 +540,7 @@ wait_deployments() {
 
 backup_state_write() {
   local status=$1 phase=$2
-  if [[ $command == restore ]]; then
+  if [[ $command == restore || $command == recovery-* ]]; then
     restore_state_write in-progress "$phase"
     return
   fi
@@ -4452,6 +4459,18 @@ case "$command" in
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  release-closeout)
+    recovery_release_closeout "$@"
+    ;;
+  recovery-reset)
+    recovery_reset "$@"
+    ;;
+  recovery-plan)
+    recovery_plan "$@"
+    ;;
+  recovery-restore)
+    recovery_restore "$@"
     ;;
   restore-abandon)
     restore_abandon "$1" "$2" "$3"

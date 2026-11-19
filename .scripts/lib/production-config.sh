@@ -88,7 +88,8 @@ production_config() {
         or $action == "release-migration-plan" or $action == "release-migration-next"
         or $action == "release-migration-status" or $action == "release-migration-recover-claim"
         or $action == "release-start" or $action == "release-reopen"
-        or $action == "release-disposition" or $action == "restore" or $action == "storage-reattach")
+        or $action == "release-disposition" or $action == "restore" or $action == "storage-reattach"
+        or $action == "release-closeout" or ($action | startswith("recovery-")))
       then has("piStorage")
         and .piStorage.node == .cluster
         and (.piStorage.expectedRootUuid | test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
@@ -152,7 +153,7 @@ production_config() {
   ' "$work/config.json" > /dev/null \
     || production_fail "invalid or incomplete production values"
   case "$2" in
-    render | deploy | restore | release-stage | release-fallback-stage)
+    render | deploy | restore | release-stage | release-fallback-stage | release-closeout | recovery-*)
       jq -e '.infrastructure.traefik |
         test("^traefik:v3[.]([7-9]|[1-9][0-9])[.][0-9]+@sha256:[0-9a-f]{64}$")' \
         "$work/config.json" > /dev/null \

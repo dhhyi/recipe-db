@@ -63,6 +63,15 @@ restore_state_write() {
 
 restore_phase() {
   restore_current_phase=$1
+  if [[ ${restore_guard_started:-false} == true &&
+    ${restore_mode:-standalone} != migration-recovery ]]; then
+    restore_guard_check || production_fail "recovery shutdown guard or heartbeat was lost"
+  fi
+  if [[ ${command:-} == recovery-reset ]]; then
+    restore_state_write in-progress "$1" || return 1
+    cluster_operation_lock_update "$1"
+    return
+  fi
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
     if [[ ${restore_guard_started:-false} == true ]]; then
       restore_guard_check || production_fail "recovery shutdown guard or heartbeat was lost"
@@ -218,7 +227,7 @@ restore_cleanup() {
     kill "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
   done
-  [[ (${command:-} == restore || ${command:-} == release-migration-recover) &&
+  [[ (${command:-} == restore || ${command:-} == recovery-restore || ${command:-} == release-migration-recover) &&
     $result != 0 && ${restore_started:-false} == true ]] || return 0
   # Never roll a partial import back by deleting data, or treat it as a resumable merge.
   retain_lock=true
@@ -272,11 +281,15 @@ restore_cleanup() {
         || printf 'production: could not reblock GraphQL; isolate ingress immediately\n' >&2
     fi
   fi
+  recovery_stop_workers \
+    || printf 'production: could not stop every restore worker; isolate application storage\n' >&2
+  restore_guard_stop \
+    || printf 'production: could not remove shutdown guard; inspect it before another attempt\n' >&2
   restore_state_write recovery-required "${restore_current_phase:-interrupted}" \
     || printf 'production: could not update durable restore recovery state\n' >&2
   printf 'production: restore FAILED; no success recorded; Lease holder %s retained\n' "$lock_holder" >&2
   printf 'production: recovery state: %s/restore-state.json (also ConfigMap recipe-db-restore when created)\n' "$restore_state" >&2
-  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. Stop every Deployment and worker Pod, then use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation; select a new empty target for another restore.\n' >&2
+  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. For planned existing-cluster recovery, run recovery-plan again then recovery-reset with the same state and backup-bound confirmation. Otherwise stop every workload and use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION; select new empty storage or reflash.\n' >&2
 }
 
 restore_abandon() {
@@ -1205,10 +1218,12 @@ restore_workers_terminated() {
 
 restore_verify_volume_identity() {
   local name=$1
+  if [[ ${command:-} == recovery-* ]]; then recovery_assert_identity; fi
   kube get pvc "$name" -o json > "$work/restore-pvc.json" || return 1
   jq -e --arg name "$name" --slurpfile expected "$work/restore-pvc-identities.jsonl" '
     .metadata.deletionTimestamp == null and .status.phase == "Bound"
-    and (.metadata.uid as $uid | any($expected[]; .name == $name and .uid == $uid))' \
+    and (. as $actual | any($expected[]; .name == $name and .uid == $actual.metadata.uid
+      and (.volumeName == null or .volumeName == $actual.spec.volumeName)))' \
     "$work/restore-pvc.json" > /dev/null
 }
 
@@ -1258,7 +1273,7 @@ restore_start() {
   infrastructure+=(browse-maintenance)
   kube scale deployment/nats --replicas=1 > /dev/null || return 1
   kube rollout status deployment/nats --timeout="${timeout}s" || return 1
-  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+  if [[ ${restore_mode:-standalone} == migration-recovery || ${restore_mode:-standalone} == existing-reset ]]; then
     kube get job nats-init --ignore-not-found -o json > "$work/restore-existing-nats-init.json" || return 1
     if [[ -s $work/restore-existing-nats-init.json ]]; then
       jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -1535,6 +1550,7 @@ restore_run() {
   local parent key name image_port artifact source_artifact source_revision current source_flag=
   local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
+  backup_id=$expected
   restore_migration_candidate=$recovery_candidate
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
     || production_fail "restore requires an exact backup identity"
@@ -1543,6 +1559,11 @@ restore_run() {
       || production_fail "restore inputs must be absolute regular files without symlink traversal"
   done
   case "$mode" in
+    existing-reset)
+      [[ $confirmation == "RESTORE-$expected" ]] || production_fail "restore requires RESTORE-<backup-id>"
+      recovery_private_state "$state"
+      [[ -f $state/restore-state.json ]] || production_fail "restore requires reset state"
+      ;;
     standalone)
       [[ $confirmation == "RESTORE-$expected" ]] \
         || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
@@ -1668,7 +1689,17 @@ restore_run() {
     "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
   jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
     .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == existing-reset ]]; then
+    connect
+    backup_id=$expected
+    restore_state=$state
+    recovery_assert_identity
+    recovery_assert_lease
+    [[ $(jq -er .artifact "$state/restore-state.json") == "$artifact" ]] \
+      || production_fail "reset handoff release differs from validated backup release"
+    locked=true
+    retain_lock=true
+  elif [[ $mode == standalone ]]; then
     connect
     lock_holder="restore-$expected-$$"
     cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
@@ -1696,7 +1727,15 @@ restore_run() {
     retain_lock=true
   fi
   guard_helm_config
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == existing-reset ]]; then
+    copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
+    restore_guard_remove_expired
+    recovery_started=true
+    recovery_stop_workers || production_fail "reset handoff workloads are not stopped"
+    recovery_assert_identity
+    restore_assert_empty_volumes
+    production_ephemeral_secrets
+  elif [[ $mode == standalone ]]; then
     restore_fresh_target
     production_ephemeral_secrets
   else
@@ -1714,7 +1753,9 @@ restore_run() {
     || production_fail "recovery public routes are not fully blocked"
   cp "$work/restore-barrier-routes.json" "$work/routes.yml"
   annotate_credentials
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == existing-reset ]]; then
+    restore_state=$state
+  elif [[ $mode == standalone ]]; then
     mkdir -m 700 "$state"
     restore_state=$state
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
@@ -1727,7 +1768,7 @@ restore_run() {
   fi
   restore_started=true
   restore_phase preparing-target
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == standalone || $mode == existing-reset ]]; then
     ensure_namespace
     restore_cluster_state=true
   else
@@ -1745,7 +1786,7 @@ restore_run() {
       || production_fail "could not persist approved migration-recovery identity"
   fi
   restore_current_phase=installing-barrier
-  if [[ $mode == standalone ]]; then restore_phase "$restore_current_phase"; fi
+  if [[ $mode != migration-recovery ]]; then restore_phase "$restore_current_phase"; fi
   # Hold public traffic before even inspecting a data mount. If an emptiness/storage
   # check fails, this Secret remains a durable barrier without any application writer.
   yq 'select(.metadata.namespace == "kube-system") |
@@ -1755,16 +1796,19 @@ restore_run() {
   restore_routes_apply "$work/restore-barrier-routes.json"
   restore_verify_installed_public_barrier
   if [[ $target == pi ]]; then
-    if [[ $mode == standalone ]]; then restore_phase storage-preflight; fi
+    if [[ $mode != migration-recovery ]]; then restore_phase storage-preflight; fi
     production_storage_preflight
     production_storage_prepare_claims "$work/rendered.yml"
   fi
-  if [[ $mode == standalone ]]; then restore_phase installing-barrier; fi
+  if [[ $mode != migration-recovery ]]; then restore_phase installing-barrier; fi
   apply_acme_contact
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
   restore_remove_ingress_nodeports
   guard_ingress_service
+  if [[ $mode != migration-recovery ]]; then
+    restore_guard_start || production_fail "cannot arm recovery shutdown guard before import"
+  fi
   if [[ $mode == migration-recovery ]]; then
     restore_current_phase=preflighting-previous-release-images
     restore_phase "$restore_current_phase"
@@ -1778,7 +1822,7 @@ restore_run() {
   fi
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == standalone || $mode == existing-reset ]]; then
     # Create missing claims only; never replace or resize an operator's existing claim.
     while IFS= read -r name; do
       kube get pvc "$name" --ignore-not-found -o json > "$work/restore-claim.json"
@@ -1871,6 +1915,7 @@ restore_run() {
     restore_guard_stop \
       || production_fail "restore verified but the recovery shutdown guard could not be removed"
     restore_started=false
+    recovery_started=false
     $release_sources_from_git && source_flag="--release-sources-from-git "
     printf 'production: complete recovery verified; previous release %s is ready behind the access barrier; candidate %s is aborted\n' \
       "$artifact" "$restore_migration_candidate"
@@ -1885,6 +1930,10 @@ restore_run() {
   fi
   backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")"
   restore_wait_reads
+  if [[ $mode != migration-recovery ]]; then
+    restore_guard_check || production_fail "recovery shutdown guard was lost during restore"
+    restore_guard_stop
+  fi
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
   guard_ingress_service
@@ -1897,5 +1946,6 @@ restore_run() {
   locked=false
   retain_lock=false
   restore_started=false
+  recovery_started=false
   printf 'production: restore %s verified; public ingress reopened; state %s/restore-state.json\n' "$expected" "$state"
 }

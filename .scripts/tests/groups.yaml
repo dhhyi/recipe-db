@@ -176,7 +176,12 @@ restore:
   tests:
     - .scripts/tests/production-k3d-restore.bats
     - .scripts/tests/production-restore.bats
+    - .scripts/tests/production-recovery.bats
   suite_inputs:
+    .scripts/tests/production-recovery.bats:
+      - .scripts/lib/production-recovery.sh
+      - .scripts/lib/production-restore.sh
+      - .scripts/lib/production-config.sh
     .scripts/tests/production-k3d-restore.bats:
       - .scripts/tests/production-k3d-restore-setup.bash
       - .scripts/production-k3d.sh
@@ -185,6 +190,7 @@ restore:
       - .scripts/lib/cluster-operation-lock.sh
       - .scripts/lib/production-storage.sh
       - .scripts/lib/production-restore.sh
+      - .scripts/lib/production-recovery.sh
       - .scripts/validate-production-image-index.sh
       - .scripts/validate-production-release.sh
       - .scripts/validate-backup-snapshot.py
