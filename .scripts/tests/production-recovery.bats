@@ -21,6 +21,7 @@ cluster=recipe-db-rehearsal
 context=k3d-recipe-db-rehearsal
 namespace=recipe-db
 storage_class=local-path
+storage_data_root=/srv/recipe-db
 timeout=1
 production_fail() { printf '%s\n' "$*" >&2; exit 1; }
 EOF
@@ -293,6 +294,138 @@ EOF
     and .status == "reset-ready"' "$RECOVERY_STATE/restore-state.json"
 }
 
+@test "real CLI cleanup retains acquired Lease through UID capture or state rename failures and retry" {
+  state_machine_fixture
+  sed -n '/^cleanup() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh" >> harness.sh
+  cat >> harness.sh << 'EOF'
+locked=false
+retain_lock=false
+command=recovery-reset
+release_migration_claimed=false
+release_mutation_started=false
+pod_watch_pid=
+recovery_command_release() { :; }
+release_recovery_reopen_cleanup() { :; }
+cluster_operation_lock_release() {
+  echo erroneous-primary-release >> "$MOCK_LOG"
+  rm lease.json
+}
+cluster_operation_lock_status() {
+  if [[ -f lease.json ]]; then
+    if [[ -f "$FIXTURE_ROOT/fail-uid" ]]; then jq 'del(.metadata.uid)' lease.json
+    else cat lease.json; fi
+  fi
+}
+mv() {
+  if [[ -f "$FIXTURE_ROOT/fail-mv" && $1 == "$RECOVERY_STATE/restore-state.next" ]] &&
+    jq -e '.reset.leaseUid != null and .status == "in-progress"' "$1" > /dev/null; then
+    return 1
+  fi
+  command mv "$@"
+}
+trap cleanup EXIT
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  local failure holder
+  for failure in fail-uid fail-mv; do
+    mkdir -p work
+    printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
+    touch "$failure"
+    run bash harness.sh
+    [ "$status" -ne 0 ]
+    jq -e '.metadata.uid == "lease-1" and .metadata.annotations["recipe-db/phase"] == "acquired"' lease.json
+    jq -e '.status == "reset-planned" and .reset.acquisitionPending == true
+      and .reset.leaseUid == null and (.holder | startswith("reset-"))' "$RECOVERY_STATE/restore-state.json"
+    holder=$(jq -er .spec.holderIdentity lease.json)
+    ! grep -q '^erroneous-primary-release$' "$MOCK_LOG"
+    rm "$failure"
+    mkdir -p work
+    printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
+    run bash harness.sh
+    [ "$status" -eq 0 ]
+    jq -e --arg holder "$holder" '.spec.holderIdentity == $holder and .metadata.uid == "lease-1"
+      and .metadata.annotations["recipe-db/phase"] == "reset-ready"' lease.json
+    jq -e --arg holder "$holder" '.holder == $holder and .reset.leaseUid == "lease-1"
+      and .status == "reset-ready"' "$RECOVERY_STATE/restore-state.json"
+    rm -rf "$RECOVERY_STATE"
+    rm lease.json
+  done
+}
+
+@test "closed release reset adopts the same Lease holder UID and selected artifact" {
+  closeout_fixture
+  cat >> harness.sh << 'EOF'
+recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+jq '.source.artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + ("c"*64)' "$MANIFEST" > selected.next
+mv selected.next "$MANIFEST"
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  jq -e --arg holder "$BACKUP_ID" '.spec.holderIdentity == $holder and .metadata.uid == "lease-1"
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/phase"] == "reset-ready"
+    and .metadata.annotations["recipe-db/release"] == ("ghcr.io/dhhyi/recipe-db-releases@sha256:" + ("c"*64))' lease.json
+  jq -e --arg holder "$BACKUP_ID" '.holder == $holder and .reset.leaseUid == "lease-1"
+    and .status == "reset-ready"' "$RECOVERY_STATE/restore-state.json"
+}
+
+@test "reset rejects replacement primary UID holder or unknown phase after closeout without wiping" {
+  closeout_fixture
+  cat >> harness.sh << 'EOF'
+recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+jq "$MUTATION" lease.json > lease.next
+mv lease.next lease.json
+cp lease.json expected-lease.json
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  local mutation
+  for mutation in '.metadata.uid="replacement"' '.spec.holderIdentity="other"' \
+    '.metadata.annotations["recipe-db/phase"]="unknown"'; do
+    rm -rf "$RECOVERY_STATE"
+    rm -f lease.json handoff.json
+    jq '.status="recovery-required" | .phase="post-release-backup-failed" | del(.recoveryCloseout)' \
+      state/backup-state.json > state/state.next
+    mv state/state.next state/backup-state.json
+    : > "$MOCK_LOG"
+    run env MUTATION="$mutation" bash harness.sh
+    [ "$status" -ne 0 ]
+    ! grep -q '^wipe$' "$MOCK_LOG"
+    cmp lease.json expected-lease.json
+  done
+}
+
+@test "reset rejects altered closeout receipt or replacement Lease before wiping" {
+  closeout_fixture
+  cat >> harness.sh << 'EOF'
+recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+jq "$MUTATION" handoff.json > handoff.next
+mv handoff.next handoff.json
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  local mutation
+  for mutation in '.data["handoff.json"] |= (fromjson | .leaseUid="replacement" | tojson)' \
+    '.data["handoff.json"] |= (fromjson | .holder="other" | tojson)' \
+    '.data["handoff.json"] |= (fromjson | .configSha256="other" | tojson)' \
+    '.data["handoff.json"] |= (fromjson | .identity.systemUid="replacement" | tojson)' \
+    '.data["handoff.json"] |= (fromjson | .artifact="other" | tojson)'; do
+    rm -rf "$RECOVERY_STATE"
+    rm -f lease.json handoff.json
+    jq '.status="recovery-required" | .phase="post-release-backup-failed" | del(.recoveryCloseout)' \
+      state/backup-state.json > state/state.next
+    mv state/state.next state/backup-state.json
+    : > "$MOCK_LOG"
+    run env MUTATION="$mutation" bash harness.sh
+    [ "$status" -ne 0 ]
+    [[ $output == *"handoff receipt does not match"* ]]
+    ! grep -q '^wipe$' "$MOCK_LOG"
+  done
+}
+
 @test "Pi reset refuses failed real host-path and filesystem UUID inspection before wipe" {
   state_machine_fixture
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/
@@ -388,7 +521,7 @@ release_state_write() {
   if [[ $1 == recovery-closed && -f "$FIXTURE_ROOT/fail-final" ]]; then return 1; fi
   original_state_write "$@"
 }
-recovery_release_closeout "$RECOVERY_STATE" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
 EOF
   touch fail-final
   run bash harness.sh
@@ -542,7 +675,7 @@ EOF
   local barrier stop retained
   barrier=$(grep -n '^barrier$' "$MOCK_LOG" | cut -d: -f1)
   stop=$(grep -n '^workers-stopped$' "$MOCK_LOG" | cut -d: -f1)
-  retained=$(grep -n '^lock-api replace .*recovery-lease-next.json' "$MOCK_LOG" | cut -d: -f1)
+  retained=$(grep -n '^lock-api replace .*recovery-lease-next.json' "$MOCK_LOG" | tail -1 | cut -d: -f1)
   [ "$barrier" -lt "$stop" ] && [ "$stop" -lt "$retained" ]
   ! grep -q '^exact-lease-deleted$' "$MOCK_LOG"
 }

@@ -545,7 +545,7 @@ PY
 }
 
 recovery_reset() {
-  local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5 current
+  local manifest=$1 archive=$2 expected=$3 state=$4 confirmation=$5 current lease_uid
   [[ $confirmation == "RESET-$expected" ]] \
     || production_fail "destructive reset requires RESET-<backup-id> confirmation"
   recovery_private_state "$state"
@@ -615,9 +615,21 @@ recovery_reset() {
     fi
     retain_lock=true
     locked=true
-    current=$(cluster_operation_lock_status)
+    current=$(cluster_operation_lock_status) || production_fail "cannot inspect acquired recovery Lease"
+    jq -e --arg holder "$lock_holder" --arg artifact "$artifact" \
+      --slurpfile state "$state/restore-state.json" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.holderIdentity == $holder
+      and .metadata.annotations["recipe-db/operation"] == "restore"
+      and .metadata.annotations["recipe-db/release"] == $artifact
+      and (.metadata.annotations["recipe-db/phase"] == "acquired"
+        or .metadata.annotations["recipe-db/phase"] == "reset-prepared")
+      and ($state[0].reset.leaseUid == null or .metadata.uid == $state[0].reset.leaseUid)' \
+      <<< "$current" > /dev/null || production_fail "acquired recovery Lease identity changed"
+    lease_uid=$(jq -er '.metadata.uid | select(type == "string" and length > 0)' <<< "$current") \
+      || production_fail "cannot capture acquired recovery Lease UID; retry with the same state"
     jq --arg holder "$lock_holder" \
-      --arg leaseUid "$(jq -er .metadata.uid <<< "$current")" \
+      --arg leaseUid "$lease_uid" \
       '.holder=$holder | .status="in-progress" | .phase="reset-prepared" |
         .reset.leaseUid=$leaseUid' "$state/restore-state.json" > "$state/restore-state.next"
     mv "$state/restore-state.next" "$state/restore-state.json"
@@ -696,6 +708,7 @@ recovery_replace_lease() {
 }
 
 recovery_read_handoff() {
+  recovery_identity || production_fail "cannot verify recovery handoff cluster and storage identities"
   cluster_operation_lock_kubectl get configmap recipe-db-recovery-handoff --ignore-not-found -o json \
     > "$work/recovery-handoff-configmap.json" || return 1
   jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
@@ -704,11 +717,13 @@ recovery_read_handoff() {
     || production_fail "missing recovery handoff receipt"
   jq -e --argjson lease "$1" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg ns "$namespace" \
-    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    --slurpfile identity "$work/reset-identity.json" '
     .version == 1 and .ownershipRetained == true and .ownershipReleased == false
     and .barrierVerified == true and .workersStopped == true
     and .target == $target and .cluster == $cluster and .context == $context
     and .namespace == $ns and .configSha256 == $config
+    and .identity == $identity[0]
     and .holder == $lease.spec.holderIdentity and .leaseUid == $lease.metadata.uid
     and .artifact == $lease.metadata.annotations["recipe-db/release"]
     and $lease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -776,11 +791,12 @@ recovery_release_closeout() {
   release_state_write recovery-required recovery-closeout-pending \
     "$(jq -cn --arg phase "$phase" --arg uid "$uid" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{recoveryCloseout:{previousPhase:$phase,requestedAt:$at,leaseUid:$uid}}')"
-  cluster_operation_lock_update recovery-closeout-pending
+  recovery_replace_lease "$current" backup recovery-closeout-pending "$source"
   recovery_closeout_started=true
   recovery_install_barrier
   recovery_stop_workers || production_fail "cannot stop all release workers before closeout"
   recovery_closeout_verify_isolation
+  recovery_identity || production_fail "cannot pin recovery handoff cluster and storage identities"
   current=$(cluster_operation_lock_status)
   jq -e --arg holder "$expected" --arg uid "$uid" --arg source "$source" '
     .spec.holderIdentity == $holder and .metadata.uid == $uid
@@ -791,9 +807,10 @@ recovery_release_closeout() {
     <<< "$current" > /dev/null || production_fail "release closeout Lease changed during isolation"
   jq -n --arg holder "$expected" --arg uid "$uid" --arg source "$source" --arg artifact "$artifact" \
     --arg target "$target" --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" \
-    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    --slurpfile identity "$work/reset-identity.json" '
     {version:1,holder:$holder,leaseUid:$uid,artifact:$source,targetArtifact:$artifact,
-      target:$target,cluster:$cluster,context:$context,namespace:$ns,configSha256:$config,
+      target:$target,cluster:$cluster,context:$context,namespace:$ns,configSha256:$config,identity:$identity[0],
       ownershipRetained:true,ownershipReleased:false,barrierVerified:true,workersStopped:true,
       handoffReceipt:"recipe-db-recovery-handoff"}' > "$work/recovery-handoff.json"
   cluster_operation_lock_kubectl get configmap recipe-db-recovery-handoff --ignore-not-found -o json \
