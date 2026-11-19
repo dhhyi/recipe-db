@@ -689,15 +689,18 @@ EOF
   [ "$(cat "$MOCK_LOG")" = read ]
 }
 
-@test "restore expected image reads select v1 objects and the first v2 entry" {
+@test "restore read verification accepts v1 and first-entry v2 image manifests" {
   cat > restore-image-harness.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$FIXTURE_ROOT/.scripts/production-restore.sh"
 work="$FIXTURE_ROOT/work"
+timeout=5
+restore_graphql_port=4000
+restore_browse_port=4100
 mkdir -p "$work/validated"
 python3 - "$work" << 'PY'
-import io, json, pathlib, sqlite3, sys, tarfile
+import base64, hashlib, io, json, pathlib, sqlite3, sys, tarfile
 root = pathlib.Path(sys.argv[1])
 database = root / "recipes.sqlite3"
 with sqlite3.connect(database) as connection:
@@ -705,28 +708,85 @@ with sqlite3.connect(database) as connection:
     connection.execute("INSERT INTO recipes VALUES (?, ?)", ("recipe", '{"name":"Recipe"}'))
 with tarfile.open(root / "validated/recipes.tar", "w") as archive:
     archive.add(database, arcname="recipes.sqlite3")
-entry = {"recipeId":"recipe","url":"/public/v1.png","thumbUrl":"/public/v1-thumb.png","size":1}
-for version, document in (
-    (1, entry),
-    (2, [entry | {"url":"/public/v2-first.png","id":"first"},
-         entry | {"url":"/public/v2-second.png","id":"second"}]),
-):
+for version, count in ((1, 1), (2, 2)):
+    entries, public_files, contents, inventory = [], [], {}, []
+    for index in range(count):
+        normal = f"normal image v{version}-{index}".encode()
+        thumb = f"thumbnail v{version}-{index}".encode()
+        normal_sha = hashlib.sha256(normal).hexdigest()
+        thumb_sha = hashlib.sha256(thumb).hexdigest()
+        normal_name = f"recipe-{normal_sha}.png"
+        thumb_name = f"recipe-{thumb_sha}-thumb.png"
+        entry = {
+            "recipeId":"recipe", "url":"/public/" + normal_name,
+            "thumbUrl":"/public/" + thumb_name, "size":len(normal),
+        }
+        if version == 2:
+            entry["id"] = normal_sha
+        entries.append(entry)
+        for name, value in ((normal_name, normal), (thumb_name, thumb)):
+            path = "public/" + name
+            public_files.append((path, value))
+            contents["/" + path] = base64.b64encode(value).decode()
+            inventory.append({
+                "path":path, "sha256":hashlib.sha256(value).hexdigest(),
+            })
+    document = entries[0] if version == 1 else entries
     with tarfile.open(root / f"images-v{version}.tar", "w") as archive:
-        for name, content in (
+        for name in ("public", "manifests"):
+            directory = tarfile.TarInfo(name)
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+        files = public_files + [
             ("manifests/recipe.json", json.dumps(document).encode()),
             ("storage-version", f"{version}\n".encode()),
-        ):
+        ]
+        for name, content in files:
             info = tarfile.TarInfo(name)
             info.size = len(content)
             archive.addfile(info, io.BytesIO(content))
+    (root / f"restore-fixture-v{version}.json").write_text(json.dumps({
+        "image":{"url":entries[0]["url"],"thumbUrl":entries[0]["thumbUrl"]},
+        "content":contents, "files":inventory,
+    }))
 PY
+restore_graphql() {
+  case "$1" in
+    'query { recipes { id name } }')
+      printf '{"data":{"recipes":[{"id":"recipe","name":"Recipe"}]}}\n' \
+        > "$work/restore-response.json"
+      ;;
+    *'recipe(id:$id)'*)
+      jq -n --slurpfile fixture "$RESPONSE" '
+        {data:{recipe:{id:"recipe",name:"Recipe",image:$fixture[0].image,rating:{count:1}}}}
+      ' > "$work/restore-response.json"
+      ;;
+    *searchRecipes*)
+      printf '{"data":{"searchRecipes":{"recipes":[{"id":"recipe"}],"found":1}}}\n' \
+        > "$work/restore-response.json"
+      ;;
+    *) return 1 ;;
+  esac
+}
+curl() {
+  local url="${*: -1}" path
+  case "$url" in
+    http://127.0.0.1:4000/public/*)
+      path=${url#http://127.0.0.1:4000}
+      jq -er --arg path "$path" '.content[$path]' "$RESPONSE" | base64 --decode
+      ;;
+    http://127.0.0.1:4100/recipe/*) printf 'restored recipe page\n' ;;
+    *) return 1 ;;
+  esac
+}
 for version in 1 2; do
+  export RESPONSE="$work/restore-fixture-v$version.json"
   cp "$work/images-v$version.tar" "$work/validated/images.tar"
+  jq -n --slurpfile fixture "$RESPONSE" \
+    '{inventory:[{service:"images",files:$fixture[0].files}]}' \
+    > "$work/restore-manifest.json"
   restore_prepare_expected_reads
-  jq -e --arg version "$version" '
-    if $version == "1" then .url == "/public/v1.png"
-    else .url == "/public/v2-first.png" end
-  ' "$work/restore-expected-image.json" > /dev/null
+  restore_verify_reads
 done
 EOF
   run bash restore-image-harness.sh

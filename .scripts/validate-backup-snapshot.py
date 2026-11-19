@@ -109,6 +109,8 @@ def validate(archive, layout, require_storage_version=False):
                     output = "public/" + name
                     if match is None or output not in files or files[output][1] != match[1]:
                         raise ValueError("image manifest references a missing or corrupt pair")
+                    if field == "url" and storage_version == 2 and document.get("id") != match[1]:
+                        raise ValueError("image manifest ID does not match its normal image digest")
                     if field == "url" and files[output][0] != document.get("size"):
                         raise ValueError("image manifest size mismatch")
                     selected.add(output)

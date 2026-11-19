@@ -48,8 +48,9 @@ normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
 entry = {"recipeId":"a","url":"/public/"+normal_name,
     "thumbUrl":"/public/"+thumb_name,"size":len(normal)}
+v2_entry = entry | {"id": hashlib.sha256(normal).hexdigest()}
 images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb}
-for version, manifest in ((1, entry), (2, [entry, entry | {"id": hashlib.sha256(normal).hexdigest()}])):
+for version, manifest in ((1, entry), (2, [v2_entry, v2_entry])):
     values = images | {"manifests/a.json":json.dumps(manifest).encode(),
         "storage-version":f"{version}\n".encode()}
     assert len(module.validate(archive(values), {"kind":"images"})) == 4
@@ -78,8 +79,9 @@ for entries, layout, link in [
     (images | {"storage-version":b"2\n", "manifests/a.json":b"[]"}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps(entry).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"1\n", "manifests/a.json":json.dumps([entry]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([entry, entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([entry, entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry | {"id":"0" * 64}]).encode()}, {"kind":"images"}, False),
     ({}, {"kind":"images"}, False),
 ]:
     try:
