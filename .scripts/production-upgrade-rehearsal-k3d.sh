@@ -732,6 +732,50 @@ delete_scenario_cluster() {
   mark
 }
 
+capture_post_release_backup() {
+  local label=$1 candidate_values=$2 state=$3 package_id=$4
+  local package_manifest package_archive
+  phase=post-release-backup-capture
+  run_logged "$work/logs/post-release-website-result.log" lifecycle "$candidate_worktree" true \
+    release-website-result "$candidate_values" "$state" "$candidate" passed \
+    'Local rehearsal smoke checks passed' "WEBSITE-$package_id-passed"
+  run_logged "$work/logs/post-release-capture.log" lifecycle "$candidate_worktree" true \
+    release-backup-capture "$candidate_values" "$state" "$candidate"
+  post_backup_id=$(jq -er '.postReleaseBackup.backupId |
+    select(type == "string" and test("^backup-[0-9]+-[0-9]+$"))' "$state/backup-state.json") \
+    || die 'post-release capture did not record a valid backup ID'
+  mark
+  phase=post-release-backup-upload
+  post_backup_upload_status=failed
+  run_logged "$work/logs/post-release-upload.log" python3 "$upload" release-upload \
+    --config "$work/$label-backup-config.json"
+  post_backup_upload_status=$(jq -er '.status' "$work/uploader/$label/status.json")
+  jq -e --arg id "$post_backup_id" \
+    '.status == "verified-upload" and .backupId == $id' "$work/uploader/$label/status.json" > /dev/null \
+    || die 'post-release backup was not verified-upload for the captured backup ID'
+  jq -e --arg id "$post_backup_id" \
+    '.backupId == $id' "$work/uploader/$label/baseline.json" > /dev/null \
+    || die 'post-release upload baseline does not identify the captured backup'
+  package_manifest=$(jq -er .manifest "$work/uploader/$label/baseline.json")
+  package_archive=$(jq -er .archive "$work/uploader/$label/baseline.json")
+  package_manifest="$fake_remote/recipe-db-backups/issue-251-$run_id-$label/$package_manifest"
+  package_archive="$fake_remote/recipe-db-backups/issue-251-$run_id-$label/$package_archive"
+  mark
+  phase=post-release-backup-validation
+  jq -e --arg release "$candidate" --arg revision "$candidate_revision" \
+    '.source.artifact == $release and .source.revision == $revision' "$package_manifest" > /dev/null \
+    || die 'post-release package does not identify the candidate release'
+  jq -e --argjson actual "$actual_versions" --argjson backup "$(backup_storage_versions_from_manifest "$package_manifest")" '
+    ($actual | length) > 0
+    and ([ $actual[] | {service,version:.currentVersion} ] | sort_by(.service)) == $backup
+  ' > /dev/null <<< '{}' || die 'post-release package storage versions do not match the migrated candidate'
+  application_project_metadata_to_jsonl "$candidate_worktree" "$work/post-release-projects.jsonl"
+  run_logged "$work/logs/post-release-package-validation.log" python3 "$validator" \
+    "$package_manifest" "$package_archive" "$work/post-release-validated-package" \
+    "$work/post-release-projects.jsonl" "$post_backup_id"
+  mark
+}
+
 run_scenario() {
   local label=$1 source_values=$2 candidate_values=$3
   local state package_id smoke_script_backup
@@ -823,44 +867,7 @@ run_scenario() {
       || die 'successful local route checks changed the recorded release outcome'
     success_upgrade_status=passed
     mark
-    phase=post-release-backup-capture
-    run_logged "$work/logs/post-release-website-result.log" lifecycle "$candidate_worktree" true \
-      release-website-result "$candidate_values" "$state" "$candidate" passed \
-      'Local rehearsal smoke checks passed' "WEBSITE-$package_id-passed"
-    run_logged "$work/logs/post-release-capture.log" lifecycle "$candidate_worktree" true \
-      release-backup-capture "$candidate_values" "$state" "$candidate"
-    post_backup_id=$(jq -er '.postReleaseBackup.backupId |
-      select(type == "string" and test("^backup-[0-9]+-[0-9]+$"))' "$state/backup-state.json") \
-      || die 'post-release capture did not record a valid backup ID'
-    mark
-    phase=post-release-backup-upload
-    run_logged "$work/logs/post-release-upload.log" python3 "$upload" release-upload \
-      --config "$work/$label-backup-config.json"
-    post_backup_upload_status=$(jq -er '.status' "$work/uploader/$label/status.json")
-    jq -e --arg id "$post_backup_id" \
-      '.status == "verified-upload" and .backupId == $id' "$work/uploader/$label/status.json" > /dev/null \
-      || die 'post-release backup was not verified-upload for the captured backup ID'
-    jq -e --arg id "$post_backup_id" \
-      '.backupId == $id' "$work/uploader/$label/baseline.json" > /dev/null \
-      || die 'post-release upload baseline does not identify the captured backup'
-    package_manifest=$(jq -er .manifest "$work/uploader/$label/baseline.json")
-    package_archive=$(jq -er .archive "$work/uploader/$label/baseline.json")
-    package_manifest="$fake_remote/recipe-db-backups/issue-251-$run_id-$label/$package_manifest"
-    package_archive="$fake_remote/recipe-db-backups/issue-251-$run_id-$label/$package_archive"
-    mark
-    phase=post-release-backup-validation
-    jq -e --arg release "$candidate" --arg revision "$candidate_revision" \
-      '.source.artifact == $release and .source.revision == $revision' "$package_manifest" > /dev/null \
-      || die 'post-release package does not identify the candidate release'
-    jq -e --argjson actual "$actual_versions" --argjson backup "$(backup_storage_versions_from_manifest "$package_manifest")" '
-      ($actual | length) > 0
-      and ([ $actual[] | {service,version:.currentVersion} ] | sort_by(.service)) == $backup
-    ' > /dev/null <<< '{}'
-    application_project_metadata_to_jsonl "$candidate_worktree" "$work/post-release-projects.jsonl"
-    run_logged "$work/logs/post-release-package-validation.log" python3 "$validator" \
-      "$package_manifest" "$package_archive" "$work/post-release-validated-package" \
-      "$work/post-release-projects.jsonl" "$post_backup_id"
-    mark
+    capture_post_release_backup "$label" "$candidate_values" "$state" "$package_id"
   else
     phase=injected-uncertain-migration-and-complete-recovery
     run_logged "$work/logs/failure-migration-plan.log" lifecycle "$candidate_worktree" true \
@@ -965,7 +972,7 @@ run_rehearsal_scenarios() {
   delete_scenario_cluster complete || die "$failure_reason"
 
   phase=post-release-backup-restore
-  post_backup_restore_status=in-progress
+  post_backup_restore_status=failed
   new_cluster p "$restore_cluster_values"
   package_id=$(jq -er .backupId "$work/uploader/successful-upgrade/baseline.json")
   local remote="$fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade"

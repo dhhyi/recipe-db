@@ -102,13 +102,57 @@ load_scenario_functions() {
     deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
     run_migration_sequence successful_migration_outcome_is_valid \
-    complete_recovery_state_is_verified delete_scenario_cluster run_scenario \
+    complete_recovery_state_is_verified delete_scenario_cluster capture_post_release_backup run_scenario \
     run_rehearsal_scenarios; do
     sed -n "/^${function_name}() {/,/^}/p" \
       .scripts/production-upgrade-rehearsal-k3d.sh >> "$FIXTURE_ROOT/scenario-functions.sh"
   done
   # shellcheck source=/dev/null
   source "$FIXTURE_ROOT/scenario-functions.sh"
+}
+
+@test "candidate backup captures uploads and validates exact migrated identity and versions" {
+  local work="$FIXTURE_ROOT/work" fake_remote="$FIXTURE_ROOT/remote" run_id=123
+  local candidate="$CANDIDATE_RELEASE" candidate_revision="$SOURCE_REVISION"
+  local candidate_worktree="$FIXTURE_ROOT/candidate" upload=uploader validator=validator
+  local actual_versions='[{"service":"recipes","currentVersion":2,"requiredVersion":2}]'
+  local phase='' post_backup_id='' post_backup_upload_status=not-run
+  local state="$work/uploader/successful-upgrade/maintenance"
+  local remote="$fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade"
+  mkdir -p "$state" "$work/logs" "$remote"
+  load_scenario_functions
+  mark() { :; }
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  lifecycle() {
+    printf '%s\n' "$*" >> "$work/calls"
+    if [[ $3 == release-backup-capture ]]; then
+      printf '{"postReleaseBackup":{"backupId":"backup-123-456"}}\n' > "$state/backup-state.json"
+    fi
+  }
+  application_project_metadata_to_jsonl() { printf '{}\n' > "$2"; }
+  run_logged() {
+    local log=$1
+    shift
+    if [[ $1 == python3 && $2 == "$upload" ]]; then
+      printf '{"status":"verified-upload","backupId":"backup-123-456"}\n' > "$work/uploader/successful-upgrade/status.json"
+      printf '{"backupId":"backup-123-456","manifest":"post.json","archive":"post.tar.gz"}\n' > "$work/uploader/successful-upgrade/baseline.json"
+      jq -n --arg candidate "$candidate" --arg revision "$candidate_revision" '{
+        source:{artifact:$candidate,revision:$revision},
+        snapshotManifest:{inventory:[{service:"recipes",files:[{path:"storage-version",storageVersion:2}]}]}
+      }' > "$remote/post.json"
+      : > "$remote/post.tar.gz"
+    elif [[ $1 == python3 && $2 == "$validator" ]]; then
+      printf 'validate %s\n' "$*" >> "$work/calls"
+    else
+      "$@" > "$log"
+    fi
+  }
+  capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
+  [ "$post_backup_id" = backup-123-456 ]
+  [ "$post_backup_upload_status" = verified-upload ]
+  grep -Fq 'release-website-result candidate.yaml' "$work/calls"
+  grep -Fq 'release-backup-capture candidate.yaml' "$work/calls"
+  grep -Fq "validate python3 validator $remote/post.json $remote/post.tar.gz" "$work/calls"
 }
 
 @test "release inventory validation uses the schema-specific source CLI contract" {
@@ -409,6 +453,7 @@ YAML
   local backup_storage_versions_match_source=true live_storage_workloads_ready=true
   local source_package_status=verified-upload success_upgrade_status=passed
   local migration_outcome=no-migration-required failure_recovery_status=passed
+  local post_backup_id=backup-456-789 post_backup_upload_status=verified-upload post_backup_restore_status=passed
   local cluster='' deleted_clusters=() source_worktree="$BATS_TEST_TMPDIR/source"
   local candidate_worktree="$BATS_TEST_TMPDIR/candidate"
   local source_worktree_created=false candidate_worktree_created=false
@@ -430,6 +475,7 @@ YAML
   jq -e '.status == "passed" and .failureReason == null
     and .successfulUpgrade.migrationOutcome == "no-migration-required"
     and .successfulUpgrade.representativeRecipeLinkedDataVerified == true
+    and .postReleaseBackup == {backupId:"backup-456-789",uploadStatus:"verified-upload",restoreResult:"passed"}
     and .failureRecovery.status == "passed"
     and .failureRecovery.verification != null
     and .failureRecovery.injectedFailure != null
@@ -679,6 +725,7 @@ YAML
       > "$work/source-sample.json"
   }
   verify_sample() { printf 'verified %s\n' "$2" >> "$work/sample-checks.log"; }
+  capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
     local label=$1 snapshot=$2
     mkdir -p "$work/uploader/$label" "$work/packages/$label"
@@ -796,6 +843,7 @@ YAML
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
+  grep -Fq 'post-release successful-upgrade' "$scenario_lifecycle_log"
 
   : > "$scenario_lifecycle_log"
   scenario_label=failure-recovery
@@ -866,6 +914,7 @@ YAML
   }
   take_sample() { sample_id=recipe-with-links; }
   verify_sample() { :; }
+  capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
     local label=$1
     mkdir -p "$work/uploader/$label" "$work/packages/$label"
@@ -954,6 +1003,7 @@ YAML
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
+  grep -Fq 'post-release successful-upgrade' "$scenario_lifecycle_log"
 }
 
 @test "scenario cluster deletion failure is cleanup-failed and retains ownership evidence" {
@@ -1006,13 +1056,16 @@ YAML
   [ "$status" -ne 0 ]
 }
 
-@test "one cluster restores once then recovers reopens upgrades and deletes in order" {
+@test "rehearsal restores candidate backup on a second cluster after upgrade" {
   local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work"
   local backup_id=backup-123-456 source_revision="$SOURCE_REVISION"
   local source_release="$SOURCE_RELEASE" candidate="$CANDIDATE_RELEASE"
   local manifest=manifest.json archive=archive.tar.gz phase=''
-  mkdir -p "$work/logs" "$work/state/failure-recovery"
+  local fake_remote="$work/remote" run_id=123 post_backup_restore_status=not-run
+  mkdir -p "$work/logs" "$work/state/failure-recovery" "$work/uploader/successful-upgrade"
   printf '{"backupId":"backup-789-123"}\n' > "$work/state/failure-recovery/backup-state.json"
+  printf '{"backupId":"backup-999-888","manifest":"post.json","archive":"post.tar.gz"}\n' \
+    > "$work/uploader/successful-upgrade/baseline.json"
   load_scenario_functions
   new_cluster() { printf 'create %s\n' "$*" >> "$work/steps"; }
   run_logged() {
@@ -1026,17 +1079,22 @@ YAML
   mark() { :; }
   run_scenario() { printf 'scenario %s\n' "$*" >> "$work/steps"; }
   verify_sample() { printf 'verify %s\n' "$*" >> "$work/steps"; }
-  delete_scenario_cluster() { printf 'delete\n' >> "$work/steps"; }
+  delete_scenario_cluster() { printf 'delete %s\n' "$*" >> "$work/steps"; }
 
-  run_rehearsal_scenarios source.yaml candidate.yaml cluster.yaml
+  run_rehearsal_scenarios source.yaml candidate.yaml cluster.yaml post.yaml post-cluster.yaml
   [ "$(sed -n '1p' "$work/steps")" = 'create r cluster.yaml' ]
   grep -Fq "restore source.yaml manifest.json archive.tar.gz $backup_id $work/state/restore RESTORE-$backup_id" "$work/steps"
   [ "$(sed -n '3p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
   grep -Fq "release-recovery-reopen source.yaml $work/state/failure-recovery $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
   [ "$(sed -n '5p' "$work/steps")" = 'verify source.yaml recovered-source' ]
   [ "$(sed -n '6p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
-  [ "$(sed -n '7p' "$work/steps")" = delete ]
-  [ "$(grep -c '^restore ' "$work/steps")" -eq 1 ]
+  [ "$(sed -n '7p' "$work/steps")" = 'delete complete' ]
+  [ "$(sed -n '8p' "$work/steps")" = 'create p post-cluster.yaml' ]
+  grep -Fq "restore post.yaml $fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade/post.json $fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade/post.tar.gz backup-999-888" "$work/steps"
+  [ "$(sed -n '10p' "$work/steps")" = 'verify post.yaml post-release-restore' ]
+  [ "$(sed -n '11p' "$work/steps")" = 'delete post-release' ]
+  [ "$post_backup_restore_status" = passed ]
+  [ "$(grep -c '^restore ' "$work/steps")" -eq 2 ]
 }
 
 @test "recovery removes only stopped candidate-only Deployments with server preconditions" {
