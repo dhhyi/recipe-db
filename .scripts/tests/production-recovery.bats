@@ -83,7 +83,10 @@ EOF
       map({kind:.[0],metadata:{name:.[1],labels:{"app.kubernetes.io/part-of":"recipe-db"}}}))}' > workers.json
   cat >> harness.sh << 'EOF'
 kube() {
-  if [[ $* == get\ deployments,* ]]; then cat "$FIXTURE_ROOT/workers.json"
+  if [[ $* == *horizontalpodautoscalers,pods* ]]; then cat "$FIXTURE_ROOT/workers.json"
+  elif [[ $* == get\ deployments,* ]]; then
+    jq '.items |= map(select(.kind != "HorizontalPodAutoscaler") |
+      .spec.replicas=0 | .spec.suspend=true | .status.desiredNumberScheduled=0)' "$FIXTURE_ROOT/workers.json"
   elif [[ $* == 'get pods -o json' ]]; then
     echo '{"items":[{"kind":"Pod","metadata":{"name":"unrelated"},"spec":{"volumes":[{"persistentVolumeClaim":{"claimName":"unrelated"}}]}}]}'
   else echo "$*" >> "$MOCK_LOG"; fi

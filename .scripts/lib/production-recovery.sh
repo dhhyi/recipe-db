@@ -221,17 +221,21 @@ recovery_stop_workers() {
         and .metadata.name != $guard) |
       .metadata.name' "$work/reset-workers.json")
   done
-  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers \
-    -o json > "$work/reset-stopped-controllers.json" || return 1
-  jq -e 'all(.items[] | select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db");
-    if .kind == "Deployment" or .kind == "StatefulSet" or .kind == "ReplicaSet"
-      or .kind == "ReplicationController" then (.spec.replicas // 1) == 0
-    elif .kind == "Job" then .spec.suspend == true or
-      (.metadata.name | startswith("recovery-guard-"))
-    elif .kind == "CronJob" then .spec.suspend == true
-    elif .kind == "DaemonSet" then (.status.desiredNumberScheduled // 1) == 0
-    else false end)' "$work/reset-stopped-controllers.json" > /dev/null \
-    || production_fail "restartable workload controllers remain; wait for shutdown before retrying"
+  deadline=$((SECONDS + timeout))
+  while :; do
+    kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers \
+      -o json > "$work/reset-stopped-controllers.json" || return 1
+    if jq -e --arg guard "recovery-guard-${backup_id:-}" '
+      all(.items[] | select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db");
+      if .kind == "Deployment" or .kind == "StatefulSet" or .kind == "ReplicaSet"
+        or .kind == "ReplicationController" then (.spec.replicas // 1) == 0
+      elif .kind == "Job" then .spec.suspend == true or .metadata.name == $guard
+      elif .kind == "CronJob" then .spec.suspend == true
+      elif .kind == "DaemonSet" then (.status.desiredNumberScheduled // 1) == 0
+      else false end)' "$work/reset-stopped-controllers.json" > /dev/null; then break; fi
+    ((SECONDS < deadline)) || production_fail "restartable workload controllers remain; wait for shutdown before retrying"
+    sleep 1
+  done
   kube get pods -o json > "$work/reset-worker-pods.json" || return 1
   while IFS= read -r pod; do
     kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
