@@ -734,21 +734,54 @@ delete_scenario_cluster() {
 
 capture_post_release_backup() {
   local label=$1 candidate_values=$2 state=$3 package_id=$4
-  local package_manifest package_archive
+  local package_manifest package_archive capture="$work/post-release-capture-command"
+  local reference="$work/post-release-reference" config="$work/$label-backup-config.json"
   phase=post-release-backup-capture
   run_logged "$work/logs/post-release-website-result.log" lifecycle "$candidate_worktree" true \
     release-website-result "$candidate_values" "$state" "$candidate" passed \
     'Local rehearsal smoke checks passed' "WEBSITE-$package_id-passed"
-  run_logged "$work/logs/post-release-capture.log" lifecycle "$candidate_worktree" true \
-    release-backup-capture "$candidate_values" "$state" "$candidate"
+  printf '%s\n' "$candidate" > "$reference"
+  jq --arg artifact "$candidate" --arg revision "$candidate_revision" \
+    '.backupAlignment={artifact:$artifact,revision:$revision}' \
+    "$state/backup-state.json" > "$state/backup-state.next"
+  mv "$state/backup-state.next" "$state/backup-state.json"
+  {
+    printf '#!/bin/bash\nset -Eeuo pipefail\n'
+    printf 'export PATH=%q HOME=%q\n' "$PATH" "$HOME"
+    printf '[[ $# == 3 && $1 == release-capture && $2 == %q && $3 == %q ]]\n' "$state" "$candidate"
+    printf 'cd %q\n' "$root"
+    printf 'mise run --raw production-k3d verify %q > %q 2>&1\n' \
+      "$cluster_values" "$work/logs/post-release-cluster-ownership.log"
+    printf 'exec mise run --raw production-k3d --release-sources-from-git release-backup-capture %q "$2" "$3" > %q 2>&1\n' \
+      "$candidate_values" "$work/logs/post-release-capture.log"
+  } > "$capture"
+  chmod 700 "$capture"
+  jq --arg capture "$capture" '.captureCommand=$capture' "$config" > "$config.next"
+  mv "$config.next" "$config"
+  post_backup_upload_status=failed
+  if ! run_logged "$work/logs/post-release-upload.log" python3 -c '
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location("backup_upload", sys.argv[1])
+uploader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(uploader)
+uploader.RELEASE_REFERENCE_PATH = pathlib.Path(sys.argv[2])
+sys.argv = [sys.argv[1], "nightly", "--config", sys.argv[3]]
+sys.exit(uploader.main())
+' "$upload" "$reference" "$config"; then
+    post_backup_id=$(jq -r '.postReleaseBackup.backupId // ""' "$state/backup-state.json") || true
+    if [[ -f $work/uploader/$label/status.json ]]; then
+      post_backup_upload_status=$(jq -r '.status // "failed"' "$work/uploader/$label/status.json") || true
+    fi
+    return 1
+  fi
   post_backup_id=$(jq -er '.postReleaseBackup.backupId |
     select(type == "string" and test("^backup-[0-9]+-[0-9]+$"))' "$state/backup-state.json") \
     || die 'post-release capture did not record a valid backup ID'
   mark
   phase=post-release-backup-upload
-  post_backup_upload_status=failed
-  run_logged "$work/logs/post-release-upload.log" python3 "$upload" release-upload \
-    --config "$work/$label-backup-config.json"
   post_backup_upload_status=$(jq -er '.status' "$work/uploader/$label/status.json")
   jq -e --arg id "$post_backup_id" \
     '.status == "verified-upload" and .backupId == $id' "$work/uploader/$label/status.json" > /dev/null \
