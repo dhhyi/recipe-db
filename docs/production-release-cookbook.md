@@ -665,7 +665,7 @@ ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
     backup-configure.yml --ask-become-pass
 ```
 
-Require a successful play recap. This records a new configuration timestamp and leaves scheduled capture disabled; it does not replace Drive authorization. Exit the container shell, [capture and verify an ordinary backup](#verify-an-ordinary-backup), then [re-enable the schedule](#verify-a-backup-then-re-enable-its-schedule) only when appropriate. The verified backup must be newer than this installation. Do not continue through the retained-release steps below.
+Require a successful play recap. This records a new configuration timestamp and leaves scheduled capture disabled; it does not replace Drive authorization. Exit the container shell, [capture and verify an ordinary backup](#verify-an-ordinary-backup), then [re-enable the schedule](#verify-a-backup-then-re-enable-its-schedule) only when appropriate. Require a capture after restore and this installation, with off-device verification and a baseline matching the restored artifact and revision. `verified-unchanged` is acceptable only for that matching restored-release baseline; it verifies existing remote objects and is not a new upload. Do not continue through the retained-release steps below.
 
 ### Run the normal backup service
 

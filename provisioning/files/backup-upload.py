@@ -74,7 +74,9 @@ def safely_closed(state):
         and isinstance(state.get("backupId"), str) \
         and bool(BACKUP_ID_PATTERN.fullmatch(state["backupId"])) \
         and isinstance(closeout, dict) \
-        and closeout.get("ownershipReleased") is True \
+        and closeout.get("ownershipReleased") is False \
+        and closeout.get("ownershipRetained") is True \
+        and isinstance(closeout.get("leaseUid"), str) and bool(closeout["leaseUid"]) \
         and closeout.get("barrierVerified") is True \
         and closeout.get("workersStopped") is True \
         and closeout.get("holder") == state.get("backupId") \

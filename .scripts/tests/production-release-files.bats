@@ -101,7 +101,8 @@ with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
         "backupId": backup_id, "source": state["source"], "data": {"private": "discard"},
     })
     closeout = {
-        "ownershipReleased": True, "barrierVerified": True, "workersStopped": True,
+        "ownershipReleased": False, "ownershipRetained": True, "leaseUid": "retained-lease-uid",
+        "barrierVerified": True, "workersStopped": True,
         "holder": backup_id, "closedAt": "2026-01-02T00:00:00Z",
     }
     closed = dict(state, status="recovery-closed", phase="recovery-closed",
@@ -112,6 +113,9 @@ with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
         assert not files.backup["safely_recovered"](incomplete), key
     for phase in ("recovery-closeout-pending", "post-release-backup-failed", "unknown"):
         assert not files.backup["safely_closed"](dict(closed, phase=phase))
+    for fields in ({"ownershipReleased": True}, {"ownershipRetained": False}, {"leaseUid": ""}):
+        assert not files.backup["safely_closed"](
+            dict(closed, recoveryCloseout=dict(closeout, **fields)))
     assert files.backup["maintenance_active"](config)
     files.handle({
         "operation": "checkpoint", "token": "token", "expected": initial["expected"],

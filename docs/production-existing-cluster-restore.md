@@ -95,7 +95,7 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-closeout "
   "$HOLDER" "CLOSEOUT-$HOLDER"
 ```
 
-Success archives the operation's closed status and releases only that holder's Lease, with application access blocked and workloads stopped. It does not erase data or run reset. If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease.
+Success archives the failed release's closed status and transitions its exact Lease to `recovery-ready`, with application access blocked and workloads stopped. The same Lease remains held across the separate reset and restore confirmations, excluding another deployment or backup. Closeout does not erase data or run reset. If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease.
 
 On the Pi, confirm the uploader no longer considers the closed operation active:
 
@@ -103,7 +103,7 @@ On the Pi, confirm the uploader no longer considers the closed operation active:
 sudo /usr/local/sbin/recipe-db-backup-upload status --config /etc/recipe-db/backup.json
 ```
 
-Require `maintenanceActive: false`; keep the timer disabled. Closed operation metadata is archived privately on the Pi, not in the temporary workstation view.
+Require `maintenanceActive: false`; keep the timer disabled. This reports that failed-release maintenance is closed, not that the cluster is unlocked: `lock-status` must still show the same holder and Lease UID in `recovery-ready`. Closed operation metadata is archived privately on the Pi, not in the temporary workstation view.
 
 ## 3. Approve the data reset
 
@@ -135,7 +135,7 @@ mise run production-k3d --release-sources-from-git recovery-reset "$VALUES" "$MA
   "$BACKUP_ID" "$STATE" "RESET-$BACKUP_ID"
 ```
 
-The reset preserves PVC/PV objects and identities, the separate `kube-system` ACME/HTTPS PVC, K3s, credentials, configuration, backup authorization and off-device backups. It clears only the configured application PVC `/data` roots, including derived data, and verifies they are empty. Success keeps public access blocked and holds the exact recovery Lease for restore.
+The reset preserves PVC/PV objects and identities, the separate `kube-system` ACME/HTTPS PVC, K3s, credentials, configuration, backup authorization and off-device backups. It clears only the configured application PVC `/data` roots, including derived data, and verifies they are empty. After closeout it adopts the same holder and Lease UID without releasing ownership; on an idle site it acquires a new Lease. Success keeps public access blocked and holds that exact recovery Lease for restore.
 
 ## 4. Restore and verify the site
 
