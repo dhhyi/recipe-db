@@ -303,7 +303,31 @@ recovery_stop_workers() {
 }
 
 recovery_cleanup() {
-  local result=$1
+  local result=$1 current
+  if [[ ${recovery_initializing:-false} == true && $result != 0 ]]; then
+    current=$(cluster_operation_lock_status) || current=
+    if ! jq -e --arg holder "$lock_holder" --arg artifact "$artifact" \
+      --slurpfile state "$restore_state/restore-state.json" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.holderIdentity == $holder
+      and .metadata.annotations["recipe-db/operation"] == "restore"
+      and .metadata.annotations["recipe-db/release"] == $artifact
+      and (.metadata.annotations["recipe-db/phase"] == "acquired"
+        or .metadata.annotations["recipe-db/phase"] == "reset-prepared")
+      and ($state[0].reset.leaseUid == null or .metadata.uid == $state[0].reset.leaseUid)' \
+      <<< "${current:-null}" > /dev/null; then
+      printf 'production: cannot verify initializing recovery ownership; refusing to change another operation\n' >&2
+      return 0
+    fi
+    retain_lock=true
+    locked=true
+    recovery_install_barrier \
+      || printf 'production: cannot establish initializing recovery barrier; isolate ingress immediately\n' >&2
+    recovery_stop_workers \
+      || printf 'production: cannot stop initializing recovery workers; inspect application storage users\n' >&2
+    printf 'production: initialization interrupted; exact Lease and acquisition intent retained unchanged; retry with the same state directory\n' >&2
+    return 0
+  fi
   if [[ ${recovery_closeout_started:-false} == true && $result != 0 ]]; then
     recovery_install_barrier || printf 'production: closeout barrier could not be reasserted; isolate ingress\n' >&2
     recovery_stop_workers || printf 'production: closeout workers could not all be stopped\n' >&2
@@ -575,6 +599,7 @@ recovery_reset() {
     recovery_assert_lease
     retain_lock=true
     locked=true
+    recovery_initializing=true
   else
     recovery_identity || production_fail "cannot pin configured application storage identities before reset"
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect operation Lease"
@@ -611,6 +636,7 @@ recovery_reset() {
         "$state/restore-state.json" > "$state/restore-state.next"
       mv "$state/restore-state.next" "$state/restore-state.json"
       retain_lock=true
+      recovery_initializing=true
       cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
     fi
     retain_lock=true
@@ -635,6 +661,7 @@ recovery_reset() {
     mv "$state/restore-state.next" "$state/restore-state.json"
     retain_lock=true
     recovery_started=true
+    recovery_initializing=false
     restore_current_phase=reset-prepared
     cluster_operation_lock_update reset-prepared
     jq 'del(.reset.acquisitionPending)' "$state/restore-state.json" > "$state/restore-state.next"

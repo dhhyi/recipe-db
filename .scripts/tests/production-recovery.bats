@@ -332,6 +332,7 @@ EOF
     mkdir -p work
     printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
     touch "$failure"
+    : > "$MOCK_LOG"
     run bash harness.sh
     [ "$status" -ne 0 ]
     jq -e '.metadata.uid == "lease-1" and .metadata.annotations["recipe-db/phase"] == "acquired"' lease.json
@@ -339,6 +340,9 @@ EOF
       and .reset.leaseUid == null and (.holder | startswith("reset-"))' "$RECOVERY_STATE/restore-state.json"
     holder=$(jq -er .spec.holderIdentity lease.json)
     ! grep -q '^erroneous-primary-release$' "$MOCK_LOG"
+    [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 1 ]
+    [ "$(grep -c '^workers-stopped$' "$MOCK_LOG")" -eq 1 ]
+    ! grep -q '^wipe$' "$MOCK_LOG"
     rm "$failure"
     mkdir -p work
     printf '{"volumes":{"recipes":"1Gi","images":"1Gi"}}\n' > work/config.json
@@ -370,6 +374,27 @@ EOF
     and .metadata.annotations["recipe-db/release"] == ("ghcr.io/dhhyi/recipe-db-releases@sha256:" + ("c"*64))' lease.json
   jq -e --arg holder "$BACKUP_ID" '.holder == $holder and .reset.leaseUid == "lease-1"
     and .status == "reset-ready"' "$RECOVERY_STATE/restore-state.json"
+}
+
+@test "initializing cleanup does not isolate a competing operation when acquisition fails" {
+  state_machine_fixture
+  cat >> harness.sh << 'EOF'
+cluster_operation_lock_acquire() {
+  jq -n '{metadata:{uid:"foreign-lease",labels:{"app.kubernetes.io/part-of":"recipe-db"},
+    annotations:{"recipe-db/operation":"restore","recipe-db/phase":"acquired"}},
+    spec:{holderIdentity:"another-operation"}}' > lease.json
+  return 1
+}
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"refusing to change another operation"* ]]
+  jq -e '.metadata.uid == "foreign-lease" and .spec.holderIdentity == "another-operation"' lease.json
+  jq -e '.status == "reset-planned" and .reset.acquisitionPending == true
+    and .reset.leaseUid == null' "$RECOVERY_STATE/restore-state.json"
+  ! grep -Eq '^(barrier|workers-stopped|wipe)$' "$MOCK_LOG"
 }
 
 @test "reset rejects replacement primary UID holder or unknown phase after closeout without wiping" {
