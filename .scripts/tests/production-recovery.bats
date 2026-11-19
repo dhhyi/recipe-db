@@ -313,13 +313,12 @@ EOF
 
 @test "preview lists newer local archive integrity evidence and labels missing archives unverified" {
   state_machine_fixture
-  mkdir newer
-  printf 'newer data' > newer/point.tar.gz
-  jq --arg sha "$(sha256sum newer/point.tar.gz | cut -d ' ' -f1)" \
+  printf 'newer data' > point.tar.gz
+  jq --arg sha "$(sha256sum point.tar.gz | cut -d ' ' -f1)" \
     '.backupId="backup-20260102000000-1" | .capturedAt="2026-01-02T00:00:00Z" |
-      .archive={name:"point.tar.gz",sizeBytes:10,sha256:$sha}' "$MANIFEST" > newer/point.manifest.json
+      .archive={name:"point.tar.gz",sizeBytes:10,sha256:$sha}' "$MANIFEST" > point.manifest.json
   jq '.backupId="backup-20260103000000-1" | .capturedAt="2026-01-03T00:00:00Z" |
-    .archive.name="missing.tar.gz"' newer/point.manifest.json > newer/missing.manifest.json
+    .archive.name="missing.tar.gz"' point.manifest.json > missing.manifest.json
   cat >> harness.sh << 'EOF'
 recovery_known_backups "$MANIFEST"
 EOF
@@ -385,4 +384,33 @@ EOF
   [ -f lease.json ]
   [ "$(grep -c '^barrier$' "$MOCK_LOG")" -eq 2 ]
   run ! grep -q '^exact-lease-deleted$' "$MOCK_LOG"
+}
+
+@test "barrier renders real routes with existing runtime ingress credential without rotating secrets" {
+  sed -n '/^routes() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh" >> harness.sh
+  printf '{"name":"images","devcontainer":{"ports":[8082]}}\n' > work/projects.jsonl
+  cat >> harness.sh << 'EOF'
+google_enabled=false
+release_root=$root
+ytt() {
+  printf '{"http":{"routers":{"graphql":{"entrypoints":["web"],"rule":"PathPrefix(`/graphql`)","service":"graphql"}},"services":{},"middlewares":{}}}\n'
+}
+kube() {
+  printf '%s\n' "$*" >> "$MOCK_LOG"
+  if [[ $* == 'get secret recipe-db-runtime -o json' ]]; then
+    jq -n --arg token "$(printf '%043d' 0 | tr 0 a | base64 -w0)" \
+      '{metadata:{namespace:"recipe-db",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+        data:{"graphql-ingress-secret":$token}}'
+  fi
+}
+restore_routes_apply() { cp "$1" "$work/installed-routes.json"; }
+restore_verify_installed_public_barrier() { restore_validate_public_barrier "$work/installed-routes.json"; }
+recovery_install_barrier
+EOF
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  jq -e --arg token "$(printf '%043d' 0 | tr 0 a)" \
+    '.http.middlewares["graphql-ingress"].headers.customRequestHeaders["X-Internal-Ingress-Token"] == $token
+      and .http.routers["restore-public-barrier"] != null' work/installed-routes.json
+  run ! grep -Eq 'create secret|apply .*runtime|set env' "$MOCK_LOG"
 }

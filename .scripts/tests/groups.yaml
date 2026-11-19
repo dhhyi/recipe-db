@@ -182,6 +182,7 @@ restore:
     - .scripts/tests/production-recovery.bats
   suite_inputs:
     .scripts/tests/production-recovery.bats:
+      - .scripts/production-k3d.sh
       - .scripts/lib/production-recovery.sh
       - .scripts/lib/production-restore.sh
       - .scripts/lib/production-config.sh

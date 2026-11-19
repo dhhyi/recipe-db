@@ -179,7 +179,18 @@ recovery_assert_lease() {
 }
 
 recovery_install_barrier() {
-  routes
+  kube get secret recipe-db-runtime -o json > "$work/recovery-runtime-secret.json" \
+    2> "$work/recovery-runtime-secret-error" || return 1
+  jq -ej --arg ns "$namespace" '
+    select(.metadata.namespace == $ns and
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
+    .data["graphql-ingress-secret"] | @base64d |
+    select(test("^[A-Za-z0-9_-]{43}$"))' \
+    "$work/recovery-runtime-secret.json" > "$work/graphql-ingress-secret" || {
+    printf 'production: cannot stage the existing owned runtime ingress credential; no credential rotation is allowed during reset\n' >&2
+    return 1
+  }
+  routes || return 1
   restore_build_public_barrier_routes "$work/routes.yml" "$work/restore-barrier-routes.json" \
     "$(jq -er 'select(.name == "images") | .devcontainer.ports[0]' "$work/projects.jsonl")"
   restore_validate_public_barrier "$work/restore-barrier-routes.json" \
@@ -393,6 +404,16 @@ recovery_plan() {
   restore_state=$state
   connect
   recovery_identity || production_fail "cannot pin configured application storage identities before reset"
+  if [[ ! -e $state ]]; then
+    mkdir -m 700 "$state"
+    jq -n --arg id "$expected" --arg artifact "$artifact" --arg revision "$revision" \
+      --arg manifest "$(sha256sum "$manifest" | cut -d ' ' -f 1)" \
+      --arg archive "$(sha256sum "$archive" | cut -d ' ' -f 1)" \
+      --slurpfile identity "$work/reset-identity.json" \
+      '$identity[0] + {version:1,backupId:$id,artifact:$artifact,revision:$revision,
+        status:"reset-planned",phase:"discard-preview",reset:{identity:$identity[0],
+        manifestSha256:$manifest,archiveSha256:$archive}}' > "$state/restore-state.json"
+  fi
   if [[ -e $state ]]; then
     restore_state=$state
     jq -e --arg id "$expected" --arg artifact "$artifact" --arg target "$target" \
@@ -470,15 +491,6 @@ PY
         "$state/restore-state.json" > "$state/restore-state.next"
       mv "$state/restore-state.next" "$state/restore-state.json"
     fi
-  else
-    mkdir -m 700 "$state"
-    jq -n --arg id "$expected" --arg artifact "$artifact" --arg revision "$revision" \
-      --arg manifest "$(sha256sum "$manifest" | cut -d ' ' -f 1)" \
-      --arg archive "$(sha256sum "$archive" | cut -d ' ' -f 1)" \
-      --slurpfile identity "$work/reset-identity.json" \
-      '$identity[0] + {version:1,backupId:$id,artifact:$artifact,revision:$revision,
-        status:"reset-planned",phase:"discard-preview",reset:{identity:$identity[0],
-        manifestSha256:$manifest,archiveSha256:$archive}}' > "$state/restore-state.json"
   fi
   recovery_summary "$expected"
   jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.reset.previewedAt=$at' \

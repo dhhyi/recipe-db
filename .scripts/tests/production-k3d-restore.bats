@@ -25,6 +25,24 @@ load production-k3d-restore-setup
   jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
 }
 
+@test "historical recovery preview requires matching sources or explicit immutable Git release sources" {
+  restore_fixture
+  export MOCK_SOURCE_REVISION="$MOCK_REVISION"
+  printf '*\n' > .gitignore
+  printf 'changed tooling metadata\n' > message-bus/nats.conf
+  git add -f .gitignore message-bus/nats.conf
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Separate recovery tooling inputs'
+  run bash .scripts/production-k3d.sh recovery-plan "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"metadata and templates must match"* ]]
+  run bash .scripts/production-k3d.sh --release-sources-from-git recovery-plan "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE"
+  [ "$status" -ne 0 ]
+  [[ $output == *"cannot pin configured application storage identities"* ]]
+  [[ $output != *"metadata and templates must match"* && $output != *"Git release sources are limited"* ]]
+}
+
 @test "fresh Pi HTTPS restore creates retained storage before applying Traefik certificate infrastructure" {
   restore_fixture
   export MOCK_PI=true MOCK_LAN=true MOCK_HTTPS=true MOCK_RETAINED_CLASS_MISSING=true
