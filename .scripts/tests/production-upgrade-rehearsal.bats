@@ -113,28 +113,32 @@ load_scenario_functions() {
 
 @test "candidate backup captures uploads and validates exact migrated identity and versions" {
   local work="$FIXTURE_ROOT/work" fake_remote="$FIXTURE_ROOT/remote" run_id=123
+  local root="$FIXTURE_ROOT" cluster_values=cluster.yaml
   local candidate="$CANDIDATE_RELEASE" candidate_revision="$SOURCE_REVISION"
   local candidate_worktree="$FIXTURE_ROOT/candidate" upload=uploader validator=validator
   local actual_versions='[{"service":"recipes","currentVersion":2,"requiredVersion":2}]'
   local phase='' post_backup_id='' post_backup_upload_status=not-run
+  local mock_status=verified-upload
   local state="$work/uploader/successful-upgrade/maintenance"
   local remote="$fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade"
   mkdir -p "$state" "$work/logs" "$remote"
+  printf '{}\n' > "$work/successful-upgrade-backup-config.json"
+  printf '{}\n' > "$state/backup-state.json"
   load_scenario_functions
   mark() { :; }
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() { printf '%s\n' "$*" >&2; exit 1; }
   lifecycle() {
     printf '%s\n' "$*" >> "$work/calls"
-    if [[ $3 == release-backup-capture ]]; then
-      printf '{"postReleaseBackup":{"backupId":"backup-123-456"}}\n' > "$state/backup-state.json"
-    fi
   }
   application_project_metadata_to_jsonl() { printf '{}\n' > "$2"; }
   run_logged() {
     local log=$1
     shift
-    if [[ $1 == python3 && $2 == "$upload" ]]; then
-      printf '{"status":"verified-upload","backupId":"backup-123-456"}\n' > "$work/uploader/successful-upgrade/status.json"
+    if [[ $1 == python3 && $2 == -c ]]; then
+      jq '.postReleaseBackup={backupId:"backup-123-456"}' "$state/backup-state.json" > "$state/next"
+      mv "$state/next" "$state/backup-state.json"
+      jq -n --arg status "$mock_status" \
+        '{status:$status,backupId:"backup-123-456"}' > "$work/uploader/successful-upgrade/status.json"
       printf '{"backupId":"backup-123-456","manifest":"post.json","archive":"post.tar.gz"}\n' > "$work/uploader/successful-upgrade/baseline.json"
       jq -n --arg candidate "$candidate" --arg revision "$candidate_revision" '{
         source:{artifact:$candidate,revision:$revision},
@@ -151,8 +155,105 @@ load_scenario_functions() {
   [ "$post_backup_id" = backup-123-456 ]
   [ "$post_backup_upload_status" = verified-upload ]
   grep -Fq 'release-website-result candidate.yaml' "$work/calls"
-  grep -Fq 'release-backup-capture candidate.yaml' "$work/calls"
+  grep -Fq 'release-backup-capture candidate.yaml' "$work/post-release-capture-command"
   grep -Fq "validate python3 validator $remote/post.json $remote/post.tar.gz" "$work/calls"
+  mock_status=verified-unchanged
+  run capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
+  [ "$status" -ne 0 ]
+  [[ $output == *'not verified-upload'* ]]
+}
+
+@test "normal uploader dispatch invokes local capture adapter and uploads candidate snapshot" {
+  local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work" fake_remote="$FIXTURE_ROOT/remote"
+  local run_id=123 cluster_values=cluster.yaml candidate="$CANDIDATE_RELEASE"
+  local candidate_revision="$SOURCE_REVISION" candidate_worktree="$FIXTURE_ROOT/candidate"
+  local upload="$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" validator=validator
+  local actual_versions='[{"service":"recipes","currentVersion":2,"requiredVersion":2}]'
+  local phase='' post_backup_id='' post_backup_upload_status=not-run
+  local state="$work/uploader/successful-upgrade/maintenance"
+  mkdir -p "$state" "$work/logs" "$work/staging" "$fake_remote" "$work/fixture"
+  rm "$FIXTURE_ROOT/bin/python3"
+  cp "$BATS_TEST_DIRNAME/fixtures/rclone-local" "$FIXTURE_ROOT/bin/rclone"
+  chmod 700 "$FIXTURE_ROOT/bin/rclone"
+  export FAKE_RCLONE_ROOT="$fake_remote"
+  printf '{}\n' > "$work/rclone.conf"
+  chmod 600 "$work/rclone.conf"
+  jq -n --arg state "$work/uploader/successful-upgrade" --arg staging "$work/staging" \
+    --arg rclone "$work/rclone.conf" --arg capture "$work/unused" '{
+      deploymentId:"issue-251-123-successful-upgrade",remote:"fake-e2e:recipe-db-backups",
+      rcloneConfig:$rclone,stateDirectory:$state,stagingDirectory:$staging,
+      captureCommand:$capture,captureTimeoutSeconds:600,maxStagingBytes:8589934592
+    }' > "$work/successful-upgrade-backup-config.json"
+  chmod 600 "$work/successful-upgrade-backup-config.json"
+  jq -n --arg source "$SOURCE_RELEASE" --arg candidate "$candidate" --arg revision "$candidate_revision" '{
+    backupId:"backup-111-222",status:"access-open",phase:"website-passed",
+    source:{artifact:$source},candidate:{artifact:$candidate,revision:$revision},
+    websiteCheck:{outcome:"passed"}
+  }' > "$state/backup-state.json"
+  python3 - "$work/fixture" "$candidate" "$candidate_revision" << 'PY'
+import hashlib, io, json, pathlib, sys, tarfile
+root = pathlib.Path(sys.argv[1])
+contents = {"recipes.sqlite3": b"data", "storage-version": b"2\n"}
+entries = []
+with tarfile.open(root / "recipes.tar", "w") as archive:
+    for name, data in sorted(contents.items()):
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+        entry = {"path": name, "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        if name == "storage-version":
+            entry["storageVersion"] = 2
+        entries.append(entry)
+data = (root / "recipes.tar").read_bytes()
+manifest = {
+    "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-333-444",
+    "capturedAt": "2026-11-19T12:00:00Z",
+    "source": {"target": "local", "cluster": "fixture", "context": "fixture",
+               "namespace": "recipe-db", "artifact": sys.argv[2], "revision": sys.argv[3]},
+    "inventory": [{"service": "recipes", "role": "authoritative-read-only", "pvc": "recipes",
+                   "archive": "recipes.tar", "sizeBytes": len(data), "fileCount": len(entries),
+                   "sha256": hashlib.sha256(data).hexdigest(), "files": entries}],
+}
+(root / "manifest.json").write_text(json.dumps(manifest))
+PY
+  {
+    printf '#!/bin/bash\nset -eu\n'
+    printf 'printf "%%s\\n" "$*" >> %q\n' "$work/mise-calls"
+    printf 'if [[ $4 == verify ]]; then exit 0; fi\n'
+    printf '[[ $4 == --release-sources-from-git && $5 == release-backup-capture && $7 == %q && $8 == %q ]]\n' "$state" "$candidate"
+    printf 'cp -a %q %q\n' "$work/fixture" "$state/post-release-backup"
+    printf 'jq --arg path %q --arg artifact %q ' "$state/post-release-backup" "$candidate"
+    printf '%q ' '.phase="post-release-backup-captured" | .postReleaseBackup={status:"captured",artifact:$artifact,backupId:"backup-333-444",snapshotPath:$path}'
+    printf '%q > %q\n' "$state/backup-state.json" "$state/backup-state.next"
+    printf 'mv %q %q\n' "$state/backup-state.next" "$state/backup-state.json"
+  } > "$FIXTURE_ROOT/bin/mise"
+  chmod 700 "$FIXTURE_ROOT/bin/mise"
+  load_scenario_functions
+  mark() { :; }
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  lifecycle() { [[ $3 == release-website-result ]]; }
+  application_project_metadata_to_jsonl() { printf '{}\n' > "$2"; }
+  run_logged() {
+    local log=$1
+    shift
+    if [[ $1 == python3 && $2 == "$validator" ]]; then
+      printf 'validated %s\n' "$*" > "$log"
+    else
+      "$@" > "$log" 2>&1 || {
+        cat "$log" >&2
+        [[ ! -f $work/logs/post-release-capture.log ]] || cat "$work/logs/post-release-capture.log" >&2
+        return 1
+      }
+    fi
+  }
+  capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
+  [ "$post_backup_id" = backup-333-444 ]
+  [ "$post_backup_upload_status" = verified-upload ]
+  grep -Fq 'production-k3d verify cluster.yaml' "$work/mise-calls"
+  grep -Fq 'release-backup-capture candidate.yaml' "$work/mise-calls"
+  jq -e '.postReleaseBackup.uploadStatus == "verified-upload"' "$state/backup-state.json"
+  jq -e '.status == "verified-upload" and .backupId == "backup-333-444"' \
+    "$work/uploader/successful-upgrade/status.json"
 }
 
 @test "release inventory validation uses the schema-specific source CLI contract" {

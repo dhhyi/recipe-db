@@ -757,6 +757,7 @@ capture_post_release_backup() {
   } > "$capture"
   chmod 700 "$capture"
   jq --arg capture "$capture" '.captureCommand=$capture' "$config" > "$config.next"
+  chmod 600 "$config.next"
   mv "$config.next" "$config"
   post_backup_upload_status=failed
   if ! run_logged "$work/logs/post-release-upload.log" python3 -c '
@@ -773,7 +774,9 @@ sys.exit(uploader.main())
 ' "$upload" "$reference" "$config"; then
     post_backup_id=$(jq -r '.postReleaseBackup.backupId // ""' "$state/backup-state.json") || true
     if [[ -f $work/uploader/$label/status.json ]]; then
-      post_backup_upload_status=$(jq -r '.status // "failed"' "$work/uploader/$label/status.json") || true
+      post_backup_upload_status=$(jq -r --arg id "$post_backup_id" '
+        if $id != "" and .backupId == $id then .status // "failed" else "failed" end
+      ' "$work/uploader/$label/status.json") || true
     fi
     return 1
   fi
