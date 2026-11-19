@@ -171,6 +171,8 @@ load_scenario_functions() {
   local actual_versions='[{"service":"recipes","currentVersion":2,"requiredVersion":2}]'
   local phase='' post_backup_id='' post_backup_upload_status=not-run
   local state="$work/uploader/successful-upgrade/maintenance"
+  export DOCKER_HOST='unix:///tmp/rehearsal-test.sock' DOCKER_CONTEXT='rehearsal-test'
+  export DOCKER_CONFIG="$FIXTURE_ROOT/docker config" XDG_RUNTIME_DIR="$FIXTURE_ROOT/runtime"
   mkdir -p "$state" "$work/logs" "$work/staging" "$fake_remote" "$work/fixture"
   rm "$FIXTURE_ROOT/bin/python3"
   cp "$BATS_TEST_DIRNAME/fixtures/rclone-local" "$FIXTURE_ROOT/bin/rclone"
@@ -218,6 +220,8 @@ manifest = {
 PY
   {
     printf '#!/bin/bash\nset -eu\n'
+    printf '[[ $DOCKER_HOST == %q && $DOCKER_CONTEXT == %q && $DOCKER_CONFIG == %q && $XDG_RUNTIME_DIR == %q ]]\n' \
+      "$DOCKER_HOST" "$DOCKER_CONTEXT" "$DOCKER_CONFIG" "$XDG_RUNTIME_DIR"
     printf 'printf "%%s\\n" "$*" >> %q\n' "$work/mise-calls"
     printf 'if [[ $4 == verify ]]; then exit 0; fi\n'
     printf '[[ $4 == --release-sources-from-git && $5 == release-backup-capture && $7 == %q && $8 == %q ]]\n' "$state" "$candidate"
@@ -249,6 +253,7 @@ PY
   capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
   [ "$post_backup_id" = backup-333-444 ]
   [ "$post_backup_upload_status" = verified-upload ]
+  jq -e '.captureTimeoutSeconds == 5400' "$work/successful-upgrade-backup-config.json"
   grep -Fq 'production-k3d verify cluster.yaml' "$work/mise-calls"
   grep -Fq 'release-backup-capture candidate.yaml' "$work/mise-calls"
   jq -e '.postReleaseBackup.uploadStatus == "verified-upload"' "$state/backup-state.json"

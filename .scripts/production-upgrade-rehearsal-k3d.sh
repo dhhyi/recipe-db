@@ -734,7 +734,7 @@ delete_scenario_cluster() {
 
 capture_post_release_backup() {
   local label=$1 candidate_values=$2 state=$3 package_id=$4
-  local package_manifest package_archive capture="$work/post-release-capture-command"
+  local package_manifest package_archive variable capture="$work/post-release-capture-command"
   local reference="$work/post-release-reference" config="$work/$label-backup-config.json"
   phase=post-release-backup-capture
   run_logged "$work/logs/post-release-website-result.log" lifecycle "$candidate_worktree" true \
@@ -748,6 +748,12 @@ capture_post_release_backup() {
   {
     printf '#!/bin/bash\nset -Eeuo pipefail\n'
     printf 'export PATH=%q HOME=%q\n' "$PATH" "$HOME"
+    for variable in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS DOCKER_TLS_VERIFY \
+      DOCKER_CERT_PATH DOCKER_API_VERSION XDG_CONFIG_HOME XDG_RUNTIME_DIR SSH_AUTH_SOCK; do
+      if [[ ${!variable+x} ]]; then
+        printf 'export %s=%q\n' "$variable" "${!variable}"
+      fi
+    done
     printf '[[ $# == 3 && $1 == release-capture && $2 == %q && $3 == %q ]]\n' "$state" "$candidate"
     printf 'cd %q\n' "$root"
     printf 'mise run --raw production-k3d verify %q > %q 2>&1\n' \
@@ -756,7 +762,8 @@ capture_post_release_backup() {
       "$candidate_values" "$work/logs/post-release-capture.log"
   } > "$capture"
   chmod 700 "$capture"
-  jq --arg capture "$capture" '.captureCommand=$capture' "$config" > "$config.next"
+  jq --arg capture "$capture" '.captureCommand=$capture | .captureTimeoutSeconds=5400' \
+    "$config" > "$config.next"
   chmod 600 "$config.next"
   mv "$config.next" "$config"
   post_backup_upload_status=failed
