@@ -158,9 +158,35 @@ recovery_identity() {
 
 recovery_assert_identity() {
   recovery_identity || production_fail "cannot verify the configured application PVC/PV and cluster identities"
-  jq -e --slurpfile actual "$work/reset-identity.json" '.reset.identity == $actual[0]' \
+  jq -e --slurpfile actual "$work/reset-identity.json" '
+    .reset.identity as $expected |
+    ($actual[0] | .volumes |= map(. as $volume |
+      if $expected.target == "pi" and .pvSpec.persistentVolumeReclaimPolicy == "Retain"
+        and any($expected.volumes[]; .name == $volume.name
+          and .pvSpec.persistentVolumeReclaimPolicy == "Delete")
+      then .pvSpec.persistentVolumeReclaimPolicy = "Delete" else . end)) == $expected' \
     "$restore_state/restore-state.json" > /dev/null \
     || production_fail "recovery target, configuration, namespace, PVC UID or PV identity changed"
+  if ! jq -e --slurpfile actual "$work/reset-identity.json" '.reset.identity == $actual[0]' \
+    "$restore_state/restore-state.json" > /dev/null; then
+    jq --slurpfile actual "$work/reset-identity.json" '.reset.identity=$actual[0]' \
+      "$restore_state/restore-state.json" > "$restore_state/restore-state.next"
+    mv "$restore_state/restore-state.next" "$restore_state/restore-state.json"
+  fi
+}
+
+recovery_validate_namespace_handoff() {
+  [[ ${locked:-false} == true && ${retain_lock:-false} == true ]] \
+    || production_fail "reset namespace handoff requires retained ownership"
+  recovery_assert_identity
+  recovery_assert_lease
+  jq -e --arg ns "$namespace" --slurpfile local "$restore_state/restore-state.json" '
+    (.data["restore-state.json"] | fromjson) as $saved |
+    .metadata.namespace == $ns and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and $saved.status == "reset-ready" and $saved.phase == "empty-target"
+    and ($saved | {version,backupId,holder,target,cluster,context,namespace,artifact,revision,configSha256,reset})
+      == ($local[0] | {version,backupId,holder,target,cluster,context,namespace,artifact,revision,configSha256,reset})' \
+    "$1" > /dev/null || production_fail "namespace recovery ConfigMap is not this exact reset-ready Lease-bound handoff"
 }
 
 recovery_assert_lease() {
@@ -172,7 +198,8 @@ recovery_assert_lease() {
     and .metadata.uid == $state[0].reset.leaseUid
     and .metadata.annotations["recipe-db/operation"] == "restore"
     and .metadata.annotations["recipe-db/release"] == $state[0].artifact
-    and .metadata.annotations["recipe-db/phase"] != "acquired"' <<< "$current" > /dev/null \
+    and (.metadata.annotations["recipe-db/phase"] != "acquired"
+      or $state[0].reset.acquisitionPending == true)' <<< "$current" > /dev/null \
     || production_fail "recovery requires the exact retained reset/restore Lease"
   lock_holder=$(jq -er .holder "$restore_state/restore-state.json")
   cluster_operation_lock_holder=$lock_holder
@@ -533,9 +560,24 @@ recovery_reset() {
   else
     recovery_identity || production_fail "cannot pin configured application storage identities before reset"
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect operation Lease"
-    [[ -z $current ]] || production_fail "reset requires an idle cluster; close out the retained release first"
-    lock_holder="reset-$expected-$$"
-    cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
+    if [[ -n $current ]]; then
+      jq -e --slurpfile state "$state/restore-state.json" '
+        $state[0].reset.acquisitionPending == true
+        and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+        and .spec.holderIdentity == $state[0].holder
+        and .metadata.annotations["recipe-db/operation"] == "restore"
+        and .metadata.annotations["recipe-db/release"] == $state[0].artifact
+        and .metadata.annotations["recipe-db/phase"] == "acquired"' <<< "$current" > /dev/null \
+        || production_fail "reset requires an idle cluster; close out the retained release first"
+      lock_holder=$(jq -er .holder "$state/restore-state.json")
+      cluster_operation_lock_holder=$lock_holder
+    else
+      lock_holder="reset-$expected-$(date -u +%s%N)-$$"
+      jq --arg holder "$lock_holder" '.holder=$holder | .reset.acquisitionPending=true' \
+        "$state/restore-state.json" > "$state/restore-state.next"
+      mv "$state/restore-state.next" "$state/restore-state.json"
+      cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
+    fi
     locked=true
     current=$(cluster_operation_lock_status)
     jq --arg holder "$lock_holder" \
@@ -544,7 +586,11 @@ recovery_reset() {
         .reset.leaseUid=$leaseUid' "$state/restore-state.json" > "$state/restore-state.next"
     mv "$state/restore-state.next" "$state/restore-state.json"
     retain_lock=true
+    recovery_started=true
+    restore_current_phase=reset-prepared
     cluster_operation_lock_update reset-prepared
+    jq 'del(.reset.acquisitionPending)' "$state/restore-state.json" > "$state/restore-state.next"
+    mv "$state/restore-state.next" "$state/restore-state.json"
   fi
   restore_cluster_state=true
   recovery_started=true
@@ -558,6 +604,7 @@ recovery_reset() {
     -o json > "$work/recovery-controller-inventory.json"
   restore_guard_start || production_fail "cannot arm recovery shutdown guard before worker shutdown"
   recovery_stop_workers || production_fail "every application storage user must stop before reset"
+  if [[ $target == pi ]]; then production_storage_preflight; fi
   recovery_assert_identity
   restore_current_phase=reset-clearing-application-data
   restore_state_write in-progress "$restore_current_phase"
@@ -585,6 +632,28 @@ recovery_restore() {
   restore_run "$manifest" "$archive" "$expected" "$state" "$confirmation" existing-reset
 }
 
+recovery_closeout_verify_isolation() {
+  restore_verify_installed_public_barrier
+  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods \
+    -o json > "$work/closeout-stopped.json"
+  jq -e 'all(.items[];
+    if .kind == "Deployment" or .kind == "StatefulSet" or .kind == "ReplicaSet" or .kind == "ReplicationController"
+    then (.spec.replicas // 1) == 0 and (.status.replicas // 0) == 0
+    elif .kind == "Job" then .spec.suspend == true and (.status.active // 0) == 0
+    elif .kind == "CronJob" then .spec.suspend == true and ((.status.active // []) | length) == 0
+    else false end)' "$work/closeout-stopped.json" > /dev/null \
+    || production_fail "closeout requires all workloads stopped and no remaining Pods or restartable workers"
+}
+
+recovery_closeout_complete() {
+  release_state_write recovery-closed recovery-closed \
+    "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg holder "$1" \
+      --argjson previous "$(jq -c .recoveryCloseout "$snapshot/backup-state.json")" \
+      '{recoveryCloseout:($previous + {closedAt:$at,ownershipReleased:true,holder:$holder,
+        barrierVerified:true,workersStopped:true})}')"
+  printf 'production: failed release closed for separate recovery; evidence retained at %s/backup-state.json; barrier and storage preserved, no restore or reset performed\n' "$snapshot"
+}
+
 recovery_release_closeout() {
   local state=$1 expected=$2 confirmation=$3 current phase
   [[ $confirmation == "CLOSEOUT-$expected" ]] || production_fail "release closeout requires CLOSEOUT-<holder>"
@@ -598,10 +667,29 @@ recovery_release_closeout() {
   connect
   current=$(cluster_operation_lock_status)
   phase=$(jq -er .phase "$snapshot/backup-state.json")
+  if [[ -z $current ]]; then
+    jq -e --arg holder "$expected" '
+      .phase == "recovery-closeout-pending"
+      and .recoveryCloseout.releaseIntent.holder == $holder
+      and .recoveryCloseout.releaseIntent.artifact == .source.artifact
+      and (.recoveryCloseout.releaseIntent.leaseUid | type == "string" and length > 0)
+      and .recoveryCloseout.releaseIntent.barrierVerified == true
+      and .recoveryCloseout.releaseIntent.workersStopped == true' \
+      "$snapshot/backup-state.json" > /dev/null \
+      || production_fail "absent release Lease has no durable exact-operation isolation and release intent"
+    recovery_command_acquire
+    recovery_closeout_verify_isolation
+    [[ -z $(cluster_operation_lock_status) ]] \
+      || production_fail "another operation acquired the Lease; closeout will not release it"
+    recovery_closeout_complete "$expected"
+    return
+  fi
   jq -e --arg holder "$expected" --slurpfile state "$snapshot/backup-state.json" '
     .spec.holderIdentity == $holder and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
     and .metadata.annotations["recipe-db/operation"] == "backup"
     and .metadata.annotations["recipe-db/release"] == $state[0].source.artifact
+    and ($state[0].recoveryCloseout.releaseIntent.leaseUid == null
+      or .metadata.uid == $state[0].recoveryCloseout.releaseIntent.leaseUid)
     and (.metadata.annotations["recipe-db/phase"] == $state[0].phase
       or .metadata.annotations["recipe-db/phase"] == "recovery-required")' <<< "$current" > /dev/null \
     || production_fail "closeout requires the exact terminal retained release Lease"
@@ -622,26 +710,21 @@ recovery_release_closeout() {
   recovery_closeout_started=true
   recovery_install_barrier
   recovery_stop_workers || production_fail "cannot stop all release workers before closeout"
-  restore_verify_installed_public_barrier
-  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods \
-    -o json > "$work/closeout-stopped.json"
-  jq -e 'all(.items[];
-    if .kind == "Deployment" or .kind == "StatefulSet" or .kind == "ReplicaSet" or .kind == "ReplicationController"
-    then (.spec.replicas // 1) == 0 and (.status.replicas // 0) == 0
-    elif .kind == "Job" then .spec.suspend == true and (.status.active // 0) == 0
-    elif .kind == "CronJob" then .spec.suspend == true and ((.status.active // []) | length) == 0
-    else false end)' "$work/closeout-stopped.json" > /dev/null \
-    || production_fail "closeout requires all workloads stopped and no remaining Pods or restartable workers"
+  recovery_closeout_verify_isolation
   current=$(cluster_operation_lock_status)
   jq -e --arg holder "$expected" '.spec.holderIdentity == $holder
     and .metadata.annotations["recipe-db/phase"] == "recovery-closeout-pending"' \
     <<< "$current" > /dev/null || production_fail "release closeout Lease changed during isolation"
+  release_state_write recovery-required recovery-closeout-pending \
+    "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg holder "$expected" \
+      --arg uid "$(jq -er '.metadata.uid | select(type == "string" and length > 0)' <<< "$current")" \
+      --arg artifact "$(jq -er .source.artifact "$snapshot/backup-state.json")" \
+      --argjson previous "$(jq -c .recoveryCloseout "$snapshot/backup-state.json")" \
+      '{recoveryCloseout:($previous + {releaseIntent:{recordedAt:$at,holder:$holder,leaseUid:$uid,
+        artifact:$artifact,barrierVerified:true,workersStopped:true}})}')" \
+    || production_fail "cannot durably record exact-operation closeout release intent"
   cluster_operation_lock_delete "$current" || production_fail "closeout could not release exact captured Lease"
   locked=false
   recovery_closeout_started=false
-  release_state_write recovery-closed recovery-closed \
-    "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg holder "$expected" \
-      '{recoveryCloseout:{closedAt:$at,ownershipReleased:true,holder:$holder,
-        barrierVerified:true,workersStopped:true}}')"
-  printf 'production: failed release closed for separate recovery; evidence retained at %s/backup-state.json; barrier and storage preserved, no restore or reset performed\n' "$snapshot"
+  recovery_closeout_complete "$expected"
 }

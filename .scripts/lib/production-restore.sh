@@ -314,7 +314,9 @@ restore_abandon() {
     and .spec.holderIdentity == $holder
     and .metadata.annotations["recipe-db/operation"] == "restore"
     and .metadata.annotations["recipe-db/release"] == ($state | fromjson | .artifact)
-    and .metadata.annotations["recipe-db/phase"] != "acquired"' <<< "$lease" > /dev/null \
+    and (.metadata.annotations["recipe-db/phase"] != "acquired"
+      or (($state | fromjson | .reset.acquisitionPending) == true
+        and .metadata.uid == ($state | fromjson | .reset.leaseUid)))' <<< "$lease" > /dev/null \
     || production_fail "restore abandonment requires this exact retained post-preflight restore Lease"
   kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json > "$work/restore-isolation.json"
   jq -e 'all(.items[];
