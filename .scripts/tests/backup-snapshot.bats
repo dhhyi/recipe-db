@@ -57,6 +57,28 @@ v2_second_entry = {
     "thumbUrl":"/public/"+second_thumb_name, "size":len(second_normal),
     "id":hashlib.sha256(second_normal).hexdigest(),
 }
+
+
+def image_collection(count):
+    values, entries = {}, []
+    for index in range(count):
+        image = f"image {index}".encode()
+        thumbnail = f"thumbnail {index}".encode()
+        image_sha = hashlib.sha256(image).hexdigest()
+        thumbnail_sha = hashlib.sha256(thumbnail).hexdigest()
+        image_name = f"a-{image_sha}.png"
+        thumbnail_name = f"a-{thumbnail_sha}-thumb.png"
+        values["public/"+image_name] = image
+        values["public/"+thumbnail_name] = thumbnail
+        entries.append({
+            "recipeId":"a", "url":"/public/"+image_name,
+            "thumbUrl":"/public/"+thumbnail_name, "size":len(image), "id":image_sha,
+        })
+    return values | {
+        "manifests/a.json":json.dumps(entries).encode(), "storage-version":b"2\n",
+    }
+
+
 images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb}
 images_v2 = images | {
     "public/"+second_normal_name:second_normal,
@@ -69,6 +91,9 @@ for version, manifest, image_files in (
     values = image_files | {"manifests/a.json":json.dumps(manifest).encode(),
         "storage-version":f"{version}\n".encode()}
     assert len(module.validate(archive(values), {"kind":"images"})) == len(image_files) + 2
+valid_at_capacity = image_collection(10)
+assert len(module.validate(archive(valid_at_capacity), {"kind":"images"})) == len(valid_at_capacity)
+over_capacity = image_collection(11)
 images = images | {"manifests/a.json":json.dumps(entry).encode(), "storage-version":b"1\n"}
 for entries, layout, link in [
     ({}, sqlite, False),
@@ -98,7 +123,7 @@ for entries, layout, link in [
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
     (images_v2 | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"size":len(second_normal)+1}]).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry] * 11).encode()}, {"kind":"images"}, False),
+    (over_capacity, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry | {"id":"0" * 64}]).encode()}, {"kind":"images"}, False),
     ({}, {"kind":"images"}, False),
 ]:

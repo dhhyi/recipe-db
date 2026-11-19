@@ -90,6 +90,34 @@ def image_files_for(version, document=None, marker=None):
     ]
 
 
+def image_collection(count):
+    values = [
+        ("public", b"", tarfile.DIRTYPE),
+        ("manifests", b"", tarfile.DIRTYPE),
+    ]
+    entries = []
+    for index in range(count):
+        normal = b"normal image " + str(index).encode()
+        thumb = b"thumbnail " + str(index).encode()
+        normal_sha = hashlib.sha256(normal).hexdigest()
+        thumb_sha = hashlib.sha256(thumb).hexdigest()
+        normal_name = f"a-{normal_sha}.png"
+        thumb_name = f"a-{thumb_sha}-thumb.png"
+        values.extend([
+            ("public/" + normal_name, normal, None),
+            ("public/" + thumb_name, thumb, None),
+        ])
+        entries.append({
+            "recipeId": "a", "url": "/public/" + normal_name,
+            "thumbUrl": "/public/" + thumb_name, "size": len(normal), "id": normal_sha,
+        })
+    values.extend([
+        ("manifests/a.json", json.dumps(entries).encode(), None),
+        ("storage-version", b"2\n", None),
+    ])
+    return values
+
+
 image_files = image_files_for(1)
 layouts = {
     "recipes": ("authoritative-read-only", {"kind": "sqlite", "file": "recipes.sqlite3"}),
@@ -131,7 +159,7 @@ entries = {
 }
 
 
-def fixture(image_version=1):
+def fixture(image_version=1, image_count=None):
     global counter
     counter += 1
     case = root / str(counter)
@@ -141,7 +169,7 @@ def fixture(image_version=1):
     inventory = []
     for service, values in entries.items():
         if service == "images":
-            values = image_files_for(image_version)
+            values = image_collection(image_count) if image_count is not None else image_files_for(image_version)
         data = tar_bytes(values)
         name = service + ".tar"
         write(capture / name, data)
@@ -253,8 +281,8 @@ def update(metadata, key, value):
 
 group = sys.argv[1]
 if group == "valid":
-    for version in (1, 2):
-        case, metadata, archive, projects, manifest = fixture(version)
+    for version, count in ((1, None), (2, None), (2, 10)):
+        case, metadata, archive, projects, manifest = fixture(version, count)
         output = case / "snapshot"
         result = subprocess.run([
             sys.executable, ".scripts/validate-backup-package.py", str(metadata), str(archive),
@@ -482,6 +510,7 @@ elif group == "images":
         image_files_for(2, document=[entry, entry | {"id": "0" * 64}]),
         image_files_for(2, document=[entry, entry]),
         image_files_for(2, document=[entry] * 11),
+        image_collection(11),
         image_files_for(2, document=[entry | {"thumbUrl": "/public/missing.png"}]),
         image_files_for(2, marker=b"3\n"),
         image_files_for(2, marker=b"2"),
