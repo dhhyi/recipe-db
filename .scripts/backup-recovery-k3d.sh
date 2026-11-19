@@ -473,6 +473,51 @@ verify_recovery_barrier() {
   done
 }
 
+verify_retained_recovery_lease() {
+  local label=$1 expected_phase=$2
+  bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
+    > "$result_directory/$label-lease.json"
+  jq -e --arg uid "$release_lease_uid" --arg holder "$release_holder" --arg phase "$expected_phase" '
+    .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/phase"] == $phase' \
+    "$result_directory/$label-lease.json" > /dev/null
+}
+
+recovery_guard_snapshot() {
+  local output=$1
+  {
+    bash "$driver" kubectl "$target_values" --namespace kube-system \
+      get lease recipe-db-deploy -o json
+    bash "$driver" kubectl "$target_values" --namespace kube-system \
+      get configmap recipe-db-recovery-handoff -o json
+    bash "$driver" kubectl "$target_values" \
+      get deployments,statefulsets,daemonsets,jobs,cronjobs,pods,pvc,services,ingresses,configmaps,networkpolicies -o json
+  } | jq -Scs '[.[] | if .kind == "List" then .items[] else . end |
+      {kind,metadata:(.metadata | {name,namespace,uid,generation,labels,annotations}),spec,data}]
+      | sort_by(.kind,.metadata.namespace,.metadata.name)' > "$output"
+}
+
+verify_recovery_refusals() {
+  local label=$1 operation
+  recovery_guard_snapshot "$result_directory/$label-before.json"
+  for operation in deploy backup-enter; do
+    if [[ $operation == deploy ]]; then
+      if bash "$driver" deploy "$target_values" "$release" \
+        > "$result_directory/logs/$label-$operation.log" 2>&1; then
+        die 'normal deploy unexpectedly accepted retained recovery ownership'
+        return 1
+      fi
+    elif release_lifecycle backup-enter "$target_values" "$release" "$result_directory/state/$label-refused-backup" \
+      > "$result_directory/logs/$label-$operation.log" 2>&1; then
+      die 'backup-enter unexpectedly accepted retained recovery ownership'
+      return 1
+    fi
+    recovery_guard_snapshot "$result_directory/$label-$operation-after.json"
+    cmp "$result_directory/$label-before.json" "$result_directory/$label-$operation-after.json" || return 1
+  done
+}
+
 run_faulted_recovery() (
   local operation=$1 fault=$2 log=$3
   shift 3
@@ -632,20 +677,29 @@ phase=retained-failed-release
 run_faulted_recovery backup fail "$result_directory/logs/post-release-capture-failure.log" \
   release-backup-capture "$target_values" "$release_state" "$candidate_release"
 jq -e '.status == "recovery-required" and
-  (.phase == "post-release-backup-failed" or .phase == "post-release-backup-recovery-required")' \
+  .phase == "post-release-backup-failed"' \
   "$release_state/backup-state.json" > /dev/null
 verify_preserved_storage retained-failed-release
+bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
+  > "$result_directory/pre-closeout-lease.json"
+release_lease_uid=$(jq -er --arg holder "$release_holder" \
+  'select(.spec.holderIdentity == $holder) | .metadata.uid' "$result_directory/pre-closeout-lease.json")
+verify_fixture_recipe "$target_values" "$recipe_name"
 mark
 
 phase=retained-failed-release-closeout
 run_logged "$result_directory/logs/release-closeout.log" \
   release_lifecycle release-closeout "$target_values" "$release_state" "$release_holder" "CLOSEOUT-$release_holder"
-jq -e '.status == "recovery-closed"' "$release_state/backup-state.json" > /dev/null
-bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy \
-  --ignore-not-found -o json > "$result_directory/closeout-lease.json"
-[[ ! -s $result_directory/closeout-lease.json ]] || die 'closeout left the operation Lease held'
+jq -e --arg uid "$release_lease_uid" --arg holder "$release_holder" '
+  .status == "recovery-closed" and .phase == "recovery-closed"
+  and .recoveryCloseout.ownershipRetained == true and .recoveryCloseout.ownershipReleased == false
+  and .recoveryCloseout.leaseUid == $uid and .recoveryCloseout.holder == $holder' \
+  "$release_state/backup-state.json" > /dev/null
+verify_retained_recovery_lease closeout recovery-ready
 verify_recovery_barrier
 verify_preserved_storage release-closed
+verify_recovery_refusals after-closeout
+verify_retained_recovery_lease after-closeout-refusals recovery-ready
 mark
 
 phase=after-closeout-reset
@@ -656,7 +710,10 @@ run_logged "$result_directory/logs/after-closeout-reset.log" \
   release_lifecycle recovery-reset "$target_values" "$package_manifest" "$archive" \
   "$backup_id" "$reset_state" "RESET-$backup_id"
 verify_recovery_isolation "$reset_state"
+verify_retained_recovery_lease after-closeout-reset reset-ready
 verify_preserved_storage after-closeout-reset
+verify_recovery_refusals after-closeout-reset
+verify_retained_recovery_lease after-reset-refusals reset-ready
 mark
 
 phase=after-closeout-recovery-restore

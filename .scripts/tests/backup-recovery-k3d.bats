@@ -457,3 +457,94 @@ SH
   source ./retry-steps.sh
   [ "$(cat "$result_directory/retry-operations")" = $'recovery-plan\nrecovery-reset\nrecovery-plan\nrecovery-reset\nrecovery-plan\nrecovery-reset' ]
 }
+
+@test "closeout recovery ownership checks require the exact retained UID holder operation and phase" {
+  use_mise_tools
+  mkdir -p "$result_directory"
+  local driver=driver.sh target_values=target.yaml release_holder=original-holder release_lease_uid=original-uid
+  sed -n '/^verify_retained_recovery_lease() {/,/^}/p' .scripts/backup-recovery-k3d.sh > retained-function.sh
+  # shellcheck source=/dev/null
+  source ./retained-function.sh
+  bash() {
+    jq -nc --arg uid "${LEASE_UID:-original-uid}" --arg holder "${LEASE_HOLDER:-original-holder}" \
+      --arg operation "${LEASE_OPERATION:-restore}" --arg phase "${LEASE_PHASE:-recovery-ready}" \
+      '{metadata:{uid:$uid,annotations:{"recipe-db/operation":$operation,"recipe-db/phase":$phase}},
+        spec:{holderIdentity:$holder}}'
+  }
+  run verify_retained_recovery_lease closeout recovery-ready
+  [ "$status" -eq 0 ]
+  LEASE_UID=recreated run verify_retained_recovery_lease closeout recovery-ready
+  [ "$status" -ne 0 ]
+  LEASE_HOLDER=another run verify_retained_recovery_lease closeout recovery-ready
+  [ "$status" -ne 0 ]
+  LEASE_OPERATION=backup run verify_retained_recovery_lease closeout recovery-ready
+  [ "$status" -ne 0 ]
+  LEASE_PHASE=unknown run verify_retained_recovery_lease closeout recovery-ready
+  [ "$status" -ne 0 ]
+  LEASE_PHASE=reset-ready run verify_retained_recovery_lease reset reset-ready
+  [ "$status" -eq 0 ]
+}
+
+@test "deploy and backup-enter must both refuse without mutating retained recovery resources" {
+  use_mise_tools
+  mkdir -p "$result_directory/logs"
+  local driver=driver.sh target_values=target.yaml release=source-release
+  sed -n '/^verify_recovery_refusals() {/,/^}/p' .scripts/backup-recovery-k3d.sh > refusal-function.sh
+  # shellcheck source=/dev/null
+  source ./refusal-function.sh
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  recovery_guard_snapshot() { printf '%s\n' "${GUARD_STATE:-unchanged}" > "$1"; }
+  bash() {
+    printf '%s\n' "$*" >> "$result_directory/deploy-calls"
+    [[ ${ACCEPT_DEPLOY:-false} == true ]]
+  }
+  release_lifecycle() {
+    printf '%s\n' "$*" >> "$result_directory/backup-calls"
+    if [[ ${MUTATE_BACKUP:-false} == true ]]; then GUARD_STATE=mutated; fi
+    [[ ${ACCEPT_BACKUP:-false} == true ]]
+  }
+  run verify_recovery_refusals closeout
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/deploy-calls")" = 'driver.sh deploy target.yaml source-release' ]
+  [ "$(cat "$result_directory/backup-calls")" = "backup-enter target.yaml source-release $result_directory/state/closeout-refused-backup" ]
+  ACCEPT_DEPLOY=true run verify_recovery_refusals closeout
+  [ "$status" -ne 0 ]
+  ACCEPT_BACKUP=true run verify_recovery_refusals closeout
+  [ "$status" -ne 0 ]
+  MUTATE_BACKUP=true run verify_recovery_refusals closeout
+  [ "$status" -ne 0 ]
+}
+
+@test "retained failed release requires its exact phase and a successful fixture read after the failure" {
+  use_mise_tools
+  mkdir -p "$result_directory/logs" "$result_directory/release-state"
+  local driver=driver.sh target_values=target.yaml candidate_release=candidate recipe_name=fixture
+  local release_state="$result_directory/release-state" release_holder=original-holder
+  sed -n '/^phase=retained-failed-release$/,/^phase=retained-failed-release-closeout$/p' \
+    .scripts/backup-recovery-k3d.sh | sed '$d' > failed-release-steps.sh
+  run_faulted_recovery() {
+    printf 'failure\n' >> "$result_directory/order"
+    jq -nc --arg phase "${FAILED_PHASE:-post-release-backup-failed}" \
+      '{status:"recovery-required",phase:$phase}' > "$release_state/backup-state.json"
+  }
+  verify_preserved_storage() { return 0; }
+  bash() { printf '{"metadata":{"uid":"original-uid"},"spec":{"holderIdentity":"original-holder"}}\n'; }
+  verify_fixture_recipe() {
+    printf 'normal-read\n' >> "$result_directory/order"
+    [[ ${READ_FAIL:-false} != true ]]
+  }
+  mark() { printf 'verified\n' >> "$result_directory/order"; }
+  {
+    printf 'set -e\n'
+    declare -p result_directory driver target_values candidate_release recipe_name release_state release_holder
+    declare -f run_faulted_recovery verify_preserved_storage bash verify_fixture_recipe mark
+    printf 'source ./failed-release-steps.sh\n'
+  } > failed-release-harness.sh
+  run command bash failed-release-harness.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/order")" = $'failure\nnormal-read\nverified' ]
+  FAILED_PHASE=post-release-backup-recovery-required run command bash failed-release-harness.sh
+  [ "$status" -ne 0 ]
+  READ_FAIL=true run command bash failed-release-harness.sh
+  [ "$status" -ne 0 ]
+}
