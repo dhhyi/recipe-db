@@ -477,6 +477,7 @@ elif group == "images":
         image_files_for(2, document=image_entry),
         image_files_for(2, document=[entry, entry | {"recipeId": "other"}]),
         image_files_for(2, document=[entry, entry | {"thumbUrl": "/public/missing.png"}]),
+        image_files_for(2, document=[entry, entry | {"size": len(normal) + 1}]),
         image_files_for(2, document=[entry | {"id": "0" * 64}]),
         image_files_for(2, document=[entry | {"thumbUrl": "/public/missing.png"}]),
         image_files_for(2, marker=b"3\n"),

@@ -81,6 +81,7 @@ for entries, layout, link in [
     (images | {"storage-version":b"1\n", "manifests/a.json":json.dumps([entry]).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"size":len(normal)+1}]).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry | {"id":"0" * 64}]).encode()}, {"kind":"images"}, False),
     ({}, {"kind":"images"}, False),
 ]:
