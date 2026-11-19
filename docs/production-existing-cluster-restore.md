@@ -18,6 +18,8 @@ On the Pi, pause scheduled backups using [Pause scheduled backups](production-re
 
 Retrieve the chosen complete archive and manifest using the [backup retrieval procedure](production-kubernetes.md#fresh-deployment-restore), including its historical-backup alternative when necessary. Keep the matching immutable release and images available. Retrieval is not approval to discard current data.
 
+Use a clean checkout of the reviewed recovery tooling, with the selected release's Git commit available locally. The recovery commands below use `--release-sources-from-git` to render that exact historical release without switching the tooling checkout or substituting current metadata.
+
 Run the following on the **workstation, in fish, from the repository root**. Replace the manifest, archive and operation directory paths with private absolute paths. Use the existing production values and verified kubeconfig, not demo values:
 
 ```fish
@@ -79,7 +81,7 @@ On the workstation, preview reset without approving data deletion:
 umask 077
 set -g CATALOG "$STATE.catalog.json"
 mise run --raw retrieve-verified-backup --catalog > "$CATALOG"
-and mise run production-k3d recovery-plan "$VALUES" "$MANIFEST" "$ARCHIVE" \
+and mise run production-k3d --release-sources-from-git recovery-plan "$VALUES" "$MANIFEST" "$ARCHIVE" \
   "$BACKUP_ID" "$STATE" "$CATALOG"
 ```
 
@@ -88,7 +90,7 @@ The catalog uses the same Pi SSH and sudo authentication as backup retrieval; ad
 If the remote backup path is unavailable, you may still recover from the independently verified package. Run the preview without a catalog:
 
 ```fish
-mise run production-k3d recovery-plan "$VALUES" "$MANIFEST" "$ARCHIVE" \
+mise run production-k3d --release-sources-from-git recovery-plan "$VALUES" "$MANIFEST" "$ARCHIVE" \
   "$BACKUP_ID" "$STATE"
 ```
 
@@ -97,7 +99,7 @@ The preview verifies the selected backup, its archive hashes and exact immutable
 Approve discarding application data with a separate command:
 
 ```fish
-mise run production-k3d recovery-reset "$VALUES" "$MANIFEST" "$ARCHIVE" \
+mise run production-k3d --release-sources-from-git recovery-reset "$VALUES" "$MANIFEST" "$ARCHIVE" \
   "$BACKUP_ID" "$STATE" "RESET-$BACKUP_ID"
 ```
 
@@ -108,7 +110,7 @@ The reset preserves PVC/PV objects and identities, the separate `kube-system` AC
 Follow the prerequisites and verification contract of the [existing empty-storage restore procedure](production-kubernetes.md#fresh-deployment-restore). For the reset target, use its retained-Lease handoff on the workstation with the same verified manifest, archive, backup ID, unchanged values and private operation directory:
 
 ```fish
-mise run production-k3d recovery-restore "$VALUES" "$STATE" "$MANIFEST" \
+mise run production-k3d --release-sources-from-git recovery-restore "$VALUES" "$STATE" "$MANIFEST" \
   "$ARCHIVE" "$BACKUP_ID" "RESTORE-$BACKUP_ID"
 ```
 
