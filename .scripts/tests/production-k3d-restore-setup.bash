@@ -5,6 +5,7 @@ restore_fixture() {
   export RESTORE_ID=backup-20261031123456-42
   export RESTORE_MANIFEST="$FIXTURE_ROOT/backup-package.json" RESTORE_ARCHIVE="$FIXTURE_ROOT/package.tar"
   export RESTORE_STATE="$FIXTURE_ROOT/backups/restore"
+  printf '1\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"restore-owner","secret":"private-restore-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
   rm "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3"
   python3 - "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3" << 'PY'
