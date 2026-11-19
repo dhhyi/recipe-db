@@ -26,7 +26,7 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "$driver"$'\n--release-sources-from-git\n'"$operation"$'\nvalues with spaces.yaml\nimmutable artifact' ]
   done
-  run grep -E 'bash "\$driver" (render|backup|release-|restore|recovery-)' .scripts/backup-recovery-k3d.sh
+  run grep -E 'bash "\$driver" (backup|release-|restore|recovery-)' .scripts/backup-recovery-k3d.sh
   [ "$status" -eq 1 ]
 }
 
@@ -42,6 +42,49 @@ setup() {
   # shellcheck source=/dev/null
   source ./source-cluster-steps.sh
   [ "$(cat "$result_directory/driver-operations")" = $'driver.sh create source.yaml\ndriver.sh deploy source.yaml immutable-release' ]
+}
+
+@test "source preflight rejects current-metadata incompatibility before create while historical candidate uses immutable sources" {
+  use_mise_tools
+  mkdir -p "$result_directory/logs"
+  export driver=driver.sh source_values=source.yaml target_values=candidate.yaml
+  export release=matching-source-artifact candidate_release=historical-candidate-artifact
+  cat > preflight-guards.sh << 'SH'
+set -e
+source ./release-lifecycle-function.sh
+source_http_port=22000
+target_http_port=22001
+source_api_port=32000
+target_api_port=32001
+oras() {
+  printf '{"annotations":{"org.opencontainers.image.revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}\n' > "${!#}"
+}
+bash() {
+  case "$2" in
+    render)
+      printf 'ordinary-source-render\n' >> "$result_directory/driver-operations"
+      [[ ${SOURCE_METADATA_COMPATIBLE:-true} == true ]] ;;
+    --release-sources-from-git)
+      [[ $3 == render && $4 == "$target_values" && $5 == "$candidate_release" ]]
+      printf 'immutable-candidate-render\n' >> "$result_directory/driver-operations" ;;
+    create | deploy) printf '%s\n' "$2" >> "$result_directory/driver-operations" ;;
+    *) return 1 ;;
+  esac
+}
+python3() { return 0; }
+docker() { printf 'disposable-source-container'; }
+mark() { return 0; }
+SH
+  sed -n '/^run_logged() {/,/^}/p' .scripts/backup-recovery-k3d.sh >> preflight-guards.sh
+  sed -n "/^phase='release-preflight'/,/^graphql_at() {/p" .scripts/backup-recovery-k3d.sh \
+    | sed '$d' >> preflight-guards.sh
+  SOURCE_METADATA_COMPATIBLE=false run bash preflight-guards.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$result_directory/driver-operations")" = ordinary-source-render ]
+  : > "$result_directory/driver-operations"
+  run bash preflight-guards.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/driver-operations")" = $'ordinary-source-render\nimmutable-candidate-render\ncreate\ndeploy' ]
 }
 
 @test "k3d rehearsal rejects mutable artifacts before creating result files or invoking tools" {

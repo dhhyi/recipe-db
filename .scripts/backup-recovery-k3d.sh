@@ -175,7 +175,9 @@ run_logged "$result_directory/logs/release-manifest.log" oras manifest fetch "$r
 revision=$(jq -er '.annotations["org.opencontainers.image.revision"] |
   select(test("^[a-f0-9]{40}$"))' "$release_manifest")
 run_logged "$result_directory/logs/release-render.log" \
-  release_lifecycle render "$source_values" "$release"
+  bash "$driver" render "$source_values" "$release"
+# Source deployment uses current-checkout metadata, so its preflight must too.
+# Historical candidates use their immutable Git sources; deploy is not broadened.
 run_logged "$result_directory/logs/candidate-render.log" \
   release_lifecycle render "$target_values" "$candidate_release"
 python3 - "$source_http_port" "$target_http_port" "$source_api_port" "$target_api_port" << 'PY'
