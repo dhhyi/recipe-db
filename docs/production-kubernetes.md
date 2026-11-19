@@ -242,7 +242,9 @@ Reattachment checks the old namespace/claim, requested capacity, node and guarde
 
 ### Fresh-deployment restore
 
-Restore is recovery at the backup's recorded immutable application release, not an upgrade or in-place repair. Use a newly provisioned, explicitly identified local k3d or Pi k3s target. Never deploy the normal application first: initialization populates databases and derived volumes, making that target unsuitable for restore. Existing or partially restored data must not be wiped, merged or overwritten to make a target pass.
+Restore is recovery at the backup's recorded immutable application release, not an upgrade or in-place repair. It requires an explicitly identified local k3d or Pi k3s target with empty application storage. On a newly provisioned target, never deploy the normal application first: initialization populates databases and derived volumes. Restore itself never wipes, merges or overwrites existing data.
+
+For an existing cluster, including a healthy idle site, a retained failed-release operation, or a failed restore, follow the [existing-cluster restore cookbook](production-existing-cluster-restore.md). It separates failed-release closeout, explicitly approved application-data reset, and the unchanged empty-storage restore. Use that cookbook when restore reports that storage is not empty; do not bypass the check. This preserves the Pi, K3s, HTTPS state, configuration and backup authorization. Use the [Pi rebuild cookbook](raspberry-pi-rebuild.md) instead when the host is lost or its integrity or disk is suspect.
 
 To retrieve the current verified backup for a workstation rehearsal, run this from your workstation checkout, including from fish. Choose a **new** destination directory under an existing parent with no symlink components:
 
@@ -293,7 +295,7 @@ mise run production-k3d restore-abandon "$VALUES" "$STATE_DIRECTORY" \
   "$HOLDER" "ABANDON-$HOLDER-AFTER-ISOLATION"
 ```
 
-Retain the failed target for investigation and select another genuinely fresh target for a new restore; abandonment does not make partial volumes reusable. Any destructive disposal requires separate explicit operator approval. Automated failure tests are not evidence of a live Pi recovery. The integrated disposable-k3d rehearsal belongs to #108, and operator-approved Drive/Pi acceptance to #107.
+Abandonment does not make partial volumes reusable. Collect any investigation evidence by hand before discarding data, then either select another genuinely fresh target or follow the separately confirmed [existing-cluster reset procedure](production-existing-cluster-restore.md). Automated failure tests are not evidence of a live Pi recovery. The integrated disposable-k3d rehearsal belongs to #108, and operator-approved Drive/Pi acceptance to #107.
 
 ### Failed migration recovery
 

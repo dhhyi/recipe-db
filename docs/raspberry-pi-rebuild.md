@@ -162,6 +162,8 @@ mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 
 ## 7. Restore the application
 
+If the existing host and disk are trustworthy and only application data needs replacing, use the [existing-cluster restore cookbook](production-existing-cluster-restore.md) instead of rebuilding. Continue here for a lost or suspect host.
+
 First [authorize Drive interactively on the new Pi](google-drive-authorization.md#1-authorize-on-a-new-pi). No authorized rclone config is restored from operator home. Then follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to download and verify the backup and its matching release artifact. If the verified package was already downloaded before the rebuild, authorization can wait until backup configuration in step 8.
 
 Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.

@@ -66,10 +66,27 @@ def lifecycle_state(snapshot):
         return None
 
 
+def safely_closed(state):
+    if not isinstance(state, dict):
+        return False
+    closeout = state.get("recoveryCloseout")
+    return (state.get("status"), state.get("phase")) == ("recovery-closed", "recovery-closed") \
+        and isinstance(state.get("backupId"), str) \
+        and bool(BACKUP_ID_PATTERN.fullmatch(state["backupId"])) \
+        and isinstance(closeout, dict) \
+        and closeout.get("ownershipReleased") is True \
+        and closeout.get("barrierVerified") is True \
+        and closeout.get("workersStopped") is True \
+        and closeout.get("holder") == state.get("backupId") \
+        and isinstance(closeout.get("closedAt"), str) and bool(closeout["closedAt"])
+
+
 def safely_recovered(state):
     if not isinstance(state, dict):
         return False
     if (state.get("status"), state.get("phase")) in SAFE_RECOVERY_STATES:
+        return True
+    if safely_closed(state):
         return True
     recovery = state.get("migrationRecovery")
     return (state.get("status"), state.get("phase")) == ("recovered", "migration-reopened") \
@@ -460,12 +477,25 @@ def archive_recovered_maintenance(config):
                     or retained.get("backupId") != backup_id \
                     or retained.get("source") != state.get("source"):
                 raise ValueError("invalid retained credential identity")
-            archived_credentials = history / (backup_id + ".previous-runtime-secret.json")
-            if archived_credentials.exists() or archived_credentials.is_symlink():
-                raise ValueError("retained credential history collision")
-            os.replace(credentials, archived_credentials)
+            if safely_closed(state):
+                credentials.unlink()
+            else:
+                archived_credentials = history / (backup_id + ".previous-runtime-secret.json")
+                if archived_credentials.exists() or archived_credentials.is_symlink():
+                    raise ValueError("retained credential history collision")
+                os.replace(credentials, archived_credentials)
         except (OSError, ValueError, AttributeError, json.JSONDecodeError) as error:
             raise BackupError("restart-failure", "invalid-retained-runtime-credentials") from error
+    if safely_closed(state):
+        for child in path.iterdir():
+            if child.name == "backup-state.json":
+                continue
+            if child.is_symlink():
+                raise BackupError("restart-failure", "invalid-maintenance-state")
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
     os.replace(path, destination)
 
 

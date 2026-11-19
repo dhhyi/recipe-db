@@ -57,6 +57,79 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "failed-release closeout archives only terminal isolation evidence and removes temporary Pi data" {
+  run python3 - << 'PY'
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+release = load("release", ".scripts/production-release.py")
+files = load("files", "provisioning/files/release-files.py")
+assert "release-closeout" in release.ACTIONS
+with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+    base = Path(temporary)
+    maintenance = base / "maintenance"
+    maintenance.mkdir(mode=0o700)
+    config = {"stateDirectory": str(base)}
+    backup_id = "backup-20260101000000-1"
+    state = {
+        "backupId": backup_id, "source": {"artifact": "previous"},
+        "configSha256": "config", "status": "recovery-required",
+        "phase": "post-release-backup-failed",
+    }
+    state_path = maintenance / "backup-state.json"
+    files.backup["atomic_json"](state_path, state)
+    with patch.object(files.subprocess, "check_output", return_value=b"revision\n"):
+        initial = files.handle({
+            "operation": "begin", "token": "token", "revision": "revision",
+            "action": "release-closeout",
+        }, config)
+    files.backup["atomic_json"](maintenance / "partial.json", {"private": "discard"})
+    partial = maintenance / "post-release-backup"
+    partial.mkdir(mode=0o700)
+    (partial / "partial.tar").write_bytes(b"partial snapshot")
+    credentials = base / "maintenance.previous-runtime-secret.json"
+    files.backup["atomic_json"](credentials, {
+        "backupId": backup_id, "source": state["source"], "data": {"private": "discard"},
+    })
+    closeout = {
+        "ownershipReleased": True, "barrierVerified": True, "workersStopped": True,
+        "holder": backup_id, "closedAt": "2026-01-02T00:00:00Z",
+    }
+    closed = dict(state, status="recovery-closed", phase="recovery-closed",
+                  recoveryCloseout=closeout)
+    for key in closeout:
+        incomplete = dict(closed, recoveryCloseout={k: v for k, v in closeout.items() if k != key})
+        assert not files.backup["safely_closed"](incomplete), key
+        assert not files.backup["safely_recovered"](incomplete), key
+    for phase in ("recovery-closeout-pending", "post-release-backup-failed", "unknown"):
+        assert not files.backup["safely_closed"](dict(closed, phase=phase))
+    assert files.backup["maintenance_active"](config)
+    files.handle({
+        "operation": "checkpoint", "token": "token", "expected": initial["expected"],
+        "state": closed,
+    }, config)
+    assert not files.backup["maintenance_active"](config)
+    files.handle({"operation": "end", "token": "token"}, config)
+    archived = base / "maintenance-history" / backup_id
+    assert not maintenance.exists()
+    assert not credentials.exists()
+    assert not (base / "release-command.json").exists()
+    assert list(archived.iterdir()) == [archived / "backup-state.json"]
+    assert json.loads((archived / "backup-state.json").read_text()) == closed
+    assert not files.backup["maintenance_active"](config)
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "write-through checkpoints keep canonical Pi paths and recommendations contain no temporary paths" {
   run python3 - << 'PY'
 import importlib.util
