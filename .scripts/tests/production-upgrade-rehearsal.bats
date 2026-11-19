@@ -126,7 +126,10 @@ load_scenario_functions() {
   printf '{}\n' > "$state/backup-state.json"
   load_scenario_functions
   mark() { :; }
-  die() { printf '%s\n' "$*" >&2; exit 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+  }
   lifecycle() {
     printf '%s\n' "$*" >> "$work/calls"
   }
@@ -234,7 +237,10 @@ PY
   chmod 700 "$FIXTURE_ROOT/bin/mise"
   load_scenario_functions
   mark() { :; }
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   lifecycle() { [[ $3 == release-website-result ]]; }
   application_project_metadata_to_jsonl() { printf '{}\n' > "$2"; }
   run_logged() {
