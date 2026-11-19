@@ -12,15 +12,19 @@ upload="$root/provisioning/files/backup-upload.py"
 source "$root/.scripts/lib/rehearsal-k3d.sh"
 result_directory=${2:-}
 release=${1:-}
+candidate_release=${3:-}
 
 die() {
   printf 'Backup recovery rehearsal: %s\n' "$*" >&2
   exit 1
 }
 
-[[ $# == 2 ]] || die 'usage: mise run production-backup-recovery-k3d <release@sha256:digest> <new-absolute-result-directory>'
+[[ $# == 2 || $# == 3 ]] || die 'usage: mise run production-backup-recovery-k3d <release@sha256:digest> <new-absolute-result-directory> <different-candidate-release@sha256:digest>'
 [[ $release =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[a-f0-9]{64}$ ]] \
   || die 'release must be the immutable recipe-db release artifact'
+[[ $candidate_release =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[a-f0-9]{64}$ &&
+  $candidate_release != "$release" ]] \
+  || die 'full recovery rehearsal requires a distinct immutable candidate release for the retained failed-release path'
 [[ $result_directory == /* && ! -e $result_directory && ! -L $result_directory ]] \
   || die 'result directory must be a new absolute path'
 parent=$(dirname "$result_directory")
@@ -83,7 +87,8 @@ write_result() {
     fi
   done
   available_bytes=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}')
-  jq -n --arg release "$release" --arg source "$source_cluster" --arg target "$target_cluster" \
+  jq -n --arg release "$release" --arg candidateRelease "$candidate_release" \
+    --arg source "$source_cluster" --arg target "$target_cluster" \
     --arg backupId "$backup_id" --arg revision "$revision" \
     --arg sourceContainer "$source_container" --arg targetContainer "$target_container" \
     --argjson sourceHttpPort "$source_http_port" --argjson targetHttpPort "$target_http_port" \
@@ -94,7 +99,7 @@ write_result() {
     --argjson success "$success" --argjson cleanupSucceeded "$cleanup_succeeded" \
     --slurpfile phases "$result_directory/phases.json" \
     '{schemaVersion:1,success:$success,phase:$phase,startedAt:$started,finishedAt:$finished,
-      elapsedSeconds:$elapsedSeconds,release:$release,revision:$revision,
+      elapsedSeconds:$elapsedSeconds,release:$release,candidateRelease:$candidateRelease,revision:$revision,
       sourceCluster:{name:$source,containerId:$sourceContainer,httpPort:$sourceHttpPort,apiPort:$sourceApiPort},
       targetCluster:{name:$target,containerId:$targetContainer,httpPort:$targetHttpPort,apiPort:$targetApiPort},
       backupId:$backupId,phases:$phases[0],stagingBytes:$stagingBytes,
@@ -167,6 +172,8 @@ revision=$(jq -er '.annotations["org.opencontainers.image.revision"] |
   select(test("^[a-f0-9]{40}$"))' "$release_manifest")
 run_logged "$result_directory/logs/release-render.log" \
   bash "$driver" render "$source_values" "$release"
+run_logged "$result_directory/logs/candidate-render.log" \
+  bash "$driver" render "$target_values" "$candidate_release"
 python3 - "$source_http_port" "$target_http_port" "$source_api_port" "$target_api_port" << 'PY'
 import socket
 import sys
@@ -409,14 +416,14 @@ sentinel_volume() {
   if [[ $action != create ]]; then
     bash "$driver" kubectl "$target_values" --namespace "$namespace" logs "$name" \
       > "$result_directory/$name-content"
-    [[ $(cat "$result_directory/$name-content") == unrelated-storage-must-survive ]]
+    [[ $(cat "$result_directory/$name-content") == unrelated-storage-must-survive ]] || return 1
   fi
   bash "$driver" kubectl "$target_values" --namespace "$namespace" delete pod "$name" \
     --wait=true --timeout=180s > "$result_directory/logs/$name-pod-delete.log" 2>&1
   bash "$driver" kubectl "$target_values" --namespace "$namespace" get pvc "$name" -o json \
     | jq -er '.metadata.uid' > "$result_directory/$name-$action.uid"
   if [[ $action != create ]]; then
-    cmp "$result_directory/$name-create.uid" "$result_directory/$name-$action.uid"
+    cmp "$result_directory/$name-create.uid" "$result_directory/$name-$action.uid" || return 1
   fi
 }
 
@@ -425,30 +432,38 @@ verify_preserved_storage() {
   bash "$driver" kubectl "$target_values" get pvc -o json \
     | jq -Sc '[.items[] | {name:.metadata.name,uid:.metadata.uid,volume:.spec.volumeName}] | sort_by(.name)' \
       > "$result_directory/$label-pvcs.json"
-  cmp "$result_directory/recovery-before-pvcs.json" "$result_directory/$label-pvcs.json"
+  cmp "$result_directory/recovery-before-pvcs.json" "$result_directory/$label-pvcs.json" || return 1
   sentinel_volume recipe-db rehearsal-unrelated verify
   sentinel_volume kube-system recipe-db-acme verify
 }
 
 verify_recovery_isolation() {
-  local state=$1 holder origin status
+  local state=$1 holder
+  jq -e '.status == "reset-ready" or .status == "recovery-required"' \
+    "$state/restore-state.json" > /dev/null || return 1
   holder=$(jq -er '.holder' "$state/restore-state.json")
   bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
     > "$result_directory/recovery-lease.json"
   jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
-    "$result_directory/recovery-lease.json" > /dev/null
+    "$result_directory/recovery-lease.json" > /dev/null || return 1
+  verify_recovery_barrier
+}
+
+verify_recovery_barrier() {
+  local origin status
   bash "$driver" kubectl "$target_values" get pods -o json \
     > "$result_directory/recovery-pods.json"
   jq -e 'all(.items[];
     (.status.phase == "Succeeded" or .status.phase == "Failed") or
-    (all(.spec.volumes[]?; .persistentVolumeClaim == null)))' \
-    "$result_directory/recovery-pods.json" > /dev/null
+    (.metadata.labels["app.kubernetes.io/part-of"] != "recipe-db"
+      and all(.spec.volumes[]?; .persistentVolumeClaim == null)))' \
+    "$result_directory/recovery-pods.json" > /dev/null || return 1
   origin=$(yq -r '.origin' "$target_values")
   local path
   for path in / /graphql /public/rehearsal-missing.png; do
     status=$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
       --output /dev/null --write-out '%{http_code}' "$origin$path")
-    [[ $status == 503 ]] || die "recovery barrier did not block $path"
+    [[ $status == 503 ]] || { die "recovery barrier did not block $path"; return 1; }
   done
 }
 
@@ -470,7 +485,8 @@ run_faulted_recovery() (
       if [[ ($REHEARSAL_FAULT_OPERATION == reset && $arguments == *"find /data"* &&
         $arguments == *"-exec rm -rf"*) ||
         ($REHEARSAL_FAULT_OPERATION == restore && $arguments == *" tar -xpkf "* &&
-          $arguments == *" -C /data "*) ]]; then
+          $arguments == *" -C /data "*) ||
+        ($REHEARSAL_FAULT_OPERATION == backup && $arguments == *" -- tar -C /data -cf - . "*) ]]; then
         printf '%s\n' "$REHEARSAL_FAULT_ACTION" > "$REHEARSAL_FAULT_MARKER"
         if [[ $REHEARSAL_FAULT_ACTION == term ]]; then
           kill -TERM "$$"
@@ -556,6 +572,89 @@ run_logged "$result_directory/logs/reset-again-recovery-restore.log" \
   "$archive" "$backup_id" "RESTORE-$backup_id"
 verify_fixture_recipe "$target_values" "$recipe_name"
 verify_preserved_storage reset-again-restored
+mark
+
+phase=retained-release-preparation
+release_state="$result_directory/state/failed-release"
+run_logged "$result_directory/logs/release-enter.log" \
+  bash "$driver" backup-enter "$target_values" "$release" "$release_state"
+release_holder=$(jq -er .backupId "$release_state/backup-state.json")
+run_logged "$result_directory/logs/release-capture.log" \
+  bash "$driver" backup-capture "$target_values" "$release_state"
+# Reuse the isolated uploader and fake remote to actually verify this release's
+# pre-upgrade backup, rather than asserting a remote status that never happened.
+snapshot_quoted=$(printf '%s' "$release_state" | jq -Rr '@sh')
+printf '#!/bin/sh\nset -eu\n[ "$#" -eq 1 ] || exit 2\nmkdir -m 700 "$1"\ncp -a -- %s/. "$1/"\n' \
+  "$snapshot_quoted" > "$capture_command"
+run_logged "$result_directory/logs/release-upload.log" \
+  python3 "$upload" nightly --config "$result_directory/secrets/backup.json"
+release_backup_status=$(jq -er --arg holder "$release_holder" \
+  'select(.backupId == $holder) | .status |
+    select(. == "verified-upload" or . == "verified-unchanged")' \
+  "$result_directory/state/status.json")
+run_logged "$result_directory/logs/release-stage.log" \
+  bash "$driver" release-stage "$target_values" "$release_state" "$candidate_release" \
+  "$release_backup_status" "VERIFIED-$release_holder-$release_backup_status"
+run_logged "$result_directory/logs/release-migration-plan.log" \
+  bash "$driver" release-migration-plan "$target_values" "$release_state" "$candidate_release"
+deadline=$((SECONDS + 1800))
+migration_step=0
+while ! jq -e '.migrationResult.outcome == "migration-succeeded"
+  or .migrationResult.outcome == "no-migration-required"' \
+  "$release_state/backup-state.json" > /dev/null; do
+  ((SECONDS < deadline)) || die 'candidate migration did not complete before rehearsal deadline'
+  migration_step=$((migration_step + 1))
+  run_logged "$result_directory/logs/release-migration-$migration_step.log" \
+    bash "$driver" release-migration-next "$target_values" "$release_state" "$candidate_release"
+  sleep 2
+done
+run_logged "$result_directory/logs/release-start.log" \
+  bash "$driver" release-start "$target_values" "$release_state" "$candidate_release"
+run_logged "$result_directory/logs/release-reopen.log" \
+  bash "$driver" release-reopen "$target_values" "$release_state" "$candidate_release" "OPEN-$release_holder"
+verify_fixture_recipe "$target_values" "$recipe_name"
+run_logged "$result_directory/logs/release-website-result.log" \
+  bash "$driver" release-website-result "$target_values" "$release_state" "$candidate_release" \
+  passed 'Disposable rehearsal verified synthetic recipe, image, tags and rating.' "WEBSITE-$release_holder-passed"
+mark
+
+phase=retained-failed-release
+run_faulted_recovery backup fail "$result_directory/logs/post-release-capture-failure.log" \
+  release-backup-capture "$target_values" "$release_state" "$candidate_release"
+jq -e '.status == "recovery-required" and
+  (.phase == "post-release-backup-failed" or .phase == "post-release-backup-recovery-required")' \
+  "$release_state/backup-state.json" > /dev/null
+verify_preserved_storage retained-failed-release
+mark
+
+phase=retained-failed-release-closeout
+run_logged "$result_directory/logs/release-closeout.log" \
+  bash "$driver" release-closeout "$target_values" "$release_state" "$release_holder" "CLOSEOUT-$release_holder"
+jq -e '.status == "recovery-closed"' "$release_state/backup-state.json" > /dev/null
+bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy \
+  --ignore-not-found -o json > "$result_directory/closeout-lease.json"
+[[ ! -s $result_directory/closeout-lease.json ]] || die 'closeout left the operation Lease held'
+verify_recovery_barrier
+verify_preserved_storage release-closed
+mark
+
+phase=after-closeout-reset
+reset_state="$result_directory/state/after-closeout-reset"
+run_logged "$result_directory/logs/after-closeout-plan.log" \
+  bash "$driver" recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_logged "$result_directory/logs/after-closeout-reset.log" \
+  bash "$driver" recovery-reset "$target_values" "$package_manifest" "$archive" \
+  "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage after-closeout-reset
+mark
+
+phase=after-closeout-recovery-restore
+run_logged "$result_directory/logs/after-closeout-restore.log" \
+  bash "$driver" recovery-restore "$target_values" "$reset_state" "$package_manifest" \
+  "$archive" "$backup_id" "RESTORE-$backup_id"
+verify_fixture_recipe "$target_values" "$recipe_name"
+verify_preserved_storage after-closeout-restored
 mark
 
 cleanup_test_record() {

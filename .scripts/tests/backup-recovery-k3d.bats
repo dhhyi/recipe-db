@@ -20,6 +20,17 @@ setup() {
   [ ! -e "$FIXTURE_ROOT/results" ]
 }
 
+@test "complete rehearsal requires a distinct immutable candidate for a genuine failed release" {
+  local release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  run bash .scripts/backup-recovery-k3d.sh "$release" "$result_directory"
+  [ "$status" -ne 0 ]
+  [[ $output == *"distinct immutable candidate release"* ]]
+  run bash .scripts/backup-recovery-k3d.sh "$release" "$result_directory" "$release"
+  [ "$status" -ne 0 ]
+  [[ $output == *"distinct immutable candidate release"* ]]
+  [ ! -e "$result_directory" ]
+}
+
 @test "synthetic source and target values satisfy the real token-only production configuration contract" {
   use_mise_tools
   mkdir -p deploy work secrets "$result_directory"
@@ -220,6 +231,36 @@ SH
   [ ! -e "$result_directory/$phase.fault" ]
 }
 
+@test "post-release capture fault skips capacity probes and fails only after a real archive copy" {
+  use_mise_tools
+  mkdir -p "$result_directory" bin
+  export target_values="$FIXTURE_ROOT/target.json" driver="$FIXTURE_ROOT/backup-driver.sh"
+  printf '{"context":"k3d-disposable-target"}\n' > "$target_values"
+  sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
+  # shellcheck source=/dev/null
+  source ./fault-function.sh
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  cat > bin/kubectl << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$result_directory/real-kubectl"
+SH
+  chmod +x bin/kubectl
+  export PATH="$FIXTURE_ROOT/bin:$PATH"
+  cat > "$driver" << 'SH'
+#!/usr/bin/env bash
+set -e
+kubectl --context k3d-disposable-target exec backup-volume-recipes -- sh -ec 'set -o pipefail; tar -C /data -cf - . | wc -c'
+kubectl --context k3d-disposable-target exec backup-volume-recipes -- tar -C /data -cf - .
+printf 'unexpectedly reached\n' > "$result_directory/after-fault"
+SH
+  phase=failed-post-release-capture
+  run run_faulted_recovery backup fail "$result_directory/backup.log"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/$phase.fault")" = fail ]
+  [ ! -e "$result_directory/after-fault" ]
+  [ "$(wc -l < "$result_directory/real-kubectl")" -eq 2 ]
+}
+
 @test "sentinel verification checks contents and PVC UID in app and kube-system namespaces" {
   use_mise_tools
   mkdir -p "$result_directory/logs"
@@ -252,5 +293,72 @@ SH
   SENTINEL_UID=replaced-uid run sentinel_volume kube-system recipe-db-acme verify
   [ "$status" -ne 0 ]
   SENTINEL_CONTENT=overwritten run sentinel_volume recipe-db rehearsal-unrelated verify
+  [ "$status" -ne 0 ]
+}
+
+@test "preservation checks reject changed application PVC and PV identities before sentinel verification" {
+  use_mise_tools
+  mkdir -p "$result_directory"
+  export target_values=target.json driver=driver.sh
+  sed -n '/^verify_preserved_storage() {/,/^}/p' .scripts/backup-recovery-k3d.sh > preserved-function.sh
+  # shellcheck source=/dev/null
+  source ./preserved-function.sh
+  printf '[{"name":"recipes","uid":"original","volume":"pv-original"}]\n' \
+    > "$result_directory/recovery-before-pvcs.json"
+  bash() {
+    jq -nc --arg uid "${PVC_UID:-original}" --arg volume "${PV_NAME:-pv-original}" \
+      '{items:[{metadata:{name:"recipes",uid:$uid},spec:{volumeName:$volume}}]}'
+  }
+  sentinel_volume() { printf '%s\n' "$*" >> "$result_directory/sentinel-calls"; }
+  run verify_preserved_storage unchanged
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/sentinel-calls")" = $'recipe-db rehearsal-unrelated verify\nkube-system recipe-db-acme verify' ]
+  PVC_UID=replaced run verify_preserved_storage replaced
+  [ "$status" -ne 0 ]
+  PV_NAME=other-volume run verify_preserved_storage rebound
+  [ "$status" -ne 0 ]
+  [ "$(wc -l < "$result_directory/sentinel-calls")" -eq 2 ]
+}
+
+@test "recovery isolation requires retained holder, stopped workers and every public barrier route" {
+  use_mise_tools
+  mkdir -p "$result_directory/state"
+  export target_values="$FIXTURE_ROOT/target.json" driver=driver.sh
+  printf '{"origin":"http://127.0.0.1:22000"}\n' > "$target_values"
+  printf '{"status":"recovery-required","holder":"original"}\n' \
+    > "$result_directory/state/restore-state.json"
+  printf '{"items":[]}\n' > "$result_directory/pods.json"
+  sed -n '/^verify_recovery_isolation() {/,/^}/p; /^verify_recovery_barrier() {/,/^}/p' \
+    .scripts/backup-recovery-k3d.sh > isolation-function.sh
+  # shellcheck source=/dev/null
+  source ./isolation-function.sh
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  bash() {
+    case " $* " in
+      *" get lease "*) printf '{"spec":{"holderIdentity":"%s"}}\n' "${LEASE_HOLDER:-original}" ;;
+      *" get pods "*) cat "$result_directory/pods.json" ;;
+    esac
+  }
+  curl() {
+    if [[ ${BARRIER_FAIL:-false} == true && ${!#} == */graphql ]]; then
+      printf 200
+    else
+      printf 503
+    fi
+  }
+  run verify_recovery_isolation "$result_directory/state"
+  [ "$status" -eq 0 ]
+  LEASE_HOLDER=another-holder run verify_recovery_isolation "$result_directory/state"
+  [ "$status" -ne 0 ]
+  BARRIER_FAIL=true run verify_recovery_isolation "$result_directory/state"
+  [ "$status" -ne 0 ]
+  [[ $output == *"did not block /graphql"* ]]
+  printf '{"items":[{"metadata":{"labels":{"app.kubernetes.io/part-of":"recipe-db"}},"status":{"phase":"Running"},"spec":{"volumes":[]}}]}\n' \
+    > "$result_directory/pods.json"
+  run verify_recovery_isolation "$result_directory/state"
+  [ "$status" -ne 0 ]
+  printf '{"items":[{"metadata":{},"status":{"phase":"Running"},"spec":{"volumes":[{"persistentVolumeClaim":{"claimName":"recipes"}}]}}]}\n' \
+    > "$result_directory/pods.json"
+  run verify_recovery_isolation "$result_directory/state"
   [ "$status" -ne 0 ]
 }
