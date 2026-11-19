@@ -543,6 +543,8 @@ verify_preserved_storage interrupted-reset
 mark
 
 phase=interrupted-reset-reset-again
+run_logged "$result_directory/logs/interrupted-reset-retry-plan.log" \
+  bash "$driver" recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
 run_logged "$result_directory/logs/interrupted-reset-retry.log" \
   bash "$driver" recovery-reset "$target_values" "$package_manifest" "$archive" \
   "$backup_id" "$reset_state" "RESET-$backup_id"
@@ -558,6 +560,8 @@ for restore_fault in fail term; do
   verify_preserved_storage "$phase"
   mark
   phase="$phase-reset-again"
+  run_logged "$result_directory/logs/$phase-plan.log" \
+    bash "$driver" recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
   run_logged "$result_directory/logs/$phase.log" \
     bash "$driver" recovery-reset "$target_values" "$package_manifest" "$archive" \
     "$backup_id" "$reset_state" "RESET-$backup_id"

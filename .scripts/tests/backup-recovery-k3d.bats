@@ -362,3 +362,20 @@ SH
   run verify_recovery_isolation "$result_directory/state"
   [ "$status" -ne 0 ]
 }
+
+@test "reset-again rehearsals refresh the consumed discard preview before every retry" {
+  mkdir -p "$result_directory"
+  local driver=driver.sh target_values=target.json package_manifest=manifest.json
+  local archive=backup.tar backup_id=backup-test reset_state=reset-state
+  sed -n '/^phase=interrupted-reset-reset-again/,/^phase=reset-again-recovery-restore/p' \
+    .scripts/backup-recovery-k3d.sh > retry-steps.sh
+  run_logged() { shift; "$@"; }
+  bash() { printf '%s\n' "$2" >> "$result_directory/retry-operations"; }
+  run_faulted_recovery() { return 0; }
+  verify_recovery_isolation() { return 0; }
+  verify_preserved_storage() { return 0; }
+  mark() { return 0; }
+  # shellcheck source=/dev/null
+  source ./retry-steps.sh
+  [ "$(cat "$result_directory/retry-operations")" = $'recovery-plan\nrecovery-reset\nrecovery-plan\nrecovery-reset\nrecovery-plan\nrecovery-reset' ]
+}
