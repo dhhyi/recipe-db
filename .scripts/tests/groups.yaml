@@ -78,6 +78,7 @@ release:
       - .scripts/lib/cluster-operation-lock.sh
       - .scripts/lib/production-storage.sh
       - .scripts/lib/production-restore.sh
+      - .scripts/lib/production-recovery.sh
       - .scripts/templates/**
       - provisioning/files/backup-upload.py
       - .scripts/tests/fixtures/rclone-local
@@ -107,6 +108,7 @@ deploy:
       - .scripts/lib/cluster-operation-lock.sh
       - .scripts/lib/production-storage.sh
       - .scripts/lib/production-restore.sh
+      - .scripts/lib/production-recovery.sh
       - .scripts/validate-production-image-index.sh
       - .scripts/validate-production-release.sh
       - .scripts/validate-backup-snapshot.py

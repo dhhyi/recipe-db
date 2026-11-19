@@ -1695,6 +1695,7 @@ restore_run() {
     restore_state=$state
     recovery_assert_identity
     recovery_assert_lease
+    recovery_command_acquire
     [[ $(jq -er .artifact "$state/restore-state.json") == "$artifact" ]] \
       || production_fail "reset handoff release differs from validated backup release"
     locked=true

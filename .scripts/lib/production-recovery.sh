@@ -2,6 +2,72 @@
 # Explicit destructive recovery is separate from the empty-target restore contract.
 # shellcheck disable=SC2034,SC2154
 
+recovery_command_delete() {
+  jq '{apiVersion:"v1",kind:"DeleteOptions",
+    preconditions:{uid:.metadata.uid,resourceVersion:.metadata.resourceVersion}}' \
+    "$work/recovery-command.json" > "$work/recovery-command-delete.json" || return 1
+  cluster_operation_lock_kubectl delete \
+    --raw /apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-recovery-command \
+    -f "$work/recovery-command-delete.json" > /dev/null
+}
+
+# The retained operation Lease is a handoff, not permission for two concurrent
+# commands. A bounded heartbeat claim serializes commands across operator hosts.
+recovery_command_acquire() {
+  local parent_pid=$BASHPID holder="recovery-$(date -u +%s%N)-$$" now
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  cluster_operation_lock_kubectl get lease recipe-db-recovery-command --ignore-not-found -o json \
+    > "$work/recovery-command.json" || return 1
+  if [[ -s $work/recovery-command.json ]]; then
+    jq -e --arg now "$now" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and .spec.leaseDurationSeconds == 45
+      and ((.spec.renewTime | fromdateiso8601) + 45 < ($now | fromdateiso8601))' \
+      "$work/recovery-command.json" > /dev/null \
+      || production_fail "another recovery command is active or its claim is uncertain; wait at least 45 seconds after interruption"
+    recovery_command_delete || production_fail "recovery command claim changed; refusing concurrent execution"
+  fi
+  jq -n --arg holder "$holder" --arg now "$now" '
+    {apiVersion:"coordination.k8s.io/v1",kind:"Lease",
+      metadata:{name:"recipe-db-recovery-command",namespace:"kube-system",
+        labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+      spec:{holderIdentity:$holder,leaseDurationSeconds:45,renewTime:$now}}' \
+    > "$work/recovery-command-create.json"
+  cluster_operation_lock_kubectl create -f "$work/recovery-command-create.json" > /dev/null \
+    || production_fail "another recovery command acquired the command claim"
+  recovery_command_holder=$holder
+  (
+    trap - EXIT INT TERM
+    while kill -0 "$parent_pid" 2> /dev/null; do
+      cluster_operation_lock_kubectl get lease recipe-db-recovery-command -o json \
+        > "$work/recovery-heartbeat.json" &&
+        jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
+          "$work/recovery-heartbeat.json" > /dev/null &&
+        jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
+          "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" &&
+        cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null || {
+        kill -TERM "$parent_pid" 2> /dev/null || true
+        exit 1
+      }
+      sleep 5
+    done
+  ) > "$work/recovery-command-heartbeat.log" 2>&1 &
+  recovery_command_pid=$!
+}
+
+recovery_command_release() {
+  [[ -n ${recovery_command_holder:-} ]] || return 0
+  if [[ -n ${recovery_command_pid:-} ]]; then
+    kill "$recovery_command_pid" 2> /dev/null || true
+    wait "$recovery_command_pid" 2> /dev/null || true
+  fi
+  cluster_operation_lock_kubectl get lease recipe-db-recovery-command -o json \
+    > "$work/recovery-command.json" || return 1
+  jq -e --arg holder "$recovery_command_holder" '.spec.holderIdentity == $holder' \
+    "$work/recovery-command.json" > /dev/null || return 1
+  recovery_command_delete
+}
+
 recovery_validate_package() {
   local manifest=$1 archive=$2 expected=$3 name source_artifact
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
@@ -155,6 +221,17 @@ recovery_stop_workers() {
         and .metadata.name != $guard) |
       .metadata.name' "$work/reset-workers.json")
   done
+  kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers \
+    -o json > "$work/reset-stopped-controllers.json" || return 1
+  jq -e 'all(.items[] | select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db");
+    if .kind == "Deployment" or .kind == "StatefulSet" or .kind == "ReplicaSet"
+      or .kind == "ReplicationController" then (.spec.replicas // 1) == 0
+    elif .kind == "Job" then .spec.suspend == true or
+      (.metadata.name | startswith("recovery-guard-"))
+    elif .kind == "CronJob" then .spec.suspend == true
+    elif .kind == "DaemonSet" then (.status.desiredNumberScheduled // 1) == 0
+    else false end)' "$work/reset-stopped-controllers.json" > /dev/null \
+    || production_fail "restartable workload controllers remain; wait for shutdown before retrying"
   kube get pods -o json > "$work/reset-worker-pods.json" || return 1
   while IFS= read -r pod; do
     kube delete pod "$pod" --wait=true --timeout="${timeout}s" > /dev/null || return 1
@@ -207,6 +284,16 @@ recovery_summary() {
     "$1" "$(jq -r .capturedAt "$work/restore-manifest.json")" "$artifact" "$revision"
   printf 'Target: %s / %s / %s. All current application data, partial imports and changes newer than this backup will be lost; newer backups are NOT deleted or selected automatically.\n' "$context" "$cluster" "$namespace"
   printf 'Preserve a manual backup and incident evidence before reset. No recent verified backup is inferred from this local package; verify off-host backup freshness yourself.\n'
+  printf 'Newer backup catalog: unavailable (off-device backups are not queried). Do not assume this is the latest backup; inspect the off-device catalog and known local verified manifests before approving.\n'
+  kube get deployments -o json > "$work/reset-current-release.json" || return 1
+  printf 'Current workload release artifacts to discard: '
+  jq -cr '[.items[].spec.template.metadata.annotations["recipe-db/release"] // "unknown"] | unique' \
+    "$work/reset-current-release.json"
+  if jq -e --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    'try (($now | fromdateiso8601) - (.capturedAt | fromdateiso8601) > 86400) catch true' \
+    "$work/restore-manifest.json" > /dev/null; then
+    printf 'WARNING: NO RECENT VERIFIED BACKUP SELECTED: capture is older than 24 hours or freshness is unknown. Expect permanent loss of newer changes.\n'
+  fi
 }
 
 recovery_plan() {
@@ -292,6 +379,7 @@ recovery_reset() {
   recovery_assert_identity
   yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" |
     jq -s '[.[] | {name:.metadata.name}]' > "$work/prior-workloads.json"
+  recovery_command_acquire
   restore_guard_remove_expired
   if [[ $(jq -r .status "$state/restore-state.json") != reset-planned ]]; then
     recovery_assert_identity
@@ -371,6 +459,7 @@ recovery_release_closeout() {
     and (.metadata.annotations["recipe-db/phase"] == $state[0].phase
       or .metadata.annotations["recipe-db/phase"] == "recovery-required")' <<< "$current" > /dev/null \
     || production_fail "closeout requires the exact terminal retained release Lease"
+  recovery_command_acquire
   lock_holder=$expected
   cluster_operation_lock_holder=$expected
   locked=true
@@ -405,7 +494,8 @@ recovery_release_closeout() {
   locked=false
   recovery_closeout_started=false
   release_state_write recovery-closed recovery-closed \
-    "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{recoveryCloseout:{closedAt:$at,ownershipReleased:true}}')"
+    "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg holder "$expected" \
+      '{recoveryCloseout:{closedAt:$at,ownershipReleased:true,holder:$holder,
+        barrierVerified:true,workersStopped:true}}')"
   printf 'production: failed release closed for separate recovery; evidence retained at %s/backup-state.json; barrier and storage preserved, no restore or reset performed\n' "$snapshot"
 }

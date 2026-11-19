@@ -127,6 +127,10 @@ cleanup() {
   trap - EXIT
   restore_cleanup "$result"
   recovery_cleanup "$result"
+  if ! recovery_command_release; then
+    printf 'production: recovery command claim could not be released; inspect it after its 45-second heartbeat expires\n' >&2
+    result=1
+  fi
   if ! release_recovery_reopen_cleanup "$result"; then
     result=1
   fi
