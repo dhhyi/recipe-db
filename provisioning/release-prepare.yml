@@ -12,28 +12,55 @@
           - groups['pi'] | length == 1
           - ansible_user is defined and ansible_user != 'root'
           - checkout_revision is match('^[0-9a-f]{40}$')
+          - backup_capture_revision == checkout_revision
+          - >-
+            (release_closeout_holder | default('') == '' and
+             release_closeout_confirmation | default('') == '') or
+            (release_closeout_holder | default('') is match('^backup-[0-9]+-[0-9]+$') and
+             release_closeout_confirmation | default('') == 'PREPARE-CLOSEOUT-' ~ release_closeout_holder)
 
     - name: Keep scheduled capture disabled
       ansible.builtin.systemd_service:
         name: recipe-db-backup.timer
         enabled: false
         state: stopped
+      when: release_closeout_holder | default('') == ''
 
     - name: Reuse the guarded isolated backup toolchain and checkout maintenance
       ansible.builtin.import_tasks: backup-toolchain.yml
+      when: release_closeout_holder | default('') == ''
 
-    - name: Install the reviewed backup publisher
-      ansible.builtin.copy:
-        src: files/backup-upload.py
-        dest: /usr/local/sbin/recipe-db-backup-upload
-        owner: root
-        group: root
-        mode: "0755"
+    - name: Prepare reviewed tools while preserving retained operation ownership
+      block:
+        - name: Prepare only the explicitly approved retained failure tooling
+          ansible.builtin.include_tasks: release-closeout-prepare-tasks.yml
+          when: release_closeout_holder | default('') != ''
 
-    - name: Install the bounded private release file helper
-      ansible.builtin.copy:
-        src: files/release-files.py
-        dest: /usr/local/sbin/recipe-db-release-files
-        owner: root
-        group: root
-        mode: "0700"
+        - name: Install the reviewed backup publisher
+          ansible.builtin.copy:
+            src: files/backup-upload.py
+            dest: /usr/local/sbin/recipe-db-backup-upload
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Install the bounded private release file helper
+          ansible.builtin.copy:
+            src: files/release-files.py
+            dest: /usr/local/sbin/recipe-db-release-files
+            owner: root
+            group: root
+            mode: "0700"
+      always:
+        - name: Release only this installer workstation file claim
+          ansible.builtin.command:
+            argv: [/usr/local/sbin/recipe-db-release-files]
+            stdin: >-
+              {{ {'operation': 'end',
+                  'token': (release_closeout_preparation.stdout | from_json).token} | to_json }}
+          changed_when: false
+          when:
+            - release_closeout_preparation is defined
+            - release_closeout_preparation is not skipped
+            - release_closeout_preparation.rc | default(1) == 0
+          no_log: true

@@ -1,0 +1,50 @@
+- name: Restrict retained tooling preparation to the isolated release installer
+  ansible.builtin.assert:
+    that:
+      - ansible_play_name == 'Prepare only the managed release and backup tools before maintenance'
+      - release_closeout_holder is match('^backup-[0-9]+-[0-9]+$')
+      - release_closeout_confirmation == 'PREPARE-CLOSEOUT-' ~ release_closeout_holder
+      - backup_capture_revision is match('^[0-9a-f]{40}$')
+      - backup_capture_revision == checkout_revision
+
+- name: Independently validate the retained failure and claim its tooling preparation
+  ansible.builtin.script:
+    cmd: >-
+      files/checkout-guard.py --prepare-closeout --revision {{ backup_capture_revision | quote }}
+      --closeout-holder {{ release_closeout_holder | quote }}
+      --closeout-confirmation {{ release_closeout_confirmation | quote }}
+    executable: /usr/bin/python3
+  register: release_closeout_preparation
+  changed_when: false
+  no_log: true
+
+- name: Install the claim-aware lock-guarded Git executable
+  ansible.builtin.copy:
+    src: files/checkout-guard.py
+    dest: /usr/local/sbin/recipe-db-checkout-git
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check out only the approved immutable closeout tooling revision
+  ansible.builtin.git:
+    repo: https://github.com/dhhyi/recipe-db.git
+    dest: /opt/recipe-db
+    version: "{{ backup_capture_revision }}"
+    force: false
+    recursive: false
+    executable: /usr/local/sbin/recipe-db-checkout-git
+  environment:
+    RECIPE_DB_CHECKOUT_REVISION: "{{ backup_capture_revision }}"
+    RECIPE_DB_CLOSEOUT_HOLDER: "{{ release_closeout_holder }}"
+    RECIPE_DB_CLOSEOUT_CONFIRMATION: "{{ release_closeout_confirmation }}"
+    RECIPE_DB_CLOSEOUT_TOKEN: "{{ (release_closeout_preparation.stdout | from_json).token }}"
+  no_log: true
+
+- name: Install the reviewed private capture and recovery command
+  ansible.builtin.template:
+    src: recipe-db-backup-capture.j2
+    dest: /usr/local/sbin/recipe-db-backup-capture
+    owner: root
+    group: root
+    mode: "0700"

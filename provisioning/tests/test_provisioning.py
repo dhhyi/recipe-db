@@ -401,6 +401,110 @@ class ContractTests(unittest.TestCase):
                      if task["name"] == "Refuse capture checkout changes during release maintenance")
         self.assertIn("maintenanceActive", guard["ansible.builtin.assert"]["that"][0])
 
+    def test_release_prepare_closeout_requires_exact_explicit_confirmation(self):
+        play = yaml.safe_load((ROOT / "release-prepare.yml").read_text())[0]
+        validation = play["tasks"][0]["ansible.builtin.assert"]["that"]
+        self.environment.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None
+        evaluate = self.environment.compile_expression(" and ".join(
+            f"({condition})" for condition in validation
+        ))
+        defaults = dict(
+            groups={"pi": ["pi"]}, ansible_user="administrator",
+            checkout_revision="a" * 40, backup_capture_revision="a" * 40,
+        )
+        self.assertTrue(evaluate(**defaults))
+        holder = "backup-20261119144000-123"
+        approval = dict(release_closeout_holder=holder,
+                        release_closeout_confirmation=f"PREPARE-CLOSEOUT-{holder}")
+        self.assertTrue(evaluate(**(defaults | approval)))
+        for change in (
+            {"release_closeout_holder": holder},
+            {"release_closeout_confirmation": f"PREPARE-CLOSEOUT-{holder}"},
+            {"release_closeout_holder": holder, "release_closeout_confirmation": "true"},
+            approval | {"release_closeout_holder": "backup-20261119144000-124"},
+            approval | {"backup_capture_revision": "b" * 40},
+            approval | {"checkout_revision": "main"},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(evaluate(**(defaults | change)))
+
+    def test_release_prepare_closeout_is_separate_from_ordinary_toolchain_maintenance(self):
+        play = yaml.safe_load((ROOT / "release-prepare.yml").read_text())[0]
+        tasks = play["tasks"]
+        timer = next(task for task in tasks if "ansible.builtin.systemd_service" in task)
+        toolchain = next(task for task in tasks
+                         if task.get("ansible.builtin.import_tasks") == "backup-toolchain.yml")
+        idle = "release_closeout_holder | default('') == ''"
+        self.assertEqual(timer["when"], idle)
+        self.assertEqual(toolchain["when"], idle)
+        self.assertFalse(timer["ansible.builtin.systemd_service"]["enabled"])
+        block = next(task for task in tasks if "always" in task)
+        scoped = block["block"][0]
+        self.assertEqual(scoped["when"], "release_closeout_holder | default('') != ''")
+        retained = yaml.safe_load((ROOT / scoped["ansible.builtin.include_tasks"]).read_text())
+        self.assertIn(
+            f"ansible_play_name == '{play['name']}'",
+            retained[0]["ansible.builtin.assert"]["that"],
+        )
+        guard = retained[1]
+        self.assertEqual(guard["register"], "release_closeout_preparation")
+        self.assertTrue(guard["no_log"])
+        command = guard["ansible.builtin.script"]["cmd"]
+        for argument in ("--prepare-closeout", "--revision", "--closeout-holder",
+                         "--closeout-confirmation"):
+            self.assertIn(argument, command)
+        self.assertFalse(any("ansible.builtin.systemd_service" in task for task in retained))
+        self.assertFalse(any("ansible.builtin.import_tasks" in task for task in retained))
+        ordinary = yaml.safe_load((ROOT / "backup-toolchain.yml").read_text())
+        ordinary_guard = next(task for task in ordinary
+                              if task["name"] == "Refuse capture checkout changes during release maintenance")
+        self.assertEqual(ordinary_guard["when"], "backup_configuration.stat.exists")
+        self.assertNotIn("release_closeout", str(ordinary_guard))
+
+    def test_release_prepare_closeout_claim_spans_only_reviewed_tool_installation(self):
+        play = yaml.safe_load((ROOT / "release-prepare.yml").read_text())[0]
+        block = next(task for task in play["tasks"] if "always" in task)
+        retained = yaml.safe_load(
+            (ROOT / block["block"][0]["ansible.builtin.include_tasks"]).read_text()
+        )
+        checkout = next(task for task in retained if "ansible.builtin.git" in task)
+        self.assertEqual(checkout["ansible.builtin.git"]["version"], "{{ backup_capture_revision }}")
+        self.assertFalse(checkout["ansible.builtin.git"]["force"])
+        self.assertFalse(checkout["ansible.builtin.git"]["recursive"])
+        self.assertEqual(checkout["ansible.builtin.git"]["executable"],
+                         "/usr/local/sbin/recipe-db-checkout-git")
+        self.assertEqual(checkout["environment"], {
+            "RECIPE_DB_CHECKOUT_REVISION": "{{ backup_capture_revision }}",
+            "RECIPE_DB_CLOSEOUT_HOLDER": "{{ release_closeout_holder }}",
+            "RECIPE_DB_CLOSEOUT_CONFIRMATION": "{{ release_closeout_confirmation }}",
+            "RECIPE_DB_CLOSEOUT_TOKEN": "{{ (release_closeout_preparation.stdout | from_json).token }}",
+        })
+        self.assertTrue(checkout["no_log"])
+        installs = retained + block["block"][1:]
+        destinations = {
+            task[module]["dest"] for task in installs
+            for module in ("ansible.builtin.copy", "ansible.builtin.template")
+            if module in task
+        }
+        self.assertEqual(destinations, {
+            "/usr/local/sbin/recipe-db-checkout-git",
+            "/usr/local/sbin/recipe-db-backup-capture",
+            "/usr/local/sbin/recipe-db-backup-upload",
+            "/usr/local/sbin/recipe-db-release-files",
+        })
+        self.assertFalse(any(
+            module in task for task in installs
+            for module in ("ansible.builtin.file", "ansible.builtin.systemd_service",
+                           "ansible.builtin.shell", "ansible.builtin.command")
+        ))
+        cleanup, = block["always"]
+        self.assertEqual(cleanup["ansible.builtin.command"]["argv"],
+                         ["/usr/local/sbin/recipe-db-release-files"])
+        self.assertIn("'operation': 'end'", cleanup["ansible.builtin.command"]["stdin"])
+        self.assertIn("release_closeout_preparation.stdout", cleanup["ansible.builtin.command"]["stdin"])
+        self.assertIn("release_closeout_preparation.rc | default(1) == 0", cleanup["when"])
+        self.assertTrue(cleanup["no_log"])
+
     def test_base_provisioning_leaves_backup_timer_disabled(self):
         tasks = next(task["block"] for task in self.play["tasks"] if "block" in task)
         enable = next(task for task in tasks
