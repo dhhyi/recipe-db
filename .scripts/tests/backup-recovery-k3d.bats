@@ -10,6 +10,38 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/rehearsal-k3d.sh" .scripts/lib/
   export FAKE_RCLONE_ROOT="$FIXTURE_ROOT/fake-remote"
   export result_directory="$FIXTURE_ROOT/results"
+  sed -n '/^release_lifecycle() {/,/^}/p' .scripts/backup-recovery-k3d.sh > release-lifecycle-function.sh
+  # shellcheck source=/dev/null
+  source ./release-lifecycle-function.sh
+}
+
+@test "immutable-source lifecycle dispatch preserves arguments for renders backups releases and restores" {
+  local driver="$FIXTURE_ROOT/driver with spaces.sh" operation
+  bash() { printf '%s\n' "$@"; }
+  for operation in render backup-run backup-enter backup-capture backup-exit \
+    release-stage release-migration-plan release-migration-next release-start release-reopen \
+    release-website-result release-backup-capture release-closeout \
+    restore recovery-plan recovery-reset recovery-restore; do
+    run release_lifecycle "$operation" "values with spaces.yaml" "immutable artifact"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$driver"$'\n--release-sources-from-git\n'"$operation"$'\nvalues with spaces.yaml\nimmutable artifact' ]
+  done
+  run grep -E 'bash "\$driver" (render|backup|release-|restore|recovery-)' .scripts/backup-recovery-k3d.sh
+  [ "$status" -eq 1 ]
+}
+
+@test "normal source cluster deploy retains its current-checkout contract without immutable-source flag" {
+  mkdir -p "$result_directory"
+  local driver=driver.sh source_values=source.yaml release=immutable-release
+  sed -n '/^phase=source-cluster/,/^graphql_at() {/p' .scripts/backup-recovery-k3d.sh \
+    | sed '$d' > source-cluster-steps.sh
+  run_logged() { shift; "$@"; }
+  bash() { printf '%s\n' "$*" >> "$result_directory/driver-operations"; }
+  docker() { printf 'disposable-source-container'; }
+  mark() { return 0; }
+  # shellcheck source=/dev/null
+  source ./source-cluster-steps.sh
+  [ "$(cat "$result_directory/driver-operations")" = $'driver.sh create source.yaml\ndriver.sh deploy source.yaml immutable-release' ]
 }
 
 @test "k3d rehearsal rejects mutable artifacts before creating result files or invoking tools" {
@@ -168,6 +200,7 @@ SH
   cat > "$driver" << 'SH'
 #!/usr/bin/env bash
 set -e
+[[ $1 == --release-sources-from-git ]]
 kubectl --context k3d-source exec restore-volume-recipes -- tar -xpkf - --numeric-owner -C /data
 kubectl --context k3d-disposable-target get pods
 kubectl --context k3d-disposable-target exec restore-volume-recipes -- tar -xpkf - --numeric-owner -C /data
@@ -202,6 +235,7 @@ SH
   cat > "$driver" << 'SH'
 #!/usr/bin/env bash
 set -e
+[[ $1 == --release-sources-from-git ]]
 kubectl --context k3d-disposable-target exec restore-volume-recipes -- sh -ec 'find /data -mindepth 1 -maxdepth 1 -print -quit'
 kubectl --context k3d-disposable-target exec restore-volume-recipes -- sh -ec 'test -d /data && find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
 printf 'unexpectedly reached\n' > "$result_directory/after-fault"
@@ -249,6 +283,7 @@ SH
   cat > "$driver" << 'SH'
 #!/usr/bin/env bash
 set -e
+[[ $1 == --release-sources-from-git ]]
 kubectl --context k3d-disposable-target exec backup-volume-recipes -- sh -ec 'set -o pipefail; tar -C /data -cf - . | wc -c'
 kubectl --context k3d-disposable-target exec backup-volume-recipes -- tar -C /data -cf - .
 printf 'unexpectedly reached\n' > "$result_directory/after-fault"
@@ -370,7 +405,7 @@ SH
   sed -n '/^phase=interrupted-reset-reset-again/,/^phase=reset-again-recovery-restore/p' \
     .scripts/backup-recovery-k3d.sh > retry-steps.sh
   run_logged() { shift; "$@"; }
-  bash() { printf '%s\n' "$2" >> "$result_directory/retry-operations"; }
+  release_lifecycle() { printf '%s\n' "$1" >> "$result_directory/retry-operations"; }
   run_faulted_recovery() { return 0; }
   verify_recovery_isolation() { return 0; }
   verify_preserved_storage() { return 0; }
