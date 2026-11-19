@@ -450,9 +450,27 @@ recovery_plan() {
       and .cluster == $cluster and .context == $context and .namespace == $ns
       and .configSha256 == $sha
       and (.status == "recovery-required" or .status == "in-progress"
-        or .status == "reset-ready" or .status == "reset-planned")' \
+        or .status == "reset-ready" or .status == "reset-planned"
+        or (.status == "succeeded" and .phase == "complete"))' \
       "$state/restore-state.json" > /dev/null \
       || production_fail "cannot replan an active or unrelated recovery"
+    if jq -e '.status == "succeeded"' "$state/restore-state.json" > /dev/null; then
+      local completion_lease
+      completion_lease=$(cluster_operation_lock_status)
+      jq -e --slurpfile state "$state/restore-state.json" '
+        .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+        and .spec.holderIdentity == $state[0].holder
+        and .metadata.annotations["recipe-db/operation"] == "restore"
+        and .metadata.annotations["recipe-db/release"] == $state[0].artifact
+        and .metadata.annotations["recipe-db/phase"] != "acquired"
+        and ($state[0].reset.leaseUid == null or .metadata.uid == $state[0].reset.leaseUid)' \
+        <<< "$completion_lease" > /dev/null \
+        || production_fail "completed restore has no exact retained ownership to recover"
+      restore_operation_lease_uid=$(jq -er .metadata.uid <<< "$completion_lease")
+      restore_guard_validate_expired
+      [[ -n ${restore_expired_guard_uid:-} ]] \
+        || production_fail "completed restore retry requires a confirmed expired shutdown guard"
+    fi
     if jq -e '.reset == null' "$state/restore-state.json" > /dev/null; then
       local lease
       lease=$(cluster_operation_lock_status)

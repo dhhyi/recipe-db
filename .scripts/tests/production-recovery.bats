@@ -240,6 +240,157 @@ EOF
   [ "$barrier" -lt "$guard" ] && [ "$guard" -lt "$stop" ] && [ "$stop" -lt "$wipe" ]
 }
 
+@test "reset initial phase failure retains a reconcilable acquired Lease and can reset again" {
+  state_machine_fixture
+  cat >> harness.sh << 'EOF'
+cluster_operation_lock_update() {
+  [[ ! -f "$FIXTURE_ROOT/fail-phase" ]] || return 1
+  jq --arg phase "$1" '.metadata.annotations["recipe-db/phase"]=$phase' lease.json > lease.next
+  mv lease.next lease.json
+}
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  touch fail-phase
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  jq -e '.status == "recovery-required" and .reset.acquisitionPending == true
+    and .reset.leaseUid == "lease-1"' "$RECOVERY_STATE/restore-state.json"
+  ! grep -q '^wipe$' "$MOCK_LOG"
+  rm fail-phase
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  jq -e '.status == "reset-ready"' "$RECOVERY_STATE/restore-state.json"
+}
+
+@test "reset reconciles a crash after acquisition before UID persistence" {
+  state_machine_fixture
+  cat >> harness.sh << 'EOF'
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+if [[ ! -f lease.json ]]; then
+  artifact=$(jq -er .artifact "$RECOVERY_STATE/restore-state.json")
+  jq '.holder="reset-before-uid" | .reset.acquisitionPending=true' \
+    "$RECOVERY_STATE/restore-state.json" > state.next
+  mv state.next "$RECOVERY_STATE/restore-state.json"
+  cluster_operation_lock_acquire reset-before-uid restore "$artifact"
+fi
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  jq -e '.holder == "reset-before-uid" and .reset.leaseUid == "lease-1"
+    and .status == "reset-ready"' "$RECOVERY_STATE/restore-state.json"
+}
+
+@test "Pi reset refuses failed real host-path and filesystem UUID inspection before wipe" {
+  state_machine_fixture
+  cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/
+  cat >> harness.sh << 'EOF'
+source "$FIXTURE_ROOT/.scripts/production-storage.sh"
+target=pi
+cluster_operation_lock_assert_held() { :; }
+production_storage_validate_config() { :; }
+production_storage_require_config() { :; }
+production_storage_node() { :; }
+production_storage_ensure_class() { :; }
+production_storage_inspect_existing_volumes() { :; }
+kube() {
+  echo "$*" >> "$MOCK_LOG"
+  case "$*" in
+    *"get nodes"*) echo '{"items":[{"metadata":{"name":"pi"},"status":{"nodeInfo":{"architecture":"arm64"},"conditions":[{"type":"Ready","status":"True"}]}}]}' ;;
+    *"get deployment local-path-provisioner"*) echo '{"metadata":{"name":"local-path-provisioner"}}' ;;
+    *"wait "*) return 1 ;;
+    *"logs "*) printf '%s\n' "$HOST_FAILURE" >&2 ;;
+    *) echo '{"items":[]}' ;;
+  esac
+}
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  for reason in wrong-filesystem-uuid symlinked-storage-path; do
+    rm -rf "$RECOVERY_STATE"
+    rm -f lease.json
+    : > "$MOCK_LOG"
+    run env HOST_FAILURE="$reason" bash harness.sh
+    [ "$status" -ne 0 ]
+    ! grep -q '^wipe$' "$MOCK_LOG"
+  done
+}
+
+@test "Pi identity permits only Delete-to-Retain policy strengthening and pins it" {
+  state_machine_fixture
+  cat >> harness.sh << 'EOF'
+target=pi
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+restore_state=$RECOVERY_STATE
+jq '.reset.identity.volumes[0] += {pvSpec:{persistentVolumeReclaimPolicy:"Delete",
+  local:{path:"/data/recipes"},claimRef:{uid:"claim-1"},nodeAffinity:{required:{node:"pi"}}}}' \
+  "$restore_state/restore-state.json" > state.next
+mv state.next "$restore_state/restore-state.json"
+jq '.reset.identity | .volumes[0].pvSpec.persistentVolumeReclaimPolicy="Retain"' \
+  "$restore_state/restore-state.json" > retained.json
+recovery_identity() { cp "$FIXTURE_ROOT/retained.json" "$work/reset-identity.json"; }
+recovery_assert_identity
+jq -e '.reset.identity.volumes[0].pvSpec.persistentVolumeReclaimPolicy == "Retain"' \
+  "$restore_state/restore-state.json"
+jq "$MUTATION" retained.json > retained.next
+mv retained.next retained.json
+recovery_assert_identity
+EOF
+  for mutation in '.volumes[0].pvSpec.persistentVolumeReclaimPolicy="Delete"' \
+    '.volumes[0].volumeUid="replacement"' '.volumes[0].pvSpec.local.path="/other"' \
+    '.volumes[0].pvSpec.nodeAffinity.required.node="other"'; do
+    rm -rf "$RECOVERY_STATE"
+    run env MUTATION="$mutation" bash harness.sh
+    [ "$status" -ne 0 ]
+    [[ $output == *"PVC UID or PV identity changed"* ]]
+  done
+}
+
+@test "namespace handoff accepts only exact reset receipt and retained Lease" {
+  state_machine_fixture
+  cat >> harness.sh << 'EOF'
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+jq -n --arg ns "$namespace" --rawfile state "$RECOVERY_STATE/restore-state.json" \
+  '{metadata:{namespace:$ns,labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+    data:{"restore-state.json":$state}}' > receipt.json
+jq '.status="in-progress" | .phase="preparing-target"' \
+  "$RECOVERY_STATE/restore-state.json" > state.next
+mv state.next "$RECOVERY_STATE/restore-state.json"
+recovery_validate_namespace_handoff receipt.json
+jq '.data["restore-state.json"] |= (fromjson | .reset.leaseUid="another" | tojson)' \
+  receipt.json > receipt.next
+mv receipt.next receipt.json
+recovery_validate_namespace_handoff receipt.json
+EOF
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"not this exact reset-ready"* ]]
+}
+
+@test "closeout retries durable release intent after deletion and final checkpoint failure" {
+  closeout_fixture
+  cat >> harness.sh << 'EOF'
+eval "$(declare -f release_state_write | sed '1s/release_state_write/original_state_write/')"
+release_state_write() {
+  if [[ $1 == recovery-closed && -f "$FIXTURE_ROOT/fail-final" ]]; then return 1; fi
+  original_state_write "$@"
+}
+recovery_release_closeout "$RECOVERY_STATE" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+EOF
+  touch fail-final
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  [ ! -e lease.json ]
+  jq -e '.phase == "recovery-closeout-pending"
+    and .recoveryCloseout.releaseIntent.leaseUid == "lease-1"' state/backup-state.json
+  rm fail-final
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  jq -e '.status == "recovery-closed" and .recoveryCloseout.ownershipReleased == true' state/backup-state.json
+}
+
 @test "reset failure reasserts barrier stops workers and persists exact retained recovery state" {
   state_machine_fixture
   cat >> harness.sh << 'EOF'
