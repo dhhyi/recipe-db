@@ -66,7 +66,7 @@ kube() { echo '{"items":[]}'; }
 cluster_operation_lock_status() { if [[ -f lease.json ]]; then cat lease.json; fi; }
 cluster_operation_lock_acquire() {
   jq -n --arg holder "$1" --arg release "$3" '
-    {metadata:{uid:"lease-1",labels:{"app.kubernetes.io/part-of":"recipe-db"},
+    {metadata:{name:"recipe-db-deploy",namespace:"kube-system",uid:"lease-1",resourceVersion:"1",labels:{"app.kubernetes.io/part-of":"recipe-db"},
       annotations:{"recipe-db/operation":"restore","recipe-db/release":$release,"recipe-db/phase":"acquired"}},
       spec:{holderIdentity:$holder}}' > lease.json
 }
@@ -74,6 +74,16 @@ cluster_operation_lock_update() {
   echo "phase $1" >> "$MOCK_LOG"
   jq --arg phase "$1" '.metadata.annotations["recipe-db/phase"]=$phase' lease.json > lease.next
   mv lease.next lease.json
+}
+cluster_operation_lock_kubectl() {
+  echo "lock-api $*" >> "$MOCK_LOG"
+  case "$1 $2" in
+    "get configmap") if [[ -f handoff.json ]]; then cat handoff.json; fi ;;
+    "create -f"|"replace -f")
+      if [[ $(jq -r .kind "$3") == ConfigMap ]]; then cp "$3" handoff.json
+      else cp "$3" lease.json; fi ;;
+    *) return 1 ;;
+  esac
 }
 trap 'result=$?; recovery_cleanup "$result"; exit "$result"' EXIT
 EOF
@@ -104,11 +114,12 @@ cluster_operation_lock_delete() {
   [[ $(jq -r .metadata.uid <<< "$1") == lease-1 ]]
   rm lease.json
 }
+if [[ ! -f lease.json ]]; then
 cluster_operation_lock_acquire "$BACKUP_ID" backup "$(jq -r .source.artifact "$MANIFEST")"
 jq '.metadata.annotations["recipe-db/operation"]="backup" |
   .metadata.annotations["recipe-db/phase"]="recovery-required"' lease.json > lease.next
 mv lease.next lease.json
-recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+fi
 EOF
 }
 
@@ -369,7 +380,7 @@ EOF
   [[ $output == *"not this exact reset-ready"* ]]
 }
 
-@test "closeout retries durable release intent after deletion and final checkpoint failure" {
+@test "closeout retries retained handoff after final checkpoint failure without deleting Lease" {
   closeout_fixture
   cat >> harness.sh << 'EOF'
 eval "$(declare -f release_state_write | sed '1s/release_state_write/original_state_write/')"
@@ -382,13 +393,15 @@ EOF
   touch fail-final
   run bash harness.sh
   [ "$status" -ne 0 ]
-  [ ! -e lease.json ]
+  [ -e lease.json ]
   jq -e '.phase == "recovery-closeout-pending"
-    and .recoveryCloseout.releaseIntent.leaseUid == "lease-1"' state/backup-state.json
+    and .recoveryCloseout.leaseUid == "lease-1"' state/backup-state.json
+  jq -e '.metadata.uid == "lease-1" and .metadata.annotations["recipe-db/phase"] == "recovery-ready"' lease.json
   rm fail-final
   run bash harness.sh
   [ "$status" -eq 0 ]
-  jq -e '.status == "recovery-closed" and .recoveryCloseout.ownershipReleased == true' state/backup-state.json
+  jq -e '.status == "recovery-closed" and .recoveryCloseout.ownershipRetained == true
+    and .recoveryCloseout.ownershipReleased == false' state/backup-state.json
 }
 
 @test "reset failure reasserts barrier stops workers and persists exact retained recovery state" {
@@ -497,6 +510,7 @@ EOF
 
 @test "closeout rejects unknown terminal and active release states without claiming or stopping workloads" {
   closeout_fixture
+  echo 'recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"' >> harness.sh
   cp state/backup-state.json original-state.json
   for phase in candidate-staged migration-running website-passed post-release-backup-captured \
     operator-accepted arbitrary-failure; do
@@ -509,25 +523,33 @@ EOF
   done
 }
 
-@test "terminal failed release closeout isolates before releasing exact holder and preserves evidence" {
+@test "terminal failed release closeout isolates and retains exact holder with durable handoff" {
   closeout_fixture
+  echo 'recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"' >> harness.sh
   run bash harness.sh
   [ "$status" -eq 0 ]
-  [ ! -f lease.json ]
+  [ -f lease.json ]
   jq -e --arg holder "$BACKUP_ID" '.status == "recovery-closed" and .phase == "recovery-closed"
-    and .recoveryCloseout.ownershipReleased == true and .recoveryCloseout.barrierVerified == true
+    and .recoveryCloseout.ownershipReleased == false and .recoveryCloseout.ownershipRetained == true
+    and .recoveryCloseout.leaseUid == "lease-1" and .recoveryCloseout.barrierVerified == true
     and .recoveryCloseout.workersStopped == true and .recoveryCloseout.holder == $holder
     and (.recoveryCloseout.closedAt | type == "string" and length > 0)
     and .source.artifact != null' state/backup-state.json
-  local barrier stop released
+  jq -e --arg holder "$BACKUP_ID" '.metadata.uid == "lease-1" and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/phase"] == "recovery-ready"' lease.json
+  jq -e '.data["handoff.json"] | fromjson | .leaseUid == "lease-1" and .ownershipRetained == true' handoff.json
+  local barrier stop retained
   barrier=$(grep -n '^barrier$' "$MOCK_LOG" | cut -d: -f1)
   stop=$(grep -n '^workers-stopped$' "$MOCK_LOG" | cut -d: -f1)
-  released=$(grep -n '^exact-lease-deleted$' "$MOCK_LOG" | cut -d: -f1)
-  [ "$barrier" -lt "$stop" ] && [ "$stop" -lt "$released" ]
+  retained=$(grep -n '^lock-api replace .*recovery-lease-next.json' "$MOCK_LOG" | cut -d: -f1)
+  [ "$barrier" -lt "$stop" ] && [ "$stop" -lt "$retained" ]
+  ! grep -q '^exact-lease-deleted$' "$MOCK_LOG"
 }
 
 @test "failed closeout retains pending state and Lease while attempting isolation again" {
   closeout_fixture
+  echo 'recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"' >> harness.sh
   FAIL_STOP=true run bash harness.sh
   [ "$status" -ne 0 ]
   jq -e '.status == "recovery-required" and .phase == "recovery-closeout-pending"

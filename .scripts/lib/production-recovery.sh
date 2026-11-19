@@ -573,29 +573,47 @@ recovery_reset() {
   if [[ $(jq -r .status "$state/restore-state.json") != reset-planned ]]; then
     recovery_assert_identity
     recovery_assert_lease
-    locked=true
     retain_lock=true
+    locked=true
   else
     recovery_identity || production_fail "cannot pin configured application storage identities before reset"
     current=$(cluster_operation_lock_status) || production_fail "cannot inspect operation Lease"
     if [[ -n $current ]]; then
-      jq -e --slurpfile state "$state/restore-state.json" '
+      if [[ $(jq -r '.metadata.annotations["recipe-db/phase"]' <<< "$current") == recovery-ready ]]; then
+        recovery_read_handoff "$current"
+        lock_holder=$(jq -er .holder "$work/recovery-handoff.json")
+        jq --arg holder "$lock_holder" --arg uid "$(jq -er .metadata.uid <<< "$current")" \
+          '.holder=$holder | .reset.acquisitionPending=true | .reset.leaseUid=$uid' \
+          "$state/restore-state.json" > "$state/restore-state.next"
+        mv "$state/restore-state.next" "$state/restore-state.json"
+      else
+        jq -e --slurpfile state "$state/restore-state.json" '
         $state[0].reset.acquisitionPending == true
         and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
         and .spec.holderIdentity == $state[0].holder
+        and ($state[0].reset.leaseUid == null or .metadata.uid == $state[0].reset.leaseUid)
         and .metadata.annotations["recipe-db/operation"] == "restore"
         and .metadata.annotations["recipe-db/release"] == $state[0].artifact
-        and .metadata.annotations["recipe-db/phase"] == "acquired"' <<< "$current" > /dev/null \
+        and (.metadata.annotations["recipe-db/phase"] == "acquired"
+          or .metadata.annotations["recipe-db/phase"] == "reset-prepared")' <<< "$current" > /dev/null \
         || production_fail "reset requires an idle cluster; close out the retained release first"
+      fi
       lock_holder=$(jq -er .holder "$state/restore-state.json")
       cluster_operation_lock_holder=$lock_holder
+      retain_lock=true
+      locked=true
+      if [[ $(jq -r '.metadata.annotations["recipe-db/phase"]' <<< "$current") == recovery-ready ]]; then
+        recovery_replace_lease "$current" restore reset-prepared "$artifact"
+      fi
     else
       lock_holder="reset-$expected-$(date -u +%s%N)-$$"
       jq --arg holder "$lock_holder" '.holder=$holder | .reset.acquisitionPending=true' \
         "$state/restore-state.json" > "$state/restore-state.next"
       mv "$state/restore-state.next" "$state/restore-state.json"
+      retain_lock=true
       cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
     fi
+    retain_lock=true
     locked=true
     current=$(cluster_operation_lock_status)
     jq --arg holder "$lock_holder" \
@@ -663,86 +681,143 @@ recovery_closeout_verify_isolation() {
     || production_fail "closeout requires all workloads stopped and no remaining Pods or restartable workers"
 }
 
+recovery_replace_lease() {
+  jq -e '.metadata.namespace == "kube-system" and .metadata.name == "recipe-db-deploy"
+    and (.metadata.uid | type == "string" and length > 0)
+    and (.metadata.resourceVersion | type == "string" and length > 0)' <<< "$1" > /dev/null \
+    || production_fail "retained Lease lacks exact server identity"
+  jq --arg operation "$2" --arg phase "$3" --arg artifact "$4" '
+    .metadata.annotations["recipe-db/operation"]=$operation |
+    .metadata.annotations["recipe-db/phase"]=$phase |
+    .metadata.annotations["recipe-db/release"]=$artifact' <<< "$1" \
+    > "$work/recovery-lease-next.json" || return 1
+  cluster_operation_lock_kubectl replace -f "$work/recovery-lease-next.json" > /dev/null \
+    || production_fail "exact retained Lease changed; refusing recovery transition"
+}
+
+recovery_read_handoff() {
+  cluster_operation_lock_kubectl get configmap recipe-db-recovery-handoff --ignore-not-found -o json \
+    > "$work/recovery-handoff-configmap.json" || return 1
+  jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"' \
+    "$work/recovery-handoff-configmap.json" > /dev/null || production_fail "missing owned recovery handoff receipt"
+  jq -er '.data["handoff.json"]' "$work/recovery-handoff-configmap.json" > "$work/recovery-handoff.json" \
+    || production_fail "missing recovery handoff receipt"
+  jq -e --argjson lease "$1" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg ns "$namespace" \
+    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    .version == 1 and .ownershipRetained == true and .ownershipReleased == false
+    and .barrierVerified == true and .workersStopped == true
+    and .target == $target and .cluster == $cluster and .context == $context
+    and .namespace == $ns and .configSha256 == $config
+    and .holder == $lease.spec.holderIdentity and .leaseUid == $lease.metadata.uid
+    and .artifact == $lease.metadata.annotations["recipe-db/release"]
+    and $lease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and $lease.metadata.annotations["recipe-db/operation"] == "restore"
+    and $lease.metadata.annotations["recipe-db/phase"] == "recovery-ready"' \
+    "$work/recovery-handoff.json" > /dev/null \
+    || production_fail "recovery handoff receipt does not match the exact retained Lease and configuration"
+}
+
 recovery_closeout_complete() {
   release_state_write recovery-closed recovery-closed \
     "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg holder "$1" \
       --argjson previous "$(jq -c .recoveryCloseout "$snapshot/backup-state.json")" \
-      '{recoveryCloseout:($previous + {closedAt:$at,ownershipReleased:true,holder:$holder,
+      '{recoveryCloseout:($previous + {closedAt:$at,ownershipReleased:false,ownershipRetained:true,holder:$holder,
         barrierVerified:true,workersStopped:true})}')"
   printf 'production: failed release closed for separate recovery; evidence retained at %s/backup-state.json; barrier and storage preserved, no restore or reset performed\n' "$snapshot"
 }
 
 recovery_release_closeout() {
-  local state=$1 expected=$2 confirmation=$3 current phase
+  local state=$1 expected=$2 confirmation=$3 current phase uid source
   [[ $confirmation == "CLOSEOUT-$expected" ]] || production_fail "release closeout requires CLOSEOUT-<holder>"
   backup_load_state "$state"
   [[ $backup_id == "$expected" ]] || production_fail "release closeout holder differs from saved release"
-  jq -e '.status == "recovery-required" and (.candidate.artifact | type == "string")
+  jq -e '(.status == "recovery-required" or (.status == "recovery-closed" and .phase == "recovery-closed"))
+    and (.candidate.artifact | type == "string")
     and (.phase == "post-release-backup-failed" or .phase == "post-release-backup-recovery-required"
       or .phase == "post-release-backup-manifest-failed" or .phase == "post-release-storage-version-failed"
-      or .phase == "recovery-closeout-pending")' "$snapshot/backup-state.json" > /dev/null \
+      or .phase == "recovery-closeout-pending" or .phase == "recovery-closed")' "$snapshot/backup-state.json" > /dev/null \
     || production_fail "closeout requires a terminal retained failed post-release backup; active releases cannot be closed"
   connect
   current=$(cluster_operation_lock_status)
+  [[ -n $current ]] || production_fail "closeout requires the exact terminal retained release Lease"
   phase=$(jq -er .phase "$snapshot/backup-state.json")
-  if [[ -z $current ]]; then
-    jq -e --arg holder "$expected" '
-      .phase == "recovery-closeout-pending"
-      and .recoveryCloseout.releaseIntent.holder == $holder
-      and .recoveryCloseout.releaseIntent.artifact == .source.artifact
-      and (.recoveryCloseout.releaseIntent.leaseUid | type == "string" and length > 0)
-      and .recoveryCloseout.releaseIntent.barrierVerified == true
-      and .recoveryCloseout.releaseIntent.workersStopped == true' \
-      "$snapshot/backup-state.json" > /dev/null \
-      || production_fail "absent release Lease has no durable exact-operation isolation and release intent"
-    recovery_command_acquire
-    recovery_closeout_verify_isolation
-    [[ -z $(cluster_operation_lock_status) ]] \
-      || production_fail "another operation acquired the Lease; closeout will not release it"
-    recovery_closeout_complete "$expected"
-    return
-  fi
   jq -e --arg holder "$expected" --slurpfile state "$snapshot/backup-state.json" '
     .spec.holderIdentity == $holder and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
-    and .metadata.annotations["recipe-db/operation"] == "backup"
     and .metadata.annotations["recipe-db/release"] == $state[0].source.artifact
-    and ($state[0].recoveryCloseout.releaseIntent.leaseUid == null
-      or .metadata.uid == $state[0].recoveryCloseout.releaseIntent.leaseUid)
-    and (.metadata.annotations["recipe-db/phase"] == $state[0].phase
-      or .metadata.annotations["recipe-db/phase"] == "recovery-required")' <<< "$current" > /dev/null \
+    and (.metadata.uid | type == "string" and length > 0)
+    and ($state[0].recoveryCloseout.leaseUid == null
+      or .metadata.uid == $state[0].recoveryCloseout.leaseUid)
+    and ((.metadata.annotations["recipe-db/operation"] == "backup"
+      and (.metadata.annotations["recipe-db/phase"] == $state[0].phase
+        or .metadata.annotations["recipe-db/phase"] == "recovery-required"))
+      or (.metadata.annotations["recipe-db/operation"] == "restore"
+        and .metadata.annotations["recipe-db/phase"] == "recovery-ready"
+        and $state[0].recoveryCloseout.leaseUid == .metadata.uid))' <<< "$current" > /dev/null \
     || production_fail "closeout requires the exact terminal retained release Lease"
   recovery_command_acquire
   lock_holder=$expected
   cluster_operation_lock_holder=$expected
-  locked=true
   retain_lock=true
+  locked=true
+  uid=$(jq -er .metadata.uid <<< "$current")
+  source=$(jq -er .source.artifact "$snapshot/backup-state.json")
+  if [[ $(jq -r '.metadata.annotations["recipe-db/operation"]' <<< "$current") == restore ]]; then
+    recovery_read_handoff "$current"
+    recovery_closeout_verify_isolation
+    recovery_closeout_complete "$expected"
+    return
+  fi
   artifact=$(jq -er .candidate.artifact "$snapshot/backup-state.json")
   pull_release "$artifact"
   application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   production_secrets
   render
   release_state_write recovery-required recovery-closeout-pending \
-    "$(jq -cn --arg phase "$phase" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{recoveryCloseout:{previousPhase:$phase,requestedAt:$at}}')"
+    "$(jq -cn --arg phase "$phase" --arg uid "$uid" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{recoveryCloseout:{previousPhase:$phase,requestedAt:$at,leaseUid:$uid}}')"
   cluster_operation_lock_update recovery-closeout-pending
   recovery_closeout_started=true
   recovery_install_barrier
   recovery_stop_workers || production_fail "cannot stop all release workers before closeout"
   recovery_closeout_verify_isolation
   current=$(cluster_operation_lock_status)
-  jq -e --arg holder "$expected" '.spec.holderIdentity == $holder
+  jq -e --arg holder "$expected" --arg uid "$uid" --arg source "$source" '
+    .spec.holderIdentity == $holder and .metadata.uid == $uid
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/release"] == $source
     and .metadata.annotations["recipe-db/phase"] == "recovery-closeout-pending"' \
     <<< "$current" > /dev/null || production_fail "release closeout Lease changed during isolation"
+  jq -n --arg holder "$expected" --arg uid "$uid" --arg source "$source" --arg artifact "$artifact" \
+    --arg target "$target" --arg cluster "$cluster" --arg context "$context" --arg ns "$namespace" \
+    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" '
+    {version:1,holder:$holder,leaseUid:$uid,artifact:$source,targetArtifact:$artifact,
+      target:$target,cluster:$cluster,context:$context,namespace:$ns,configSha256:$config,
+      ownershipRetained:true,ownershipReleased:false,barrierVerified:true,workersStopped:true,
+      handoffReceipt:"recipe-db-recovery-handoff"}' > "$work/recovery-handoff.json"
+  cluster_operation_lock_kubectl get configmap recipe-db-recovery-handoff --ignore-not-found -o json \
+    > "$work/recovery-handoff-configmap.json"
+  if [[ -s $work/recovery-handoff-configmap.json ]]; then
+    jq -e --slurpfile receipt "$work/recovery-handoff.json" '
+      .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+      and ((.data["handoff.json"] | fromjson) == $receipt[0]
+        or ((.data["handoff.json"] | fromjson).leaseUid != $receipt[0].leaseUid))' \
+      "$work/recovery-handoff-configmap.json" > /dev/null \
+      || production_fail "another or changed recovery handoff receipt exists"
+    jq --rawfile receipt "$work/recovery-handoff.json" '.data["handoff.json"]=$receipt' \
+      "$work/recovery-handoff-configmap.json" > "$work/recovery-handoff-next.json"
+    cluster_operation_lock_kubectl replace -f "$work/recovery-handoff-next.json" > /dev/null
+  else
+    jq -n --rawfile receipt "$work/recovery-handoff.json" '
+      {apiVersion:"v1",kind:"ConfigMap",metadata:{name:"recipe-db-recovery-handoff",
+        namespace:"kube-system",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+        data:{"handoff.json":$receipt}}' > "$work/recovery-handoff-configmap.json"
+    cluster_operation_lock_kubectl create -f "$work/recovery-handoff-configmap.json" > /dev/null
+  fi
   release_state_write recovery-required recovery-closeout-pending \
-    "$(jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg holder "$expected" \
-      --arg uid "$(jq -er '.metadata.uid | select(type == "string" and length > 0)' <<< "$current")" \
-      --arg artifact "$(jq -er .source.artifact "$snapshot/backup-state.json")" \
-      --argjson previous "$(jq -c .recoveryCloseout "$snapshot/backup-state.json")" \
-      '{recoveryCloseout:($previous + {releaseIntent:{recordedAt:$at,holder:$holder,leaseUid:$uid,
-        artifact:$artifact,barrierVerified:true,workersStopped:true}})}')" \
-    || production_fail "cannot durably record exact-operation closeout release intent"
-  cluster_operation_lock_delete "$current" || production_fail "closeout could not release exact captured Lease"
-  locked=false
+    "$(jq -c '{recoveryCloseout:.}' "$work/recovery-handoff.json")"
+  recovery_replace_lease "$current" restore recovery-ready "$source"
   recovery_closeout_started=false
   recovery_closeout_complete "$expected"
 }
