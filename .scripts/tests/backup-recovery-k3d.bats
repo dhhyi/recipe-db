@@ -138,3 +138,119 @@ setup() {
   grep -q 'synthetic-recipe-id' "$result_directory/validated-package.json"
   [ "$(cat "$result_directory/logs/package-validation.log")" = 'safe validator diagnostic' ]
 }
+
+@test "recovery fault injection runs the real helper before failing or interrupting only the selected cluster" {
+  use_mise_tools
+  mkdir -p "$result_directory" bin
+  export target_values="$FIXTURE_ROOT/target.json" driver="$FIXTURE_ROOT/fault-driver.sh"
+  printf '{"context":"k3d-disposable-target"}\n' > "$target_values"
+  sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
+  # shellcheck source=/dev/null
+  source ./fault-function.sh
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  cat > bin/kubectl << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$result_directory/real-kubectl"
+SH
+  chmod +x bin/kubectl
+  export PATH="$FIXTURE_ROOT/bin:$PATH"
+  cat > "$driver" << 'SH'
+#!/usr/bin/env bash
+set -e
+kubectl --context k3d-source exec restore-volume-recipes -- tar -xpkf - --numeric-owner -C /data
+kubectl --context k3d-disposable-target get pods
+kubectl --context k3d-disposable-target exec restore-volume-recipes -- tar -xpkf - --numeric-owner -C /data
+printf 'unexpectedly reached\n' > "$result_directory/after-fault"
+SH
+  local fault
+  for fault in fail term; do
+    phase="restore-$fault"
+    run run_faulted_recovery restore "$fault" "$result_directory/$fault.log"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$result_directory/$phase.fault")" = "$fault" ]
+    [ ! -e "$result_directory/after-fault" ]
+  done
+  [ "$(wc -l < "$result_directory/real-kubectl")" -eq 6 ]
+}
+
+@test "interrupted reset fault is injected only after the actual configured data wipe" {
+  use_mise_tools
+  mkdir -p "$result_directory" bin
+  export target_values="$FIXTURE_ROOT/target.json" driver="$FIXTURE_ROOT/reset-driver.sh"
+  printf '{"context":"k3d-disposable-target"}\n' > "$target_values"
+  sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
+  # shellcheck source=/dev/null
+  source ./fault-function.sh
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  cat > bin/kubectl << 'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$result_directory/real-kubectl"
+SH
+  chmod +x bin/kubectl
+  export PATH="$FIXTURE_ROOT/bin:$PATH"
+  cat > "$driver" << 'SH'
+#!/usr/bin/env bash
+set -e
+kubectl --context k3d-disposable-target exec restore-volume-recipes -- sh -ec 'find /data -mindepth 1 -maxdepth 1 -print -quit'
+kubectl --context k3d-disposable-target exec restore-volume-recipes -- sh -ec 'test -d /data && find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
+printf 'unexpectedly reached\n' > "$result_directory/after-fault"
+SH
+  phase=interrupted-reset
+  run run_faulted_recovery reset term "$result_directory/reset.log"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/$phase.fault")" = term ]
+  [ ! -e "$result_directory/after-fault" ]
+  [ "$(wc -l < "$result_directory/real-kubectl")" -eq 2 ]
+}
+
+@test "faulted recovery refuses a failure that happened before the requested injection" {
+  use_mise_tools
+  mkdir -p "$result_directory"
+  export target_values="$FIXTURE_ROOT/target.json" driver="$FIXTURE_ROOT/early-failure.sh"
+  printf '{"context":"k3d-disposable-target"}\n' > "$target_values"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$driver"
+  sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
+  # shellcheck source=/dev/null
+  source ./fault-function.sh
+  die() { printf '%s\n' "$*" >&2; return 1; }
+  phase=early-failure
+  run run_faulted_recovery restore fail "$result_directory/early.log"
+  [ "$status" -ne 0 ]
+  [[ $output == *"before the requested fault was injected"* ]]
+  [ ! -e "$result_directory/$phase.fault" ]
+}
+
+@test "sentinel verification checks contents and PVC UID in app and kube-system namespaces" {
+  use_mise_tools
+  mkdir -p "$result_directory/logs"
+  export target_values=target.json driver=driver.sh
+  printf '{"infrastructure":{"maintenance":"maintenance@sha256:test"}}\n' > "$target_values"
+  sed -n '/^sentinel_volume() {/,/^}/p' .scripts/backup-recovery-k3d.sh > sentinel-function.sh
+  # shellcheck source=/dev/null
+  source ./sentinel-function.sh
+  bash() {
+    printf '%s\n' "$*" >> "$result_directory/driver-calls"
+    case " $* " in
+      *" create -f "*)
+        local manifest=${!#}
+        jq -e 'if .kind == "PersistentVolumeClaim" then
+            .spec.storageClassName == "local-path"
+            and .metadata.labels["app.kubernetes.io/part-of"] == null
+          else .spec.automountServiceAccountToken == false
+            and .spec.volumes[0].persistentVolumeClaim.claimName == .metadata.name
+          end' "$manifest" > /dev/null ;;
+      *" logs "*) printf '%s\n' "${SENTINEL_CONTENT:-unrelated-storage-must-survive}" ;;
+      *" get pvc "*) printf '{"metadata":{"uid":"%s"}}\n' "${SENTINEL_UID:-original-uid}" ;;
+    esac
+  }
+  sentinel_volume recipe-db rehearsal-unrelated create
+  sentinel_volume recipe-db rehearsal-unrelated verify
+  sentinel_volume kube-system recipe-db-acme create
+  sentinel_volume kube-system recipe-db-acme verify
+  grep -q -- '--namespace recipe-db ' "$result_directory/driver-calls"
+  grep -q -- '--namespace kube-system ' "$result_directory/driver-calls"
+  SENTINEL_UID=replaced-uid run sentinel_volume kube-system recipe-db-acme verify
+  [ "$status" -ne 0 ]
+  SENTINEL_CONTENT=overwritten run sentinel_volume recipe-db rehearsal-unrelated verify
+  [ "$status" -ne 0 ]
+}

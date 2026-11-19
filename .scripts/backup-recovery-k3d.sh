@@ -379,6 +379,185 @@ curl --silent --show-error --fail --connect-timeout 5 --max-time 30 \
 grep -qF "$recipe_id" "$result_directory/browse.html"
 mark
 
+sentinel_volume() {
+  local namespace=$1 name=$2 action=$3 image manifest="$result_directory/sentinel.json"
+  image=$(yq -r '.infrastructure.maintenance' "$target_values")
+  if [[ $action == create ]]; then
+    jq -n --arg ns "$namespace" --arg name "$name" '{
+      apiVersion:"v1",kind:"PersistentVolumeClaim",
+      metadata:{namespace:$ns,name:$name,labels:{"recipe-db/rehearsal-sentinel":"true"}},
+      spec:{accessModes:["ReadWriteOnce"],storageClassName:"local-path",
+        resources:{requests:{storage:"16Mi"}}}}' > "$manifest"
+    bash "$driver" kubectl "$target_values" --namespace "$namespace" create -f "$manifest" \
+      > "$result_directory/logs/$name-create.log" 2>&1
+  fi
+  local command='cat /data/rehearsal-marker'
+  if [[ $action == create ]]; then
+    command='printf "unrelated-storage-must-survive\n" > /data/rehearsal-marker'
+  fi
+  jq -n --arg ns "$namespace" --arg name "$name" --arg image "$image" --arg command "$command" '{
+    apiVersion:"v1",kind:"Pod",metadata:{namespace:$ns,name:$name},
+    spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+      activeDeadlineSeconds:120,containers:[{name:"sentinel",image:$image,
+        command:["sh","-ec",$command],volumeMounts:[{name:"data",mountPath:"/data"}]}],
+      volumes:[{name:"data",persistentVolumeClaim:{claimName:$name}}]}}' > "$manifest"
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" create -f "$manifest" \
+    > "$result_directory/logs/$name-pod-create.log" 2>&1
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" wait \
+    --for=jsonpath='{.status.phase}'=Succeeded "pod/$name" --timeout=180s \
+    > "$result_directory/logs/$name-pod-wait.log" 2>&1
+  if [[ $action != create ]]; then
+    bash "$driver" kubectl "$target_values" --namespace "$namespace" logs "$name" \
+      > "$result_directory/$name-content"
+    [[ $(cat "$result_directory/$name-content") == unrelated-storage-must-survive ]]
+  fi
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" delete pod "$name" \
+    --wait=true --timeout=180s > "$result_directory/logs/$name-pod-delete.log" 2>&1
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" get pvc "$name" -o json \
+    | jq -er '.metadata.uid' > "$result_directory/$name-$action.uid"
+  if [[ $action != create ]]; then
+    cmp "$result_directory/$name-create.uid" "$result_directory/$name-$action.uid"
+  fi
+}
+
+verify_preserved_storage() {
+  local label=$1
+  bash "$driver" kubectl "$target_values" get pvc -o json \
+    | jq -Sc '[.items[] | {name:.metadata.name,uid:.metadata.uid,volume:.spec.volumeName}] | sort_by(.name)' \
+      > "$result_directory/$label-pvcs.json"
+  cmp "$result_directory/recovery-before-pvcs.json" "$result_directory/$label-pvcs.json"
+  sentinel_volume recipe-db rehearsal-unrelated verify
+  sentinel_volume kube-system recipe-db-acme verify
+}
+
+verify_recovery_isolation() {
+  local state=$1 holder origin status
+  holder=$(jq -er '.holder' "$state/restore-state.json")
+  bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
+    > "$result_directory/recovery-lease.json"
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
+    "$result_directory/recovery-lease.json" > /dev/null
+  bash "$driver" kubectl "$target_values" get pods -o json \
+    > "$result_directory/recovery-pods.json"
+  jq -e 'all(.items[];
+    (.status.phase == "Succeeded" or .status.phase == "Failed") or
+    (all(.spec.volumes[]?; .persistentVolumeClaim == null)))' \
+    "$result_directory/recovery-pods.json" > /dev/null
+  origin=$(yq -r '.origin' "$target_values")
+  local path
+  for path in / /graphql /public/rehearsal-missing.png; do
+    status=$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
+      --output /dev/null --write-out '%{http_code}' "$origin$path")
+    [[ $status == 503 ]] || die "recovery barrier did not block $path"
+  done
+}
+
+run_faulted_recovery() (
+  local operation=$1 fault=$2 log=$3
+  shift 3
+  export REHEARSAL_FAULT_OPERATION="$operation" REHEARSAL_FAULT_ACTION="$fault"
+  export REHEARSAL_FAULT_CONTEXT
+  REHEARSAL_FAULT_CONTEXT=$(yq -r '.context' "$target_values")
+  export REHEARSAL_FAULT_MARKER="$result_directory/$phase.fault"
+  # Intercept only this disposable target's first destructive helper exec, after
+  # it really completes. No production fault flags or fabricated state records.
+  kubectl() {
+    local arguments=" $* " result=0
+    command kubectl "$@" || result=$?
+    if [[ $result == 0 && ! -e $REHEARSAL_FAULT_MARKER &&
+      $arguments == *" --context $REHEARSAL_FAULT_CONTEXT "* &&
+      $arguments == *" exec "* ]]; then
+      if [[ ($REHEARSAL_FAULT_OPERATION == reset && $arguments == *"find /data"* &&
+        $arguments == *"-exec rm -rf"*) ||
+        ($REHEARSAL_FAULT_OPERATION == restore && $arguments == *" tar -xpkf "* &&
+          $arguments == *" -C /data "*) ]]; then
+        printf '%s\n' "$REHEARSAL_FAULT_ACTION" > "$REHEARSAL_FAULT_MARKER"
+        if [[ $REHEARSAL_FAULT_ACTION == term ]]; then
+          kill -TERM "$$"
+          return 143
+        fi
+        return 91
+      fi
+    fi
+    return "$result"
+  }
+  export -f kubectl
+  if bash "$driver" "$@" > "$log" 2>&1; then
+    die 'faulted recovery unexpectedly succeeded'
+  fi
+  [[ -f $REHEARSAL_FAULT_MARKER ]] || die 'recovery failed before the requested fault was injected'
+)
+
+phase=recovery-storage-sentinels
+sentinel_volume recipe-db rehearsal-unrelated create
+# Loopback rehearsals do not obtain real certificates. Use the production ACME
+# claim name and namespace with synthetic contents, never a real certificate.
+sentinel_volume kube-system recipe-db-acme create
+bash "$driver" kubectl "$target_values" get pvc -o json \
+  | jq -Sc '[.items[] | {name:.metadata.name,uid:.metadata.uid,volume:.spec.volumeName}] | sort_by(.name)' \
+    > "$result_directory/recovery-before-pvcs.json"
+mark
+
+phase=idle-site-reset
+reset_state="$result_directory/state/idle-reset"
+run_logged "$result_directory/logs/idle-reset-plan.log" bash "$driver" recovery-plan "$target_values" \
+  "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_logged "$result_directory/logs/idle-reset.log" bash "$driver" recovery-reset "$target_values" \
+  "$package_manifest" "$archive" "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage idle-reset
+mark
+
+phase=idle-site-recovery-restore
+run_logged "$result_directory/logs/idle-recovery-restore.log" \
+  bash "$driver" recovery-restore "$target_values" "$reset_state" \
+  "$package_manifest" "$archive" "$backup_id" "RESTORE-$backup_id"
+verify_fixture_recipe "$target_values" "$recipe_name"
+verify_preserved_storage idle-restored
+mark
+
+phase=interrupted-reset
+reset_state="$result_directory/state/interrupted-reset"
+run_logged "$result_directory/logs/interrupted-reset-plan.log" \
+  bash "$driver" recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_faulted_recovery reset term "$result_directory/logs/interrupted-reset.log" \
+  recovery-reset "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage interrupted-reset
+mark
+
+phase=interrupted-reset-reset-again
+run_logged "$result_directory/logs/interrupted-reset-retry.log" \
+  bash "$driver" recovery-reset "$target_values" "$package_manifest" "$archive" \
+  "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage reset-again
+mark
+
+for restore_fault in fail term; do
+  if [[ $restore_fault == fail ]]; then phase=failed-restore; else phase=interrupted-restore; fi
+  run_faulted_recovery restore "$restore_fault" "$result_directory/logs/$phase.log" \
+    recovery-restore "$target_values" "$reset_state" "$package_manifest" "$archive" "$backup_id" "RESTORE-$backup_id"
+  verify_recovery_isolation "$reset_state"
+  verify_preserved_storage "$phase"
+  mark
+  phase="$phase-reset-again"
+  run_logged "$result_directory/logs/$phase.log" \
+    bash "$driver" recovery-reset "$target_values" "$package_manifest" "$archive" \
+    "$backup_id" "$reset_state" "RESET-$backup_id"
+  verify_recovery_isolation "$reset_state"
+  verify_preserved_storage "$phase"
+  mark
+done
+
+phase=reset-again-recovery-restore
+run_logged "$result_directory/logs/reset-again-recovery-restore.log" \
+  bash "$driver" recovery-restore "$target_values" "$reset_state" "$package_manifest" \
+  "$archive" "$backup_id" "RESTORE-$backup_id"
+verify_fixture_recipe "$target_values" "$recipe_name"
+verify_preserved_storage reset-again-restored
+mark
+
 cleanup_test_record() {
   local values=$1 label=$2
   graphql_at "$values" \
