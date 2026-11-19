@@ -46,10 +46,14 @@ for document in (b"{}", b"[]", b'{"recipe":["https://example.com"]}'):
 normal, thumb = b"normal image", b"thumbnail"
 normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
-images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb,
-    "manifests/a.json":json.dumps({"recipeId":"a","url":"/public/"+normal_name,
-        "thumbUrl":"/public/"+thumb_name,"size":len(normal)}).encode()}
-assert len(module.validate(archive(images), {"kind":"images"})) == 3
+entry = {"recipeId":"a","url":"/public/"+normal_name,
+    "thumbUrl":"/public/"+thumb_name,"size":len(normal)}
+images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb}
+for version, manifest in ((1, entry), (2, [entry, entry | {"id": hashlib.sha256(normal).hexdigest()}])):
+    values = images | {"manifests/a.json":json.dumps(manifest).encode(),
+        "storage-version":f"{version}\n".encode()}
+    assert len(module.validate(archive(values), {"kind":"images"})) == 4
+images = images | {"manifests/a.json":json.dumps(entry).encode(), "storage-version":b"1\n"}
 for entries, layout, link in [
     ({}, sqlite, False),
     ({"tags.sqlite":b"not sqlite"}, sqlite, False),
@@ -69,6 +73,13 @@ for entries, layout, link in [
     ({name:value for name,value in images.items() if name != "public/"+thumb_name}, {"kind":"images"}, False),
     (images | {"public/old.png":b"old"}, {"kind":"images"}, False),
     (images | {"public/"+normal_name:b"corrupted"}, {"kind":"images"}, False),
+    ({name:value for name,value in images.items() if name != "storage-version"}, {"kind":"images"}, False),
+    (images | {"storage-version":b"3\n"}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":b"[]"}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps(entry).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"1\n", "manifests/a.json":json.dumps([entry]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([entry, entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([entry, entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
     ({}, {"kind":"images"}, False),
 ]:
     try:

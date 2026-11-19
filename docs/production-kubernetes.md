@@ -162,6 +162,7 @@ Body-bearing routes require `application/json` and use `{"recipeId":"opaque-id"}
 
 - Declare `backupRole`, `storageVersion` and, for captured storage, the complete `backupData` layout; keep caches and secrets outside authoritative data.
 - Keep `<data-root>/storage-version` as a positive decimal integer followed by one newline. For SQLite, `data-root` is the configured database file's parent; for JSON and image storage, it is the configured data directory. Startup validates the marker before opening or initializing storage; existing unmarked data and invalid or mismatched markers fail in every mode, with no runtime override. Only genuinely empty storage can be initialized automatically in production/testing; backup mode never initializes it. Reset, purge and compaction preserve the marker.
+- Any storage-version or authoritative data-format change must update the backup snapshot/package validators and restore read verification in the same change, with fixtures for both the old and new formats.
 - Test exact maintenance routes through the real router, including supported trailing slashes and opaque IDs. Inventories must be complete, distinct and ordered; purge/compaction must tolerate retries.
 - Keep maintenance private and backup-only, test resets testing-only, and denied operations non-mutating. Health probes remain available in every mode.
 - Quiesce background writers and flush durable state before clean exit. Test every built container as PID 1 with SIGTERM and its image `STOPSIGNAL`, including wrappers and sidecars.

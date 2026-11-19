@@ -77,30 +77,41 @@ def validate(archive, layout, require_storage_version=False):
     elif kind == "images":
         if directories != {"public", "manifests"}:
             raise ValueError("image PVC lacks its authoritative storage directories")
+        if storage_version not in (1, 2):
+            raise ValueError("unsupported or missing image storage-version marker")
         selected = set()
         for path, (_, _, content, _) in files.items():
             if not path.startswith("manifests/") or not path.endswith(".json"):
                 continue
-            document = json.loads(content)
+            manifest = json.loads(content)
             recipe_id = PurePosixPath(path).name[:-5]
             if not recipe_id or len(recipe_id) > 128 or ".." in recipe_id or "\\" in recipe_id:
                 raise ValueError("invalid image manifest recipe ID")
-            if document["recipeId"] != recipe_id:
-                raise ValueError("image manifest identity mismatch")
+            if storage_version == 1:
+                if not isinstance(manifest, dict):
+                    raise ValueError("version-1 image manifest is not an object")
+                documents = [manifest]
+            else:
+                if not isinstance(manifest, list) or not manifest:
+                    raise ValueError("version-2 image manifest is not a non-empty array")
+                documents = manifest
             selected.add(path)
-            for field in ("url", "thumbUrl"):
-                url = document[field]
-                if not url.startswith("/public/"):
-                    raise ValueError("invalid image manifest URL")
-                name = unquote(url[len("/public/"):])
-                suffix = "-thumb" if field == "thumbUrl" else ""
-                match = re.fullmatch(re.escape(recipe_id) + r"-([0-9a-f]{64})" + suffix + r"\.png", name)
-                output = "public/" + name
-                if match is None or output not in files or files[output][1] != match[1]:
-                    raise ValueError("image manifest references a missing or corrupt pair")
-                if field == "url" and files[output][0] != document["size"]:
-                    raise ValueError("image manifest size mismatch")
-                selected.add(output)
+            for document in documents:
+                if not isinstance(document, dict) or document.get("recipeId") != recipe_id:
+                    raise ValueError("image manifest identity mismatch")
+                for field in ("url", "thumbUrl"):
+                    url = document.get(field)
+                    if not isinstance(url, str) or not url.startswith("/public/"):
+                        raise ValueError("invalid image manifest URL")
+                    name = unquote(url[len("/public/"):])
+                    suffix = "-thumb" if field == "thumbUrl" else ""
+                    match = re.fullmatch(re.escape(recipe_id) + r"-([0-9a-f]{64})" + suffix + r"\.png", name)
+                    output = "public/" + name
+                    if match is None or output not in files or files[output][1] != match[1]:
+                        raise ValueError("image manifest references a missing or corrupt pair")
+                    if field == "url" and files[output][0] != document.get("size"):
+                        raise ValueError("image manifest size mismatch")
+                    selected.add(output)
         if "storage-version" in files:
             selected.add("storage-version")
         if selected != set(files):

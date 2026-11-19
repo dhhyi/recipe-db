@@ -689,6 +689,50 @@ EOF
   [ "$(cat "$MOCK_LOG")" = read ]
 }
 
+@test "restore expected image reads select v1 objects and the first v2 entry" {
+  cat > restore-image-harness.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+mkdir -p "$work/validated"
+python3 - "$work" << 'PY'
+import io, json, pathlib, sqlite3, sys, tarfile
+root = pathlib.Path(sys.argv[1])
+database = root / "recipes.sqlite3"
+with sqlite3.connect(database) as connection:
+    connection.execute("CREATE TABLE recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)")
+    connection.execute("INSERT INTO recipes VALUES (?, ?)", ("recipe", '{"name":"Recipe"}'))
+with tarfile.open(root / "validated/recipes.tar", "w") as archive:
+    archive.add(database, arcname="recipes.sqlite3")
+entry = {"recipeId":"recipe","url":"/public/v1.png","thumbUrl":"/public/v1-thumb.png","size":1}
+for version, document in (
+    (1, entry),
+    (2, [entry | {"url":"/public/v2-first.png","id":"first"},
+         entry | {"url":"/public/v2-second.png","id":"second"}]),
+):
+    with tarfile.open(root / f"images-v{version}.tar", "w") as archive:
+        for name, content in (
+            ("manifests/recipe.json", json.dumps(document).encode()),
+            ("storage-version", f"{version}\n".encode()),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+PY
+for version in 1 2; do
+  cp "$work/images-v$version.tar" "$work/validated/images.tar"
+  restore_prepare_expected_reads
+  jq -e --arg version "$version" '
+    if $version == "1" then .url == "/public/v1.png"
+    else .url == "/public/v2-first.png" end
+  ' "$work/restore-expected-image.json" > /dev/null
+done
+EOF
+  run bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+}
+
 @test "restore waits for GraphQL reads before starting propagation mutations" {
   cat > route-gate.sh << 'EOF'
 #!/usr/bin/env bash
