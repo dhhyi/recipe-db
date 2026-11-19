@@ -10,9 +10,7 @@
 - name: Independently validate the retained failure and claim its tooling preparation
   ansible.builtin.script:
     cmd: >-
-      files/checkout-guard.py --prepare-closeout --revision {{ backup_capture_revision | quote }}
-      --closeout-holder {{ release_closeout_holder | quote }}
-      --closeout-confirmation {{ release_closeout_confirmation | quote }}
+      files/checkout-guard.py --prepare-closeout --revision {{ backup_capture_revision | quote }} --closeout-holder {{ release_closeout_holder | quote }} --closeout-confirmation {{ release_closeout_confirmation | quote }}
     executable: /usr/bin/python3
   register: release_closeout_preparation
   changed_when: false

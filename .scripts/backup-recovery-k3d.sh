@@ -469,7 +469,10 @@ verify_recovery_barrier() {
   for path in / /graphql /public/rehearsal-missing.png; do
     status=$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
       --output /dev/null --write-out '%{http_code}' "$origin$path")
-    [[ $status == 503 ]] || { die "recovery barrier did not block $path"; return 1; }
+    [[ $status == 503 ]] || {
+      die "recovery barrier did not block $path"
+      return 1
+    }
   done
 }
 
@@ -536,7 +539,7 @@ run_faulted_recovery() (
       if [[ ($REHEARSAL_FAULT_OPERATION == reset && $arguments == *"find /data"* &&
         $arguments == *"-exec rm -rf"*) ||
         ($REHEARSAL_FAULT_OPERATION == restore && $arguments == *" tar -xpkf "* &&
-          $arguments == *" -C /data "*) ||
+        $arguments == *" -C /data "*) ||
         ($REHEARSAL_FAULT_OPERATION == backup && $arguments == *" -- tar -C /data -cf - . "*) ]]; then
         printf '%s\n' "$REHEARSAL_FAULT_ACTION" > "$REHEARSAL_FAULT_MARKER"
         if [[ $REHEARSAL_FAULT_ACTION == term ]]; then

@@ -492,7 +492,7 @@ ensure_namespace() {
       else
         jq -e '.data["restore-state.json"] | fromjson |
         .status == "succeeded" and .phase == "complete"' \
-        "$work/existing-restore-state.json" > /dev/null \
+          "$work/existing-restore-state.json" > /dev/null \
           || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
       fi
     fi

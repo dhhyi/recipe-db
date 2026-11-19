@@ -40,12 +40,12 @@ recovery_command_acquire() {
     trap - EXIT INT TERM
     while kill -0 "$parent_pid" 2> /dev/null; do
       cluster_operation_lock_kubectl get lease recipe-db-recovery-command -o json \
-        > "$work/recovery-heartbeat.json" &&
-        jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
-          "$work/recovery-heartbeat.json" > /dev/null &&
-        jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
-          "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" &&
-        cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null || {
+        > "$work/recovery-heartbeat.json" \
+        && jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
+          "$work/recovery-heartbeat.json" > /dev/null \
+        && jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
+          "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" \
+        && cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null || {
         kill -TERM "$parent_pid" 2> /dev/null || true
         exit 1
       }
@@ -92,7 +92,7 @@ recovery_private_state() {
   local state=$1 parent
   parent=$(dirname "$state")
   [[ $state == /* && -d $parent && $(realpath -e "$parent") == "$parent" &&
-    $(stat -c %u "$parent") == "$EUID" && ! -L $state ]] \
+  $(stat -c %u "$parent") == "$EUID" && ! -L $state ]] \
     || production_fail "recovery state requires an absolute operator-owned parent without symlinks"
   case "$state/" in
     "$root/.secrets/"* | /var/lib/rancher/*) production_fail "unsafe recovery state location" ;;
@@ -102,8 +102,8 @@ recovery_private_state() {
   fi
   if [[ -e $state ]]; then
     [[ -d $state && $(stat -c %u "$state") == "$EUID" &&
-      $((8#$(stat -c %a "$state") & 077)) == 0 &&
-      -f $state/restore-state.json && ! -L $state/restore-state.json ]] \
+    $((8#$(stat -c %a "$state") & 077)) == 0 &&
+    -f $state/restore-state.json && ! -L $state/restore-state.json ]] \
       || production_fail "existing recovery state must be the private original recovery directory"
   fi
 }
@@ -241,19 +241,25 @@ recovery_stop_workers() {
       and all((.spec.template.spec.volumes[]?, .spec.jobTemplate.spec.template.spec.volumes[]?) |
         .persistentVolumeClaim.claimName // empty;
         . as $claim | ($claims | index($claim)) == null))' "$work/reset-workers.json" > /dev/null \
-    || { printf 'production: foreign controller can restart an application storage user; isolate it before recovery\n' >&2; return 1; }
+    || {
+      printf 'production: foreign controller can restart an application storage user; isolate it before recovery\n' >&2
+      return 1
+    }
   for kind in HorizontalPodAutoscaler Deployment StatefulSet ReplicaSet ReplicationController CronJob Job DaemonSet; do
     resource=${kind,,}
     while IFS= read -r name; do
       case "$kind" in
         HorizontalPodAutoscaler) kube delete "$resource/$name" --wait=true > /dev/null || return 1 ;;
         Deployment | StatefulSet | ReplicaSet | ReplicationController)
-          kube scale "$resource/$name" --replicas=0 > /dev/null || return 1 ;;
+          kube scale "$resource/$name" --replicas=0 > /dev/null || return 1
+          ;;
         CronJob | Job)
-          kube patch "$resource/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1 ;;
+          kube patch "$resource/$name" --type=merge -p '{"spec":{"suspend":true}}' > /dev/null || return 1
+          ;;
         DaemonSet)
           kube patch "$resource/$name" --type=merge \
-            -p '{"spec":{"template":{"spec":{"nodeSelector":{"recipe-db/recovery-stopped":"true"}}}}}' > /dev/null || return 1 ;;
+            -p '{"spec":{"template":{"spec":{"nodeSelector":{"recipe-db/recovery-stopped":"true"}}}}}' > /dev/null || return 1
+          ;;
       esac
     done < <(jq -r --arg kind "$kind" --arg guard "recovery-guard-${backup_id:-}" '.items[] |
       select(.kind == $kind and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -526,7 +532,7 @@ recovery_plan() {
         $(realpath -e "$catalog") == "$catalog" && $(stat -c %u "$catalog") == "$EUID" &&
         $((8#$(stat -c %a "$catalog") & 077)) == 0 && $(stat -c %s "$catalog") -le 4194304 ]] \
         || production_fail "catalog must be an absolute bounded private operator-owned regular file"
-    python3 - "$catalog" > "$work/recovery-catalog.json" << 'PY'
+      python3 - "$catalog" > "$work/recovery-catalog.json" << 'PY'
 import datetime
 import json
 import sys
@@ -584,15 +590,15 @@ recovery_reset() {
   connect
   restore_state=$state
   jq -e --arg id "$expected" --arg manifest "$(sha256sum "$manifest" | cut -d ' ' -f 1)" \
-      --arg archive "$(sha256sum "$archive" | cut -d ' ' -f 1)" '
+    --arg archive "$(sha256sum "$archive" | cut -d ' ' -f 1)" '
       .version == 1 and (.status == "recovery-required" or .status == "in-progress" or .status == "reset-ready" or .status == "reset-planned")
       and (.reset.previewedAt | type == "string" and length > 0)
       and .backupId == $id and .reset.manifestSha256 == $manifest and .reset.archiveSha256 == $archive' \
-      "$state/restore-state.json" > /dev/null \
-      || production_fail "reset retry requires the original validated backup and failed/reset-ready state"
+    "$state/restore-state.json" > /dev/null \
+    || production_fail "reset retry requires the original validated backup and failed/reset-ready state"
   recovery_assert_identity
-  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" |
-    jq -s '[.[] | {name:.metadata.name}]' > "$work/prior-workloads.json"
+  yq -o=json -I=0 'select(.kind == "Deployment")' "$work/rendered.yml" \
+    | jq -s '[.[] | {name:.metadata.name}]' > "$work/prior-workloads.json"
   recovery_command_acquire
   restore_guard_remove_expired
   if [[ $(jq -r .status "$state/restore-state.json") != reset-planned ]]; then
@@ -621,7 +627,7 @@ recovery_reset() {
         and .metadata.annotations["recipe-db/release"] == $state[0].artifact
         and (.metadata.annotations["recipe-db/phase"] == "acquired"
           or .metadata.annotations["recipe-db/phase"] == "reset-prepared")' <<< "$current" > /dev/null \
-        || production_fail "reset requires an idle cluster; close out the retained release first"
+          || production_fail "reset requires an idle cluster; close out the retained release first"
       fi
       lock_holder=$(jq -er .holder "$state/restore-state.json")
       cluster_operation_lock_holder=$lock_holder

@@ -35,7 +35,10 @@ setup() {
   local driver=driver.sh source_values=source.yaml release=immutable-release
   sed -n '/^phase=source-cluster/,/^graphql_at() {/p' .scripts/backup-recovery-k3d.sh \
     | sed '$d' > source-cluster-steps.sh
-  run_logged() { shift; "$@"; }
+  run_logged() {
+    shift
+    "$@"
+  }
   bash() { printf '%s\n' "$*" >> "$result_directory/driver-operations"; }
   docker() { printf 'disposable-source-container'; }
   mark() { return 0; }
@@ -233,7 +236,10 @@ SH
   sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
   # shellcheck source=/dev/null
   source ./fault-function.sh
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   cat > bin/kubectl << 'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$result_directory/real-kubectl"
@@ -268,7 +274,10 @@ SH
   sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
   # shellcheck source=/dev/null
   source ./fault-function.sh
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   cat > bin/kubectl << 'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$result_directory/real-kubectl"
@@ -300,7 +309,10 @@ SH
   sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
   # shellcheck source=/dev/null
   source ./fault-function.sh
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   phase=early-failure
   run run_faulted_recovery restore fail "$result_directory/early.log"
   [ "$status" -ne 0 ]
@@ -316,7 +328,10 @@ SH
   sed -n '/^run_faulted_recovery() (/,/^)/p' .scripts/backup-recovery-k3d.sh > fault-function.sh
   # shellcheck source=/dev/null
   source ./fault-function.sh
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   cat > bin/kubectl << 'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$result_directory/real-kubectl"
@@ -357,7 +372,8 @@ SH
             and .metadata.labels["app.kubernetes.io/part-of"] == null
           else .spec.automountServiceAccountToken == false
             and .spec.volumes[0].persistentVolumeClaim.claimName == .metadata.name
-          end' "$manifest" > /dev/null ;;
+          end' "$manifest" > /dev/null
+        ;;
       *" logs "*) printf '%s\n' "${SENTINEL_CONTENT:-unrelated-storage-must-survive}" ;;
       *" get pvc "*) printf '{"metadata":{"uid":"%s"}}\n' "${SENTINEL_UID:-original-uid}" ;;
     esac
@@ -410,7 +426,10 @@ SH
     .scripts/backup-recovery-k3d.sh > isolation-function.sh
   # shellcheck source=/dev/null
   source ./isolation-function.sh
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   bash() {
     case " $* " in
       *" get lease "*) printf '{"spec":{"holderIdentity":"%s"}}\n' "${LEASE_HOLDER:-original}" ;;
@@ -447,7 +466,10 @@ SH
   local archive=backup.tar backup_id=backup-test reset_state=reset-state
   sed -n '/^phase=interrupted-reset-reset-again/,/^phase=reset-again-recovery-restore/p' \
     .scripts/backup-recovery-k3d.sh > retry-steps.sh
-  run_logged() { shift; "$@"; }
+  run_logged() {
+    shift
+    "$@"
+  }
   release_lifecycle() { printf '%s\n' "$1" >> "$result_directory/retry-operations"; }
   run_faulted_recovery() { return 0; }
   verify_recovery_isolation() { return 0; }
@@ -492,7 +514,10 @@ SH
   sed -n '/^verify_recovery_refusals() {/,/^}/p' .scripts/backup-recovery-k3d.sh > refusal-function.sh
   # shellcheck source=/dev/null
   source ./refusal-function.sh
-  die() { printf '%s\n' "$*" >&2; return 1; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
   recovery_guard_snapshot() { printf '%s\n' "${GUARD_STATE:-unchanged}" > "$1"; }
   bash() {
     printf '%s\n' "$*" >> "$result_directory/deploy-calls"

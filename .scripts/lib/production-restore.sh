@@ -704,8 +704,8 @@ restore_guard_manifest() {
       printf '{"items":[]}\n' > "$work/recovery-controller-inventory.json"
     fi
   fi
-  if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]] &&
-    jq -e '.reset != null' "$restore_state/restore-state.json" > /dev/null; then
+  if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]] \
+    && jq -e '.reset != null' "$restore_state/restore-state.json" > /dev/null; then
     jq --slurpfile inventory "$work/recovery-controller-inventory.json" \
       '.reset.guardInventory={items:[$inventory[0].items[] |
         select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
@@ -1033,8 +1033,8 @@ restore_guard_stop() {
   done
   kube delete rolebinding,role,serviceaccount,configmap "$restore_guard_name" > /dev/null || return 1
   kube delete secret "$restore_guard_name" --ignore-not-found > /dev/null || return 1
-  if [[ -f $work/restore-guard.json ]] &&
-    jq -e '.items[] | select(.kind == "Role" and .metadata.namespace == "kube-system")' \
+  if [[ -f $work/restore-guard.json ]] \
+    && jq -e '.items[] | select(.kind == "Role" and .metadata.namespace == "kube-system")' \
       "$work/restore-guard.json" > /dev/null; then
     kube --namespace kube-system delete rolebinding,role "$restore_guard_name" --ignore-not-found > /dev/null || return 1
   fi
