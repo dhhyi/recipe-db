@@ -87,6 +87,7 @@ load production-k3d-restore-setup
   run_restore
   [ "$status" -eq 0 ]
   [[ $output == *"verified; public ingress reopened"* ]]
+  [ -e "$MOCK_LOG.guard-completion-ready" ]
   [ ! -e "$MOCK_LOG.lease" ]
   jq -e '.status == "succeeded" and .phase == "complete" and .probeRecipeId == null' \
     "$RESTORE_STATE/restore-state.json"

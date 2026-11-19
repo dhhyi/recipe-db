@@ -252,7 +252,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         fi
         exit ;;
       *"patch configmap recovery-guard-"*)
-        printf '%s\n' "${*: -1}" | jq -er .data.pulse > "$MOCK_LOG.guard-pulse"
+        patch=$(printf '%s\n' "${*: -1}")
+        if jq -e '.data.pulse | type == "string"' <<< "$patch" > /dev/null; then
+          jq -er .data.pulse <<< "$patch" > "$MOCK_LOG.guard-pulse"
+        elif jq -e '.data.completionReady == "true"' <<< "$patch" > /dev/null; then
+          touch "$MOCK_LOG.guard-completion-ready"
+        else
+          exit 1
+        fi
         exit ;;
       *"delete job recovery-guard-"* | \
       *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
