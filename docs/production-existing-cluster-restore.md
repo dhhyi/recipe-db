@@ -68,7 +68,17 @@ TOOLING_REVISION=$(git rev-parse HEAD) \
     -e "release_closeout_confirmation=PREPARE-CLOSEOUT-$HOLDER" --ask-become-pass
 ```
 
-Require a successful play recap. This narrowly admits recognized terminal failures under the exact retained Lease and an exclusive private command claim. It updates tooling only: no data is cleared, no operation Lease is released, and access is not reopened. Ordinary preparation still refuses retained maintenance. If preparation is interrupted, stop the old installer and follow the reported private-claim recovery instructions; do not delete any Lease or alter operation state. Exit the container shell before continuing.
+Require a successful play recap. This narrowly admits recognized terminal failures under the exact retained Lease and an exclusive private command claim. It updates tooling only: no data is cleared, no operation Lease is released, and access is not reopened. Ordinary preparation still refuses retained maintenance.
+
+If preparation is interrupted, first confirm the old installer has stopped. In the same **provisioning-container Bash shell**, inspect its retained preparation claim without relying on the partially installed tools:
+
+```sh
+ansible pi -i ~/.config/recipe-db/provisioning/inventory.yml \
+  --become --ask-become-pass -m ansible.builtin.script \
+  -a 'files/checkout-guard.py --inspect-closeout-claim'
+```
+
+Use the returned exact `holder` and `token` in the existing [private file-claim abandonment procedure](production-release-cookbook.md#5-stage-the-candidate-without-starting-normal-workloads), then retry the same preparation command. Inspection does not prove that the installer stopped or authorize deleting any Lease or altering operation state. Exit the container shell before continuing.
 
 Now use the [managed workstation release controller](production-release-cookbook.md#5-stage-the-candidate-without-starting-normal-workloads), which writes progress through to the authoritative private state on the Pi. The reviewed tooling and installed private file helpers must match the workstation; do not bypass their revision or helper-integrity checks. Read the holder and compare it with `lock-status`:
 
