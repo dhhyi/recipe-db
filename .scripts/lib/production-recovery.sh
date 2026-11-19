@@ -14,7 +14,8 @@ recovery_command_delete() {
 # The retained operation Lease is a handoff, not permission for two concurrent
 # commands. A bounded heartbeat claim serializes commands across operator hosts.
 recovery_command_acquire() {
-  local parent_pid=$BASHPID holder="recovery-$(date -u +%s%N)-$$" now
+  local parent_pid=$BASHPID holder now
+  holder="recovery-$(date -u +%s%N)-$$"
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   cluster_operation_lock_kubectl get lease recipe-db-recovery-command --ignore-not-found -o json \
     > "$work/recovery-command.json" || return 1
@@ -39,16 +40,18 @@ recovery_command_acquire() {
   (
     trap - EXIT INT TERM
     while kill -0 "$parent_pid" 2> /dev/null; do
-      cluster_operation_lock_kubectl get lease recipe-db-recovery-command -o json \
-        > "$work/recovery-heartbeat.json" \
-        && jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
-          "$work/recovery-heartbeat.json" > /dev/null \
-        && jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
-          "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" \
-        && cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null || {
+      if ! {
+        cluster_operation_lock_kubectl get lease recipe-db-recovery-command -o json \
+          > "$work/recovery-heartbeat.json" \
+          && jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
+            "$work/recovery-heartbeat.json" > /dev/null \
+          && jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
+            "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" \
+          && cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null
+      }; then
         kill -TERM "$parent_pid" 2> /dev/null || true
         exit 1
-      }
+      fi
       sleep 5
     done
   ) > "$work/recovery-command-heartbeat.log" 2>&1 &

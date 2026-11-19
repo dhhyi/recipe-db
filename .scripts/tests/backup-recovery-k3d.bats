@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Test-local lifecycle globals are intentionally reused across isolated Bats tests.
-# shellcheck disable=SC2030,SC2031
+# shellcheck disable=SC2030,SC2031,SC2329
 
 load test_helper
 
@@ -26,6 +26,7 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "$driver"$'\n--release-sources-from-git\n'"$operation"$'\nvalues with spaces.yaml\nimmutable artifact' ]
   done
+  # shellcheck disable=SC2016
   run grep -E 'bash "\$driver" (backup|release-|restore|recovery-)' .scripts/backup-recovery-k3d.sh
   [ "$status" -eq 1 ]
 }
@@ -463,7 +464,7 @@ SH
 @test "reset-again rehearsals refresh the consumed discard preview before every retry" {
   mkdir -p "$result_directory"
   local driver=driver.sh target_values=target.json package_manifest=manifest.json
-  local archive=backup.tar backup_id=backup-test reset_state=reset-state
+  local archive=backup.tar backup_id=backup-test
   sed -n '/^phase=interrupted-reset-reset-again/,/^phase=reset-again-recovery-restore/p' \
     .scripts/backup-recovery-k3d.sh > retry-steps.sh
   run_logged() {
@@ -483,6 +484,7 @@ SH
 @test "closeout recovery ownership checks require the exact retained UID holder operation and phase" {
   use_mise_tools
   mkdir -p "$result_directory"
+  # shellcheck disable=SC2034
   local driver=driver.sh target_values=target.yaml release_holder=original-holder release_lease_uid=original-uid
   sed -n '/^verify_retained_recovery_lease() {/,/^}/p' .scripts/backup-recovery-k3d.sh > retained-function.sh
   # shellcheck source=/dev/null

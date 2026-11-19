@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2016
 
 load test_helper
 
@@ -268,7 +269,7 @@ EOF
   [ "$status" -ne 0 ]
   jq -e '.status == "recovery-required" and .reset.acquisitionPending == true
     and .reset.leaseUid == "lease-1"' "$RECOVERY_STATE/restore-state.json"
-  ! grep -q '^wipe$' "$MOCK_LOG"
+  run ! grep -q '^wipe$' "$MOCK_LOG"
   rm fail-phase
   run bash harness.sh
   [ "$status" -eq 0 ]
@@ -406,7 +407,7 @@ EOF
   jq -e '.metadata.uid == "foreign-lease" and .spec.holderIdentity == "another-operation"' lease.json
   jq -e '.status == "reset-planned" and .reset.acquisitionPending == true
     and .reset.leaseUid == null' "$RECOVERY_STATE/restore-state.json"
-  ! grep -Eq '^(barrier|workers-stopped|wipe)$' "$MOCK_LOG"
+  run ! grep -Eq '^(barrier|workers-stopped|wipe)$' "$MOCK_LOG"
 }
 
 @test "reset rejects replacement primary UID holder or unknown phase after closeout without wiping" {
@@ -746,7 +747,7 @@ EOF
   stop=$(grep -n '^workers-stopped$' "$MOCK_LOG" | cut -d: -f1)
   retained=$(grep -n '^lock-api replace .*recovery-lease-next.json' "$MOCK_LOG" | tail -1 | cut -d: -f1)
   [ "$barrier" -lt "$stop" ] && [ "$stop" -lt "$retained" ]
-  ! grep -q '^exact-lease-deleted$' "$MOCK_LOG"
+  run ! grep -q '^exact-lease-deleted$' "$MOCK_LOG"
 }
 
 @test "failed closeout retains pending state and Lease while attempting isolation again" {

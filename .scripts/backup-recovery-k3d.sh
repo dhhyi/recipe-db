@@ -471,6 +471,7 @@ verify_recovery_barrier() {
       --output /dev/null --write-out '%{http_code}' "$origin$path")
     [[ $status == 503 ]] || {
       die "recovery barrier did not block $path"
+      # shellcheck disable=SC2317
       return 1
     }
   done
@@ -509,11 +510,13 @@ verify_recovery_refusals() {
       if bash "$driver" deploy "$target_values" "$release" \
         > "$result_directory/logs/$label-$operation.log" 2>&1; then
         die 'normal deploy unexpectedly accepted retained recovery ownership'
+        # shellcheck disable=SC2317
         return 1
       fi
     elif release_lifecycle backup-enter "$target_values" "$release" "$result_directory/state/$label-refused-backup" \
       > "$result_directory/logs/$label-$operation.log" 2>&1; then
       die 'backup-enter unexpectedly accepted retained recovery ownership'
+      # shellcheck disable=SC2317
       return 1
     fi
     recovery_guard_snapshot "$result_directory/$label-$operation-after.json"
@@ -530,6 +533,7 @@ run_faulted_recovery() (
   export REHEARSAL_FAULT_MARKER="$result_directory/$phase.fault"
   # Intercept only this disposable target's first destructive helper exec, after
   # it really completes. No production fault flags or fabricated state records.
+  # shellcheck disable=SC2329
   kubectl() {
     local arguments=" $* " result=0
     command kubectl "$@" || result=$?
