@@ -406,6 +406,7 @@ legacy_pi_claims() {
   export MOCK_BACKUP=true
   no_google_values
   legacy_pi_claims
+  printf '1\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
   run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
   [ "$status" -eq 0 ]
   [ -f "$FIXTURE_ROOT/snapshot/manifest.json" ]
@@ -416,6 +417,7 @@ legacy_pi_claims() {
   export MOCK_BACKUP=true MOCK_PVC_DRIFT=true
   no_google_values
   legacy_pi_claims
+  printf '1\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
   run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$FIXTURE_ROOT/snapshot"
   [ "$status" -ne 0 ]
   [ ! -e "$FIXTURE_ROOT/snapshot" ]
