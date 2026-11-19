@@ -46,14 +46,29 @@ for document in (b"{}", b"[]", b'{"recipe":["https://example.com"]}'):
 normal, thumb = b"normal image", b"thumbnail"
 normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
+second_normal, second_thumb = b"second normal image", b"second thumbnail"
+second_normal_name = "a-" + hashlib.sha256(second_normal).hexdigest() + ".png"
+second_thumb_name = "a-" + hashlib.sha256(second_thumb).hexdigest() + "-thumb.png"
 entry = {"recipeId":"a","url":"/public/"+normal_name,
     "thumbUrl":"/public/"+thumb_name,"size":len(normal)}
 v2_entry = entry | {"id": hashlib.sha256(normal).hexdigest()}
+v2_second_entry = {
+    "recipeId":"a", "url":"/public/"+second_normal_name,
+    "thumbUrl":"/public/"+second_thumb_name, "size":len(second_normal),
+    "id":hashlib.sha256(second_normal).hexdigest(),
+}
 images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb}
-for version, manifest in ((1, entry), (2, [v2_entry, v2_entry])):
-    values = images | {"manifests/a.json":json.dumps(manifest).encode(),
+images_v2 = images | {
+    "public/"+second_normal_name:second_normal,
+    "public/"+second_thumb_name:second_thumb,
+}
+for version, manifest, image_files in (
+    (1, entry, images),
+    (2, [v2_entry, v2_second_entry], images_v2),
+):
+    values = image_files | {"manifests/a.json":json.dumps(manifest).encode(),
         "storage-version":f"{version}\n".encode()}
-    assert len(module.validate(archive(values), {"kind":"images"})) == 4
+    assert len(module.validate(archive(values), {"kind":"images"})) == len(image_files) + 2
 images = images | {"manifests/a.json":json.dumps(entry).encode(), "storage-version":b"1\n"}
 for entries, layout, link in [
     ({}, sqlite, False),
@@ -80,8 +95,10 @@ for entries, layout, link in [
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps(entry).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"1\n", "manifests/a.json":json.dumps([entry]).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"size":len(normal)+1}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
+    (images_v2 | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"size":len(second_normal)+1}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry] * 11).encode()}, {"kind":"images"}, False),
     (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry | {"id":"0" * 64}]).encode()}, {"kind":"images"}, False),
     ({}, {"kind":"images"}, False),
 ]:

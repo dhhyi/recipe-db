@@ -9,6 +9,8 @@ import sys
 import tarfile
 from urllib.parse import unquote
 
+MAX_IMAGES_PER_RECIPE = 10
+
 
 def validate(archive, layout, require_storage_version=False):
     files = {}
@@ -94,11 +96,15 @@ def validate(archive, layout, require_storage_version=False):
             else:
                 if not isinstance(manifest, list) or not manifest:
                     raise ValueError("version-2 image manifest is not a non-empty array")
+                if len(manifest) > MAX_IMAGES_PER_RECIPE:
+                    raise ValueError("version-2 image manifest exceeds the per-recipe image limit")
                 documents = manifest
             selected.add(path)
+            image_ids = set()
             for document in documents:
                 if not isinstance(document, dict) or document.get("recipeId") != recipe_id:
                     raise ValueError("image manifest identity mismatch")
+                image_id = None
                 for field in ("url", "thumbUrl"):
                     url = document.get(field)
                     if not isinstance(url, str) or not url.startswith("/public/"):
@@ -114,6 +120,12 @@ def validate(archive, layout, require_storage_version=False):
                     if field == "url" and files[output][0] != document.get("size"):
                         raise ValueError("image manifest size mismatch")
                     selected.add(output)
+                    if field == "url":
+                        image_id = match[1]
+                if storage_version == 2:
+                    if image_id in image_ids:
+                        raise ValueError("version-2 image manifest contains duplicate image IDs")
+                    image_ids.add(image_id)
         if "storage-version" in files:
             selected.add("storage-version")
         if selected != set(files):
