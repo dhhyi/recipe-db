@@ -105,7 +105,10 @@ function harness(options = {}) {
         href: "http://recipe.test/images/123",
         assign: (url) => navigations.push(url),
       },
-      confirm: () => options.confirm ?? true,
+      confirm: (message) =>
+        typeof options.confirm === "function"
+          ? options.confirm(message)
+          : (options.confirm ?? true),
       addEventListener: (name, listener) => windowListeners.set(name, listener),
       removeEventListener: (name) => windowListeners.delete(name),
     },
@@ -196,6 +199,14 @@ test("saving capture guard blocks in-app anchors, including composed paths", () 
   assert.equal(bridge.click("http://recipe.test/"), true);
   assert.equal(bridge.click("https://external.test/"), false);
   assert.equal(bridge.windowListeners.has("beforeunload"), true);
+});
+
+test("gallery writes block in-app navigation without adding an unload dialog", () => {
+  const bridge = harness();
+  bridge.receive({ action: "guard", dirty: false, saving: true });
+  assert.equal(bridge.header.inert, true);
+  assert.equal(bridge.click("http://recipe.test/"), true);
+  assert.equal(bridge.windowListeners.has("beforeunload"), false);
 });
 
 test("dirty in-app anchor departure confirms, while external/new-tab links retain native behavior", () => {
@@ -402,4 +413,49 @@ test("declined discard keeps pending source and navigation unchanged", async () 
   assert.equal(bridge.events[0].kind, "loaded");
   assert.deepEqual(bridge.revoked, []);
   assert.deepEqual(bridge.navigations, []);
+});
+
+test("native image confirmation returns the opaque ID and gallery session", () => {
+  let prompt;
+  const bridge = harness({
+    confirm: (message) => {
+      prompt = message;
+      return true;
+    },
+  });
+  bridge.receive({
+    action: "confirm-delete",
+    imageId: "opaque/id?with#reserved",
+    session: 7,
+    message: "Das erste Bild löschen?",
+  });
+  assert.equal(prompt, "Das erste Bild löschen?");
+  assert.equal(
+    JSON.stringify(bridge.events[0]),
+    JSON.stringify({
+      kind: "delete-confirmation",
+      imageId: "opaque/id?with#reserved",
+      session: 7,
+      accepted: true,
+    }),
+  );
+});
+
+test("dismissed native image confirmation returns no accepted deletion", () => {
+  const bridge = harness({ confirm: false });
+  bridge.receive({
+    action: "confirm-delete",
+    imageId: "opaque-image-id",
+    session: 9,
+    message: "Dieses Bild löschen?",
+  });
+  assert.equal(
+    JSON.stringify(bridge.events[0]),
+    JSON.stringify({
+      kind: "delete-confirmation",
+      imageId: "opaque-image-id",
+      session: 9,
+      accepted: false,
+    }),
+  );
 });

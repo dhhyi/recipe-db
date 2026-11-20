@@ -1,4 +1,4 @@
-module Editor.Types exposing (Drag, Model, Msg(..), Phase(..), Session, canAdd, capacityWarning, dirty, imageLimit, init)
+module Editor.Types exposing (Drag, GalleryFeedback, GalleryFeedbackKind(..), GalleryMutation, Model, Msg(..), Phase(..), Session, canAdd, canDelete, capacityWarning, dirty, imageLimit, init)
 
 import Crop exposing (Crop, Handle, Point, Size)
 import File exposing (File)
@@ -30,10 +30,36 @@ type alias Drag =
     { start : Point, crop : Crop, handle : Maybe Handle }
 
 
+type alias GalleryMutation =
+    { token : Int
+    , imageId : String
+    , index : Int
+    }
+
+
+type GalleryFeedbackKind
+    = DeletionSucceeded
+    | ImageAlreadyAbsent
+    | DeletionUnconfirmed
+
+
+type alias GalleryFeedback =
+    { kind : GalleryFeedbackKind
+    , message : String
+    }
+
+
 type alias Model =
     { recipeId : String
     , recipe : RecipeDB.RecipeModel
     , capabilities : RecipeDB.CapabilitiesModel
+    , galleryToken : Int
+    , galleryRefreshing : Bool
+    , galleryError : Maybe String
+    , galleryConfirmation : Maybe ( String, Int )
+    , galleryMutation : Maybe GalleryMutation
+    , mutationToken : Int
+    , galleryFeedback : Maybe GalleryFeedback
     , recipeName : Maybe String
     , failedThumbnails : Set String
     , phase : Phase
@@ -48,9 +74,12 @@ type alias Model =
 
 
 type Msg
-    = GotRecipe RecipeDB.RecipeModel
+    = GotRecipe Int RecipeDB.RecipeModel
     | GotCapabilities RecipeDB.CapabilitiesModel
     | RetryGallery
+    | DeleteImage String
+    | DeleteConfirmed String Int Bool
+    | Deleted Int RecipeDB.DeleteModel
     | ThumbnailFailed String
     | GotFile File
     | Bridge D.Value
@@ -67,6 +96,13 @@ init recipeId =
     { recipeId = recipeId
     , recipe = RemoteData.Loading
     , capabilities = RemoteData.Loading
+    , galleryToken = 0
+    , galleryRefreshing = True
+    , galleryError = Nothing
+    , galleryConfirmation = Nothing
+    , galleryMutation = Nothing
+    , mutationToken = 0
+    , galleryFeedback = Nothing
     , recipeName = Nothing
     , failedThumbnails = Set.empty
     , phase = Viewing
@@ -106,9 +142,32 @@ capacityWarning images =
 
 canAdd : Model -> Bool
 canAdd model =
-    case ( model.phase, model.capabilities, model.recipe ) of
-        ( Viewing, RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
-            capabilities.canManageImages && (recipe.images |> Maybe.map (\entries -> List.length entries < imageLimit) |> Maybe.withDefault False)
+    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing then
+        False
 
-        _ ->
-            False
+    else
+        case ( model.capabilities, model.recipe ) of
+            ( RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
+                capabilities.canManageImages
+                    && (recipe.images |> Maybe.map (\entries -> List.length entries < imageLimit) |> Maybe.withDefault False)
+
+            _ ->
+                False
+
+
+canDelete : Model -> String -> Bool
+canDelete model imageId =
+    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryError /= Nothing then
+        False
+
+    else
+        case ( model.capabilities, model.recipe ) of
+            ( RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
+                capabilities.canManageImages
+                    && (recipe.images
+                            |> Maybe.map (List.any (.id >> (==) imageId))
+                            |> Maybe.withDefault False
+                       )
+
+            _ ->
+                False

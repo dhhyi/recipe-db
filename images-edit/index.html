@@ -478,6 +478,14 @@
                 if (header) header.inert = saving;
               }
               break;
+            case "confirm-delete":
+              send({
+                kind: "delete-confirmation",
+                imageId: message.imageId,
+                session: message.session,
+                accepted: window.confirm(message.message),
+              });
+              break;
             case "navigate":
               if (
                 !message.dirty ||

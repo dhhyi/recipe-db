@@ -15,7 +15,7 @@ main =
             \flags ->
                 ( Editor.Types.init flags.recipeId
                 , Cmd.batch
-                    [ RecipeDB.makeRecipeRequest flags.recipeId GotRecipe
+                    [ RecipeDB.makeRecipeRequest flags.recipeId (GotRecipe 0)
                     , RecipeDB.makeCapabilitiesRequest GotCapabilities
                     ]
                 )

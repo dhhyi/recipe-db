@@ -136,6 +136,20 @@ tests =
       )
     , ( "invalid upload response rejected", RecipeDB.decodeUpload "not json" |> Result.toMaybe |> (==) Nothing )
     , ( "null upload metadata rejected", RecipeDB.decodeUpload """{"data":{"addImage":null}}""" |> Result.toMaybe |> (==) Nothing )
+    , ( "delete mutation decodes true and confirmed absence"
+      , RecipeDB.decodeDeleteImage """{"data":{"deleteImage":true}}"""
+            == Ok True
+            && RecipeDB.decodeDeleteImage """{"data":{"deleteImage":false}}"""
+            == Ok False
+      )
+    , ( "delete mutation rejects GraphQL errors and malformed responses"
+      , List.all ((==) Nothing << Result.toMaybe)
+            [ RecipeDB.decodeDeleteImage """{"errors":[{"message":"forbidden","extensions":{"code":"forbidden"}}]}"""
+            , RecipeDB.decodeDeleteImage """{"data":{"deleteImage":"true"}}"""
+            , RecipeDB.decodeDeleteImage """{"data":{"deleteImage":true},"errors":null}"""
+            , RecipeDB.decodeDeleteImage "not json"
+            ]
+      )
     , ( "structured crop and image errors provide German feedback"
       , List.all
             (\( code, message ) ->
@@ -202,7 +216,7 @@ galleryTests =
 
         loaded : Maybe (List RecipeDB.GalleryImage) -> Editor.Model
         loaded images =
-            apply (GotRecipe (RemoteData.Success (Just { name = "Testrezept", images = images }))) authorized
+            apply (GotRecipe 0 (RemoteData.Success (Just { name = "Testrezept", images = images }))) authorized
 
         entries : Int -> List RecipeDB.GalleryImage
         entries count =
@@ -224,15 +238,89 @@ galleryTests =
         lateUpload : Msg
         lateUpload =
             Uploaded 1 (RemoteData.Success { url = "/full", thumbUrl = "/thumb", size = 1, width = 648, height = 486 })
+
+        first : Editor.Model
+        first =
+            loaded (Just (entries 2))
+
+        pendingDelete : Editor.Model
+        pendingDelete =
+            apply (DeleteImage "opaque/1") first
+
+        acceptedDelete : Editor.Model
+        acceptedDelete =
+            apply (DeleteConfirmed "opaque/1" 0 True) pendingDelete
+
+        writeCompleted : Editor.Model
+        writeCompleted =
+            apply (Deleted acceptedDelete.mutationToken (RemoteData.Success True)) acceptedDelete
+
+        reconciled : Editor.Model
+        reconciled =
+            apply
+                (GotRecipe writeCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" } ] })))
+                writeCompleted
+
+        rejectedWrite : Editor.Model
+        rejectedWrite =
+            apply (Deleted acceptedDelete.mutationToken (RemoteData.Success False)) acceptedDelete
+
+        failedRefresh : Editor.Model
+        failedRefresh =
+            apply
+                (GotRecipe rejectedWrite.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Nothing })))
+                rejectedWrite
+
+        retriedRefresh : Editor.Model
+        retriedRefresh =
+            apply RetryGallery failedRefresh
+
+        recoveredRefresh : Editor.Model
+        recoveredRefresh =
+            apply
+                (GotRecipe retriedRefresh.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [] })))
+                retriedRefresh
+
+        failedWrite : Editor.Model
+        failedWrite =
+            apply (Deleted acceptedDelete.mutationToken (RemoteData.Failure "unknown outcome")) acceptedDelete
+
+        atLimit : Editor.Model
+        atLimit =
+            loaded (Just (entries 10))
+
+        atLimitDelete : Editor.Model
+        atLimitDelete =
+            apply (DeleteImage "opaque/1") atLimit
+
+        atLimitAccepted : Editor.Model
+        atLimitAccepted =
+            apply (DeleteConfirmed "opaque/1" 0 True) atLimitDelete
+
+        atLimitWritten : Editor.Model
+        atLimitWritten =
+            apply (Deleted atLimitAccepted.mutationToken (RemoteData.Success True)) atLimitAccepted
+
+        atNine : Editor.Model
+        atNine =
+            apply
+                (GotRecipe atLimitWritten.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just (List.drop 1 (entries 10)) })))
+                atLimitWritten
     in
     [ ( "unconfirmed gallery or capabilities never enable Add"
       , not (Editor.canAdd authorized)
             && not (Editor.canAdd unavailable)
-            && not (Editor.canAdd (apply (GotRecipe (RemoteData.Success Nothing)) authorized))
+            && not (Editor.canAdd (apply (GotRecipe 0 (RemoteData.Success Nothing)) authorized))
             && not (Editor.canAdd (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) (loaded (Just []))))
       )
     , ( "only loaded collections below capacity enable Add"
       , Editor.canAdd (loaded (Just [])) && Editor.canAdd (loaded (Just (entries 9))) && not (Editor.canAdd (loaded (Just (entries 10))))
+      )
+    , ( "Add is restored after authoritative deletion reduces a full gallery"
+      , not (Editor.canAdd atLimit)
+            && Editor.canAdd atNine
+            && List.length (currentIds atNine)
+            == 9
       )
     , ( "capacity warning appears at ten, not at nine or unknown count"
       , Editor.capacityWarning (Just (entries 10))
@@ -243,12 +331,124 @@ galleryTests =
             == Nothing
       )
     , ( "gallery retry clears the previous count without discarding upload confirmation"
-      , retrying.recipe == RemoteData.Loading && retrying.savedFeedback && not (Editor.canAdd retrying)
+      , retrying.recipe == RemoteData.Loading && retrying.savedFeedback && retrying.galleryRefreshing && not (Editor.canAdd retrying)
       )
     , ( "late upload and preview results cannot reopen the gallery's released session"
       , List.all (\msg -> apply msg retrying == retrying) [ lateUpload, PreviewReady 1, PreviewFailed 1, Save, Close ]
       )
+    , ( "delete is gated by loaded opaque identity and image-management capability"
+      , Editor.canDelete first "opaque/1"
+            && not (Editor.canDelete first "/thumb")
+            && not (Editor.canDelete (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) first) "opaque/1")
+      )
+    , ( "confirmation cancel preserves the collection and starts no mutation"
+      , let
+            cancelled : Editor.Model
+            cancelled =
+                apply (DeleteConfirmed "opaque/1" 0 False) pendingDelete
+        in
+        cancelled.galleryMutation
+            == Nothing
+            && cancelled.galleryConfirmation
+            == Nothing
+            && currentIds cancelled
+            == [ "opaque/1", "opaque/2" ]
+            && Editor.canAdd cancelled
+      )
+    , ( "accepted deletion keeps confirmed order visible and gates all controls"
+      , Maybe.map .imageId acceptedDelete.galleryMutation
+            == Just "opaque/1"
+            && Maybe.map .index acceptedDelete.galleryMutation
+            == Just 0
+            && currentIds acceptedDelete
+            == [ "opaque/1", "opaque/2" ]
+            && not (Editor.canAdd acceptedDelete)
+            && not (Editor.canDelete acceptedDelete "opaque/2")
+      )
+    , ( "confirmed success reconciles order and clears pending state"
+      , not reconciled.galleryRefreshing
+            && reconciled.galleryMutation
+            == Nothing
+            && currentIds reconciled
+            == [ "opaque/2" ]
+            && Maybe.map .kind reconciled.galleryFeedback
+            == Just Editor.DeletionSucceeded
+      )
+    , ( "false response is neutral and refresh failure keeps controls disabled"
+      , Maybe.map .kind rejectedWrite.galleryFeedback
+            == Just Editor.ImageAlreadyAbsent
+            && currentIds rejectedWrite
+            == [ "opaque/1", "opaque/2" ]
+            && failedRefresh.galleryError
+            /= Nothing
+            && failedRefresh.galleryMutation
+            /= Nothing
+            && currentIds failedRefresh
+            == [ "opaque/1", "opaque/2" ]
+            && not (Editor.canDelete failedRefresh "opaque/1")
+            && not (Editor.canAdd failedRefresh)
+      )
+    , ( "retry after a failed deletion read is read-only and restores capability only after success"
+      , retriedRefresh.galleryToken
+            == failedRefresh.galleryToken
+            + 1
+            && retriedRefresh.galleryMutation
+            /= Nothing
+            && retriedRefresh.galleryRefreshing
+            && not (Editor.canAdd retriedRefresh)
+            && not (Editor.canDelete retriedRefresh "opaque/1")
+      )
+    , ( "mutation error triggers reconciliation and keeps an explicit outcome"
+      , Maybe.map .kind failedWrite.galleryFeedback
+            == Just Editor.DeletionUnconfirmed
+            && failedWrite.galleryRefreshing
+      )
+    , ( "successful read retry clears mutation and load error"
+      , recoveredRefresh.galleryMutation == Nothing && recoveredRefresh.galleryError == Nothing
+      )
+    , ( "successful read retry restores Add capability"
+      , Editor.canAdd recoveredRefresh
+      )
+    , ( "successful read retry preserves the already-absent result"
+      , Maybe.map .kind recoveredRefresh.galleryFeedback == Just Editor.ImageAlreadyAbsent
+      )
+    , ( "stale confirmation and duplicate mutation callbacks cannot target a later gallery"
+      , let
+            stale : Editor.Model
+            stale =
+                apply (DeleteConfirmed "opaque/1" 0 True) (apply RetryGallery pendingDelete)
+
+            duplicate : Editor.Model
+            duplicate =
+                apply (Deleted acceptedDelete.mutationToken (RemoteData.Success True)) reconciled
+
+            repeatedConfirmation : Editor.Model
+            repeatedConfirmation =
+                apply (DeleteConfirmed "opaque/1" 0 True) acceptedDelete
+        in
+        stale.galleryMutation
+            == Nothing
+            && stale.galleryConfirmation
+            == Nothing
+            && duplicate
+            == reconciled
+            && repeatedConfirmation
+            == acceptedDelete
+            && apply (DeleteImage "opaque/1") pendingDelete
+            == pendingDelete
+      )
+    , ( "gallery IDs remain exact opaque strings", currentIds first == [ "opaque/1", "opaque/2" ] )
     ]
+
+
+currentIds : Editor.Model -> List String
+currentIds model =
+    case model.recipe of
+        RemoteData.Success (Just recipe) ->
+            recipe.images |> Maybe.withDefault [] |> List.map .id
+
+        _ ->
+            []
 
 
 sourceTests : List ( String, Bool )
@@ -289,6 +489,10 @@ sourceTests =
     , ( "load decoder retains metadata and native dimensions"
       , D.decodeString Bridge.incoming """{"kind":"loaded","token":3,"url":"blob:source","width":900,"height":1200,"naturalWidth":1200,"naturalHeight":900}"""
             == Ok (Bridge.Loaded 3 "blob:source" { width = 900, height = 1200 } size)
+      )
+    , ( "delete confirmation decoder preserves opaque identity and gallery session"
+      , D.decodeString Bridge.incoming """{"kind":"delete-confirmation","imageId":"opaque/id?with#reserved","session":7,"accepted":true}"""
+            == Ok (Bridge.DeleteConfirmation "opaque/id?with#reserved" 7 True)
       )
     , ( "stale metadata and failures cannot change the editor"
       , let

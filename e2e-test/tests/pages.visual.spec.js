@@ -688,8 +688,12 @@ for (const role of ["anonymous", "member", "owner"]) {
         await expect(rows).toHaveCount(2);
         const firstImage = galleryImages(page).first();
         await expect(firstImage).toHaveAttribute("src", newest.thumbUrl);
-        await expect(rows.first()).toHaveText("Standardbild");
-        await expect(rows.last()).toHaveText("");
+        await expect(
+          rows.first().getByText("Standardbild", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          rows.last().getByText("Standardbild", { exact: true }),
+        ).toHaveCount(0);
         for (const thumbnail of await galleryImages(page).all()) {
           await waitForImageDecoded(thumbnail);
         }

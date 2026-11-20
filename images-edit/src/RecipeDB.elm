@@ -1,4 +1,4 @@
-module RecipeDB exposing (Capabilities, CapabilitiesModel, GalleryImage, RecipeData, RecipeModel, UploadModel, UploadedImage, decodeUpload, makeCapabilitiesRequest, makeRecipeRequest, makeUploadRequest)
+module RecipeDB exposing (Capabilities, CapabilitiesModel, DeleteModel, GalleryImage, RecipeData, RecipeModel, UploadModel, UploadedImage, decodeDeleteImage, decodeUpload, makeCapabilitiesRequest, makeDeleteImageRequest, makeRecipeRequest, makeUploadRequest)
 
 import Api.Object exposing (Recipe)
 import Api.Object.ImageMetadata as ImageMetadata
@@ -86,6 +86,10 @@ makeRecipeRequest recipeId targetMsg =
 
 type alias UploadModel =
     RemoteData.RemoteData String UploadedImage
+
+
+type alias DeleteModel =
+    RemoteData.RemoteData String Bool
 
 
 type alias UploadedImage =
@@ -181,6 +185,116 @@ transportError error =
 
         _ ->
             "Speichern fehlgeschlagen. Bitte später erneut versuchen."
+
+
+makeDeleteImageRequest : String -> String -> (DeleteModel -> msg) -> Cmd msg
+makeDeleteImageRequest recipeId imageId targetMsg =
+    let
+        body : String
+        body =
+            Encode.object
+                [ ( "query", Encode.string "mutation ($recipeId: ID!, $imageId: ID!) { deleteImage(recipeId: $recipeId, imageId: $imageId) }" )
+                , ( "variables"
+                  , Encode.object
+                        [ ( "recipeId", Encode.string recipeId )
+                        , ( "imageId", Encode.string imageId )
+                        ]
+                  )
+                ]
+                |> Encode.encode 0
+    in
+    Http.request
+        { method = "POST"
+        , headers = []
+        , url = "/graphql"
+        , body = Http.stringBody "application/json" body
+        , timeout = Nothing
+        , tracker = Nothing
+        , expect =
+            Http.expectString
+                (\result ->
+                    result
+                        |> Result.mapError deleteTransportError
+                        |> Result.andThen decodeDeleteImage
+                        |> RemoteData.fromResult
+                        |> targetMsg
+                )
+        }
+
+
+deleteTransportError : Http.Error -> String
+deleteTransportError error =
+    case error of
+        Http.BadStatus 401 ->
+            "Anmeldung erforderlich oder abgelaufen. Die Löschung konnte nicht bestätigt werden."
+
+        Http.BadStatus 403 ->
+            "Keine Berechtigung zum Verwalten dieses Bildes. Die Löschung konnte nicht bestätigt werden."
+
+        _ ->
+            "Die Löschung konnte nicht bestätigt werden."
+
+
+decodeDeleteImage : String -> Result String Bool
+decodeDeleteImage body =
+    Decode.decodeString Decode.value body
+        |> Result.mapError (\_ -> "Der Server hat eine ungültige Löschantwort gesendet.")
+        |> Result.andThen decodeDeleteResponse
+
+
+decodeDeleteResponse : Decode.Value -> Result String Bool
+decodeDeleteResponse value =
+    case Decode.decodeValue (field "errors" Decode.value) value of
+        Ok errors ->
+            case Decode.decodeValue (Decode.list Decode.value) errors of
+                Ok [] ->
+                    decodeDeletedValue value
+
+                Ok (first :: _) ->
+                    Err (deleteGraphQLError first)
+
+                Err _ ->
+                    Err "Der Server hat eine ungültige GraphQL-Fehlerantwort gesendet."
+
+        Err _ ->
+            decodeDeletedValue value
+
+
+decodeDeletedValue : Decode.Value -> Result String Bool
+decodeDeletedValue value =
+    Decode.decodeValue (field "data" (field "deleteImage" Decode.bool)) value
+        |> Result.mapError (\_ -> "Der Server hat das Ergebnis der Löschung nicht bestätigt.")
+
+
+deleteGraphQLError : Decode.Value -> String
+deleteGraphQLError value =
+    case Decode.decodeValue (Decode.at [ "extensions", "code" ] string) value of
+        Ok "authentication-required" ->
+            "Anmeldung erforderlich oder abgelaufen. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "invalid-credentials" ->
+            "Anmeldung erforderlich oder abgelaufen. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "invalid-auth-context" ->
+            "Anmeldung erforderlich oder abgelaufen. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "mixed-auth-context" ->
+            "Anmeldung erforderlich oder abgelaufen. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "forbidden" ->
+            "Keine Berechtigung zum Verwalten dieses Bildes. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "csrf-forbidden" ->
+            "Keine Berechtigung zum Verwalten dieses Bildes. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "invalid-image-id" ->
+            "Die Bildkennung ist ungültig. Die Löschung konnte nicht bestätigt werden."
+
+        Ok "invalid-recipe-id" ->
+            "Das Rezept konnte nicht gefunden werden. Die Löschung konnte nicht bestätigt werden."
+
+        _ ->
+            "Die Löschung konnte nicht bestätigt werden."
 
 
 decodeUpload : String -> Result String UploadedImage

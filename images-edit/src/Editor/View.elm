@@ -1,7 +1,7 @@
 module Editor.View exposing (view)
 
 import Crop exposing (Crop)
-import Editor.Types exposing (Model, Msg(..), Phase(..), Session, canAdd, imageLimit)
+import Editor.Types exposing (GalleryFeedbackKind(..), Model, Msg(..), Phase(..), Session, canAdd, canDelete, imageLimit)
 import File exposing (File)
 import Html exposing (Html, a, button, div, h1, img, input, label, li, p, span, text)
 import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
@@ -43,7 +43,7 @@ view model =
 accessPage : Model -> String -> String -> Html Msg
 accessPage model title message =
     Html.main_ [ class "image-editor" ]
-        [ h1 [] [ text title ]
+        [ h1 [ id "gallery-heading", attribute "tabindex" "-1" ] [ text title ]
         , p [ attribute "role" "alert", class "feedback error" ] [ text message ]
         , a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ]
         ]
@@ -154,28 +154,85 @@ editorPage content =
 
 editorStatus : Model -> Html Msg
 editorStatus model =
+    let
+        message : String
+        message =
+            if model.galleryMutation /= Nothing && model.galleryError /= Nothing then
+                "Der aktuelle Stand konnte nicht bestätigt werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
+
+            else if model.galleryMutation /= Nothing && model.galleryRefreshing then
+                "Galerie wird aktualisiert. Die angezeigten Bilder zeigen den zuletzt geladenen Stand."
+
+            else if model.galleryMutation /= Nothing then
+                "Bild wird gelöscht."
+
+            else if model.phase == Viewing && model.savedFeedback then
+                "Bild gespeichert."
+
+            else if model.galleryRefreshing then
+                "Rezeptbilder werden geladen."
+
+            else
+                ""
+    in
     p
-        [ id "editor-status"
-        , attribute "role" "status"
-        , class
-            (if model.phase == Viewing && model.savedFeedback then
+        ([ id "editor-status"
+         , attribute "role" "status"
+         , attribute "tabindex" "-1"
+         , class
+            (if model.phase == Viewing && model.savedFeedback && model.galleryMutation == Nothing then
                 "feedback success save-feedback"
 
              else
                 "editor-announcement"
             )
-        ]
-        [ text
-            (if model.phase == Viewing && model.savedFeedback then
-                "Bild gespeichert."
+         ]
+            ++ (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
+                    [ attribute "aria-busy" "true" ]
 
-             else if model.phase == Viewing && model.recipe == RemoteData.Loading then
-                "Rezeptbilder werden geladen."
+                else
+                    []
+               )
+        )
+        [ text message ]
 
-             else
-                ""
-            )
-        ]
+
+galleryFeedback : Model -> Html Msg
+galleryFeedback model =
+    case model.galleryFeedback of
+        Just feedback ->
+            case feedback.kind of
+                DeletionSucceeded ->
+                    p [ attribute "role" "status", class "feedback success" ] [ text feedback.message ]
+
+                ImageAlreadyAbsent ->
+                    p [ attribute "role" "status", class "feedback warning" ] [ text feedback.message ]
+
+                DeletionUnconfirmed ->
+                    p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
+
+        Nothing ->
+            text ""
+
+
+galleryLoadError : Model -> Html Msg
+galleryLoadError model =
+    case model.galleryError of
+        Just _ ->
+            let
+                message : String
+                message =
+                    case model.galleryMutation of
+                        Just _ ->
+                            "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
+
+                        Nothing ->
+                            "Rezeptbilder konnten nicht geladen werden."
+            in
+            p [ attribute "role" "alert", class "feedback error" ] [ text message ]
+
+        Nothing ->
+            text ""
 
 
 galleryView : Model -> Html Msg
@@ -197,8 +254,8 @@ galleryView model =
     editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
             [ h1
-                (id "gallery-heading"
-                    :: (if model.savedFeedback then
+                ([ id "gallery-heading", attribute "tabindex" "-1" ]
+                    ++ (if model.savedFeedback then
                             [ attribute "aria-describedby" "editor-status" ]
 
                         else
@@ -220,19 +277,38 @@ galleryView model =
                 ]
             ]
         , editorStatus model
+        , galleryFeedback model
         , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
-        , Maybe.withDefault (text "") (Maybe.map (\warning -> p [ class "feedback warning", attribute "role" "status" ] [ text warning ]) (Editor.Types.capacityWarning images))
+        , Maybe.withDefault (text "")
+            (if model.galleryRefreshing || model.galleryError /= Nothing then
+                Nothing
+
+             else
+                Maybe.map (\warning -> p [ class "feedback warning", attribute "role" "status" ] [ text warning ]) (Editor.Types.capacityWarning images)
+            )
         , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
-        , galleryContent model.recipe images model.failedThumbnails
+        , galleryLoadError model
+        , if model.galleryError /= Nothing then
+            button [ type_ "button", class "outline", onClick RetryGallery ] [ text "Erneut laden" ]
+
+          else
+            text ""
+        , galleryContent model images model.failedThumbnails
         , p [] [ a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ] ]
         ]
 
 
-galleryContent : RecipeDB.RecipeModel -> Maybe (List RecipeDB.GalleryImage) -> Set String -> Html Msg
-galleryContent recipe images failed =
-    case ( recipe, images ) of
+galleryContent : Model -> Maybe (List RecipeDB.GalleryImage) -> Set String -> Html Msg
+galleryContent model images failed =
+    case ( model.recipe, images ) of
         ( RemoteData.Success (Just _), Just entries ) ->
-            div []
+            div
+                (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
+                    [ attribute "aria-busy" "true" ]
+
+                 else
+                    []
+                )
                 [ p [] [ text (String.fromInt (List.length entries) ++ " / " ++ String.fromInt imageLimit) ]
                 , if List.isEmpty entries then
                     p [] [ text "Kein Bild vorhanden." ]
@@ -240,7 +316,7 @@ galleryContent recipe images failed =
                   else
                     Html.Keyed.node "ol"
                         [ class "gallery-list", attribute "aria-label" "Rezeptbilder" ]
-                        (List.indexedMap (galleryRow failed) entries)
+                        (List.indexedMap (galleryRow model failed) entries)
                 ]
 
         ( RemoteData.Success Nothing, _ ) ->
@@ -250,14 +326,11 @@ galleryContent recipe images failed =
             div [ attribute "aria-busy" "true", attribute "aria-label" "Rezeptbilder werden geladen" ] []
 
         _ ->
-            div []
-                [ errorMessage "Rezeptbilder konnten nicht geladen werden."
-                , button [ type_ "button", class "outline", onClick RetryGallery ] [ text "Erneut laden" ]
-                ]
+            text ""
 
 
-galleryRow : Set String -> Int -> RecipeDB.GalleryImage -> ( String, Html Msg )
-galleryRow failed index image =
+galleryRow : Model -> Set String -> Int -> RecipeDB.GalleryImage -> ( String, Html Msg )
+galleryRow model failed index image =
     let
         description : String
         description =
@@ -286,6 +359,15 @@ galleryRow failed index image =
 
           else
             text ""
+        , button
+            [ type_ "button"
+            , class "outline"
+            , id ("delete-image-" ++ image.id)
+            , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " löschen")
+            , disabled (not (canDelete model image.id))
+            , onClick (DeleteImage image.id)
+            ]
+            [ text "Löschen" ]
         ]
     )
 
