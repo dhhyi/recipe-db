@@ -473,8 +473,8 @@ assert {Path(result[field]).name for field in ("archive", "manifest")} == names
 assert set((root / "read-log").read_text().splitlines()) == names
 PY
 
-rm -r "$DESTINATION"
-python3 - << 'PY'
+  rm -r "$DESTINATION"
+  python3 - << 'PY'
 import json
 import os
 from pathlib import Path
