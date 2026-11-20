@@ -51,4 +51,4 @@ category: test
 check: |
   pnpm check
   pnpm exec playwright test --list --reporter=list
-test: pnpm test
+integration: pnpm test

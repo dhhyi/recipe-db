@@ -1,45 +1,45 @@
 #!/usr/bin/env bash
 #USAGE flag "--development" help="Required before project names: acknowledge tests may modify and delete development data"
-#USAGE arg "[projects]" var=#true help="Test project names; defaults to all qualifying test projects"
+#USAGE arg "[projects]" var=#true help="Integration project names; defaults to projects declaring integration scripts"
 set -Eeuo pipefail
 
 if [[ ${1:-} != --development ]]; then
-  echo "Usage: mise run integration-tests -- --development [test-project ...]" >&2
+  echo "Usage: mise run integration-tests -- --development [integration-project ...]" >&2
   echo "This command runs destructive integration tests against the development stack." >&2
   exit 2
 fi
 shift
 
+known_projects=()
 valid_projects=()
+declare -A integration_scripts=()
 tracked_folders=$(git -c core.quotePath=false ls-files | cut -d/ -f1 | LC_ALL=C sort -u)
 while IFS= read -r project; do
-  [[ $project == *-test && -d "$project" && -f "$project/.project.yaml" ]] || continue
+  [[ -d "$project" && -f "$project/.project.yaml" ]] || continue
+  known_projects+=("$project")
   metadata=$(yq eval-all -o=json 'select(documentIndex == 1)' "$project/.project.yaml")
-  if jq -e '
-    .category == "test" and (.test | type == "string" and length > 0)
-  ' <<< "$metadata" > /dev/null; then
+  if jq -e '.integration | type == "string"' <<< "$metadata" > /dev/null; then
     valid_projects+=("$project")
+    integration_scripts["$project"]=$(jq -r '.integration' <<< "$metadata")
   fi
 done <<< "$tracked_folders"
 
 projects=("${valid_projects[@]}")
+explicit_selection=false
 if (($# > 0)); then
   projects=("$@")
+  explicit_selection=true
 fi
 
-if ((${#projects[@]} == 0)); then
+if ((${#projects[@]} == 0)) && [[ $explicit_selection == false ]]; then
   echo "No qualifying integration-test projects found." >&2
   exit 2
 fi
 
-HOST_UID=$(id -u)
-HOST_GID=$(id -g)
-export HOST_UID HOST_GID
-
 for project in "${projects[@]}"; do
   valid=false
-  for valid_project in "${valid_projects[@]}"; do
-    if [[ $project == "$valid_project" ]]; then
+  for known_project in "${known_projects[@]}"; do
+    if [[ $project == "$known_project" ]]; then
       valid=true
       break
     fi
@@ -49,6 +49,34 @@ for project in "${projects[@]}"; do
     exit 2
   fi
 done
+
+selected_projects=()
+for project in "${projects[@]}"; do
+  valid=false
+  for valid_project in "${valid_projects[@]}"; do
+    if [[ $project == "$valid_project" ]]; then
+      valid=true
+      break
+    fi
+  done
+  [[ $valid == true ]] || continue
+  integration=${integration_scripts[$project]}
+  if [[ -z ${integration//[[:space:]]/} ]]; then
+    if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+      echo "::warning::Project $project has an empty or whitespace-only integration script; skipping." >&2
+    fi
+    continue
+  fi
+  selected_projects+=("$project")
+done
+projects=("${selected_projects[@]}")
+if ((${#projects[@]} == 0)); then
+  exit 0
+fi
+
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+export HOST_UID HOST_GID
 
 compose_config=$(docker compose --profile test config --format json)
 if ! jq -e '
@@ -91,14 +119,15 @@ cleanup() {
 trap cleanup EXIT
 
 for project in "${projects[@]}"; do
-  if ! jq -e --arg project "$project" '.services[$project].profiles | index("test") != null' <<< "$compose_config" > /dev/null; then
-    echo "Test service $project is missing from the generated Compose configuration." >&2
+  if ! jq -e --arg project "$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
+    echo "Project service $project is missing from the generated Compose configuration." >&2
     exit 2
   fi
 done
 
 docker compose --profile test build fixtures "${projects[@]}"
 for project in "${projects[@]}"; do
+  integration=${integration_scripts[$project]}
   if [[ $project == tags-test ]]; then
     docker compose --profile test build tags-test-api tags-production-test-api tags-recipes-test-api
     break
@@ -197,12 +226,14 @@ for project in "${projects[@]}"; do
     fi
     E2E_AUTH_TOKENS=$(cat "$tokens_file")
     export E2E_AUTH_TOKENS
-    docker compose --profile test run --rm -e E2E_AUTH_TOKENS "$project" 2>&1 \
+    docker compose --profile test run --rm -e E2E_AUTH_TOKENS \
+      --entrypoint /bin/sh "$project" -c "$integration" 2>&1 \
       | tee "$project/target/integration-tests/run.log"
     status=${PIPESTATUS[0]}
     unset E2E_AUTH_TOKENS
   else
-    docker compose --profile test run --rm "$project" 2>&1 \
+    docker compose --profile test run --rm --entrypoint /bin/sh \
+      "$project" -c "$integration" 2>&1 \
       | tee "$project/target/integration-tests/run.log"
     status=${PIPESTATUS[0]}
   fi

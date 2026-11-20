@@ -59,4 +59,4 @@ prettier:
   ignore:
     - "*.feature"
     - "*.jpg"
-test: sh karate -T 1 .
+integration: sh karate -T 1 .

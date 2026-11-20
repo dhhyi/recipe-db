@@ -11,7 +11,14 @@ case "$1" in
   up) exit "${UP_STATUS:-0}" ;;
   stop) exit "${STOP_STATUS:-0}" ;;
   run)
-    project=${!#}
+    shift
+    while (($#)); do
+      case "$1" in
+        --rm) shift ;;
+        -e | --entrypoint) shift 2 ;;
+        *) project=$1; break ;;
+      esac
+    done
     printf '%s\n' "test stdout: $project"
     printf '%s\n' "test stderr: $project" >&2
     exit "${RUN_STATUS:-0}"

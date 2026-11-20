@@ -37,7 +37,7 @@ format:
     apply: hurlfmt --in-place $argv
     files: ["*.hurl"]
 check: hurl --version
-test: sh hurl-run
+integration: sh hurl-run
 prettier:
   ignore:
     - "*.hurl"

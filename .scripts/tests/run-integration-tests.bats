@@ -4,11 +4,18 @@ load test_helper
 
 setup() {
   setup_fixture run-integration-tests.sh
+  unset GITHUB_ACTIONS
   git init -q
   for project in recipes-test ratings-test graphql-test images-test \
     inspirations-test link-extract-test image-inline-test mcp-test; do
     add_test_project "$project"
   done
+  mkdir unit-only
+  cat > unit-only/.project.yaml << 'EOF'
+category: backend
+test: echo local test
+EOF
+  git add unit-only/.project.yaml
   create_auth_tokens
   setup_mock_bin
   install_mock integration-docker.sh docker
@@ -25,6 +32,52 @@ setup() {
   ' > "$COMPOSE_CONFIG"
 }
 
+@test "runs integration scripts for projects without a test category or suffix" {
+  mkdir api-contract
+  cat > api-contract/.project.yaml << 'EOF'
+category: backend
+integration: echo api contract
+EOF
+  git add api-contract/.project.yaml
+  jq '.services["api-contract"] = {}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development api-contract
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test build fixtures api-contract' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh api-contract -c echo api contract' "$MOCK_LOG"
+}
+
+@test "a test-only project is ignored by stack integration discovery" {
+  run bash .scripts/run-integration-tests.sh --development unit-only
+
+  [ "$status" -eq 0 ]
+  [ ! -s "$MOCK_LOG" ]
+}
+
+@test "blank integration scripts are no-ops and warn only in GitHub Actions" {
+  mkdir blank-integration
+  cat > blank-integration/.project.yaml << 'EOF'
+category: backend
+integration: "   "
+EOF
+  git add blank-integration/.project.yaml
+
+  run --separate-stderr env GITHUB_ACTIONS=true \
+    bash .scripts/run-integration-tests.sh --development blank-integration
+
+  [ "$status" -eq 0 ]
+  [ "$stderr" = "::warning::Project blank-integration has an empty or whitespace-only integration script; skipping." ]
+  [ ! -s "$MOCK_LOG" ]
+
+  run --separate-stderr bash .scripts/run-integration-tests.sh --development blank-integration
+
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+  [ ! -s "$MOCK_LOG" ]
+}
+
 create_auth_tokens() {
   mkdir -p e2e-test/.secrets
   printf '%s\n' '{"owner":"0000000000000000000000000000000000000000000000000000000000000000","memberOne":"1111111111111111111111111111111111111111111111111111111111111111","memberTwo":"2222222222222222222222222222222222222222222222222222222222222222"}' > e2e-test/.secrets/auth-tokens.json
@@ -36,7 +89,7 @@ add_test_project() {
 name: integration-test
 ---
 category: test
-test: echo tested
+integration: echo tested
 EOF
   git add "$1/.project.yaml"
 }
@@ -91,8 +144,8 @@ docker compose --profile test ps --services --status running
 docker compose --profile test up -d fixtures
 curl HEAD http://127.0.0.1:3000/recipes
 curl HEAD http://127.0.0.1:3000/ratings
-docker compose --profile test run --rm recipes-test
-docker compose --profile test run --rm ratings-test
+docker compose --profile test run --rm --entrypoint /bin/sh recipes-test -c echo tested
+docker compose --profile test run --rm --entrypoint /bin/sh ratings-test -c echo tested
 docker compose --profile test stop fixtures
 EOF
   cmp expected-calls "$MOCK_LOG"
@@ -109,6 +162,7 @@ EOF
   [ "$(grep -c '^::endgroup::$' <<< "$stderr")" -eq 2 ]
   [[ "$stderr" == *"::group::integration tests: recipes-test"* ]]
   [[ "$stderr" == *"::group::integration tests: ratings-test"* ]]
+  [[ "$stderr" != *"::warning::"* ]]
 }
 
 @test "runs discovered jobs in alphabetical order including their API and fixture readiness checks" {
@@ -139,7 +193,7 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(grep -c '^docker compose --profile test run --rm ' "$MOCK_LOG")" -eq 9 ]
-  grep -Fx 'docker compose --profile test run --rm new-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh new-test -c echo tested' "$MOCK_LOG"
 
   run bash .scripts/run-integration-tests.sh --development new-test
 
@@ -157,7 +211,7 @@ EOF
   grep -Fx 'curl HEAD http://127.0.0.1:8080/graphql' "$MOCK_LOG"
   grep -Fx 'curl HEAD http://127.0.0.1:3000/search' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:3000/mcp-test-fixture/test.jpg' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS search-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh search-test -c echo tested' "$MOCK_LOG"
 }
 
 @test "inspirations tests wait with HEAD on their own REST API without GraphQL or fixture requests" {
@@ -166,7 +220,7 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(grep -c '^curl ' "$MOCK_LOG")" -eq 1 ]
   grep -Fx 'curl HEAD http://127.0.0.1:3000/inspirations' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm inspirations-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh inspirations-test -c echo tested' "$MOCK_LOG"
 }
 
 @test "inspirations readiness retries connection failures and unrelated error responses" {
@@ -179,7 +233,7 @@ EOF
 
     [ "$status" -eq 0 ]
     [ "$(grep -c '^curl ' "$MOCK_LOG")" -eq 3 ]
-    grep -Fx 'docker compose --profile test run --rm inspirations-test' "$MOCK_LOG"
+    grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh inspirations-test -c echo tested' "$MOCK_LOG"
   done
 }
 
@@ -208,7 +262,7 @@ EOF
   grep -Fx 'docker compose --profile test build fixtures tags-test' "$MOCK_LOG"
   grep -Fx 'docker compose --profile test build tags-test-api tags-production-test-api tags-recipes-test-api' "$MOCK_LOG"
   grep -Fx 'docker compose --profile test up -d --force-recreate tags-test-api tags-production-test-api tags-recipes-test-api' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm tags-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh tags-test -c echo tested' "$MOCK_LOG"
   mapfile -t commands < "$MOCK_LOG"
   [ "${commands[-2]}" = "docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api" ]
   [ "${commands[-1]}" = "docker compose --profile test stop fixtures" ]
@@ -229,7 +283,7 @@ EOF
   grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/images-edit/' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS e2e-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh e2e-test -c echo tested' "$MOCK_LOG"
 }
 
 @test "GraphQL tests receive configured auth principals" {
@@ -242,14 +296,14 @@ EOF
   run bash .scripts/run-integration-tests.sh --development graphql-test
 
   [ "$status" -eq 0 ]
-  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS graphql-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh graphql-test -c echo tested' "$MOCK_LOG"
 }
 
 @test "MCP tests receive owner and both member auth principals" {
   run bash .scripts/run-integration-tests.sh --development mcp-test
 
   [ "$status" -eq 0 ]
-  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS mcp-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh mcp-test -c echo tested' "$MOCK_LOG"
 }
 
 @test "browser tests require generated auth client inputs" {
@@ -270,31 +324,40 @@ EOF
   git rm --cached untracked-test/.project.yaml
   add_test_project nested/child-test
   add_test_project no-suffix
+  sed -i '/^integration:/d' no-suffix/.project.yaml
   add_test_project missing-config-test
   git mv missing-config-test/.project.yaml missing-config-test/tracked.txt
   add_test_project wrong-category-test
   sed -i 's/category: test/category: api/' wrong-category-test/.project.yaml
+  sed -i '/^integration:/d' wrong-category-test/.project.yaml
   add_test_project missing-script-test
-  sed -i '/^test:/d' missing-script-test/.project.yaml
+  sed -i '/^integration:/d' missing-script-test/.project.yaml
   add_test_project empty-script-test
-  sed -i 's/test: echo tested/test: ""/' empty-script-test/.project.yaml
+  sed -i 's/integration: echo tested/integration: ""/' empty-script-test/.project.yaml
   add_test_project non-string-script-test
-  sed -i 's/test: echo tested/test: true/' non-string-script-test/.project.yaml
+  sed -i 's/integration: echo tested/integration: true/' non-string-script-test/.project.yaml
   add_test_project first-document-test
-  printf '%s\n' 'category: test' 'test: echo tested' > first-document-test/.project.yaml
+  printf '%s\n' 'category: test' 'integration: echo tested' > first-document-test/.project.yaml
 
   run bash .scripts/run-integration-tests.sh --development
 
   [ "$status" -eq 0 ]
   [ "$(grep -c '^docker compose --profile test run --rm ' "$MOCK_LOG")" -eq 8 ]
 
-  for project in untracked-test nested/child-test no-suffix missing-config-test \
-    wrong-category-test missing-script-test empty-script-test non-string-script-test \
-    first-document-test; do
+  for project in untracked-test nested/child-test missing-config-test; do
     : > "$MOCK_LOG"
     run --separate-stderr bash .scripts/run-integration-tests.sh --development "$project"
     [ "$status" -eq 2 ]
     [ "$stderr" = "Unknown integration-test project: $project" ]
+    [ ! -s "$MOCK_LOG" ]
+  done
+
+  for project in wrong-category-test missing-script-test empty-script-test \
+    non-string-script-test first-document-test; do
+    : > "$MOCK_LOG"
+    run --separate-stderr bash .scripts/run-integration-tests.sh --development "$project"
+    [ "$status" -eq 0 ]
+    [ -z "$stderr" ]
     [ ! -s "$MOCK_LOG" ]
   done
 }
@@ -336,7 +399,7 @@ EOF
   grep -Fx 'test stderr: recipes-test' recipes-test/target/integration-tests/run.log
   [ ! -e ratings-test/target/integration-tests/run.log ]
   [ "$(tail -n 1 "$MOCK_LOG")" = "docker compose --profile test stop fixtures" ]
-  run -1 grep -Fx 'docker compose --profile test run --rm ratings-test' "$MOCK_LOG"
+  run -1 grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh ratings-test -c echo tested' "$MOCK_LOG"
 }
 
 @test "build failures do not start or stop fixtures" {
@@ -376,5 +439,5 @@ EOF
 
   [ "$status" -eq 0 ]
   [ "$(grep -c '^curl ' "$MOCK_LOG")" -eq 2 ]
-  grep -Fx 'docker compose --profile test run --rm recipes-test' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
 }

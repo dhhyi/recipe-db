@@ -33,7 +33,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: GRADLE_USER_HOME=target/gradle-cache ./gradlew --no-daemon --project-cache-dir target/gradle-project-cache test
+integration: GRADLE_USER_HOME=target/gradle-cache ./gradlew --no-daemon --project-cache-dir target/gradle-project-cache test
 format:
   - check: ./gradlew --no-daemon "-PspotlessFiles="(string join , $argv) spotlessCheck
     apply: ./gradlew --no-daemon "-PspotlessFiles="(string join , $argv) spotlessApply

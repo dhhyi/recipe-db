@@ -31,7 +31,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: python3 -m behave --no-color --junit --junit-directory target/behave
+integration: python3 -m behave --no-color --junit --junit-directory target/behave
 check: |
   python3 -m py_compile search_support.py features/environment.py features/steps/search_steps.py
   python3 -m behave --no-color --dry-run

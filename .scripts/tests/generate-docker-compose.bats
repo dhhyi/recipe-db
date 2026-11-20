@@ -56,7 +56,8 @@ traefik:
             server:
               port: 8000
 ---
-test: echo tested
+test: echo local
+integration: echo integrated
 EOF
   done
   mkdir pwa
@@ -237,7 +238,7 @@ devcontainer:
 traefik: {}
 ---
 category: test
-test: echo tested
+integration: echo integrated
 EOF
 }
 
@@ -276,7 +277,9 @@ assert_compose() {
     ] - .services.traefik.labels == [])
     and .services.job.profiles == ["development"]
     and .services.test.profiles == ["test"]
-    and .services.test.command == ["/bin/sh", "-c", "echo tested"]
+    and (.services.test | has("command") | not)
+    and (.services.backend | has("command") | not)
+    and (.services.test | has("integration") | not)
     and .services.test.volumes == ["./test/target:/app/target"]
     and all(.services | to_entries[] | select(.value | has("build"));
       (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" else . end) as $project
