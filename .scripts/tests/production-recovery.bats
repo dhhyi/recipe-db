@@ -531,6 +531,7 @@ EOF
 }
 
 @test "Pi reset accepts the provisioned values representation without accepting changed settings" {
+  export HOME="$FIXTURE_ROOT/home"
   closeout_fixture
   cat >> harness.sh << 'EOF'
 target=pi
