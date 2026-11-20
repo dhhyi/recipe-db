@@ -88,7 +88,18 @@ EOF
   cat > images/.project.yaml << 'EOF'
 devcontainer:
   ports: [8000]
-traefik: {}
+traefik:
+  labels:
+    http:
+      routers:
+        images:
+          rule: "PathPrefix(`/images`)"
+          entrypoints: rest-internal
+      services:
+        recipe-db-images:
+          loadBalancer:
+            healthCheck:
+              path: /health
 ---
 category: backend
 EOF
