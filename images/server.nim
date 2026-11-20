@@ -350,7 +350,10 @@ proc main() =
     fmtStr = "$levelname ",
   ))
   let freshStorage = store.checkStorageVersion(runtimeMode)
-  store.initialize()
+  if runtimeMode != "backup":
+    if freshStorage:
+      store.restrictFreshRoot()
+    store.initialize()
   if freshStorage:
     store.publishStorageVersion()
   info "Data location '", dataFolder, "'"

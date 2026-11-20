@@ -53,6 +53,10 @@ proc initialize*(store: ImageStorage) =
   createDir(store.publicFolder)
   createDir(store.manifestFolder)
 
+proc restrictFreshRoot*(store: ImageStorage) =
+  createDir(store.root)
+  setFilePermissions(store.root, {fpUserRead, fpUserWrite, fpUserExec})
+
 proc storageFailure(marker, reason: string) {.noreturn.} =
   raise newException(StorageError, "images storage version failure at " &
     marker & ": expected " & $expectedStorageVersion & ", " & reason)
@@ -60,7 +64,7 @@ proc storageFailure(marker, reason: string) {.noreturn.} =
 proc emptyDirectory(path: string): bool =
   if not dirExists(path):
     return false
-  for _ in walkDir(path):
+  for _ in walkDir(path, checkDir = true):
     return false
   true
 
@@ -89,36 +93,36 @@ proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
   elif fileExists(store.root):
     storageFailure(marker, "cannot inspect data root")
 
-  var dataEntries = 0
+  var hasEntries, hasApplicationData: bool
   if dirExists(store.root):
     try:
-      for kind, path in walkDir(store.root):
+      for kind, path in walkDir(store.root, checkDir = true):
         let name = extractFilename(path)
         if name == "storage-version":
           if kind != pcFile:
             storageFailure(marker, "unsafe marker file type")
           continue
-        if kind == pcDir and name in ["public", "manifests"] and
-            emptyDirectory(path):
-          continue
-        inc dataEntries
+        hasEntries = true
+        if version != -1 and mode == "backup" and
+            not (kind == pcDir and name in ["public", "manifests"] and
+            emptyDirectory(path)):
+          hasApplicationData = true
     except StorageError:
       raise
     except CatchableError:
       storageFailure(marker, "cannot inspect data root")
 
   if version == -1:
-    if dataEntries > 0:
+    if hasEntries:
       storageFailure(marker, "marker missing; existing data found")
     if mode == "backup":
       storageFailure(marker, "marker missing; backup mode cannot initialize")
     return true
   if version != expectedStorageVersion:
     storageFailure(marker, "actual " & $version)
-  if dataEntries == 0:
-    if mode == "backup":
-      storageFailure(marker, "application data missing; backup mode cannot initialize")
-    return false
+  if mode == "backup" and (not hasApplicationData or
+      not dirExists(store.publicFolder) or not dirExists(store.manifestFolder)):
+    storageFailure(marker, "application data missing; backup mode cannot initialize")
   false
 
 proc publishStorageVersion*(store: ImageStorage) =

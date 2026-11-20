@@ -59,14 +59,28 @@ suite "immutable image storage":
       discard versionedStore.checkStorageVersion("backup")
 
     createDir(versionRoot)
+    check versionedStore.checkStorageVersion("testing")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("backup")
+    for folder in [versionedStore.publicFolder, versionedStore.manifestFolder]:
+      createDir(folder)
+      expect StorageError:
+        discard versionedStore.checkStorageVersion("testing")
+      check dirExists(folder)
+      removeDir(folder)
     createDir(versionedStore.publicFolder)
     createDir(versionedStore.manifestFolder)
-    check versionedStore.checkStorageVersion("testing")
-    writeFile(versionRoot / "unknown", "untouched")
     expect StorageError:
       discard versionedStore.checkStorageVersion("production")
-    check readFile(versionRoot / "unknown") == "untouched"
-    removeFile(versionRoot / "unknown")
+    check not fileExists(versionRoot / "storage-version")
+    removeDir(versionedStore.publicFolder)
+    removeDir(versionedStore.manifestFolder)
+
+    writeFile(versionRoot / ".unknown", "untouched")
+    expect StorageError:
+      discard versionedStore.checkStorageVersion("production")
+    check readFile(versionRoot / ".unknown") == "untouched"
+    removeFile(versionRoot / ".unknown")
 
     versionedStore.initialize()
     versionedStore.publishStorageVersion()

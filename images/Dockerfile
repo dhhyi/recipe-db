@@ -7,13 +7,10 @@ RUN nimble install -d -y
 COPY server.nim storage.nim processing.nim storage_version_generated.nim /app/
 RUN --mount=type=cache,id=images-nim-${TARGETARCH},target=/root/.cache/nim,sharing=locked \
   nimble build -d:release -y --threads:off --passL:"-static" \
-  && strip server \
-  && mkdir -p /data/public \
-  && chown -R 65534:65534 /data
+  && strip server
 
 FROM scratch
 COPY --from=build /app/server /server
-COPY --from=build --chown=65534:65534 /data /data
 ENV PORT=8000 DATA_LOCATION=/data
 EXPOSE 8000
 ENTRYPOINT ["/server"]
