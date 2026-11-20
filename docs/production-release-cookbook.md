@@ -615,28 +615,7 @@ set -g BACKUP_CONFIG_FILES "$HOME/.config/recipe-db/backup/backup-release-ref" \
 set -g BACKUP_CONFIG_MESSAGE "Align Recipe DB backup inputs for $RC_TAG"
 ```
 
-#### Sync backup inputs to dotfiles
-
-Use the file list and commit message set by the release or restore step. In the same workstation fish shell, re-add only those managed files to chezmoi, resolve their actual source paths (including any private/encrypted filename attributes), and stage them in the private repository:
-
-```fish
-set -q BACKUP_CONFIG_FILES[1] BACKUP_CONFIG_MESSAGE[1]
-and chezmoi git -- --no-pager diff --cached --exit-code --stat
-and chezmoi re-add -- $BACKUP_CONFIG_FILES
-and set -g BACKUP_CONFIG_SOURCES (chezmoi source-path -- $BACKUP_CONFIG_FILES)
-and test (count $BACKUP_CONFIG_SOURCES) -eq (count $BACKUP_CONFIG_FILES)
-and chezmoi git -- add -- $BACKUP_CONFIG_SOURCES
-and chezmoi git -- --no-pager diff --cached -- $BACKUP_CONFIG_SOURCES
-```
-
-The staged-diff check stops the batch if the private repository already has staged changes; resolve those separately without automatically unstaging or committing them. Stop if any command fails. Review the changes privately before committing; do not paste private configuration diffs into chat. Then commit only these files and push to the private repository:
-
-```fish
-chezmoi git -- commit --only -m "$BACKUP_CONFIG_MESSAGE" -- $BACKUP_CONFIG_SOURCES
-and chezmoi git -- push
-```
-
-`--only` excludes unrelated staged files from this commit. The push also publishes any earlier unpushed commits on the current private branch; review those before pushing. Require both commands to succeed before continuing. This preserves the backup inputs for recovery; it does not itself update the Pi. After a restore, return to [Install backup inputs after a standalone restore](#install-backup-inputs-after-a-standalone-restore). For a retained release, continue below.
+Follow [Sync production backup inputs to dotfiles](production-backup-dotfiles.md), then return here to install the aligned reference.
 
 #### Install the aligned release backup reference
 
@@ -671,7 +650,7 @@ set -g BACKUP_CONFIG_FILES "$HOME/.config/recipe-db/backup/backup-release-ref" \
 set -g BACKUP_CONFIG_MESSAGE "Sync Recipe DB backup inputs after restore"
 ```
 
-Follow [Sync backup inputs to dotfiles](#sync-backup-inputs-to-dotfiles), then return here to install them.
+Follow [Sync production backup inputs to dotfiles](production-backup-dotfiles.md), then return here to install them.
 
 From workstation fish, open the provisioning container:
 

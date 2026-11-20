@@ -154,7 +154,7 @@ The handoff runs the existing restore pipeline with its own separate `RESTORE-$B
 
 Require restore to finish successfully: it verifies stored data, search readiness, representative reads and change propagation before reopening access. Then check the normal website, recipe images, search, editing and configured sign-in. A reachable home page alone is not acceptance.
 
-Keep the backup timer disabled. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to match the restored release, [sync the backup inputs to private dotfiles](production-release-cookbook.md#sync-backup-inputs-to-dotfiles), install the inputs and verify a **fresh off-device backup** before schedule re-enable. This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Preserve an intentionally paused schedule.
+Keep the backup timer disabled. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to match the restored release, [sync the backup inputs to private dotfiles](production-backup-dotfiles.md), install the inputs and verify a **fresh off-device backup** before schedule re-enable. This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Preserve an intentionally paused schedule.
 
 ## 5. Recover from a failure
 
