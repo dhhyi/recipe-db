@@ -20,6 +20,16 @@ Use paths relative to this root for operator-side references, regardless of the 
 
 Relative references must resolve inside the private configuration tree. Existing absolute references remain supported where their exact paths exist in the consuming environment; stale absolute paths are never rebased or searched for automatically. After restoring this configuration to a different home, separately update active private files and encrypted chezmoi sources as needed. The tools do not rewrite operator files.
 
+For an existing inventory, adding `operator_ssh_private_key` alone does not override a legacy `ansible_ssh_private_key_file`. In the existing host's settings, replace the legacy key-file entry with the resolver wiring from [`provisioning/inventory.example.yml`](../provisioning/inventory.example.yml):
+
+```yaml
+operator_config_directory: "{{ lookup('ansible.builtin.env', 'HOME') }}/.config/recipe-db"
+operator_ssh_private_key: ssh/recipe-db-pi
+ansible_ssh_private_key_file: "{{ operator_ssh_private_key | operator_config_path(operator_config_directory) }}"
+```
+
+Keep the existing host, user, root UUID, networks, and other operator-specific settings; do not replace the inventory with the example. Adjust the key reference if the key has a different name.
+
 ```text
 ~/.config/recipe-db/
 ├── deployment/

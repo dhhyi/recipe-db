@@ -93,7 +93,7 @@ chmod 600 ~/.config/recipe-db/provisioning/inventory.yml \
 Update `inventory.yml` to match the Pi Imager settings and the checks above:
 
 - `ansible_host`: `recipe-pi.home`; `ansible_user`: `piadmin`
-- Set `operator_ssh_private_key` to `ssh/recipe-db-pi`, relative to `~/.config/recipe-db/`. The provisioning launcher mounts that root at `/home/vscode/.config/recipe-db`; the mount path is container-only.
+- Set `operator_ssh_private_key` to `ssh/recipe-db-pi`, relative to `~/.config/recipe-db/`. For an existing inventory, also [adopt the resolver wiring](production-configuration.md#private-workstation-directory). The provisioning launcher mounts that root at `/home/vscode/.config/recipe-db`; the mount path is container-only.
 - `expected_root_uuid`: the UUID you just recorded
 - `admin_networks` and `application_networks`: the actual trusted network ranges
 
