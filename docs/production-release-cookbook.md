@@ -150,7 +150,7 @@ and git switch --detach "$TOOLING_REVISION"
 and mise install
 ```
 
-Confirm `git rev-parse HEAD` equals `TOOLING_REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Confirm that absolute secret-file paths in `deployment/pi-values.yaml` exist on this workstation; update paths when the home directory differs. Do not copy the generated Pi kubeconfig from another workstation or cluster.
+Confirm `git rev-parse HEAD` equals `TOOLING_REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Relative secret-file references in `deployment/pi-values.yaml` resolve from `~/.config/recipe-db/`; existing absolute references work only when those exact files exist and are not rebased automatically. Migrate active private files and encrypted chezmoi sources separately when their paths need updating. Do not copy the generated Pi kubeconfig from another workstation or cluster.
 
 The workstation also needs OpenSSH, OpenSSL, curl, Git, GitHub CLI, chezmoi, Python 3, Bash, GNU core utilities, findutils, grep, sed, awk and tar installed by its system package manager. Mise supplies the repository-pinned rendering and Kubernetes tools; it does not install every system prerequisite. The release preflight checks required executables, prepared alignment files and mapped application inputs before downtime.
 

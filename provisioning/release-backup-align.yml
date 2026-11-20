@@ -2,6 +2,8 @@
   hosts: pi
   gather_facts: false
   become: true
+  vars:
+    operator_config_directory: "{{ lookup('ansible.builtin.env', 'HOME') }}/.config/recipe-db"
   tasks:
     - name: Require one Pi and a non-root administrator connection
       become: false
@@ -29,7 +31,7 @@
         argv: [/usr/local/sbin/recipe-db-release-files]
         stdin: >-
           {{ {'operation': 'align', 'holder': release_backup_holder,
-              'artifact': lookup('ansible.builtin.file', '/home/vscode/.config/recipe-db/backup/backup-release-ref') | trim,
+              'artifact': lookup('ansible.builtin.file', operator_config_directory ~ '/backup/backup-release-ref') | trim,
               'revision': backup_capture_revision} | to_json }}
       changed_when: true
       no_log: true

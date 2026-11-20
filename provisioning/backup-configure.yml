@@ -3,9 +3,8 @@
   gather_facts: false
   become: true
   vars:
-    operator_config_directory: /home/vscode/.config/recipe-db
+    operator_config_directory: "{{ lookup('ansible.builtin.env', 'HOME') }}/.config/recipe-db"
     operator_backup_directory: "{{ operator_config_directory }}/backup"
-    operator_deployment_directory: "{{ operator_config_directory }}/deployment"
     operator_backup_files:
       - { name: backup.json, destination: /etc/recipe-db/backup.json }
       - {
@@ -165,15 +164,8 @@
         fail_msg: Backup inputs are incomplete or reference unsupported private files.
       no_log: true
 
-    - name: Require each private application input to be a direct deployment file
-      ansible.builtin.assert:
-        that:
-          - item.value is string
-          - item.value.startswith(operator_deployment_directory ~ '/')
-          - item.value | dirname == operator_deployment_directory
-        fail_msg: Backup values reference an unsupported private input path.
-      loop: "{{ backup_values.secrets | dict2items }}"
-      no_log: true
+    - name: Resolve backup application inputs on the controller
+      ansible.builtin.import_tasks: resolve-backup-inputs.yml
 
     - name: Inspect prepared backup files on the provisioning controller
       ansible.builtin.stat:
@@ -196,7 +188,7 @@
 
     - name: Inspect referenced private application inputs on the controller
       ansible.builtin.stat:
-        path: "{{ item.value }}"
+        path: "{{ operator_backup_secret_sources[item.key] }}"
       delegate_to: localhost
       become: false
       loop: "{{ backup_values.secrets | dict2items }}"
@@ -236,7 +228,7 @@
 
     - name: Copy referenced private application inputs
       ansible.builtin.copy:
-        src: "{{ item.value }}"
+        src: "{{ operator_backup_secret_sources[item.key] }}"
         dest: "/etc/recipe-db/application-inputs/{{ item.key }}"
         owner: root
         group: root
@@ -244,18 +236,9 @@
       loop: "{{ backup_values.secrets | dict2items }}"
       no_log: true
 
-    - name: Map private application inputs to their Pi paths
-      ansible.builtin.set_fact:
-        backup_pi_secret_paths: >-
-          {{ backup_pi_secret_paths | default({}) |
-             combine({item.key: '/etc/recipe-db/application-inputs/' ~ item.key}) }}
-      loop: "{{ backup_values.secrets | dict2items }}"
-      no_log: true
-
     - name: Install backup values with private Pi input paths
       ansible.builtin.copy:
-        content: >-
-          {{ backup_values | combine({'secrets': backup_pi_secret_paths}, recursive=True) | to_nice_yaml }}
+        content: "{{ operator_backup_values_for_pi | to_nice_yaml }}"
         dest: /etc/recipe-db/backup-values.yaml
         owner: root
         group: root

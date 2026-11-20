@@ -60,9 +60,34 @@ def parse_values(path):
     return documents[0]
 
 
+def operator_input_path(path, config_directory, direct_directory=None):
+    if not isinstance(path, str) or not path or any(ord(char) < 32 for char in path):
+        raise ValueError("private input reference is missing or invalid")
+    try:
+        reference = Path(path)
+        root = Path(config_directory).resolve(strict=True) if direct_directory or not reference.is_absolute() else None
+        candidate = reference if reference.is_absolute() else root / reference
+        resolved = candidate.resolve()
+        if root is not None and not reference.is_absolute() and not resolved.is_relative_to(root):
+            raise ValueError("private input reference escapes the configuration directory")
+        resolved = candidate.resolve(strict=True)
+        if direct_directory is not None:
+            allowed = (root / direct_directory).resolve(strict=True)
+            if not allowed.is_relative_to(root) or candidate.parent != root / direct_directory \
+                    or resolved.parent != allowed:
+                raise ValueError("private input reference must name a direct deployment file")
+        if not resolved.is_file():
+            raise ValueError("private input reference is not a regular file")
+    except (OSError, RuntimeError, ValueError) as error:
+        if isinstance(error, ValueError) and str(error).startswith("private input reference"):
+            raise
+        raise ValueError("private input reference is missing or invalid") from error
+    return candidate if reference.is_absolute() else resolved
+
+
 def validate_operator_files(directory):
-    for filename in ("backup/backup-values.yaml", "provisioning/inventory.yml"):
-        parse_values(directory / filename)
+    parse_values(directory / "backup/backup-values.yaml")
+    parse_values(directory / "provisioning/inventory.yml")
     reference = (directory / "backup/backup-release-ref").read_text().strip()
     if not re.fullmatch(r"ghcr.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}", reference):
         raise ValueError("prepared backup release reference must be an immutable recipe-db artifact")
@@ -90,9 +115,11 @@ def prepare_inputs(args, directory):
         raise ValueError("workstation values differ from the retained Pi configuration")
     mapping = {}
     for key, path in inputs.items():
-        source = Path(path)
-        if not source.is_absolute() or not source.is_file() \
-                or hashlib.sha256(source.read_bytes()).hexdigest() != info["inputs"][key]:
+        try:
+            source = operator_input_path(path, Path.home() / ".config/recipe-db")
+        except ValueError as error:
+            raise ValueError(f"workstation input is missing or invalid: {key}") from error
+        if hashlib.sha256(source.read_bytes()).hexdigest() != info["inputs"][key]:
             raise ValueError(f"workstation input does not match the installed Pi input: {key}")
         mapping[pi_inputs[key]] = str(source)
     mapped = directory / "inputs.json"

@@ -11,7 +11,24 @@ This guide is the source of truth for operator-held production inputs, their own
 
 ## Private workstation directory
 
-Keep operator configuration outside the checkout in `~/.config/recipe-db/`. This central directory is authoritative for workstation Pi SSH access, including the dedicated key and verified host key. Restrict it to the operator (`umask 077`, directories mode `0700`, private files mode `0600`). The provisioning devcontainer bind-mounts this directory at `/home/vscode/.config/recipe-db`; create it before starting that container.
+Keep operator configuration outside the checkout in `~/.config/recipe-db/`. This is the private configuration root for operator-side file references and is authoritative for workstation Pi SSH access, including the dedicated key and verified host key. Restrict it to the operator (`umask 077`, directories mode `0700`, private files mode `0600`). The provisioning launcher bind-mounts this directory at `/home/vscode/.config/recipe-db`; that fixed path is only the container mount, not a workstation or Pi path. Create the private directory before starting the container.
+
+Use paths relative to this root for operator-side references, regardless of the current directory or the YAML file's location:
+
+- Deployment and backup `secrets` entries use paths such as `deployment/auth-accounts.json`.
+- In `provisioning/inventory.yml`, set `operator_ssh_private_key` to a path such as `ssh/recipe-db-pi`; Ansible resolves it before SSH uses it.
+
+Relative references must resolve inside the private configuration tree. Existing absolute references remain supported where their exact paths exist in the consuming environment; stale absolute paths are never rebased or searched for automatically. After restoring this configuration to a different home, separately update active private files and encrypted chezmoi sources as needed. The tools do not rewrite operator files.
+
+For an existing inventory, adding `operator_ssh_private_key` alone does not override a legacy `ansible_ssh_private_key_file`. In the existing host's settings, replace the legacy key-file entry with the resolver wiring from [`provisioning/inventory.example.yml`](../provisioning/inventory.example.yml):
+
+```yaml
+operator_config_directory: "{{ lookup('ansible.builtin.env', 'HOME') }}/.config/recipe-db"
+operator_ssh_private_key: ssh/recipe-db-pi
+ansible_ssh_private_key_file: "{{ operator_ssh_private_key | operator_config_path(operator_config_directory) }}"
+```
+
+Keep the existing host, user, root UUID, networks, and other operator-specific settings; do not replace the inventory with the example. Adjust the key reference if the key has a different name.
 
 ```text
 ~/.config/recipe-db/
@@ -35,13 +52,13 @@ Keep operator configuration outside the checkout in `~/.config/recipe-db/`. This
     └── drive-oauth-client.json         # dedicated Desktop OAuth client, not tokens
 ```
 
-The backup inputs are operator-prepared. `backup.json` must use `/etc/recipe-db/rclone.conf`, `/var/lib/recipe-db-backup`, `/var/lib/recipe-db-backup/work`, and `/usr/local/sbin/recipe-db-backup-capture` for its rclone config, state, staging, and capture command paths. In `backup-values.yaml`, private `secrets` entries must point to direct files under `~/.config/recipe-db/deployment/`. The explicit `backup-configure.yml` playbook copies the files and referenced application inputs into root-only `/etc/recipe-db/`, then rewrites those values paths to `/etc/recipe-db/application-inputs/`. The Pi never mounts operator home.
+The backup inputs are operator-prepared. `backup.json` keeps its absolute Pi runtime paths: `/etc/recipe-db/rclone.conf`, `/var/lib/recipe-db-backup`, `/var/lib/recipe-db-backup/work`, and `/usr/local/sbin/recipe-db-backup-capture`. In `backup-values.yaml`, private `secrets` entries should use paths such as `deployment/auth-accounts.json`, naming direct files under the private configuration root. The explicit `backup-configure.yml` playbook resolves and copies the source files from the provisioning controller into root-only `/etc/recipe-db/`, then writes their Pi destinations as `/etc/recipe-db/application-inputs/<filename>`. The Pi never mounts operator home or the provisioning container.
 
 `backup-release-ref` must be the immutable OCI release artifact reference `ghcr.io/dhhyi/recipe-db-releases@sha256:<64 lowercase hexadecimal characters>`; commit IDs and tags are not accepted.
 
-`pi-values.yaml` begins as a private copy of [`deploy/pi.yaml`](../deploy/pi.yaml). It contains the Pi's immutable release/deployment settings and absolute paths to operator-held secret files. `auth-accounts.json` follows [`graphql/auth-accounts.schema.json`](../graphql/auth-accounts.schema.json). The Google client ID is public configuration in the values file; its client secret and OAuth cookie key are private inputs. The ACME email is needed only for the optional HTTPS configuration.
+`pi-values.yaml` begins as a private copy of [`deploy/pi.yaml`](../deploy/pi.yaml). It contains the Pi's immutable release/deployment settings and operator-held secret references, preferably relative paths such as `deployment/auth-accounts.json`. `auth-accounts.json` follows [`graphql/auth-accounts.schema.json`](../graphql/auth-accounts.schema.json). The Google client ID is public configuration in the values file; its client secret and OAuth cookie key are private inputs. The ACME email is needed only for the optional HTTPS configuration.
 
-`inventory.yml` is copied from [`provisioning/inventory.example.yml`](../provisioning/inventory.example.yml). Set its host, SSH-key path, measured root UUID, and narrowly scoped administrator/application networks. Keep `known_hosts` limited to the Pi host key verified during bootstrap. The kubeconfig is generated from the live Pi by `access.yml`; it is sensitive, disposable, and can be recreated after provisioning.
+`inventory.yml` is copied from [`provisioning/inventory.example.yml`](../provisioning/inventory.example.yml). Set its host, `operator_ssh_private_key` reference, measured root UUID, and narrowly scoped administrator/application networks. Keep `known_hosts` limited to the Pi host key verified during bootstrap. The kubeconfig is generated from the live Pi by `access.yml`; it is sensitive, disposable, and can be recreated after provisioning.
 
 ## Ownership and lifecycle
 
