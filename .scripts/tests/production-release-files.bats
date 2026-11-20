@@ -57,6 +57,87 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "relative workstation inputs resolve from each private home and remain content-bound" {
+  run python3 - << 'PY'
+import base64
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("release", ".scripts/production-release.py")
+release = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(release)
+with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+    directory = Path(temporary)
+    original_cwd = Path.cwd()
+    homes = [directory / "home one", directory / "home two"]
+    workdirs = [directory / "working-one", directory / "working-two"]
+    for home in homes:
+        input_path = home / ".config/recipe-db/deployment/auth-accounts.json"
+        input_path.parent.mkdir(parents=True)
+        input_path.write_bytes(b'{"accounts":[]}\n')
+    for workdir in workdirs:
+        workdir.mkdir()
+    values = directory / "values.yaml"
+    values.write_text(json.dumps({
+        "target": "pi", "secrets": {"auth-accounts.json": "deployment/auth-accounts.json"},
+    }))
+    installed = {
+        "target": "pi",
+        "secrets": {"auth-accounts.json": "/etc/recipe-db/application-inputs/auth-accounts.json"},
+    }
+    info = {
+        "fileProtocolVersion": 1, "toolingRevision": "a" * 40,
+        "values": base64.b64encode(json.dumps(installed).encode()).decode(),
+        "inputs": {"auth-accounts.json": hashlib.sha256(b'{"accounts":[]}\n').hexdigest()},
+        "helperSha256": hashlib.sha256(Path("provisioning/files/release-files.py").read_bytes()).hexdigest(),
+        "publisherSha256": hashlib.sha256(Path("provisioning/files/backup-upload.py").read_bytes()).hexdigest(),
+    }
+    try:
+        for home, workdir in zip(homes, workdirs):
+            os.chdir(workdir)
+            with patch.dict(os.environ, {"HOME": str(home)}), \
+                    patch.object(release, "remote", return_value=info), patch.object(
+                        release.subprocess, "check_output", return_value=("a" * 40).encode()
+                    ):
+                canonical, mapped = release.prepare_inputs(
+                    SimpleNamespace(values=str(values)), directory)
+                expected = home / ".config/recipe-db/deployment/auth-accounts.json"
+                assert json.loads(mapped.read_text())[installed["secrets"]["auth-accounts.json"]] == str(expected)
+                assert json.loads(canonical.read_text()) == installed
+        secret = homes[0] / ".config/recipe-db/deployment/auth-accounts.json"
+        secret.write_bytes(b"mismatched synthetic contents")
+        with patch.dict(os.environ, {"HOME": str(homes[0])}), \
+                patch.object(release, "remote", return_value=info), patch.object(
+                    release.subprocess, "check_output", return_value=("a" * 40).encode()
+                ):
+            try:
+                release.prepare_inputs(SimpleNamespace(values=str(values)), directory)
+            except ValueError as error:
+                assert "does not match" in str(error)
+                assert "mismatched synthetic contents" not in str(error)
+            else:
+                raise AssertionError("mismatched input accepted")
+            values.write_text(json.dumps({
+                "target": "pi", "secrets": {"auth-accounts.json": "../../outside.json"},
+            }))
+            try:
+                release.prepare_inputs(SimpleNamespace(values=str(values)), directory)
+            except ValueError as error:
+                assert "missing or invalid" in str(error)
+            else:
+                raise AssertionError("escaping relative input accepted")
+    finally:
+        os.chdir(original_cwd)
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "failed-release closeout archives only terminal isolation evidence and removes temporary Pi data" {
   run python3 - << 'PY'
 import importlib.util
@@ -341,9 +422,11 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 with tempfile.TemporaryDirectory() as temporary:
     directory = Path(temporary)
-    for folder in ("backup","provisioning"):
+    for folder in ("backup","provisioning","deployment"):
         (directory/folder).mkdir()
-    (directory/"backup/backup-values.yaml").write_text('{"target":"pi"}')
+    (directory/"deployment/auth-accounts.json").write_text('{"accounts":[]}')
+    (directory/"backup/backup-values.yaml").write_text(
+        '{"target":"pi","secrets":{"auth-accounts.json":"deployment/auth-accounts.json"}}')
     (directory/"provisioning/inventory.yml").write_text('{"all":{}}')
     reference = directory/"backup/backup-release-ref"
     try:

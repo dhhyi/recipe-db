@@ -32,4 +32,4 @@ infrastructure:
 runtime:
   trustedIssuer: https://accounts.google.com
 secrets:
-  auth-accounts.json: /absolute/private/path/auth-accounts.json
+  auth-accounts.json: deployment/auth-accounts.json

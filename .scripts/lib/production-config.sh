@@ -149,7 +149,7 @@ production_config() {
       objectkeys(["auth-accounts.json"] +
         (if $googleEnabled then ["google-oauth-client-secret","oauth2-cookie-secret"] else [] end) +
         (if has("acme-account-email") then ["acme-account-email"] else [] end))
-      and all(.[]; type == "string" and startswith("/") and (test("[\\r\\n]") | not)))
+      and all(.[]; type == "string" and length > 0 and (test("[\\r\\n]") | not)))
   ' "$work/config.json" > /dev/null \
     || production_fail "invalid or incomplete production values"
   case "$2" in
@@ -186,8 +186,19 @@ production_input_path() {
   if [[ -n ${RECIPE_DB_RELEASE_INPUTS:-} ]]; then
     jq -er --arg path "$1" '.[$path] | select(type == "string" and startswith("/"))' \
       "$RECIPE_DB_RELEASE_INPUTS" || production_fail "workstation application input was not preflighted"
-  else
+  elif [[ $1 = /* ]]; then
     printf '%s\n' "$1"
+  else
+    local root resolved
+    root=$(realpath -e -- "${HOME:?HOME must be set}/.config/recipe-db") \
+      || production_fail "private configuration directory is missing"
+    resolved=$(realpath -m -- "$root/$1" 2> /dev/null) \
+      || production_fail "private input reference is missing or invalid"
+    [[ $resolved == "$root/"* ]] \
+      || production_fail "private input reference escapes the configuration directory"
+    resolved=$(realpath -e -- "$resolved" 2> /dev/null) \
+      || production_fail "private input reference is missing or invalid"
+    printf '%s\n' "$resolved"
   fi
 }
 

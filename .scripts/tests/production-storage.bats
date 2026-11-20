@@ -203,6 +203,51 @@ prepare_reattach_state() {
   [ "$status" -eq 0 ]
 }
 
+@test "deployment secrets resolve from either home and reject missing or escaping relative inputs" {
+  local home_one="$BATS_TEST_TMPDIR/home one" home_two="$BATS_TEST_TMPDIR/home two"
+  local outside="$BATS_TEST_TMPDIR/outside.json" working_one="$BATS_TEST_TMPDIR/working-one"
+  local working_two="$BATS_TEST_TMPDIR/working-two" values="$work/relative-values.yaml"
+  mkdir -p "$home_one/.config/recipe-db/deployment" "$home_two/.config/recipe-db/deployment" \
+    "$working_one" "$working_two"
+  printf '{"accounts":[]}\n' > "$home_one/.config/recipe-db/deployment/auth-accounts.json"
+  cp "$home_one/.config/recipe-db/deployment/auth-accounts.json" \
+    "$home_two/.config/recipe-db/deployment/auth-accounts.json"
+  printf '{"synthetic":"secret contents"}\n' > "$outside"
+  cp "$ROOT/deploy/local.yaml" "$values"
+
+  HOME="$home_one"
+  cd "$working_one"
+  production_config "$values" deploy
+  production_secrets
+  cmp "$HOME/.config/recipe-db/deployment/auth-accounts.json" "$work/auth-accounts.json"
+
+  HOME="$home_two"
+  cd "$working_two"
+  production_config "$values" deploy
+  production_secrets
+  cmp "$HOME/.config/recipe-db/deployment/auth-accounts.json" "$work/auth-accounts.json"
+
+  export OUTSIDE_SECRET=$outside
+  yq -o=yaml '.secrets["auth-accounts.json"] = strenv(OUTSIDE_SECRET)' "$values" > "$work/absolute-values.yaml"
+  production_config "$work/absolute-values.yaml" deploy
+  production_secrets
+  cmp "$outside" "$work/auth-accounts.json"
+
+  yq -o=yaml '.secrets["auth-accounts.json"] = "deployment/missing.json"' "$values" > "$work/missing-values.yaml"
+  production_config "$work/missing-values.yaml" deploy
+  run production_secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"private input reference is missing or invalid"* ]]
+  [[ "$output" != *"secret contents"* ]]
+
+  yq -o=yaml '.secrets["auth-accounts.json"] = "../../outside.json"' "$values" > "$work/escaping-values.yaml"
+  production_config "$work/escaping-values.yaml" deploy
+  run production_secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"escapes the configuration directory"* ]]
+  [[ "$output" != *"secret contents"* ]]
+}
+
 @test "only matching local PVs on the configured Pi root pass identity validation" {
   local pv
   pv=$(released_pv)
