@@ -60,6 +60,19 @@ test: echo local
 integration: echo integrated
 EOF
   done
+  mkdir tooling
+  cat > tooling/.project.yaml << 'EOF'
+devcontainer:
+  name: fixture-tooling
+  build:
+    args:
+      VERSION: 7
+  environment:
+    TOOL_ENV: local
+---
+category: tooling
+integration: echo integrated
+EOF
   mkdir pwa
   cat > pwa/.project.yaml << 'EOF'
 devcontainer:
@@ -259,8 +272,19 @@ assert_compose() {
   # shellcheck disable=SC2016
   assert_compose '
     . as $root |
-    all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","pwa","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
+    all(["backend","browse","browse-maintenance","fixtures","graphql","integration-tooling","job","nats","nats-init","pwa","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
       . as $service | $root.services | has($service))
+    and (.services | has("tooling") | not)
+    and .services["integration-tooling"].profiles == ["test"]
+    and .services["integration-tooling"].build.context == "tooling"
+    and .services["integration-tooling"].build.dockerfile == ".devcontainer/Dockerfile"
+    and .services["integration-tooling"].build.args.VERSION == "7"
+    and .services["integration-tooling"].build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-devcontainer-tooling-cache"]
+    and .services["integration-tooling"].networks == ["intranet"]
+    and .services["integration-tooling"].working_dir == "/workspaces/recipe-db/tooling"
+    and .services["integration-tooling"].volumes == ["./:/workspaces/recipe-db"]
+    and .services["integration-tooling"].environment.TOOL_ENV == "local"
+    and .services["integration-tooling"].environment.HOME == "/tmp"
     and (.services.browse.environment | has("GOOGLE_OAUTH_CLIENT_ID") | not)
     and .services.browse.environment.PUBLIC_ORIGIN == "${PUBLIC_ORIGIN:-http://localhost:8080}"
     and (.services.graphql.labels | all(.[]; startswith("traefik.http.routers.graphql-cookie.") | not))
@@ -282,7 +306,7 @@ assert_compose() {
     and (.services.test | has("integration") | not)
     and .services.test.volumes == ["./test/target:/app/target"]
     and all(.services | to_entries[] | select(.value | has("build"));
-      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" else . end) as $project
+      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" elif startswith("integration-") then sub("^integration-"; "devcontainer-") else . end) as $project
       | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $project + "-cache"]
       and (.value.build | has("cache_to") | not))
     and .volumes["nats-data"].name == "recipe-db-nats-data"
@@ -334,7 +358,7 @@ assert_compose() {
   # shellcheck disable=SC2016
   assert_compose '
     all(.services | to_entries[] | select(.value | has("build"));
-      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" else . end) as $project
+      (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" elif startswith("integration-") then sub("^integration-"; "devcontainer-") else . end) as $project
       | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $project + "-cache-arm64"]
       and (.value.build | has("cache_to") | not))
   '

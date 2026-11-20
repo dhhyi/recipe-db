@@ -92,6 +92,21 @@ if ! jq -e '.services.fixtures.profiles | index("test") != null' <<< "$compose_c
   exit 2
 fi
 
+declare -A project_services=()
+service_names=()
+for project in "${projects[@]}"; do
+  if jq -e --arg project "integration-$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
+    service="integration-$project"
+  elif jq -e --arg project "$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
+    service=${project}
+  else
+    echo "Project service $project is missing from the generated Compose configuration." >&2
+    exit 2
+  fi
+  project_services["$project"]=$service
+  service_names+=("$service")
+done
+
 echo "WARNING: integration tests may modify application data. e2e-test deletes all recipes, ratings, images, inspirations, and tags before each attempt, preserving the final attempt's data; volumes are not reset."
 
 fixture_started=false
@@ -118,14 +133,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for project in "${projects[@]}"; do
-  if ! jq -e --arg project "$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
-    echo "Project service $project is missing from the generated Compose configuration." >&2
-    exit 2
-  fi
-done
-
-docker compose --profile test build fixtures "${projects[@]}"
+docker compose --profile test build fixtures "${service_names[@]}"
 for project in "${projects[@]}"; do
   integration=${integration_scripts[$project]}
   if [[ $project == tags-test ]]; then
@@ -227,13 +235,13 @@ for project in "${projects[@]}"; do
     E2E_AUTH_TOKENS=$(cat "$tokens_file")
     export E2E_AUTH_TOKENS
     docker compose --profile test run --rm -e E2E_AUTH_TOKENS \
-      --entrypoint /bin/sh "$project" -c "$integration" 2>&1 \
+      --entrypoint /bin/sh "${project_services[$project]}" -c "$integration" 2>&1 \
       | tee "$project/target/integration-tests/run.log"
     status=${PIPESTATUS[0]}
     unset E2E_AUTH_TOKENS
   else
     docker compose --profile test run --rm --entrypoint /bin/sh \
-      "$project" -c "$integration" 2>&1 \
+      "${project_services[$project]}" -c "$integration" 2>&1 \
       | tee "$project/target/integration-tests/run.log"
     status=${PIPESTATUS[0]}
   fi

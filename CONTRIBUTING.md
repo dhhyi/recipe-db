@@ -83,7 +83,7 @@ Declare project commands in the second document of `.project.yaml`. Keep their r
 - `integration` runs against the shared development/test stack. Declaring it alone opts a project into `mise run integration-tests -- --development`, regardless of its category or directory name. Missing keys are ignored; blank scripts do nothing and produce a warning annotation in GitHub Actions.
 - `format` remains separate from both checks and tests.
 
-The integration runner passes the declared script to a one-off Compose job; it does not change the service's normal startup command. Start the development stack before running it.
+The integration runner passes the declared script to a one-off Compose job; it does not change the service's normal startup command. Projects without an application service get a test-profile job based on their devcontainer instead. Start the development stack before running it.
 
 Declare formatting in the second document of `.project.yaml`:
 
