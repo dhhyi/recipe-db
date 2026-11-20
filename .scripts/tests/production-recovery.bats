@@ -530,6 +530,40 @@ EOF
   done
 }
 
+@test "Pi reset accepts the provisioned values representation without accepting changed settings" {
+  closeout_fixture
+  cat >> harness.sh << 'EOF'
+target=pi
+production_storage_preflight() { :; }
+printf '%s\n' '{
+  "secrets": {
+    "auth-accounts": "/etc/recipe-db/application-inputs/auth-accounts"
+  },
+  "volumes": {
+    "recipes": "1Gi"
+  }
+}' > "$work/config.json"
+recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+jq -n --arg path "$HOME/.config/recipe-db/deployment/accounts.json" \
+  --arg size "$SIZE" \
+  '{volumes:{recipes:$size},secrets:{"auth-accounts":$path}}' > "$work/config.json"
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  run env SIZE=2Gi bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"handoff receipt does not match"* ]]
+  run ! grep -q '^wipe$' "$MOCK_LOG"
+  rm -f "$RECOVERY_STATE/restore-state.json" lease.json handoff.json
+  rmdir "$RECOVERY_STATE"
+  jq '.status="recovery-required" | .phase="post-release-backup-failed" | del(.recoveryCloseout)' \
+    state/backup-state.json > state/state.next
+  mv state/state.next state/backup-state.json
+  run env SIZE=1Gi bash harness.sh
+  [ "$status" -eq 0 ]
+  grep -q '^wipe$' "$MOCK_LOG"
+}
+
 @test "Pi reset refuses failed real host-path and filesystem UUID inspection before wipe" {
   state_machine_fixture
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/

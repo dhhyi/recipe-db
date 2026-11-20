@@ -130,6 +130,8 @@ mise run production-k3d --release-sources-from-git recovery-plan "$VALUES" "$MAN
 
 The preview verifies the selected backup, its archive hashes and exact immutable release before touching application storage. Review its discard summary: capture time, selected release, current release, newer verified catalog points and any partial-restore warning. Without a catalog, treat newer backups as **unknown**, not absent. A warning that there is no recent verified backup deserves particular attention. Do not proceed if you chose the wrong restore point.
 
+Use the same workstation values file as the preview. For a retained Pi handoff, the reset also checks that those settings match the closeout receipt after applying the provisioning mapping for secret file paths. Stop if the receipt does not match; do not edit the receipt or the values to force a match.
+
 Approve discarding application data with a separate command:
 
 ```fish

@@ -754,6 +754,7 @@ recovery_replace_lease() {
 }
 
 recovery_read_handoff() {
+  local config pi_config=""
   recovery_identity || production_fail "cannot verify recovery handoff cluster and storage identities"
   cluster_operation_lock_kubectl get configmap recipe-db-recovery-handoff --ignore-not-found -o json \
     > "$work/recovery-handoff-configmap.json" || return 1
@@ -761,15 +762,23 @@ recovery_read_handoff() {
     "$work/recovery-handoff-configmap.json" > /dev/null || production_fail "missing owned recovery handoff receipt"
   jq -er '.data["handoff.json"]' "$work/recovery-handoff-configmap.json" > "$work/recovery-handoff.json" \
     || production_fail "missing recovery handoff receipt"
+  config=$(sha256sum "$work/config.json" | cut -d ' ' -f 1)
+  if [[ $target == pi ]]; then
+    # backup-configure.yml writes sorted values with host-local application input paths.
+    pi_config=$(jq -eS '.secrets |= with_entries(.value = ("/etc/recipe-db/application-inputs/" + .key))' \
+      "$work/config.json" | sha256sum | cut -d ' ' -f 1) \
+      || production_fail "cannot derive provisioned Pi recovery configuration identity"
+  fi
   jq -e --argjson lease "$1" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg ns "$namespace" \
-    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    --arg config "$config" --arg piConfig "$pi_config" \
     --slurpfile identity "$work/reset-identity.json" '
     .version == 1 and .ownershipRetained == true and .ownershipReleased == false
     and .barrierVerified == true and .workersStopped == true
     and .target == $target and .cluster == $cluster and .context == $context
-    and .namespace == $ns and .configSha256 == $config
-    and .identity == $identity[0]
+    and .namespace == $ns
+    and (.configSha256 == $config or ($piConfig != "" and .configSha256 == $piConfig))
+    and .identity == ($identity[0] + {configSha256:.configSha256})
     and .holder == $lease.spec.holderIdentity and .leaseUid == $lease.metadata.uid
     and .artifact == $lease.metadata.annotations["recipe-db/release"]
     and $lease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
