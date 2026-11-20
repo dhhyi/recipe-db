@@ -48,7 +48,7 @@ try:
         try:
             names = tool["remote_names"](config)
             candidates = [name for name in names
-                          if name.endswith(f"-{backup_id}.manifest.json")]
+                          if tool["remote_point_backup_id"](config, name) == backup_id]
             if len(candidates) != 1:
                 raise ValueError("requested backup is missing, incomplete, or ambiguous")
             matches = tool["complete_remote_points"](

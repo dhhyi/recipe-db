@@ -686,6 +686,19 @@ def remote_names(config):
     return {line for line in result.stdout.splitlines() if REMOTE_FILENAME_PATTERN.fullmatch(line)}
 
 
+def remote_point_backup_id(config, name):
+    prefix = f"recipe-db-{config['deploymentId']}-"
+    suffix = ".manifest.json"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return None
+    stem = name[len(prefix):-len(suffix)]
+    if len(stem) <= 17 or stem[16] != "-" \
+            or not re.fullmatch(r"\d{8}T\d{6}Z", stem[:16]):
+        return None
+    backup_id = stem[17:]
+    return backup_id if BACKUP_ID_PATTERN.fullmatch(backup_id) else None
+
+
 def remote_hash(config, name, expected_size):
     if type(expected_size) is not int or expected_size < 0 \
             or expected_size > config["maxStagingBytes"]:
@@ -770,7 +783,7 @@ def complete_remote_points(config, names, catalog=None, backup_id=None, verify_a
     prefix = f"recipe-db-{config['deploymentId']}-"
     for name in sorted(names):
         if not name.startswith(prefix) or not name.endswith(".manifest.json") \
-                or (backup_id is not None and not name.endswith(f"-{backup_id}.manifest.json")):
+                or (backup_id is not None and remote_point_backup_id(config, name) != backup_id):
             continue
         document = read_remote_manifest(config, name)
         if not isinstance(document, dict) or document.get("format") != PACKAGE_FORMAT \

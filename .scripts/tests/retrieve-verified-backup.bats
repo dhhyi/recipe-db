@@ -451,6 +451,47 @@ PY
   [ ! -e "$DESTINATION" ]
 }
 
+@test "backup IDs are matched exactly, not by a colliding filename suffix" {
+  add_selected_backup 42
+  add_selected_backup previous-42
+  run python3 .scripts/retrieve-verified-backup.py --backup-id 42 "$DESTINATION"
+  [ "$status" -eq 0 ]
+  RESULT="$output" python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["REMOTE_ROOT"])
+result = json.loads(os.environ["RESULT"])
+drive = root / "drive"
+package = next(json.loads(path.read_text()) for path in drive.glob("*.manifest.json")
+               if json.loads(path.read_text()).get("backupId") == "42")
+names = {package["archive"]["name"], package["archive"]["name"].removesuffix(".tar.gz")
+         + ".manifest.json"}
+assert result["backupId"] == "42"
+assert {Path(result[field]).name for field in ("archive", "manifest")} == names
+assert set((root / "read-log").read_text().splitlines()) == names
+PY
+
+  python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["REMOTE_ROOT"])
+for path in (root / "drive").glob("*.manifest.json"):
+    package = json.loads(path.read_text())
+    if package.get("backupId") == "42":
+        (root / "drive" / package["archive"]["name"]).unlink()
+        path.unlink()
+(root / "read-log").write_text("")
+PY
+  run python3 .scripts/retrieve-verified-backup.py --backup-id 42 "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+  [ ! -s "$REMOTE_ROOT/read-log" ]
+}
+
 terminal_retrieval() {
   export REQUIRE_TERMINAL=1
   run python3 - << 'PY'
