@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
-# Bats fixtures invoke sourced helpers indirectly and isolate each test in a subshell.
-# shellcheck disable=SC2030,SC2031,SC2034,SC2218,SC2329
+# Bats fixtures invoke sourced helpers indirectly, generate literal shell expressions, and isolate tests in subshells.
+# shellcheck disable=SC2016,SC2030,SC2031,SC2034,SC2218,SC2329
 
 load test_helper
 
@@ -102,13 +102,169 @@ load_scenario_functions() {
     deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
     run_migration_sequence successful_migration_outcome_is_valid \
-    complete_recovery_state_is_verified delete_scenario_cluster run_scenario \
+    complete_recovery_state_is_verified delete_scenario_cluster capture_post_release_backup run_scenario \
     run_rehearsal_scenarios; do
     sed -n "/^${function_name}() {/,/^}/p" \
       .scripts/production-upgrade-rehearsal-k3d.sh >> "$FIXTURE_ROOT/scenario-functions.sh"
   done
   # shellcheck source=/dev/null
   source "$FIXTURE_ROOT/scenario-functions.sh"
+}
+
+@test "candidate backup captures uploads and validates exact migrated identity and versions" {
+  local work="$FIXTURE_ROOT/work" fake_remote="$FIXTURE_ROOT/remote" run_id=123
+  local root="$FIXTURE_ROOT" cluster_values=cluster.yaml
+  local candidate="$CANDIDATE_RELEASE" candidate_revision="$SOURCE_REVISION"
+  local candidate_worktree="$FIXTURE_ROOT/candidate" upload=uploader validator=validator
+  local actual_versions='[{"service":"recipes","currentVersion":2,"requiredVersion":2}]'
+  local phase='' post_backup_id='' post_backup_upload_status=not-run
+  local mock_status=verified-upload
+  local state="$work/uploader/successful-upgrade/maintenance"
+  local remote="$fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade"
+  mkdir -p "$state" "$work/logs" "$remote"
+  printf '{}\n' > "$work/successful-upgrade-backup-config.json"
+  printf '{}\n' > "$state/backup-state.json"
+  load_scenario_functions
+  mark() { :; }
+  die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+  }
+  lifecycle() {
+    printf '%s\n' "$*" >> "$work/calls"
+  }
+  application_project_metadata_to_jsonl() { printf '{}\n' > "$2"; }
+  run_logged() {
+    local log=$1
+    shift
+    if [[ $1 == python3 && $2 == -c ]]; then
+      jq '.postReleaseBackup={backupId:"backup-123-456"}' "$state/backup-state.json" > "$state/next"
+      mv "$state/next" "$state/backup-state.json"
+      jq -n --arg status "$mock_status" \
+        '{status:$status,backupId:"backup-123-456"}' > "$work/uploader/successful-upgrade/status.json"
+      printf '{"backupId":"backup-123-456","manifest":"post.json","archive":"post.tar.gz"}\n' > "$work/uploader/successful-upgrade/baseline.json"
+      jq -n --arg candidate "$candidate" --arg revision "$candidate_revision" '{
+        source:{artifact:$candidate,revision:$revision},
+        snapshotManifest:{inventory:[{service:"recipes",files:[{path:"storage-version",storageVersion:2}]}]}
+      }' > "$remote/post.json"
+      : > "$remote/post.tar.gz"
+    elif [[ $1 == python3 && $2 == "$validator" ]]; then
+      printf 'validate %s\n' "$*" >> "$work/calls"
+    else
+      "$@" > "$log"
+    fi
+  }
+  capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
+  [ "$post_backup_id" = backup-123-456 ]
+  [ "$post_backup_upload_status" = verified-upload ]
+  grep -Fq 'release-website-result candidate.yaml' "$work/calls"
+  grep -Fq 'release-backup-capture candidate.yaml' "$work/post-release-capture-command"
+  grep -Fq "validate python3 validator $remote/post.json $remote/post.tar.gz" "$work/calls"
+  mock_status=verified-unchanged
+  run capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
+  [ "$status" -ne 0 ]
+  [[ $output == *'not verified-upload'* ]]
+}
+
+@test "normal uploader dispatch invokes local capture adapter and uploads candidate snapshot" {
+  local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work" fake_remote="$FIXTURE_ROOT/remote"
+  local run_id=123 cluster_values=cluster.yaml candidate="$CANDIDATE_RELEASE"
+  local candidate_revision="$SOURCE_REVISION" candidate_worktree="$FIXTURE_ROOT/candidate"
+  local upload="$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" validator=validator
+  local actual_versions='[{"service":"recipes","currentVersion":2,"requiredVersion":2}]'
+  local phase='' post_backup_id='' post_backup_upload_status=not-run
+  local state="$work/uploader/successful-upgrade/maintenance"
+  export DOCKER_HOST='unix:///tmp/rehearsal-test.sock' DOCKER_CONTEXT='rehearsal-test'
+  export DOCKER_CONFIG="$FIXTURE_ROOT/docker config" XDG_RUNTIME_DIR="$FIXTURE_ROOT/runtime"
+  mkdir -p "$state" "$work/logs" "$work/staging" "$fake_remote" "$work/fixture"
+  rm "$FIXTURE_ROOT/bin/python3"
+  cp "$BATS_TEST_DIRNAME/fixtures/rclone-local" "$FIXTURE_ROOT/bin/rclone"
+  chmod 700 "$FIXTURE_ROOT/bin/rclone"
+  export FAKE_RCLONE_ROOT="$fake_remote"
+  printf '{}\n' > "$work/rclone.conf"
+  chmod 600 "$work/rclone.conf"
+  jq -n --arg state "$work/uploader/successful-upgrade" --arg staging "$work/staging" \
+    --arg rclone "$work/rclone.conf" --arg capture "$work/unused" '{
+      deploymentId:"issue-251-123-successful-upgrade",remote:"fake-e2e:recipe-db-backups",
+      rcloneConfig:$rclone,stateDirectory:$state,stagingDirectory:$staging,
+      captureCommand:$capture,captureTimeoutSeconds:600,maxStagingBytes:8589934592
+    }' > "$work/successful-upgrade-backup-config.json"
+  chmod 600 "$work/successful-upgrade-backup-config.json"
+  jq -n --arg source "$SOURCE_RELEASE" --arg candidate "$candidate" --arg revision "$candidate_revision" '{
+    backupId:"backup-111-222",status:"access-open",phase:"website-passed",
+    source:{artifact:$source},candidate:{artifact:$candidate,revision:$revision},
+    websiteCheck:{outcome:"passed"}
+  }' > "$state/backup-state.json"
+  python3 - "$work/fixture" "$candidate" "$candidate_revision" << 'PY'
+import hashlib, io, json, pathlib, sys, tarfile
+root = pathlib.Path(sys.argv[1])
+contents = {"recipes.sqlite3": b"data", "storage-version": b"2\n"}
+entries = []
+with tarfile.open(root / "recipes.tar", "w") as archive:
+    for name, data in sorted(contents.items()):
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+        entry = {"path": name, "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        if name == "storage-version":
+            entry["storageVersion"] = 2
+        entries.append(entry)
+data = (root / "recipes.tar").read_bytes()
+manifest = {
+    "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-333-444",
+    "capturedAt": "2026-11-19T12:00:00Z",
+    "source": {"target": "local", "cluster": "fixture", "context": "fixture",
+               "namespace": "recipe-db", "artifact": sys.argv[2], "revision": sys.argv[3]},
+    "inventory": [{"service": "recipes", "role": "authoritative-read-only", "pvc": "recipes",
+                   "archive": "recipes.tar", "sizeBytes": len(data), "fileCount": len(entries),
+                   "sha256": hashlib.sha256(data).hexdigest(), "files": entries}],
+}
+(root / "manifest.json").write_text(json.dumps(manifest))
+PY
+  {
+    printf '#!/bin/bash\nset -eu\n'
+    printf '[[ $DOCKER_HOST == %q && $DOCKER_CONTEXT == %q && $DOCKER_CONFIG == %q && $XDG_RUNTIME_DIR == %q ]]\n' \
+      "$DOCKER_HOST" "$DOCKER_CONTEXT" "$DOCKER_CONFIG" "$XDG_RUNTIME_DIR"
+    printf 'printf "%%s\\n" "$*" >> %q\n' "$work/mise-calls"
+    printf 'if [[ $4 == verify ]]; then exit 0; fi\n'
+    printf '[[ $4 == --release-sources-from-git && $5 == release-backup-capture && $7 == %q && $8 == %q ]]\n' "$state" "$candidate"
+    printf 'cp -a %q %q\n' "$work/fixture" "$state/post-release-backup"
+    printf 'jq --arg path %q --arg artifact %q ' "$state/post-release-backup" "$candidate"
+    printf '%q ' '.phase="post-release-backup-captured" | .postReleaseBackup={status:"captured",artifact:$artifact,backupId:"backup-333-444",snapshotPath:$path}'
+    printf '%q > %q\n' "$state/backup-state.json" "$state/backup-state.next"
+    printf 'mv %q %q\n' "$state/backup-state.next" "$state/backup-state.json"
+  } > "$FIXTURE_ROOT/bin/mise"
+  chmod 700 "$FIXTURE_ROOT/bin/mise"
+  load_scenario_functions
+  mark() { :; }
+  die() {
+    printf '%s\n' "$*" >&2
+    return 1
+  }
+  lifecycle() { [[ $3 == release-website-result ]]; }
+  application_project_metadata_to_jsonl() { printf '{}\n' > "$2"; }
+  run_logged() {
+    local log=$1
+    shift
+    if [[ $1 == python3 && $2 == "$validator" ]]; then
+      printf 'validated %s\n' "$*" > "$log"
+    else
+      "$@" > "$log" 2>&1 || {
+        cat "$log" >&2
+        [[ ! -f $work/logs/post-release-capture.log ]] || cat "$work/logs/post-release-capture.log" >&2
+        return 1
+      }
+    fi
+  }
+  capture_post_release_backup successful-upgrade candidate.yaml "$state" backup-111-222
+  [ "$post_backup_id" = backup-333-444 ]
+  [ "$post_backup_upload_status" = verified-upload ]
+  jq -e '.captureTimeoutSeconds == 5400' "$work/successful-upgrade-backup-config.json"
+  grep -Fq 'production-k3d verify cluster.yaml' "$work/mise-calls"
+  grep -Fq 'release-backup-capture candidate.yaml' "$work/mise-calls"
+  jq -e '.postReleaseBackup.uploadStatus == "verified-upload"' "$state/backup-state.json"
+  jq -e '.status == "verified-upload" and .backupId == "backup-333-444"' \
+    "$work/uploader/successful-upgrade/status.json"
 }
 
 @test "release inventory validation uses the schema-specific source CLI contract" {
@@ -409,6 +565,7 @@ YAML
   local backup_storage_versions_match_source=true live_storage_workloads_ready=true
   local source_package_status=verified-upload success_upgrade_status=passed
   local migration_outcome=no-migration-required failure_recovery_status=passed
+  local post_backup_id=backup-456-789 post_backup_upload_status=verified-upload post_backup_restore_status=passed
   local cluster='' deleted_clusters=() source_worktree="$BATS_TEST_TMPDIR/source"
   local candidate_worktree="$BATS_TEST_TMPDIR/candidate"
   local source_worktree_created=false candidate_worktree_created=false
@@ -430,6 +587,7 @@ YAML
   jq -e '.status == "passed" and .failureReason == null
     and .successfulUpgrade.migrationOutcome == "no-migration-required"
     and .successfulUpgrade.representativeRecipeLinkedDataVerified == true
+    and .postReleaseBackup == {backupId:"backup-456-789",uploadStatus:"verified-upload",restoreResult:"passed"}
     and .failureRecovery.status == "passed"
     and .failureRecovery.verification != null
     and .failureRecovery.injectedFailure != null
@@ -679,6 +837,7 @@ YAML
       > "$work/source-sample.json"
   }
   verify_sample() { printf 'verified %s\n' "$2" >> "$work/sample-checks.log"; }
+  capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
     local label=$1 snapshot=$2
     mkdir -p "$work/uploader/$label" "$work/packages/$label"
@@ -796,6 +955,7 @@ YAML
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
+  grep -Fq 'post-release successful-upgrade' "$scenario_lifecycle_log"
 
   : > "$scenario_lifecycle_log"
   scenario_label=failure-recovery
@@ -866,6 +1026,7 @@ YAML
   }
   take_sample() { sample_id=recipe-with-links; }
   verify_sample() { :; }
+  capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
     local label=$1
     mkdir -p "$work/uploader/$label" "$work/packages/$label"
@@ -954,6 +1115,7 @@ YAML
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
+  grep -Fq 'post-release successful-upgrade' "$scenario_lifecycle_log"
 }
 
 @test "scenario cluster deletion failure is cleanup-failed and retains ownership evidence" {
@@ -1006,13 +1168,16 @@ YAML
   [ "$status" -ne 0 ]
 }
 
-@test "one cluster restores once then recovers reopens upgrades and deletes in order" {
+@test "rehearsal restores candidate backup on a second cluster after upgrade" {
   local root="$FIXTURE_ROOT" work="$FIXTURE_ROOT/work"
   local backup_id=backup-123-456 source_revision="$SOURCE_REVISION"
   local source_release="$SOURCE_RELEASE" candidate="$CANDIDATE_RELEASE"
   local manifest=manifest.json archive=archive.tar.gz phase=''
-  mkdir -p "$work/logs" "$work/state/failure-recovery"
+  local fake_remote="$work/remote" run_id=123 post_backup_restore_status=not-run
+  mkdir -p "$work/logs" "$work/state/failure-recovery" "$work/uploader/successful-upgrade"
   printf '{"backupId":"backup-789-123"}\n' > "$work/state/failure-recovery/backup-state.json"
+  printf '{"backupId":"backup-999-888","manifest":"post.json","archive":"post.tar.gz"}\n' \
+    > "$work/uploader/successful-upgrade/baseline.json"
   load_scenario_functions
   new_cluster() { printf 'create %s\n' "$*" >> "$work/steps"; }
   run_logged() {
@@ -1026,17 +1191,22 @@ YAML
   mark() { :; }
   run_scenario() { printf 'scenario %s\n' "$*" >> "$work/steps"; }
   verify_sample() { printf 'verify %s\n' "$*" >> "$work/steps"; }
-  delete_scenario_cluster() { printf 'delete\n' >> "$work/steps"; }
+  delete_scenario_cluster() { printf 'delete %s\n' "$*" >> "$work/steps"; }
 
-  run_rehearsal_scenarios source.yaml candidate.yaml cluster.yaml
+  run_rehearsal_scenarios source.yaml candidate.yaml cluster.yaml post.yaml post-cluster.yaml
   [ "$(sed -n '1p' "$work/steps")" = 'create r cluster.yaml' ]
   grep -Fq "restore source.yaml manifest.json archive.tar.gz $backup_id $work/state/restore RESTORE-$backup_id" "$work/steps"
   [ "$(sed -n '3p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
   grep -Fq "release-recovery-reopen source.yaml $work/state/failure-recovery $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
   [ "$(sed -n '5p' "$work/steps")" = 'verify source.yaml recovered-source' ]
   [ "$(sed -n '6p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
-  [ "$(sed -n '7p' "$work/steps")" = delete ]
-  [ "$(grep -c '^restore ' "$work/steps")" -eq 1 ]
+  [ "$(sed -n '7p' "$work/steps")" = 'delete complete' ]
+  [ "$(sed -n '8p' "$work/steps")" = 'create p post-cluster.yaml' ]
+  grep -Fq "restore post.yaml $fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade/post.json $fake_remote/recipe-db-backups/issue-251-$run_id-successful-upgrade/post.tar.gz backup-999-888" "$work/steps"
+  [ "$(sed -n '10p' "$work/steps")" = 'verify post.yaml post-release-restore' ]
+  [ "$(sed -n '11p' "$work/steps")" = 'delete post-release' ]
+  [ "$post_backup_restore_status" = passed ]
+  [ "$(grep -c '^restore ' "$work/steps")" -eq 2 ]
 }
 
 @test "recovery removes only stopped candidate-only Deployments with server preconditions" {
