@@ -20,14 +20,15 @@ export async function assertHeaderScreenshots(
       ["logged-out", LoggedOut],
       ["logged-in", LoggedIn],
     ] as const) {
-      document.body.replaceChildren();
+      const canvas = document.createElement("div");
+      document.body.replaceChildren(canvas);
       const storyRender = story.render;
       if (!storyRender) throw new Error(`Missing render function for ${name}`);
       render(
         storyRender(story.args, {} as Parameters<typeof storyRender>[1]),
-        document.body,
+        canvas,
       );
-      const component = document.querySelector(
+      const component = canvas.querySelector(
         "header-component",
       ) as HTMLElement & { updateComplete: Promise<unknown> };
       await component.updateComplete;

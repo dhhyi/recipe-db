@@ -18,6 +18,20 @@ const setReducedMotion = (value: "reduce" | "no-preference") =>
     features: [{ name: "prefers-reduced-motion", value }],
   });
 
+const nativeVisualViewportHeight = window.visualViewport
+  ? Object.getOwnPropertyDescriptor(window.visualViewport, "height")
+  : undefined;
+
+function restoreVisualViewportHeight() {
+  const visualViewport = window.visualViewport;
+  if (!visualViewport) return;
+  if (nativeVisualViewportHeight) {
+    Object.defineProperty(visualViewport, "height", nativeVisualViewportHeight);
+  } else {
+    Reflect.deleteProperty(visualViewport, "height");
+  }
+}
+
 async function mountHeader() {
   document.body.innerHTML = `
     <header-component auth-role="anonymous" auth-enabled></header-component>
@@ -54,6 +68,7 @@ async function expectHidden(hidden: boolean) {
 describe("shared header scrolling", () => {
   beforeEach(async () => {
     document.documentElement.dataset.theme = "light";
+    restoreVisualViewportHeight();
     await page.viewport(800, 600);
     await mountHeader();
     window.scrollTo(0, 0);
@@ -68,6 +83,7 @@ describe("shared header scrolling", () => {
     ).send("Emulation.setEmulatedMedia", { features: [] });
     document.body.replaceChildren();
     window.scrollTo(0, 0);
+    restoreVisualViewportHeight();
   });
 
   it("stays sticky and visible below the 10% header-to-viewport threshold", async () => {
@@ -124,10 +140,6 @@ describe("shared header scrolling", () => {
     ).style.height = "59px";
     await expectHidden(false);
     const visualViewport = window.visualViewport!;
-    const heightDescriptor = Object.getOwnPropertyDescriptor(
-      visualViewport,
-      "height",
-    );
     Object.defineProperty(visualViewport, "height", {
       configurable: true,
       value: 500,
@@ -142,11 +154,6 @@ describe("shared header scrolling", () => {
     });
     visualViewport.dispatchEvent(new Event("resize"));
     await expectHidden(false);
-    if (heightDescriptor) {
-      Object.defineProperty(visualViewport, "height", heightDescriptor);
-    } else {
-      Reflect.deleteProperty(visualViewport, "height");
-    }
   });
 
   it("reveals for keyboard focus and keeps focused authentication controls visible", async () => {

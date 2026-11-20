@@ -17,7 +17,7 @@ export default mergeConfig(
       }),
     ],
     test: {
-      include: ["src/**/*.stories.ts"],
+      setupFiles: ["./vitest.storybook.setup.ts"],
       browser: {
         enabled: true,
         provider: playwright(),

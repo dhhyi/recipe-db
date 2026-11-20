@@ -65,6 +65,9 @@ export const Static: Story = {
         canvasElement.querySelectorAll("rating-component svg"),
       ).toHaveLength(5);
     });
+    const rating = canvasElement.querySelector("rating-component");
+    expect(rating).not.toHaveAttribute("hx-post");
+    expect(rating?.querySelectorAll(".own-rating")).toHaveLength(0);
   },
   args: {
     rating: 3.5,

@@ -46,12 +46,17 @@ describe("rating interactions", () => {
     expect(ownRatings()).toHaveLength(5);
 
     const currentStar = stars.querySelectorAll("svg")[3];
-    await userEvent.click(currentStar);
+    await expect.poll(() => currentStar.getAnimations().length).toBe(0);
+    currentStar.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true }),
+    );
     expect(events).toEqual([]);
     expect(currentStar.getAnimations()).toHaveLength(0);
 
     const changedStar = stars.querySelectorAll("svg")[1];
-    await userEvent.click(changedStar);
+    changedStar.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, composed: true }),
+    );
     expect(events).toEqual([2]);
     expect(changedStar.getAnimations()).toHaveLength(
       matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1,

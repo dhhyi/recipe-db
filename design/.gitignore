@@ -26,3 +26,4 @@ src/tailwind-sources.css
 
 *storybook.log
 storybook-static
+.vitest

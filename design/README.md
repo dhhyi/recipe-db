@@ -8,6 +8,14 @@ Shared UI component library, implemented using [Lit](https://lit.dev/) web compo
 
 Use Storybook's theme switch to review every story in light and dark mode. Do not create dedicated light/dark stories or hard-code a theme in a story; stories should describe distinct component states and follow the selected theme.
 
+Story `play` functions run automatically when a story opens, including in the published static Storybook. Keep them assertion-only: verify the story's initial rendered state and do not click, type, scroll, resize, or otherwise drive interactions. Put browser interaction scenarios in separate Vitest Browser tests. Present candidate additional initial-state assertions for review before adding them.
+
+Run Design's local browser tests with `mise run --raw in-devcontainer design test`. The command runs Storybook story-render smoke tests and assertion-only `play` functions, plus standalone Vitest Browser interaction and visual tests. It does not require the shared application stack and is run in CI, not pre-commit. The Vitest addon is configured for the test command only; the normal static Storybook does not include its test-running UI.
+
+Rating hover, vote, and static-click interaction checks, and the shared header's sticky visibility, scroll thresholds, resize/orientation, focus, and reduced-motion checks live in separate Vitest Browser tests. The carousel story's GraphQL preview is served by a deterministic in-test fixture; unexpected fetches fail the Storybook test rather than reaching an application service. Keep app-specific header wiring and representative assembled-page screenshots in E2E, where they protect a distinct integration boundary.
+
+Header visual tests capture only the header element in the logged-out and logged-in stories at mobile (390×844), mobile landscape (844×390), dark touch tablet (768×1024), and desktop (1280×900). These eight local Chromium baselines are tracked by Git LFS. Browser binaries, Linux dependencies, and fonts are provisioned by the test command; no screenshot cloud is used. The visual-viewport resize case dispatches a synthetic resize with a controlled height, matching the prior E2E test's boundary rather than emulating an operating-system keyboard or zoom.
+
 ## Form labels
 
 - Do not use floating labels or visible labels above text-like inputs (`text`, `url`, `search`).
