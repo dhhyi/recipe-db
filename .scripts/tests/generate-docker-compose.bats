@@ -303,8 +303,8 @@ assert_compose() {
       and (.value.build | has("cache_to") | not))
     and .volumes["nats-data"].name == "recipe-db-nats-data"
     and (.volumes | has("oauth2-sessions-data") | not)
-    and .volumes["images-data"] == {}
-    and .services.images.volumes == [{type:"volume",source:"images-data",target:"/data",volume:{nocopy:true}}]
+    and .volumes["images-data"].name == "recipe-db-images-data"
+    and .services.images.volumes == ["images-data:/data"]
     and .volumes["tags-data"].name == "recipe-db-tags-data"
     and .services.tags.environment.MODE == "testing"
     and (.services.tags.environment | has("PRODUCTION") | not)

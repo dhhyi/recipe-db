@@ -89,8 +89,13 @@ suite "immutable image storage":
       versionedStore.publishStorageVersion()
     check readFile(versionRoot / "storage-version") == "2\n"
     check not versionedStore.checkStorageVersion("production")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("backup")
+    check not versionedStore.checkStorageVersion("backup")
+    for folder in [versionedStore.publicFolder, versionedStore.manifestFolder]:
+      removeDir(folder)
+      expect StorageError:
+        discard versionedStore.checkStorageVersion("backup")
+      check not dirExists(folder)
+      createDir(folder)
 
     writeFile(versionRoot / "storage-version", "1\n")
     writeFile(versionedStore.manifestFolder / "recipe.json", "{}")

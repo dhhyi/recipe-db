@@ -61,13 +61,6 @@ proc storageFailure(marker, reason: string) {.noreturn.} =
   raise newException(StorageError, "images storage version failure at " &
     marker & ": expected " & $expectedStorageVersion & ", " & reason)
 
-proc emptyDirectory(path: string): bool =
-  if not dirExists(path):
-    return false
-  for _ in walkDir(path, checkDir = true):
-    return false
-  true
-
 proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
   let marker = store.root / "storage-version"
   var version = -1
@@ -93,7 +86,7 @@ proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
   elif fileExists(store.root):
     storageFailure(marker, "cannot inspect data root")
 
-  var hasEntries, hasApplicationData: bool
+  var hasEntries: bool
   if dirExists(store.root):
     try:
       for kind, path in walkDir(store.root, checkDir = true):
@@ -103,10 +96,6 @@ proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
             storageFailure(marker, "unsafe marker file type")
           continue
         hasEntries = true
-        if version != -1 and mode == "backup" and
-            not (kind == pcDir and name in ["public", "manifests"] and
-            emptyDirectory(path)):
-          hasApplicationData = true
     except StorageError:
       raise
     except CatchableError:
@@ -120,8 +109,8 @@ proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
     return true
   if version != expectedStorageVersion:
     storageFailure(marker, "actual " & $version)
-  if mode == "backup" and (not hasApplicationData or
-      not dirExists(store.publicFolder) or not dirExists(store.manifestFolder)):
+  if mode == "backup" and
+      (not dirExists(store.publicFolder) or not dirExists(store.manifestFolder)):
     storageFailure(marker, "application data missing; backup mode cannot initialize")
   false
 

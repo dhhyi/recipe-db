@@ -57,7 +57,7 @@
 #@     })
 #@   end
 #@   if "images" in services:
-#@     services["images"]["volumes"] = [{"type": "volume", "source": "images-data", "target": "/data", "volume": {"nocopy": True}}]
+#@     services["images"]["volumes"] = ["images-data:/data"]
 #@   end
 #@   if "tags" in services:
 #@     services["tags"]["volumes"] = ["tags-data:/data"]
@@ -184,7 +184,8 @@ volumes:
     name: recipe-db-search-data
   #@ end
   #@ if len([p for p in deploy_projects if p.name == "images"]) > 0:
-  images-data: {}
+  images-data:
+    name: recipe-db-images-data
   #@ end
   #@ if len([p for p in deploy_projects if p.name == "tags"]) > 0:
   tags-data:
