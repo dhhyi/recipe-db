@@ -46,6 +46,7 @@ Keep each instruction page to roughly one screen:
 5. **Expected result and stop condition:** what proves success, when to stop, and the minimal non-sensitive result needed next.
 
 - For operator-run batches, wait for the operator's result before advancing. Acknowledge it briefly and validate the relevant evidence; do not automatically chain through subsequent steps.
+- When a batch has a clear success message and no additional output is needed, use `ask_user` for a yes/no confirmation of whether it succeeded. If a decision depends on an ID, status, recap or other evidence, don't use `ask_user`; request the minimal output in chat.
 - Follow the agreed command responsibilities. Do not silently execute an upgrade, rehearsal, deployment, migration, access change, cleanup or publication.
 - Assume the operator can use workstation fish, a Pi SSH session as `piadmin` with POSIX-compatible commands, and the provisioning container's SSH-agent Bash shell. Ask the operator to open a missing shell or Kubernetes tunnel. Do not attempt protected SSH or sudo yourself when their key-passphrase/password prompts cannot be answered.
 - Give each command in its actual shell. Do not wrap Pi commands in workstation `ssh host 'command'` one-liners. Plain SSH connection/tunnel setup and operator-authenticated internal file transport by the release controller are distinct from those one-liners.

@@ -373,6 +373,8 @@ Return to the **workstation fish shell** from step 1. Keep that checkout at the 
 set -g RELEASE_STATE (mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES")
 and set -g HOLDER (printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -er .backupId)
 and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$HOLDER"
+and printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -e \
+  'select(.status == "captured" and .phase == "captured") | {backupId, status, phase}'
 ```
 
 Stop if any command fails. Require `captured/captured` and the holder belonging to the backup just verified. Run staging only after the Pi uploader reports `verified-upload` or `verified-unchanged` with `maintenanceActive: true`:
@@ -505,7 +507,9 @@ For an eligible candidate, return to **workstation fish**, using the variables f
 
 ```fish
 mise run --raw production-release --pi piadmin@recipe-pi.home release-start "$VALUES" "$RELEASE"
-mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES"
+and set -g RELEASE_STATE (mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES")
+and printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -e --arg holder "$HOLDER" \
+  'select(.backupId == $holder and .status == "release-ready" and .phase == "ready") | {backupId, status, phase}'
 ```
 
 Startup is guarded by the exact candidate identity and recorded handoff. GraphQL starts in backup mode first; other candidate workloads then start and must become ready while GraphQL continues blocking application operations. Continue only when state is `release-ready/ready` and all candidate workloads are ready. A startup or readiness failure retains the Lease and inspectable recovery state; do not reopen access or roll back automatically.
@@ -685,6 +689,7 @@ Require `verified-upload` for the **post-release** backup ID, with `maintenanceA
 set -g RELEASE_STATE (mise run --raw production-release --pi piadmin@recipe-pi.home status "$VALUES")
 and set -g POST_BACKUP_ID (printf '%s\n' "$RELEASE_STATE" | mise exec -- jq -er .postReleaseBackup.backupId)
 and string match -qr '^backup-[0-9]+-[0-9]+$' -- "$POST_BACKUP_ID"
+and printf 'Post-release backup ID: %s\n' "$POST_BACKUP_ID"
 ```
 
 Stop on failure or an identity mismatch. After checking the Pi upload status matches:
