@@ -23,7 +23,10 @@ export async function assertHeaderScreenshots(
       document.body.replaceChildren();
       const storyRender = story.render;
       if (!storyRender) throw new Error(`Missing render function for ${name}`);
-      render(storyRender(story.args), document.body);
+      render(
+        storyRender(story.args, {} as Parameters<typeof storyRender>[1]),
+        document.body,
+      );
       const component = document.querySelector(
         "header-component",
       ) as HTMLElement & { updateComplete: Promise<unknown> };

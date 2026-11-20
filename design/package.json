@@ -10,7 +10,7 @@
     "start": "storybook dev -p 6006 --no-open",
     "lint": "eslint .",
     "build-storybook": "storybook build",
-    "test": "playwright install --with-deps chromium && vitest run"
+    "test": "playwright install --with-deps chromium && vitest run --config vitest.storybook.config.ts && vitest run && vitest run --config vitest.visual-touch.config.ts"
   },
   "dependencies": {
     "@anyblades/blades": "3.1.4",

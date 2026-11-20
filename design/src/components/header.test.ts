@@ -9,6 +9,15 @@ const settle = () =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
 
+const setReducedMotion = (value: "reduce" | "no-preference") =>
+  (
+    cdp() as unknown as {
+      send: (method: string, params: unknown) => Promise<unknown>;
+    }
+  ).send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value }],
+  });
+
 async function mountHeader() {
   document.body.innerHTML = `
     <header-component auth-role="anonymous" auth-enabled></header-component>
@@ -52,13 +61,19 @@ describe("shared header scrolling", () => {
   });
 
   afterEach(async () => {
-    await cdp().send("Emulation.setEmulatedMedia", { features: [] });
+    await (
+      cdp() as unknown as {
+        send: (method: string, params: unknown) => Promise<unknown>;
+      }
+    ).send("Emulation.setEmulatedMedia", { features: [] });
     document.body.replaceChildren();
     window.scrollTo(0, 0);
   });
 
   it("stays sticky and visible below the 10% header-to-viewport threshold", async () => {
-    const header = document.querySelector("header-component > header")!;
+    const header = document.querySelector(
+      "header-component > header",
+    ) as HTMLElement;
     header.style.height = "59px";
     await settle();
     await scrollTo(400);
@@ -104,7 +119,9 @@ describe("shared header scrolling", () => {
   it("observes rendered-header and visual-viewport size changes", async () => {
     await scrollTo(400);
     await expectHidden(true);
-    document.querySelector("header-component > header")!.style.height = "59px";
+    (
+      document.querySelector("header-component > header") as HTMLElement
+    ).style.height = "59px";
     await expectHidden(false);
     const visualViewport = window.visualViewport!;
     const heightDescriptor = Object.getOwnPropertyDescriptor(
@@ -133,9 +150,7 @@ describe("shared header scrolling", () => {
   });
 
   it("reveals for keyboard focus and keeps focused authentication controls visible", async () => {
-    await cdp().send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
-    });
+    await setReducedMotion("no-preference");
     await scrollTo(400);
     await expectHidden(true);
     await userEvent.tab();
@@ -159,18 +174,14 @@ describe("shared header scrolling", () => {
   });
 
   it("uses a 150ms transition normally and disables it for reduced motion", async () => {
-    await cdp().send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
-    });
+    await setReducedMotion("no-preference");
     const header = document.querySelector("header-component > header")!;
     expect(getComputedStyle(header).transitionDuration).toBe("0.15s");
     await scrollTo(400);
     await expectHidden(true);
     await scrollTo(392);
     await expectHidden(false);
-    await cdp().send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
-    });
+    await setReducedMotion("reduce");
     expect(getComputedStyle(header).transitionDuration).toBe("0s");
     await scrollTo(400);
     await expectHidden(true);
