@@ -12,6 +12,8 @@ setup() {
   done
   mkdir unit-only
   cat > unit-only/.project.yaml << 'EOF'
+name: unit-only
+---
 category: backend
 test: echo local test
 EOF
@@ -35,6 +37,8 @@ EOF
 @test "runs integration scripts for projects without a test category or suffix" {
   mkdir api-contract
   cat > api-contract/.project.yaml << 'EOF'
+name: api-contract
+---
 category: backend
 integration: echo api contract
 EOF
@@ -59,6 +63,8 @@ EOF
 @test "blank integration scripts are no-ops and warn only in GitHub Actions" {
   mkdir blank-integration
   cat > blank-integration/.project.yaml << 'EOF'
+name: blank-integration
+---
 category: backend
 integration: "   "
 EOF
