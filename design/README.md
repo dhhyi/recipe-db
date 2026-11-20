@@ -14,8 +14,6 @@ Run Design's local browser tests with `mise run --raw in-devcontainer design tes
 
 Use deterministic, isolated fixtures for data-fetching stories; unexpected requests should fail closed rather than reach application services. Keep app-specific header wiring and representative assembled-page screenshots in E2E, where they protect a distinct integration boundary.
 
-Header visual tests capture only the header element in the logged-out and logged-in stories at mobile (390×844), mobile landscape (844×390), dark touch tablet (768×1024), and desktop (1280×900). These eight local Chromium baselines are tracked by Git LFS. Browser binaries, Linux dependencies, and fonts are provisioned by the test command; no screenshot cloud is used. The visual-viewport resize case dispatches a synthetic resize with a controlled height, matching the prior E2E test's boundary rather than emulating an operating-system keyboard or zoom.
-
 ## Form labels
 
 - Do not use floating labels or visible labels above text-like inputs (`text`, `url`, `search`).
