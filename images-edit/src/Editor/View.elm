@@ -278,12 +278,6 @@ galleryView model =
             ]
         , editorStatus model
         , galleryFeedback model
-        , galleryLoadError model
-        , if model.galleryError /= Nothing then
-            button [ type_ "button", class "outline", onClick RetryGallery ] [ text "Erneut laden" ]
-
-          else
-            text ""
         , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
         , Maybe.withDefault (text "")
             (if model.galleryRefreshing || model.galleryError /= Nothing then
@@ -293,6 +287,12 @@ galleryView model =
                 Maybe.map (\warning -> p [ class "feedback warning", attribute "role" "status" ] [ text warning ]) (Editor.Types.capacityWarning images)
             )
         , Maybe.withDefault (text "") (Maybe.map errorMessage model.error)
+        , galleryLoadError model
+        , if model.galleryError /= Nothing then
+            button [ type_ "button", class "outline", onClick RetryGallery ] [ text "Erneut laden" ]
+
+          else
+            text ""
         , galleryContent model images model.failedThumbnails
         , p [] [ a [ href ("/recipe/" ++ model.recipeId) ] [ text "Zurück zum Rezept" ] ]
         ]
