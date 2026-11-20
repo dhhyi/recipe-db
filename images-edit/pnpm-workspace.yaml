@@ -7,7 +7,7 @@ allowBuilds:
 # TODO: Remove this override and patch when folder-hash can be upgraded to a release with the minimatch compatibility fix.
 overrides:
   # elm-graphql still requires glob 11; glob 14 fixes cancellation and uses patched minimatch.
-  '@dillonkearns/elm-graphql>glob': ^14.0.6
+  "@dillonkearns/elm-graphql>glob": ^14.0.6
   folder-hash>minimatch: ^11.0.1
 patchedDependencies:
   folder-hash@3.3.5: patches/folder-hash@3.3.5.patch
