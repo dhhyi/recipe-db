@@ -81,6 +81,15 @@ with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
         input_path = home / ".config/recipe-db/deployment/auth-accounts.json"
         input_path.parent.mkdir(parents=True)
         input_path.write_bytes(b'{"accounts":[]}\n')
+        config = home / ".config/recipe-db"
+        (config / "backup").mkdir()
+        (config / "provisioning").mkdir()
+        (config / "backup/backup-values.yaml").write_text(json.dumps({
+            "secrets": {"auth-accounts.json": "deployment/auth-accounts.json"},
+        }))
+        (config / "provisioning/inventory.yml").write_text('{"all":{}}')
+        (config / "backup/backup-release-ref").write_text(
+            "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64)
     for workdir in workdirs:
         workdir.mkdir()
     values = directory / "values.yaml"
@@ -110,6 +119,7 @@ with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
                 expected = home / ".config/recipe-db/deployment/auth-accounts.json"
                 assert json.loads(mapped.read_text())[installed["secrets"]["auth-accounts.json"]] == str(expected)
                 assert json.loads(canonical.read_text()) == installed
+                release.validate_operator_files(home / ".config/recipe-db")
         secret = homes[0] / ".config/recipe-db/deployment/auth-accounts.json"
         secret.write_bytes(b"mismatched synthetic contents")
         with patch.dict(os.environ, {"HOME": str(homes[0])}), \

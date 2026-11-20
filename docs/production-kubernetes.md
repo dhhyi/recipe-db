@@ -375,8 +375,8 @@ infrastructure:
 volumes:
   redis: 256Mi
 secrets:
-  google-oauth-client-secret: /absolute/private/path/google-oauth-client-secret
-  oauth2-cookie-secret: /absolute/private/path/oauth2-cookie-secret
+  google-oauth-client-secret: deployment/google-oauth-client-secret
+  oauth2-cookie-secret: deployment/oauth2-cookie-secret
 httpsStaging:
   hostname: your-hostname.example.org
   acmeEnvironment: production

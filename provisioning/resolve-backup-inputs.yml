@@ -1,0 +1,9 @@
+- name: Resolve private application input sources from the configuration root
+  ansible.builtin.set_fact:
+    operator_backup_secret_sources: >-
+      {{ operator_backup_secret_sources | default({}) |
+         combine({item.key: item.value | operator_deployment_file(operator_config_directory)}) }}
+  delegate_to: localhost
+  become: false
+  loop: "{{ backup_values.secrets | dict2items }}"
+  no_log: true

@@ -10,6 +10,7 @@ import tomllib
 import unittest
 from unittest.mock import patch
 
+from ansible.errors import AnsibleFilterError
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -28,7 +29,42 @@ storage = load_script("storage-guard")
 network = load_script("network-preflight")
 host = load_script("host-preflight")
 checkout_guard = load_script("checkout-guard")
+operator_paths_spec = importlib.util.spec_from_file_location(
+    "operator_paths", ROOT / "filter_plugins/operator_paths.py")
+operator_paths = importlib.util.module_from_spec(operator_paths_spec)
+operator_paths_spec.loader.exec_module(operator_paths)
 UUID = "02f61d5e-92cb-4f9c-a781-099d97795020"
+
+
+class OperatorPathTests(unittest.TestCase):
+    def test_operator_paths_resolve_from_config_root_and_reject_escape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "config"
+            deployment = root / "deployment"
+            ssh = root / "ssh"
+            deployment.mkdir(parents=True)
+            ssh.mkdir()
+            app_input = deployment / "auth-accounts.json"
+            app_input.write_text('{"accounts":[]}')
+            key = ssh / "recipe-db-pi"
+            key.write_text("synthetic private key")
+
+            self.assertEqual(operator_paths._resolve_operator_path(
+                "ssh/recipe-db-pi", root), str(key))
+            self.assertEqual(operator_paths._resolve_operator_path(
+                str(key), root), str(key))
+            self.assertEqual(operator_paths._resolve_operator_path(
+                "deployment/auth-accounts.json", root, "deployment"), str(app_input))
+            for path in ("../outside", "deployment/nested/auth-accounts.json",
+                         "deployment/missing.json"):
+                with self.subTest(path=path), self.assertRaises(AnsibleFilterError):
+                    operator_paths._resolve_operator_path(path, root, "deployment")
+            outside = Path(temporary) / "outside.json"
+            outside.write_text("not a private input")
+            (deployment / "escape.json").symlink_to(outside)
+            with self.assertRaises(AnsibleFilterError):
+                operator_paths._resolve_operator_path(
+                    "deployment/escape.json", root, "deployment")
 
 
 class CheckoutTests(unittest.TestCase):
@@ -516,6 +552,9 @@ class ContractTests(unittest.TestCase):
         setup = yaml.safe_load((ROOT / "backup-configure.yml").read_text())[0]
         enable = yaml.safe_load((ROOT / "backup-enable.yml").read_text())[0]
         setup_tasks = setup["tasks"]
+        self.assertEqual(setup["vars"]["operator_config_directory"],
+                         "{{ lookup('ansible.builtin.env', 'HOME') }}/.config/recipe-db")
+        self.assertNotIn("/home/vscode", (ROOT / "backup-configure.yml").read_text())
         configure_timer = setup_tasks[0]["ansible.builtin.systemd_service"]
         self.assertFalse(configure_timer["enabled"])
         self.assertEqual(configure_timer["state"], "stopped")
@@ -533,14 +572,28 @@ class ContractTests(unittest.TestCase):
                           if task["name"] == "Copy referenced private application inputs")
         self.assertEqual(input_copy["ansible.builtin.copy"]["dest"],
                          "/etc/recipe-db/application-inputs/{{ item.key }}")
+        self.assertEqual(input_copy["ansible.builtin.copy"]["src"],
+                         "{{ operator_backup_secret_sources[item.key] }}")
         self.assertEqual(set(setup["vars"]["allowed_application_inputs"]), {
             "auth-accounts.json", "google-oauth-client-secret",
             "oauth2-cookie-secret", "acme-account-email",
         })
-        self.assertTrue(next(task for task in setup_tasks
-                             if task["name"] == "Require each private application input to be a direct deployment file")["no_log"])
+        self.assertIn("ansible.builtin.import_tasks: resolve-backup-inputs.yml",
+                      (ROOT / "backup-configure.yml").read_text())
+        resolver_tasks = yaml.safe_load((ROOT / "resolve-backup-inputs.yml").read_text())
+        self.assertTrue(resolver_tasks[0]["no_log"])
+        self.assertIn("operator_deployment_file", str(resolver_tasks[0]))
         self.assertTrue(any(task.get("ansible.builtin.file", {}).get("mode") == "0700"
                             for task in setup_tasks))
+        pi_values = next(task for task in private_copies
+                         if task["name"] == "Install backup values with private Pi input paths")
+        self.assertIn("backup_pi_secret_paths", pi_values["ansible.builtin.copy"]["content"])
+        self.assertNotIn("/home/vscode", pi_values["ansible.builtin.copy"]["content"])
+        self.assertNotIn("operator_config_directory", pi_values["ansible.builtin.copy"]["content"])
+        path_mapping = next(task for task in setup_tasks
+                            if task["name"] == "Map private application inputs to their Pi paths")
+        self.assertIn("'/etc/recipe-db/application-inputs/' ~ item.key",
+                      path_mapping["ansible.builtin.set_fact"]["backup_pi_secret_paths"])
         self.assertTrue(any(task["name"] == "Require a verified explicit capture before enabling the timer"
                             and task["no_log"] for task in enable["tasks"]))
         marker_removal = next(task for task in setup_tasks

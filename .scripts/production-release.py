@@ -86,9 +86,8 @@ def operator_input_path(path, config_directory, direct_directory=None):
 
 
 def validate_operator_files(directory):
-    for filename in ("backup/backup-values.yaml", "provisioning/inventory.yml"):
-        parse_values(directory / filename)
     backup_values = parse_values(directory / "backup/backup-values.yaml")
+    parse_values(directory / "provisioning/inventory.yml")
     if not isinstance(backup_values.get("secrets"), dict):
         raise ValueError("backup values must contain private input references")
     for path in backup_values["secrets"].values():

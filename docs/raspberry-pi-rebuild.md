@@ -93,7 +93,7 @@ chmod 600 ~/.config/recipe-db/provisioning/inventory.yml \
 Update `inventory.yml` to match the Pi Imager settings and the checks above:
 
 - `ansible_host`: `recipe-pi.home`; `ansible_user`: `piadmin`
-- SSH key: `~/.config/recipe-db/ssh/recipe-db-pi` on your machine, mounted at `/home/vscode/.config/recipe-db/ssh/recipe-db-pi` in the provisioning container
+- Set `operator_ssh_private_key` to `ssh/recipe-db-pi`, relative to `~/.config/recipe-db/`. The provisioning launcher mounts that root at `/home/vscode/.config/recipe-db`; the mount path is container-only.
 - `expected_root_uuid`: the UUID you just recorded
 - `admin_networks` and `application_networks`: the actual trusted network ranges
 
@@ -102,7 +102,7 @@ Update `pi-values.yaml`:
 - Set `piStorage.expectedRootUuid` to the UUID recorded above.
 - Update the same UUID in `backup/backup-values.yaml`.
 - Set `origin` to the deployment's URL.
-- Set private input paths as listed in the [configuration inventory](production-configuration.md).
+- Set private input references as listed in the [configuration inventory](production-configuration.md), preferably relative to `~/.config/recipe-db/`. Backup provisioning copies those source files into `/etc/recipe-db/application-inputs/` and writes those absolute Pi paths into installed values.
 - Keep the template's data path, images and resource defaults unless intentionally changing them.
 
 Create `~/.config/recipe-db` before starting the provisioning container. It mounts this directory at `/home/vscode/.config/recipe-db`.

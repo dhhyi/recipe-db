@@ -1,0 +1,23 @@
+- name: Resolve operator inputs without connecting to a Pi
+  hosts: recipe-db-pi
+  connection: local
+  gather_facts: false
+  vars:
+    operator_config_directory: "{{ lookup('ansible.builtin.env', 'HOME') }}/.config/recipe-db"
+    backup_values: >-
+      {{ lookup('ansible.builtin.file', operator_config_directory ~ '/backup/backup-values.yaml') | from_yaml }}
+  tasks:
+    - name: Require the inventory SSH key to resolve from the mounted config root
+      ansible.builtin.assert:
+        that:
+          - ansible_ssh_private_key_file == operator_config_directory ~ '/ssh/recipe-db-pi'
+        fail_msg: The smoke test did not resolve the inventory SSH key from the private config root.
+
+    - name: Resolve the same backup application inputs used by provisioning
+      ansible.builtin.import_tasks: ../resolve-backup-inputs.yml
+
+    - name: Require the expected private config source
+      ansible.builtin.assert:
+        that:
+          - operator_backup_secret_sources['auth-accounts.json'] == operator_config_directory ~ '/deployment/auth-accounts.json'
+        fail_msg: The smoke test did not resolve the expected private config source.

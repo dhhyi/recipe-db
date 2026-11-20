@@ -336,7 +336,18 @@ devcontainer:
   tests:
     - .scripts/tests/run-in-devcontainer.bats
     - .scripts/tests/run-integration-tests.bats
+    - .scripts/tests/provisioning-config-paths.bats
   suite_inputs:
+    .scripts/tests/provisioning-config-paths.bats:
+      - .scripts/tests/provisioning-config-paths.bats
+      - .scripts/tests/test_helper.bash
+      - .scripts/run-in-devcontainer.sh
+      - provisioning/.project.yaml
+      - provisioning/ansible.cfg
+      - provisioning/filter_plugins/operator_paths.py
+      - provisioning/inventory.example.yml
+      - provisioning/resolve-backup-inputs.yml
+      - provisioning/tests/operator-path-smoke.yml
     .scripts/tests/run-in-devcontainer.bats:
       - .scripts/run-in-devcontainer.sh
       - .scripts/tests/mocks/devcontainer-*
