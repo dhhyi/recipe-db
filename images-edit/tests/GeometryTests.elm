@@ -9,6 +9,7 @@ import Json.Decode as D
 import Json.Encode as E
 import Platform
 import RecipeDB
+import RemoteData
 
 
 port results : E.Value -> Cmd msg
@@ -145,10 +146,12 @@ tests =
             , ( "crop-too-small", "Der Zuschnitt ist zu klein. Mindestens 300 × 225 Pixel sind erforderlich." )
             , ( "invalid-crop-aspect-ratio", "Der Zuschnitt muss das Seitenverhältnis 4:3 haben. Bitte den Zuschnitt anpassen." )
             , ( "invalid-image", "Das Bild konnte nicht verarbeitet werden. Bitte eine unbeschädigte JPEG- oder PNG-Datei auswählen." )
+            , ( "image-limit-reached", "Das Rezept hat bereits die maximal erlaubten zehn Bilder. Das Bild wurde nicht gespeichert." )
             ]
       )
     ]
         ++ sourceTests
+        ++ galleryTests
         ++ List.concatMap
             (\( name, handle ) ->
                 [ ( name ++ ": bounds, exact ratio and fixed anchor for 49 pointer deltas"
@@ -184,6 +187,68 @@ tests =
                 ]
             )
             Crop.handles
+
+
+galleryTests : List ( String, Bool )
+galleryTests =
+    let
+        init : Editor.Model
+        init =
+            Editor.init "recipe"
+
+        authorized : Editor.Model
+        authorized =
+            apply (GotCapabilities (RemoteData.Success { role = "owner", canManageImages = True })) init
+
+        loaded : Maybe (List RecipeDB.GalleryImage) -> Editor.Model
+        loaded images =
+            apply (GotRecipe (RemoteData.Success (Just { name = "Testrezept", images = images }))) authorized
+
+        entries : Int -> List RecipeDB.GalleryImage
+        entries count =
+            List.range 1 count
+                |> List.map (\index -> { id = "opaque/" ++ String.fromInt index, thumbUrl = "/thumb" })
+
+        apply : Msg -> Editor.Model -> Editor.Model
+        apply msg =
+            Editor.State.update msg >> Tuple.first
+
+        unavailable : Editor.Model
+        unavailable =
+            loaded Nothing
+
+        retrying : Editor.Model
+        retrying =
+            apply RetryGallery { unavailable | savedFeedback = True }
+
+        lateUpload : Msg
+        lateUpload =
+            Uploaded 1 (RemoteData.Success { url = "/full", thumbUrl = "/thumb", size = 1, width = 648, height = 486 })
+    in
+    [ ( "unconfirmed gallery or capabilities never enable Add"
+      , not (Editor.canAdd authorized)
+            && not (Editor.canAdd unavailable)
+            && not (Editor.canAdd (apply (GotRecipe (RemoteData.Success Nothing)) authorized))
+            && not (Editor.canAdd (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) (loaded (Just []))))
+      )
+    , ( "only loaded collections below capacity enable Add"
+      , Editor.canAdd (loaded (Just [])) && Editor.canAdd (loaded (Just (entries 9))) && not (Editor.canAdd (loaded (Just (entries 10))))
+      )
+    , ( "capacity warning appears at ten, not at nine or unknown count"
+      , Editor.capacityWarning (Just (entries 10))
+            == Just "Dieses Rezept hat bereits die maximal erlaubten zehn Bilder."
+            && Editor.capacityWarning (Just (entries 9))
+            == Nothing
+            && Editor.capacityWarning Nothing
+            == Nothing
+      )
+    , ( "gallery retry clears the previous count without discarding upload confirmation"
+      , retrying.recipe == RemoteData.Loading && retrying.savedFeedback && not (Editor.canAdd retrying)
+      )
+    , ( "late upload and preview results cannot reopen the gallery's released session"
+      , List.all (\msg -> apply msg retrying == retrying) [ lateUpload, PreviewReady 1, PreviewFailed 1, Save, Close ]
+      )
+    ]
 
 
 sourceTests : List ( String, Bool )

@@ -4,12 +4,13 @@ import Browser.Dom
 import Crop exposing (Crop, Handle, Point)
 import Editor.Bridge exposing (Incoming(..), command, incoming, release)
 import Editor.Source as Source
-import Editor.Types exposing (Model, Msg(..), Phase(..), dirty)
+import Editor.Types exposing (Model, Msg(..), Phase(..), canAdd, dirty)
 import File
 import Json.Decode as D
 import Json.Encode as E
 import RecipeDB
 import RemoteData
+import Set
 import Task
 
 
@@ -34,13 +35,52 @@ step : Msg -> Model -> ( Model, Cmd Msg )
 step msg model =
     case msg of
         GotRecipe recipe ->
-            ( { model | recipe = recipe }, Cmd.none )
+            if model.phase == Viewing && model.recipe == RemoteData.Loading then
+                let
+                    next : Model
+                    next =
+                        { model
+                            | recipe = recipe
+                            , recipeName =
+                                case recipe of
+                                    RemoteData.Success (Just data) ->
+                                        Just data.name
+
+                                    _ ->
+                                        model.recipeName
+                            , focusAfterCancel = False
+                        }
+                in
+                ( next
+                , if model.focusAfterCancel && canAdd next then
+                    focus "upload-image"
+
+                  else
+                    Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
 
         GotCapabilities capabilities ->
             ( { model | capabilities = capabilities }, Cmd.none )
 
+        RetryGallery ->
+            if model.phase == Viewing && model.recipe /= RemoteData.Loading then
+                loadGallery model
+
+            else
+                ( model, Cmd.none )
+
+        ThumbnailFailed id ->
+            if model.phase == Viewing && model.recipe /= RemoteData.Loading then
+                ( { model | failedThumbnails = Set.insert id model.failedThumbnails }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
+
         GotFile file ->
-            if model.phase == Viewing || model.phase == SavedOpen then
+            if canAdd model then
                 case Source.file (File.mime file) (File.size file) of
                     Ok () ->
                         ( { model | phase = Loading, pending = Just file, token = model.token + 1, error = Nothing, drag = Nothing }
@@ -67,8 +107,8 @@ step msg model =
             case model.session of
                 Just session ->
                     if session.token == token && not session.previewReady && model.phase == Loading then
-                        ( { model | session = Just { session | previewReady = True }, previous = Nothing, phase = Editing, savedFeedback = False, error = Nothing }
-                        , model.previous |> Maybe.map (.token >> release) |> Maybe.withDefault Cmd.none
+                        ( { model | session = Just { session | previewReady = True }, phase = Editing, savedFeedback = False, error = Nothing }
+                        , Cmd.none
                         )
 
                     else
@@ -85,19 +125,13 @@ step msg model =
 
                     else if model.phase == Loading then
                         ( { model
-                            | session = model.previous
-                            , previous = Nothing
-                            , phase =
-                                if model.previous == Nothing then
-                                    Viewing
-
-                                else
-                                    SavedOpen
+                            | session = Nothing
+                            , phase = Viewing
                             , error = Just "Das Vorschaubild konnte nicht angezeigt werden. Bitte eine andere JPEG- oder PNG-Datei auswählen."
                             , pending = Nothing
                             , drag = Nothing
                           }
-                        , release token
+                        , Cmd.batch [ release token, focus "upload-image" ]
                         )
 
                     else
@@ -117,7 +151,7 @@ step msg model =
                 Just session ->
                     if session.previewReady && dirty model && (model.phase == Editing || model.phase == SaveFailed) then
                         ( { model | phase = Saving, error = Nothing, drag = Nothing }
-                        , RecipeDB.makeUploadRequest model.recipeId session.file session.crop (Uploaded session.token session.crop)
+                        , RecipeDB.makeUploadRequest model.recipeId session.file session.crop (Uploaded session.token)
                         )
 
                     else
@@ -126,7 +160,7 @@ step msg model =
                 Nothing ->
                     ( model, Cmd.none )
 
-        Uploaded token crop response ->
+        Uploaded token response ->
             case model.session of
                 Just session ->
                     if model.phase /= Saving || token /= session.token then
@@ -134,21 +168,8 @@ step msg model =
 
                     else
                         case response of
-                            RemoteData.Success image ->
-                                ( { model
-                                    | phase = SavedOpen
-                                    , session = Just { session | saved = Just crop }
-                                    , latestUrl = Just image.url
-                                    , error =
-                                        if session.previewReady then
-                                            Nothing
-
-                                        else
-                                            model.error
-                                    , savedFeedback = True
-                                  }
-                                , Cmd.none
-                                )
+                            RemoteData.Success _ ->
+                                returnToGallery True model session.token
 
                             RemoteData.Failure error ->
                                 ( { model
@@ -159,7 +180,7 @@ step msg model =
                                                 error
 
                                              else
-                                                error ++ " Das bisherige Bild bleibt erhalten. Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten."
+                                                error ++ " Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten."
                                             )
                                   }
                                 , Cmd.none
@@ -172,35 +193,61 @@ step msg model =
                     ( model, Cmd.none )
 
         Close ->
-            if model.phase == Saving || model.phase == Loading then
-                ( model, Cmd.none )
+            case model.session of
+                Just session ->
+                    if model.phase == Saving || model.phase == Loading then
+                        ( model, Cmd.none )
 
-            else
-                ( { model | phase = Viewing, session = Nothing, previous = Nothing, drag = Nothing, error = Nothing, token = model.token + 1, savedFeedback = False }
-                , Cmd.batch
-                    [ model.session |> Maybe.map (.token >> release) |> Maybe.withDefault Cmd.none
-                    , Browser.Dom.focus "upload-image" |> Task.attempt (\_ -> Focused)
-                    ]
-                )
+                    else
+                        returnToGallery False model session.token
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         Focused ->
             ( model, Cmd.none )
+
+
+loadGallery : Model -> ( Model, Cmd Msg )
+loadGallery model =
+    ( { model | recipe = RemoteData.Loading, error = Nothing, failedThumbnails = Set.empty }
+    , RecipeDB.makeRecipeRequest model.recipeId GotRecipe
+    )
+
+
+returnToGallery : Bool -> Model -> Int -> ( Model, Cmd Msg )
+returnToGallery saved model token =
+    let
+        ( next, request ) =
+            loadGallery
+                { model
+                    | phase = Viewing
+                    , session = Nothing
+                    , pending = Nothing
+                    , drag = Nothing
+                    , token = model.token + 1
+                    , savedFeedback = saved
+                    , focusAfterCancel = not saved
+                }
+    in
+    ( next, Cmd.batch [ release token, request ] )
+
+
+focus : String -> Cmd Msg
+focus target =
+    Browser.Dom.focus target |> Task.attempt (\_ -> Focused)
 
 
 loadFailed : Int -> Source.Problem -> Model -> ( Model, Cmd Msg )
 loadFailed token problem model =
     if model.phase == Loading && token == model.token then
         ( { model
-            | phase =
-                if model.session == Nothing then
-                    Viewing
-
-                else
-                    SavedOpen
+            | phase = Viewing
+            , session = Nothing
             , pending = Nothing
             , error = Just (Source.message problem)
           }
-        , release token
+        , Cmd.batch [ release token, focus "upload-image" ]
         )
 
     else
@@ -223,12 +270,11 @@ handleEvent event model =
                 ( model, release token )
 
         Loaded token url size actual ->
-            if model.phase == Loading && token == model.token then
+            if model.phase == Loading && token == model.token && model.pending /= Nothing then
                 case ( model.pending, Source.decoded size actual ) of
                     ( Just file, Ok crop ) ->
                         ( { model
-                            | session = Just { token = token, file = file, url = url, size = size, crop = crop, saved = Nothing, previewReady = False }
-                            , previous = model.session
+                            | session = Just { token = token, file = file, url = url, size = size, crop = crop, previewReady = False }
                             , pending = Nothing
                           }
                         , Cmd.none
@@ -239,6 +285,9 @@ handleEvent event model =
 
                     _ ->
                         ( model, Cmd.none )
+
+            else if model.session |> Maybe.map (.token >> (==) token) |> Maybe.withDefault False then
+                ( model, Cmd.none )
 
             else
                 ( model, release token )
@@ -285,12 +334,7 @@ handleEvent event model =
                                 else
                                     ( { model
                                         | session = Just { session | crop = crop }
-                                        , phase =
-                                            if session.saved == Just crop then
-                                                SavedOpen
-
-                                            else
-                                                Editing
+                                        , phase = Editing
                                         , error = Nothing
                                         , savedFeedback = False
                                       }

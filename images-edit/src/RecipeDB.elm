@@ -1,4 +1,4 @@
-module RecipeDB exposing (Capabilities, CapabilitiesModel, RecipeData, RecipeModel, UploadModel, UploadedImage, decodeUpload, makeCapabilitiesRequest, makeRecipeRequest, makeUploadRequest)
+module RecipeDB exposing (Capabilities, CapabilitiesModel, GalleryImage, RecipeData, RecipeModel, UploadModel, UploadedImage, decodeUpload, makeCapabilitiesRequest, makeRecipeRequest, makeUploadRequest)
 
 import Api.Object exposing (Recipe)
 import Api.Object.ImageMetadata as ImageMetadata
@@ -19,7 +19,13 @@ import RemoteData exposing (RemoteData)
 
 type alias RecipeData =
     { name : String
-    , url : Maybe String
+    , images : Maybe (List GalleryImage)
+    }
+
+
+type alias GalleryImage =
+    { id : String
+    , thumbUrl : String
     }
 
 
@@ -62,7 +68,12 @@ makeRecipeRequest recipeId targetMsg =
         selection =
             SelectionSet.map2 RecipeData
                 Recipe.name
-                (Recipe.image ImageMetadata.url)
+                (Recipe.images
+                    (SelectionSet.map2 GalleryImage
+                        (SelectionSet.map (\(Id id) -> id) ImageMetadata.id)
+                        ImageMetadata.thumbUrl
+                    )
+                )
 
         recipeQuery : SelectionSet (Maybe RecipeData) RootQuery
         recipeQuery =
@@ -251,6 +262,9 @@ graphQLError value =
 
         Ok "image-too-large" ->
             "Das Bild überschreitet die erlaubte Datei- oder Pixelgröße des Servers. Bitte ein kleineres Bild auswählen."
+
+        Ok "image-limit-reached" ->
+            "Das Rezept hat bereits die maximal erlaubten zehn Bilder. Das Bild wurde nicht gespeichert."
 
         Ok "unsupported-content-type" ->
             "Dieses Dateiformat wird nicht unterstützt. Bitte eine JPEG- oder PNG-Datei auswählen."
