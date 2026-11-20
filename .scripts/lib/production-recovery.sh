@@ -11,19 +11,26 @@ recovery_command_delete() {
     -f "$work/recovery-command-delete.json" > /dev/null
 }
 
+recovery_command_time() {
+  date -u +%Y-%m-%dT%H:%M:%S.%6NZ
+}
+
 # The retained operation Lease is a handoff, not permission for two concurrent
 # commands. A bounded heartbeat claim serializes commands across operator hosts.
 recovery_command_acquire() {
   local parent_pid=$BASHPID holder now
   holder="recovery-$(date -u +%s%N)-$$"
-  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now=$(recovery_command_time) || return 1
   cluster_operation_lock_kubectl get lease recipe-db-recovery-command --ignore-not-found -o json \
     > "$work/recovery-command.json" || return 1
   if [[ -s $work/recovery-command.json ]]; then
     jq -e --arg now "$now" '
+      def microtime:
+        capture("^(?<second>[0-9T:-]+)\\.(?<fraction>[0-9]{6})Z$")
+        | ((.second + "Z") | fromdateiso8601) + (("0." + .fraction) | tonumber);
       .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
       and .spec.leaseDurationSeconds == 45
-      and ((.spec.renewTime | fromdateiso8601) + 45 < ($now | fromdateiso8601))' \
+      and ((.spec.renewTime | microtime) + 45 < ($now | microtime))' \
       "$work/recovery-command.json" > /dev/null \
       || production_fail "another recovery command is active or its claim is uncertain; wait at least 45 seconds after interruption"
     recovery_command_delete || production_fail "recovery command claim changed; refusing concurrent execution"
@@ -35,7 +42,7 @@ recovery_command_acquire() {
       spec:{holderIdentity:$holder,leaseDurationSeconds:45,renewTime:$now}}' \
     > "$work/recovery-command-create.json"
   cluster_operation_lock_kubectl create -f "$work/recovery-command-create.json" > /dev/null \
-    || production_fail "another recovery command acquired the command claim"
+    || production_fail "could not create the recovery command claim; inspect the Kubernetes error above"
   recovery_command_holder=$holder
   (
     trap - EXIT INT TERM
@@ -45,7 +52,8 @@ recovery_command_acquire() {
           > "$work/recovery-heartbeat.json" \
           && jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
             "$work/recovery-heartbeat.json" > /dev/null \
-          && jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
+          && now=$(recovery_command_time) \
+          && jq --arg now "$now" '.spec.renewTime=$now' \
             "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" \
           && cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null
       }; then

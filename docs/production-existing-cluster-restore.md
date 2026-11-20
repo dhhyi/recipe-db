@@ -95,7 +95,9 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-closeout "
   "$HOLDER" "CLOSEOUT-$HOLDER"
 ```
 
-Success archives the failed release's closed status and transitions its exact Lease to `recovery-ready`, with application access blocked and workloads stopped. The same Lease remains held across the separate reset and restore confirmations, excluding another deployment or backup. Closeout does not erase data or run reset. If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease.
+Success archives the failed release's closed status and transitions its exact Lease to `recovery-ready`, with application access blocked and workloads stopped. The same Lease remains held across the separate reset and restore confirmations, excluding another deployment or backup. Closeout does not erase data or run reset.
+
+If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease. If creating the recovery command claim fails, inspect the Kubernetes error and check both the primary Lease and `recipe-db-recovery-command` before retrying. A rejected request alone does not mean another command is running.
 
 On the Pi, confirm the uploader no longer considers the closed operation active:
 
