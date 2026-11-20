@@ -454,6 +454,9 @@ with tempfile.TemporaryDirectory() as temporary:
         raise AssertionError("mutable backup reference accepted")
     reference.write_text("ghcr.io/dhhyi/recipe-db-releases@sha256:"+"a"*64)
     release.validate_operator_files(directory)
+    (directory/"backup/backup-values.yaml").write_text(
+        '{"secrets":{"auth-accounts.json":"/home/vscode/.config/recipe-db/deployment/auth-accounts.json"}}')
+    release.validate_operator_files(directory)
 PY
   [ "$status" -eq 0 ]
 }

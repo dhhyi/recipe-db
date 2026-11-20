@@ -86,12 +86,8 @@ def operator_input_path(path, config_directory, direct_directory=None):
 
 
 def validate_operator_files(directory):
-    backup_values = parse_values(directory / "backup/backup-values.yaml")
+    parse_values(directory / "backup/backup-values.yaml")
     parse_values(directory / "provisioning/inventory.yml")
-    if not isinstance(backup_values.get("secrets"), dict):
-        raise ValueError("backup values must contain private input references")
-    for path in backup_values["secrets"].values():
-        operator_input_path(path, directory, "deployment")
     reference = (directory / "backup/backup-release-ref").read_text().strip()
     if not re.fullmatch(r"ghcr.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}", reference):
         raise ValueError("prepared backup release reference must be an immutable recipe-db artifact")

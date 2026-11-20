@@ -7,3 +7,17 @@
   become: false
   loop: "{{ backup_values.secrets | dict2items }}"
   no_log: true
+
+- name: Map private application inputs to their Pi paths
+  ansible.builtin.set_fact:
+    backup_pi_secret_paths: >-
+      {{ backup_pi_secret_paths | default({}) |
+         combine({item.key: '/etc/recipe-db/application-inputs/' ~ item.key}) }}
+  loop: "{{ backup_values.secrets | dict2items }}"
+  no_log: true
+
+- name: Prepare backup values with private Pi input paths
+  ansible.builtin.set_fact:
+    operator_backup_values_for_pi: >-
+      {{ backup_values | combine({'secrets': backup_pi_secret_paths}, recursive=True) }}
+  no_log: true

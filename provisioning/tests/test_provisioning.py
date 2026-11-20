@@ -583,17 +583,18 @@ class ContractTests(unittest.TestCase):
         resolver_tasks = yaml.safe_load((ROOT / "resolve-backup-inputs.yml").read_text())
         self.assertTrue(resolver_tasks[0]["no_log"])
         self.assertIn("operator_deployment_file", str(resolver_tasks[0]))
+        path_mapping = next(task for task in resolver_tasks
+                            if task["name"] == "Map private application inputs to their Pi paths")
+        self.assertIn("'/etc/recipe-db/application-inputs/' ~ item.key",
+                      path_mapping["ansible.builtin.set_fact"]["backup_pi_secret_paths"])
         self.assertTrue(any(task.get("ansible.builtin.file", {}).get("mode") == "0700"
                             for task in setup_tasks))
         pi_values = next(task for task in private_copies
                          if task["name"] == "Install backup values with private Pi input paths")
-        self.assertIn("backup_pi_secret_paths", pi_values["ansible.builtin.copy"]["content"])
+        self.assertEqual(pi_values["ansible.builtin.copy"]["content"],
+                         "{{ operator_backup_values_for_pi | to_nice_yaml }}")
         self.assertNotIn("/home/vscode", pi_values["ansible.builtin.copy"]["content"])
         self.assertNotIn("operator_config_directory", pi_values["ansible.builtin.copy"]["content"])
-        path_mapping = next(task for task in setup_tasks
-                            if task["name"] == "Map private application inputs to their Pi paths")
-        self.assertIn("'/etc/recipe-db/application-inputs/' ~ item.key",
-                      path_mapping["ansible.builtin.set_fact"]["backup_pi_secret_paths"])
         self.assertTrue(any(task["name"] == "Require a verified explicit capture before enabling the timer"
                             and task["no_log"] for task in enable["tasks"]))
         marker_removal = next(task for task in setup_tasks

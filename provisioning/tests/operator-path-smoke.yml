@@ -21,3 +21,9 @@
         that:
           - operator_backup_secret_sources['auth-accounts.json'] == operator_config_directory ~ '/deployment/auth-accounts.json'
         fail_msg: The smoke test did not resolve the expected private config source.
+
+    - name: Require installed backup values to use the Pi input path
+      ansible.builtin.assert:
+        that:
+          - "operator_backup_values_for_pi.secrets == {'auth-accounts.json': '/etc/recipe-db/application-inputs/auth-accounts.json'}"
+        fail_msg: The smoke test did not map backup inputs to their Pi runtime paths.

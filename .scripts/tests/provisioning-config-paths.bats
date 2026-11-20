@@ -26,4 +26,5 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"Require the inventory SSH key to resolve from the mounted config root"* ]]
   [[ "$output" == *"Require the expected private config source"* ]]
+  [[ "$output" == *"Require installed backup values to use the Pi input path"* ]]
 }
