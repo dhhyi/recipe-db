@@ -249,6 +249,20 @@ let test_storage_version_startup_gates () =
     "failed publication preserves marker";
   cleanup ()
 
+let test_backup_rejects_missing_tables () =
+  List.iter
+    (fun missing ->
+      let path = Filename.temp_file "tags-backup" ".sqlite" in
+      let db = Tags.open_database (Some path) in
+      Tags.exec db ("DROP TABLE " ^ missing);
+      Tags.close_database db;
+      let original = In_channel.with_open_bin path In_channel.input_all in
+      expect_database_error (fun () -> Tags.open_database ~mode:Tags.Backup (Some path));
+      check (In_channel.with_open_bin path In_channel.input_all = original)
+        "backup rejection leaves the database unchanged";
+      Sys.remove path)
+    [ "tags"; "assignments" ]
+
 let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =
   Dream.test (Tags.router ~mode db)
     (Dream.request ~method_ ~target
@@ -428,6 +442,7 @@ let () =
   test_restart_persistence ();
   test_reset_is_complete_and_transactional ();
   test_storage_version_startup_gates ();
+  test_backup_rejects_missing_tables ();
   test_runtime_modes_and_http_reset ();
   test_http_errors_and_rollback ();
   test_http_other_category_flow ();

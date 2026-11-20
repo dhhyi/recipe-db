@@ -7,7 +7,7 @@ let () =
     try Tags.check_storage_version (Sys.getenv_opt "DATA_LOCATION") mode
     with Failure message -> prerr_endline message; exit 1
   in
-  let database = Tags.open_database (Sys.getenv_opt "DATA_LOCATION") in
+  let database = Tags.open_database ~mode (Sys.getenv_opt "DATA_LOCATION") in
   if fresh_storage then
     (try Tags.publish_storage_version (Sys.getenv_opt "DATA_LOCATION")
      with Failure message -> prerr_endline message; exit 1);
