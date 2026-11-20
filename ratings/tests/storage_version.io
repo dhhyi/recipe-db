@@ -1,3 +1,5 @@
+doFile("lib/db.io")
+
 root := "tests/storage-version-fixture"
 System system("rm -rf -- " .. root)
 System system("mkdir -p -- " .. root .. "/unknown-directory")
@@ -18,6 +20,41 @@ if (result == 0,
 if (File clone setPath(root .. "/db.sqlite") exists == false,
     Exception raise("Rejected ratings storage was modified")
 )
+
+list("0", "-1", "1.5") foreach(invalid,
+    System system("printf '" .. invalid .. "\\n' > " .. root .. "/storage-version")
+    result = System system("MODE=testing DATA_LOCATION=" .. root .. " io main.io")
+    if (result == 0, Exception raise("Malformed ratings marker was accepted"))
+)
+
+System system("rm -f -- " .. root .. "/db.sqlite")
+System system("printf '2\\n' > " .. root .. "/storage-version")
+DB setPath(root .. "/db.sqlite")
+DB open
+DB exec("CREATE TABLE Ratings (key TEXT, value INTEGER)")
+DB exec("INSERT INTO Ratings VALUES ('preserve', 5)")
+DB close
+list("production", "testing", "backup") foreach(mode,
+    result = System system("MODE=" .. mode .. " DATA_LOCATION=" .. root .. " io main.io")
+    if (result == 0, Exception raise("Incompatible Ratings schema was accepted"))
+)
+DB open
+rows := DB exec("SELECT key, value FROM Ratings")
+if (rows size != 1 or (rows at(0) at("key")) != "preserve",
+    Exception raise("Incompatible Ratings schema lost data")
+)
+DB close
+
+System system("rm -f -- " .. root .. "/db.sqlite")
+DB open
+DB exec("CREATE TABLE unrelated (value TEXT)")
+DB close
+result = System system("MODE=backup DATA_LOCATION=" .. root .. " io main.io")
+if (result == 0, Exception raise("Backup initialized missing Ratings table"))
+DB open
+tables := DB exec("SELECT name FROM sqlite_master WHERE name='Ratings'")
+if (tables size != 0, Exception raise("Backup created missing Ratings table"))
+DB close
 
 System system("rm -rf -- " .. root)
 result = System system("MODE=backup DATA_LOCATION=" .. root .. " io main.io")

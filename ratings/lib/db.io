@@ -61,6 +61,15 @@ DB checkStorageVersion := method(
             contents exSlice(0, contents size - 1),
             storageFailure(marker, "invalid marker contents")
         )
+        digits := contents exSlice(0, contents size - 1)
+        if (digits at(0) < 49 or digits at(0) > 57,
+            storageFailure(marker, "invalid marker contents")
+        )
+        digits foreach(digit,
+            if (digit < 48 or digit > 57,
+                storageFailure(marker, "invalid marker contents")
+            )
+        )
         version = contents exSlice(0, contents size - 1) asNumber
     )
 
@@ -126,17 +135,23 @@ DB initialize := method(
     openOrCreate
 
     tables := exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';")
+    checkNoError
     if (tables size > 0,
         hasUserId := false
         exec("PRAGMA table_info(Ratings);") foreach(row,
             if (row at("name") == "userId", hasUserId = true)
         )
+        checkNoError
         if (hasUserId == false,
-            writeln("Recreating ratings with stable user IDs")
-            exec("DROP TABLE Ratings;")
+            writeln("ERROR incompatible Ratings schema: missing userId")
+            System exit(1)
         )
     )
-    if (exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';") size == 0,
+    if (tables size == 0,
+        if (System getEnvironmentVariable("MODE") == "backup",
+            writeln("ERROR Ratings table missing; backup mode cannot initialize")
+            System exit(1)
+        )
         exec("CREATE TABLE Ratings (
                 key varchar(100) NOT NULL,
                 userId varchar(500) NOT NULL,
