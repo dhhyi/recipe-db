@@ -125,7 +125,7 @@ defmodule Recipes.StorageVersion do
     end
   end
 
-  defp require_initialization_mode!("backup", marker),
+  defp require_initialization_mode!(mode, marker) when mode in [:backup, "backup"],
     do: fail!(marker, "missing application data; backup mode cannot initialize")
 
   defp require_initialization_mode!(_mode, _marker), do: :ok

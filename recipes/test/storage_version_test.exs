@@ -15,6 +15,10 @@ defmodule Recipes.StorageVersionTest do
       StorageVersion.check!(database, "backup")
     end
 
+    assert_raise RuntimeError, ~r/backup mode cannot initialize/, fn ->
+      StorageVersion.check!(database, :backup)
+    end
+
     File.mkdir_p!(root)
     File.write!(database, "existing")
 
