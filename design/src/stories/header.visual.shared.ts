@@ -25,7 +25,15 @@ export async function assertHeaderScreenshots(
       const storyRender = story.render;
       if (!storyRender) throw new Error(`Missing render function for ${name}`);
       render(
-        storyRender(story.args, {} as Parameters<typeof storyRender>[1]),
+        storyRender(
+          {
+            authRole: "",
+            authEmail: "",
+            authEnabled: false,
+            ...story.args,
+          },
+          {} as Parameters<typeof storyRender>[1],
+        ),
         canvas,
       );
       const component = canvas.querySelector(
