@@ -65,8 +65,8 @@ setup() {
   project_metadata_to_jsonl() {
     if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
       cat << 'JSONL' > "$2"
-{"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":2}}
-{"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":3}}
+{"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":3}}
+{"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":2}}
 {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
 {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
 {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":2}}
@@ -1320,8 +1320,8 @@ else
           {service:"recipes",fromVersion:1,toVersion:2,timeoutSeconds:300,
             image:("ghcr.io/dhhyi/recipe-db-migrator-recipes-1-to-2@sha256:"+("e"*64))},
           (if $missing == "true" then empty else
-            {service:"images",fromVersion:2,toVersion:3,timeoutSeconds:300,
-              image:("ghcr.io/dhhyi/recipe-db-migrator-images-2-to-3@sha256:"+("d"*64))}
+            {service:"recipes",fromVersion:2,toVersion:3,timeoutSeconds:300,
+              image:("ghcr.io/dhhyi/recipe-db-migrator-recipes-2-to-3@sha256:"+("d"*64))}
           end),
           {service:"images",fromVersion:1,toVersion:2,timeoutSeconds:300,
             image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))},
@@ -1641,6 +1641,7 @@ EOF
   chmod +x bin/*
   mkdir -p "$FIXTURE_ROOT/tar-data/recipes" "$FIXTURE_ROOT/tar-data/tags" \
     "$FIXTURE_ROOT/tar-data/images/public" "$FIXTURE_ROOT/tar-data/images/manifests" "$FIXTURE_ROOT/backups"
+  printf '1\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
   printf 'SQLite format 3\000fixture\n' > "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3"
   printf 'SQLite format 3\000fixture\n' > "$FIXTURE_ROOT/tar-data/tags/tags.sqlite"
   printf 'sidecar\n' > "$FIXTURE_ROOT/tar-data/tags/tags.sqlite-wal"
