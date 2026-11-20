@@ -90,9 +90,7 @@ end
 
 local has_database =
     marker_entries[db_location:match("([^/]*)$") or db_location] == "f"
-local fresh_storage = marker_version == nil and not has_database or
-                          marker_version == expected_storage_version and
-                          not has_database
+local fresh_storage = not has_database
 if marker_version == nil and has_database then
     storage_failure("marker missing; existing data found")
 end
