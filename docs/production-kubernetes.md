@@ -97,6 +97,8 @@ Services enforce the storage version declared in `.project.yaml` using a `storag
 
 ### Recover an unused Images volume seeded by an older build
 
+**Before the first development Compose upgrade:** If the old `images` container has no `/data` mount, its uploads are in the container itself. Before recreating it, either plan to reseed disposable demo data or stop Images and copy its complete `/data` (including `storage-version`) into the new Compose volume. The new volume does not inherit the old container's data. Do not remove the old container until the copy is safe.
+
 Use this procedure only for an unmarked volume that never held any images. Do not remove a marker, non-empty directory, or any other entry to make startup pass.
 
 1. Stop Images and wait until nothing else is using its volume. For development Compose, run `docker compose stop images` from the workstation checkout. In Kubernetes, scale the `images` Deployment to zero in the intended context and namespace and wait for its Pods to terminate. Do not bypass an active production maintenance operation.

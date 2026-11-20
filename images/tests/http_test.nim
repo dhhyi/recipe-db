@@ -58,6 +58,37 @@ suite "backend HTTP publication contract":
     for mode in ["", "Production", " production", "testing "]:
       checkInvalidMode(mode)
 
+  test "startup does not publish a marker after rejecting storage or failing setup":
+    let startupRoot = root & "-startup"
+    createDir(startupRoot)
+    defer: removeDir(startupRoot)
+
+    let legacy = startupRoot / "public"
+    createDir(legacy)
+    let permissions = getFilePermissions(startupRoot)
+    let environment = serverEnvironment(some("production"),
+        40_000_000, 10 * 1024 * 1024)
+    environment["DATA_LOCATION"] = startupRoot
+    let rejected = startProcess("./server", env = environment,
+        options = {poParentStreams})
+    check rejected.waitForExit(5000) == 1
+    rejected.close()
+    check dirExists(legacy)
+    check not dirExists(startupRoot / "manifests")
+    check getFilePermissions(startupRoot) == permissions
+    check not fileExists(startupRoot / "storage-version")
+
+    let blocker = startupRoot / "not-a-directory"
+    writeFile(blocker, "untouched")
+    let inaccessibleRoot = blocker / "data"
+    environment["DATA_LOCATION"] = inaccessibleRoot
+    let failed = startProcess("./server", env = environment,
+        options = {poParentStreams})
+    check failed.waitForExit(5000) == 1
+    failed.close()
+    check readFile(blocker) == "untouched"
+    check not fileExists(inaccessibleRoot / "storage-version")
+
   test "off-center crop pixels, strict errors and failed saves preserve the complete pair":
     if dirExists(root):
       removeDir(root)
