@@ -728,15 +728,21 @@ test("native confirmation can cancel or delete the sole image with exact identit
   const responsePromise = page.waitForResponse((response) =>
     isImageDelete(response.request()),
   );
-  const acceptedDialog = page.waitForEvent("dialog");
-  const deleteClick = deleteButton.click();
-  const accepted = await acceptedDialog;
-  expect(accepted.type()).toBe("confirm");
-  expect(accepted.message()).toBe(
-    "Das einzige Bild löschen? Dieses Rezept hat danach kein Bild.",
-  );
-  await accepted.accept();
-  await deleteClick;
+  const acceptedDialogs = [];
+  page.on("dialog", async (accepted) => {
+    acceptedDialogs.push({
+      type: accepted.type(),
+      message: accepted.message(),
+    });
+    await accepted.accept();
+  });
+  await deleteButton.dblclick();
+  expect(acceptedDialogs).toEqual([
+    {
+      type: "confirm",
+      message: "Das einzige Bild löschen? Dieses Rezept hat danach kein Bild.",
+    },
+  ]);
   const response = await responsePromise;
   const requestBody = response.request().postDataJSON();
   expect(requestBody.variables).toEqual({
@@ -831,6 +837,204 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
     `delete-image-${next.id}`,
   );
   expect(deletes).toHaveLength(1);
+});
+
+test("accepted non-first deletion keeps the default and focuses the preceding row", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  const { recipe } = await graphql(
+    request,
+    "query($id: ID!) { recipe(id: $id) { images { id thumbUrl } } }",
+    { id: multiImageRecipe.id },
+  );
+  const [defaultImage, otherImage] = recipe.images;
+  expect(recipe.images).toHaveLength(2);
+  const deletes = [];
+  page.on("request", (request) => {
+    if (isImageDelete(request)) deletes.push(request);
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  const deleteButton = rows.nth(1).getByRole("button");
+  const responsePromise = page.waitForResponse((response) =>
+    isImageDelete(response.request()),
+  );
+  const dialogPromise = page.waitForEvent("dialog");
+  const clickPromise = deleteButton.click();
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toBe("Dieses Bild löschen?");
+  await dialog.accept();
+  await clickPromise;
+  const response = await responsePromise;
+  expect(response.request().postDataJSON().variables).toEqual({
+    recipeId: multiImageRecipe.id,
+    imageId: otherImage.id,
+  });
+  expect((await response.json()).data.deleteImage).toBe(true);
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first().getByText("Standardbild")).toBeVisible();
+  await expect(
+    rows.first().getByRole("img", { name: "Rezeptbild 1" }),
+  ).toHaveAttribute("src", defaultImage.thumbUrl);
+  await expect(rows.first().getByRole("button")).toBeFocused();
+  await expect(rows.first().getByRole("button")).toHaveAttribute(
+    "id",
+    `delete-image-${defaultImage.id}`,
+  );
+  expect(deletes).toHaveLength(1);
+});
+
+test("successful deletion stays successful when refresh fails and Retry only reads", async ({
+  page,
+  request,
+  demoRecipe,
+}) => {
+  const { recipe } = await graphql(
+    request,
+    "query($id: ID!) { recipe(id: $id) { images { id } } }",
+    { id: demoRecipe.id },
+  );
+  const imageId = recipe.images[0].id;
+  await page.goto(`/images-edit/${demoRecipe.id}`);
+  const deleteButton = page.getByRole("button", {
+    name: `Bild 1 aus ${demoRecipe.name} löschen`,
+    exact: true,
+  });
+  await expect(deleteButton).toBeVisible();
+  let galleryReads = 0;
+  const deletes = [];
+  await page.route("**/graphql", async (route) => {
+    if (isGalleryRead(route.request()) && ++galleryReads === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({
+          data: null,
+          errors: [{ message: "Gallery unavailable" }],
+        }),
+      });
+    } else {
+      await route.fallback();
+    }
+  });
+  page.on("request", (request) => {
+    if (isImageDelete(request)) deletes.push(request);
+  });
+  const responsePromise = page.waitForResponse((response) =>
+    isImageDelete(response.request()),
+  );
+  const dialogPromise = page.waitForEvent("dialog");
+  const clickPromise = deleteButton.click();
+  const dialog = await dialogPromise;
+  await dialog.accept();
+  await clickPromise;
+  const response = await responsePromise;
+  expect(response.request().postDataJSON().variables).toEqual({
+    recipeId: demoRecipe.id,
+    imageId,
+  });
+  expect((await response.json()).data.deleteImage).toBe(true);
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Erneut laden" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: `Bild 1 aus ${demoRecipe.name} löschen`,
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await expect(addInput(page)).toBeDisabled();
+  expect(galleryReads).toBe(1);
+
+  const retryPromise = page.waitForResponse((candidate) =>
+    isGalleryRead(candidate.request()),
+  );
+  await page.getByRole("button", { name: "Erneut laden" }).click();
+  const retry = await retryPromise;
+  expect((await retry.json()).data.recipe.images).toEqual([]);
+  await expect(
+    page.getByText("Kein Bild vorhanden.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  expect(galleryReads).toBe(2);
+  expect(deletes).toHaveLength(1);
+});
+
+test("delete errors remain visible and reconcile without retry", async ({
+  page,
+  request,
+  demoRecipe,
+}) => {
+  const { recipe } = await graphql(
+    request,
+    "query($id: ID!) { recipe(id: $id) { images { id } } }",
+    { id: demoRecipe.id },
+  );
+  const imageId = recipe.images[0].id;
+  await page.goto(`/images-edit/${demoRecipe.id}`);
+  const deleteButton = page.getByRole("button", {
+    name: `Bild 1 aus ${demoRecipe.name} löschen`,
+    exact: true,
+  });
+  await expect(deleteButton).toBeVisible();
+  const deletes = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageDelete(route.request())) {
+      deletes.push(route.request());
+      await route.fulfill({
+        status: 200,
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({
+          errors: [
+            {
+              message: "Forbidden",
+              extensions: { code: "forbidden" },
+            },
+          ],
+        }),
+      });
+    } else {
+      await route.fallback();
+    }
+  });
+  const refreshPromise = page.waitForResponse((response) =>
+    isGalleryRead(response.request()),
+  );
+  const dialogPromise = page.waitForEvent("dialog");
+  const clickPromise = deleteButton.click();
+  const dialog = await dialogPromise;
+  await dialog.accept();
+  await clickPromise;
+  const refresh = await refreshPromise;
+  expect((await refresh.json()).data.recipe.images).toHaveLength(1);
+  await expect(
+    page.getByText(
+      "Keine Berechtigung zum Verwalten dieses Bildes. Die Löschung konnte nicht bestätigt werden.",
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("img", { name: "Rezeptbild 1" })).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: `Bild 1 aus ${demoRecipe.name} löschen`,
+      exact: true,
+    }),
+  ).toBeEnabled();
+  expect(deletes).toHaveLength(1);
+  expect(deletes[0].postDataJSON().variables).toEqual({
+    recipeId: demoRecipe.id,
+    imageId,
+  });
 });
 
 test("false deletion is neutral and a failed reconciliation retries only the read", async ({

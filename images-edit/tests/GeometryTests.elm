@@ -284,6 +284,28 @@ galleryTests =
         failedWrite : Editor.Model
         failedWrite =
             apply (Deleted acceptedDelete.mutationToken (RemoteData.Failure "unknown outcome")) acceptedDelete
+
+        atLimit : Editor.Model
+        atLimit =
+            loaded (Just (entries 10))
+
+        atLimitDelete : Editor.Model
+        atLimitDelete =
+            apply (DeleteImage "opaque/1") atLimit
+
+        atLimitAccepted : Editor.Model
+        atLimitAccepted =
+            apply (DeleteConfirmed "opaque/1" 0 True) atLimitDelete
+
+        atLimitWritten : Editor.Model
+        atLimitWritten =
+            apply (Deleted atLimitAccepted.mutationToken (RemoteData.Success True)) atLimitAccepted
+
+        atNine : Editor.Model
+        atNine =
+            apply
+                (GotRecipe atLimitWritten.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just (List.drop 1 (entries 10)) })))
+                atLimitWritten
     in
     [ ( "unconfirmed gallery or capabilities never enable Add"
       , not (Editor.canAdd authorized)
@@ -293,6 +315,12 @@ galleryTests =
       )
     , ( "only loaded collections below capacity enable Add"
       , Editor.canAdd (loaded (Just [])) && Editor.canAdd (loaded (Just (entries 9))) && not (Editor.canAdd (loaded (Just (entries 10))))
+      )
+    , ( "Add is restored after authoritative deletion reduces a full gallery"
+      , not (Editor.canAdd atLimit)
+            && Editor.canAdd atNine
+            && List.length (currentIds atNine)
+            == 9
       )
     , ( "capacity warning appears at ten, not at nine or unknown count"
       , Editor.capacityWarning (Just (entries 10))
@@ -406,6 +434,8 @@ galleryTests =
             == reconciled
             && repeatedConfirmation
             == acceptedDelete
+            && apply (DeleteImage "opaque/1") pendingDelete
+            == pendingDelete
       )
     , ( "gallery IDs remain exact opaque strings", currentIds first == [ "opaque/1", "opaque/2" ] )
     ]
