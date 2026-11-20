@@ -11,38 +11,6 @@
 #@   return [project for project in data.values.projects if project.category == category]
 #@ end
 #@
-#@ def integration_runner_service(project):
-#@   name = project.name
-#@   build = {
-#@     "context": name,
-#@     "dockerfile": ".devcontainer/Dockerfile",
-#@     "cache_from": ["type=registry,ref=ghcr.io/dhhyi/recipe-db-devcontainer-" + name + "-cache" + options.registryCacheSuffix],
-#@   }
-#@   if len(project.buildInputs.args) > 0:
-#@     build["args"] = project.buildInputs.args
-#@   end
-#@   service = {
-#@     "build": build,
-#@     "image": "ghcr.io/dhhyi/recipe-db-devcontainer-" + name + ":latest",
-#@     "networks": ["intranet"],
-#@     "profiles": ["test"],
-#@     "restart": "no",
-#@     "user": "${HOST_UID:-1000}:${HOST_GID:-1000}",
-#@     "environment": {"HOME": "/tmp"},
-#@     "working_dir": "/workspaces/recipe-db/" + name,
-#@     "volumes": ["./:/workspaces/recipe-db"],
-#@   }
-#@   if "environment" in project.devcontainer:
-#@     for key in project.devcontainer.environment:
-#@       value = project.devcontainer.environment[key]
-#@       if "${" not in value:
-#@         service["environment"][key] = value
-#@       end
-#@     end
-#@   end
-#@   return {"integration-" + name: service}
-#@ end
-#@
 #@ projects = struct.make(
 #@   backend=filter_projects("backend"),
 #@   api=filter_projects("api"),
@@ -68,11 +36,6 @@
 #@   services.update(fixtures_service(projects.fixtures[0], options))
 #@   for project in deploy_projects:
 #@     services.update(service(project, options, projects))
-#@   end
-#@   for project in data.values.projects:
-#@     if "integration" in project and project.category not in ["api", "backend", "frontend", "test"]:
-#@       services.update(integration_runner_service(project))
-#@     end
 #@   end
 #@   services.update(nats_services())
 #@   if "search" in services:

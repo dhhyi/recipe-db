@@ -36,12 +36,12 @@ EOF
   ' > "$COMPOSE_CONFIG"
 }
 
-@test "runs integration scripts for projects without a test category or suffix" {
+@test "runs test-category integration scripts without a test suffix" {
   mkdir api-contract
   cat > api-contract/.project.yaml << 'EOF'
 name: api-contract
 ---
-category: backend
+category: test
 integration: echo api contract
 EOF
   git add api-contract/.project.yaml
@@ -55,42 +55,21 @@ EOF
   grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh api-contract -c echo api contract' "$MOCK_LOG"
 }
 
-@test "runs tooling integrations through a test-profile devcontainer service" {
-  mkdir tooling-integration
-  cat > tooling-integration/.project.yaml << 'EOF'
-name: tooling-integration
+@test "integration scripts do not create services for test projects without a Compose service" {
+  mkdir test-no-service
+  cat > test-no-service/.project.yaml << 'EOF'
+name: test-no-service
 ---
-category: tooling
-integration: echo tooling contract
+category: test
+integration: echo test contract
 EOF
-  git add tooling-integration/.project.yaml
-  jq '.services["integration-tooling-integration"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
-  mv next.json "$COMPOSE_CONFIG"
+  git add test-no-service/.project.yaml
 
-  run bash .scripts/run-integration-tests.sh --development tooling-integration
+  run bash .scripts/run-integration-tests.sh --development test-no-service
 
-  [ "$status" -eq 0 ]
-  grep -Fx 'docker compose --profile test build fixtures integration-tooling-integration' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh integration-tooling-integration -c echo tooling contract' "$MOCK_LOG"
-}
-
-@test "runs job integrations through a test-profile devcontainer service" {
-  mkdir job-integration
-  cat > job-integration/.project.yaml << 'EOF'
-name: job-integration
----
-category: job
-integration: echo job contract
-EOF
-  git add job-integration/.project.yaml
-  jq '.services["integration-job-integration"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
-  mv next.json "$COMPOSE_CONFIG"
-
-  run bash .scripts/run-integration-tests.sh --development job-integration
-
-  [ "$status" -eq 0 ]
-  grep -Fx 'docker compose --profile test build fixtures integration-job-integration' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh integration-job-integration -c echo job contract' "$MOCK_LOG"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Project service test-no-service is missing from the generated Compose configuration."* ]]
+  [ "$(wc -l < "$MOCK_LOG")" -eq 1 ]
 }
 
 @test "a test-only project is ignored by stack integration discovery" {
@@ -105,7 +84,7 @@ EOF
   cat > blank-integration/.project.yaml << 'EOF'
 name: blank-integration
 ---
-category: backend
+category: test
 integration: "   "
 EOF
   git add blank-integration/.project.yaml
@@ -391,7 +370,6 @@ EOF
   git mv missing-config-test/.project.yaml missing-config-test/tracked.txt
   add_test_project wrong-category-test
   sed -i 's/category: test/category: api/' wrong-category-test/.project.yaml
-  sed -i '/^integration:/d' wrong-category-test/.project.yaml
   add_test_project missing-script-test
   sed -i '/^integration:/d' missing-script-test/.project.yaml
   add_test_project empty-script-test

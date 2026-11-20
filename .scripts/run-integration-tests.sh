@@ -18,7 +18,7 @@ while IFS= read -r project; do
   [[ -d "$project" && -f "$project/.project.yaml" ]] || continue
   known_projects+=("$project")
   metadata=$(yq eval-all -o=json 'select(documentIndex == 1)' "$project/.project.yaml")
-  if jq -e '.integration | type == "string"' <<< "$metadata" > /dev/null; then
+  if jq -e '.category == "test" and (.integration | type == "string")' <<< "$metadata" > /dev/null; then
     valid_projects+=("$project")
     integration_scripts["$project"]=$(jq -r '.integration' <<< "$metadata")
   fi
@@ -74,10 +74,6 @@ if ((${#projects[@]} == 0)); then
   exit 0
 fi
 
-HOST_UID=$(id -u)
-HOST_GID=$(id -g)
-export HOST_UID HOST_GID
-
 compose_config=$(docker compose --profile test config --format json)
 if ! jq -e '
   .services.traefik.ports // []
@@ -92,19 +88,11 @@ if ! jq -e '.services.fixtures.profiles | index("test") != null' <<< "$compose_c
   exit 2
 fi
 
-declare -A project_services=()
-service_names=()
 for project in "${projects[@]}"; do
-  if jq -e --arg project "integration-$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
-    service="integration-$project"
-  elif jq -e --arg project "$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
-    service=${project}
-  else
+  if ! jq -e --arg project "$project" '.services[$project] != null' <<< "$compose_config" > /dev/null; then
     echo "Project service $project is missing from the generated Compose configuration." >&2
     exit 2
   fi
-  project_services["$project"]=$service
-  service_names+=("$service")
 done
 
 echo "WARNING: integration tests may modify application data. e2e-test deletes all recipes, ratings, images, inspirations, and tags before each attempt, preserving the final attempt's data; volumes are not reset."
@@ -133,7 +121,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker compose --profile test build fixtures "${service_names[@]}"
+docker compose --profile test build fixtures "${projects[@]}"
 for project in "${projects[@]}"; do
   integration=${integration_scripts[$project]}
   if [[ $project == tags-test ]]; then
@@ -236,13 +224,13 @@ for project in "${projects[@]}"; do
     E2E_AUTH_TOKENS=$(cat "$tokens_file")
     export E2E_AUTH_TOKENS
     docker compose --profile test run --rm -e E2E_AUTH_TOKENS \
-      --entrypoint /bin/sh "${project_services[$project]}" -c "$integration" 2>&1 \
+      --entrypoint /bin/sh "$project" -c "$integration" 2>&1 \
       | tee "$project/target/integration-tests/run.log"
     status=${PIPESTATUS[0]}
     unset E2E_AUTH_TOKENS
   else
     docker compose --profile test run --rm --entrypoint /bin/sh \
-      "${project_services[$project]}" -c "$integration" 2>&1 \
+      "$project" -c "$integration" 2>&1 \
       | tee "$project/target/integration-tests/run.log"
     status=${PIPESTATUS[0]}
   fi

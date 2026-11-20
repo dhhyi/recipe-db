@@ -21,6 +21,18 @@
     },
     {
       "if": {
+        "required": ["integration"]
+      },
+      "then": {
+        "properties": {
+          "category": {
+            "const": "test"
+          }
+        }
+      }
+    },
+    {
+      "if": {
         "properties": {
           "backupCompact": {
             "const": true
@@ -181,7 +193,7 @@
       "type": "string"
     },
     "integration": {
-      "description": "Stack integration test command. Empty values are allowed and skipped by the integration runner.",
+      "description": "Optional stack integration test command for test projects. Empty values are allowed and skipped by the integration runner.",
       "type": "string"
     },
     "prettier": {
