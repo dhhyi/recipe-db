@@ -315,6 +315,54 @@ EOF
   run ! grep -q '"observedPulse":"different"' "$MOCK_LOG"
 }
 
+@test "expired guard accepts API defaults but refuses altered runtime identity" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  cat > validate-expired.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work=$FIXTURE_ROOT/work
+namespace=fixture backup_id=backup-1
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+restore_guard_manifest
+jq '.items[] | select(.kind=="Job") | .metadata += {uid:"guard-uid",resourceVersion:"1"}
+    | .status.active=1
+    | .spec.template.spec.containers[].env[] |=
+        (if .value=="" then del(.value) else . end)' "$work/restore-guard.json" > job.json
+jq '.items[] | select(.kind=="ConfigMap") | .data={ready:"true",expired:"true"}' \
+  "$work/restore-guard.json" > configmap.json
+jq '{items:[{kind:"Pod",apiVersion:"v1",metadata:(.spec.template.metadata +
+    {uid:"pod-uid",namespace:.metadata.namespace,ownerReferences:[
+      {apiVersion:"batch/v1",kind:"Job",name:.metadata.name,uid:.metadata.uid,controller:true}]}),
+    spec:(.spec.template.spec | .containers[0].resources.requests.cpu="20m")}]}' \
+    job.json > pods.json
+jq "$JOB_CHANGE" job.json > actual-job.json
+jq "$POD_CHANGE" pods.json > actual-pods.json
+kube() {
+  case "$2" in
+    job) cat actual-job.json ;;
+    configmap) cat configmap.json ;;
+    deployments) echo '{"items":[]}' ;;
+    pods) cat actual-pods.json ;;
+    *) return 1 ;;
+  esac
+}
+restore_guard_validate_expired
+[[ $restore_expired_guard_uid == guard-uid ]]
+EOF
+  run env JOB_CHANGE=. POD_CHANGE=. bash validate-expired.sh
+  [ "$status" -eq 0 ]
+  run env JOB_CHANGE='.spec.template.spec.containers[0].image="other"' POD_CHANGE=. \
+    bash validate-expired.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"guard identity or specification has drifted"* ]]
+  run env JOB_CHANGE=. POD_CHANGE='.items[0].spec.containers[0].env[0].value="other"' \
+    bash validate-expired.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"guard Pods have drifted"* ]]
+}
+
 @test "active but unresponsive guard terminates the live client" {
   printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
   printf '[]\n' > work/prior-workloads.json
