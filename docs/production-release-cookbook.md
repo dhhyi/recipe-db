@@ -204,7 +204,7 @@ TOOLING_REVISION=$(git rev-parse HEAD) \
     release-prepare.yml -e "checkout_revision=$TOOLING_REVISION" --ask-become-pass
 ```
 
-Require the Bash `TOOLING_REVISION` to equal the reviewed tooling revision selected on the workstation, not necessarily the application's `REVISION`. The playbook refuses active capture or retained maintenance, leaves the timer disabled, and preserves the installed old-release backup reference and private values. The managed capture wrapper loads each release's own immutable Git metadata, so its tooling checkout can be newer than the release being backed up. It never runs repository development setup on the Pi. Exit this container shell when finished; an open session holds the container lifecycle lock.
+Require the Bash `TOOLING_REVISION` to equal the reviewed tooling revision selected on the workstation, not necessarily the application's `REVISION`. The playbook refuses active capture or retained maintenance, except for the separately confirmed [terminal-failure closeout preparation](production-existing-cluster-restore.md#2-choose-the-entry-path). It leaves the timer disabled and preserves the installed old-release backup reference and private values. The managed capture wrapper loads each release's own immutable Git metadata, so its tooling checkout can be newer than the release being backed up. It never runs repository development setup on the Pi. Exit this container shell when finished; an open session holds the container lifecycle lock.
 
 Back in **workstation fish**, check workstation prerequisites and the private metadata connection before downtime:
 
@@ -647,6 +647,28 @@ ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
 ```
 
 Require a successful play recap. This narrowly scoped operation checks the exact holder, website decision, candidate artifact/revision, pinned checkout, unchanged private values and idle backup service before installing the candidate reference and configuration-generation timestamp. It preserves previous-release state and credentials, does not reinstall secrets or touch Drive authorization, and leaves the timer disabled. It cannot prepare tools or update the checkout during this step. Exit the container shell afterward.
+
+### Install backup inputs after a standalone restore
+
+This branch is for a completed empty-storage restore, not a retained release. Require `maintenanceActive: false` and an unlocked, verified application before changing backup inputs. Do not run `release-backup-align.yml`, release acceptance or publication against an archived operation.
+
+Update the [operator-managed inputs](production-configuration.md#private-workstation-directory): `backup/backup-release-ref` must contain the restored immutable artifact, and the provisioning inventory's `backup_capture_revision` must select the reviewed capture tooling. Keep the application secret inputs and Drive authorization unchanged. Save the private configuration through your normal private-repository workflow.
+
+From workstation fish, open the provisioning container:
+
+```fish
+mise run --raw in-devcontainer provisioning ssh-agent bash
+```
+
+In that **Bash shell**, install the prepared inputs:
+
+```sh
+ssh-add ~/.config/recipe-db/ssh/recipe-db-pi \
+  && ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml \
+    backup-configure.yml --ask-become-pass
+```
+
+Require a successful play recap. This records a new configuration timestamp and leaves scheduled capture disabled; it does not replace Drive authorization. Exit the container shell, [capture and verify an ordinary backup](#verify-an-ordinary-backup), then [re-enable the schedule](#verify-a-backup-then-re-enable-its-schedule) only when appropriate. Require a capture after restore and this installation, with off-device verification and a baseline matching the restored artifact and revision. `verified-unchanged` is acceptable only for that matching restored-release baseline; it verifies existing remote objects and is not a new upload. Do not continue through the retained-release steps below.
 
 ### Run the normal backup service
 

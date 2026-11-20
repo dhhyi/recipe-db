@@ -12,15 +12,19 @@ upload="$root/provisioning/files/backup-upload.py"
 source "$root/.scripts/lib/rehearsal-k3d.sh"
 result_directory=${2:-}
 release=${1:-}
+candidate_release=${3:-}
 
 die() {
   printf 'Backup recovery rehearsal: %s\n' "$*" >&2
   exit 1
 }
 
-[[ $# == 2 ]] || die 'usage: mise run production-backup-recovery-k3d <release@sha256:digest> <new-absolute-result-directory>'
+[[ $# == 2 || $# == 3 ]] || die 'usage: mise run production-backup-recovery-k3d <release@sha256:digest> <new-absolute-result-directory> <different-candidate-release@sha256:digest>'
 [[ $release =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[a-f0-9]{64}$ ]] \
   || die 'release must be the immutable recipe-db release artifact'
+[[ $candidate_release =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[a-f0-9]{64}$ &&
+  $candidate_release != "$release" ]] \
+  || die 'full recovery rehearsal requires a distinct immutable candidate release for the retained failed-release path'
 [[ $result_directory == /* && ! -e $result_directory && ! -L $result_directory ]] \
   || die 'result directory must be a new absolute path'
 parent=$(dirname "$result_directory")
@@ -71,6 +75,10 @@ run_logged() {
   }
 }
 
+release_lifecycle() {
+  bash "$driver" --release-sources-from-git "$@"
+}
+
 write_result() {
   local success=$1 finished elapsed staging_bytes available_bytes
   finished=$(date -u +%FT%TZ)
@@ -83,7 +91,8 @@ write_result() {
     fi
   done
   available_bytes=$(df -B1 --output=avail "$result_directory" | awk 'NR == 2 {print $1}')
-  jq -n --arg release "$release" --arg source "$source_cluster" --arg target "$target_cluster" \
+  jq -n --arg release "$release" --arg candidateRelease "$candidate_release" \
+    --arg source "$source_cluster" --arg target "$target_cluster" \
     --arg backupId "$backup_id" --arg revision "$revision" \
     --arg sourceContainer "$source_container" --arg targetContainer "$target_container" \
     --argjson sourceHttpPort "$source_http_port" --argjson targetHttpPort "$target_http_port" \
@@ -94,7 +103,7 @@ write_result() {
     --argjson success "$success" --argjson cleanupSucceeded "$cleanup_succeeded" \
     --slurpfile phases "$result_directory/phases.json" \
     '{schemaVersion:1,success:$success,phase:$phase,startedAt:$started,finishedAt:$finished,
-      elapsedSeconds:$elapsedSeconds,release:$release,revision:$revision,
+      elapsedSeconds:$elapsedSeconds,release:$release,candidateRelease:$candidateRelease,revision:$revision,
       sourceCluster:{name:$source,containerId:$sourceContainer,httpPort:$sourceHttpPort,apiPort:$sourceApiPort},
       targetCluster:{name:$target,containerId:$targetContainer,httpPort:$targetHttpPort,apiPort:$targetApiPort},
       backupId:$backupId,phases:$phases[0],stagingBytes:$stagingBytes,
@@ -167,6 +176,10 @@ revision=$(jq -er '.annotations["org.opencontainers.image.revision"] |
   select(test("^[a-f0-9]{40}$"))' "$release_manifest")
 run_logged "$result_directory/logs/release-render.log" \
   bash "$driver" render "$source_values" "$release"
+# Source deployment uses current-checkout metadata, so its preflight must too.
+# Historical candidates use their immutable Git sources; deploy is not broadened.
+run_logged "$result_directory/logs/candidate-render.log" \
+  release_lifecycle render "$target_values" "$candidate_release"
 python3 - "$source_http_port" "$target_http_port" "$source_api_port" "$target_api_port" << 'PY'
 import socket
 import sys
@@ -277,7 +290,7 @@ mark
 phase=source-snapshot
 source_snapshot="$result_directory/snapshots/source"
 run_logged "$result_directory/logs/source-backup.log" \
-  bash "$driver" backup "$source_values" "$release" "$source_snapshot"
+  release_lifecycle backup-run "$source_values" "$release" "$source_snapshot"
 verify_fixture_recipe "$source_values" "$recipe_name"
 mark
 
@@ -331,7 +344,7 @@ bash "$driver" kubectl "$target_values" label namespace recipe-db \
 bash "$driver" kubectl "$target_values" create configmap e2e-marker \
   --from-literal=value=must-remain-unchanged \
   > "$result_directory/logs/nonempty-marker.log" 2>&1
-if bash "$driver" restore "$target_values" "$package_manifest" "$archive" "$backup_id" \
+if release_lifecycle restore "$target_values" "$package_manifest" "$archive" "$backup_id" \
   "$result_directory/state/nonempty-target" "RESTORE-$backup_id" \
   > "$result_directory/logs/nonempty-restore.log" 2>&1; then
   die 'restore unexpectedly accepted a populated target'
@@ -346,7 +359,7 @@ bash "$driver" kubectl "$target_values" wait --for=delete namespace/recipe-db \
 mark
 
 phase=fresh-target-restore
-run_logged "$result_directory/logs/restore.log" bash "$driver" restore "$target_values" \
+run_logged "$result_directory/logs/restore.log" release_lifecycle restore "$target_values" \
   "$package_manifest" "$archive" "$backup_id" "$result_directory/state/restore" "RESTORE-$backup_id"
 verify_fixture_recipe "$target_values" "$recipe_name"
 mark
@@ -379,6 +392,345 @@ curl --silent --show-error --fail --connect-timeout 5 --max-time 30 \
 grep -qF "$recipe_id" "$result_directory/browse.html"
 mark
 
+sentinel_volume() {
+  local namespace=$1 name=$2 action=$3 image manifest="$result_directory/sentinel.json"
+  image=$(yq -r '.infrastructure.maintenance' "$target_values")
+  if [[ $action == create ]]; then
+    jq -n --arg ns "$namespace" --arg name "$name" '{
+      apiVersion:"v1",kind:"PersistentVolumeClaim",
+      metadata:{namespace:$ns,name:$name,labels:{"recipe-db/rehearsal-sentinel":"true"}},
+      spec:{accessModes:["ReadWriteOnce"],storageClassName:"local-path",
+        resources:{requests:{storage:"16Mi"}}}}' > "$manifest"
+    bash "$driver" kubectl "$target_values" --namespace "$namespace" create -f "$manifest" \
+      > "$result_directory/logs/$name-create.log" 2>&1
+  fi
+  local command='cat /data/rehearsal-marker'
+  if [[ $action == create ]]; then
+    command='printf "unrelated-storage-must-survive\n" > /data/rehearsal-marker'
+  fi
+  jq -n --arg ns "$namespace" --arg name "$name" --arg image "$image" --arg command "$command" '{
+    apiVersion:"v1",kind:"Pod",metadata:{namespace:$ns,name:$name},
+    spec:{restartPolicy:"Never",automountServiceAccountToken:false,
+      activeDeadlineSeconds:120,containers:[{name:"sentinel",image:$image,
+        command:["sh","-ec",$command],volumeMounts:[{name:"data",mountPath:"/data"}]}],
+      volumes:[{name:"data",persistentVolumeClaim:{claimName:$name}}]}}' > "$manifest"
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" create -f "$manifest" \
+    > "$result_directory/logs/$name-pod-create.log" 2>&1
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" wait \
+    --for=jsonpath='{.status.phase}'=Succeeded "pod/$name" --timeout=180s \
+    > "$result_directory/logs/$name-pod-wait.log" 2>&1
+  if [[ $action != create ]]; then
+    bash "$driver" kubectl "$target_values" --namespace "$namespace" logs "$name" \
+      > "$result_directory/$name-content"
+    [[ $(cat "$result_directory/$name-content") == unrelated-storage-must-survive ]] || return 1
+  fi
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" delete pod "$name" \
+    --wait=true --timeout=180s > "$result_directory/logs/$name-pod-delete.log" 2>&1
+  bash "$driver" kubectl "$target_values" --namespace "$namespace" get pvc "$name" -o json \
+    | jq -er '.metadata.uid' > "$result_directory/$name-$action.uid"
+  if [[ $action != create ]]; then
+    cmp "$result_directory/$name-create.uid" "$result_directory/$name-$action.uid" || return 1
+  fi
+}
+
+verify_preserved_storage() {
+  local label=$1
+  bash "$driver" kubectl "$target_values" get pvc -o json \
+    | jq -Sc '[.items[] | {name:.metadata.name,uid:.metadata.uid,volume:.spec.volumeName}] | sort_by(.name)' \
+      > "$result_directory/$label-pvcs.json"
+  cmp "$result_directory/recovery-before-pvcs.json" "$result_directory/$label-pvcs.json" || return 1
+  sentinel_volume recipe-db rehearsal-unrelated verify
+  sentinel_volume kube-system recipe-db-acme verify
+}
+
+verify_recovery_isolation() {
+  local state=$1 holder
+  jq -e '.status == "reset-ready" or .status == "recovery-required"' \
+    "$state/restore-state.json" > /dev/null || return 1
+  holder=$(jq -er '.holder' "$state/restore-state.json")
+  bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
+    > "$result_directory/recovery-lease.json"
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
+    "$result_directory/recovery-lease.json" > /dev/null || return 1
+  verify_recovery_barrier
+}
+
+verify_recovery_barrier() {
+  local origin status
+  bash "$driver" kubectl "$target_values" get pods -o json \
+    > "$result_directory/recovery-pods.json"
+  jq -e 'all(.items[];
+    (.status.phase == "Succeeded" or .status.phase == "Failed") or
+    (.metadata.labels["app.kubernetes.io/part-of"] != "recipe-db"
+      and all(.spec.volumes[]?; .persistentVolumeClaim == null)))' \
+    "$result_directory/recovery-pods.json" > /dev/null || return 1
+  origin=$(yq -r '.origin' "$target_values")
+  local path
+  for path in / /graphql /public/rehearsal-missing.png; do
+    status=$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
+      --output /dev/null --write-out '%{http_code}' "$origin$path")
+    [[ $status == 503 ]] || {
+      die "recovery barrier did not block $path"
+      # shellcheck disable=SC2317
+      return 1
+    }
+  done
+}
+
+verify_retained_recovery_lease() {
+  local label=$1 expected_phase=$2
+  bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
+    > "$result_directory/$label-lease.json"
+  jq -e --arg uid "$release_lease_uid" --arg holder "$release_holder" --arg phase "$expected_phase" '
+    .metadata.uid == $uid and .spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/operation"] == "restore"
+    and .metadata.annotations["recipe-db/phase"] == $phase' \
+    "$result_directory/$label-lease.json" > /dev/null
+}
+
+recovery_guard_snapshot() {
+  local output=$1
+  {
+    bash "$driver" kubectl "$target_values" --namespace kube-system \
+      get lease recipe-db-deploy -o json
+    bash "$driver" kubectl "$target_values" --namespace kube-system \
+      get configmap recipe-db-recovery-handoff -o json
+    bash "$driver" kubectl "$target_values" \
+      get deployments,statefulsets,daemonsets,jobs,cronjobs,pods,pvc,services,ingresses,configmaps,networkpolicies -o json
+  } | jq -Scs '[.[] | if .kind == "List" then .items[] else . end |
+      {kind,metadata:(.metadata | {name,namespace,uid,generation,labels,annotations}),spec,data}]
+      | sort_by(.kind,.metadata.namespace,.metadata.name)' > "$output"
+}
+
+verify_recovery_refusals() {
+  local label=$1 operation
+  recovery_guard_snapshot "$result_directory/$label-before.json"
+  for operation in deploy backup-enter; do
+    if [[ $operation == deploy ]]; then
+      if bash "$driver" deploy "$target_values" "$release" \
+        > "$result_directory/logs/$label-$operation.log" 2>&1; then
+        die 'normal deploy unexpectedly accepted retained recovery ownership'
+        # shellcheck disable=SC2317
+        return 1
+      fi
+    elif release_lifecycle backup-enter "$target_values" "$release" "$result_directory/state/$label-refused-backup" \
+      > "$result_directory/logs/$label-$operation.log" 2>&1; then
+      die 'backup-enter unexpectedly accepted retained recovery ownership'
+      # shellcheck disable=SC2317
+      return 1
+    fi
+    recovery_guard_snapshot "$result_directory/$label-$operation-after.json"
+    cmp "$result_directory/$label-before.json" "$result_directory/$label-$operation-after.json" || return 1
+  done
+}
+
+run_faulted_recovery() (
+  local operation=$1 fault=$2 log=$3
+  shift 3
+  export REHEARSAL_FAULT_OPERATION="$operation" REHEARSAL_FAULT_ACTION="$fault"
+  export REHEARSAL_FAULT_CONTEXT
+  REHEARSAL_FAULT_CONTEXT=$(yq -r '.context' "$target_values")
+  export REHEARSAL_FAULT_MARKER="$result_directory/$phase.fault"
+  # Intercept only this disposable target's first destructive helper exec, after
+  # it really completes. No production fault flags or fabricated state records.
+  # shellcheck disable=SC2329
+  kubectl() {
+    local arguments=" $* " result=0
+    command kubectl "$@" || result=$?
+    if [[ $result == 0 && ! -e $REHEARSAL_FAULT_MARKER &&
+      $arguments == *" --context $REHEARSAL_FAULT_CONTEXT "* &&
+      $arguments == *" exec "* ]]; then
+      if [[ ($REHEARSAL_FAULT_OPERATION == reset && $arguments == *"find /data"* &&
+        $arguments == *"-exec rm -rf"*) ||
+        ($REHEARSAL_FAULT_OPERATION == restore && $arguments == *" tar -xpkf "* &&
+        $arguments == *" -C /data "*) ||
+        ($REHEARSAL_FAULT_OPERATION == backup && $arguments == *" -- tar -C /data -cf - . "*) ]]; then
+        printf '%s\n' "$REHEARSAL_FAULT_ACTION" > "$REHEARSAL_FAULT_MARKER"
+        if [[ $REHEARSAL_FAULT_ACTION == term ]]; then
+          kill -TERM "$$"
+          return 143
+        fi
+        return 91
+      fi
+    fi
+    return "$result"
+  }
+  export -f kubectl
+  if release_lifecycle "$@" > "$log" 2>&1; then
+    die 'faulted recovery unexpectedly succeeded'
+  fi
+  [[ -f $REHEARSAL_FAULT_MARKER ]] || die 'recovery failed before the requested fault was injected'
+)
+
+phase=recovery-storage-sentinels
+sentinel_volume recipe-db rehearsal-unrelated create
+# Loopback rehearsals do not obtain real certificates. Use the production ACME
+# claim name and namespace with synthetic contents, never a real certificate.
+sentinel_volume kube-system recipe-db-acme create
+bash "$driver" kubectl "$target_values" get pvc -o json \
+  | jq -Sc '[.items[] | {name:.metadata.name,uid:.metadata.uid,volume:.spec.volumeName}] | sort_by(.name)' \
+    > "$result_directory/recovery-before-pvcs.json"
+mark
+
+phase=idle-site-reset
+reset_state="$result_directory/state/idle-reset"
+run_logged "$result_directory/logs/idle-reset-plan.log" release_lifecycle recovery-plan "$target_values" \
+  "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_logged "$result_directory/logs/idle-reset.log" release_lifecycle recovery-reset "$target_values" \
+  "$package_manifest" "$archive" "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage idle-reset
+mark
+
+phase=idle-site-recovery-restore
+run_logged "$result_directory/logs/idle-recovery-restore.log" \
+  release_lifecycle recovery-restore "$target_values" "$reset_state" \
+  "$package_manifest" "$archive" "$backup_id" "RESTORE-$backup_id"
+verify_fixture_recipe "$target_values" "$recipe_name"
+verify_preserved_storage idle-restored
+mark
+
+phase=interrupted-reset
+reset_state="$result_directory/state/interrupted-reset"
+run_logged "$result_directory/logs/interrupted-reset-plan.log" \
+  release_lifecycle recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_faulted_recovery reset term "$result_directory/logs/interrupted-reset.log" \
+  recovery-reset "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage interrupted-reset
+mark
+
+phase=interrupted-reset-reset-again
+run_logged "$result_directory/logs/interrupted-reset-retry-plan.log" \
+  release_lifecycle recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_logged "$result_directory/logs/interrupted-reset-retry.log" \
+  release_lifecycle recovery-reset "$target_values" "$package_manifest" "$archive" \
+  "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_preserved_storage reset-again
+mark
+
+for restore_fault in fail term; do
+  if [[ $restore_fault == fail ]]; then phase=failed-restore; else phase=interrupted-restore; fi
+  run_faulted_recovery restore "$restore_fault" "$result_directory/logs/$phase.log" \
+    recovery-restore "$target_values" "$reset_state" "$package_manifest" "$archive" "$backup_id" "RESTORE-$backup_id"
+  verify_recovery_isolation "$reset_state"
+  verify_preserved_storage "$phase"
+  mark
+  phase="$phase-reset-again"
+  run_logged "$result_directory/logs/$phase-plan.log" \
+    release_lifecycle recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
+  run_logged "$result_directory/logs/$phase.log" \
+    release_lifecycle recovery-reset "$target_values" "$package_manifest" "$archive" \
+    "$backup_id" "$reset_state" "RESET-$backup_id"
+  verify_recovery_isolation "$reset_state"
+  verify_preserved_storage "$phase"
+  mark
+done
+
+phase=reset-again-recovery-restore
+run_logged "$result_directory/logs/reset-again-recovery-restore.log" \
+  release_lifecycle recovery-restore "$target_values" "$reset_state" "$package_manifest" \
+  "$archive" "$backup_id" "RESTORE-$backup_id"
+verify_fixture_recipe "$target_values" "$recipe_name"
+verify_preserved_storage reset-again-restored
+mark
+
+phase=retained-release-preparation
+release_state="$result_directory/state/failed-release"
+run_logged "$result_directory/logs/release-enter.log" \
+  release_lifecycle backup-enter "$target_values" "$release" "$release_state"
+release_holder=$(jq -er .backupId "$release_state/backup-state.json")
+run_logged "$result_directory/logs/release-capture.log" \
+  release_lifecycle backup-capture "$target_values" "$release_state"
+# Reuse the isolated uploader and fake remote to actually verify this release's
+# pre-upgrade backup, rather than asserting a remote status that never happened.
+snapshot_quoted=$(printf '%s' "$release_state" | jq -Rr '@sh')
+printf '#!/bin/sh\nset -eu\n[ "$#" -eq 1 ] || exit 2\nmkdir -m 700 "$1"\ncp -a -- %s/. "$1/"\n' \
+  "$snapshot_quoted" > "$capture_command"
+run_logged "$result_directory/logs/release-upload.log" \
+  python3 "$upload" nightly --config "$result_directory/secrets/backup.json"
+release_backup_status=$(jq -er --arg holder "$release_holder" \
+  'select(.backupId == $holder) | .status |
+    select(. == "verified-upload" or . == "verified-unchanged")' \
+  "$result_directory/state/status.json")
+run_logged "$result_directory/logs/release-stage.log" \
+  release_lifecycle release-stage "$target_values" "$release_state" "$candidate_release" \
+  "$release_backup_status" "VERIFIED-$release_holder-$release_backup_status"
+run_logged "$result_directory/logs/release-migration-plan.log" \
+  release_lifecycle release-migration-plan "$target_values" "$release_state" "$candidate_release"
+deadline=$((SECONDS + 1800))
+migration_step=0
+while ! jq -e '.migrationResult.outcome == "migration-succeeded"
+  or .migrationResult.outcome == "no-migration-required"' \
+  "$release_state/backup-state.json" > /dev/null; do
+  ((SECONDS < deadline)) || die 'candidate migration did not complete before rehearsal deadline'
+  migration_step=$((migration_step + 1))
+  run_logged "$result_directory/logs/release-migration-$migration_step.log" \
+    release_lifecycle release-migration-next "$target_values" "$release_state" "$candidate_release"
+  sleep 2
+done
+run_logged "$result_directory/logs/release-start.log" \
+  release_lifecycle release-start "$target_values" "$release_state" "$candidate_release"
+run_logged "$result_directory/logs/release-reopen.log" \
+  release_lifecycle release-reopen "$target_values" "$release_state" "$candidate_release" "OPEN-$release_holder"
+verify_fixture_recipe "$target_values" "$recipe_name"
+run_logged "$result_directory/logs/release-website-result.log" \
+  release_lifecycle release-website-result "$target_values" "$release_state" "$candidate_release" \
+  passed 'Disposable rehearsal verified synthetic recipe, image, tags and rating.' "WEBSITE-$release_holder-passed"
+mark
+
+phase=retained-failed-release
+run_faulted_recovery backup fail "$result_directory/logs/post-release-capture-failure.log" \
+  release-backup-capture "$target_values" "$release_state" "$candidate_release"
+jq -e '.status == "recovery-required" and
+  .phase == "post-release-backup-failed"' \
+  "$release_state/backup-state.json" > /dev/null
+verify_preserved_storage retained-failed-release
+bash "$driver" kubectl "$target_values" --namespace kube-system get lease recipe-db-deploy -o json \
+  > "$result_directory/pre-closeout-lease.json"
+release_lease_uid=$(jq -er --arg holder "$release_holder" \
+  'select(.spec.holderIdentity == $holder) | .metadata.uid' "$result_directory/pre-closeout-lease.json")
+verify_fixture_recipe "$target_values" "$recipe_name"
+mark
+
+phase=retained-failed-release-closeout
+run_logged "$result_directory/logs/release-closeout.log" \
+  release_lifecycle release-closeout "$target_values" "$release_state" "$release_holder" "CLOSEOUT-$release_holder"
+jq -e --arg uid "$release_lease_uid" --arg holder "$release_holder" '
+  .status == "recovery-closed" and .phase == "recovery-closed"
+  and .recoveryCloseout.ownershipRetained == true and .recoveryCloseout.ownershipReleased == false
+  and .recoveryCloseout.leaseUid == $uid and .recoveryCloseout.holder == $holder' \
+  "$release_state/backup-state.json" > /dev/null
+verify_retained_recovery_lease closeout recovery-ready
+verify_recovery_barrier
+verify_preserved_storage release-closed
+verify_recovery_refusals after-closeout
+verify_retained_recovery_lease after-closeout-refusals recovery-ready
+mark
+
+phase=after-closeout-reset
+reset_state="$result_directory/state/after-closeout-reset"
+run_logged "$result_directory/logs/after-closeout-plan.log" \
+  release_lifecycle recovery-plan "$target_values" "$package_manifest" "$archive" "$backup_id" "$reset_state"
+run_logged "$result_directory/logs/after-closeout-reset.log" \
+  release_lifecycle recovery-reset "$target_values" "$package_manifest" "$archive" \
+  "$backup_id" "$reset_state" "RESET-$backup_id"
+verify_recovery_isolation "$reset_state"
+verify_retained_recovery_lease after-closeout-reset reset-ready
+verify_preserved_storage after-closeout-reset
+verify_recovery_refusals after-closeout-reset
+verify_retained_recovery_lease after-reset-refusals reset-ready
+mark
+
+phase=after-closeout-recovery-restore
+run_logged "$result_directory/logs/after-closeout-restore.log" \
+  release_lifecycle recovery-restore "$target_values" "$reset_state" "$package_manifest" \
+  "$archive" "$backup_id" "RESTORE-$backup_id"
+verify_fixture_recipe "$target_values" "$recipe_name"
+verify_preserved_storage after-closeout-restored
+mark
+
 cleanup_test_record() {
   local values=$1 label=$2
   graphql_at "$values" \
@@ -389,7 +741,7 @@ cleanup_test_record() {
   graphql_at "$values" 'mutation($id: ID!) { deleteTag(id: $id) }' \
     "$(jq -nc --arg id "$tag_id" '{id:$id}')"
   run_logged "$result_directory/logs/$label-cleanup-backup.log" \
-    bash "$driver" backup "$values" "$release" "$result_directory/snapshots/$label-cleanup"
+    release_lifecycle backup-run "$values" "$release" "$result_directory/snapshots/$label-cleanup"
   graphql_at "$values" 'query($id: ID!) { recipe(id: $id) { id } rating(id: $id) { count } tags { id } }' \
     "$(jq -nc --arg id "$recipe_id" '{id:$id}')"
   jq -e --arg tag "$tag_id" \

@@ -14,6 +14,8 @@ source "$root/.scripts/lib/cluster-operation-lock.sh"
 source "$root/.scripts/lib/production-storage.sh"
 # shellcheck source=.scripts/lib/production-restore.sh
 source "$root/.scripts/lib/production-restore.sh"
+# shellcheck source=.scripts/lib/production-recovery.sh
+source "$root/.scripts/lib/production-recovery.sh"
 
 release_sources_from_git=false
 if [[ ${1:-} == --release-sources-from-git ]]; then
@@ -26,7 +28,7 @@ values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == backup-enter ||
-    $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore ]] \
+    $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
@@ -63,6 +65,10 @@ case "$command" in
   release-accept) [[ $# = 3 ]] || production_fail "release-accept requires the maintenance state directory, candidate artifact and ACCEPT-<holder> confirmation" ;;
   release-finalize) [[ $# = 4 ]] || production_fail "release-finalize requires the maintenance state directory, candidate artifact, sequential GitHub release tag and PUBLISHED-<holder>-<tag> confirmation" ;;
   restore) [[ $# = 5 ]] || production_fail "restore requires absolute package manifest, archive, expected backup ID, new absolute state directory and RESTORE-<backup-id> confirmation" ;;
+  release-closeout) [[ $# = 3 ]] || production_fail "release-closeout requires release state, exact holder and CLOSEOUT-<holder>" ;;
+  recovery-reset) [[ $# = 5 ]] || production_fail "recovery-reset requires manifest, archive, backup ID, private state directory and RESET-<backup-id>" ;;
+  recovery-plan) [[ $# = 4 || $# = 5 ]] || production_fail "recovery-plan requires manifest, archive, backup ID, private state directory and optional private verified catalog" ;;
+  recovery-restore) [[ $# = 5 ]] || production_fail "recovery-restore requires reset state, manifest, archive, backup ID and RESTORE-<backup-id>" ;;
   restore-abandon) [[ $# = 3 ]] || production_fail "restore-abandon requires absolute state directory, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation" ;;
   backup-status) [[ $# = 1 ]] || production_fail "backup-status requires the absolute state directory" ;;
   backup-exit) [[ $# = 3 ]] || production_fail "backup-exit requires the absolute state directory, exact holder and EXIT-<holder> confirmation" ;;
@@ -120,6 +126,11 @@ cleanup() {
   local result=$?
   trap - EXIT
   restore_cleanup "$result"
+  recovery_cleanup "$result"
+  if ! recovery_command_release; then
+    printf 'production: recovery command claim could not be released; inspect it after its 45-second heartbeat expires\n' >&2
+    result=1
+  fi
   if ! release_recovery_reopen_cleanup "$result"; then
     result=1
   fi
@@ -249,7 +260,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | backup-exit | restore | release-migration-recover | release-recovery-reopen)
+    backup-run | backup-enter | backup-capture | backup-exit | restore | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
@@ -300,7 +311,7 @@ render() {
   ytt -f "$release_root/.scripts/templates/kubernetes-template.yml" \
     -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
-  if [[ $command == restore || $command == release-migration-recover ]]; then
+  if [[ $command == restore || $command == recovery-* || $command == release-migration-recover ]]; then
     restore_ingress_values
   fi
   yq '(select(.kind == "HelmChartConfig").metadata.labels."app.kubernetes.io/part-of") = "recipe-db"' \
@@ -476,10 +487,14 @@ ensure_namespace() {
       || production_fail "refusing to adopt an unowned application namespace"
     kube get configmap recipe-db-restore --ignore-not-found -o json > "$work/existing-restore-state.json"
     if [[ -s $work/existing-restore-state.json ]]; then
-      jq -e '.data["restore-state.json"] | fromjson |
+      if [[ ${command:-} == recovery-restore && ${restore_mode:-} == existing-reset ]]; then
+        recovery_validate_namespace_handoff "$work/existing-restore-state.json"
+      else
+        jq -e '.data["restore-state.json"] | fromjson |
         .status == "succeeded" and .phase == "complete"' \
-        "$work/existing-restore-state.json" > /dev/null \
-        || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
+          "$work/existing-restore-state.json" > /dev/null \
+          || production_fail "target has unresolved or abandoned restore state; keep it isolated and select a new empty target"
+      fi
     fi
   else
     jq -n --arg ns "$namespace" '{apiVersion:"v1",kind:"Namespace",
@@ -533,7 +548,7 @@ wait_deployments() {
 
 backup_state_write() {
   local status=$1 phase=$2
-  if [[ $command == restore ]]; then
+  if [[ $command == restore || $command == recovery-* ]]; then
     restore_state_write in-progress "$phase"
     return
   fi
@@ -4452,6 +4467,18 @@ case "$command" in
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"
+    ;;
+  release-closeout)
+    recovery_release_closeout "$@"
+    ;;
+  recovery-reset)
+    recovery_reset "$@"
+    ;;
+  recovery-plan)
+    recovery_plan "$@"
+    ;;
+  recovery-restore)
+    recovery_restore "$@"
     ;;
   restore-abandon)
     restore_abandon "$1" "$2" "$3"

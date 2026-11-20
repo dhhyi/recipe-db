@@ -162,6 +162,8 @@ mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
 
 ## 7. Restore the application
 
+If the existing host and disk are trustworthy and only application data needs replacing, use the [existing-cluster restore cookbook](production-existing-cluster-restore.md) instead of rebuilding. Continue here for a lost or suspect host.
+
 First [authorize Drive interactively on the new Pi](google-drive-authorization.md#1-authorize-on-a-new-pi). No authorized rclone config is restored from operator home. Then follow the [production recovery guide](production-kubernetes.md#fresh-deployment-restore), which explains how to download and verify the backup and its matching release artifact. If the verified package was already downloaded before the rebuild, authorization can wait until backup configuration in step 8.
 
 Set the paths below to your backup manifest and archive. Use a new directory for restore progress. Restore into the empty cluster—**do not deploy the application first**.
@@ -194,4 +196,4 @@ After restore, verify:
 
 ## 8. Configure automated backups
 
-After restore acceptance, [authorize Drive](google-drive-authorization.md#1-authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow [Align backups and record the result](production-release-cookbook.md#10-align-backups-and-record-the-result) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups. That procedure also updates the capture checkout and immutable release reference to match the deployed application.
+After restore acceptance, [authorize Drive](google-drive-authorization.md#1-authorize-on-a-new-pi) if it was not needed in step 7. Keep any authorization already established on this Pi; restoring application data does not change it. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to install the operator-prepared backup inputs, verify a capture, and enable scheduled backups with inputs matching the deployed application.

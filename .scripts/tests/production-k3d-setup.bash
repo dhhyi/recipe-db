@@ -13,6 +13,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-restore.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/production-recovery.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-backup-snapshot.py" .scripts/
   use_mise_tools
@@ -251,7 +252,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         fi
         exit ;;
       *"patch configmap recovery-guard-"*)
-        printf '%s\n' "${*: -1}" | jq -er .data.pulse > "$MOCK_LOG.guard-pulse"
+        patch=$(printf '%s\n' "${*: -1}")
+        if jq -e '.data.pulse | type == "string"' <<< "$patch" > /dev/null; then
+          jq -er .data.pulse <<< "$patch" > "$MOCK_LOG.guard-pulse"
+        elif jq -e '.data.completionReady == "true"' <<< "$patch" > /dev/null; then
+          touch "$MOCK_LOG.guard-completion-ready"
+        else
+          exit 1
+        fi
         exit ;;
       *"delete job recovery-guard-"* | \
       *"delete rolebinding,role,serviceaccount,configmap recovery-guard-"*)
@@ -272,7 +280,13 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
           echo '{"items":[{"kind":"Deployment","spec":{"replicas":1},"status":{"replicas":1}}]}'
         elif [[ ${MOCK_ABANDON_JOB:-false} == true ]]; then
           echo '{"items":[{"kind":"Job","spec":{"suspend":false},"status":{"active":0}}]}'
+        elif [[ -f $MOCK_LOG.restore-deployments ]]; then
+          cat "$MOCK_LOG.restore-deployments"
         else echo '{"items":[{"kind":"Deployment","spec":{"replicas":0},"status":{"replicas":0}},{"kind":"Job","spec":{"suspend":true},"status":{"active":0}}]}'; fi
+        exit ;;
+      *"get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers -o json")
+        if [[ -f $MOCK_LOG.restore-deployments ]]; then cat "$MOCK_LOG.restore-deployments"
+        else echo '{"items":[]}'; fi
         exit ;;
       *"get secret recipe-db-routes -o json")
         jq --arg bad "${MOCK_ABANDON_BAD_BARRIER:-false}" '

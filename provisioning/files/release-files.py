@@ -211,6 +211,8 @@ def handle(request, config):
         raise ValueError("private file claim does not belong to this command")
     if operation == "end":
         marker.unlink()
+        if backup["safely_closed"](state):
+            backup["archive_recovered_maintenance"](config)
         return {}
     if operation == "abandon":
         if request["confirmation"] != f"ABANDON-{claim['holder']}-{claim['token']}-AFTER-COMMAND-STOPPED":

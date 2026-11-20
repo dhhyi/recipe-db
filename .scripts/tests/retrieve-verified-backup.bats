@@ -5,6 +5,53 @@
 
 load test_helper
 
+@test "catalog retrieval validates bounded metadata and does not require a healthy baseline" {
+  run python3 - << 'PY'
+import importlib.util
+import json
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("retrieve", ".scripts/retrieve-verified-backup.py")
+retrieve = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(retrieve)
+catalog = {
+    "format": "recipe-db-backup-catalog", "formatVersion": 1, "deploymentId": "production",
+    "checkedAt": "2026-01-02T00:00:00Z",
+    "points": [{"backupId": "backup-20260101000000-1", "capturedAt": "2026-01-01T00:00:00Z",
+                "source": {"artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+                           "revision": "b" * 40}}],
+}
+with patch.object(retrieve, "receive", return_value=json.dumps(catalog).encode()) as receive:
+    assert retrieve.retrieve_catalog(None) == catalog
+    assert receive.call_args.args[1] == ("catalog",)
+for mutate in (
+    lambda c: c.update(format="unknown"),
+    lambda c: c.update(points=c["points"] * 2),
+    lambda c: c["points"][0].update(source={"artifact": "mutable"}),
+):
+    invalid = json.loads(json.dumps(catalog))
+    mutate(invalid)
+    with patch.object(retrieve, "receive", return_value=json.dumps(invalid).encode()):
+        try:
+            retrieve.retrieve_catalog(None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid catalog accepted")
+assert retrieve.REMOTE.index('sys.argv[1] == "catalog"') < retrieve.REMOTE.index('tool["baseline_path"]')
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "catalog and destination are mutually exclusive before SSH begins" {
+  run python3 .scripts/retrieve-verified-backup.py --catalog /tmp/not-used
+  [ "$status" -ne 0 ]
+  [[ $output == *"choose either DESTINATION or --catalog"* ]]
+  run python3 .scripts/retrieve-verified-backup.py
+  [ "$status" -ne 0 ]
+  [[ $output == *"choose either DESTINATION or --catalog"* ]]
+}
+
 setup() {
   setup_fixture retrieve-verified-backup.py
   setup_mock_bin

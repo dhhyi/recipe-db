@@ -63,6 +63,15 @@ restore_state_write() {
 
 restore_phase() {
   restore_current_phase=$1
+  if [[ ${restore_guard_started:-false} == true &&
+    ${restore_mode:-standalone} != migration-recovery ]]; then
+    restore_guard_check || production_fail "recovery shutdown guard or heartbeat was lost"
+  fi
+  if [[ ${command:-} == recovery-reset ]]; then
+    restore_state_write in-progress "$1" || return 1
+    cluster_operation_lock_update "$1"
+    return
+  fi
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
     if [[ ${restore_guard_started:-false} == true ]]; then
       restore_guard_check || production_fail "recovery shutdown guard or heartbeat was lost"
@@ -218,7 +227,7 @@ restore_cleanup() {
     kill "$pid" 2> /dev/null || true
     wait "$pid" 2> /dev/null || true
   done
-  [[ (${command:-} == restore || ${command:-} == release-migration-recover) &&
+  [[ (${command:-} == restore || ${command:-} == recovery-restore || ${command:-} == release-migration-recover) &&
     $result != 0 && ${restore_started:-false} == true ]] || return 0
   # Never roll a partial import back by deleting data, or treat it as a resumable merge.
   retain_lock=true
@@ -272,11 +281,15 @@ restore_cleanup() {
         || printf 'production: could not reblock GraphQL; isolate ingress immediately\n' >&2
     fi
   fi
+  recovery_stop_workers \
+    || printf 'production: could not stop every restore worker; isolate application storage\n' >&2
+  restore_guard_stop \
+    || printf 'production: could not remove shutdown guard; inspect it before another attempt\n' >&2
   restore_state_write recovery-required "${restore_current_phase:-interrupted}" \
     || printf 'production: could not update durable restore recovery state\n' >&2
   printf 'production: restore FAILED; no success recorded; Lease holder %s retained\n' "$lock_holder" >&2
   printf 'production: recovery state: %s/restore-state.json (also ConfigMap recipe-db-restore when created)\n' "$restore_state" >&2
-  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. Stop every Deployment and worker Pod, then use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION confirmation; select a new empty target for another restore.\n' >&2
+  printf 'production: inspect lock-status, workloads and helper Pods; keep public ingress blocked. Do not rerun import into these volumes. Preserve partial data for investigation. For planned existing-cluster recovery, run recovery-plan again then recovery-reset with the same state and backup-bound confirmation. Otherwise stop every workload and use restore-abandon with this saved state, exact holder and ABANDON-<holder>-AFTER-ISOLATION; select new empty storage or reflash.\n' >&2
 }
 
 restore_abandon() {
@@ -301,7 +314,9 @@ restore_abandon() {
     and .spec.holderIdentity == $holder
     and .metadata.annotations["recipe-db/operation"] == "restore"
     and .metadata.annotations["recipe-db/release"] == ($state | fromjson | .artifact)
-    and .metadata.annotations["recipe-db/phase"] != "acquired"' <<< "$lease" > /dev/null \
+    and (.metadata.annotations["recipe-db/phase"] != "acquired"
+      or (($state | fromjson | .reset.acquisitionPending) == true
+        and .metadata.uid == ($state | fromjson | .reset.leaseUid)))' <<< "$lease" > /dev/null \
     || production_fail "restore abandonment requires this exact retained post-preflight restore Lease"
   kube get deployments,statefulsets,replicasets,replicationcontrollers,daemonsets,jobs,cronjobs,horizontalpodautoscalers,pods -o json > "$work/restore-isolation.json"
   jq -e 'all(.items[];
@@ -675,7 +690,29 @@ restore_validate_migration_secrets() {
 }
 
 restore_guard_manifest() {
-  local name="recovery-guard-$backup_id"
+  local name="recovery-guard-$backup_id" operation_uid=${restore_operation_lease_uid:-}
+  if [[ -z $operation_uid && -n ${restore_state:-} && -f $restore_state/restore-state.json ]]; then
+    operation_uid=$(jq -r '.reset.leaseUid // empty' "$restore_state/restore-state.json") || return 1
+  fi
+  local barrier=
+  if [[ -f $work/restore-barrier-routes.json ]]; then barrier=$(cat "$work/restore-barrier-routes.json"); fi
+  if [[ ! -f $work/recovery-controller-inventory.json ]]; then
+    if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]]; then
+      jq '.reset.guardInventory // {items:[]}' "$restore_state/restore-state.json" \
+        > "$work/recovery-controller-inventory.json" || return 1
+    else
+      printf '{"items":[]}\n' > "$work/recovery-controller-inventory.json"
+    fi
+  fi
+  if [[ -n ${restore_state:-} && -f $restore_state/restore-state.json ]] \
+    && jq -e '.reset != null' "$restore_state/restore-state.json" > /dev/null; then
+    jq --slurpfile inventory "$work/recovery-controller-inventory.json" \
+      '.reset.guardInventory={items:[$inventory[0].items[] |
+        select(.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
+        {kind,metadata:{name:.metadata.name,labels:{"app.kubernetes.io/part-of":"recipe-db"}}}]}' \
+      "$restore_state/restore-state.json" > "$restore_state/restore-state.next" || return 1
+    mv "$restore_state/restore-state.next" "$restore_state/restore-state.json" || return 1
+  fi
   cat > "$work/restore-guard.sh" << 'EOF'
 set -eu
 trap 'exit 0' TERM INT QUIT
@@ -697,10 +734,23 @@ stop_patch() {
   }
 }
 pods_gone() {
-  request "$api/api/v1/namespaces/$NAMESPACE/pods?labelSelector=$1" > /tmp/workers.json || return 1
+  workers=$(request "$api/api/v1/namespaces/$NAMESPACE/pods?labelSelector=$1") || return 1
   # PodList metadata has no name; every listed Pod does, including terminating Pods.
-  grep -q '"kind"[[:space:]]*:[[:space:]]*"PodList"' /tmp/workers.json \
-    && ! grep -q '"name"[[:space:]]*:' /tmp/workers.json
+  printf '%s\n' "$workers" | grep -q '"kind"[[:space:]]*:[[:space:]]*"PodList"' \
+    && ! printf '%s\n' "$workers" | grep -q '"name"[[:space:]]*:'
+}
+completion_released() {
+  [ -n "${OPERATION_UID:-}" ] || return 1
+  completion=$(request "$api$heartbeat") || return 1
+  printf '%s\n' "$completion" | grep -q '"completionReady"[[:space:]]*:[[:space:]]*"true"' || return 1
+  response=$(request -w '\n%{http_code}' \
+    "$api/apis/coordination.k8s.io/v1/namespaces/kube-system/leases/recipe-db-deploy") || {
+    [ "$(printf '%s\n' "$response" | tail -n 1)" = 404 ] || return 1
+  }
+  [ "$(printf '%s\n' "$response" | tail -n 1)" != 404 ] || return 0
+  printf '%s\n' "$response" | grep -q '"kind"[[:space:]]*:[[:space:]]*"Lease"' || return 1
+  printf '%s\n' "$response" | grep -q '"uid"[[:space:]]*:[[:space:]]*"[^"]\+"' || return 1
+  ! printf '%s\n' "$response" | grep -F "\"$OPERATION_UID\"" > /dev/null
 }
 heartbeat="/api/v1/namespaces/$NAMESPACE/configmaps/$GUARD"
 patch "$heartbeat" '{"data":{"ready":"true","observedPulse":"initial"}}'
@@ -718,6 +768,11 @@ while [ "$stale" -lt 6 ]; do
   fi
   sleep 5
 done
+if completion_released; then
+  # Durable success and release of this exact Lease make shutdown unnecessary.
+  # Keep the Job alive for the command's ordinary, bounded guard removal.
+  while :; do sleep 5; done
+fi
 printf 'Recovery command heartbeat lost; stopping recovery workers. Access barrier and ownership remain.\n' >&2
 patch "$heartbeat" '{"data":{"expired":"true"}}' || {
   printf 'Cannot record guard expiry; shutdown remains required.\n' >&2
@@ -725,9 +780,46 @@ patch "$heartbeat" '{"data":{"expired":"true"}}' || {
 reported=false
 while :; do
   failed=false
+  if [ -n "${BARRIER_ROUTES:-}" ]; then
+    stop_patch "/api/v1/namespaces/kube-system/services/recipe-db-internal" \
+      '{"spec":{"ports":[{"port":80,"targetPort":3000}]}}' application/strategic-merge-patch+json || failed=true
+    stop_patch "/api/v1/namespaces/kube-system/secrets/recipe-db-routes" \
+      "{\"data\":{\"routes.yml\":\"$BARRIER_ROUTES\"}}" || failed=true
+  fi
   for name in $WORKLOADS; do
     stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$name/scale" \
       '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${STATEFULSETS:-}; do
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/statefulsets/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${REPLICASETS:-}; do
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/replicasets/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${REPLICATIONCONTROLLERS:-}; do
+    stop_patch "/api/v1/namespaces/$NAMESPACE/replicationcontrollers/$name/scale" \
+      '{"spec":{"replicas":0}}' || failed=true
+  done
+  for name in ${DAEMONSETS:-}; do
+    stop_patch "/apis/apps/v1/namespaces/$NAMESPACE/daemonsets/$name" \
+      '{"spec":{"template":{"spec":{"nodeSelector":{"recipe-db/recovery-stopped":"true"}}}}}' || failed=true
+  done
+  for name in ${JOBS:-}; do
+    stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/$name" \
+      '{"spec":{"suspend":true}}' || failed=true
+  done
+  for name in ${CRONJOBS:-}; do
+    stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/cronjobs/$name" \
+      '{"spec":{"suspend":true}}' || failed=true
+  done
+  for name in ${AUTOSCALERS:-}; do
+    code=$(request -X DELETE --data '{"kind":"DeleteOptions","apiVersion":"v1"}' \
+      -H 'Content-Type: application/json' -o /dev/null -w '%{http_code}' \
+      "$api/apis/autoscaling/v2/namespaces/$NAMESPACE/horizontalpodautoscalers/$name") || {
+      [ "$code" = 404 ] || failed=true
+    }
   done
   # Suspension retains completed Pods. The TTL controller removes this owned Job and its Pods.
   stop_patch "/apis/batch/v1/namespaces/$NAMESPACE/jobs/nats-init" \
@@ -735,7 +827,7 @@ while :; do
       {"op":"add","path":"/spec/suspend","value":true},
       {"op":"add","path":"/spec/ttlSecondsAfterFinished","value":0}]' \
     application/json-patch+json || failed=true
-  for name in $HELPERS; do
+  for name in $HELPERS ${WORKER_PODS:-}; do
     # A missing helper is already stopped. Never force-delete a running storage Pod.
     code=$(request -X DELETE --data '{"kind":"DeleteOptions","apiVersion":"v1"}' \
       -H 'Content-Type: application/json' -o /dev/null -w '%{http_code}' \
@@ -762,23 +854,49 @@ while :; do
 done
 EOF
   jq -n --arg ns "$namespace" --arg name "$name" --arg holder "$backup_id" \
+    --arg operationUid "$operation_uid" --arg barrier "$barrier" \
     --arg image "$(jq -r '.infrastructure.maintenance' "$work/config.json")" \
     --argjson workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")" \
     --argjson helpers "$(jq -c '[.volumes | keys[] | "restore-volume-" + .]' "$work/config.json")" \
+    --slurpfile inventory "$work/recovery-controller-inventory.json" \
     --rawfile script "$work/restore-guard.sh" '
+    def names($kind): [$inventory[0].items[] |
+      select(.kind == $kind and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db") |
+      .metadata.name | select(type == "string" and test("^[a-z0-9][a-z0-9.-]*$"))] | unique;
+    (names("Deployment") + $workloads | unique) as $allWorkloads |
+    names("StatefulSet") as $statefulSets | names("ReplicaSet") as $replicaSets |
+    names("ReplicationController") as $replicationControllers | names("DaemonSet") as $daemonSets |
+    names("Job") as $jobs | names("CronJob") as $cronJobs |
+    names("HorizontalPodAutoscaler") as $autoscalers | names("Pod") as $workerPods |
     def meta: {name:$name,namespace:$ns,labels:{"app.kubernetes.io/part-of":"recipe-db",
       "recipe-db/restore-holder":$holder}};
     {apiVersion:"v1",kind:"List",items:[
       {apiVersion:"v1",kind:"ServiceAccount",metadata:meta},
       {apiVersion:"rbac.authorization.k8s.io/v1",kind:"Role",metadata:meta,rules:[
         {apiGroups:[""],resources:["configmaps"],resourceNames:[$name],verbs:["get","patch"]},
-        {apiGroups:["apps"],resources:["deployments/scale"],resourceNames:$workloads,verbs:["patch"]},
-        {apiGroups:["batch"],resources:["jobs"],resourceNames:["nats-init"],verbs:["patch"]},
-        {apiGroups:[""],resources:["pods"],resourceNames:$helpers,verbs:["delete"]},
+        {apiGroups:["apps"],resources:["deployments/scale"],resourceNames:$allWorkloads,verbs:["patch"]},
+        {apiGroups:["apps"],resources:["statefulsets/scale"],resourceNames:$statefulSets,verbs:["patch"]},
+        {apiGroups:["apps"],resources:["replicasets/scale"],resourceNames:$replicaSets,verbs:["patch"]},
+        {apiGroups:[""],resources:["replicationcontrollers/scale"],resourceNames:$replicationControllers,verbs:["patch"]},
+        {apiGroups:["apps"],resources:["daemonsets"],resourceNames:$daemonSets,verbs:["patch"]},
+        {apiGroups:["batch"],resources:["jobs"],resourceNames:(["nats-init"] + $jobs | unique),verbs:["patch"]},
+        {apiGroups:["batch"],resources:["cronjobs"],resourceNames:$cronJobs,verbs:["patch"]},
+        {apiGroups:["autoscaling"],resources:["horizontalpodautoscalers"],resourceNames:$autoscalers,verbs:["delete"]},
+        {apiGroups:[""],resources:["pods"],resourceNames:($helpers + $workerPods | unique),verbs:["delete"]},
         {apiGroups:[""],resources:["pods"],verbs:["list"]}]},
       {apiVersion:"rbac.authorization.k8s.io/v1",kind:"RoleBinding",metadata:meta,
         roleRef:{apiGroup:"rbac.authorization.k8s.io",kind:"Role",name:$name},
         subjects:[{kind:"ServiceAccount",name:$name,namespace:$ns}]},
+      {apiVersion:"v1",kind:"Secret",metadata:meta,type:"Opaque",stringData:{routes:($barrier | @base64)}},
+      (if $operationUid != "" then
+        {apiVersion:"rbac.authorization.k8s.io/v1",kind:"Role",metadata:(meta | .namespace="kube-system"),rules:[
+          {apiGroups:[""],resources:["secrets"],resourceNames:["recipe-db-routes"],verbs:["patch"]},
+          {apiGroups:[""],resources:["services"],resourceNames:["recipe-db-internal"],verbs:["patch"]},
+          {apiGroups:["coordination.k8s.io"],resources:["leases"],resourceNames:["recipe-db-deploy"],verbs:["get"]}]},
+        {apiVersion:"rbac.authorization.k8s.io/v1",kind:"RoleBinding",metadata:(meta | .namespace="kube-system"),
+          roleRef:{apiGroup:"rbac.authorization.k8s.io",kind:"Role",name:$name},
+          subjects:[{kind:"ServiceAccount",name:$name,namespace:$ns}]}
+       else empty end),
       {apiVersion:"v1",kind:"ConfigMap",metadata:meta,data:{ready:"false",expired:"false",pulse:"initial"}},
       {apiVersion:"batch/v1",kind:"Job",metadata:meta,spec:{backoffLimit:0,template:{
         metadata:{labels:{"app.kubernetes.io/part-of":"recipe-db","recipe-db/recovery-guard":$holder}},
@@ -786,9 +904,22 @@ EOF
           containers:[{name:"guard",image:$image,command:["sh","-ec",$script],
             env:[{name:"NAMESPACE",value:$ns},{name:"GUARD",value:$name},
               {name:"HOLDER",value:$holder},
-              {name:"WORKLOADS",value:($workloads | join(" "))},
+              {name:"OPERATION_UID",value:$operationUid},
+              {name:"BARRIER_ROUTES",valueFrom:{secretKeyRef:{name:$name,key:"routes"}}},
+              {name:"WORKLOADS",value:($allWorkloads | join(" "))},
+              {name:"STATEFULSETS",value:($statefulSets | join(" "))},
+              {name:"REPLICASETS",value:($replicaSets | join(" "))},
+              {name:"REPLICATIONCONTROLLERS",value:($replicationControllers | join(" "))},
+              {name:"DAEMONSETS",value:($daemonSets | join(" "))},
+              {name:"JOBS",value:($jobs | join(" "))},
+              {name:"CRONJOBS",value:($cronJobs | join(" "))},
+              {name:"AUTOSCALERS",value:($autoscalers | join(" "))},
+              {name:"WORKER_PODS",value:($workerPods | join(" "))},
               {name:"HELPERS",value:($helpers | join(" "))}],
-            resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]}' \
+            resources:{requests:{cpu:"10m",memory:"16Mi"},limits:{memory:"64Mi"}}}]}}}}]} |
+      .items |= map(if .kind == "Role" then
+        .rules |= map(select(.resourceNames == null or (.resourceNames | length) > 0))
+        else . end)' \
     > "$work/restore-guard.json" || return 1
 }
 
@@ -796,7 +927,7 @@ restore_guard_start() {
   local parent_pid=$BASHPID deadline=$((SECONDS + timeout))
   restore_guard_name="recovery-guard-$backup_id"
   kube get "rolebinding/$restore_guard_name" "role/$restore_guard_name" \
-    "serviceaccount/$restore_guard_name" "configmap/$restore_guard_name" \
+    "serviceaccount/$restore_guard_name" "configmap/$restore_guard_name" "secret/$restore_guard_name" \
     --ignore-not-found -o json > "$work/restore-existing-guard-resources.json" || return 1
   if [[ ! -s $work/restore-existing-guard-resources.json ]]; then
     printf '{"items":[]}\n' > "$work/restore-existing-guard-resources.json"
@@ -816,6 +947,19 @@ restore_guard_start() {
     kube delete job "$restore_guard_name" --wait=true --timeout="${timeout}s" > /dev/null || return 1
   fi
   restore_guard_manifest || return 1
+  if jq -e '.items[] | select(.kind == "Role" and .metadata.namespace == "kube-system")' \
+    "$work/restore-guard.json" > /dev/null; then
+    [[ -s $work/restore-barrier-routes.json ]] || production_fail "guard requires staged access-barrier routes"
+    kube --namespace kube-system get "rolebinding/$restore_guard_name" "role/$restore_guard_name" \
+      --ignore-not-found -o json > "$work/restore-existing-system-guard.json" || return 1
+    if [[ -s $work/restore-existing-system-guard.json ]]; then
+      jq -e --arg holder "$backup_id" 'all(.items[];
+        .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+        and .metadata.labels["recipe-db/restore-holder"] == $holder)' \
+        "$work/restore-existing-system-guard.json" > /dev/null \
+        || production_fail "refusing to replace foreign cross-namespace recovery guard permissions"
+    fi
+  fi
   kube apply -f "$work/restore-guard.json" > /dev/null || return 1
   restore_guard_started=true
   while ((SECONDS < deadline)); do
@@ -888,6 +1032,12 @@ restore_guard_stop() {
     sleep 1
   done
   kube delete rolebinding,role,serviceaccount,configmap "$restore_guard_name" > /dev/null || return 1
+  kube delete secret "$restore_guard_name" --ignore-not-found > /dev/null || return 1
+  if [[ -f $work/restore-guard.json ]] \
+    && jq -e '.items[] | select(.kind == "Role" and .metadata.namespace == "kube-system")' \
+      "$work/restore-guard.json" > /dev/null; then
+    kube --namespace kube-system delete rolebinding,role "$restore_guard_name" --ignore-not-found > /dev/null || return 1
+  fi
   restore_guard_started=false
 }
 
@@ -1205,10 +1355,12 @@ restore_workers_terminated() {
 
 restore_verify_volume_identity() {
   local name=$1
+  if [[ ${command:-} == recovery-* ]]; then recovery_assert_identity; fi
   kube get pvc "$name" -o json > "$work/restore-pvc.json" || return 1
   jq -e --arg name "$name" --slurpfile expected "$work/restore-pvc-identities.jsonl" '
     .metadata.deletionTimestamp == null and .status.phase == "Bound"
-    and (.metadata.uid as $uid | any($expected[]; .name == $name and .uid == $uid))' \
+    and (. as $actual | any($expected[]; .name == $name and .uid == $actual.metadata.uid
+      and (.volumeName == null or .volumeName == $actual.spec.volumeName)))' \
     "$work/restore-pvc.json" > /dev/null
 }
 
@@ -1258,7 +1410,7 @@ restore_start() {
   infrastructure+=(browse-maintenance)
   kube scale deployment/nats --replicas=1 > /dev/null || return 1
   kube rollout status deployment/nats --timeout="${timeout}s" || return 1
-  if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
+  if [[ ${restore_mode:-standalone} == migration-recovery || ${restore_mode:-standalone} == existing-reset ]]; then
     kube get job nats-init --ignore-not-found -o json > "$work/restore-existing-nats-init.json" || return 1
     if [[ -s $work/restore-existing-nats-init.json ]]; then
       jq -e '.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
@@ -1543,6 +1695,7 @@ restore_run() {
   local parent key name image_port artifact source_artifact source_revision current source_flag=
   local recovery_state_phase='' recovery_attempt='' recovery_attempts=''
   restore_mode=$mode
+  backup_id=$expected
   restore_migration_candidate=$recovery_candidate
   [[ $expected =~ ^backup-[0-9]{14}-[0-9]+$ ]] \
     || production_fail "restore requires an exact backup identity"
@@ -1551,6 +1704,11 @@ restore_run() {
       || production_fail "restore inputs must be absolute regular files without symlink traversal"
   done
   case "$mode" in
+    existing-reset)
+      [[ $confirmation == "RESTORE-$expected" ]] || production_fail "restore requires RESTORE-<backup-id>"
+      recovery_private_state "$state"
+      [[ -f $state/restore-state.json ]] || production_fail "restore requires reset state"
+      ;;
     standalone)
       [[ $confirmation == "RESTORE-$expected" ]] \
         || production_fail "restore requires the exact expected backup identity and RESTORE-<backup-id> confirmation"
@@ -1676,11 +1834,23 @@ restore_run() {
     "$work/prior-workloads.json" > /dev/null || production_fail "release lacks required restore workloads"
   jq -sc '[.[] | select(.category == "api" or .category == "backend" or .name == "browse") |
     .name | select(. != "graphql")]' "$work/projects.jsonl" > "$work/maintenance-workloads.json"
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == existing-reset ]]; then
+    connect
+    backup_id=$expected
+    restore_state=$state
+    recovery_assert_identity
+    recovery_assert_lease
+    recovery_command_acquire
+    [[ $(jq -er .artifact "$state/restore-state.json") == "$artifact" ]] \
+      || production_fail "reset handoff release differs from validated backup release"
+    locked=true
+    retain_lock=true
+  elif [[ $mode == standalone ]]; then
     connect
     lock_holder="restore-$expected-$$"
     cluster_operation_lock_acquire "$lock_holder" restore "$artifact"
     locked=true
+    restore_operation_lease_uid=$(cluster_operation_lock_status | jq -er .metadata.uid)
   else
     snapshot=$state
     backup_load_state "$snapshot"
@@ -1704,7 +1874,14 @@ restore_run() {
     retain_lock=true
   fi
   guard_helm_config
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == existing-reset ]]; then
+    copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
+    restore_guard_remove_expired
+    recovery_started=true
+    recovery_stop_workers || production_fail "reset handoff workloads are not stopped"
+    recovery_assert_identity
+    production_ephemeral_secrets
+  elif [[ $mode == standalone ]]; then
     restore_fresh_target
     production_ephemeral_secrets
   else
@@ -1722,7 +1899,9 @@ restore_run() {
     || production_fail "recovery public routes are not fully blocked"
   cp "$work/restore-barrier-routes.json" "$work/routes.yml"
   annotate_credentials
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == existing-reset ]]; then
+    restore_state=$state
+  elif [[ $mode == standalone ]]; then
     mkdir -m 700 "$state"
     restore_state=$state
     jq -n --arg backupId "$expected" --arg holder "$lock_holder" --arg target "$target" \
@@ -1735,7 +1914,7 @@ restore_run() {
   fi
   restore_started=true
   restore_phase preparing-target
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == standalone || $mode == existing-reset ]]; then
     ensure_namespace
     restore_cluster_state=true
   else
@@ -1753,7 +1932,7 @@ restore_run() {
       || production_fail "could not persist approved migration-recovery identity"
   fi
   restore_current_phase=installing-barrier
-  if [[ $mode == standalone ]]; then restore_phase "$restore_current_phase"; fi
+  if [[ $mode != migration-recovery ]]; then restore_phase "$restore_current_phase"; fi
   # Hold public traffic before even inspecting a data mount. If an emptiness/storage
   # check fails, this Secret remains a durable barrier without any application writer.
   yq 'select(.metadata.namespace == "kube-system") |
@@ -1763,16 +1942,19 @@ restore_run() {
   restore_routes_apply "$work/restore-barrier-routes.json"
   restore_verify_installed_public_barrier
   if [[ $target == pi ]]; then
-    if [[ $mode == standalone ]]; then restore_phase storage-preflight; fi
+    if [[ $mode != migration-recovery ]]; then restore_phase storage-preflight; fi
     production_storage_preflight
     production_storage_prepare_claims "$work/rendered.yml"
   fi
-  if [[ $mode == standalone ]]; then restore_phase installing-barrier; fi
+  if [[ $mode != migration-recovery ]]; then restore_phase installing-barrier; fi
   apply_acme_contact
   kube --namespace kube-system apply -f "$work/infrastructure.yml" > /dev/null
   wait_traefik
   restore_remove_ingress_nodeports
   guard_ingress_service
+  if [[ $mode != migration-recovery ]]; then
+    restore_guard_start || production_fail "cannot arm recovery shutdown guard before import"
+  fi
   if [[ $mode == migration-recovery ]]; then
     restore_current_phase=preflighting-previous-release-images
     restore_phase "$restore_current_phase"
@@ -1786,7 +1968,7 @@ restore_run() {
   fi
   copy_image=$(jq -r '.infrastructure.maintenance' "$work/config.json")
   yq 'select(.kind == "PersistentVolumeClaim")' "$work/rendered.yml" > "$work/restore-claims.yml"
-  if [[ $mode == standalone ]]; then
+  if [[ $mode == standalone || $mode == existing-reset ]]; then
     # Create missing claims only; never replace or resize an operator's existing claim.
     while IFS= read -r name; do
       kube get pvc "$name" --ignore-not-found -o json > "$work/restore-claim.json"
@@ -1879,6 +2061,7 @@ restore_run() {
     restore_guard_stop \
       || production_fail "restore verified but the recovery shutdown guard could not be removed"
     restore_started=false
+    recovery_started=false
     $release_sources_from_git && source_flag="--release-sources-from-git "
     printf 'production: complete recovery verified; previous release %s is ready behind the access barrier; candidate %s is aborted\n' \
       "$artifact" "$restore_migration_candidate"
@@ -1893,6 +2076,9 @@ restore_run() {
   fi
   backup_verify_recovered_workloads "$(jq -c '[.[].name]' "$work/prior-workloads.json")"
   restore_wait_reads
+  if [[ $mode != migration-recovery ]]; then
+    restore_guard_check || production_fail "recovery shutdown guard was lost during restore"
+  fi
   restore_current_phase=opening-public-ingress
   restore_phase "$restore_current_phase"
   guard_ingress_service
@@ -1900,10 +2086,21 @@ restore_run() {
     -p '{"spec":{"ports":[{"port":80,"targetPort":8000}]}}' > /dev/null
   restore_routes_apply "$work/restore-final-routes.json"
   restore_wait_public_routes
+  if [[ $mode != migration-recovery ]]; then
+    restore_guard_check || production_fail "recovery shutdown guard was lost while reopening"
+  fi
   restore_state_write succeeded complete
+  if [[ $mode != migration-recovery ]]; then
+    kube patch configmap "$restore_guard_name" --type=merge \
+      -p '{"data":{"completionReady":"true"}}' > /dev/null \
+      || production_fail "cannot durably authorize completed restore guard shutdown"
+    restore_guard_check || production_fail "recovery shutdown guard was lost before ownership release"
+  fi
   cluster_operation_lock_release "$lock_holder"
   locked=false
   retain_lock=false
   restore_started=false
+  recovery_started=false
+  if [[ $mode != migration-recovery ]]; then restore_guard_stop; fi
   printf 'production: restore %s verified; public ingress reopened; state %s/restore-state.json\n' "$expected" "$state"
 }
