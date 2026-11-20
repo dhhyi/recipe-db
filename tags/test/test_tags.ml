@@ -250,6 +250,12 @@ let test_storage_version_startup_gates () =
   cleanup ()
 
 let test_backup_rejects_missing_tables () =
+  let valid_path = Filename.temp_file "tags-backup-valid" ".sqlite" in
+  let valid_db = Tags.open_database (Some valid_path) in
+  Tags.close_database valid_db;
+  let backup_db = Tags.open_database ~mode:Tags.Backup (Some valid_path) in
+  Tags.close_database backup_db;
+  Sys.remove valid_path;
   List.iter
     (fun missing ->
       let path = Filename.temp_file "tags-backup" ".sqlite" in
