@@ -46,10 +46,55 @@ for document in (b"{}", b"[]", b'{"recipe":["https://example.com"]}'):
 normal, thumb = b"normal image", b"thumbnail"
 normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
-images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb,
-    "manifests/a.json":json.dumps({"recipeId":"a","url":"/public/"+normal_name,
-        "thumbUrl":"/public/"+thumb_name,"size":len(normal)}).encode()}
-assert len(module.validate(archive(images), {"kind":"images"})) == 3
+second_normal, second_thumb = b"second normal image", b"second thumbnail"
+second_normal_name = "a-" + hashlib.sha256(second_normal).hexdigest() + ".png"
+second_thumb_name = "a-" + hashlib.sha256(second_thumb).hexdigest() + "-thumb.png"
+entry = {"recipeId":"a","url":"/public/"+normal_name,
+    "thumbUrl":"/public/"+thumb_name,"size":len(normal)}
+v2_entry = entry | {"id": hashlib.sha256(normal).hexdigest()}
+v2_second_entry = {
+    "recipeId":"a", "url":"/public/"+second_normal_name,
+    "thumbUrl":"/public/"+second_thumb_name, "size":len(second_normal),
+    "id":hashlib.sha256(second_normal).hexdigest(),
+}
+
+
+def image_collection(count):
+    values, entries = {}, []
+    for index in range(count):
+        image = f"image {index}".encode()
+        thumbnail = f"thumbnail {index}".encode()
+        image_sha = hashlib.sha256(image).hexdigest()
+        thumbnail_sha = hashlib.sha256(thumbnail).hexdigest()
+        image_name = f"a-{image_sha}.png"
+        thumbnail_name = f"a-{thumbnail_sha}-thumb.png"
+        values["public/"+image_name] = image
+        values["public/"+thumbnail_name] = thumbnail
+        entries.append({
+            "recipeId":"a", "url":"/public/"+image_name,
+            "thumbUrl":"/public/"+thumbnail_name, "size":len(image), "id":image_sha,
+        })
+    return values | {
+        "manifests/a.json":json.dumps(entries).encode(), "storage-version":b"2\n",
+    }
+
+
+images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb}
+images_v2 = images | {
+    "public/"+second_normal_name:second_normal,
+    "public/"+second_thumb_name:second_thumb,
+}
+for version, manifest, image_files in (
+    (1, entry, images),
+    (2, [v2_entry, v2_second_entry], images_v2),
+):
+    values = image_files | {"manifests/a.json":json.dumps(manifest).encode(),
+        "storage-version":f"{version}\n".encode()}
+    assert len(module.validate(archive(values), {"kind":"images"})) == len(image_files) + 2
+valid_at_capacity = image_collection(10)
+assert len(module.validate(archive(valid_at_capacity), {"kind":"images"})) == len(valid_at_capacity)
+over_capacity = image_collection(11)
+images = images | {"manifests/a.json":json.dumps(entry).encode(), "storage-version":b"1\n"}
 for entries, layout, link in [
     ({}, sqlite, False),
     ({"tags.sqlite":b"not sqlite"}, sqlite, False),
@@ -69,6 +114,17 @@ for entries, layout, link in [
     ({name:value for name,value in images.items() if name != "public/"+thumb_name}, {"kind":"images"}, False),
     (images | {"public/old.png":b"old"}, {"kind":"images"}, False),
     (images | {"public/"+normal_name:b"corrupted"}, {"kind":"images"}, False),
+    ({name:value for name,value in images.items() if name != "storage-version"}, {"kind":"images"}, False),
+    (images | {"storage-version":b"3\n"}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":b"[]"}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps(entry).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"1\n", "manifests/a.json":json.dumps([entry]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
+    (images_v2 | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"size":len(second_normal)+1}]).encode()}, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry]).encode()}, {"kind":"images"}, False),
+    (over_capacity, {"kind":"images"}, False),
+    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry | {"id":"0" * 64}]).encode()}, {"kind":"images"}, False),
     ({}, {"kind":"images"}, False),
 ]:
     try:

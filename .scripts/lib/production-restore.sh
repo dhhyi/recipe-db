@@ -1337,14 +1337,22 @@ with sqlite3.connect(f"file:{root / 'recipes.sqlite3'}?mode=ro", uri=True) as da
                for row in database.execute("SELECT id, document FROM recipes ORDER BY id")]
 ids = {recipe["id"] for recipe in recipes}
 images = []
+image_documents = []
+storage_version = None
 with tarfile.open(root / "validated/images.tar", "r:") as source:
     for member in source:
         name = member.name.removeprefix("./")
-        if name.startswith("manifests/") and member.isfile():
-            image = json.load(source.extractfile(member))
-            if image["recipeId"] not in ids:
-                raise ValueError("image manifest references an absent authoritative recipe")
-            images.append(image)
+        if name == "storage-version" and member.isfile():
+            storage_version = int(source.extractfile(member).read())
+        elif name.startswith("manifests/") and member.isfile():
+            image_documents.append(json.load(source.extractfile(member)))
+if storage_version not in (1, 2):
+    raise ValueError("unsupported or missing image storage-version marker")
+for document in image_documents:
+    image = document[0] if storage_version == 2 else document
+    if image["recipeId"] not in ids:
+        raise ValueError("image manifest references an absent authoritative recipe")
+    images.append(image)
 (root / "restore-expected-image.json").write_text(json.dumps(
     sorted(images, key=lambda image: image["recipeId"])[0] if images else None))
 print(json.dumps(recipes))

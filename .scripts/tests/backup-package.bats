@@ -67,16 +67,58 @@ def storage_marker(archive, content):
 normal, thumb = b"normal image", b"thumbnail"
 normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
 thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
-image_files = [
-    ("public", b"", tarfile.DIRTYPE),
-    ("manifests", b"", tarfile.DIRTYPE),
-    ("public/" + normal_name, normal, None),
-    ("public/" + thumb_name, thumb, None),
-    ("manifests/a.json", json.dumps({
-        "recipeId": "a", "url": "/public/" + normal_name,
-        "thumbUrl": "/public/" + thumb_name, "size": len(normal),
-    }).encode(), None),
-]
+image_entry = {
+    "recipeId": "a", "url": "/public/" + normal_name,
+    "thumbUrl": "/public/" + thumb_name, "size": len(normal),
+}
+
+
+def image_files_for(version, document=None, marker=None):
+    if document is None:
+        document = image_entry if version == 1 else [
+            image_entry | {"id": hashlib.sha256(normal).hexdigest()}
+        ]
+    if marker is None:
+        marker = f"{version}\n".encode()
+    return [
+        ("public", b"", tarfile.DIRTYPE),
+        ("manifests", b"", tarfile.DIRTYPE),
+        ("public/" + normal_name, normal, None),
+        ("public/" + thumb_name, thumb, None),
+        ("manifests/a.json", json.dumps(document).encode(), None),
+        ("storage-version", marker, None),
+    ]
+
+
+def image_collection(count):
+    values = [
+        ("public", b"", tarfile.DIRTYPE),
+        ("manifests", b"", tarfile.DIRTYPE),
+    ]
+    entries = []
+    for index in range(count):
+        normal = b"normal image " + str(index).encode()
+        thumb = b"thumbnail " + str(index).encode()
+        normal_sha = hashlib.sha256(normal).hexdigest()
+        thumb_sha = hashlib.sha256(thumb).hexdigest()
+        normal_name = f"a-{normal_sha}.png"
+        thumb_name = f"a-{thumb_sha}-thumb.png"
+        values.extend([
+            ("public/" + normal_name, normal, None),
+            ("public/" + thumb_name, thumb, None),
+        ])
+        entries.append({
+            "recipeId": "a", "url": "/public/" + normal_name,
+            "thumbUrl": "/public/" + thumb_name, "size": len(normal), "id": normal_sha,
+        })
+    values.extend([
+        ("manifests/a.json", json.dumps(entries).encode(), None),
+        ("storage-version", b"2\n", None),
+    ])
+    return values
+
+
+image_files = image_files_for(1)
 layouts = {
     "recipes": ("authoritative-read-only", {"kind": "sqlite", "file": "recipes.sqlite3"}),
     "tags": ("cleanup-participant", {"kind": "sqlite", "file": "tags.sqlite"}),
@@ -117,7 +159,7 @@ entries = {
 }
 
 
-def fixture():
+def fixture(image_version=1, image_count=None):
     global counter
     counter += 1
     case = root / str(counter)
@@ -126,6 +168,8 @@ def fixture():
     capture.mkdir(mode=0o700)
     inventory = []
     for service, values in entries.items():
+        if service == "images":
+            values = image_collection(image_count) if image_count is not None else image_files_for(image_version)
         data = tar_bytes(values)
         name = service + ".tar"
         write(capture / name, data)
@@ -133,6 +177,12 @@ def fixture():
             {"path": name, "sizeBytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
             for name, content, kind in values if not kind
         ], key=lambda item: item["path"])
+        for item in files:
+            if item["path"] == "storage-version":
+                item["storageVersion"] = int(next(
+                    content for name, content, kind in values
+                    if name == "storage-version" and not kind
+                ).strip())
         inventory.append({
             "service": service, "role": layouts[service][0], "pvc": service,
             "archive": name, "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
@@ -231,30 +281,31 @@ def update(metadata, key, value):
 
 group = sys.argv[1]
 if group == "valid":
-    case, metadata, archive, projects, manifest = fixture()
-    output = case / "snapshot"
-    result = subprocess.run([
-        sys.executable, ".scripts/validate-backup-package.py", str(metadata), str(archive),
-        str(output), str(projects), "selected-backup",
-    ], text=True, capture_output=True)
-    assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == manifest
-    assert output.stat().st_mode & 0o777 == 0o700
-    assert {path.name for path in output.iterdir()} == {"manifest.json"} | {
-        item["archive"] for item in manifest["inventory"]
-    }
-    assert all(path.stat().st_mode & 0o777 == 0o600 for path in output.iterdir())
-    assert all((output / item["archive"]).read_bytes()
-               == (case / "capture" / item["archive"]).read_bytes()
-               for item in manifest["inventory"])
-    assert module.upload.validate_snapshot(output) == manifest
-    try:
-        module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("existing output accepted")
-    assert module.upload.validate_snapshot(output) == manifest
+    for version, count in ((1, None), (2, None), (2, 10)):
+        case, metadata, archive, projects, manifest = fixture(version, count)
+        output = case / "snapshot"
+        result = subprocess.run([
+            sys.executable, ".scripts/validate-backup-package.py", str(metadata), str(archive),
+            str(output), str(projects), "selected-backup",
+        ], text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == manifest
+        assert output.stat().st_mode & 0o777 == 0o700
+        assert {path.name for path in output.iterdir()} == {"manifest.json"} | {
+            item["archive"] for item in manifest["inventory"]
+        }
+        assert all(path.stat().st_mode & 0o777 == 0o600 for path in output.iterdir())
+        assert all((output / item["archive"]).read_bytes()
+                   == (case / "capture" / item["archive"]).read_bytes()
+                   for item in manifest["inventory"])
+        assert module.upload.validate_snapshot(output) == manifest
+        try:
+            module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("existing output accepted")
+        assert module.upload.validate_snapshot(output) == manifest
 elif group == "identity":
     for key, value in [
         ("format", "other"), ("formatVersion", 2), ("formatVersion", True),
@@ -443,18 +494,45 @@ elif group == "unsafe":
          for value in image_files],
     ]:
         reject(lambda c, m, a, p, s, values=values: repack(m, a, inner=tar_bytes(values)))
+elif group == "images":
+    valid_v2 = image_files_for(2)
+    entry = json.loads(next(
+        content for name, content, kind in valid_v2 if name == "manifests/a.json"
+    ))[0]
+    for values in [
+        image_files_for(1, document=[image_entry]),
+        image_files_for(2, document=[]),
+        image_files_for(2, document=image_entry),
+        image_files_for(2, document=[entry, entry | {"recipeId": "other"}]),
+        image_files_for(2, document=[entry, entry | {"thumbUrl": "/public/missing.png"}]),
+        image_files_for(2, document=[entry, entry | {"size": len(normal) + 1}]),
+        image_files_for(2, document=[entry | {"id": "0" * 64}]),
+        image_files_for(2, document=[entry, entry | {"id": "0" * 64}]),
+        image_files_for(2, document=[entry, entry]),
+        image_files_for(2, document=[entry] * 11),
+        image_collection(11),
+        image_files_for(2, document=[entry | {"thumbUrl": "/public/missing.png"}]),
+        image_files_for(2, marker=b"3\n"),
+        image_files_for(2, marker=b"2"),
+        [value for value in valid_v2 if value[0] != "storage-version"],
+    ]:
+        reject(lambda c, m, a, p, s, values=values:
+               repack(m, a, inner=tar_bytes(values)))
 elif group == "storage":
     case, metadata, archive, projects, manifest = fixture()
     inners = {}
     for item in manifest["inventory"]:
         source = (case / "capture" / item["archive"]).read_bytes()
-        inners[item["service"]] = storage_marker(source, b"4\n")
+        inners[item["service"]] = storage_marker(
+            source, b"1\n" if item["service"] == "images" else b"4\n"
+        )
     repack(metadata, archive, manifest, inner=inners)
     output = case / "snapshot"
     module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
     for item in manifest["inventory"]:
         with tarfile.open(output / item["archive"], "r:") as restored:
-            assert restored.extractfile("storage-version").read() == b"4\n"
+            expected = b"1\n" if item["service"] == "images" else b"4\n"
+            assert restored.extractfile("storage-version").read() == expected
 
     def malformed(c, m, a, p, s):
         recipes = next(item for item in s["inventory"] if item["service"] == "recipes")
@@ -528,6 +606,10 @@ PY
 
 @test "backup package rejects unsafe outer and inner entries and incomplete image pairs" {
   package_cases unsafe
+}
+
+@test "backup package rejects malformed, empty and unsupported image manifest versions" {
+  package_cases images
 }
 
 @test "backup package checks real SQLite integrity and WAL-only recent rows without changing staged archives" {

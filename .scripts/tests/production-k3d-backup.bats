@@ -93,14 +93,14 @@ complete_candidate_migration() {
 
 prepare_published_migration_release() {
   export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true MOCK_COMPLETED_MIGRATION=false
-  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":3,"ratings":1,"inspirations":1,"tags":2}'
+  export MOCK_STORAGE_VERSIONS='{"recipes":2,"images":2,"ratings":1,"inspirations":1,"tags":2}'
   prepare_candidate_release
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   export MOCK_COMPLETED_MIGRATION=true
   run bash .scripts/production-k3d.sh release-migration-status "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  export MOCK_STORAGE_VERSIONS='{"recipes":2,"images":3,"ratings":1,"inspirations":1,"tags":2}'
+  export MOCK_STORAGE_VERSIONS='{"recipes":3,"images":2,"ratings":1,"inspirations":1,"tags":2}'
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
@@ -108,8 +108,8 @@ prepare_published_migration_release() {
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -eq 0 ]
 
-  printf '2\n' > "$FIXTURE_ROOT/tar-data/recipes/storage-version"
-  printf '3\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
+  printf '3\n' > "$FIXTURE_ROOT/tar-data/recipes/storage-version"
+  printf '2\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
   printf '2\n' > "$FIXTURE_ROOT/tar-data/tags/storage-version"
   run bash .scripts/production-k3d.sh release-website-result "$VALUES" "$STATE" \
     "$CANDIDATE" passed "Checked completed migration release" "WEBSITE-$HOLDER-passed"
@@ -881,11 +881,11 @@ EOF
 
   run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  [[ $output == *"Service images: current=1 required=3"* ]]
-  [[ $output == *"Service recipes: current=1 required=2"* ]]
+  [[ $output == *"Service images: current=1 required=2"* ]]
+  [[ $output == *"Service recipes: current=1 required=3"* ]]
   [[ $output == *"Service tags: current=1 required=2"* ]]
   order=$(printf '%s\n' "$output" | awk '/^  [0-9]+\./ { print $1, $2, $3 }')
-  [ "$order" = "$(printf '1. images 1->2\n2. images 2->3\n3. recipes 1->2\n4. tags 1->2')" ]
+  [ "$order" = "$(printf '1. images 1->2\n2. recipes 1->2\n3. recipes 2->3\n4. tags 1->2')" ]
   [[ $output == *"release-migration-next"* ]]
   [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
   run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
@@ -897,7 +897,7 @@ EOF
 
   run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
-  [[ $output == *"no unique migration path for images from version 2 to required version 3"* ]]
+  [[ $output == *"no unique migration path for recipes from version 2 to required version 3"* ]]
   jq -e '.migrationExecution == null and .migrationResult == null' \
     "$STATE/backup-state.json" > /dev/null
   run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
@@ -1027,33 +1027,33 @@ PY
   prepare_recovery_package
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  local images_first_job images_second_job recipes_job
-  images_first_job=$(jq -er '.migrationExecution.transitions[0].job' "$STATE/backup-state.json")
-  images_second_job=$(jq -er '.migrationExecution.transitions[1].job' "$STATE/backup-state.json")
-  recipes_job=$(jq -er '.migrationExecution.transitions[2].job' "$STATE/backup-state.json")
+  local images_job recipes_first_job recipes_second_job
+  images_job=$(jq -er '.migrationExecution.transitions[0].job' "$STATE/backup-state.json")
+  recipes_first_job=$(jq -er '.migrationExecution.transitions[1].job' "$STATE/backup-state.json")
+  recipes_second_job=$(jq -er '.migrationExecution.transitions[2].job' "$STATE/backup-state.json")
 
-  export MOCK_COMPLETED_MIGRATION=true MOCK_MIGRATION_RESULT_JOB="$images_first_job"
+  export MOCK_COMPLETED_MIGRATION=true MOCK_MIGRATION_RESULT_JOB="$images_job"
   export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":2,"ratings":1,"inspirations":1,"tags":1}'
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
 
-  export MOCK_MIGRATION_RESULT_JOB="$images_second_job"
-  export MOCK_STORAGE_VERSIONS='{"recipes":1,"images":3,"ratings":1,"inspirations":1,"tags":1}'
+  export MOCK_MIGRATION_RESULT_JOB="$recipes_first_job"
+  export MOCK_STORAGE_VERSIONS='{"recipes":2,"images":2,"ratings":1,"inspirations":1,"tags":1}'
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
   jq -e '.migrationExecution.transitions[0].status == "completed"
     and .migrationExecution.transitions[1].status == "completed"
     and .migrationExecution.currentIndex == 2
     and any(.migrationExecution.versions[];
-      .service == "images" and .currentVersion == 3 and .requiredVersion == 3)' \
+      .service == "recipes" and .currentVersion == 2 and .requiredVersion == 3)' \
     "$STATE/backup-state.json" > /dev/null
 
-  export MOCK_COMPLETED_MIGRATION=false MOCK_MIGRATION_RESULT_JOB="$recipes_job"
+  export MOCK_COMPLETED_MIGRATION=false MOCK_MIGRATION_RESULT_JOB="$recipes_second_job"
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
-  export MOCK_FAILED_MIGRATION=true MOCK_MIGRATION_RESULT_JOB="$recipes_job"
+  export MOCK_FAILED_MIGRATION=true MOCK_MIGRATION_RESULT_JOB="$recipes_second_job"
   run bash .scripts/production-k3d.sh release-migration-next "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -ne 0 ]
   jq -e '.migrationExecution.failedTransition.service == "recipes"
@@ -2373,8 +2373,12 @@ EOF
 @test "release finalization removes only verified completed and unused migration Jobs" {
   prepare_published_migration_release
   local job_file job_name activation_marker
+  job_name=$(jq -er '.migrationExecution.transitions[] | select(.status == "completed") | .job' \
+    "$STATE/backup-state.json")
   job_file="$MOCK_LOG.migration-job.json"
-  job_name=$(jq -er '.metadata.name' "$job_file")
+  if [[ $(jq -er '.metadata.name' "$job_file") != "$job_name" ]]; then
+    job_file="$MOCK_LOG.migration-job-$job_name.json"
+  fi
   cp "$job_file" "$job_file.original"
   jq '.metadata.annotations["recipe-db/release"]="ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' \
     "$job_file" > "$job_file.next"

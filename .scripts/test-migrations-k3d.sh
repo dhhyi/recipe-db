@@ -485,6 +485,20 @@ python3 .scripts/validate-backup-snapshot.py --require-storage-version \
 python3 .scripts/validate-backup-snapshot.py --require-storage-version \
   "$work/recovery-backup-images.tar" '{"kind":"images"}' \
   > "$work/recovery-images-files.json"
+cp -a "$work/recovery-source/images" "$work/recovery-source-v2"
+printf '2\n' > "$work/recovery-source-v2/storage-version"
+jq --arg id "$image_full_sha" '[. + {id:$id}]' \
+  "$work/recovery-source-v2/manifests/fixture-recipe.json" \
+  > "$work/recovery-source-v2/manifests/fixture-recipe.json.next"
+mv "$work/recovery-source-v2/manifests/fixture-recipe.json.next" \
+  "$work/recovery-source-v2/manifests/fixture-recipe.json"
+tar -C "$work/recovery-source-v2" \
+  -cf "$work/recovery-backup-images-v2.tar" public manifests storage-version
+python3 .scripts/validate-backup-snapshot.py --require-storage-version \
+  "$work/recovery-backup-images-v2.tar" '{"kind":"images"}' \
+  > "$work/recovery-images-v2-files.json"
+jq -e 'any(.[]; .path == "storage-version" and .storageVersion == 2)' \
+  "$work/recovery-images-v2-files.json" > /dev/null
 cp "$work/recovery-backup-recipes.tar" "$work/restore-runtime/validated/recipes.tar"
 cp "$work/recovery-backup-images.tar" "$work/restore-runtime/validated/images.tar"
 jq -cn '{name:"recipes",backupData:{kind:"sqlite",file:"recipes.sqlite3"}}' \
