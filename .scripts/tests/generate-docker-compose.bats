@@ -272,9 +272,11 @@ assert_compose() {
   # shellcheck disable=SC2016
   assert_compose '
     . as $root |
-    all(["backend","browse","browse-maintenance","fixtures","graphql","integration-tooling","job","nats","nats-init","pwa","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
+    all(["backend","browse","browse-maintenance","fixtures","graphql","integration-job","integration-tooling","job","nats","nats-init","pwa","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
       . as $service | $root.services | has($service))
     and (.services | has("tooling") | not)
+    and .services["integration-job"].profiles == ["test"]
+    and .services["integration-job"].build.context == "job"
     and .services["integration-tooling"].profiles == ["test"]
     and .services["integration-tooling"].build.context == "tooling"
     and .services["integration-tooling"].build.dockerfile == ".devcontainer/Dockerfile"

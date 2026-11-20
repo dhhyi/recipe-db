@@ -70,7 +70,7 @@
 #@     services.update(service(project, options, projects))
 #@   end
 #@   for project in data.values.projects:
-#@     if "integration" in project and project.category not in ["api", "backend", "frontend", "job", "test"]:
+#@     if "integration" in project and project.category not in ["api", "backend", "frontend", "test"]:
 #@       services.update(integration_runner_service(project))
 #@     end
 #@   end

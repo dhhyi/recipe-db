@@ -72,6 +72,25 @@ EOF
   grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh integration-tooling-integration -c echo tooling contract' "$MOCK_LOG"
 }
 
+@test "runs job integrations through a test-profile devcontainer service" {
+  mkdir job-integration
+  cat > job-integration/.project.yaml << 'EOF'
+name: job-integration
+---
+category: job
+integration: echo job contract
+EOF
+  git add job-integration/.project.yaml
+  jq '.services["integration-job-integration"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development job-integration
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test build fixtures integration-job-integration' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh integration-job-integration -c echo job contract' "$MOCK_LOG"
+}
+
 @test "a test-only project is ignored by stack integration discovery" {
   run bash .scripts/run-integration-tests.sh --development unit-only
 
