@@ -22,9 +22,11 @@ if (File clone setPath(root .. "/db.sqlite") exists == false,
 )
 
 list("0", "-1", "1.5") foreach(invalid,
-    System system("printf '" .. invalid .. "\\n' > " .. root .. "/storage-version")
-    result = System system("MODE=testing DATA_LOCATION=" .. root .. " io main.io")
-    if (result == 0, Exception raise("Malformed ratings marker was accepted"))
+    System system("printf '%s\\n' '" .. invalid .. "' > " .. root .. "/storage-version")
+    result = System system("timeout 2s env MODE=testing DATA_LOCATION=" .. root .. " io main.io")
+    if (result == 0 or result == 124,
+        Exception raise("Malformed ratings marker was accepted")
+    )
 )
 
 System system("rm -f -- " .. root .. "/db.sqlite")
@@ -35,8 +37,8 @@ DB exec("CREATE TABLE Ratings (key TEXT, value INTEGER)")
 DB exec("INSERT INTO Ratings VALUES ('preserve', 5)")
 DB close
 list("production", "testing", "backup") foreach(mode,
-    result = System system("MODE=" .. mode .. " DATA_LOCATION=" .. root .. " io main.io")
-    if (result == 0, Exception raise("Incompatible Ratings schema was accepted"))
+    result = System system("timeout 2s env MODE=" .. mode .. " DATA_LOCATION=" .. root .. " io main.io")
+    if (result == 0 or result == 124, Exception raise("Incompatible Ratings schema was accepted"))
 )
 DB open
 rows := DB exec("SELECT key, value FROM Ratings")
@@ -49,8 +51,8 @@ System system("rm -f -- " .. root .. "/db.sqlite")
 DB open
 DB exec("CREATE TABLE unrelated (value TEXT)")
 DB close
-result = System system("MODE=backup DATA_LOCATION=" .. root .. " io main.io")
-if (result == 0, Exception raise("Backup initialized missing Ratings table"))
+result = System system("timeout 2s env MODE=backup DATA_LOCATION=" .. root .. " io main.io")
+if (result == 0 or result == 124, Exception raise("Backup initialized missing Ratings table"))
 DB open
 tables := DB exec("SELECT name FROM sqlite_master WHERE name='Ratings'")
 if (tables size != 0, Exception raise("Backup created missing Ratings table"))
