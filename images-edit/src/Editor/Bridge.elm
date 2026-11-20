@@ -15,6 +15,7 @@ type Incoming
     = Metadata Int Size
     | Loaded Int String Size Size
     | LoadFailed Int
+    | DeleteConfirmation String Int Bool
     | Pointer String String Point { width : Float, height : Float }
     | EndPointer
 
@@ -52,6 +53,12 @@ incoming =
 
                     "failed" ->
                         D.map LoadFailed (D.field "token" D.int)
+
+                    "delete-confirmation" ->
+                        D.map3 DeleteConfirmation
+                            (D.field "imageId" D.string)
+                            (D.field "session" D.int)
+                            (D.field "accepted" D.bool)
 
                     "pointer" ->
                         D.map4 Pointer
