@@ -714,7 +714,8 @@ test("native confirmation can cancel or delete the sole image with exact identit
   await expect(deleteButton).toBeEnabled();
 
   const cancelledDialog = page.waitForEvent("dialog");
-  const cancelClick = deleteButton.click();
+  await deleteButton.focus();
+  const cancelClick = page.keyboard.press("Enter");
   const cancelled = await cancelledDialog;
   expect(cancelled.type()).toBe("confirm");
   expect(cancelled.message()).toBe(
