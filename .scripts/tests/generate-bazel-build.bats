@@ -171,7 +171,7 @@ EOF
   grep -Fx '        "test-only/.devcontainer/devcontainer.json",' test-rule
   grep -Fx '        "test-only/.devcontainer/Dockerfile",' test-rule
   grep -Fx '        ".scripts/bazel-project-action.sh",' test-rule
-  grep -Fx '    cmd = "sh $(location .scripts/bazel-project-action.sh) test-only test $@ $(location :test-only_generate) 2>&1",' test-rule
+  grep -Fx "    cmd = \"sh \$(location .scripts/bazel-project-action.sh) test-only test \$@ \$(location :test-only_generate) 2>&1\"," test-rule
   run -1 grep -F 'name = "test-only_check"' BUILD.bazel
   run -1 grep -F 'name = "test-only_precommit"' BUILD.bazel
 }
