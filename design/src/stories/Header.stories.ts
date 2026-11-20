@@ -36,6 +36,9 @@ export const Sticky: Story = {
       const login = canvas.queryByRole("link", { name: "Anmelden" });
       const dropdown = canvasElement.querySelector("details.dropdown");
       expect(!!login).toBe(args.authRole === "anonymous" && args.authEnabled);
+      if (login) {
+        expect(login).toHaveAttribute("href", "/oauth2/start?rd=%2F");
+      }
       expect(!!dropdown).toBe(
         args.authEnabled && !!args.authRole && args.authRole !== "anonymous",
       );
@@ -47,6 +50,11 @@ export const Sticky: Story = {
         expect(
           dropdown.querySelector('a[href="/oauth2/sign_out?rd=%2F"]'),
         ).toHaveTextContent("Abmelden");
+        if (args.authEmail) {
+          expect(dropdown.querySelector(".profile-email")).toHaveTextContent(
+            args.authEmail,
+          );
+        }
       }
     });
   },

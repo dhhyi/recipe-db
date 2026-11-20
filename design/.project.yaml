@@ -117,6 +117,7 @@ check: |
   pnpm --version
   pnpm exec storybook --version
   pnpm build
+test: pnpm test
 prettier:
   ignore:
     - nginx.conf
