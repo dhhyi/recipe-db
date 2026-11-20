@@ -240,7 +240,13 @@ prepare_reattach_state() {
   [[ "$output" == *"private input reference is missing or invalid"* ]]
   [[ "$output" != *"secret contents"* ]]
 
-  yq -o=yaml '.secrets["auth-accounts.json"] = "../../outside.json"' "$values" > "$work/escaping-values.yaml"
+  yq -o=yaml '.secrets["auth-accounts.json"] = "deployment/missing/../auth-accounts.json"' "$values" > "$work/missing-parent-values.yaml"
+  production_config "$work/missing-parent-values.yaml" deploy
+  run production_secrets
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"private input reference is missing or invalid"* ]]
+
+  yq -o=yaml '.secrets["auth-accounts.json"] = "../../../outside.json"' "$values" > "$work/escaping-values.yaml"
   production_config "$work/escaping-values.yaml" deploy
   run production_secrets
   [ "$status" -ne 0 ]

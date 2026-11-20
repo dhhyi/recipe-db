@@ -120,6 +120,12 @@ with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
                 assert json.loads(mapped.read_text())[installed["secrets"]["auth-accounts.json"]] == str(expected)
                 assert json.loads(canonical.read_text()) == installed
                 release.validate_operator_files(home / ".config/recipe-db")
+        try:
+            release.operator_input_path("deployment/missing/../auth-accounts.json", homes[0] / ".config/recipe-db")
+        except ValueError as error:
+            assert "missing or invalid" in str(error)
+        else:
+            raise AssertionError("missing intermediate directory accepted")
         secret = homes[0] / ".config/recipe-db/deployment/auth-accounts.json"
         secret.write_bytes(b"mismatched synthetic contents")
         with patch.dict(os.environ, {"HOME": str(homes[0])}), \

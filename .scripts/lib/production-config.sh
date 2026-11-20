@@ -192,12 +192,10 @@ production_input_path() {
     local root resolved
     root=$(realpath -e -- "${HOME:?HOME must be set}/.config/recipe-db") \
       || production_fail "private configuration directory is missing"
-    resolved=$(realpath -m -- "$root/$1" 2> /dev/null) \
+    resolved=$(realpath -e -- "$root/$1" 2> /dev/null) \
       || production_fail "private input reference is missing or invalid"
     [[ $resolved == "$root/"* ]] \
       || production_fail "private input reference escapes the configuration directory"
-    resolved=$(realpath -e -- "$resolved" 2> /dev/null) \
-      || production_fail "private input reference is missing or invalid"
     printf '%s\n' "$resolved"
   fi
 }
