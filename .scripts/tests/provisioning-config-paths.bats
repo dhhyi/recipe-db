@@ -13,6 +13,14 @@ setup() {
 
   local home="$BATS_TEST_TMPDIR/operator home"
   local config="$home/.config/recipe-db"
+  local workspace="$BATS_TEST_TMPDIR/workspace"
+  mkdir -p "$workspace/.scripts" "$workspace/provisioning/.devcontainer" \
+    "$workspace/provisioning/filter_plugins" "$workspace/provisioning/tests"
+  cp "$ROOT/.scripts/run-in-devcontainer.sh" "$workspace/.scripts/"
+  cp "$ROOT/provisioning/.devcontainer/"{devcontainer.json,Dockerfile} "$workspace/provisioning/.devcontainer/"
+  cp "$ROOT/provisioning/"{.project.yaml,ansible.cfg,inventory.example.yml,resolve-backup-inputs.yml} "$workspace/provisioning/"
+  cp "$ROOT/provisioning/filter_plugins/operator_paths.py" "$workspace/provisioning/filter_plugins/"
+  cp "$ROOT/provisioning/tests/operator-path-smoke.yml" "$workspace/provisioning/tests/"
   mkdir -p "$config/ssh" "$config/provisioning" "$config/backup" "$config/deployment"
   printf 'synthetic-only key material\n' > "$config/ssh/recipe-db-pi"
   chmod 600 "$config/ssh/recipe-db-pi"
@@ -21,7 +29,7 @@ setup() {
     > "$config/backup/backup-values.yaml"
   printf '{"synthetic":"account fixture"}\n' > "$config/deployment/auth-accounts.json"
 
-  run env HOME="$home" "$ROOT/.scripts/run-in-devcontainer.sh" --rm provisioning \
+  run env HOME="$home" "$workspace/.scripts/run-in-devcontainer.sh" --rm provisioning \
     'ansible-playbook -i ~/.config/recipe-db/provisioning/inventory.yml tests/operator-path-smoke.yml'
   [ "$status" -eq 0 ]
   [[ "$output" == *"Require the inventory SSH key to resolve from the mounted config root"* ]]
