@@ -89,6 +89,11 @@ assert valid({})
 assert not valid({"backupRole": "derived-stateless", "storageVersion": storage})
 assert not valid({"backupRole": "excluded-external-cache", "storageVersion": storage})
 assert not valid({"storageVersion": storage})
+
+assert schema["properties"]["check"]["type"] == "string"
+assert schema["properties"]["test"]["type"] == "string"
+assert schema["properties"]["integration"]["type"] == "string"
+assert "minLength" not in schema["properties"]["integration"]
 PY
   [ "$status" -eq 0 ]
 }

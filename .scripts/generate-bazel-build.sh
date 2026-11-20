@@ -14,8 +14,8 @@ quote() {
 }
 
 emit_rule() {
-  local name=$1 archive=$2 script=$3 dependency=$4
-  shift 4
+  local name=$1 archive=$2 script=$3 dependency=$4 action=$5
+  shift 5
   {
     printf '\ngenrule(\n'
     printf '    name = "%s",\n' "$name"
@@ -40,9 +40,16 @@ emit_rule() {
     printf '        %s,\n' "$(quote .mise/tasks/project-actions.toml)"
     printf '    ],\n'
     printf '    outs = ["%s"],\n' "$archive"
-    printf '    cmd = "sh %s %s %s' "\$(location $script)" "$project" "\$@"
-    if [[ -n "$dependency" ]]; then
-      printf ' %s' "\$(location :$dependency)"
+    if [[ "$script" == .scripts/bazel-project-action.sh ]]; then
+      printf '    cmd = "sh %s %s %s %s' "\$(location $script)" "$project" "$action" "\$@"
+      if [[ -n "$dependency" ]]; then
+        printf ' %s' "\$(location :$dependency)"
+      fi
+    else
+      printf '    cmd = "sh %s %s %s' "\$(location $script)" "$project" "\$@"
+      if [[ -n "$dependency" ]]; then
+        printf ' %s' "\$(location :$dependency)"
+      fi
     fi
     # Bazel replays streams separately; keep group markers with command output.
     printf ' 2>&1",\n'
@@ -54,9 +61,10 @@ emit_rule() {
 for project_file in */.project.yaml; do
   project=${project_file%/.project.yaml}
   check=$(yq eval-all -r 'select(documentIndex == 1) | .check // ""' "$project_file")
+  test=$(yq eval-all -r 'select(documentIndex == 1) | .test // ""' "$project_file")
   format_count=$(yq eval-all -r 'select(documentIndex == 1) | .format // [] | length' "$project_file")
   generators=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | length' "$project_file")
-  [[ -n "$check" || "$format_count" -gt 0 || "$generators" -gt 0 ]] || continue
+  [[ -n "$check" || -n "$test" || "$format_count" -gt 0 || "$generators" -gt 0 ]] || continue
 
   files=()
   format_files=()
@@ -111,7 +119,7 @@ for project_file in */.project.yaml; do
   generation_dependency=
   if [[ "$generators" -gt 0 ]]; then
     generation_dependency="${project}_generate"
-    emit_rule "$generation_dependency" "$project-generate.tar" .scripts/generate-bazel.sh "" "${format_files[@]}"
+    emit_rule "$generation_dependency" "$project-generate.tar" .scripts/generate-bazel.sh "" "" "${format_files[@]}"
   fi
 
   if [[ "$format_count" -gt 0 ]]; then
@@ -142,16 +150,20 @@ for project_file in */.project.yaml; do
       fi
     done < "$resolved"
     rm -f "$resolved"
-    emit_rule "${project}_format_check" "$project-format-check.ok" .scripts/format-bazel.sh "" "${formatting_inputs[@]}"
+    emit_rule "${project}_format_check" "$project-format-check.ok" .scripts/format-bazel.sh "" "" "${formatting_inputs[@]}"
   fi
 
   if [[ -n "$check" ]]; then
-    emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-check.sh "$generation_dependency" "${files[@]}"
+    emit_rule "${project}_check" "$project-check.ok" .scripts/bazel-project-action.sh "$generation_dependency" check "${files[@]}"
     precommit_files=("${files[@]}")
     if [[ "$format_count" -gt 0 ]]; then
       precommit_files+=(":${project}_format_check")
     fi
-    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-check.sh "$generation_dependency" "${precommit_files[@]}"
+    emit_rule "${project}_precommit" "$project-precommit.ok" .scripts/bazel-project-action.sh "$generation_dependency" check "${precommit_files[@]}"
+  fi
+
+  if [[ -n "$test" ]]; then
+    emit_rule "${project}_test" "$project-test.ok" .scripts/bazel-project-action.sh "$generation_dependency" test "${files[@]}"
   fi
 done
 

@@ -375,7 +375,7 @@ tooling:
       - .scripts/format-bazel.sh
       - .scripts/format-files.sh
       - .scripts/format-check.sh
-      - .scripts/bazel-check.sh
+      - .scripts/bazel-project-action.sh
       - .scripts/generate-bazel.sh
       - .scripts/tests/groups.yaml
       - .scripts/tests/mocks/precommit-*

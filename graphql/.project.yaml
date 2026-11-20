@@ -100,8 +100,8 @@ format:
 check: |
   cargo --version
   cargo clippy --all-targets -- -D warnings
-  cargo test
   cargo build --release
+test: cargo test
 prettier:
   ignore:
     - "*.rs"

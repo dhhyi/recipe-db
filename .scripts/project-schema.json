@@ -173,9 +173,15 @@
       }
     },
     "check": {
+      "description": "Compile, lint, or validate generated project outputs; must not run project-local tests.",
       "type": "string"
     },
     "test": {
+      "description": "Project-local unit or component tests, independent of the shared application stack.",
+      "type": "string"
+    },
+    "integration": {
+      "description": "Stack integration test command. Empty values are allowed and skipped by the integration runner.",
       "type": "string"
     },
     "prettier": {
