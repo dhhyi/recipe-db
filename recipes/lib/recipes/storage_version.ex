@@ -55,10 +55,6 @@ defmodule Recipes.StorageVersion do
   defp validate_storage!(nil, _entries, marker, _mode, _database),
     do: fail!(marker, "marker missing; existing data found")
 
-  defp validate_storage!(version, _entries, marker, _mode, _database)
-       when version != @expected_version,
-       do: fail!(marker, "actual #{version}")
-
   defp validate_storage!(_version, [], marker, mode, _database) do
     require_initialization_mode!(mode, marker)
     :initialize

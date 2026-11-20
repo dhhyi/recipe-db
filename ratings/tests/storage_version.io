@@ -19,15 +19,6 @@ if (File clone setPath(root .. "/db.sqlite") exists == false,
     Exception raise("Rejected ratings storage was modified")
 )
 
-System system("printf '2\\n' > " .. root .. "/storage-version")
-result = System system("MODE=testing DATA_LOCATION=" .. root .. " io main.io")
-if (result == 0,
-    Exception raise("Mismatched ratings marker was accepted")
-)
-if ((File clone setPath(root .. "/storage-version") contents) != "2\n",
-    Exception raise("Rejected ratings marker was modified")
-)
-
 System system("rm -rf -- " .. root)
 result = System system("MODE=backup DATA_LOCATION=" .. root .. " io main.io")
 if (result == 0 or Directory with(root) exists,

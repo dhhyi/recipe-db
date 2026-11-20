@@ -280,6 +280,118 @@ render() {
   ' manifests.json
 }
 
+@test "storage-version init gates use each durable service release version and its read-only PVC" {
+  render values.json
+  jq -e --slurpfile projects projects.jsonl --slurpfile values values.json '
+    .items as $items |
+    all(["recipes","images","ratings","tags","inspirations"][];
+      . as $name |
+      ($projects | map(select(.name == $name))[0]) as $project |
+      ($items | map(select(.kind == "Deployment" and .metadata.name == $name))[0]) as $deployment |
+      $project.storageVersion.value as $expected |
+      $deployment.spec.template.spec as $pod |
+      $pod.initContainers[0].name == "storage-version"
+      and $pod.initContainers[0].image == $values[0].config.infrastructure.maintenance
+      and $pod.initContainers[0].command[0:2] == ["/bin/sh","-ec"]
+      and any($pod.initContainers[0].env[];
+        .name == "EXPECTED_STORAGE_VERSION" and .value == ($expected | tostring))
+      and $pod.initContainers[0].volumeMounts == [
+        {name:"data",mountPath:"/data",readOnly:true}
+      ]
+      and any($pod.containers[0].volumeMounts[];
+        .name == "data" and .mountPath == "/data" and (.readOnly // false) == false)
+      and any($pod.volumes[];
+        .name == "data" and .persistentVolumeClaim.claimName == $name)
+    )
+    and all(["recipes","images","ratings","tags","inspirations"][];
+      . as $name |
+      any($items[]; .kind == "Deployment" and .metadata.name == $name
+        and (.spec.template.spec.initContainers | length) >= 1))
+  ' manifests.json
+}
+
+@test "storage-version gate applies the shared read-only marker matrix to all backends" {
+  render values.json
+  for service in recipes images ratings tags inspirations; do
+    local expected command root marker mismatch
+    expected=$(jq -s -er --arg name "$service" \
+      'map(select(.name == $name))[0].storageVersion.value' projects.jsonl)
+    command=$(jq -er --arg name "$service" '
+      .items[] | select(.kind == "Deployment" and .metadata.name == $name)
+      | .spec.template.spec.initContainers[0].command[2]
+    ' manifests.json)
+    root="$BATS_TEST_TMPDIR/$service"
+    marker="$root/storage-version"
+    mkdir "$root"
+    command=${command//\/data/$root}
+
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -eq 0 ]
+    [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -print -quit)" ]
+
+    printf '%s\n' "$expected" > "$marker"
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$marker")" = "$expected" ]
+
+    mismatch=1
+    [ "$expected" != "$mismatch" ] || mismatch=2
+    printf '%s\n' "$mismatch" > "$marker"
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -ne 0 ]
+    [[ $output == *"storage version mismatch"* ]]
+    [ "$(cat "$marker")" = "$mismatch" ]
+
+    for contents in "0"$'\n' "01"$'\n' "$expected" "$expected"$'\n\n' "$expected"$'\nextra'; do
+      printf '%s' "$contents" > "$marker"
+      run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+      [ "$status" -ne 0 ]
+      [[ $output == *"invalid marker contents"* ]]
+      printf '%s' "$contents" > "$root/expected"
+      cmp -s "$marker" "$root/expected"
+      rm "$root/expected"
+    done
+
+    printf '%s\0' "$expected" > "$marker"
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -ne 0 ]
+    [[ $output == *"invalid marker contents"* ]]
+
+    rm "$marker"
+    printf 'existing data\n' > "$root/data"
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -ne 0 ]
+    [[ $output == *"marker missing; existing data found"* ]]
+    rm "$root/data"
+
+    mkdir "$marker"
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -ne 0 ]
+    [[ $output == *"unsafe marker file type"* ]]
+    rmdir "$marker"
+    printf '%s\n' "$expected" > "$root/marker-target"
+    ln -s "$root/marker-target" "$marker"
+    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    [ "$status" -ne 0 ]
+    [[ $output == *"unsafe marker file type"* ]]
+    rm "$marker" "$root/marker-target"
+
+    if [ "$(id -u)" -ne 0 ]; then
+      chmod 000 "$root"
+      run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+      [ "$status" -ne 0 ]
+      [[ $output == *"cannot read data root"* ]]
+      chmod 700 "$root"
+      printf '%s\n' "$expected" > "$marker"
+      chmod 000 "$marker"
+      run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+      [ "$status" -ne 0 ]
+      [[ $output == *"cannot read marker"* ]]
+      chmod 600 "$marker"
+    fi
+  done
+}
+
 @test "search readiness checks completed baseline independently of process liveness" {
   render values.json
   jq -e '

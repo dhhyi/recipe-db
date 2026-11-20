@@ -79,9 +79,6 @@ if marker_kind then
     local value = contents:match("^([1-9][0-9]*)\n$")
     if not value then storage_failure("invalid marker contents") end
     marker_version = tonumber(value)
-    if marker_version ~= expected_storage_version then
-        storage_failure("actual " .. tostring(marker_version))
-    end
 end
 
 for name, kind in pairs(marker_entries) do

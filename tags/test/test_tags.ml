@@ -247,16 +247,6 @@ let test_storage_version_startup_gates () =
   | exception Failure _ -> ());
   check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
     "failed publication preserves marker";
-  let channel = open_out_bin marker in
-  output_string channel "1\n";
-  close_out channel;
-  (match Tags.check_storage_version (Some root) Tags.Testing with
-  | _ -> fail "mismatched marker was accepted"
-  | exception Failure message ->
-      check (String.ends_with ~suffix:"actual 1" message)
-        "mismatch reports actual version");
-  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
-    "mismatched marker remains unchanged";
   cleanup ()
 
 let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =

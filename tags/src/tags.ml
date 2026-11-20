@@ -109,8 +109,6 @@ let check_storage_version configured_location mode =
         storage_failure marker expected "marker missing; backup mode cannot initialize";
       true
   | None -> storage_failure marker expected "marker missing; existing data found"
-  | Some actual when actual <> expected ->
-      storage_failure marker expected (Printf.sprintf "actual %d" actual)
   | Some _ when empty ->
       if mode = Backup then
         storage_failure marker expected

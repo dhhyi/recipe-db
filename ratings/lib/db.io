@@ -62,9 +62,6 @@ DB checkStorageVersion := method(
             storageFailure(marker, "invalid marker contents")
         )
         version = contents exSlice(0, contents size - 1) asNumber
-        if (version != storageVersion,
-            storageFailure(marker, "actual " .. version asString)
-        )
     )
 
     entries := list()

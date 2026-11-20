@@ -21,6 +21,12 @@
 #@   return {"name": "secrets", "secret": {"secretName": "recipe-db-runtime", "items": [{"key": k, "path": k} for k in keys]}}
 #@ end
 
+#@ def storage_version_gate(project):
+#@   expected = str(project["storageVersion"]["value"])
+#@   command = "set -eu\ngate_failure() {\n  printf 'storage-version gate: %s\\n' \"$1\" >&2\n  exit 1\n}\nexpected=${EXPECTED_STORAGE_VERSION:-}\ncase \"$expected\" in\n  ''|*[!0-9]*|0*) gate_failure \"invalid expected storage version\" ;;\nesac\nroot=/data\nmarker=\"$root/storage-version\"\n[ -d \"$root\" ] || gate_failure \"data root is not a directory\"\n[ -r \"$root\" ] && [ -x \"$root\" ] || gate_failure \"cannot read data root\"\nif ! entries=$(find \"$root\" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null); then\n  gate_failure \"cannot inspect data root\"\nfi\nif [ -L \"$marker\" ]; then\n  gate_failure \"unsafe marker file type\"\nelif [ -e \"$marker\" ]; then\n  [ -f \"$marker\" ] || gate_failure \"unsafe marker file type\"\n  [ -r \"$marker\" ] || gate_failure \"cannot read marker\"\n  bytes=$(wc -c < \"$marker\") || gate_failure \"cannot read marker\"\n  [ \"$bytes\" -eq \"$((${#expected} + 1))\" ] || gate_failure \"invalid marker contents\"\n  actual=$(cat \"$marker\") || gate_failure \"cannot read marker\"\n  printf \"%s\\n\" \"$actual\" | cmp -s \"$marker\" - || gate_failure \"invalid marker contents\"\n  case \"$actual\" in\n    ''|0*|*[!0-9]*) gate_failure \"invalid marker contents\" ;;\n  esac\n  [ \"$actual\" = \"$expected\" ] || gate_failure \"storage version mismatch: expected $expected\"\nelse\n  [ -z \"$entries\" ] || gate_failure \"marker missing; existing data found\"\nfi"
+#@   return {"name": "storage-version", "image": cfg["infrastructure"]["maintenance"], "command": ["/bin/sh", "-ec", command], "env": [{"name": "EXPECTED_STORAGE_VERSION", "value": expected}], "resources": cfg["resources"], "volumeMounts": [{"name": "data", "mountPath": "/data", "readOnly": True}]}
+#@ end
+
 #@ def deployment(name, image, port, environment={}, durable=False, command=None, args=None, secrets=[], mounts=[], volumes=[], readiness=None, liveness=None, init=[]):
 #@   env = [{"name": k, "value": str(v)} for k, v in environment.items()]
 #@   mounts = list(mounts)
@@ -166,6 +172,9 @@
 #@   init = []
 #@   if durable:
 #@     env["DATA_LOCATION"] = "/data"
+#@     if "storageVersion" in p:
+#@       init.append(storage_version_gate(p))
+#@     end
 #@   end
 #@   if name == "graphql":
 #@     env.update({"REST_ENDPOINT": "http://traefik:3000", "AUTH_TRUSTED_ISSUER": cfg["runtime"]["trustedIssuer"], "NATS_URL": "nats://nats:4222"})
@@ -174,7 +183,7 @@
 #@   elif name == "search":
 #@     env.update({"GRAPHQL_URL": "http://traefik:3000/graphql", "STATE_DIRECTORY": "/data", "TYPESENSE_API_KEY_FILE": "/run/secrets/typesense-api-key"})
 #@     secrets = ["typesense-api-key"]
-#@     init = [wait_for_nats()]
+#@     init.append(wait_for_nats())
 #@   elif name in ["browse", "mcp"]:
 #@     env["GRAPHQL_URL"] = "http://traefik/graphql"
 #@     if name == "browse":
@@ -182,7 +191,7 @@
 #@       if google_enabled:
 #@         env["GOOGLE_OAUTH_CLIENT_ID"] = cfg["runtime"]["googleOAuthClientId"]
 #@       end
-#@       init = [wait_for_nats()]
+#@       init.append(wait_for_nats())
 #@     end
 #@   end
 #@   mounts = [config_mount("design-config", "/etc/nginx/conf.d")] if name == "design" else []

@@ -222,11 +222,6 @@ assert((assert(io.open(marker, "r")):read("*a")) == "1\n")
 assert(os.remove(location))
 assert(os.remove(marker))
 
-for _, bad in ipairs({"", "0\n", "2\n", "01\n", "1"}) do
-    write_marker(bad)
-    assert(not start("testing"))
-    assert((assert(io.open(marker, "r")):read("*a")) == bad)
-end
 os.remove(marker)
 write_data("{}")
 assert(not start("production"))
