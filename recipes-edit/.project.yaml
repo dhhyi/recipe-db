@@ -122,8 +122,8 @@ check: |
   java --version
   clojure --version
   clojure -M:lint --lint src
-  pnpm test
   pnpm build
+test: pnpm test
 prettier:
   ignore:
     - "*.clj"

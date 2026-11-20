@@ -31,7 +31,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: pytest -p no:cacheprovider --junitxml=target/junit.xml
+integration: pytest -p no:cacheprovider --junitxml=target/junit.xml
 check: python3 --version
 prettier:
   ignore:

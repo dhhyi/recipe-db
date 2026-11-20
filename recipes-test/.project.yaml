@@ -29,7 +29,7 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: mvn --batch-mode --no-transfer-progress test
+integration: mvn --batch-mode --no-transfer-progress test
 format:
   - check: mvn --batch-mode --no-transfer-progress "-DspotlessFiles="(string join , $argv) spotless:check
     apply: mvn --batch-mode --no-transfer-progress "-DspotlessFiles="(string join , $argv) spotless:apply

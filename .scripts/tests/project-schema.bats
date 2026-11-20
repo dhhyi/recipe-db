@@ -9,6 +9,12 @@ import re
 from pathlib import Path
 
 schema = json.loads(Path(".scripts/project-schema.json").read_text())
+integration_rule = next(
+    item for item in schema["allOf"]
+    if item.get("if", {}).get("required") == ["integration"]
+)
+assert integration_rule["then"]["properties"]["category"]["const"] == "test"
+integration_categories = schema["properties"]["category"]["enum"]
 
 data_roles = ["authoritative-read-only", "cleanup-participant"]
 rule = next(
@@ -28,6 +34,10 @@ assert version["properties"]["value"]["minimum"] == 1
 
 
 def valid(project):
+    if "integration" in project and (
+        project.get("category") != "test" or not isinstance(project["integration"], str)
+    ):
+        return False
     owns_data = project.get("backupRole") in data_roles
     if owns_data and not required <= project.keys():
         return False
@@ -89,6 +99,16 @@ assert valid({})
 assert not valid({"backupRole": "derived-stateless", "storageVersion": storage})
 assert not valid({"backupRole": "excluded-external-cache", "storageVersion": storage})
 assert not valid({"storageVersion": storage})
+
+assert schema["properties"]["check"]["type"] == "string"
+assert schema["properties"]["test"]["type"] == "string"
+assert schema["properties"]["integration"]["type"] == "string"
+assert "minLength" not in schema["properties"]["integration"]
+assert valid({"category": "test"})
+assert valid({"category": "test", "integration": ""})
+for category in integration_categories:
+    project = {"category": category, "integration": "echo tests"}
+    assert valid(project) == (category == "test")
 PY
   [ "$status" -eq 0 ]
 }

@@ -30,5 +30,5 @@ traefik:
 ---
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
-test: sh venom-run
+integration: sh venom-run
 check: venom version

@@ -10,7 +10,7 @@ setup() {
   install_mock precommit-pnpm.sh pnpm
   git init -q
   mkdir example
-  printf '%s\n' 'name: example' '---' 'format:' '  - check: echo checked' '    apply: echo formatted' '    files: ["**/*.txt"]' 'check: echo checked' > example/.project.yaml
+  printf '%s\n' 'name: example' '---' 'format:' '  - check: echo checked' '    apply: echo formatted' '    files: ["**/*.txt"]' 'check: echo checked' 'test: echo tested' > example/.project.yaml
 }
 
 @test "precommit explicitly skips all checks in cloud-agent checkpoint mode" {
@@ -104,6 +104,7 @@ mise run --raw bazel build --action_env=PATH --jobs=1 //:example_check //:other_
 mise run --raw bazel build --action_env=PATH --jobs=1 //:shellcheck
 EOF
   cmp expected-calls bazel-calls
+  run -1 grep -F 'example_test' "$MOCK_LOG"
   run -1 grep -F 'in-devcontainer' "$MOCK_LOG"
 }
 

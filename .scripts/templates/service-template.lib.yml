@@ -73,7 +73,6 @@
 #@     service.setdefault("environment", {})["HOME"] = "/tmp"
 #@     service["volumes"] = ["./" + project.name + "/target:/app/target"]
 #@     service["working_dir"] = "/app"
-#@     service["command"] = ["/bin/sh", "-c", project.test]
 #@   end
 #@   return {project.name: service}
 #@ end

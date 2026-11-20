@@ -87,7 +87,6 @@ check: |
   elixir --version
   mix compile --warnings-as-errors
   mix credo --strict
-  mix test --no-start
   MIX_ENV=prod mix release --overwrite
 test: mix test --no-start
 prettier:

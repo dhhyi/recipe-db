@@ -73,7 +73,17 @@ Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project cov
 
 Run Bazel through `mise run --raw bazel ...`. The wrapper generates `BUILD.bazel` only when it is missing; it does not check whether an existing file is current. After switching branches or changing project metadata, file membership, generator logic, or other generation inputs, run `mise run --raw generate-bazel-build` when current rules are required. Pre-commit and CI regenerate rules explicitly before their checks. Direct Bazel or Bazelisk invocations bypass the missing-file safeguard.
 
-## Project formatting
+## Project checks, tests, and formatting
+
+Declare project commands in the second document of `.project.yaml`. Keep their roles separate:
+
+- `generate` produces declared outputs. Bazel `check` and `test` targets both depend on them.
+- `check` compiles, lints, and validates generated outputs; it does not run project-local tests.
+- `test` runs local unit or component tests in the project's devcontainer without requiring the shared application stack. Bazel discovers it independently, including for projects without `check`; CI runs it, but pre-commit does not.
+- `integration` is optional and available only for `category: test` projects; a `-test` directory suffix is not required. The runner executes it in the project's existing test-profile Compose service; the declaration does not create another service. Missing keys are ignored; blank scripts do nothing and produce a warning annotation in GitHub Actions.
+- `format` remains separate from both checks and tests.
+
+The integration runner passes the declared script to a one-off Compose job; it does not change the service's normal startup command. Start the development stack before running it.
 
 Declare formatting in the second document of `.project.yaml`:
 

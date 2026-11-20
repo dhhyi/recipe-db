@@ -51,7 +51,7 @@ format:
 check: |
   ghokin version
   sh karate -h
-test: sh karate -T 1 .
+integration: sh karate -T 1 .
 prettier:
   ignore:
     - "*.feature"

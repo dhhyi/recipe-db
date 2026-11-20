@@ -19,6 +19,7 @@ check: echo checked
 EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../bazel-project-action.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
     .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml \
@@ -119,7 +120,7 @@ EOF
 
 @test "project actions keep mixed output inside group markers and preserve failures" {
   printf '\ngenerate:\n  - echo generated\n' >> example/.project.yaml
-  for script in generate-bazel format-bazel bazel-check; do
+  for script in generate-bazel format-bazel bazel-project-action; do
     cat > ".scripts/$script.sh" << 'EOF'
 #!/bin/sh
 printf '%s\n' '::group::example' >&2
@@ -142,6 +143,49 @@ EOF
       [ "$output" = "$(printf '%s\n' '::group::example' 'stdout output' 'stderr output' '::endgroup::')" ]
     done
   done
+}
+
+@test "project test targets are independent and depend on declared generation outputs" {
+  mkdir test-only
+  mkdir -p test-only/.devcontainer
+  cat > test-only/.project.yaml << 'EOF'
+name: test-only
+---
+test: echo tested
+generate:
+  - command: echo generated
+    output: generated.txt
+EOF
+  touch test-only/source.txt
+  touch test-only/.devcontainer/devcontainer.json test-only/.devcontainer/Dockerfile
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  sed -n '/name = "test-only_generate"/,/^)/p' BUILD.bazel > generate-rule
+  sed -n '/name = "test-only_test"/,/^)/p' BUILD.bazel > test-rule
+  [ -s generate-rule ]
+  grep -Fx '        ":test-only_generate",' test-rule
+  grep -Fx '        "test-only/.project.yaml",' test-rule
+  grep -Fx '        "test-only/source.txt",' test-rule
+  grep -Fx '        "test-only/.devcontainer/devcontainer.json",' test-rule
+  grep -Fx '        "test-only/.devcontainer/Dockerfile",' test-rule
+  grep -Fx '        ".scripts/bazel-project-action.sh",' test-rule
+  grep -Fx "    cmd = \"sh \$(location .scripts/bazel-project-action.sh) test-only test \$@ \$(location :test-only_generate) 2>&1\"," test-rule
+  run -1 grep -F 'name = "test-only_check"' BUILD.bazel
+  run -1 grep -F 'name = "test-only_precommit"' BUILD.bazel
+}
+
+@test "project check targets depend on devcontainer build inputs" {
+  mkdir -p example/.devcontainer
+  touch example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
+  grep -Fx '        "example/.devcontainer/devcontainer.json",' check-rule
+  grep -Fx '        "example/.devcontainer/Dockerfile",' check-rule
 }
 
 @test "cached validations discover independent source and fixture inputs" {

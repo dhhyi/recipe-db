@@ -33,7 +33,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: test
 check: ruby --version
-test: rspec
+integration: rspec
 prettier:
   ignore:
     - "*.rb"

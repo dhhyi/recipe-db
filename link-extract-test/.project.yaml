@@ -40,4 +40,4 @@ prettier:
   ignore:
     - "*.robot"
     - target
-test: robot --outputdir target .
+integration: robot --outputdir target .

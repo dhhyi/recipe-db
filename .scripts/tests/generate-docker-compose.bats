@@ -56,9 +56,23 @@ traefik:
             server:
               port: 8000
 ---
-test: echo tested
+test: echo local
+integration: echo integrated
 EOF
   done
+  mkdir tooling
+  cat > tooling/.project.yaml << 'EOF'
+devcontainer:
+  name: fixture-tooling
+  build:
+    args:
+      VERSION: 7
+  environment:
+    TOOL_ENV: local
+---
+category: tooling
+integration: echo integrated
+EOF
   mkdir pwa
   cat > pwa/.project.yaml << 'EOF'
 devcontainer:
@@ -237,7 +251,7 @@ devcontainer:
 traefik: {}
 ---
 category: test
-test: echo tested
+integration: echo integrated
 EOF
 }
 
@@ -260,6 +274,8 @@ assert_compose() {
     . as $root |
     all(["backend","browse","browse-maintenance","fixtures","graphql","job","nats","nats-init","pwa","search","tags","tags-production-test-api","tags-test","tags-test-api","test","traefik","typesense"][];
       . as $service | $root.services | has($service))
+    and (.services | has("tooling") | not)
+    and all(.services | keys[]; startswith("integration-") | not)
     and (.services.browse.environment | has("GOOGLE_OAUTH_CLIENT_ID") | not)
     and .services.browse.environment.PUBLIC_ORIGIN == "${PUBLIC_ORIGIN:-http://localhost:8080}"
     and (.services.graphql.labels | all(.[]; startswith("traefik.http.routers.graphql-cookie.") | not))
@@ -276,7 +292,9 @@ assert_compose() {
     ] - .services.traefik.labels == [])
     and .services.job.profiles == ["development"]
     and .services.test.profiles == ["test"]
-    and .services.test.command == ["/bin/sh", "-c", "echo tested"]
+    and (.services.test | has("command") | not)
+    and (.services.backend | has("command") | not)
+    and (.services.test | has("integration") | not)
     and .services.test.volumes == ["./test/target:/app/target"]
     and all(.services | to_entries[] | select(.value | has("build"));
       (.key | if . == "tags-test-api" or . == "tags-production-test-api" then "tags" elif . == "tags-recipes-test-api" then "recipes" else . end) as $project

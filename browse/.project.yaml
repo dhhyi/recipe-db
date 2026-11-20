@@ -98,10 +98,9 @@ format:
 check: |
   set templ_generator (templ version)
   set templ_runtime (go list -m -f '{{.Version}}' github.com/a-h/templ)
-  if test "$templ_generator" != "$templ_runtime"; echo "templ version mismatch: generator $templ_generator, go.mod runtime $templ_runtime. Sync TEMPL_VERSION in .project.yaml and rebuild the Browse devcontainer." >&2; exit 1; end
+  if test "$templ_generator" != "$templ_runtime"; echo "templ version mismatch: generator $templ_generator, go.mod runtime $templ_runtime. Sync TEMPL_VERSION in .project.yaml and rebuild the Browse devcontainer." >&2; exit 1;   end
   go version
   go vet ./...
-  env CGO_ENABLED=1 go test -race ./...
   go build -o main
   stat main
 test: env CGO_ENABLED=1 go test -race ./...
