@@ -7,6 +7,8 @@ description: Refine GitHub issues, classify manual tasks requiring human involve
 
 Follow the canonical [issue process](../../../CONTRIBUTING.md#issue-planning-and-refinement). This workflow does not authorize implementation, including documentation edits. If the user mixes refinement and implementation without clear authorization, clarify the next action before proceeding.
 
+During a refinement session, change only GitHub issue artifacts needed to record the agreed specification; do not modify repository files or create commits. Record requested code or documentation changes as implementation scope or acceptance criteria. Begin implementation only when the user explicitly requests it.
+
 Never use the Ask User tool (`ask_user`) during a refinement session. Ask all questions and request all confirmations in chat, including missing issue details, design choices and approval to persist changes. End the turn and wait for the user's reply.
 
 - [Gather context](#gather-context)
