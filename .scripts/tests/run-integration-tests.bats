@@ -22,6 +22,8 @@ EOF
   setup_mock_bin
   install_mock integration-docker.sh docker
   install_mock integration-curl.sh curl
+  export INTEGRATION_LOG="$FIXTURE_ROOT/integration.log"
+  : > "$INTEGRATION_LOG"
   export COMPOSE_CONFIG="$FIXTURE_ROOT/compose.json"
   jq -n '
     {services: {
@@ -193,9 +195,25 @@ docker compose --profile test run --rm --entrypoint /bin/sh ratings-test -c echo
 docker compose --profile test stop fixtures
 EOF
   cmp expected-calls "$MOCK_LOG"
+  [ "$(cat "$INTEGRATION_LOG")" = "$(printf '%s\n' 'recipes-test: echo tested' 'ratings-test: echo tested')" ]
   for project in recipes-test ratings-test; do
     [ "$(cat "$project/target/integration-tests/run.log")" = "test stdout: $project"$'\n'"test stderr: $project" ]
   done
+}
+
+@test "each integration project runs its own declared script" {
+  for project in alpha-test zeta-test; do
+    add_test_project "$project"
+    sed -i "s/integration: echo tested/integration: echo $project/" "$project/.project.yaml"
+  done
+  jq '.services["alpha-test"] = {profiles: ["test"]}
+    | .services["zeta-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development alpha-test zeta-test
+
+  [ "$status" -eq 0 ]
+  [ "$(cat "$INTEGRATION_LOG")" = "$(printf '%s\n' 'alpha-test: echo alpha-test' 'zeta-test: echo zeta-test')" ]
 }
 
 @test "groups each project's test output in GitHub Actions" {

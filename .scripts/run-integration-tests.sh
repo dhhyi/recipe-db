@@ -215,6 +215,7 @@ for project in "${projects[@]}"; do
 done
 
 for project in "${projects[@]}"; do
+  integration=${integration_scripts[$project]}
   if [[ $project == tags-test ]]; then
     tags_test_instances_started=true
     docker compose --profile test up -d --force-recreate tags-test-api tags-production-test-api tags-recipes-test-api
