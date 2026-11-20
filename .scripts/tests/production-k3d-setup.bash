@@ -238,8 +238,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         exit ;;
       *"get job recovery-guard-"*"-o json")
         echo '{"metadata":{"uid":"guard-job-uid"},"status":{"active":1}}'; exit ;;
-      *"apply -f "*restore-guard.json)
-        cp "${*: -1}" "$MOCK_LOG.restore-guard"
+      *"apply -f "*restore-guard-job.json)
+        cp "$(dirname "${*: -1}")/restore-guard.json" "$MOCK_LOG.restore-guard"
         exit ;;
       *"get configmap recovery-guard-"*"-o json")
         if [[ -f $MOCK_LOG.expired-guard-configmap ]]; then

@@ -226,6 +226,50 @@ EOF
   grep -q 'guard or heartbeat lost; terminating' work/restore-guard-heartbeat.log
 }
 
+@test "recovery guard never starts before both namespaces accept its prerequisites" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  printf '{}\n' > work/restore-barrier-routes.json
+  cat > install-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work=$FIXTURE_ROOT/work
+namespace=fixture backup_id=backup-1 timeout=2
+restore_operation_lease_uid=lease-1
+production_fail() { exit 1; }
+kube() {
+  local ns=$namespace file
+  if [[ $1 == --namespace ]]; then ns=$2; shift 2; fi
+  case "$1 $2" in
+    'get rolebinding/'* | 'get job') return 0 ;;
+    'apply -f')
+      file=$3
+      jq -e --arg ns "$ns" '
+        if .kind == "List" then all(.items[]; .metadata.namespace == $ns)
+        else .metadata.namespace == $ns end' "$file" >/dev/null || return 1
+      printf '%s:%s\n' "$ns" "${file##*/}" >> "$MOCK_LOG"
+      [[ $ns != "$REJECT_NAMESPACE" ]] || return 1
+      if [[ ${file##*/} == restore-guard-job.json ]]; then return 42; fi
+      ;;
+    *) return 1 ;;
+  esac
+}
+restore_guard_start
+EOF
+  run env REJECT_NAMESPACE=kube-system bash install-guard.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = 'kube-system:restore-guard-system.json' ]
+  : > "$MOCK_LOG"
+  run env REJECT_NAMESPACE=fixture bash install-guard.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = $'kube-system:restore-guard-system.json\nfixture:restore-guard-prerequisites.json' ]
+  : > "$MOCK_LOG"
+  run env REJECT_NAMESPACE=none bash install-guard.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = $'kube-system:restore-guard-system.json\nfixture:restore-guard-prerequisites.json\nfixture:restore-guard-job.json' ]
+}
+
 @test "guard rereads a rotating token and acknowledges only the client pulse" {
   printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
   printf '[]\n' > work/prior-workloads.json

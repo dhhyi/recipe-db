@@ -162,7 +162,7 @@ A nonzero exit is not partial success. Leave application access blocked, stop th
 
 Choose one action:
 
-- **Reset again:** collect any remaining evidence by hand, then repeat step 3 with the same pinned values and state directory. This discards everything left by the failed attempt. Reset never resumes or merges an import.
+- **Reset again:** collect any remaining evidence by hand, then repeat step 3 with the same pinned values and state directory. If a shutdown guard remains, the reset verifies that it belongs to this recovery, has expired, and is the only worker left before removing it. Do not remove it by hand. This discards everything left by the failed attempt. Reset never resumes or merges an import.
 - **Abandon:** use the separately confirmed abandonment command only after workload isolation and barrier checks. It releases only the exact retained Lease; data stays and access remains blocked. Abandonment does not make storage empty.
 - **Rebuild:** use the [Pi rebuild cookbook](raspberry-pi-rebuild.md) if the host or disk is suspect.
 

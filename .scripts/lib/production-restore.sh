@@ -960,7 +960,18 @@ restore_guard_start() {
         || production_fail "refusing to replace foreign cross-namespace recovery guard permissions"
     fi
   fi
-  kube apply -f "$work/restore-guard.json" > /dev/null || return 1
+  if jq -e 'any(.items[]; .metadata.namespace == "kube-system")' \
+    "$work/restore-guard.json" > /dev/null; then
+    jq '.items |= map(select(.metadata.namespace == "kube-system"))' \
+      "$work/restore-guard.json" > "$work/restore-guard-system.json" || return 1
+    kube --namespace kube-system apply -f "$work/restore-guard-system.json" > /dev/null || return 1
+  fi
+  jq --arg ns "$namespace" '.items |= map(select(.metadata.namespace == $ns and .kind != "Job"))' \
+    "$work/restore-guard.json" > "$work/restore-guard-prerequisites.json" || return 1
+  kube apply -f "$work/restore-guard-prerequisites.json" > /dev/null || return 1
+  jq -e '.items[] | select(.kind == "Job")' \
+    "$work/restore-guard.json" > "$work/restore-guard-job.json" || return 1
+  kube apply -f "$work/restore-guard-job.json" > /dev/null || return 1
   restore_guard_started=true
   while ((SECONDS < deadline)); do
     kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-status.json" || return 1
