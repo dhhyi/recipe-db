@@ -50,6 +50,9 @@ PY
   run python3 .scripts/retrieve-verified-backup.py
   [ "$status" -ne 0 ]
   [[ $output == *"choose either DESTINATION or --catalog"* ]]
+  run python3 .scripts/retrieve-verified-backup.py --catalog --backup-id baseline-id
+  [ "$status" -ne 0 ]
+  [[ $output == *"--backup-id cannot be combined with --catalog"* ]]
 }
 
 setup() {
@@ -200,7 +203,7 @@ if password_auth:
 else:
     assert command[:5] == ["sudo", "-n", "-k", "python3", "-c"]
     code_index = 5
-assert len(command) in (code_index + 2, code_index + 3)
+assert len(command) in (code_index + 2, code_index + 3, code_index + 5)
 with open(os.environ["MOCK_LOG"], "a") as log:
     log.write(json.dumps(command[code_index + 1:]) + "\n")
 code = command[code_index].replace("/usr/local/sbin/recipe-db-backup-upload", os.environ["UPLOADER"])
@@ -218,34 +221,49 @@ import sys
 
 root = Path(os.environ["REMOTE_ROOT"])
 args = sys.argv[1:]
-assert args[0] == "cat"
-assert args[1].startswith("gdrive:RecipeDB Backups/pi/")
-assert args[2:] == [
-    "--config", str(root / "rclone.conf"), "--log-level", "ERROR",
-    "--log-file", "/dev/null", "--retries", "2", "--low-level-retries", "2",
-    "--timeout", "5m", "--contimeout", "30s",
-]
+if args[0] == "lsf":
+    assert args[1] == "gdrive:RecipeDB Backups/pi"
+    assert args[2:] == [
+        "--files-only", "--format", "p", "--config", str(root / "rclone.conf"),
+        "--log-level", "ERROR", "--log-file", "/dev/null",
+    ]
+    sys.stdout.write("\n".join(sorted(path.name for path in (root / "drive").iterdir())))
+    sys.exit(0)
+assert args[0] == "cat" and args[1].startswith("gdrive:RecipeDB Backups/pi/")
+common = ["--config", str(root / "rclone.conf"), "--log-level", "ERROR",
+          "--log-file", "/dev/null"]
+assert args[2:2 + len(common)] == common
+streaming = len(args[2:]) > len(common)
+if streaming:
+    assert args[2:] == common + [
+        "--retries", "2", "--low-level-retries", "2",
+        "--timeout", "5m", "--contimeout", "30s",
+    ]
+else:
+    assert args[2:] == common
 name = args[1].split("/")[-1]
 assert "/" not in name and name not in ("rclone.conf", ".", "..")
+with open(root / "read-log", "a") as log:
+    log.write(name + "\n")
 data = (root / "drive" / name).read_bytes()
 case = os.environ["CASE"]
-if case == "corrupt":
+if case == "corrupt" and streaming and name.endswith(".tar.gz"):
     data = b"x" * len(data)
-if case == "interrupted" and name.endswith(".tar.gz"):
+if case == "interrupted" and streaming and name.endswith(".tar.gz"):
     sys.stdout.buffer.write(data[:3])
     sys.exit(1)
-if case in ("terminated", "hangup") and name.endswith(".tar.gz"):
+if case in ("terminated", "hangup") and streaming and name.endswith(".tar.gz"):
     connection = json.loads((root / "connection.json").read_text())
     os.kill(connection["parent"], signal.SIGTERM if case == "terminated" else signal.SIGHUP)
     sys.exit(1)
-if case == "oversized":
+if case == "oversized" and streaming:
     data += b"extra"
-if case == "changed-baseline" and name.endswith(".tar.gz"):
+if case == "changed-baseline" and streaming and name.endswith(".tar.gz"):
     path = root / "state/baseline.json"
     baseline = json.loads(path.read_text())
     baseline["archiveSha256"] = "0" * 64
     path.write_text(json.dumps(baseline))
-if case == "failed-status" and name.endswith(".tar.gz"):
+if case == "failed-status" and streaming and name.endswith(".tar.gz"):
     path = root / "state/status.json"
     status = json.loads(path.read_text())
     status["status"] = "upload-failure"
@@ -264,6 +282,53 @@ path = Path("remote/state") / (sys.argv[1] + ".json")
 record = json.loads(path.read_text())
 record[sys.argv[2]] = sys.argv[3]
 path.write_text(json.dumps(record))
+PY
+}
+
+add_selected_backup() {
+  python3 - "$1" "${2:-0}" << 'PY'
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+
+backup_id, offset = sys.argv[1], int(sys.argv[2])
+root = Path(os.environ["REMOTE_ROOT"])
+captured = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=3, hours=offset)
+captured_at = captured.isoformat()
+stem = f"recipe-db-pi-{captured.strftime('%Y%m%dT%H%M%SZ')}-{backup_id}"
+archive = f"private backup fixture for {backup_id} at {offset}\n".encode()
+source = {
+    "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+    "revision": "b" * 40,
+}
+package = {
+    "format": "recipe-db-backup",
+    "formatVersion": 1,
+    "deploymentId": "pi",
+    "backupId": backup_id,
+    "capturedAt": captured_at,
+    "source": source,
+    "contentFingerprint": "c" * 64,
+    "snapshotManifest": {
+        "format": "recipe-db-pvc-snapshot",
+        "formatVersion": 1,
+        "backupId": backup_id,
+        "capturedAt": captured_at,
+        "inventory": [{"kind": "fixture"}],
+        "source": source,
+    },
+    "archive": {
+        "name": stem + ".tar.gz",
+        "sizeBytes": len(archive),
+        "sha256": hashlib.sha256(archive).hexdigest(),
+    },
+}
+manifest = (json.dumps(package, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+(root / "drive" / package["archive"]["name"]).write_bytes(archive)
+(root / "drive" / (stem + ".manifest.json")).write_bytes(manifest)
 PY
 }
 
@@ -320,6 +385,112 @@ PY
   assert_private_success
   [ "$(wc -l < "$MOCK_LOG")" -eq 4 ]
   [[ $output != *private-authorization* ]]
+}
+
+@test "backup ID streams only its complete pair despite a failed latest status" {
+  add_selected_backup historical-id
+  edit_record status status upload-failure
+  edit_record status lastCheck 2000-01-01T00:00:00Z
+  run python3 .scripts/retrieve-verified-backup.py --backup-id historical-id "$DESTINATION"
+  [ "$status" -eq 0 ]
+  RESULT="$output" SELECTED_ID=historical-id python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+import stat
+
+root = Path(os.environ["REMOTE_ROOT"])
+result = json.loads(os.environ["RESULT"])
+destination = Path(os.environ["DESTINATION"])
+files = sorted(path.name for path in (root / "drive").glob("*historical-id*"))
+assert len(files) == 2
+assert result["backupId"] == os.environ["SELECTED_ID"]
+assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+assert sorted(path.name for path in destination.iterdir()) == files
+for field in ("manifest", "archive"):
+    path = Path(result[field])
+    assert path.is_absolute() and path.parent == destination
+    assert path.read_bytes() == (root / "drive" / path.name).read_bytes()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+assert set((root / "read-log").read_text().splitlines()) == set(files)
+assert not (root / "must-not-be-created").exists()
+PY
+  assert_connection_closed
+  [ "$(python3 -c 'import json; print(json.load(open("remote/state/status.json"))["status"])')" = upload-failure ]
+}
+
+@test "missing ambiguous and incomplete backup IDs fail without a download" {
+  run python3 .scripts/retrieve-verified-backup.py --backup-id missing-id "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+  [ ! -e "$REMOTE_ROOT/read-log" ]
+
+  add_selected_backup ambiguous-id
+  add_selected_backup ambiguous-id 24
+  run python3 .scripts/retrieve-verified-backup.py --backup-id ambiguous-id "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+
+  add_selected_backup incomplete-id
+  rm remote/drive/*incomplete-id.tar.gz
+  run python3 .scripts/retrieve-verified-backup.py --backup-id incomplete-id "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+}
+
+@test "corrupt and interrupted selected archives are never published" {
+  add_selected_backup selected-corrupt
+  export CASE=corrupt
+  run python3 .scripts/retrieve-verified-backup.py --backup-id selected-corrupt "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+
+  export CASE=interrupted
+  run python3 .scripts/retrieve-verified-backup.py --backup-id selected-corrupt "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+}
+
+@test "backup IDs are matched exactly, not by a colliding filename suffix" {
+  add_selected_backup 42
+  add_selected_backup previous-42
+  run python3 .scripts/retrieve-verified-backup.py --backup-id 42 "$DESTINATION"
+  [ "$status" -eq 0 ]
+  RESULT="$output" python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["REMOTE_ROOT"])
+result = json.loads(os.environ["RESULT"])
+drive = root / "drive"
+package = next(json.loads(path.read_text()) for path in drive.glob("*.manifest.json")
+               if json.loads(path.read_text()).get("backupId") == "42")
+names = {package["archive"]["name"], package["archive"]["name"].removesuffix(".tar.gz")
+         + ".manifest.json"}
+assert result["backupId"] == "42"
+assert {Path(result[field]).name for field in ("archive", "manifest")} == names
+assert set((root / "read-log").read_text().splitlines()) == names
+PY
+
+  rm -r "$DESTINATION"
+  python3 - << 'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["REMOTE_ROOT"])
+for path in (root / "drive").glob("*.manifest.json"):
+    package = json.loads(path.read_text())
+    if package.get("backupId") == "42":
+        (root / "drive" / package["archive"]["name"]).unlink()
+        path.unlink()
+(root / "read-log").write_text("")
+PY
+  run python3 .scripts/retrieve-verified-backup.py --backup-id 42 "$DESTINATION"
+  [ "$status" -ne 0 ]
+  [ ! -e "$DESTINATION" ]
+  [ ! -s "$REMOTE_ROOT/read-log" ]
 }
 
 terminal_retrieval() {

@@ -261,11 +261,19 @@ Success prints JSON containing `backupId` and absolute `manifest` and `archive` 
 
 The destination has mode `0700` and files have mode `0600`. Existing destinations and destination symlinks are refused; failed or interrupted transfers are not published as completed downloads. This retrieves an existing backup only: it does not capture, upload, delete, prune, restore or start a rehearsal. Drive reads may refresh the Pi's authorization. Keep these production-data files private and out of shared logs and CI artifacts.
 
-For a selected historical restore point, or when the latest baseline status is unavailable, select a complete package and its sibling manifest using the manual procedure below. It downloads both files on the Pi before transferring them to the workstation. Use this alternative only with separate authorization for its temporary Pi-side files and possible rclone authorization refresh. It reads the remote package without changing the Drive baseline or uploader state. A failed download is not a restore candidate. Listing or byte size alone does not verify a downloaded backup.
+For a selected historical restore point, first inspect the complete remote points with `--catalog`, then retrieve the exact ID directly to a new private workstation directory. This option does not require the latest uploader status to be healthy or recent, and never falls back to another point:
+
+```fish
+mise run --raw retrieve-verified-backup --catalog
+set -l BACKUP_ID '<exact-backupId-from-catalog>'
+mkdir -p "$HOME/.local/share/recipe-db/rehearsals"
+and mise run --raw retrieve-verified-backup --backup-id "$BACKUP_ID" \
+  "$HOME/.local/share/recipe-db/rehearsals/backup-$BACKUP_ID"
+```
+
+The selected package's identity and manifest are checked, and the archive and manifest are streamed over the existing authenticated SSH connection and verified before publication. Missing, ambiguous, incomplete, changed or corrupt points fail without leaving a download. Backup files are never staged on the Pi; only read-only Drive access is used, which may refresh authorization.
 
 If the original Pi is unavailable and no verified package was downloaded beforehand, provision the replacement Pi and [authorize Drive interactively there](google-drive-authorization.md#1-authorize-on-a-new-pi) before retrieving the backup. Recovery no longer depends on an authorized rclone config in the workstation or encrypted dotfiles.
-
-Over verified private SSH, use `sudo rclone` on the Pi with `--config /etc/recipe-db/rclone.conf`. The remote directory is `remote` from the home directory's `backup/backup.json` followed by `/deploymentId`; this home file is still available when the replacement Pi has not yet received backup settings. Use only read-only listing and remote-to-local `rclone copyto` operations to retrieve the matching archive and manifest into a new root-only directory on the Pi. Give the authorized SSH operator ownership of only that download directory and those two files, retaining directory mode `0700` and file mode `0600`, then use `scp` to transfer them to a private workstation directory. Verify command success and package hashes before using them. Never transfer `rclone.conf`. Never run the backup publisher, `sync`, upload, delete or prune for recovery. Rclone may refresh authorization on the Pi during reads. Do not print private configuration, backup contents or remote listings in shared logs.
 
 ```sh
 umask 077

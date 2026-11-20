@@ -686,6 +686,19 @@ def remote_names(config):
     return {line for line in result.stdout.splitlines() if REMOTE_FILENAME_PATTERN.fullmatch(line)}
 
 
+def remote_point_backup_id(config, name):
+    prefix = f"recipe-db-{config['deploymentId']}-"
+    suffix = ".manifest.json"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return None
+    stem = name[len(prefix):-len(suffix)]
+    if len(stem) <= 17 or stem[16] != "-" \
+            or not re.fullmatch(r"\d{8}T\d{6}Z", stem[:16]):
+        return None
+    backup_id = stem[17:]
+    return backup_id if BACKUP_ID_PATTERN.fullmatch(backup_id) else None
+
+
 def remote_hash(config, name, expected_size):
     if type(expected_size) is not int or expected_size < 0 \
             or expected_size > config["maxStagingBytes"]:
@@ -765,11 +778,14 @@ def verify_baseline(config, baseline, names):
         return False
 
 
-def complete_remote_points(config, names, catalog=None):
+def complete_remote_points(config, names, catalog=None, backup_id=None, verify_archive=True):
     points = []
+    requested_backup_id = backup_id
     prefix = f"recipe-db-{config['deploymentId']}-"
     for name in sorted(names):
-        if not name.startswith(prefix) or not name.endswith(".manifest.json"):
+        if not name.startswith(prefix) or not name.endswith(".manifest.json") \
+                or (requested_backup_id is not None
+                    and remote_point_backup_id(config, name) != requested_backup_id):
             continue
         document = read_remote_manifest(config, name)
         if not isinstance(document, dict) or document.get("format") != PACKAGE_FORMAT \
@@ -813,11 +829,12 @@ def complete_remote_points(config, names, catalog=None):
         manifest_bytes = json_bytes(document)
         try:
             manifest_hash = remote_hash(config, name, len(manifest_bytes))
-            archive_hash = remote_hash(config, archive["name"], archive["sizeBytes"])
+            archive_hash = remote_hash(config, archive["name"], archive["sizeBytes"]) \
+                if verify_archive else None
         except BackupError as error:
             raise BackupError("retention-failure", "remote-point-integrity") from error
         if manifest_hash != hashlib.sha256(manifest_bytes).hexdigest() \
-                or archive_hash != archive["sha256"]:
+                or (verify_archive and archive_hash != archive["sha256"]):
             raise BackupError("retention-failure", "remote-point-integrity")
         points.append((captured, backup_id, archive["name"], name))
         if catalog is not None:

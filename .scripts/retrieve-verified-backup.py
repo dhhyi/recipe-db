@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Retrieve the Pi's verified Drive baseline or read-only backup catalog."""
+"""Retrieve a verified Pi Drive backup by baseline, ID, or read-only catalog."""
 
 import argparse
 from contextlib import contextmanager
@@ -31,7 +31,7 @@ class AuthenticationError(Exception):
 
 # Execute installed tooling, not a Pi checkout. Only selected metadata leaves the Pi.
 REMOTE = """
-import json, runpy, subprocess, sys
+import hashlib, json, runpy, subprocess, sys
 try:
     tool = runpy.run_path("/usr/local/sbin/recipe-db-backup-upload")
     config = tool["safe_config"]("/etc/recipe-db/backup.json")
@@ -41,33 +41,81 @@ try:
         except tool["BackupError"] as error:
             raise ValueError("remote catalog verification failed") from error
         sys.exit(0)
-    path = tool["baseline_path"](config)
-    baseline = tool["read_json"](path)
-    status = tool["report_status"](config)
-    if baseline != tool["read_json"](path):
-        raise ValueError("baseline changed")
-    if sys.argv[1] == "metadata":
-        keys = ("backupId", "archive", "manifest", "archiveSizeBytes",
-                "manifestSizeBytes", "archiveSha256", "manifestSha256",
-                "capturedAt", "lastUpload")
-        print(json.dumps({
-            "deploymentId": config["deploymentId"],
-            "status": {key: status.get(key) for key in
-                       ("format", "status", "lastCheck", "backupId")},
-            "baseline": {key: baseline[key] for key in keys},
-        }))
+    if sys.argv[1] in ("backup-id", "package"):
+        backup_id = sys.argv[2]
+        if not tool["BACKUP_ID_PATTERN"].fullmatch(backup_id):
+            raise ValueError("invalid backup ID")
+        try:
+            names = tool["remote_names"](config)
+            candidates = [name for name in names
+                          if tool["remote_point_backup_id"](config, name) == backup_id]
+            if len(candidates) != 1:
+                raise ValueError("requested backup is missing, incomplete, or ambiguous")
+            matches = tool["complete_remote_points"](
+                config, names, backup_id=backup_id, verify_archive=False)
+        except tool["BackupError"] as error:
+            raise ValueError("requested backup verification failed") from error
+        if len(matches) != 1 or matches[0][1] != backup_id \
+                or matches[0][3] != candidates[0]:
+            raise ValueError("requested backup is incomplete or invalid")
+        _, _, archive_name, manifest_name = matches[0]
+        package = tool["read_remote_manifest"](config, manifest_name)
+        manifest_bytes = tool["json_bytes"](package)
+        archive = package["archive"]
+        baseline = {
+            "backupId": backup_id,
+            "archive": archive_name,
+            "manifest": manifest_name,
+            "archiveSizeBytes": archive["sizeBytes"],
+            "manifestSizeBytes": len(manifest_bytes),
+            "archiveSha256": archive["sha256"],
+            "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "capturedAt": package["capturedAt"],
+        }
+        if sys.argv[1] == "backup-id":
+            print(json.dumps({"deploymentId": config["deploymentId"], "baseline": baseline}))
+        else:
+            if len(sys.argv) != 5:
+                raise ValueError("invalid package request")
+            field, name = sys.argv[3:]
+            if field not in ("manifest", "archive") or baseline[field] != name:
+                raise ValueError("requested backup changed")
+            subprocess.run(
+                ["rclone", "cat", tool["remote_base"](config) + "/" + name,
+                 "--config", config["rcloneConfig"], "--log-level", "ERROR",
+                 "--log-file", "/dev/null", "--retries", "2",
+                 "--low-level-retries", "2", "--timeout", "5m", "--contimeout", "30s"],
+                stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=True, timeout=3600,
+            )
     else:
-        field, name = sys.argv[1:]
-        if field not in ("manifest", "archive") or baseline[field] != name:
+        path = tool["baseline_path"](config)
+        baseline = tool["read_json"](path)
+        status = tool["report_status"](config)
+        if baseline != tool["read_json"](path):
             raise ValueError("baseline changed")
-        subprocess.run(
-            ["rclone", "cat", tool["remote_base"](config) + "/" + name,
-             "--config", config["rcloneConfig"], "--log-level", "ERROR",
-             "--log-file", "/dev/null", "--retries", "2",
-             "--low-level-retries", "2", "--timeout", "5m", "--contimeout", "30s"],
-            stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=True, timeout=3600,
-        )
+        if sys.argv[1] == "metadata":
+            keys = ("backupId", "archive", "manifest", "archiveSizeBytes",
+                    "manifestSizeBytes", "archiveSha256", "manifestSha256",
+                    "capturedAt", "lastUpload")
+            print(json.dumps({
+                "deploymentId": config["deploymentId"],
+                "status": {key: status.get(key) for key in
+                           ("format", "status", "lastCheck", "backupId")},
+                "baseline": {key: baseline[key] for key in keys},
+            }))
+        else:
+            field, name = sys.argv[1:]
+            if field not in ("manifest", "archive") or baseline[field] != name:
+                raise ValueError("baseline changed")
+            subprocess.run(
+                ["rclone", "cat", tool["remote_base"](config) + "/" + name,
+                 "--config", config["rcloneConfig"], "--log-level", "ERROR",
+                 "--log-file", "/dev/null", "--retries", "2",
+                 "--low-level-retries", "2", "--timeout", "5m", "--contimeout", "30s"],
+                stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=True, timeout=3600,
+            )
 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
     print("backup retrieval: Pi metadata or Drive read failed", file=sys.stderr)
     sys.exit(1)
@@ -151,31 +199,37 @@ def receive(args, remote_args, limit, destination=None):
 
 
 def metadata(args):
-    document = parse_json(receive(args, ("metadata",), MAX_METADATA))
+    selected = args.backup_id is not None
+    remote_args = ("backup-id", args.backup_id) if selected else ("metadata",)
+    document = parse_json(receive(args, remote_args, MAX_METADATA))
     if not isinstance(document, dict):
         raise ValueError("invalid Pi metadata")
     status, baseline = document.get("status"), document.get("baseline")
     deployment = document.get("deploymentId")
-    if not isinstance(status, dict) or not isinstance(baseline, dict) \
+    if (not selected and not isinstance(status, dict)) or not isinstance(baseline, dict) \
             or not isinstance(deployment, str) \
             or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", deployment):
         raise ValueError("invalid Pi metadata")
-    if status.get("format") != upload["STATUS_FORMAT"] \
-            or status.get("status") not in ("verified-upload", "verified-unchanged"):
-        raise ValueError("latest backup check is not healthy")
-    checked = upload["validate_timestamp"](status.get("lastCheck"))
-    age = datetime.now(timezone.utc) - checked
-    if not timedelta(0) <= age <= timedelta(hours=26):
-        raise ValueError("latest backup check is overdue or in the future")
+    if not selected:
+        if status.get("format") != upload["STATUS_FORMAT"] \
+                or status.get("status") not in ("verified-upload", "verified-unchanged"):
+            raise ValueError("latest backup check is not healthy")
+        checked = upload["validate_timestamp"](status.get("lastCheck"))
+        age = datetime.now(timezone.utc) - checked
+        if not timedelta(0) <= age <= timedelta(hours=26):
+            raise ValueError("latest backup check is overdue or in the future")
     backup_id = baseline.get("backupId")
     if not isinstance(backup_id, str) or not upload["BACKUP_ID_PATTERN"].fullmatch(backup_id):
         raise ValueError("invalid baseline backup identity")
-    if status["status"] == "verified-upload" and status.get("backupId") != backup_id:
+    if selected and backup_id != args.backup_id:
+        raise ValueError("Pi returned a different backup ID")
+    if not selected and status["status"] == "verified-upload" and status.get("backupId") != backup_id:
         raise ValueError("status and baseline backup identities differ")
     captured = upload["validate_timestamp"](baseline.get("capturedAt"))
-    uploaded = upload["validate_timestamp"](baseline.get("lastUpload"))
-    if captured > uploaded or uploaded > checked:
-        raise ValueError("inconsistent baseline timestamps")
+    if not selected:
+        uploaded = upload["validate_timestamp"](baseline.get("lastUpload"))
+        if captured > uploaded or uploaded > checked:
+            raise ValueError("inconsistent baseline timestamps")
     stem = f"recipe-db-{deployment}-{captured.strftime('%Y%m%dT%H%M%SZ')}-{backup_id}"
     if baseline.get("archive") != stem + ".tar.gz" \
             or baseline.get("manifest") != stem + ".manifest.json":
@@ -235,7 +289,9 @@ def retrieve(args):
                                  os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=directory)
             with os.fdopen(descriptor, "w+b") as stream:
-                size, digest = receive(args, (field, baseline[field]),
+                remote_args = ("package", args.backup_id, field, baseline[field]) \
+                    if args.backup_id is not None else (field, baseline[field])
+                size, digest = receive(args, remote_args,
                                        baseline[field + "SizeBytes"], stream)
                 if size != baseline[field + "SizeBytes"] or digest != baseline[field + "Sha256"]:
                     raise ValueError(f"{field} size or SHA-256 mismatch")
@@ -333,11 +389,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", nargs="?", help="new directory under an existing symlink-free parent")
     parser.add_argument("--pi", default="piadmin@recipe-pi.home", help="SSH user@host for the Pi")
+    parser.add_argument("--backup-id", help="retrieve this exact complete backup, independent of latest status")
     parser.add_argument("--catalog", action="store_true",
                         help="verify off-device backup points and print metadata without saving packages")
     args = parser.parse_args()
     if args.catalog == (args.destination is not None):
         parser.error("choose either DESTINATION or --catalog")
+    if args.catalog and args.backup_id is not None:
+        parser.error("--backup-id cannot be combined with --catalog")
+    if args.backup_id is not None \
+            and not upload["BACKUP_ID_PATTERN"].fullmatch(args.backup_id):
+        parser.error("--backup-id must be a valid backup ID")
     if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]*@[a-zA-Z0-9][a-zA-Z0-9.-]*", args.pi):
         parser.error("--pi must be an SSH user@hostname")
 
