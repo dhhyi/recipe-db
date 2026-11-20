@@ -147,6 +147,7 @@ EOF
 
 @test "project test targets are independent and depend on declared generation outputs" {
   mkdir test-only
+  mkdir -p test-only/.devcontainer
   cat > test-only/.project.yaml << 'EOF'
 name: test-only
 ---
@@ -156,6 +157,7 @@ generate:
     output: generated.txt
 EOF
   touch test-only/source.txt
+  touch test-only/.devcontainer/devcontainer.json test-only/.devcontainer/Dockerfile
 
   run bash .scripts/generate-bazel-build.sh
 
@@ -166,10 +168,24 @@ EOF
   grep -Fx '        ":test-only_generate",' test-rule
   grep -Fx '        "test-only/.project.yaml",' test-rule
   grep -Fx '        "test-only/source.txt",' test-rule
+  grep -Fx '        "test-only/.devcontainer/devcontainer.json",' test-rule
+  grep -Fx '        "test-only/.devcontainer/Dockerfile",' test-rule
   grep -Fx '        ".scripts/bazel-project-action.sh",' test-rule
   grep -Fx '    cmd = "sh $(location .scripts/bazel-project-action.sh) test-only test $@ $(location :test-only_generate) 2>&1",' test-rule
   run -1 grep -F 'name = "test-only_check"' BUILD.bazel
   run -1 grep -F 'name = "test-only_precommit"' BUILD.bazel
+}
+
+@test "project check targets depend on devcontainer build inputs" {
+  mkdir -p example/.devcontainer
+  touch example/.devcontainer/devcontainer.json example/.devcontainer/Dockerfile
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  sed -n '/name = "example_check"/,/^)/p' BUILD.bazel > check-rule
+  grep -Fx '        "example/.devcontainer/devcontainer.json",' check-rule
+  grep -Fx '        "example/.devcontainer/Dockerfile",' check-rule
 }
 
 @test "cached validations discover independent source and fixture inputs" {

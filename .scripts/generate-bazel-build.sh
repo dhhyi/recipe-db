@@ -79,6 +79,13 @@ for project_file in */.project.yaml; do
     included_files["$file"]=1
   done < <(git ls-files --cached --others --exclude-standard -z -- "$project/" | sort -z)
 
+  for file in "$project/.devcontainer/devcontainer.json" "$project/.devcontainer/Dockerfile"; do
+    if [[ -f "$file" && -z ${included_files["$file"]+x} ]]; then
+      files+=("$file")
+      included_files["$file"]=1
+    fi
+  done
+
   graphql_schema=$(yq eval-all -r 'select(documentIndex == 1) | .graphqlSchema // ""' "$project_file")
   if [[ -n "$graphql_schema" ]]; then
     schema_file="$project/$graphql_schema/recipe-db.graphqls"
