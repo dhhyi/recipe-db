@@ -340,6 +340,87 @@ async def test_recipe_tools_report_malformed_json_as_tool_errors():
             assert "Invalid JSON" in result.content[0].text
 
 
+async def test_recipe_tools_preserve_ingredient_amounts():
+    ingredients_json = (
+        '[{"name":"integer","amount":2},'
+        '{"name":"fraction","amount":0.5},'
+        '{"name":"precise","amount":12345678901234567890.12300},'
+        '{"name":"exponent","amount":1.20e-3},'
+        '{"name":"text","amount":"a pinch"},'
+        '{"name":"omitted"},'
+        '{"name":"cleared","amount":"previous"}]'
+    )
+    added_amounts = {
+        "integer": "2",
+        "fraction": "0.5",
+        "precise": "12345678901234567890.12300",
+        "exponent": "1.20e-3",
+        "text": "a pinch",
+        "omitted": None,
+        "cleared": "previous",
+    }
+    updated_ingredients_json = (
+        '[{"name":"integer","amount":3},'
+        '{"name":"fraction","amount":0.75},'
+        '{"name":"precise","amount":98765432109876543210.98700},'
+        '{"name":"exponent","amount":2.30e-4},'
+        '{"name":"text","amount":"to taste"},'
+        '{"name":"omitted"},'
+        '{"name":"cleared"}]'
+    )
+    updated_amounts = {
+        "integer": "3",
+        "fraction": "0.75",
+        "precise": "98765432109876543210.98700",
+        "exponent": "2.30e-4",
+        "text": "to taste",
+        "omitted": None,
+        "cleared": None,
+    }
+    async with mcp_session() as session:
+        added = await session.call_tool(
+            "add_recipe",
+            {"recipeJson": '{"name":"Amount test","ingredients":' + ingredients_json + "}"},
+        )
+        assert added.is_error is False, added.content
+        recipe_id = json.loads(added.content[0].text)["id"]
+
+        for tool, arguments, expected in (
+            (None, {}, added_amounts),
+            (
+                "change_recipe",
+                {"recipeId": recipe_id, "recipeJson": '{"ingredients":' + updated_ingredients_json + "}"},
+                updated_amounts,
+            ),
+        ):
+            if tool:
+                changed = await session.call_tool(tool, arguments)
+                assert changed.is_error is False, changed.content
+            result = await session.call_tool("get_recipe", {"recipeId": recipe_id})
+            assert result.is_error is False, result.content
+            ingredients = json.loads(result.content[0].text)["ingredients"]
+            assert {ingredient["name"]: ingredient["amount"] for ingredient in ingredients} == expected
+
+
+@pytest.mark.parametrize("amount", [None, True, [], {}])
+async def test_recipe_tools_reject_invalid_ingredient_amounts(amount):
+    async with mcp_session() as session:
+        recipe_id = await create_recipe(session, "Invalid amount sentinel")
+        for tool, arguments in (
+            ("add_recipe", {"name": "Invalid amount"}),
+            ("change_recipe", {}),
+        ):
+            recipe = {**arguments, "ingredients": [{"name": "ingredient", "amount": amount}]}
+            params = {"recipeJson": json.dumps(recipe)}
+            if tool == "change_recipe":
+                params["recipeId"] = recipe_id
+            result = await session.call_tool(tool, params)
+            assert result.is_error is True
+            message = result.content[0].text.lower()
+            assert "amount" in message
+            assert "string or number" in message
+
+
 async def test_list_recipes_includes_a_created_recipe():
     async with mcp_session() as session:
         recipe_id = await create_recipe(session, "Listed Recipe")
