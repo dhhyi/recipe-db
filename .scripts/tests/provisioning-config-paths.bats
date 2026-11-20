@@ -3,7 +3,7 @@
 load test_helper
 
 setup() {
-  ROOT=$(cd "$BATS_TEST_DIRNAME/../.." && pwd)
+  ROOT=$(cd "$(dirname "$(realpath "$BATS_TEST_DIRNAME/provisioning-config-paths.bats")")/../.." && pwd -P)
 }
 
 @test "provisioning launcher mounts a disposable config and Ansible resolves inputs without SSH" {
