@@ -960,7 +960,18 @@ restore_guard_start() {
         || production_fail "refusing to replace foreign cross-namespace recovery guard permissions"
     fi
   fi
-  kube apply -f "$work/restore-guard.json" > /dev/null || return 1
+  if jq -e 'any(.items[]; .metadata.namespace == "kube-system")' \
+    "$work/restore-guard.json" > /dev/null; then
+    jq '.items |= map(select(.metadata.namespace == "kube-system"))' \
+      "$work/restore-guard.json" > "$work/restore-guard-system.json" || return 1
+    kube --namespace kube-system apply -f "$work/restore-guard-system.json" > /dev/null || return 1
+  fi
+  jq --arg ns "$namespace" '.items |= map(select(.metadata.namespace == $ns and .kind != "Job"))' \
+    "$work/restore-guard.json" > "$work/restore-guard-prerequisites.json" || return 1
+  kube apply -f "$work/restore-guard-prerequisites.json" > /dev/null || return 1
+  jq -e '.items[] | select(.kind == "Job")' \
+    "$work/restore-guard.json" > "$work/restore-guard-job.json" || return 1
+  kube apply -f "$work/restore-guard-job.json" > /dev/null || return 1
   restore_guard_started=true
   while ((SECONDS < deadline)); do
     kube get configmap "$restore_guard_name" -o json > "$work/restore-guard-status.json" || return 1
@@ -1060,6 +1071,21 @@ restore_guard_assert_absent() {
 
 restore_guard_validate_expired() {
   local name="recovery-guard-$backup_id"
+  local guard_spec_check='
+    def guard_containers:
+      [.containers[] | {name,image,command,
+        env: [.env[] | {name,value:(.value // ""),valueFrom}]}];
+    def matches_guard($wanted):
+      .serviceAccountName == $wanted.serviceAccountName
+      and .restartPolicy == $wanted.restartPolicy
+      and (.initContainers // []) == [] and (.ephemeralContainers // []) == []
+      and (.hostNetwork // false) == false and (.hostPID // false) == false
+      and (.hostIPC // false) == false
+      and all(.volumes[]?; .persistentVolumeClaim == null and .hostPath == null)
+      and guard_containers == ($wanted | guard_containers)
+      and all(.containers[]; (.args // []) == [] and (.envFrom // []) == []
+        and (.securityContext // {}) == {});
+  '
   restore_expired_guard_uid=
   printf '{"items":[]}\n' > "$work/restore-validated-guard.json"
   kube get job "$name" --ignore-not-found -o json > "$work/restore-expired-guard.json" || return 1
@@ -1067,7 +1093,7 @@ restore_guard_validate_expired() {
   restore_guard_manifest || return 1
   kube get configmap "$name" -o json > "$work/restore-expired-guard-configmap.json" || return 1
   jq -e --arg holder "$backup_id" --arg name "$name" --arg ns "$namespace" \
-    --slurpfile expected "$work/restore-guard.json" '
+    --slurpfile expected "$work/restore-guard.json" "$guard_spec_check"'
     .apiVersion == "batch/v1" and .kind == "Job"
     and .metadata.name == $name and .metadata.namespace == $ns and .metadata.deletionTimestamp == null
     and (.metadata.uid | type == "string" and length > 0)
@@ -1079,17 +1105,8 @@ restore_guard_validate_expired() {
     and ((.status.active // 0) | type == "number" and . >= 0 and . <= 1 and . == floor)
     and .spec.template.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
     and .spec.template.metadata.labels["recipe-db/recovery-guard"] == $holder
-    and (.spec.template.spec as $actual |
-      [$expected[0].items[] | select(.kind == "Job")][0].spec.template.spec as $wanted |
-      $actual.serviceAccountName == $wanted.serviceAccountName
-      and $actual.restartPolicy == $wanted.restartPolicy
-      and ($actual.initContainers // []) == [] and ($actual.ephemeralContainers // []) == []
-      and ($actual.hostNetwork // false) == false and ($actual.hostPID // false) == false
-      and ($actual.hostIPC // false) == false
-      and all($actual.volumes[]?; .persistentVolumeClaim == null and .hostPath == null)
-      and [$actual.containers[] | {name,image,command,env,resources}] == $wanted.containers
-      and all($actual.containers[]; (.args // []) == [] and (.envFrom // []) == []
-        and (.securityContext // {}) == {}))
+    and (.spec.template.spec |
+      matches_guard([$expected[0].items[] | select(.kind == "Job")][0].spec.template.spec))
   ' "$work/restore-expired-guard.json" > /dev/null \
     || production_fail "recovery shutdown guard identity or specification has drifted"
   jq -e --arg holder "$backup_id" --arg name "$name" --arg ns "$namespace" '
@@ -1109,18 +1126,10 @@ restore_guard_validate_expired() {
   kube get pods -o json > "$work/restore-expired-guard-pods.json" || return 1
   restore_workers_terminated "$work/restore-expired-guard-pods.json" "$restore_expired_guard_uid" \
     || production_fail "expired recovery guard cannot be removed before every other worker terminates"
-  jq -e --slurpfile guard "$work/restore-expired-guard.json" '
+  jq -e --slurpfile guard "$work/restore-expired-guard.json" "$guard_spec_check"'
     all(.items[] | select(any(.metadata.ownerReferences[]?; .uid == $guard[0].metadata.uid));
       .kind == "Pod" and .apiVersion == "v1"
-      and .spec.serviceAccountName == $guard[0].spec.template.spec.serviceAccountName
-      and .spec.restartPolicy == $guard[0].spec.template.spec.restartPolicy
-      and (.spec.hostNetwork // false) == false and (.spec.hostPID // false) == false
-      and (.spec.hostIPC // false) == false
-      and all(.spec.volumes[]?; .persistentVolumeClaim == null and .hostPath == null)
-      and [.spec.containers[] | {name,image,command,env,resources}] ==
-        [$guard[0].spec.template.spec.containers[] | {name,image,command,env,resources}]
-      and all(.spec.containers[]; (.args // []) == [] and (.envFrom // []) == []
-        and (.securityContext // {}) == {}))
+      and (.spec | matches_guard($guard[0].spec.template.spec)))
   ' "$work/restore-expired-guard-pods.json" > /dev/null \
     || production_fail "expired recovery shutdown guard Pods have drifted"
   jq --slurpfile guard "$work/restore-expired-guard.json" '

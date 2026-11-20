@@ -95,7 +95,9 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-closeout "
   "$HOLDER" "CLOSEOUT-$HOLDER"
 ```
 
-Success archives the failed release's closed status and transitions its exact Lease to `recovery-ready`, with application access blocked and workloads stopped. The same Lease remains held across the separate reset and restore confirmations, excluding another deployment or backup. Closeout does not erase data or run reset. If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease.
+Success archives the failed release's closed status and transitions its exact Lease to `recovery-ready`, with application access blocked and workloads stopped. The same Lease remains held across the separate reset and restore confirmations, excluding another deployment or backup. Closeout does not erase data or run reset.
+
+If closeout refuses, inspect the stated reason; do not use generic lock recovery or manually remove the Lease. If creating the recovery command claim fails, inspect the Kubernetes error and check both the primary Lease and `recipe-db-recovery-command` before retrying. A rejected request alone does not mean another command is running.
 
 On the Pi, confirm the uploader no longer considers the closed operation active:
 
@@ -128,6 +130,8 @@ mise run production-k3d --release-sources-from-git recovery-plan "$VALUES" "$MAN
 
 The preview verifies the selected backup, its archive hashes and exact immutable release before touching application storage. Review its discard summary: capture time, selected release, current release, newer verified catalog points and any partial-restore warning. Without a catalog, treat newer backups as **unknown**, not absent. A warning that there is no recent verified backup deserves particular attention. Do not proceed if you chose the wrong restore point.
 
+Use the same workstation values file as the preview. For a retained Pi handoff, the reset also checks that those settings match the closeout receipt after applying the provisioning mapping for secret file paths. Stop if the receipt does not match; do not edit the receipt or the values to force a match.
+
 Approve discarding application data with a separate command:
 
 ```fish
@@ -150,7 +154,7 @@ The handoff runs the existing restore pipeline with its own separate `RESTORE-$B
 
 Require restore to finish successfully: it verifies stored data, search readiness, representative reads and change propagation before reopening access. Then check the normal website, recipe images, search, editing and configured sign-in. A reachable home page alone is not acceptance.
 
-Keep the backup timer disabled. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to match the restored release, record a new configuration timestamp and verify a **fresh off-device backup** before schedule re-enable. This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Preserve an intentionally paused schedule.
+Keep the backup timer disabled. Follow [backup-input installation after standalone restore](production-release-cookbook.md#install-backup-inputs-after-a-standalone-restore) to match the restored release, [sync the backup inputs to private dotfiles](production-backup-dotfiles.md), install the inputs and verify a **fresh off-device backup** before schedule re-enable. This recovery is not a new release: do not run release acceptance, publication or retained-release alignment commands against the closed operation. Preserve an intentionally paused schedule.
 
 ## 5. Recover from a failure
 
@@ -158,7 +162,7 @@ A nonzero exit is not partial success. Leave application access blocked, stop th
 
 Choose one action:
 
-- **Reset again:** collect any remaining evidence by hand, then repeat step 3 with the same pinned values and state directory. This discards everything left by the failed attempt. Reset never resumes or merges an import.
+- **Reset again:** collect any remaining evidence by hand, then repeat step 3 with the same pinned values and state directory. If a shutdown guard remains, the reset checks its ownership, runtime settings and expiration, and verifies that all other workers have stopped before removing it. Kubernetes defaults such as omitted empty environment values do not count as changes. Do not remove the guard by hand. Reset discards everything left by the failed attempt. It never resumes or merges an import.
 - **Abandon:** use the separately confirmed abandonment command only after workload isolation and barrier checks. It releases only the exact retained Lease; data stays and access remains blocked. Abandonment does not make storage empty.
 - **Rebuild:** use the [Pi rebuild cookbook](raspberry-pi-rebuild.md) if the host or disk is suspect.
 

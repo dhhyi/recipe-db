@@ -606,30 +606,18 @@ Stop if either update fails. The inventory path matches the `recipe-db-pi` host 
 
 Keep `backup/backup-values.yaml` and the installed private application inputs unchanged during this retained operation. The original configuration hash remains bound to recovery. A release requiring different private values or credentials needs separately planned configuration maintenance; do not bypass the comparison.
 
-Re-add only these already-managed files to chezmoi, resolve their actual source paths (including any private/encrypted filename attributes), and stage them in the private repository:
+In workstation fish, select the managed files and commit message for this release:
 
 ```fish
-chezmoi git -- --no-pager diff --cached --exit-code --stat
-and chezmoi re-add -- ~/.config/recipe-db/backup/backup-release-ref \
-  ~/.config/recipe-db/provisioning/inventory.yml \
-  ~/.config/recipe-db/backup/backup-values.yaml
-and set -g RELEASE_CONFIG_SOURCES (chezmoi source-path -- \
-  ~/.config/recipe-db/backup/backup-release-ref \
-  ~/.config/recipe-db/provisioning/inventory.yml \
-  ~/.config/recipe-db/backup/backup-values.yaml)
-and chezmoi git -- add -- $RELEASE_CONFIG_SOURCES
-and chezmoi git -- --no-pager diff --cached --stat -- $RELEASE_CONFIG_SOURCES
+set -g BACKUP_CONFIG_FILES "$HOME/.config/recipe-db/backup/backup-release-ref" \
+  "$HOME/.config/recipe-db/provisioning/inventory.yml" \
+  "$HOME/.config/recipe-db/backup/backup-values.yaml"
+set -g BACKUP_CONFIG_MESSAGE "Align Recipe DB backup inputs for $RC_TAG"
 ```
 
-The first check stops the batch if the private repository already has staged changes; resolve those separately without automatically unstaging or committing them. Stop if any command fails. Review the changes privately before committing; do not paste private configuration diffs into chat. Then commit only these files and push to the private repository:
+Follow [Sync production backup inputs to dotfiles](production-backup-dotfiles.md), then return here to install the aligned reference.
 
-```fish
-chezmoi git -- commit --only -m "Align Recipe DB backup inputs for $RC_TAG" \
-  -- $RELEASE_CONFIG_SOURCES
-and chezmoi git -- push
-```
-
-`--only` excludes unrelated staged files from this commit. The push also publishes any earlier unpushed commits on the current private branch; review those before pushing. Require both commands to succeed before continuing. This preserves the release state for recovery; it does not itself update the Pi.
+#### Install the aligned release backup reference
 
 On the workstation, open the provisioning devcontainer's SSH-agent Bash shell:
 
@@ -652,7 +640,17 @@ Require a successful play recap. This narrowly scoped operation checks the exact
 
 This branch is for a completed empty-storage restore, not a retained release. Require `maintenanceActive: false` and an unlocked, verified application before changing backup inputs. Do not run `release-backup-align.yml`, release acceptance or publication against an archived operation.
 
-Update the [operator-managed inputs](production-configuration.md#private-workstation-directory): `backup/backup-release-ref` must contain the restored immutable artifact, and the provisioning inventory's `backup_capture_revision` must select the reviewed capture tooling. Keep the application secret inputs and Drive authorization unchanged. Save the private configuration through your normal private-repository workflow.
+Update the [operator-managed inputs](production-configuration.md#private-workstation-directory): `backup/backup-release-ref` must contain the restored immutable artifact, and the provisioning inventory's `backup_capture_revision` must select the reviewed capture tooling. Keep the application secret inputs and Drive authorization unchanged.
+
+In workstation fish, select these two managed files and the restore commit message:
+
+```fish
+set -g BACKUP_CONFIG_FILES "$HOME/.config/recipe-db/backup/backup-release-ref" \
+  "$HOME/.config/recipe-db/provisioning/inventory.yml"
+set -g BACKUP_CONFIG_MESSAGE "Sync Recipe DB backup inputs after restore"
+```
+
+Follow [Sync production backup inputs to dotfiles](production-backup-dotfiles.md), then return here to install them.
 
 From workstation fish, open the provisioning container:
 

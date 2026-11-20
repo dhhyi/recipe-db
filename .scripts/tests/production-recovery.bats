@@ -28,6 +28,72 @@ production_fail() { printf '%s\n' "$*" >&2; exit 1; }
 EOF
 }
 
+command_claim_fixture() {
+  cat >> harness.sh << 'EOF'
+date() {
+  case "$2" in
+    +%s%N) echo 1767225600500000000 ;;
+    +%Y-%m-%dT%H:%M:%SZ) echo 2026-01-01T00:00:00Z ;;
+    +%Y-%m-%dT%H:%M:%S.%6NZ) echo 2026-01-01T00:00:00.500000Z ;;
+    *) return 1 ;;
+  esac
+}
+cluster_operation_lock_kubectl() {
+  case "$1" in
+    get) if [[ -f claim.json ]]; then cat claim.json; fi ;;
+    create|replace)
+      jq -e '.spec.renewTime == "2026-01-01T00:00:00.500000Z"' "$3" >/dev/null || return 1
+      cp "$3" claim.json
+      touch "$1.ok"
+      ;;
+    delete)
+      jq -e '.preconditions == {uid:"claim-1",resourceVersion:"2"}' "$5" >/dev/null || return 1
+      rm claim.json
+      touch delete.ok
+      ;;
+    *) return 1 ;;
+  esac
+}
+EOF
+}
+
+@test "recovery command claim creates and renews a Kubernetes MicroTime timestamp" {
+  command_claim_fixture
+  cat >> harness.sh << 'EOF'
+recovery_command_acquire
+for ((attempt=0; attempt<100; attempt++)); do
+  [[ ! -f replace.ok ]] || break
+  sleep .02
+done
+kill "$recovery_command_pid"
+wait "$recovery_command_pid" || true
+[[ -f create.ok && -f replace.ok ]]
+EOF
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+}
+
+@test "recovery command claim only replaces a MicroTime Lease older than 45 seconds" {
+  command_claim_fixture
+  cat >> harness.sh << 'EOF'
+recovery_command_acquire
+kill "$recovery_command_pid"
+wait "$recovery_command_pid" || true
+EOF
+  jq -n '{metadata:{uid:"claim-1",resourceVersion:"2",labels:{"app.kubernetes.io/part-of":"recipe-db"}},
+    spec:{leaseDurationSeconds:45,renewTime:"2025-12-31T23:59:15.500000Z"}}' > claim.json
+  run bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"another recovery command is active"* ]]
+  [ ! -e delete.ok ]
+  jq '.spec.renewTime = "2025-12-31T23:59:15.499000Z"' claim.json > claim.next
+  mv claim.next claim.json
+  run bash harness.sh
+  [ "$status" -eq 0 ]
+  [ -f delete.ok ]
+  [ -f create.ok ]
+}
+
 state_machine_fixture() {
   export BACKUP_ID=backup-20260101000000-1
   export MANIFEST="$FIXTURE_ROOT/selected.manifest.json" ARCHIVE="$FIXTURE_ROOT/selected.tar.gz"
@@ -462,6 +528,41 @@ EOF
     [[ $output == *"handoff receipt does not match"* ]]
     ! grep -q '^wipe$' "$MOCK_LOG"
   done
+}
+
+@test "Pi reset accepts the provisioned values representation without accepting changed settings" {
+  export HOME="$FIXTURE_ROOT/home"
+  closeout_fixture
+  cat >> harness.sh << 'EOF'
+target=pi
+production_storage_preflight() { :; }
+printf '%s\n' '{
+  "secrets": {
+    "auth-accounts": "/etc/recipe-db/application-inputs/auth-accounts"
+  },
+  "volumes": {
+    "recipes": "1Gi"
+  }
+}' > "$work/config.json"
+recovery_release_closeout "$snapshot" "$BACKUP_ID" "CLOSEOUT-$BACKUP_ID"
+jq -n --arg path "$HOME/.config/recipe-db/deployment/accounts.json" \
+  --arg size "$SIZE" \
+  '{volumes:{recipes:$size},secrets:{"auth-accounts":$path}}' > "$work/config.json"
+recovery_plan "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE"
+recovery_reset "$MANIFEST" "$ARCHIVE" "$BACKUP_ID" "$RECOVERY_STATE" "RESET-$BACKUP_ID"
+EOF
+  run env SIZE=2Gi bash harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"handoff receipt does not match"* ]]
+  run ! grep -q '^wipe$' "$MOCK_LOG"
+  rm -f "$RECOVERY_STATE/restore-state.json" lease.json handoff.json
+  rmdir "$RECOVERY_STATE"
+  jq '.status="recovery-required" | .phase="post-release-backup-failed" | del(.recoveryCloseout)' \
+    state/backup-state.json > state/state.next
+  mv state/state.next state/backup-state.json
+  run env SIZE=1Gi bash harness.sh
+  [ "$status" -eq 0 ]
+  grep -q '^wipe$' "$MOCK_LOG"
 }
 
 @test "Pi reset refuses failed real host-path and filesystem UUID inspection before wipe" {

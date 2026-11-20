@@ -11,19 +11,26 @@ recovery_command_delete() {
     -f "$work/recovery-command-delete.json" > /dev/null
 }
 
+recovery_command_time() {
+  date -u +%Y-%m-%dT%H:%M:%S.%6NZ
+}
+
 # The retained operation Lease is a handoff, not permission for two concurrent
 # commands. A bounded heartbeat claim serializes commands across operator hosts.
 recovery_command_acquire() {
   local parent_pid=$BASHPID holder now
   holder="recovery-$(date -u +%s%N)-$$"
-  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  now=$(recovery_command_time) || return 1
   cluster_operation_lock_kubectl get lease recipe-db-recovery-command --ignore-not-found -o json \
     > "$work/recovery-command.json" || return 1
   if [[ -s $work/recovery-command.json ]]; then
     jq -e --arg now "$now" '
+      def microtime:
+        capture("^(?<second>[0-9T:-]+)\\.(?<fraction>[0-9]{6})Z$")
+        | ((.second + "Z") | fromdateiso8601) + (("0." + .fraction) | tonumber);
       .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
       and .spec.leaseDurationSeconds == 45
-      and ((.spec.renewTime | fromdateiso8601) + 45 < ($now | fromdateiso8601))' \
+      and ((.spec.renewTime | microtime) + 45 < ($now | microtime))' \
       "$work/recovery-command.json" > /dev/null \
       || production_fail "another recovery command is active or its claim is uncertain; wait at least 45 seconds after interruption"
     recovery_command_delete || production_fail "recovery command claim changed; refusing concurrent execution"
@@ -35,7 +42,7 @@ recovery_command_acquire() {
       spec:{holderIdentity:$holder,leaseDurationSeconds:45,renewTime:$now}}' \
     > "$work/recovery-command-create.json"
   cluster_operation_lock_kubectl create -f "$work/recovery-command-create.json" > /dev/null \
-    || production_fail "another recovery command acquired the command claim"
+    || production_fail "could not create the recovery command claim; inspect the Kubernetes error above"
   recovery_command_holder=$holder
   (
     trap - EXIT INT TERM
@@ -45,7 +52,8 @@ recovery_command_acquire() {
           > "$work/recovery-heartbeat.json" \
           && jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' \
             "$work/recovery-heartbeat.json" > /dev/null \
-          && jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.spec.renewTime=$now' \
+          && now=$(recovery_command_time) \
+          && jq --arg now "$now" '.spec.renewTime=$now' \
             "$work/recovery-heartbeat.json" > "$work/recovery-heartbeat-next.json" \
           && cluster_operation_lock_kubectl replace -f "$work/recovery-heartbeat-next.json" > /dev/null
       }; then
@@ -746,6 +754,7 @@ recovery_replace_lease() {
 }
 
 recovery_read_handoff() {
+  local config pi_config=""
   recovery_identity || production_fail "cannot verify recovery handoff cluster and storage identities"
   cluster_operation_lock_kubectl get configmap recipe-db-recovery-handoff --ignore-not-found -o json \
     > "$work/recovery-handoff-configmap.json" || return 1
@@ -753,15 +762,23 @@ recovery_read_handoff() {
     "$work/recovery-handoff-configmap.json" > /dev/null || production_fail "missing owned recovery handoff receipt"
   jq -er '.data["handoff.json"]' "$work/recovery-handoff-configmap.json" > "$work/recovery-handoff.json" \
     || production_fail "missing recovery handoff receipt"
+  config=$(sha256sum "$work/config.json" | cut -d ' ' -f 1)
+  if [[ $target == pi ]]; then
+    # backup-configure.yml writes sorted values with host-local application input paths.
+    pi_config=$(jq -eS '.secrets |= with_entries(.value = ("/etc/recipe-db/application-inputs/" + .key))' \
+      "$work/config.json" | sha256sum | cut -d ' ' -f 1) \
+      || production_fail "cannot derive provisioned Pi recovery configuration identity"
+  fi
   jq -e --argjson lease "$1" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg ns "$namespace" \
-    --arg config "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    --arg config "$config" --arg piConfig "$pi_config" \
     --slurpfile identity "$work/reset-identity.json" '
     .version == 1 and .ownershipRetained == true and .ownershipReleased == false
     and .barrierVerified == true and .workersStopped == true
     and .target == $target and .cluster == $cluster and .context == $context
-    and .namespace == $ns and .configSha256 == $config
-    and .identity == $identity[0]
+    and .namespace == $ns
+    and (.configSha256 == $config or ($piConfig != "" and .configSha256 == $piConfig))
+    and .identity == ($identity[0] + {configSha256:.configSha256})
     and .holder == $lease.spec.holderIdentity and .leaseUid == $lease.metadata.uid
     and .artifact == $lease.metadata.annotations["recipe-db/release"]
     and $lease.metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"

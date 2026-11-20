@@ -226,6 +226,50 @@ EOF
   grep -q 'guard or heartbeat lost; terminating' work/restore-guard-heartbeat.log
 }
 
+@test "recovery guard never starts before both namespaces accept its prerequisites" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  printf '{}\n' > work/restore-barrier-routes.json
+  cat > install-guard.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work=$FIXTURE_ROOT/work
+namespace=fixture backup_id=backup-1 timeout=2
+restore_operation_lease_uid=lease-1
+production_fail() { exit 1; }
+kube() {
+  local ns=$namespace file
+  if [[ $1 == --namespace ]]; then ns=$2; shift 2; fi
+  case "$1 $2" in
+    'get rolebinding/'* | 'get job') return 0 ;;
+    'apply -f')
+      file=$3
+      jq -e --arg ns "$ns" '
+        if .kind == "List" then all(.items[]; .metadata.namespace == $ns)
+        else .metadata.namespace == $ns end' "$file" >/dev/null || return 1
+      printf '%s:%s\n' "$ns" "${file##*/}" >> "$MOCK_LOG"
+      [[ $ns != "$REJECT_NAMESPACE" ]] || return 1
+      if [[ ${file##*/} == restore-guard-job.json ]]; then return 42; fi
+      ;;
+    *) return 1 ;;
+  esac
+}
+restore_guard_start
+EOF
+  run env REJECT_NAMESPACE=kube-system bash install-guard.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = 'kube-system:restore-guard-system.json' ]
+  : > "$MOCK_LOG"
+  run env REJECT_NAMESPACE=fixture bash install-guard.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = $'kube-system:restore-guard-system.json\nfixture:restore-guard-prerequisites.json' ]
+  : > "$MOCK_LOG"
+  run env REJECT_NAMESPACE=none bash install-guard.sh
+  [ "$status" -ne 0 ]
+  [ "$(cat "$MOCK_LOG")" = $'kube-system:restore-guard-system.json\nfixture:restore-guard-prerequisites.json\nfixture:restore-guard-job.json' ]
+}
+
 @test "guard rereads a rotating token and acknowledges only the client pulse" {
   printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
   printf '[]\n' > work/prior-workloads.json
@@ -269,6 +313,54 @@ EOF
   grep -q 'Authorization: Bearer rotated-token' "$MOCK_LOG"
   grep -q '"observedPulse":"initial"' "$MOCK_LOG"
   run ! grep -q '"observedPulse":"different"' "$MOCK_LOG"
+}
+
+@test "expired guard accepts API defaults but refuses altered runtime identity" {
+  printf '{"infrastructure":{"maintenance":"fixture-image"},"volumes":{}}\n' > work/config.json
+  printf '[]\n' > work/prior-workloads.json
+  cat > validate-expired.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work=$FIXTURE_ROOT/work
+namespace=fixture backup_id=backup-1
+production_fail() { printf '%s\n' "$*" >&2; exit 1; }
+restore_guard_manifest
+jq '.items[] | select(.kind=="Job") | .metadata += {uid:"guard-uid",resourceVersion:"1"}
+    | .status.active=1
+    | .spec.template.spec.containers[].env[] |=
+        (if .value=="" then del(.value) else . end)' "$work/restore-guard.json" > job.json
+jq '.items[] | select(.kind=="ConfigMap") | .data={ready:"true",expired:"true"}' \
+  "$work/restore-guard.json" > configmap.json
+jq '{items:[{kind:"Pod",apiVersion:"v1",metadata:(.spec.template.metadata +
+    {uid:"pod-uid",namespace:.metadata.namespace,ownerReferences:[
+      {apiVersion:"batch/v1",kind:"Job",name:.metadata.name,uid:.metadata.uid,controller:true}]}),
+    spec:(.spec.template.spec | .containers[0].resources.requests.cpu="20m")}]}' \
+    job.json > pods.json
+jq "$JOB_CHANGE" job.json > actual-job.json
+jq "$POD_CHANGE" pods.json > actual-pods.json
+kube() {
+  case "$2" in
+    job) cat actual-job.json ;;
+    configmap) cat configmap.json ;;
+    deployments) echo '{"items":[]}' ;;
+    pods) cat actual-pods.json ;;
+    *) return 1 ;;
+  esac
+}
+restore_guard_validate_expired
+[[ $restore_expired_guard_uid == guard-uid ]]
+EOF
+  run env JOB_CHANGE=. POD_CHANGE=. bash validate-expired.sh
+  [ "$status" -eq 0 ]
+  run env JOB_CHANGE='.spec.template.spec.containers[0].image="other"' POD_CHANGE=. \
+    bash validate-expired.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"guard identity or specification has drifted"* ]]
+  run env JOB_CHANGE=. POD_CHANGE='.items[0].spec.containers[0].env[0].value="other"' \
+    bash validate-expired.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"guard Pods have drifted"* ]]
 }
 
 @test "active but unresponsive guard terminates the live client" {
