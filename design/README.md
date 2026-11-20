@@ -12,9 +12,7 @@ Story `play` functions run automatically when a story opens, including in the pu
 
 Run Design's local browser tests with `mise run --raw in-devcontainer design test`. The command runs Storybook story-render smoke tests and assertion-only `play` functions, plus standalone Vitest Browser interaction and visual tests. It does not require the shared application stack and is run in CI, not pre-commit. The Vitest addon is configured for the test command only; the normal static Storybook does not include its test-running UI.
 
-The full test command took 16.6 seconds in the warmed devcontainer, including cached browser and system-dependency checks. The first run may take longer while Chromium, Linux dependencies, and fonts are provisioned.
-
-Rating hover, vote, and static-click interaction checks, and the shared header's sticky visibility, scroll thresholds, resize/orientation, focus, and reduced-motion checks live in separate Vitest Browser tests. The carousel story's GraphQL preview is served by a deterministic in-test fixture; unexpected fetches fail the Storybook test rather than reaching an application service. Keep app-specific header wiring and representative assembled-page screenshots in E2E, where they protect a distinct integration boundary.
+Use deterministic, isolated fixtures for data-fetching stories; unexpected requests should fail closed rather than reach application services. Keep app-specific header wiring and representative assembled-page screenshots in E2E, where they protect a distinct integration boundary.
 
 Header visual tests capture only the header element in the logged-out and logged-in stories at mobile (390×844), mobile landscape (844×390), dark touch tablet (768×1024), and desktop (1280×900). These eight local Chromium baselines are tracked by Git LFS. Browser binaries, Linux dependencies, and fonts are provisioned by the test command; no screenshot cloud is used. The visual-viewport resize case dispatches a synthetic resize with a controlled height, matching the prior E2E test's boundary rather than emulating an operating-system keyboard or zoom.
 
