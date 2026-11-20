@@ -266,6 +266,7 @@ For a selected historical restore point, first inspect the complete remote point
 ```fish
 mise run --raw retrieve-verified-backup --catalog
 set -l BACKUP_ID '<exact-backupId-from-catalog>'
+mkdir -p "$HOME/.local/share/recipe-db/rehearsals"
 and mise run --raw retrieve-verified-backup --backup-id "$BACKUP_ID" \
   "$HOME/.local/share/recipe-db/rehearsals/backup-$BACKUP_ID"
 ```
