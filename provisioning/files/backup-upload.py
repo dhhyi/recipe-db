@@ -780,10 +780,12 @@ def verify_baseline(config, baseline, names):
 
 def complete_remote_points(config, names, catalog=None, backup_id=None, verify_archive=True):
     points = []
+    requested_backup_id = backup_id
     prefix = f"recipe-db-{config['deploymentId']}-"
     for name in sorted(names):
         if not name.startswith(prefix) or not name.endswith(".manifest.json") \
-                or (backup_id is not None and remote_point_backup_id(config, name) != backup_id):
+                or (requested_backup_id is not None
+                    and remote_point_backup_id(config, name) != requested_backup_id):
             continue
         document = read_remote_manifest(config, name)
         if not isinstance(document, dict) or document.get("format") != PACKAGE_FORMAT \
