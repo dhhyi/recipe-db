@@ -84,6 +84,14 @@ EOF
   setup_graphql
   setup_search
   setup_tags
+  mkdir images
+  cat > images/.project.yaml << 'EOF'
+devcontainer:
+  ports: [8000]
+traefik: {}
+---
+category: backend
+EOF
 }
 
 setup_browse() {
@@ -284,6 +292,8 @@ assert_compose() {
       and (.value.build | has("cache_to") | not))
     and .volumes["nats-data"].name == "recipe-db-nats-data"
     and (.volumes | has("oauth2-sessions-data") | not)
+    and .volumes["images-data"] == {}
+    and .services.images.volumes == [{type:"volume",source:"images-data",target:"/data",volume:{nocopy:true}}]
     and .volumes["tags-data"].name == "recipe-db-tags-data"
     and .services.tags.environment.MODE == "testing"
     and (.services.tags.environment | has("PRODUCTION") | not)

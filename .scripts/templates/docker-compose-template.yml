@@ -56,6 +56,9 @@
 #@       "typesense": {"condition": "service_started"},
 #@     })
 #@   end
+#@   if "images" in services:
+#@     services["images"]["volumes"] = [{"type": "volume", "source": "images-data", "target": "/data", "volume": {"nocopy": True}}]
+#@   end
 #@   if "tags" in services:
 #@     services["tags"]["volumes"] = ["tags-data:/data"]
 #@     if "tags-test" in services:
@@ -179,6 +182,9 @@ volumes:
     name: recipe-db-typesense-data
   search-data:
     name: recipe-db-search-data
+  #@ end
+  #@ if len([p for p in deploy_projects if p.name == "images"]) > 0:
+  images-data: {}
   #@ end
   #@ if len([p for p in deploy_projects if p.name == "tags"]) > 0:
   tags-data:

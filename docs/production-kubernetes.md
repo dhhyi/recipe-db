@@ -95,6 +95,16 @@ Archive format versions do not describe service data versions, and removing migr
 
 Services enforce the storage version declared in `.project.yaml` using a `storage-version` marker. The one-time version-1 initialization and first versioned production backup are complete under [#260: Establish version 1 and verify the first versioned production backup](https://github.com/dhhyi/recipe-db/issues/260). Existing unversioned production storage must not be used with these builds: startup fails closed, with no deployment-time bypass. Subsequent storage-format changes use the sequential migration lifecycle in [#262: Discover and execute release migrations sequentially](https://github.com/dhhyi/recipe-db/issues/262).
 
+### Recover an unused Images volume seeded by an older build
+
+Use this procedure only for an unmarked volume that never held any images. Do not remove a marker, non-empty directory, or any other entry to make startup pass.
+
+1. Stop Images and wait until nothing else is using its volume. For development Compose, run `docker compose stop images` from the workstation checkout. In Kubernetes, scale the `images` Deployment to zero in the intended context and namespace and wait for its Pods to terminate. Do not bypass an active production maintenance operation.
+2. Mount the exact Images volume at `/data` in a temporary maintenance container with shell tools. In Compose, identify the volume from the stopped container's `/data` mount (`docker inspect images`); in Kubernetes, mount the `images` PVC from the same namespace in a temporary Pod. Start with a read-only mount for inspection.
+3. In the maintenance container, run `find /data -mindepth 1`. The only output may be `/data/public`, `/data/manifests`, or both. Use `ls -ld` on each listed path to confirm it is a directory, not a symlink. If you see a marker, any other path (including hidden entries or children), or an inspection error, stop without making changes.
+4. With the same volume mounted read-write and Images still stopped, run `rmdir /data/public` and/or `rmdir /data/manifests` for only the directories confirmed above. Do not use a recursive delete. If `rmdir` fails, stop and investigate. Confirm `find /data -mindepth 1` now produces no output and no error.
+5. Remove the maintenance container or Pod before restarting Images. In Compose, run `docker compose up -d images`; in Kubernetes, restore the Deployment's previous replica count and wait for readiness. Images should become healthy and publish a new marker itself.
+
 Detailed findings and delivery ownership are tracked in [#143: Define a release process with better gates](https://github.com/dhhyi/recipe-db/issues/143) and [#246: Inventory the current release process and start the release cookbook](https://github.com/dhhyi/recipe-db/issues/246), rather than repeated here.
 
 ## Prerequisites and boundaries
