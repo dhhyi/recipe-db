@@ -74,6 +74,10 @@ if ((${#projects[@]} == 0)); then
   exit 0
 fi
 
+HOST_UID=$(id -u)
+HOST_GID=$(id -g)
+export HOST_UID HOST_GID
+
 compose_config=$(docker compose --profile test config --format json)
 if ! jq -e '
   .services.traefik.ports // []

@@ -5,7 +5,12 @@ printf 'docker %s\n' "$*" >> "$MOCK_LOG"
 [[ "$1 $2 $3" == "compose --profile test" ]] || exit 99
 shift 3
 case "$1" in
-  config) cat "$COMPOSE_CONFIG" ;;
+  config)
+    if [[ ${ASSERT_HOST_IDENTITY:-false} == true ]]; then
+      [[ ${HOST_UID:-} == "$(id -u)" && ${HOST_GID:-} == "$(id -g)" ]] || exit 97
+    fi
+    cat "$COMPOSE_CONFIG"
+    ;;
   build) exit "${BUILD_STATUS:-0}" ;;
   ps) printf '%s' "${RUNNING_FIXTURES:-}" ;;
   up) exit "${UP_STATUS:-0}" ;;

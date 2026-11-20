@@ -180,6 +180,14 @@ EOF
   done
 }
 
+@test "runs test services with the host uid and gid for writable target mounts" {
+  run env ASSERT_HOST_IDENTITY=true \
+    bash .scripts/run-integration-tests.sh --development recipes-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
+}
+
 @test "each integration project runs its own declared script" {
   for project in alpha-test zeta-test; do
     add_test_project "$project"
