@@ -695,12 +695,12 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   multiImageRecipe,
 }) => {
   const [first, second] = multiImageRecipe.images;
-  const releaseMutation = Promise.withResolvers();
+  const releaseMutations = [Promise.withResolvers(), Promise.withResolvers()];
   const reorderRequests = [];
   await page.route("**/graphql", async (route) => {
     if (isImageReorder(route.request())) {
       reorderRequests.push(route.request());
-      await releaseMutation.promise;
+      await releaseMutations[reorderRequests.length - 1].promise;
     }
     await route.fallback();
   });
@@ -797,7 +797,7 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await moveUp.click({ force: true });
   expect(reorderRequests).toHaveLength(1);
 
-  releaseMutation.resolve();
+  releaseMutations[0].resolve();
   const response = await responsePromise;
   const result = await response.json();
   expect(result.data.reorderImages.map((image) => image.id)).toEqual([
@@ -824,9 +824,10 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   const downResponsePromise = page.waitForResponse((response) =>
     isImageReorder(response.request()),
   );
+  const downRequestPromise = page.waitForRequest(isImageReorder);
   await moveDown.click();
-  const downResponse = await downResponsePromise;
-  expect(downResponse.request().postDataJSON().variables).toEqual({
+  const downRequest = await downRequestPromise;
+  expect(downRequest.postDataJSON().variables).toEqual({
     recipeId: multiImageRecipe.id,
     imageIds: [first.id, second.id],
   });
@@ -838,6 +839,8 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
     "src",
     first.thumbUrl,
   );
+  releaseMutations[1].resolve();
+  await downResponsePromise;
   await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
     "src",
     first.thumbUrl,
