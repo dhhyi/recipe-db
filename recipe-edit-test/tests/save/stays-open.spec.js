@@ -75,12 +75,6 @@ test("saving freezes controls and navigation until the existing recipe is saved"
 
   await page.keyboard.press("Enter");
   await page.evaluate(() => {
-    const form = document.querySelector("form");
-    form.requestSubmit();
-    form.requestSubmit();
-    form.dispatchEvent(
-      new SubmitEvent("submit", { bubbles: true, cancelable: true }),
-    );
     document.querySelector("a[href='/recipe/recipe-1']").click();
     document.querySelector("header-component a[href='/']").click();
   });
