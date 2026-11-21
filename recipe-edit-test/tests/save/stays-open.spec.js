@@ -62,6 +62,16 @@ test("saving freezes controls and navigation until the existing recipe is saved"
   await expect(header).toHaveAttribute("inert", "");
   await expect(header.locator("a[href='/']")).toHaveCount(1);
 
+  const dialogs = [];
+  page.on("dialog", (dialog) => dialogs.push(dialog.type()));
+  const dialogPromise = page.waitForEvent("dialog");
+  const reload = page.evaluate(() => window.location.reload());
+  const dialog = await dialogPromise;
+  expect(dialog.type()).toBe("beforeunload");
+  await dialog.dismiss();
+  await reload;
+  await expect(page).toHaveURL("/edit/recipe-1");
+
   await page.keyboard.press("Enter");
   await page.evaluate(() => {
     const form = document.querySelector("form");
@@ -83,5 +93,6 @@ test("saving freezes controls and navigation until the existing recipe is saved"
   await expect(save).toBeDisabled();
   await expect(page.locator("main[aria-busy]")).toHaveCount(0);
   await expect(header).not.toHaveAttribute("inert");
+  expect(dialogs).toEqual(["beforeunload"]);
   expect(updateCount).toBe(1);
 });

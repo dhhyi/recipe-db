@@ -258,40 +258,6 @@ test("beforeunload prompts when dirty and is removed after returning to clean", 
   expect(dialogCount).toBe(0);
 });
 
-test("beforeunload guard is active while save is pending", async ({
-  page,
-  demoRecipe,
-}) => {
-  const started = deferred();
-  const release = deferred();
-
-  await page.route("**/graphql", async (route) => {
-    if (requestIsOperation(route.request(), "UpdateRecipe", "updateRecipe")) {
-      started.resolve();
-      await release.promise;
-    }
-    await route.fallback();
-  });
-
-  try {
-    await page.goto(`/edit/${demoRecipe.id}`);
-    await waitForEditorForm(page);
-    await nameField(page).fill(`${demoRecipe.name} pending-unload`);
-    const saveClick = saveButton(page).click();
-    await started.promise;
-
-    await runBeforeUnloadAndDismissOnce(page, () =>
-      page.evaluate(() => window.location.reload()),
-    );
-
-    release.resolve();
-    await saveClick;
-    await expect(successStatus(page)).toBeVisible();
-  } finally {
-    release.resolve();
-  }
-});
-
 test("guard preserves modified/newtab/download/hash link behaviors", async ({
   page,
   demoRecipe,
