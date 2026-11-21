@@ -252,6 +252,20 @@ galleryTests =
         pendingMove =
             apply (MoveImage "opaque/2" Editor.MoveUp) threeImages
 
+        middleDownMove : Editor.Model
+        middleDownMove =
+            apply (MoveImage "opaque/2" Editor.MoveDown) threeImages
+
+        middleDownWriteCompleted : Editor.Model
+        middleDownWriteCompleted =
+            apply (Reordered middleDownMove.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) middleDownMove
+
+        middleDownReconciled : Editor.Model
+        middleDownReconciled =
+            apply
+                (GotRecipe middleDownWriteCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })))
+                middleDownWriteCompleted
+
         moveWriteCompleted : Editor.Model
         moveWriteCompleted =
             apply (Reordered pendingMove.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) pendingMove
@@ -405,6 +419,12 @@ galleryTests =
             && not (Editor.canDelete pendingMove "opaque/1")
             && not (Editor.canMove pendingMove "opaque/2" Editor.MoveDown)
       )
+    , ( "middle Down swaps only its adjacent neighbor and preserves membership"
+      , currentIds middleDownReconciled
+            == [ "opaque/1", "opaque/3", "opaque/2" ]
+            && middleDownReconciled.galleryMutation
+            == Nothing
+      )
     , ( "confirmed move reloads authoritative order and announces default change"
       , currentIds movedReconciled
             == [ "opaque/2", "opaque/1", "opaque/3" ]
@@ -556,15 +576,39 @@ currentIds model =
 reorderResponseTests : List ( String, Bool )
 reorderResponseTests =
     [ ( "complete reorder metadata confirms the write"
-      , RecipeDB.decodeReorderImages """{"data":{"reorderImages":[{"id":"opaque/id","url":"/full","thumbUrl":"/thumb","size":12,"width":648,"height":486}]}}"""
+      , RecipeDB.decodeReorderImages [ "opaque/id" ] """{"data":{"reorderImages":[{"id":"opaque/id","url":"/full","thumbUrl":"/thumb","size":12,"width":648,"height":486}]}}"""
             == Ok RecipeDB.ReorderConfirmed
       )
     , ( "backend membership conflict remains an explicit rejection"
-      , RecipeDB.decodeReorderImages """{"errors":[{"message":"Image collection changed","extensions":{"code":"image-order-conflict"}}]}"""
+      , RecipeDB.decodeReorderImages [ "opaque/id" ] """{"errors":[{"message":"Image collection changed","extensions":{"code":"image-order-conflict"}}]}"""
             == Ok (RecipeDB.ReorderRejected "Die Bildreihenfolge wurde zwischenzeitlich geändert. Der aktuelle Stand wird neu geladen.")
       )
     , ( "malformed reorder response cannot confirm success"
-      , case RecipeDB.decodeReorderImages """{"data":{"reorderImages":[{"id":"opaque/id"}]}}""" of
+      , case RecipeDB.decodeReorderImages [ "opaque/id" ] """{"data":{"reorderImages":[{"id":"opaque/id"}]}}""" of
+            Err _ ->
+                True
+
+            _ ->
+                False
+      )
+    , ( "empty reorder response cannot confirm a non-empty request"
+      , case RecipeDB.decodeReorderImages [ "opaque/1", "opaque/2" ] """{"data":{"reorderImages":[]}}""" of
+            Err _ ->
+                True
+
+            _ ->
+                False
+      )
+    , ( "reorder response must preserve the requested order of opaque IDs"
+      , case RecipeDB.decodeReorderImages [ "opaque/1", "opaque/2" ] """{"data":{"reorderImages":[{"id":"opaque/2","url":"/full","thumbUrl":"/thumb","size":12,"width":648,"height":486},{"id":"opaque/1","url":"/full","thumbUrl":"/thumb","size":12,"width":648,"height":486}]}}""" of
+            Err _ ->
+                True
+
+            _ ->
+                False
+      )
+    , ( "malformed GraphQL errors cannot confirm a reorder response"
+      , case RecipeDB.decodeReorderImages [ "opaque/id" ] """{"errors":null,"data":{"reorderImages":[{"id":"opaque/id","url":"/full","thumbUrl":"/thumb","size":12,"width":648,"height":486}]}}""" of
             Err _ ->
                 True
 

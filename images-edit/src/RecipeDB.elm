@@ -276,7 +276,7 @@ makeReorderImagesRequest recipeId imageIds targetMsg =
                 (\result ->
                     (case result of
                         Ok payload ->
-                            decodeReorderImages payload
+                            decodeReorderImages imageIds payload
 
                         Err error ->
                             reorderTransportError error
@@ -300,33 +300,55 @@ reorderTransportError error =
             Ok (ReorderUnconfirmed "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.")
 
 
-decodeReorderImages : String -> Result String ReorderResult
-decodeReorderImages body =
+decodeReorderImages : List String -> String -> Result String ReorderResult
+decodeReorderImages imageIds body =
     Decode.decodeString Decode.value body
         |> Result.mapError (\_ -> "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.")
-        |> Result.andThen decodeReorderResponse
+        |> Result.andThen (decodeReorderResponse imageIds)
 
 
-decodeReorderResponse : Decode.Value -> Result String ReorderResult
-decodeReorderResponse value =
-    case Decode.decodeValue (field "errors" (Decode.list Decode.value)) value of
-        Ok (first :: _) ->
-            Ok (reorderGraphQLError first)
+decodeReorderResponse : List String -> Decode.Value -> Result String ReorderResult
+decodeReorderResponse imageIds value =
+    case Decode.decodeValue (field "errors" Decode.value) value of
+        Ok errors ->
+            case Decode.decodeValue (Decode.list Decode.value) errors of
+                Ok (first :: _) ->
+                    Ok (reorderGraphQLError first)
 
-        _ ->
-            Decode.decodeValue (field "data" (field "reorderImages" reorderMetadata)) value
-                |> Result.map (always ReorderConfirmed)
-                |> Result.mapError
-                    (\_ ->
-                        "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen."
-                    )
+                Ok [] ->
+                    decodeReorderSuccess imageIds value
+
+                Err _ ->
+                    reorderResponseUnconfirmed
+
+        Err _ ->
+            decodeReorderSuccess imageIds value
 
 
-reorderMetadata : Decode.Decoder (List ())
+decodeReorderSuccess : List String -> Decode.Value -> Result String ReorderResult
+decodeReorderSuccess imageIds value =
+    Decode.decodeValue (field "data" (field "reorderImages" reorderMetadata)) value
+        |> Result.mapError (\_ -> "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.")
+        |> Result.andThen
+            (\returnedIds ->
+                if returnedIds == imageIds then
+                    Ok ReorderConfirmed
+
+                else
+                    reorderResponseUnconfirmed
+            )
+
+
+reorderResponseUnconfirmed : Result String ReorderResult
+reorderResponseUnconfirmed =
+    Err "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen."
+
+
+reorderMetadata : Decode.Decoder (List String)
 reorderMetadata =
     Decode.list
         (Decode.map6
-            (\_ _ _ _ _ _ -> ())
+            (\id _ _ _ _ _ -> id)
             (field "id" string)
             (field "url" string)
             (field "thumbUrl" string)

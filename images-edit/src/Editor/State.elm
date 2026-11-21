@@ -757,7 +757,6 @@ focusAfterReordering model mutation movement =
                  )
                     ++ mutation.imageId
                 )
-
     in
     if canMove model mutation.imageId movement.direction then
         focusDirection movement.direction
