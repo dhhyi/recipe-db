@@ -758,23 +758,26 @@ focusAfterReordering model mutation movement =
                     ++ mutation.imageId
                 )
 
-        opposite : MoveDirection
-        opposite =
-            case movement.direction of
-                MoveUp ->
-                    MoveDown
-
-                MoveDown ->
-                    MoveUp
     in
     if canMove model mutation.imageId movement.direction then
         focusDirection movement.direction
 
-    else if canMove model mutation.imageId opposite then
-        focusDirection opposite
-
     else
-        focus ("gallery-image-" ++ mutation.imageId)
+        let
+            opposite : MoveDirection
+            opposite =
+                case movement.direction of
+                    MoveUp ->
+                        MoveDown
+
+                    MoveDown ->
+                        MoveUp
+        in
+        if canMove model mutation.imageId opposite then
+            focusDirection opposite
+
+        else
+            focus ("gallery-image-" ++ mutation.imageId)
 
 
 galleryFeedbackAfterRead : Model -> Maybe String -> RecipeDB.RecipeModel -> Maybe GalleryFeedback
