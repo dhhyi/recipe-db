@@ -4,8 +4,9 @@ ARG PLAYWRIGHT_VERSION
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN npm install -g pnpm@12.6.0 playwright@${PLAYWRIGHT_VERSION}
 WORKDIR /app
+RUN playwright install --with-deps chromium
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium && chmod -R a+rX /app /ms-playwright
+RUN pnpm install --frozen-lockfile && local_version="$(pnpm exec playwright --version)" && global_version="$(playwright --version)" && printf 'Playwright versions must match: project=%s, global=%s\n' "$local_version" "$global_version" && test "$local_version" = "$global_version" && chmod -R a+rX /app /ms-playwright
 COPY playwright.config.js ./
 COPY screenshot.css ./
 COPY tests ./tests
