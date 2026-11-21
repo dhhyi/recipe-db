@@ -66,38 +66,46 @@ setup() {
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
   project_metadata_to_jsonl() {
-    if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+    if [[ ${MOCK_HISTORICAL_STORAGE_VERSION:-false} == true ]]; then
       cat << 'JSONL' > "$2"
-{"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":3}}
-{"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":2}}
-{"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
-{"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-{"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":2}}
+{"name":"recipes","backupRole":"authoritative-read-only","storageVersion":{"value":3}}
+{"name":"images","backupRole":"authoritative-read-only","storageVersion":2}
+{"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"tags","backupRole":"cleanup-participant","storageVersion":2}
+JSONL
+    elif [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+      cat << 'JSONL' > "$2"
+{"name":"recipes","backupRole":"authoritative-read-only","storageVersion":3}
+{"name":"images","backupRole":"authoritative-read-only","storageVersion":2}
+{"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"tags","backupRole":"cleanup-participant","storageVersion":2}
 JSONL
     elif [[ $MOCK_MIGRATIONS == true ]]; then
       cat << 'JSONL' > "$2"
-  {"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":2}}
-  {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+  {"name":"recipes","backupRole":"authoritative-read-only","storageVersion":1}
+  {"name":"images","backupRole":"authoritative-read-only","storageVersion":2}
+  {"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"tags","backupRole":"cleanup-participant","storageVersion":1}
 JSONL
     else
       cat << 'JSONL' > "$2"
-  {"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"images","backupRole":"cleanup-participant","backupData":{"kind":"images"},"storageVersion":{"value":1}}
-  {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+  {"name":"recipes","backupRole":"authoritative-read-only","storageVersion":1}
+  {"name":"images","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"tags","backupRole":"cleanup-participant","storageVersion":1}
 JSONL
     fi
   }
 application_project_metadata_to_jsonl() {
   if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true || $MOCK_RESTORE = true ]]; then
     printf '%s\n' \
-      '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"devcontainer":{"ports":[8081],"environment":{}}}' \
-      '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"backupData":{"kind":"images"},"devcontainer":{"ports":[8082],"environment":{}}}' \
-      '{"name":"tags","category":"backend","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"devcontainer":{"ports":[8090],"environment":{}}}' \
+      '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","storageVersion":1,"devcontainer":{"ports":[8081],"environment":{}}}' \
+      '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"storageVersion":1,"devcontainer":{"ports":[8082],"environment":{}}}' \
+      '{"name":"tags","category":"backend","backupRole":"cleanup-participant","storageVersion":1,"devcontainer":{"ports":[8090],"environment":{}}}' \
       '{"name":"search","category":"backend","backupRole":"derived-stateless","devcontainer":{"ports":[3000],"environment":{}}}' \
       '{"name":"browse","category":"frontend","devcontainer":{"ports":[3000],"environment":{}}}' \
       > "$2"

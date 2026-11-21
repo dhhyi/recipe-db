@@ -98,6 +98,7 @@ load_scenario_functions() {
   local function_name
   : > "$FIXTURE_ROOT/scenario-functions.sh"
   for function_name in validate_release_inventory backup_storage_versions_from_manifest \
+    source_storage_versions_from_projects \
     rehearsal_cluster_name \
     deployed_release_images_match_inventory \
     workload_image_inventory_matches_rendered verify_sample \
@@ -198,7 +199,7 @@ load_scenario_functions() {
   python3 - "$work/fixture" "$candidate" "$candidate_revision" << 'PY'
 import hashlib, io, json, pathlib, sys, tarfile
 root = pathlib.Path(sys.argv[1])
-contents = {"recipes.sqlite3": b"data", "storage-version": b"2\n"}
+contents = {"nested/opaque.data": b"data", "storage-version": b"2\n"}
 entries = []
 with tarfile.open(root / "recipes.tar", "w") as archive:
     for name, data in sorted(contents.items()):
@@ -304,7 +305,7 @@ SH
     snapshotManifest:{inventory:[
       {service:"recipes",files:[
         {path:"storage-version",storageVersion:2},
-        {path:"recipes.sqlite3"}
+        {path:"nested/opaque.data"}
       ]},
       {service:"images",files:[
         {path:"storage-version",storageVersion:1}
@@ -315,6 +316,27 @@ SH
 
   versions=$(backup_storage_versions_from_manifest "$manifest")
   [ "$versions" = '[{"service":"images","version":1},{"service":"recipes","version":2}]' ]
+}
+
+@test "historical source storage versions compare to actual backup markers" {
+  local projects="$FIXTURE_ROOT/source-projects.jsonl"
+  local manifest="$FIXTURE_ROOT/package.manifest.json" required actual
+  load_scenario_functions
+  cat > "$projects" << 'JSONL'
+{"name":"recipes","storageVersion":{"value":2}}
+{"name":"images","storageVersion":1}
+JSONL
+  jq -n '{
+    backupId:"backup-123-456",
+    snapshotManifest:{inventory:[
+      {service:"recipes",files:[{path:"storage-version",storageVersion:2}]},
+      {service:"images",files:[{path:"storage-version",storageVersion:1}]}
+    ]}
+  }' > "$manifest"
+
+  required=$(source_storage_versions_from_projects "$projects")
+  actual=$(backup_storage_versions_from_manifest "$manifest")
+  [ "$required" = "$actual" ]
 }
 
 @test "isolated rehearsal cluster names fit k3d limits and remain suffix-distinct" {

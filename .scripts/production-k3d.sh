@@ -613,7 +613,7 @@ backup_wait_selected_pvcs_unmounted() {
 }
 
 backup_role_inventory() {
-  local project name role pvc layout storage
+  local project name role pvc storage
   local authoritative=0 participants=0
   : > "$work/backup-pvcs.jsonl"
   while IFS= read -r project; do
@@ -626,11 +626,6 @@ backup_role_inventory() {
       *) production_fail "unclassified backup service: $name" ;;
     esac
     [[ $role != authoritative-read-only && $role != cleanup-participant ]] && continue
-    layout=$(jq -ce '.backupData | select(
-      (.kind == "images" and keys == ["kind"]) or
-      ((.kind == "sqlite" or .kind == "json") and keys == ["file","kind"]
-        and (.file | test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))))' <<< "$project") \
-      || production_fail "backup service has no classified authoritative layout: $name"
     jq -e --arg name "$name" '.volumes | has($name)' "$work/config.json" > /dev/null \
       || production_fail "backup service has no configured PVC: $name"
     pvc=$name
@@ -671,8 +666,8 @@ backup_role_inventory() {
     ' "$work/deployment.json" > /dev/null \
       || production_fail "backup workload does not mount its own PVC at /data: $name"
     jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
-      --argjson layout "$layout" --argjson storage "$storage" \
-      '{name:$name,role:$role,pvc:$pvc,layout:$layout,storage:$storage}' \
+      --argjson storage "$storage" \
+      '{name:$name,role:$role,pvc:$pvc,storage:$storage}' \
       >> "$work/backup-pvcs.jsonl"
   done < <(jq -c 'select(.category == "backend" or .category == "api")' "$work/projects.jsonl")
   [[ $authoritative = 1 && $participants -gt 0 ]] \
@@ -901,7 +896,7 @@ backup_start_modes() {
 }
 
 backup_copy_pvc() {
-  local name=$1 pvc=$2 role=$3 layout=$4 pod archive size sha files storage
+  local name=$1 pvc=$2 role=$3 pod archive size sha files storage
   local helper_command="trap 'exit 0' TERM QUIT; while :; do sleep 1; done"
   storage=$(jq -ce --arg name "$name" 'select(.name == $name) | .storage' \
     "$work/backup-pvcs.jsonl") || return 1
@@ -931,22 +926,23 @@ backup_copy_pvc() {
   [[ -s $archive ]] || return 1
   if $require_storage_versions; then
     python3 "$root/.scripts/validate-backup-snapshot.py" \
-      --require-storage-version "$archive" "$layout" > "$work/$name-files.json" || return 1
+      --require-storage-version --include-directories "$archive" > "$work/$name-files.json" || return 1
   else
-    python3 "$root/.scripts/validate-backup-snapshot.py" "$archive" "$layout" \
+    python3 "$root/.scripts/validate-backup-snapshot.py" --include-directories "$archive" \
       > "$work/$name-files.json" || return 1
   fi
   size=$(stat -c '%s' "$archive") || return 1
   sha=$(sha256sum "$archive") || return 1
   sha=${sha%% *}
-  files=$(jq 'length' "$work/$name-files.json")
+  files=$(jq '.files | length' "$work/$name-files.json")
   jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
     --arg archive "$name.tar" --arg sha256 "$sha" --argjson sizeBytes "$size" \
     --argjson fileCount "$files" --argjson storage "$storage" \
-    --argjson layout "$layout" --slurpfile files "$work/$name-files.json" \
+    --slurpfile files "$work/$name-files.json" \
     '{service:$name,role:$role,pvc:$pvc,archive:$archive,sha256:$sha256,
-      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0],
-      layout:$layout,storage:$storage}'
+      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0].files,
+      directories:$files[0].directories,
+      storage:$storage}'
 }
 
 backup_check_archive_capacity() {
@@ -988,18 +984,21 @@ backup_check_capacity() {
 }
 
 backup_capture() {
-  local entry name role pvc layout
+  local entry name role pvc
   local inventory="$work/archive-inventory.jsonl"
   : > "$inventory" || return 1
   while IFS= read -r entry; do
     name=$(jq -r .name <<< "$entry")
     role=$(jq -r .role <<< "$entry")
     pvc=$(jq -r .pvc <<< "$entry")
-    layout=$(jq -c .layout <<< "$entry")
     cluster_operation_lock_update "copy-$name" || return 1
-    backup_copy_pvc "$name" "$pvc" "$role" "$layout" >> "$inventory" || return 1
+    backup_copy_pvc "$name" "$pvc" "$role" >> "$inventory" || return 1
   done < "$work/backup-pvcs.jsonl"
   jq -s '.' "$inventory" > "$work/archive-inventory.json" || return 1
+  jq -e '[.[].fileCount] | add <= 100000' "$work/archive-inventory.json" > /dev/null || {
+    printf 'production: too many snapshot files\n' >&2
+    return 1
+  }
   captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   jq --arg capturedAt "$captured_at" '.capturedAt=$capturedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
@@ -2766,6 +2765,7 @@ release_migration_require_staged() {
 
 release_migration_load_metadata() {
   local candidate=$1
+  # TODO remove storageVersion.value compatibility after historical release metadata is retired.
   jq -e '.schemaVersion == 2 and (.migrations | type == "array")' \
     "$work/pulled/release.json" > /dev/null \
     || production_fail "migration execution requires schema-2 candidate metadata; missing migration metadata cannot prove no work is required"
@@ -2775,15 +2775,18 @@ release_migration_load_metadata() {
     [.[] | select(.backupRole == "authoritative-read-only" or .backupRole == "cleanup-participant")] as $owners
     | ($owners | length) > 0
       and all($owners[];
-        (.storageVersion.value | type == "number" and floor == . and . > 0)
-        and (.backupData | type == "object")
+        ((if (.storageVersion | type) == "object"
+          then .storageVersion.value else .storageVersion end)
+          | type == "number" and floor == . and . > 0)
         and (.name | type == "string" and test("^[a-z][a-z0-9-]*$")))
       and ([$owners[].name] | unique | length) == ($owners | length)
   ' "$work/migration-projects.jsonl" > /dev/null \
     || production_fail "candidate is missing a valid storage-version requirement for a stateful service"
   jq -cs '
     [.[] | select(.backupRole == "authoritative-read-only" or .backupRole == "cleanup-participant")
-      | {service:.name,role:.backupRole,requiredVersion:.storageVersion.value}]
+      | {service:.name,role:.backupRole,
+         requiredVersion:(if (.storageVersion | type) == "object"
+           then .storageVersion.value else .storageVersion end)}]
     | sort_by(.service)
   ' "$work/migration-projects.jsonl" > "$work/migration-owners.json"
   [[ -s $work/migration-owners.json ]] \

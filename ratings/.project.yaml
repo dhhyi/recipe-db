@@ -73,9 +73,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 backupRole: cleanup-participant
-backupData: { kind: sqlite, file: db.sqlite }
-storageVersion:
-  value: 1
+storageVersion: 1
 prettier:
   ignore:
     - "*.io"

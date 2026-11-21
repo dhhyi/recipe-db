@@ -115,7 +115,8 @@ load production-k3d-restore-setup
   jq -e '.status == "succeeded" and .phase == "complete" and .probeRecipeId == null' \
     "$RESTORE_STATE/restore-state.json"
   [ -e "$MOCK_LOG.probe-deleted" ]
-  cmp "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3" "$FIXTURE_ROOT/imported/recipes/recipes.sqlite3"
+  cmp "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin" \
+    "$FIXTURE_ROOT/imported/recipes/nested/data.bin"
   local checked imported last_check propagation opening
   checked=$(grep -c 'exec restore-volume-.*-- sh -ec' "$MOCK_LOG")
   [ "$checked" -ge 11 ]
@@ -202,7 +203,7 @@ load production-k3d-restore-setup
   run_restore
   [ "$status" -eq 0 ]
   jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
-  cmp "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3" "$FIXTURE_ROOT/imported/recipes/recipes.sqlite3"
+
   run ! grep -Eq 'deployment/(redis|oauth2-proxy)|restore-volume-redis' "$MOCK_LOG"
   jq -e 'all(.items[]; .metadata.name != "redis" and .metadata.name != "oauth2-proxy")' \
     "$MOCK_LOG.restore-deployments"
@@ -220,7 +221,7 @@ load production-k3d-restore-setup
   [ "$status" -eq 0 ]
   local reads transition rollout propagation name container helper_transition
   reads=$(awk '/curl .*recipe\/old/ {print NR; exit}' "$MOCK_LOG")
-  propagation=$(awk '/exec deployment\/nats -- wget/ {print NR; exit}' "$MOCK_LOG")
+  propagation=$(awk '/curl .*recipe\/probe/ {print NR; exit}' "$MOCK_LOG")
   [ -n "$reads" ] && [ -n "$propagation" ]
   for name in recipes images tags; do
     transition=$(awk -v name="$name" '$0 ~ "set env deployment/" name " MODE=production --containers=" {print NR; exit}' "$MOCK_LOG")
@@ -391,7 +392,7 @@ load production-k3d-restore-setup
   restore_fixture
   run_restore
   [ "$status" -eq 0 ]
-  [ "$(grep -c 'curl .*18081/public/old-' "$MOCK_LOG")" -eq 4 ]
+  [ "$(grep -c 'curl .*18081/public/\(full\|thumb\)\.bin' "$MOCK_LOG")" -eq 4 ]
   jq -e '.status == "succeeded"' "$RESTORE_STATE/restore-state.json"
 }
 
@@ -584,14 +585,15 @@ run_restore_abandon() {
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
-@test "restore full CLI consumes a real packaged SQLite snapshot through the real validator with mocked cluster infrastructure" {
+@test "restore full CLI consumes a real packaged opaque snapshot through the real validator with mocked cluster infrastructure" {
   restore_real_package_fixture
   run_restore
   [ "$status" -eq 0 ]
   jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
   [ ! -e "$MOCK_LOG.lease" ]
   [ -e "$MOCK_LOG.probe-deleted" ]
-  cmp "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" "$FIXTURE_ROOT/imported/tags/tags.sqlite"
+  cmp "$FIXTURE_ROOT/tar-data/tags/opaque.bin" \
+    "$FIXTURE_ROOT/imported/tags/opaque.bin"
 }
 
 @test "restore SIGTERM during private synthetic propagation retains the public barrier Lease and recovery state" {

@@ -421,7 +421,7 @@ EOF
     "$snapshot/backup-state.json"
   jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease"
   jq -e 'all(.inventory[]; .storage.uid != null and .storage.volumeName != null
-    and .storage.storageClassName == "local-path" and .layout.kind != null)' \
+    and .storage.storageClassName == "local-path" and (has("layout") | not))' \
     "$snapshot/manifest.json"
   run ! grep -q ' MODE=production ' "$MOCK_LOG"
   grep -q 'scale deployment/recipes --replicas=0' "$MOCK_LOG"
@@ -538,7 +538,7 @@ EOF
   jq -e --arg revision "$old_revision" --arg artifact "$ARTIFACT" '
     .source.revision == $revision and .source.artifact == $artifact
     and (.inventory | length) == 3
-    and all(.inventory[]; .storage.uid != null and .layout.kind != null)
+    and all(.inventory[]; .storage.uid != null and (has("layout") | not))
   ' "$snapshot/manifest.json" > /dev/null
   jq -e '.stateVersion == 2 and .status == "captured" and .phase == "captured"' \
     "$snapshot/backup-state.json" > /dev/null
@@ -595,14 +595,18 @@ EOF
   run ! grep -q 'copy-pod.json' "$MOCK_LOG"
 }
 
-@test "missing authoritative database refuses publication" {
+@test "capture archives unrecognized nested authoritative data without interpreting it" {
   export MOCK_BACKUP=true
-  rm "$FIXTURE_ROOT/tar-data/tags/tags.sqlite"
-  local snapshot="$FIXTURE_ROOT/backups/missing"
+  printf 'not a recognized application format\n' > "$FIXTURE_ROOT/tar-data/tags/tags.sqlite"
+  mkdir -p "$FIXTURE_ROOT/tar-data/tags/nested" "$FIXTURE_ROOT/tar-data/tags/empty"
+  printf '\000opaque data\n' > "$FIXTURE_ROOT/tar-data/tags/nested/data.bin"
+  local snapshot="$FIXTURE_ROOT/backups/opaque"
   run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
-  [ "$status" -ne 0 ]
-  [[ $output == *"missing authoritative database"* ]]
-  [ ! -e "$snapshot/manifest.json" ]
+  [ "$status" -eq 0 ]
+  jq -e 'all(.inventory[]; has("layout") | not) and
+    any(.inventory[] | select(.service == "tags").files[];
+      .path == "nested/data.bin") and
+    any(.inventory[] | select(.service == "tags").directories[]; . == "empty")' "$snapshot/manifest.json"
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
@@ -992,6 +996,16 @@ EOF
   [[ $output == *"release-migration-next"* ]]
   [ "$before" = "$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)" ]
   run ! grep -Eq 'patch job migration-|create -f .*migration-claim.json' "$MOCK_LOG"
+}
+
+@test "migration planning reads historical storageVersion.value and compares actual markers" {
+  export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true MOCK_HISTORICAL_STORAGE_VERSION=true
+  prepare_candidate_release
+
+  run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Service recipes: current=1 required=3"* ]]
+  [[ $output == *"Service images: current=1 required=2"* ]]
 }
 
 @test "migration planning rejects an incomplete path without recording or activating work" {

@@ -777,11 +777,11 @@ EOF
   export READ_GATE_TIMEOUT=0
   run bash read-gate.sh
   [ "$status" -ne 0 ]
-  [[ $output == *"did not pass read verification"* ]]
+  [[ $output == *"did not pass application-interface read verification"* ]]
   [ "$(cat "$MOCK_LOG")" = read ]
 }
 
-@test "restore read verification accepts v1 and first-entry v2 image manifests" {
+@test "restore read verification uses application interfaces for recipes, images, search and browse" {
   cat > restore-image-harness.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -790,129 +790,172 @@ work="$FIXTURE_ROOT/work"
 timeout=5
 restore_graphql_port=4000
 restore_browse_port=4100
-mkdir -p "$work/validated"
-python3 - "$work" << 'PY'
-import base64, hashlib, io, json, pathlib, sqlite3, sys, tarfile
-root = pathlib.Path(sys.argv[1])
-database = root / "recipes.sqlite3"
-with sqlite3.connect(database) as connection:
-    connection.execute("CREATE TABLE recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)")
-    connection.execute("INSERT INTO recipes VALUES (?, ?)", ("recipe", '{"name":"Recipe"}'))
-with tarfile.open(root / "validated/recipes.tar", "w") as archive:
-    archive.add(database, arcname="recipes.sqlite3")
-for version, count in ((1, 1), (2, 2)):
-    entries, public_files, contents, inventory = [], [], {}, []
-    for index in range(count):
-        normal = f"normal image v{version}-{index}".encode()
-        thumb = f"thumbnail v{version}-{index}".encode()
-        normal_sha = hashlib.sha256(normal).hexdigest()
-        thumb_sha = hashlib.sha256(thumb).hexdigest()
-        normal_name = f"recipe-{normal_sha}.png"
-        thumb_name = f"recipe-{thumb_sha}-thumb.png"
-        entry = {
-            "recipeId":"recipe", "url":"/public/" + normal_name,
-            "thumbUrl":"/public/" + thumb_name, "size":len(normal),
-        }
-        if version == 2:
-            entry["id"] = normal_sha
-        entries.append(entry)
-        for name, value in ((normal_name, normal), (thumb_name, thumb)):
-            path = "public/" + name
-            public_files.append((path, value))
-            contents["/" + path] = base64.b64encode(value).decode()
-            inventory.append({
-                "path":path, "sha256":hashlib.sha256(value).hexdigest(),
-            })
-    document = entries[0] if version == 1 else entries
-    with tarfile.open(root / f"images-v{version}.tar", "w") as archive:
-        for name in ("public", "manifests"):
-            directory = tarfile.TarInfo(name)
-            directory.type = tarfile.DIRTYPE
-            archive.addfile(directory)
-        files = public_files + [
-            ("manifests/recipe.json", json.dumps(document).encode()),
-            ("storage-version", f"{version}\n".encode()),
-        ]
-        for name, content in files:
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            archive.addfile(info, io.BytesIO(content))
-    (root / f"restore-fixture-v{version}.json").write_text(json.dumps({
-        "image":{"url":entries[0]["url"],"thumbUrl":entries[0]["thumbUrl"]},
-        "content":contents, "files":inventory,
-    }))
-PY
 restore_graphql() {
+  local variables=${2:-'{}'} id
   case "$1" in
     'query { recipes { id name } }')
-      printf '{"data":{"recipes":[{"id":"recipe","name":"Recipe"}]}}\n' \
-        > "$work/restore-response.json"
+      if [[ ${RESTORE_LARGE:-false} == true ]]; then
+        jq -n '{data:{recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
+          > "$work/restore-response.json"
+      elif [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
+        printf '{"data":{"recipes":[{"id":"first","name":"First"},{"id":"second","name":"Second"}]}}\n' \
+          > "$work/restore-response.json"
+      else
+        printf '{"data":{"recipes":[{"id":"recipe-no-image","name":"First"},{"id":"recipe-with-image","name":"Image"}]}}\n' \
+          > "$work/restore-response.json"
+      fi
       ;;
+    'query($id: ID!) { recipe(id:$id) { id image { url thumbUrl } } }')
+      id=$(jq -r .id <<< "$variables")
+      printf '%s\n' "$id" >> "$work/image-samples"
+      if [[ $id == recipe-with-image || $id == recipe-11 ]]; then
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,image:{url:"/public/image.bin",thumbUrl:"/public/thumb.bin"}}}}' \
+          > "$work/restore-response.json"
+      else
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,image:null}}}' > "$work/restore-response.json"
+      fi ;;
     *'recipe(id:$id)'*)
-      jq -n --slurpfile fixture "$RESPONSE" '
-        {data:{recipe:{id:"recipe",name:"Recipe",image:$fixture[0].image,rating:{count:1}}}}
-      ' > "$work/restore-response.json"
+      id=$(jq -r .id <<< "$variables")
+      [[ $id == "${EXPECTED_RECIPE_ID:?}" ]] || return 1
+      if [[ ${RESTORE_IMAGE_FREE:-false} == true || ${RESTORE_LARGE:-false} == true ]]; then
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"First",image:null,rating:{count:1}}}}' \
+          > "$work/restore-response.json"
+      else
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"Image",
+          image:{url:"/public/image.bin",thumbUrl:"/public/thumb.bin"},rating:{count:1}}}}' \
+          > "$work/restore-response.json"
+      fi
       ;;
     *searchRecipes*)
-      printf '{"data":{"searchRecipes":{"recipes":[{"id":"recipe"}],"found":1}}}\n' \
-        > "$work/restore-response.json"
+      jq -n --arg id "$EXPECTED_RECIPE_ID" \
+        '{data:{searchRecipes:{recipes:[{id:$id}],found:1}}}' > "$work/restore-response.json"
       ;;
     *) return 1 ;;
   esac
 }
 curl() {
-  local url="${*: -1}" path
+  local url="${*: -1}"
   case "$url" in
-    http://127.0.0.1:4000/public/*)
-      path=${url#http://127.0.0.1:4000}
-      jq -er --arg path "$path" '.content[$path]' "$RESPONSE" | base64 --decode
-      ;;
-    http://127.0.0.1:4100/recipe/*) printf 'restored recipe page\n' ;;
+    http://127.0.0.1:4000/public/*) printf 'opaque image bytes' ;;
+    "http://127.0.0.1:4100/recipe/$EXPECTED_RECIPE_ID") printf 'restored recipe page\n' ;;
     *) return 1 ;;
   esac
 }
-for version in 1 2; do
-  export RESPONSE="$work/restore-fixture-v$version.json"
-  cp "$work/images-v$version.tar" "$work/validated/images.tar"
-  jq -n --slurpfile fixture "$RESPONSE" \
-    '{inventory:[{service:"images",files:$fixture[0].files}]}' \
-    > "$work/restore-manifest.json"
-  restore_prepare_expected_reads
-  restore_verify_reads
-done
+mkdir -p "$work"
+restore_verify_reads
 EOF
-  run bash restore-image-harness.sh
+  run env EXPECTED_RECIPE_ID=recipe-with-image bash restore-image-harness.sh
   [ "$status" -eq 0 ]
+  run env RESTORE_IMAGE_FREE=true EXPECTED_RECIPE_ID=first bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  rm -f work/image-samples
+  run env RESTORE_LARGE=true EXPECTED_RECIPE_ID=recipe-00 bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < work/image-samples)" -eq 10 ]
+  run ! grep -Fxq recipe-11 work/image-samples
 }
 
-@test "restore waits for GraphQL reads before starting propagation mutations" {
+@test "restore propagation does not mutate until the GraphQL route is ready" {
   cat > route-gate.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$FIXTURE_ROOT/.scripts/production-restore.sh"
-timeout=${GATE_TIMEOUT:-3}
-attempts=0
+timeout=0
 restore_graphql() {
   printf '%s\n' "$1" >> "$MOCK_LOG"
-  attempts=$((attempts + 1))
-  [[ $attempts -gt 1 ]]
-}
-restore_stream_sequence() {
-  printf 'sequence\n' >> "$MOCK_LOG"
   return 1
 }
-sleep() { :; }
 restore_verify_propagation
 EOF
   run bash route-gate.sh
   [ "$status" -ne 0 ]
-  [ "$(cat "$MOCK_LOG")" = $'query { __typename }\nquery { __typename }\nsequence' ]
-  : > "$MOCK_LOG"
-  export GATE_TIMEOUT=0
-  run bash route-gate.sh
-  [ "$status" -ne 0 ]
   [[ $output == *"GraphQL route did not become ready"* ]]
   [ "$(cat "$MOCK_LOG")" = 'query { __typename }' ]
+}
+
+@test "restore propagation proves browse invalidation before expiry independently of search" {
+  cat > propagation-cache.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+timeout=200
+restore_mode=migration-recovery
+restore_browse_port=4100
+release_state_write() { :; }
+restore_graphql() {
+  local variables=${2:-'{}'} name
+  case "$1" in
+    'query { __typename }') : ;;
+    *createRecipe*)
+      jq -r .name <<< "$variables" > "$work/probe-name"
+      cp "$work/probe-name" "$work/probe-original"
+      printf '{"data":{"createRecipe":{"id":"probe"}}}\n' > "$work/restore-response.json" ;;
+    *updateRecipe*)
+      name=$(jq -r .name <<< "$variables")
+      if [[ $name == *Primed ]]; then
+        [[ -e $work/fresh-cache ]] || return 1
+      else
+        printf '%s\n' "$name" > "$work/changed-name"
+      fi
+      printf '%s\n' "$name" > "$work/probe-name" ;;
+    *deleteRecipe*) touch "$work/deleted" ;;
+    *searchRecipes*)
+      name=$(jq -r '.options.q' <<< "$variables")
+      if [[ ${CASE:-} == slow-initial-search && $name != *Changed && $name != "*" ]]; then
+        SECONDS=$((SECONDS + 199))
+      fi
+      if [[ $name == *Changed ]]; then
+        touch "$work/searched-change"
+        if [[ ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
+      fi
+      if [[ -e $work/deleted ]]; then
+        if [[ ${CASE:-} == stale-index ]]; then
+          printf '{"data":{"searchRecipes":{"found":1,"recipes":[null]}}}\n' > "$work/restore-response.json"
+        else
+          printf '{"data":{"searchRecipes":{"found":0}}}\n' > "$work/restore-response.json"
+        fi
+      else
+        jq -n --arg name "$(cat "$work/probe-name")" \
+          '{data:{searchRecipes:{recipes:[{id:"probe",name:$name}]}}}' > "$work/restore-response.json"
+      fi ;;
+    *) return 1 ;;
+  esac
+}
+curl() {
+  if [[ " $* " == *' --write-out '* ]]; then
+    if [[ ${CASE:-} == stale-delete ]]; then printf 200; else printf 404; fi
+  elif [[ ${CASE:-} == slow-prime && ! -e $work/prime-delayed ]]; then
+    touch "$work/prime-delayed"
+    SECONDS=$((SECONDS + 61))
+    cat "$work/probe-name"
+  elif [[ ${CASE:-} == slow-initial-search && ! -e $work/prime-delayed ]]; then
+    touch "$work/prime-delayed"
+    return 1
+  elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
+    cat "$work/probe-original"
+  elif [[ ${CASE:-} == stale-prime-update && $(cat "$work/probe-name") == *Primed ]]; then
+    cat "$work/changed-name"
+  else
+    if [[ -e $work/searched-change && $(cat "$work/probe-name") == *Changed ]]; then
+      touch "$work/fresh-cache"
+    fi
+    cat "$work/probe-name"
+  fi
+}
+sleep() { SECONDS=$((SECONDS + $1)); }
+restore_verify_propagation
+EOF
+  run env CASE=slow-search bash propagation-cache.sh
+  [ "$status" -eq 0 ]
+  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
+  run env CASE=slow-initial-search bash propagation-cache.sh
+  [ "$status" -eq 0 ]
+  for case in slow-prime stale-update stale-delete stale-prime-update stale-index; do
+    rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
+    run env CASE="$case" bash propagation-cache.sh
+    [ "$status" -ne 0 ]
+  done
 }
 
 @test "migration recovery persists propagation probes in release state rather than standalone restore state" {
@@ -929,11 +972,12 @@ restore_graphql() {
     'query { __typename }') return 0 ;;
     *createRecipe*) printf '{"data":{"createRecipe":{"id":"recovery-probe"}}}\n' \
       > "$work/restore-response.json" ;;
+    *searchRecipes*) printf '{"data":{"searchRecipes":{"recipes":[]}}}\n' \
+      > "$work/restore-response.json" ;;
     *) return 1 ;;
   esac
 }
-restore_stream_sequence() { printf '4\n'; }
-restore_wait_consumers() { return 1; }
+timeout=0
 restore_verify_propagation
 EOF
   run bash recovery-probe.sh
@@ -1041,14 +1085,14 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../validate-backup-snapshot.py" .scripts/
   mkdir -p work/validated data
   printf '{"volumes":{"recipes":"1Gi"}}\n' > work/config.json
-  printf '{"name":"recipes","backupData":{"kind":"sqlite","file":"recipes.sqlite3"}}\n' > work/projects.jsonl
+  printf '{"name":"recipes","backupRole":"authoritative-read-only"}\n' > work/projects.jsonl
   printf '{"name":"recipes","uid":"stable-claim"}\n' > work/restore-pvc-identities.jsonl
   python3 - "$FIXTURE_ROOT/work" << 'PY'
 import hashlib, io, json, pathlib, sys, tarfile
 root = pathlib.Path(sys.argv[1])
-content = b"SQLite format 3\x00fixture\n"
+content = b"\x00opaque volume fixture\n"
 with tarfile.open(root / "validated/recipes.tar", "w") as archive:
-    item = tarfile.TarInfo("recipes.sqlite3")
+    item = tarfile.TarInfo("opaque.bin")
     item.size = len(content)
     item.mode = 0o640
     item.uid, item.gid = 12345, 23456
@@ -1056,7 +1100,7 @@ with tarfile.open(root / "validated/recipes.tar", "w") as archive:
     archive.addfile(item, io.BytesIO(content))
 (root / "restore-manifest.json").write_text(json.dumps({"inventory":[{
     "service":"recipes", "archive":"recipes.tar",
-    "files":[{"path":"recipes.sqlite3","sizeBytes":len(content),
+    "files":[{"path":"opaque.bin","sizeBytes":len(content),
               "sha256":hashlib.sha256(content).hexdigest()}]}]}))
 PY
   cat > .scripts/restore-import-harness.sh << 'EOF'
@@ -1110,7 +1154,39 @@ EOF
   run bash .scripts/restore-import-harness.sh
   [ "$status" -eq 0 ]
   grep -q 'tar -xpkf - --numeric-owner -C /data' "$MOCK_LOG"
-  [ "$(stat -c '%a' data/recipes.sqlite3)" = 640 ]
+  [ "$(stat -c '%a' data/opaque.bin)" = 640 ]
+  [ -e helper-deleted ]
+}
+
+@test "restore import rejects missing recorded directories" {
+  jq '.inventory[0].directories = ["empty"]' work/restore-manifest.json > work/manifest.next
+  mv work/manifest.next work/restore-manifest.json
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored volume verification failed"* ]]
+  [ ! -e helper-deleted ]
+}
+
+@test "restore import permits implicit parent directories" {
+  python3 - << 'PY'
+import hashlib, io, json, pathlib, tarfile
+root = pathlib.Path("work")
+content = b"nested data"
+with tarfile.open(root / "validated/recipes.tar", "w") as archive:
+    item = tarfile.TarInfo("nested/opaque.bin")
+    item.size = len(content)
+    archive.addfile(item, io.BytesIO(content))
+manifest = json.loads((root / "restore-manifest.json").read_text())
+manifest["inventory"][0]["directories"] = []
+manifest["inventory"][0]["files"] = [{
+    "path": "nested/opaque.bin", "sizeBytes": len(content),
+    "sha256": hashlib.sha256(content).hexdigest(),
+}]
+(root / "restore-manifest.json").write_text(json.dumps(manifest))
+PY
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -eq 0 ]
+  [ -f data/nested/opaque.bin ]
   [ -e helper-deleted ]
 }
 
@@ -1118,7 +1194,7 @@ EOF
   export MOCK_EXTRA_MOUNT=true
   run bash .scripts/restore-import-harness.sh
   [ "$status" -ne 0 ]
-  [ ! -e data/recipes.sqlite3 ]
+  [ ! -e data/opaque.bin ]
   [ ! -e helper-deleted ]
   run ! grep -q 'exec -i' "$MOCK_LOG"
 }
@@ -1135,7 +1211,7 @@ EOF
   export MOCK_FIND_FAIL=true
   run bash .scripts/restore-import-harness.sh
   [ "$status" -ne 0 ]
-  [ ! -e data/recipes.sqlite3 ]
+  [ ! -e data/opaque.bin ]
   run ! grep -q 'exec -i' "$MOCK_LOG"
 }
 
@@ -1151,6 +1227,6 @@ EOF
   run bash .scripts/restore-import-harness.sh
   [ "$status" -ne 0 ]
   [ -L data/dangling-link ]
-  [ ! -e data/recipes.sqlite3 ]
+  [ ! -e data/opaque.bin ]
   run ! grep -q 'exec -i' "$MOCK_LOG"
 }

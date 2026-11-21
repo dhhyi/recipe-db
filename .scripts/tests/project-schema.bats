@@ -2,7 +2,7 @@
 
 load test_helper
 
-@test "project schema requires authoritative storage declarations and rejects invalid versions" {
+@test "project schema requires authoritative storage versions and rejects invalid versions" {
   run python3 - << 'PY'
 import json
 from pathlib import Path
@@ -22,14 +22,12 @@ rule = next(
 )
 assert rule["if"]["properties"]["backupRole"]["enum"] == data_roles
 required = set(rule["then"]["required"])
-assert {"backupData", "storageVersion"} <= required
+assert "storageVersion" in required
 forbidden = set(rule["else"]["not"]["required"])
 assert "storageVersion" in forbidden
 version = schema["properties"]["storageVersion"]
-assert version["type"] == "object"
-assert set(version["required"]) == {"value"}
-assert version["properties"]["value"]["type"] == "integer"
-assert version["properties"]["value"]["minimum"] == 1
+assert version["type"] == "integer"
+assert version["minimum"] == 1
 
 
 def valid(project):
@@ -40,43 +38,28 @@ def valid(project):
     owns_data = project.get("backupRole") in data_roles
     if owns_data and not required <= project.keys():
         return False
-    if owns_data and not isinstance(project["backupData"], dict):
-        return False
     if not owns_data and forbidden & project.keys():
         return False
     if "storageVersion" in project:
-        declaration = project["storageVersion"]
-        if not isinstance(declaration, dict) or set(declaration) != {"value"}:
-            return False
-        value = declaration["value"]
-        if type(value) is not int or value < version["properties"]["value"]["minimum"]:
+        value = project["storageVersion"]
+        if type(value) is not int or value < version["minimum"]:
             return False
     return True
 
 
 for role in data_roles:
-    storage = {"value": 1}
-    declaration = {"backupRole": role, "backupData": {"kind": "json"}, "storageVersion": storage}
+    declaration = {"backupRole": role, "storageVersion": 1}
     assert valid(declaration)
-    for invalid_storage in [
-        storage | {"value": 0},
-        storage | {"value": -1},
-        storage | {"value": 1.5},
-        storage | {"value": "1"},
-        storage | {"value": True},
-        storage | {"value": None},
-    ]:
+    for invalid_storage in [0, -1, 1.5, "1", True, None]:
         assert not valid(declaration | {"storageVersion": invalid_storage})
-    assert not valid(declaration | {"backupData": None})
-    assert not valid({"backupRole": role, "backupData": {"kind": "json"}})
-    assert not valid({"backupRole": role, "storageVersion": storage})
+    assert not valid({"backupRole": role})
 
 assert valid({"backupRole": "derived-stateless"})
 assert valid({"backupRole": "excluded-external-cache"})
 assert valid({})
-assert not valid({"backupRole": "derived-stateless", "storageVersion": storage})
-assert not valid({"backupRole": "excluded-external-cache", "storageVersion": storage})
-assert not valid({"storageVersion": storage})
+assert not valid({"backupRole": "derived-stateless", "storageVersion": 1})
+assert not valid({"backupRole": "excluded-external-cache", "storageVersion": 1})
+assert not valid({"storageVersion": 1})
 
 assert schema["properties"]["check"]["type"] == "string"
 assert schema["properties"]["test"]["type"] == "string"
