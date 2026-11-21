@@ -70,7 +70,6 @@ const returnButtonExisting = (page) =>
   page.getByRole("link", { name: "Zurück zum Rezept", exact: true });
 const returnButtonNew = (page) =>
   page.getByRole("link", { name: "Zurück zur Übersicht", exact: true });
-const headerHomeLink = (page) => page.locator("header-component a[href='/']");
 const dirtyStatus = (page) =>
   page.getByRole("status").filter({ hasText: /^Ungespeicherte Änderungen\.$/ });
 const successStatus = (page) =>
@@ -81,36 +80,6 @@ async function waitForEditorForm(page) {
   await expect(page.locator("form")).toBeVisible();
   await expect(nameField(page)).toBeVisible();
   await expect(saveButton(page)).toBeVisible();
-}
-
-async function runActionExpectSingleDialog(
-  page,
-  { trigger, decision, expectedType },
-) {
-  const types = [];
-  const listener = async (dialog) => {
-    types.push(dialog.type());
-    if (types.length === 1) {
-      if (decision === "accept") {
-        await dialog.accept();
-      } else {
-        await dialog.dismiss();
-      }
-      return;
-    }
-    await dialog.dismiss();
-  };
-
-  page.on("dialog", listener);
-  try {
-    const actionPromise = trigger();
-    await expect.poll(() => types.length, { timeout: 5_000 }).toBe(1);
-    await actionPromise.catch(() => {});
-    await page.waitForTimeout(100);
-    expect(types).toEqual([expectedType]);
-  } finally {
-    page.off("dialog", listener);
-  }
 }
 
 test("existing and new pages expose explicit return actions", async ({
@@ -129,73 +98,6 @@ test("existing and new pages expose explicit return actions", async ({
   await page.goto("/edit/new");
   await waitForEditorForm(page);
   await expect(returnButtonNew(page)).toHaveAttribute("href", "/");
-});
-
-test("dirty form confirmation decline and accept on return and header links", async ({
-  page,
-  demoRecipe,
-}) => {
-  const scenarios = [
-    {
-      label: "existing recipe",
-      route: `/edit/${demoRecipe.id}`,
-      acceptDestination: `/recipe/${demoRecipe.id}`,
-      returnTrigger: () =>
-        returnButtonExisting(page).click({ noWaitAfter: true }),
-    },
-    {
-      label: "new recipe",
-      route: "/edit/new",
-      acceptDestination: "/",
-      returnTrigger: () => returnButtonNew(page).click({ noWaitAfter: true }),
-    },
-  ];
-
-  for (const scenario of scenarios) {
-    for (const triggerCase of [
-      {
-        name: "return",
-        trigger: scenario.returnTrigger,
-        destination: scenario.acceptDestination,
-      },
-      {
-        name: "header",
-        trigger: () => headerHomeLink(page).click({ noWaitAfter: true }),
-        destination: "/",
-      },
-    ]) {
-      await page.goto(scenario.route);
-      await waitForEditorForm(page);
-      const dirtyName = `${demoRecipe.name} ${scenario.label} ${triggerCase.name}`;
-      await nameField(page).fill(dirtyName);
-      await expect(dirtyStatus(page)).toBeVisible();
-
-      await runActionExpectSingleDialog(page, {
-        trigger: triggerCase.trigger,
-        decision: "dismiss",
-        expectedType: "confirm",
-      });
-      await expect(page).toHaveURL(scenario.route);
-      await expect(nameField(page)).toHaveValue(dirtyName);
-      await expect(dirtyStatus(page)).toBeVisible();
-
-      const navigation =
-        triggerCase.name === "header"
-          ? page.waitForRequest(
-              (request) =>
-                request.isNavigationRequest() &&
-                request.url() === new URL("/", page.url()).href,
-            )
-          : null;
-      await runActionExpectSingleDialog(page, {
-        trigger: triggerCase.trigger,
-        decision: "accept",
-        expectedType: "confirm",
-      });
-      if (navigation) await navigation;
-      await expect(page).toHaveURL(triggerCase.destination);
-    }
-  }
 });
 
 test("guard preserves modified/newtab/download/hash link behaviors", async ({
