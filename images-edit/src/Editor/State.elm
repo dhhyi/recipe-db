@@ -632,7 +632,7 @@ handleEvent event model =
             if model.galleryConfirmation == Nothing && (canMove model imageId MoveUp || canMove model imageId MoveDown) then
                 case ( currentImages model, imageIndex model imageId ) of
                     ( Just images, Just index ) ->
-                        ( { model | galleryDrag = Just ( imageId, index ), galleryPreview = Just images, galleryFeedback = Nothing }, Cmd.none )
+                        ( { model | galleryDrag = Just ( imageId, index ), galleryPreview = Just images }, Cmd.none )
 
                     _ ->
                         ( model, Cmd.none )
@@ -685,7 +685,7 @@ handleEvent event model =
                                     mutation =
                                         { token = token, imageId = imageId, index = target, movement = Just movement, writing = True }
                                 in
-                                ( { model | galleryDrag = Nothing, galleryMutation = Just mutation, mutationToken = token, savedFeedback = False }
+                                ( { model | galleryDrag = Nothing, galleryMutation = Just mutation, mutationToken = token, savedFeedback = False, galleryFeedback = Nothing }
                                 , Cmd.batch
                                     [ RecipeDB.makeReorderImagesRequest model.recipeId (List.map .id images) (Reordered token)
                                     , focusWithoutScroll "editor-status"
@@ -926,7 +926,7 @@ galleryFeedbackAfterRead model readError recipe =
 
         ( Just mutation, Just feedback, Nothing ) ->
             if mutation.movement /= Nothing && feedback.kind == ReorderingSucceeded then
-                Just { feedback | message = reorderingSuccessMessage recipe mutation }
+                Just { feedback | message = reorderingSuccessMessage model.recipe recipe mutation }
 
             else
                 Just feedback
@@ -935,8 +935,8 @@ galleryFeedbackAfterRead model readError recipe =
             model.galleryFeedback
 
 
-reorderingSuccessMessage : RecipeDB.RecipeModel -> GalleryMutation -> String
-reorderingSuccessMessage recipe mutation =
+reorderingSuccessMessage : RecipeDB.RecipeModel -> RecipeDB.RecipeModel -> GalleryMutation -> String
+reorderingSuccessMessage confirmed recipe mutation =
     case recipe of
         RemoteData.Success (Just data) ->
             let
@@ -953,9 +953,14 @@ reorderingSuccessMessage recipe mutation =
                             "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
 
                 promotedDefault =
-                    case ( mutation.movement, data.images |> Maybe.andThen List.head ) of
-                        ( Just movement, Just first ) ->
-                            movement.dragged && movement.fromIndex == 0 && first.id /= mutation.imageId
+                    case ( mutation.movement, confirmed ) of
+                        ( Just movement, RemoteData.Success (Just previous) ) ->
+                            case ( previous.images |> Maybe.andThen List.head, data.images |> Maybe.andThen List.head ) of
+                                ( Just oldFirst, Just first ) ->
+                                    movement.dragged && oldFirst.id /= first.id && first.id /= mutation.imageId
+
+                                _ ->
+                                    False
 
                         _ ->
                             False

@@ -373,6 +373,16 @@ test("gallery pointer uses stable list capture, ignores clicks and cancels safel
 
   shift = 0;
   bridge.dispatch("pointerdown", event);
+  shift = 110;
+  bridge.dispatch("pointermove", { ...event, clientX: 36 });
+  bridge.dispatch("pointerup", { ...event, clientX: 36 });
+  assert.deepEqual(
+    bridge.events.slice(2).map((e) => e.kind),
+    ["gallery-drag-start", "gallery-drag-end"],
+  );
+
+  shift = 0;
+  bridge.dispatch("pointerdown", event);
   shift = 60;
   bridge.dispatch("pointermove", { ...event, clientY: 40 });
   assert.equal(bridge.events.at(-1).index, 0);

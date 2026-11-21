@@ -299,9 +299,8 @@
         }
 
         function galleryPosition(event, current) {
-          const dx = event.clientX - current.startX;
           const dy = event.clientY - current.startY;
-          if (!current.moved && Math.hypot(dx, dy) < 5) return;
+          if (!current.moved && Math.abs(dy) < 5) return;
           if (
             current.moved &&
             event.clientX === current.lastX &&

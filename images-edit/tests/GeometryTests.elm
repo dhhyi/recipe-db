@@ -297,6 +297,28 @@ galleryTests =
         firstDragReconciled =
             apply (ApplyGallery firstDragReady.galleryToken) firstDragReady
 
+        nonDefaultDrag =
+            apply (dragEvent "gallery-drag-move" [ ( "index", E.int 2 ) ]) dragStart
+                |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
+
+        nonDefaultWritten =
+            apply (Reordered nonDefaultDrag.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) nonDefaultDrag
+
+        concurrentRead =
+            RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })
+
+        nonDefaultReady =
+            apply (GotRecipe nonDefaultWritten.galleryToken concurrentRead) nonDefaultWritten
+
+        nonDefaultReconciled =
+            apply (ApplyGallery nonDefaultReady.galleryToken) nonDefaultReady
+
+        withPriorError =
+            { threeImages | galleryFeedback = Just { kind = Editor.ReorderingRejected, message = "Konflikt" } }
+
+        priorErrorDrag =
+            apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/2" ) ]) withPriorError
+
         unknownFirstDrag =
             apply (Reordered firstDrag.mutationToken (RemoteData.Failure "Ungewiss")) firstDrag
 
@@ -539,6 +561,27 @@ galleryTests =
             && apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragDrop
             == dragDrop
       )
+    , ( "cancel and no-op retain prior mutation error; a new write clears it"
+      , let
+            cancel =
+                apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool True ) ]) priorErrorDrag
+
+            noOp =
+                apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) priorErrorDrag
+
+            dropped =
+                apply (dragEvent "gallery-drag-move" [ ( "index", E.int 0 ) ]) priorErrorDrag
+                    |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
+        in
+        priorErrorDrag.galleryFeedback
+            == withPriorError.galleryFeedback
+            && cancel.galleryFeedback
+            == withPriorError.galleryFeedback
+            && noOp.galleryFeedback
+            == withPriorError.galleryFeedback
+            && dropped.galleryFeedback
+            == Nothing
+      )
     , ( "failed or unknown writes discard preview and keep last confirmed order on failed read"
       , List.all
             (\model ->
@@ -580,6 +623,12 @@ galleryTests =
             == Nothing
             && Maybe.map .message firstDragReconciled.galleryFeedback
             == Just "Bild an Position 2 verschoben. Bild an Position 1 ist jetzt das Standardbild."
+      )
+    , ( "non-default drag announces a concurrent authoritative default change"
+      , currentIds nonDefaultReconciled
+            == [ "opaque/3", "opaque/1", "opaque/2" ]
+            && Maybe.map .message nonDefaultReconciled.galleryFeedback
+            == Just "Bild an Position 3 verschoben. Bild an Position 1 ist jetzt das Standardbild."
       )
     , ( "unknown write that committed uses the authoritative collection without retry"
       , currentIds unknownCommitted

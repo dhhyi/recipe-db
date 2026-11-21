@@ -175,9 +175,6 @@ editorStatus model =
                 else
                     "Reihenfolge gespeichert. Die aktuelle Bildreihenfolge wird geladen."
 
-            else if model.galleryDrag /= Nothing then
-                "Bildreihenfolge wird vorgemerkt."
-
             else if model.galleryMutation /= Nothing && model.galleryRefreshing then
                 "Galerie wird aktualisiert. Die angezeigten Bilder zeigen den zuletzt geladenen Stand."
 
@@ -206,7 +203,7 @@ editorStatus model =
             (if model.phase == Viewing && model.savedFeedback && model.galleryMutation == Nothing then
                 "feedback success save-feedback"
 
-             else if model.galleryPreview /= Nothing then
+             else if model.galleryPreview /= Nothing && model.galleryMutation /= Nothing then
                 "feedback warning"
 
              else
@@ -335,6 +332,15 @@ galleryView model =
                 ]
             ]
         , editorStatus model
+        , p [ id "gallery-drag-status", class "sr-only", attribute "role" "status" ]
+            [ text
+                (if model.galleryDrag /= Nothing then
+                    "Bildreihenfolge wird vorgemerkt."
+
+                 else
+                    ""
+                )
+            ]
         , galleryFeedback model
         , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
         , Maybe.withDefault (text "")
@@ -396,6 +402,15 @@ galleryRow model failed index image =
 
                 _ ->
                     0
+
+        pendingDefault : Bool
+        pendingDefault =
+            case ( model.galleryPreview, model.recipe ) of
+                ( Just preview, RemoteData.Success (Just recipe) ) ->
+                    model.galleryMutation /= Nothing || Just preview /= recipe.images
+
+                _ ->
+                    False
     in
     ( image.id
     , li [ id ("gallery-image-" ++ image.id), attribute "data-gallery-id" image.id, attribute "tabindex" "-1" ]
@@ -455,7 +470,7 @@ galleryRow model failed index image =
                 , if index == 0 then
                     span []
                         [ text
-                            (if model.galleryPreview /= Nothing then
+                            (if pendingDefault then
                                 "Vorgemerktes Standardbild"
 
                              else
