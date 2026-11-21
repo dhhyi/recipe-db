@@ -856,6 +856,64 @@ EOF
   [ "$(cat "$MOCK_LOG")" = 'query { __typename }' ]
 }
 
+@test "restore propagation proves browse invalidation before expiry independently of search" {
+  cat > propagation-cache.sh << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$FIXTURE_ROOT/.scripts/production-restore.sh"
+work="$FIXTURE_ROOT/work"
+timeout=200
+restore_mode=migration-recovery
+restore_browse_port=4100
+release_state_write() { :; }
+restore_graphql() {
+  local variables=${2:-'{}'} name
+  case "$1" in
+    'query { __typename }') : ;;
+    *createRecipe*)
+      jq -r .name <<< "$variables" > "$work/probe-name"
+      cp "$work/probe-name" "$work/probe-original"
+      printf '{"data":{"createRecipe":{"id":"probe"}}}\n' > "$work/restore-response.json" ;;
+    *updateRecipe*)
+      jq -r .name <<< "$variables" > "$work/probe-name" ;;
+    *deleteRecipe*) touch "$work/deleted" ;;
+    *searchRecipes*)
+      name=$(jq -r '.options.q' <<< "$variables")
+      if [[ $name == *Changed && ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
+      if [[ -e $work/deleted ]]; then
+        printf '{"data":{"searchRecipes":{"recipes":[]}}}\n' > "$work/restore-response.json"
+      else
+        jq -n --arg name "$(cat "$work/probe-name")" \
+          '{data:{searchRecipes:{recipes:[{id:"probe",name:$name}]}}}' > "$work/restore-response.json"
+      fi ;;
+    *) return 1 ;;
+  esac
+}
+curl() {
+  if [[ " $* " == *' --write-out '* ]]; then
+    if [[ ${CASE:-} == stale-delete ]]; then printf 200; else printf 404; fi
+  elif [[ ${CASE:-} == slow-prime && ! -e $work/prime-delayed ]]; then
+    touch "$work/prime-delayed"
+    SECONDS=$((SECONDS + 61))
+    cat "$work/probe-name"
+  elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
+    cat "$work/probe-original"
+  else
+    cat "$work/probe-name"
+  fi
+}
+sleep() { SECONDS=$((SECONDS + 2)); }
+restore_verify_propagation
+EOF
+  run env CASE=slow-search bash propagation-cache.sh
+  [ "$status" -eq 0 ]
+  for case in slow-prime stale-update stale-delete; do
+    rm -f work/deleted work/prime-delayed
+    run env CASE="$case" bash propagation-cache.sh
+    [ "$status" -ne 0 ]
+  done
+}
+
 @test "migration recovery persists propagation probes in release state rather than standalone restore state" {
   cat > recovery-probe.sh << 'EOF'
 #!/usr/bin/env bash

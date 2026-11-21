@@ -89,7 +89,7 @@ case "$query" in
       touch "$MOCK_LOG.probe-paused"
       sleep 2
     fi
-    if [[ $* == *"restore-request"* && $(jq -r '.variables.options.q' "$file") == "*" ]]; then
+    if [[ $query == *"found"* && $(jq -r '.variables.options.q' "$file") == "*" ]]; then
       echo '{"data":{"searchRecipes":{"recipes":[{"id":"old","name":"Old"}],"found":1}}}'
     elif [[ -e $MOCK_LOG.probe-deleted || ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
     else jq -n --rawfile name "$MOCK_LOG.probe-name" '{data:{searchRecipes:{recipes:[{id:"probe",name:($name|rtrimstr("\n"))}]}}}'; fi ;;
