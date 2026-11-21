@@ -1496,11 +1496,13 @@ restore_graphql() {
 # black-box only; use application interfaces, not stored data formats or application internals
 restore_verify_reads() {
   local recipe id name image_url encoded url
-  restore_graphql 'query { recipes { id name } }' || return 1
+  restore_graphql 'query { recipes { id name image { url thumbUrl } } }' || return 1
   jq -e '.data.recipes | type == "array" and
     all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string"))' \
     "$work/restore-response.json" > /dev/null || return 1
-  recipe=$(jq -c '.data.recipes | sort_by(.id) | .[0] // empty' "$work/restore-response.json")
+  recipe=$(jq -c '.data.recipes | sort_by(.id) as $recipes |
+    ($recipes | map(select(.image != null)) | .[0]) // $recipes[0] // empty' \
+    "$work/restore-response.json")
   [[ -n $recipe ]] || return 0
   id=$(jq -r .id <<< "$recipe")
   name=$(jq -r .name <<< "$recipe")

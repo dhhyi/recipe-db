@@ -791,18 +791,32 @@ timeout=5
 restore_graphql_port=4000
 restore_browse_port=4100
 restore_graphql() {
+  local variables=${2:-'{}'} id
   case "$1" in
-    'query { recipes { id name } }')
-      printf '{"data":{"recipes":[{"id":"recipe","name":"Recipe"}]}}\n' \
-        > "$work/restore-response.json"
+    'query { recipes { id name image { url thumbUrl } } }')
+      if [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
+        printf '{"data":{"recipes":[{"id":"first","name":"First","image":null},{"id":"second","name":"Second","image":null}]}}\n' \
+          > "$work/restore-response.json"
+      else
+        printf '{"data":{"recipes":[{"id":"recipe-no-image","name":"First","image":null},{"id":"recipe-with-image","name":"Image","image":{"url":"/public/image.bin","thumbUrl":"/public/thumb.bin"}}]}}\n' \
+          > "$work/restore-response.json"
+      fi
       ;;
     *'recipe(id:$id)'*)
-      printf '{"data":{"recipe":{"id":"recipe","name":"Recipe","image":{"url":"/public/image.bin","thumbUrl":"/public/thumb.bin"},"rating":{"count":1}}}}\n' \
-        > "$work/restore-response.json"
+      id=$(jq -r .id <<< "$variables")
+      [[ $id == "${EXPECTED_RECIPE_ID:?}" ]] || return 1
+      if [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"First",image:null,rating:{count:1}}}}' \
+          > "$work/restore-response.json"
+      else
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"Image",
+          image:{url:"/public/image.bin",thumbUrl:"/public/thumb.bin"},rating:{count:1}}}}' \
+          > "$work/restore-response.json"
+      fi
       ;;
     *searchRecipes*)
-      printf '{"data":{"searchRecipes":{"recipes":[{"id":"recipe"}],"found":1}}}\n' \
-        > "$work/restore-response.json"
+      jq -n --arg id "$EXPECTED_RECIPE_ID" \
+        '{data:{searchRecipes:{recipes:[{id:$id}],found:1}}}' > "$work/restore-response.json"
       ;;
     *) return 1 ;;
   esac
@@ -811,14 +825,16 @@ curl() {
   local url="${*: -1}"
   case "$url" in
     http://127.0.0.1:4000/public/*) printf 'opaque image bytes' ;;
-    http://127.0.0.1:4100/recipe/*) printf 'restored recipe page\n' ;;
+    "http://127.0.0.1:4100/recipe/$EXPECTED_RECIPE_ID") printf 'restored recipe page\n' ;;
     *) return 1 ;;
   esac
 }
 mkdir -p "$work"
 restore_verify_reads
 EOF
-  run bash restore-image-harness.sh
+  run env EXPECTED_RECIPE_ID=recipe-with-image bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  run env RESTORE_IMAGE_FREE=true EXPECTED_RECIPE_ID=first bash restore-image-harness.sh
   [ "$status" -eq 0 ]
 }
 
