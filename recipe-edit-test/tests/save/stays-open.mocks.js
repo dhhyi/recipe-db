@@ -42,9 +42,11 @@ export const graphqlMocks = [
           name: "Soup",
           method: "Mix",
           inspirations: [],
-          ingredients: [],
+          ingredients: [
+            { amount: "200", unit: "g", name: "Salt", optional: false },
+          ],
         },
-        inspirationsOnline: false,
+        inspirationsOnline: true,
       },
     },
   },
@@ -57,8 +59,15 @@ export const graphqlMocks = [
     }`,
     variables: {
       id: "recipe-1",
-      input: { name: "Soup updated", method: "Mix", ingredients: [] },
+      input: {
+        name: "Soup updated",
+        method: "Mix",
+        ingredients: [
+          { amount: "200", unit: "g", name: "Fine salt", optional: false },
+        ],
+        inspirations: [],
+      },
     },
-    response: { data: { updateRecipe: { id: "recipe-1" } } },
+    responses: [{ data: { updateRecipe: { id: "recipe-1" } } }],
   },
 ];
