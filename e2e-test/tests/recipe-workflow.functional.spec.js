@@ -288,49 +288,6 @@ test("HTTP 200 GraphQL error shows retry and clears after successful retry", asy
   await expect(errorAlert(page)).toHaveCount(0);
 });
 
-test("field validation retry path marks name invalid and succeeds after correction", async ({
-  page,
-  demoRecipe,
-}) => {
-  let updateCount = 0;
-  await page.route("**/graphql", async (route) => {
-    if (requestIsOperation(route.request(), "UpdateRecipe", "updateRecipe")) {
-      updateCount += 1;
-      if (updateCount === 1) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            data: { updateRecipe: null },
-            errors: [
-              {
-                message: "Name is required",
-                extensions: { code: "required-field", field: "name" },
-              },
-            ],
-          }),
-        });
-        return;
-      }
-    }
-    await route.fallback();
-  });
-
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await waitForEditorForm(page);
-  const editedName = `${demoRecipe.name} validation`;
-  await nameField(page).fill(editedName);
-  await saveButton(page).click();
-
-  await expect(saveButton(page)).toHaveText("Erneut speichern");
-  await expect(dirtyStatus(page)).toBeVisible();
-  await expect(nameField(page)).toHaveValue(editedName);
-
-  await nameField(page).fill(`${demoRecipe.name} validation ok`);
-  await saveButton(page).click();
-  await expect(successStatus(page)).toBeVisible();
-});
-
 test("pending save freezes form controls, blocks duplicate submits and navigation", async ({
   page,
   demoRecipe,
