@@ -4,7 +4,7 @@ import Crop exposing (Crop)
 import Editor.Types exposing (GalleryFeedbackKind(..), Model, MoveDirection(..), Msg(..), Phase(..), Session, canAdd, canDelete, canMove, imageLimit)
 import File exposing (File)
 import Html exposing (Html, a, article, button, div, h1, img, input, label, li, p, span, text)
-import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
+import Html.Attributes exposing (accept, alt, attribute, class, classList, disabled, href, id, src, style, type_)
 import Html.Events exposing (on, onClick, stopPropagationOn)
 import Html.Keyed
 import Json.Decode as D
@@ -203,9 +203,6 @@ editorStatus model =
             (if model.phase == Viewing && model.savedFeedback && model.galleryMutation == Nothing then
                 "feedback success save-feedback"
 
-             else if model.galleryPreview /= Nothing && model.galleryMutation /= Nothing then
-                "feedback warning"
-
              else
                 "sr-only"
             )
@@ -402,13 +399,22 @@ galleryRow model failed index image =
 
                 _ ->
                     0
+
+        dragging : Bool
+        dragging =
+            Maybe.map Tuple.first model.galleryDrag == Just image.id
     in
     ( image.id
-    , li [ id ("gallery-image-" ++ image.id), attribute "data-gallery-id" image.id, attribute "tabindex" "-1" ]
-        [ article [ class "m-0 flex flex-wrap items-center gap-1 p-2 sm:gap-2", attribute "data-gallery-card" "" ]
+    , li
+        [ id ("gallery-image-" ++ image.id)
+        , attribute "data-gallery-id" image.id
+        , attribute "tabindex" "-1"
+        , classList [ ( "relative z-10", dragging ) ]
+        ]
+        [ article [ class "m-0 flex flex-wrap items-center gap-1 p-2 sm:gap-2", classList [ ( "shadow-xl", dragging ) ], attribute "data-gallery-card" "" ]
             [ if imageCount > 1 then
                 span
-                    [ class "gallery-handle grid h-[44px] w-[44px] select-none place-items-center text-[1.5rem] data-[enabled=true]:cursor-grab data-[enabled=true]:touch-none"
+                    [ class "grid size-8 select-none place-items-center data-[enabled=true]:cursor-grab data-[enabled=true]:touch-none"
                     , attribute "data-gallery-handle" image.id
                     , attribute "data-enabled" (boolString (canMove model image.id MoveUp || canMove model image.id MoveDown))
                     , attribute "aria-hidden" "true"
@@ -459,25 +465,7 @@ galleryRow model failed index image =
                         ]
                         []
                 , if index == 0 then
-                    let
-                        pendingDefault : Bool
-                        pendingDefault =
-                            case ( model.galleryPreview, model.recipe ) of
-                                ( Just preview, RemoteData.Success (Just recipe) ) ->
-                                    model.galleryMutation /= Nothing || Just preview /= recipe.images
-
-                                _ ->
-                                    False
-                    in
-                    span []
-                        [ text
-                            (if pendingDefault then
-                                "Vorgemerktes Standardbild"
-
-                             else
-                                "Standardbild"
-                            )
-                        ]
+                    span [] [ text "Standardbild" ]
 
                   else
                     text ""

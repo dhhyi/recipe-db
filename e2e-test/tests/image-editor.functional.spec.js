@@ -707,12 +707,13 @@ test("gallery drag previews, cancels and saves a single complete order", async (
   try {
     await page.goto(`/images-edit/${multiImageRecipe.id}`);
     const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
-    const handles = rows.locator(".gallery-handle");
+    const handles = rows.locator("[data-gallery-handle]");
     await expect(handles).toHaveCount(2);
     await expect(handles.first()).toHaveCSS("touch-action", "none");
     await expect(handles.first()).toHaveCSS("cursor", "grab");
-    await expect(handles.first()).toHaveCSS("width", "44px");
-    await expect(handles.first()).toHaveCSS("height", "44px");
+    const handleBox = await handles.first().boundingBox();
+    expect(handleBox.width).toBeGreaterThanOrEqual(40);
+    expect(handleBox.height).toBeCloseTo(handleBox.width, 1);
     await expect(rows.first().locator("article")).toHaveCSS(
       "touch-action",
       "auto",
@@ -748,19 +749,24 @@ test("gallery drag previews, cancels and saves a single complete order", async (
     await page.mouse.up();
     expect(writes).toHaveLength(0);
 
+    const grabbed = await rows.nth(1).boundingBox();
     await page.mouse.move(x, y);
     await page.mouse.down();
     await expect(page.locator("#gallery-drag-status")).toHaveText(
       "Bildreihenfolge wird vorgemerkt.",
     );
     destination = await rows.first().boundingBox();
-    await page.mouse.move(x, destination.y + destination.height / 2);
+    const pointerY = destination.y + destination.height / 2;
+    await page.mouse.move(x, pointerY);
     await expect(rows.first().getByRole("img")).toHaveAttribute(
       "src",
       second.thumbUrl,
     );
+    await expect
+      .poll(async () => (await rows.first().boundingBox()).y)
+      .toBeCloseTo(pointerY - (y - grabbed.y), 0);
     await expect(
-      rows.first().getByText("Vorgemerktes Standardbild"),
+      rows.first().getByText("Standardbild", { exact: true }),
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await expect(handles.first()).toHaveCSS("touch-action", "auto");
@@ -771,6 +777,7 @@ test("gallery drag previews, cancels and saves a single complete order", async (
       "src",
       first.thumbUrl,
     );
+    await expect(rows.nth(1)).toHaveCSS("transform", "none");
     expect(writes).toHaveLength(0);
 
     const source = await handles.nth(1).boundingBox();
@@ -798,7 +805,7 @@ test("gallery drag previews, cancels and saves a single complete order", async (
       imageIds: [second.id, first.id],
     });
     await expect(
-      rows.first().getByText("Vorgemerktes Standardbild"),
+      rows.first().getByText("Standardbild", { exact: true }),
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     release.resolve();
@@ -837,7 +844,10 @@ test("unequal gallery rows remain stable across small moves and allow reversal",
   await rows.nth(1).evaluate((row) => {
     row.style.minHeight = "300px";
   });
-  const source = await rows.first().locator(".gallery-handle").boundingBox();
+  const source = await rows
+    .first()
+    .locator("[data-gallery-handle]")
+    .boundingBox();
   const x = source.x + source.width / 2;
   await page.mouse.move(x, source.y + source.height / 2);
   await page.mouse.down();
@@ -899,7 +909,7 @@ test("drag start preserves previous error and horizontal motion is a no-op", asy
     const original = await rows.evaluateAll((elements) =>
       elements.map((row) => row.dataset.galleryId),
     );
-    const handle = rows.nth(1).locator(".gallery-handle");
+    const handle = rows.nth(1).locator("[data-gallery-handle]");
     const box = await handle.boundingBox();
     const rowTop = (await rows.nth(1).boundingBox()).y;
     const x = box.x + box.width / 2;
@@ -930,7 +940,10 @@ test("drag start preserves previous error and horizontal motion is a no-op", asy
     await expect(error).toBeVisible();
     expect(writes).toBe(1);
 
-    const source = await rows.nth(1).locator(".gallery-handle").boundingBox();
+    const source = await rows
+      .nth(1)
+      .locator("[data-gallery-handle]")
+      .boundingBox();
     await page.mouse.move(
       source.x + source.width / 2,
       source.y + source.height / 2,
@@ -994,7 +1007,10 @@ test("three-row drag uses live layout, gates both phases and reconciles a differ
       );
     await expect(rows).toHaveCount(3);
     await rows.last().scrollIntoViewIfNeeded();
-    const start = await rows.first().locator(".gallery-handle").boundingBox();
+    const start = await rows
+      .first()
+      .locator("[data-gallery-handle]")
+      .boundingBox();
     await page.mouse.move(
       start.x + start.width / 2,
       start.y + start.height / 2,
@@ -1018,16 +1034,20 @@ test("three-row drag uses live layout, gates both phases and reconciles a differ
     await expect(page.locator("#editor-status")).toHaveText(
       "Die vorgemerkte Bildreihenfolge wird gespeichert.",
     );
+    await expect(page.locator("#editor-status")).toHaveClass("sr-only");
     await expect(
-      rows.first().getByText("Vorgemerktes Standardbild"),
+      rows.first().getByText("Standardbild", { exact: true }),
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await rows.nth(1).locator("button").first().click({ force: true });
-    await rows.nth(1).locator(".gallery-handle").dispatchEvent("pointerdown", {
-      isPrimary: true,
-      button: 0,
-      pointerId: 99,
-    });
+    await rows
+      .nth(1)
+      .locator("[data-gallery-handle]")
+      .dispatchEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 99,
+      });
     expect(writes).toBe(1);
     writeRelease.resolve();
     await expect.poll(() => reads).toBe(1);
@@ -1035,15 +1055,18 @@ test("three-row drag uses live layout, gates both phases and reconciles a differ
       "Reihenfolge gespeichert. Die aktuelle Bildreihenfolge wird geladen.",
     );
     await expect(
-      rows.first().getByText("Vorgemerktes Standardbild"),
+      rows.first().getByText("Standardbild", { exact: true }),
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await rows.nth(1).locator("button").first().click({ force: true });
-    await rows.nth(1).locator(".gallery-handle").dispatchEvent("pointerdown", {
-      isPrimary: true,
-      button: 0,
-      pointerId: 100,
-    });
+    await rows
+      .nth(1)
+      .locator("[data-gallery-handle]")
+      .dispatchEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 100,
+      });
     expect(writes).toBe(1);
     readRelease.resolve();
     await expect.poll(ids).toEqual([second.id, third.id, first.id]);
@@ -1096,7 +1119,10 @@ test("non-default drag announces a concurrent authoritative default change", asy
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(3);
   await rows.last().scrollIntoViewIfNeeded();
-  const source = await rows.nth(1).locator(".gallery-handle").boundingBox();
+  const source = await rows
+    .nth(1)
+    .locator("[data-gallery-handle]")
+    .boundingBox();
   await page.mouse.move(
     source.x + source.width / 2,
     source.y + source.height / 2,
@@ -1144,7 +1170,7 @@ test("dragging near the viewport edge does not auto-scroll", async ({
     spacer.style.height = "1200px";
     document.body.append(spacer);
   });
-  const handle = page.locator(".gallery-handle").first();
+  const handle = page.locator("[data-gallery-handle]").first();
   await expect(handle).toBeVisible();
   await handle.scrollIntoViewIfNeeded();
   const box = await handle.boundingBox();
@@ -1197,7 +1223,10 @@ test("unknown drag outcome that committed is reconciled without a retry", async 
   await page.goto(`/images-edit/${multiImageRecipe.id}`);
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(2);
-  const source = await rows.nth(1).locator(".gallery-handle").boundingBox();
+  const source = await rows
+    .nth(1)
+    .locator("[data-gallery-handle]")
+    .boundingBox();
   await page.mouse.move(
     source.x + source.width / 2,
     source.y + source.height / 2,
@@ -1239,7 +1268,7 @@ test("touch drag cancels and drops from the handle, not the row", async ({
   await page.goto(`/images-edit/${multiImageRecipe.id}`);
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(2);
-  const handles = rows.locator(".gallery-handle");
+  const handles = rows.locator("[data-gallery-handle]");
   const client = await page.context().newCDPSession(page);
   await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
   const gesture = async (target, destination, cancel) => {
@@ -1336,7 +1365,7 @@ test("touch scrolling works outside the handle but not from the handle", async (
     .poll(() => page.evaluate(() => window.scrollY))
     .toBeGreaterThan(0);
   await page.evaluate(() => window.scrollTo(0, 0));
-  await swipe(rows.first().locator(".gallery-handle"));
+  await swipe(rows.first().locator("[data-gallery-handle]"));
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await client.detach();
 });
@@ -1387,7 +1416,7 @@ for (const outcome of ["rejected", "unknown", "success"]) {
     });
     await page.goto(`/images-edit/${multiImageRecipe.id}`);
     const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
-    const handles = rows.locator(".gallery-handle");
+    const handles = rows.locator("[data-gallery-handle]");
     await expect(handles).toHaveCount(2);
     const from = await handles.nth(1).boundingBox();
     const to = await handles.first().boundingBox();
@@ -1404,7 +1433,7 @@ for (const outcome of ["rejected", "unknown", "success"]) {
     );
     if (outcome === "success") {
       await expect(
-        rows.first().getByText("Vorgemerktes Standardbild"),
+        rows.first().getByText("Standardbild", { exact: true }),
       ).toBeVisible();
       await expect(
         page.getByText(
@@ -1456,7 +1485,7 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await expect(rows.nth(0).locator("button").nth(1)).toBeEnabled();
   await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
   await expect(rows.locator("article")).toHaveCount(2);
-  await expect(page.locator(".gallery-handle")).toHaveCount(2);
+  await expect(page.locator("[data-gallery-handle]")).toHaveCount(2);
   await expect(
     rows.first().locator(".gallery-move-controls button"),
   ).toHaveCount(2);

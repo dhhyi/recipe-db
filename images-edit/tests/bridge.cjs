@@ -322,18 +322,24 @@ test("active pointer coordinates do not jump when status layout moves the stage"
   assert.equal(bridge.events[2].kind, "end");
 });
 
+function galleryRow(id, box) {
+  return {
+    dataset: { galleryId: id },
+    style: {},
+    getBoundingClientRect: box,
+  };
+}
+
 test("gallery pointer uses stable list capture, ignores clicks and cancels safely", () => {
   const bridge = harness();
   let shift = 0;
   let captured = false;
-  const rows = ["a", "b", "c"].map((id, index) => ({
-    dataset: { galleryId: id },
-    getBoundingClientRect: () => ({
+  const rows = ["a", "b", "c"].map((id, index) =>
+    galleryRow(id, () => ({
       top: index * 100 + shift,
       bottom: index * 100 + shift + 100,
-      height: 100,
-    }),
-  }));
+    })),
+  );
   const list = {
     querySelectorAll: () => rows,
     setPointerCapture() {
@@ -411,13 +417,12 @@ test("gallery hit-testing follows live row bounds after layout and preview chang
   const ids = ["a", "b", "c"];
   const list = {
     querySelectorAll: () =>
-      ids.map((id, index) => ({
-        dataset: { galleryId: id },
-        getBoundingClientRect: () => ({
+      ids.map((id, index) =>
+        galleryRow(id, () => ({
           top: boxes[index][0],
           bottom: boxes[index][1],
-        }),
-      })),
+        })),
+      ),
     setPointerCapture() {},
     hasPointerCapture: () => true,
     releasePointerCapture() {},
@@ -459,7 +464,7 @@ test("gallery hit-testing follows live row bounds after layout and preview chang
   assert.equal(bridge.events.at(-1).kind, "gallery-drag-end");
 });
 
-test("unequal rows do not oscillate after a midpoint is crossed", () => {
+test("unequal rows swap at 65% coverage without oscillating", () => {
   const bridge = harness();
   const ids = ["a", "b", "c"];
   const heights = { a: 100, b: 200, c: 120 };
@@ -468,10 +473,10 @@ test("unequal rows do not oscillate after a midpoint is crossed", () => {
       let top = 40;
       return ids.map((id) => {
         const bottom = top + heights[id];
-        const row = {
-          dataset: { galleryId: id },
-          getBoundingClientRect: () => ({ top: bottom - heights[id], bottom }),
-        };
+        const row = galleryRow(id, () => ({
+          top: bottom - heights[id],
+          bottom,
+        }));
         top = bottom;
         return row;
       });
@@ -498,17 +503,20 @@ test("unequal rows do not oscillate after a midpoint is crossed", () => {
     preventDefault() {},
   };
   bridge.dispatch("pointerdown", event);
-  bridge.dispatch("pointermove", { ...event, clientY: 240 });
+  // a (100px, grabbed 50px from its top) covers 65% of b (140-340) at 220.
+  bridge.dispatch("pointermove", { ...event, clientY: 219 });
+  assert.equal(bridge.events.at(-1).index, 0);
+  bridge.dispatch("pointermove", { ...event, clientY: 220 });
   assert.equal(bridge.events.at(-1).index, 1);
   ids.splice(0, 3, "b", "a", "c");
-  bridge.dispatch("pointermove", { ...event, clientY: 239 });
+  bridge.dispatch("pointermove", { ...event, clientY: 219 });
   assert.equal(bridge.events.at(-1).index, 1);
-  bridge.dispatch("pointermove", { ...event, clientY: 241 });
+  bridge.dispatch("pointermove", { ...event, clientY: 161 });
   assert.equal(bridge.events.at(-1).index, 1);
-  bridge.dispatch("pointermove", { ...event, clientY: 139 });
+  bridge.dispatch("pointermove", { ...event, clientY: 160 });
   assert.equal(bridge.events.at(-1).index, 0);
   ids.splice(0, 3, "a", "b", "c");
-  bridge.dispatch("pointerup", { ...event, clientY: 139 });
+  bridge.dispatch("pointerup", { ...event, clientY: 160 });
   assert.equal(bridge.events.at(-1).cancelled, false);
 });
 

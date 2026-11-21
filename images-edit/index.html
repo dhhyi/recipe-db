@@ -278,12 +278,67 @@
           pointer = null;
           if (previous.stage.hasPointerCapture(previous.id))
             previous.stage.releasePointerCapture(previous.id);
-          if (notify)
-            send(
-              previous.gallery
-                ? { kind: "gallery-drag-end", cancelled }
-                : { kind: "end" },
-            );
+          if (!previous.gallery) {
+            if (notify) send({ kind: "end" });
+            return;
+          }
+          const visual = galleryVisual(previous.stage);
+          if (notify) send({ kind: "gallery-drag-end", cancelled });
+          galleryFrame(previous, visual);
+        }
+
+        // Row bounds without the drag offset and slide animations, so hit
+        // testing follows the layout rather than the visual position.
+        function galleryLayout(list) {
+          return [...list.querySelectorAll("[data-gallery-id]")].map((row) => {
+            const box = row.getBoundingClientRect();
+            const style = window.getComputedStyle?.(row);
+            const shift = style
+              ? new DOMMatrixReadOnly(style.transform).m42
+              : 0;
+            return {
+              row,
+              id: row.dataset.galleryId,
+              top: box.top - shift,
+              bottom: box.bottom - shift,
+            };
+          });
+        }
+
+        function galleryVisual(list) {
+          return new Map(
+            [...list.querySelectorAll("[data-gallery-id]")].map((row) => [
+              row.dataset.galleryId,
+              row.getBoundingClientRect().top,
+            ]),
+          );
+        }
+
+        // Runs after Elm has rendered the order sent in the same frame: keeps
+        // the dragged row under the pointer and slides the others into place.
+        function galleryFrame(current, visual) {
+          requestAnimationFrame(() => {
+            const reduced = window.matchMedia(
+              "(prefers-reduced-motion: reduce)",
+            ).matches;
+            for (const entry of galleryLayout(current.stage)) {
+              if (entry.id === current.imageId && pointer === current) {
+                entry.row.style.transform = `translateY(${current.lastY - current.grab - entry.top}px)`;
+                continue;
+              }
+              entry.row.style.transform = "";
+              const delta = (visual.get(entry.id) ?? entry.top) - entry.top;
+              if (reduced || Math.abs(delta) < 0.5) continue;
+              entry.row.slide?.cancel();
+              entry.row.slide = entry.row.animate?.(
+                [
+                  { transform: `translateY(${delta}px)` },
+                  { transform: "none" },
+                ],
+                { duration: 200, easing: "ease-out" },
+              );
+            }
+          });
         }
 
         function galleryPosition(event, current) {
@@ -298,29 +353,34 @@
           current.moved = true;
           current.lastX = event.clientX;
           current.lastY = event.clientY;
-          const rows = [...current.stage.querySelectorAll("[data-gallery-id]")];
+          const rows = galleryLayout(current.stage);
           const currentIndex = rows.findIndex(
-            (row) => row.dataset.galleryId === current.imageId,
+            (row) => row.id === current.imageId,
           );
           if (currentIndex < 0) return;
-          const centers = rows.map((row) => {
-            const box = row.getBoundingClientRect();
-            return (box.top + box.bottom) / 2;
-          });
+          // A row swaps once the dragged card covers all but this share of it.
+          const margin = 0.35;
+          const top = event.clientY - current.grab;
+          const bottom =
+            top + rows[currentIndex].bottom - rows[currentIndex].top;
           let index = currentIndex;
           for (let i = 0; i < currentIndex; i++) {
-            if (event.clientY <= centers[i]) {
+            const row = rows[i];
+            if (top <= row.top + (row.bottom - row.top) * margin) {
               index = i;
               break;
             }
           }
           for (let i = rows.length - 1; i > currentIndex; i--) {
-            if (event.clientY >= centers[i]) {
+            const row = rows[i];
+            if (bottom >= row.bottom - (row.bottom - row.top) * margin) {
               index = i;
               break;
             }
           }
+          const visual = galleryVisual(current.stage);
           send({ kind: "gallery-drag-move", index });
+          galleryFrame(current, visual);
         }
 
         function position(event, current) {
@@ -346,11 +406,10 @@
               event.button !== 0
             )
               return;
-            const rows = [...list.querySelectorAll("[data-gallery-id]")];
-            const startIndex = rows.findIndex(
-              (row) => row.dataset.galleryId === handle.dataset.galleryHandle,
+            const start = galleryLayout(list).find(
+              (row) => row.id === handle.dataset.galleryHandle,
             );
-            if (startIndex < 0) return;
+            if (!start) return;
             event.preventDefault();
             pointer = {
               id: event.pointerId,
@@ -359,6 +418,7 @@
               imageId: handle.dataset.galleryHandle,
               startX: event.clientX,
               startY: event.clientY,
+              grab: event.clientY - start.top,
               moved: false,
             };
             list.setPointerCapture(event.pointerId);
