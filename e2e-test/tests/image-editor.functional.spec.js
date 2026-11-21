@@ -1049,7 +1049,9 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await page.goto(`/images-edit/${multiImageRecipe.id}`);
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(2);
-  const otherImageDelete = rows.nth(1).getByRole("button");
+  const otherImageDelete = rows
+    .nth(1)
+    .getByRole("button", { name: /löschen$/ });
   const cancelDialogPromise = page.waitForEvent("dialog");
   const cancelClick = otherImageDelete.click();
   const cancelDialog = await cancelDialogPromise;
@@ -1059,7 +1061,7 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await expect(otherImageDelete).toBeFocused();
   expect(deletes).toHaveLength(0);
 
-  const deleteButton = rows.first().getByRole("button");
+  const deleteButton = rows.first().getByRole("button", { name: /löschen$/ });
   const requestPromise = page.waitForRequest(isImageDelete);
   const dialogPromise = page.waitForEvent("dialog");
   const clickPromise = deleteButton.click();
@@ -1070,9 +1072,12 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await dialog.accept();
   await clickPromise;
   await requestPromise;
-  await expect(rows.locator("button")).toHaveCount(2);
-  await expect(rows.locator("button").nth(0)).toBeDisabled();
-  await expect(rows.locator("button").nth(1)).toBeDisabled();
+  await expect(rows.locator("button")).toHaveCount(6);
+  expect(
+    await rows
+      .locator("button")
+      .evaluateAll((buttons) => buttons.every((button) => button.disabled)),
+  ).toBe(true);
   await expect(addInput(page)).toBeDisabled();
   await expect(page.locator("#editor-status")).toHaveAttribute(
     "aria-busy",
@@ -1094,11 +1099,9 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await expect(
     rows.first().getByRole("img", { name: "Rezeptbild 1" }),
   ).toHaveAttribute("src", multiImageRecipe.images[1].thumbUrl);
-  await expect(rows.first().getByRole("button")).toBeFocused();
-  await expect(rows.first().getByRole("button")).toHaveAttribute(
-    "id",
-    `delete-image-${next.id}`,
-  );
+  await expect(
+    rows.first().locator(`[id="delete-image-${next.id}"]`),
+  ).toBeFocused();
   expect(deletes).toHaveLength(1);
 });
 
@@ -1121,7 +1124,7 @@ test("accepted non-first deletion keeps the default and focuses the preceding ro
   await page.goto(`/images-edit/${multiImageRecipe.id}`);
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(2);
-  const deleteButton = rows.nth(1).getByRole("button");
+  const deleteButton = rows.nth(1).getByRole("button", { name: /löschen$/ });
   const responsePromise = page.waitForResponse((response) =>
     isImageDelete(response.request()),
   );
@@ -1142,11 +1145,9 @@ test("accepted non-first deletion keeps the default and focuses the preceding ro
   await expect(
     rows.first().getByRole("img", { name: "Rezeptbild 1" }),
   ).toHaveAttribute("src", defaultImage.thumbUrl);
-  await expect(rows.first().getByRole("button")).toBeFocused();
-  await expect(rows.first().getByRole("button")).toHaveAttribute(
-    "id",
-    `delete-image-${defaultImage.id}`,
-  );
+  await expect(
+    rows.first().locator(`[id="delete-image-${defaultImage.id}"]`),
+  ).toBeFocused();
   expect(deletes).toHaveLength(1);
 });
 
