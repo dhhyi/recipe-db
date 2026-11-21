@@ -459,6 +459,48 @@ test("gallery hit-testing follows live row bounds after layout and preview chang
   assert.equal(bridge.events.at(-1).kind, "gallery-drag-end");
 });
 
+test("unequal rows do not oscillate after a midpoint is crossed", () => {
+  const bridge = harness();
+  const ids = ["a", "b", "c"];
+  const heights = { a: 100, b: 200, c: 120 };
+  const list = {
+    querySelectorAll: () => {
+      let top = 40;
+      return ids.map((id) => {
+        const bottom = top + heights[id];
+        const row = {
+          dataset: { galleryId: id },
+          getBoundingClientRect: () => ({ top: bottom - heights[id], bottom }),
+        };
+        top = bottom;
+        return row;
+      });
+    },
+    setPointerCapture() {},
+    hasPointerCapture: () => true,
+    releasePointerCapture() {},
+  };
+  const handle = {
+    dataset: { enabled: "true", galleryHandle: "a" },
+    closest: () => list,
+  };
+  const target = { closest: (selector) => selector === "[data-gallery-handle]" ? handle : null };
+  const event = { target, isPrimary: true, button: 0, pointerId: 1, clientX: 20, clientY: 90, preventDefault() {} };
+  bridge.dispatch("pointerdown", event);
+  bridge.dispatch("pointermove", { ...event, clientY: 240 });
+  assert.equal(bridge.events.at(-1).index, 1);
+  ids.splice(0, 3, "b", "a", "c");
+  bridge.dispatch("pointermove", { ...event, clientY: 239 });
+  assert.equal(bridge.events.at(-1).index, 1);
+  bridge.dispatch("pointermove", { ...event, clientY: 241 });
+  assert.equal(bridge.events.at(-1).index, 1);
+  bridge.dispatch("pointermove", { ...event, clientY: 139 });
+  assert.equal(bridge.events.at(-1).index, 0);
+  ids.splice(0, 3, "a", "b", "c");
+  bridge.dispatch("pointerup", { ...event, clientY: 139 });
+  assert.equal(bridge.events.at(-1).cancelled, false);
+});
+
 for (const little of [true, false]) {
   for (let orientation = 1; orientation <= 8; orientation++) {
     test(`EXIF ${orientation}, ${little ? "little" : "big"} endian uses oriented source dimensions`, async () => {

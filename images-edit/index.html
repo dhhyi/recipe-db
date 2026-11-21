@@ -311,19 +311,27 @@
           current.lastX = event.clientX;
           current.lastY = event.clientY;
           const rows = [...current.stage.querySelectorAll("[data-gallery-id]")];
-          if (!rows.length) return;
-          const distances = rows.map((row) => {
-            const box = row.getBoundingClientRect();
-            return Math.max(
-              box.top - event.clientY,
-              0,
-              event.clientY - box.bottom,
-            );
-          });
-          const index = distances.reduce(
-            (best, value, i) => (value < distances[best] ? i : best),
-            0,
+          const currentIndex = rows.findIndex(
+            (row) => row.dataset.galleryId === current.imageId,
           );
+          if (currentIndex < 0) return;
+          const centers = rows.map((row) => {
+            const box = row.getBoundingClientRect();
+            return (box.top + box.bottom) / 2;
+          });
+          let index = currentIndex;
+          for (let i = 0; i < currentIndex; i++) {
+            if (event.clientY <= centers[i]) {
+              index = i;
+              break;
+            }
+          }
+          for (let i = rows.length - 1; i > currentIndex; i--) {
+            if (event.clientY >= centers[i]) {
+              index = i;
+              break;
+            }
+          }
           send({ kind: "gallery-drag-move", index });
         }
 
@@ -360,6 +368,7 @@
               id: event.pointerId,
               stage: list,
               gallery: true,
+              imageId: handle.dataset.galleryHandle,
               startX: event.clientX,
               startY: event.clientY,
               moved: false,
