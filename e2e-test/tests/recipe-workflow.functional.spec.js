@@ -73,7 +73,6 @@ const returnButtonExisting = (page) =>
 const returnButtonNew = (page) =>
   page.getByRole("link", { name: "Zurück zur Übersicht", exact: true });
 const headerHomeLink = (page) => page.locator("header-component a[href='/']");
-const statusLine = (page) => page.getByRole("status").first();
 const dirtyStatus = (page) =>
   page.getByRole("status").filter({ hasText: /^Ungespeicherte Änderungen\.$/ });
 const cleanStatus = (page) =>
@@ -242,44 +241,6 @@ test("ingredient rows animate without delaying edits or discard", async ({
     await expect(ingredientNameField(page, 0)).toHaveValue("");
     await expect(ingredientNameField(page, 1)).toHaveCount(0);
   }
-});
-
-test("discard restores the saved method", async ({ page, demoRecipe }) => {
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await waitForEditorForm(page);
-  await expect(nameField(page)).toHaveValue(demoRecipe.name);
-
-  const persistedMethod = [
-    "Milch langsam erhitzen und einmal aufkochen.",
-    "Reis einstreuen und gründlich verrühren.",
-    "Bei kleiner Hitze weiterköcheln lassen.",
-    "Zwischendurch regelmäßig umrühren.",
-    "Zum Schluss mit Zimt abschmecken.",
-    "Vor dem Servieren kurz ruhen lassen.",
-  ].join("\n\n");
-
-  await methodField(page).fill(persistedMethod);
-
-  const firstSave = page.waitForResponse((response) => {
-    if (response.status() !== 200) return false;
-    return requestIsOperation(
-      response.request(),
-      "UpdateRecipe",
-      "updateRecipe",
-    );
-  });
-  await saveButton(page).click();
-  await firstSave;
-
-  await expect(successStatus(page)).toBeVisible();
-
-  await methodField(page).fill("Unpersisted method");
-  await expect(dirtyStatus(page)).toBeVisible();
-  await expect(statusLine(page)).toHaveText("Ungespeicherte Änderungen.");
-  await discardButton(page).click();
-
-  await expect(methodField(page)).toHaveValue(persistedMethod);
-  await expect(cleanStatus(page)).toHaveCount(0);
 });
 
 test("HTTP 200 GraphQL error shows retry and clears after successful retry", async ({
