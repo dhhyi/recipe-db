@@ -2,7 +2,7 @@ import { render } from "lit";
 import { expect } from "vitest";
 import { page } from "vitest/browser";
 
-import { LoggedIn, LoggedOut } from "./Header.stories.ts";
+import { LoggedIn, LoggedOut } from "../stories/Header.stories.ts";
 
 export async function assertHeaderScreenshots(
   viewports: {

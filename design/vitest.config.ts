@@ -7,11 +7,8 @@ export default mergeConfig(
   viteConfig,
   defineConfig({
     test: {
-      include: [
-        "src/components/**/*.test.ts",
-        "src/stories/header.visual.desktop.test.ts",
-        "src/stories/rating.visual.test.ts",
-      ],
+      include: ["src/components/**/*.test.ts"],
+      exclude: ["src/components/header.visual.touch.test.ts"],
       browser: {
         enabled: true,
         provider: playwright(),
