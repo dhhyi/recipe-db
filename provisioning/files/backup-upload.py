@@ -210,6 +210,7 @@ def validate_snapshot(snapshot, require_storage_versions=False):
             raise ValueError("missing storage-version marker")
         observed = {}
         observed_members = set()
+        observed_directories = []
         observed_storage_version = None
         try:
             with tarfile.open(archive, "r:") as source_tar:
@@ -227,6 +228,7 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                         raise ValueError("duplicate archive path")
                     observed_members.add(name)
                     if member.isdir():
+                        observed_directories.append(name)
                         continue
                     if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                         raise ValueError("unsafe archive member")
@@ -252,6 +254,8 @@ def validate_snapshot(snapshot, require_storage_versions=False):
             raise ValueError("invalid archive") from error
         if observed != expected_files or file_hash(archive) != pvc["sha256"]:
             raise ValueError("archive integrity mismatch")
+        if "directories" in pvc and pvc["directories"] != sorted(observed_directories):
+            raise ValueError("directory inventory mismatch")
         if observed_storage_version != expected_storage_version:
             raise ValueError("storage-version marker does not match the inventory")
         if require_storage_versions and expected_storage_version is None:
@@ -277,6 +281,7 @@ def content_fingerprint(manifest):
                 "layout": item.get("layout"),
                 "storage": item.get("storage"),
                 "files": item["files"],
+                **({"directories": item["directories"]} if "directories" in item else {}),
             }
             for item in sorted(manifest["inventory"], key=lambda item: item["archive"])
         ],

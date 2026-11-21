@@ -926,21 +926,22 @@ backup_copy_pvc() {
   [[ -s $archive ]] || return 1
   if $require_storage_versions; then
     python3 "$root/.scripts/validate-backup-snapshot.py" \
-      --require-storage-version "$archive" > "$work/$name-files.json" || return 1
+      --require-storage-version --include-directories "$archive" > "$work/$name-files.json" || return 1
   else
-    python3 "$root/.scripts/validate-backup-snapshot.py" "$archive" \
+    python3 "$root/.scripts/validate-backup-snapshot.py" --include-directories "$archive" \
       > "$work/$name-files.json" || return 1
   fi
   size=$(stat -c '%s' "$archive") || return 1
   sha=$(sha256sum "$archive") || return 1
   sha=${sha%% *}
-  files=$(jq 'length' "$work/$name-files.json")
+  files=$(jq '.files | length' "$work/$name-files.json")
   jq -cn --arg name "$name" --arg role "$role" --arg pvc "$pvc" \
     --arg archive "$name.tar" --arg sha256 "$sha" --argjson sizeBytes "$size" \
     --argjson fileCount "$files" --argjson storage "$storage" \
     --slurpfile files "$work/$name-files.json" \
     '{service:$name,role:$role,pvc:$pvc,archive:$archive,sha256:$sha256,
-      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0],
+      sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0].files,
+      directories:$files[0].directories,
       storage:$storage}'
 }
 

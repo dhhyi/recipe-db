@@ -1056,6 +1056,15 @@ EOF
   [ -e helper-deleted ]
 }
 
+@test "restore import rejects missing recorded directories" {
+  jq '.inventory[0].directories = ["empty"]' work/restore-manifest.json > work/manifest.next
+  mv work/manifest.next work/restore-manifest.json
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored volume verification failed"* ]]
+  [ ! -e helper-deleted ]
+}
+
 @test "restore import rejects another Pod mounted on the selected PVC before extracting any bytes" {
   export MOCK_EXTRA_MOUNT=true
   run bash .scripts/restore-import-harness.sh

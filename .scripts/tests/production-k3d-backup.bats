@@ -598,14 +598,15 @@ EOF
 @test "capture archives unrecognized nested authoritative data without interpreting it" {
   export MOCK_BACKUP=true
   printf 'not a recognized application format\n' > "$FIXTURE_ROOT/tar-data/tags/tags.sqlite"
-  mkdir -p "$FIXTURE_ROOT/tar-data/tags/nested"
+  mkdir -p "$FIXTURE_ROOT/tar-data/tags/nested" "$FIXTURE_ROOT/tar-data/tags/empty"
   printf '\000opaque data\n' > "$FIXTURE_ROOT/tar-data/tags/nested/data.bin"
   local snapshot="$FIXTURE_ROOT/backups/opaque"
   run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -eq 0 ]
   jq -e 'all(.inventory[]; has("layout") | not) and
     any(.inventory[] | select(.service == "tags").files[];
-      .path == "nested/data.bin")' "$snapshot/manifest.json"
+      .path == "nested/data.bin") and
+    any(.inventory[] | select(.service == "tags").directories[]; . == "empty")' "$snapshot/manifest.json"
   [ ! -e "$MOCK_LOG.lease" ]
 }
 

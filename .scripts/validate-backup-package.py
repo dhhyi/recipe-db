@@ -267,8 +267,9 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
             check_inner_bounds(output / item["archive"])
         validated = upload.validate_snapshot(output)
         for item in validated["inventory"]:
-            observed = snapshot.validate(output / item["archive"])
-            if observed != item["files"]:
+            observed = snapshot.validate(output / item["archive"], include_directories=True)
+            if observed["files"] != item["files"] or (
+                    "directories" in item and observed["directories"] != item["directories"]):
                 raise ValueError("file inventory mismatch")
         for item in validated["inventory"]:
             item.pop("layout", None)
