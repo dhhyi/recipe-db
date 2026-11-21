@@ -246,17 +246,22 @@
         baseline (model/blank-form)
         db {:status :saving
             :route {:page :new}
+            :authorization :allowed
             :form form
             :baseline baseline}
         effects (event-effects db [::events/saved
                                    {:response {:data {:createRecipe {:id "321"}}
                                                :errors []}}])
-        next-db (:db effects)]
+        next-db (:db effects)
+        edited (event-db next-db [::events/set-method "Simmer"])
+        next-save (event-effects edited [::events/save])]
     (is (= :idle (:status next-db)))
     (is (= {:page :edit :id "321"} (:route next-db)))
     (is (= form (:baseline next-db)))
     (is (= {:kind :success :message "Gespeichert"} (:feedback next-db)))
-    (is (= "/edit/321" (::events/replace-url effects)))))
+    (is (= "/edit/321" (::events/replace-url effects)))
+    (is (= events/update-mutation (get-in next-save [:dispatch 1 :query])))
+    (is (= "321" (get-in next-save [:dispatch 1 :variables :id])))))
 
 (deftest successful-save-removes-unnamed-rows-from-form-and-baseline
   (doseq [[page response] [[:new {:createRecipe {:id "321"}}]
