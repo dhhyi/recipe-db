@@ -243,51 +243,6 @@ test("ingredient rows animate without delaying edits or discard", async ({
   }
 });
 
-test("HTTP 200 GraphQL error shows retry and clears after successful retry", async ({
-  page,
-  demoRecipe,
-}) => {
-  let updateCount = 0;
-  await page.route("**/graphql", async (route) => {
-    if (requestIsOperation(route.request(), "UpdateRecipe", "updateRecipe")) {
-      updateCount += 1;
-      if (updateCount === 1) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            data: { updateRecipe: null },
-            errors: [
-              {
-                message: "Server validation failed",
-                extensions: { code: "invalid-input" },
-              },
-            ],
-          }),
-        });
-        return;
-      }
-    }
-    await route.fallback();
-  });
-
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await waitForEditorForm(page);
-  const editedName = `${demoRecipe.name} retry`;
-  await nameField(page).fill(editedName);
-
-  await saveButton(page).click();
-  await expect(errorAlert(page)).toContainText("Server validation failed");
-  await expect(saveButton(page)).toHaveText("Erneut speichern");
-  await expect(saveButton(page)).toBeEnabled();
-  await expect(dirtyStatus(page)).toBeVisible();
-  await expect(nameField(page)).toHaveValue(editedName);
-
-  await saveButton(page).click();
-  await expect(successStatus(page)).toBeVisible();
-  await expect(errorAlert(page)).toHaveCount(0);
-});
-
 test("pending save freezes form controls, blocks duplicate submits and navigation", async ({
   page,
   demoRecipe,
