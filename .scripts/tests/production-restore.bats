@@ -902,6 +902,9 @@ restore_graphql() {
     *deleteRecipe*) touch "$work/deleted" ;;
     *searchRecipes*)
       name=$(jq -r '.options.q' <<< "$variables")
+      if [[ ${CASE:-} == slow-initial-search && $name != *Changed && $name != "*" ]]; then
+        SECONDS=$((SECONDS + 199))
+      fi
       if [[ $name == *Changed ]]; then
         touch "$work/searched-change"
         if [[ ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
@@ -926,6 +929,9 @@ curl() {
     touch "$work/prime-delayed"
     SECONDS=$((SECONDS + 61))
     cat "$work/probe-name"
+  elif [[ ${CASE:-} == slow-initial-search && ! -e $work/prime-delayed ]]; then
+    touch "$work/prime-delayed"
+    return 1
   elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
     cat "$work/probe-original"
   elif [[ ${CASE:-} == stale-prime-update && $(cat "$work/probe-name") == *Primed ]]; then
@@ -941,6 +947,9 @@ sleep() { SECONDS=$((SECONDS + $1)); }
 restore_verify_propagation
 EOF
   run env CASE=slow-search bash propagation-cache.sh
+  [ "$status" -eq 0 ]
+  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
+  run env CASE=slow-initial-search bash propagation-cache.sh
   [ "$status" -eq 0 ]
   for case in slow-prime stale-update stale-delete stale-prime-update stale-index; do
     rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache

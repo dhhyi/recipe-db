@@ -1586,6 +1586,7 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+  deadline=$((SECONDS + timeout))
   cache_deadline=$((SECONDS + 60))
   while :; do
     ((SECONDS < cache_deadline)) || return 1
