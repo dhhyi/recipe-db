@@ -302,13 +302,19 @@
           const dx = event.clientX - current.startX;
           const dy = event.clientY - current.startY;
           if (!current.moved && Math.hypot(dx, dy) < 5) return;
+          if (current.moved && event.clientX === current.lastX && event.clientY === current.lastY)
+            return;
           current.moved = true;
-          const center = current.centers[current.startIndex] + dy;
-          const index = current.centers.reduce(
-            (best, value, i, centers) =>
-              Math.abs(value - center) < Math.abs(centers[best] - center)
-                ? i
-                : best,
+          current.lastX = event.clientX;
+          current.lastY = event.clientY;
+          const rows = [...current.stage.querySelectorAll("[data-gallery-id]")];
+          if (!rows.length) return;
+          const distances = rows.map((row) => {
+            const box = row.getBoundingClientRect();
+            return Math.max(box.top - event.clientY, 0, event.clientY - box.bottom);
+          });
+          const index = distances.reduce(
+            (best, value, i) => value < distances[best] ? i : best,
             0,
           );
           send({ kind: "gallery-drag-move", index });
@@ -349,11 +355,6 @@
               gallery: true,
               startX: event.clientX,
               startY: event.clientY,
-              startIndex,
-              centers: rows.map((row) => {
-                const box = row.getBoundingClientRect();
-                return box.top + box.height / 2;
-              }),
               moved: false,
             };
             list.setPointerCapture(event.pointerId);

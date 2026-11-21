@@ -92,7 +92,7 @@ step msg model =
 
                             movement : GalleryMovement
                             movement =
-                                { direction = direction, fromIndex = index, toIndex = targetIndex }
+                                { direction = direction, fromIndex = index, toIndex = targetIndex, dragged = False }
 
                             mutation : GalleryMutation
                             mutation =
@@ -679,6 +679,7 @@ handleEvent event model =
                                                 MoveDown
                                         , fromIndex = from
                                         , toIndex = target
+                                        , dragged = True
                                         }
 
                                     mutation =
@@ -938,16 +939,32 @@ reorderingSuccessMessage : RecipeDB.RecipeModel -> GalleryMutation -> String
 reorderingSuccessMessage recipe mutation =
     case recipe of
         RemoteData.Success (Just data) ->
-            case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
-                Just index ->
-                    if index == 0 then
-                        "Bild an Position 1 verschoben und als Standardbild festgelegt."
+            let
+                message =
+                    case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
+                        Just index ->
+                            if index == 0 then
+                                "Bild an Position 1 verschoben und als Standardbild festgelegt."
 
-                    else
-                        "Bild an Position " ++ String.fromInt (index + 1) ++ " verschoben."
+                            else
+                                "Bild an Position " ++ String.fromInt (index + 1) ++ " verschoben."
 
-                Nothing ->
-                    "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
+                        Nothing ->
+                            "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
+
+                promotedDefault =
+                    case ( mutation.movement, data.images |> Maybe.andThen List.head ) of
+                        ( Just movement, Just first ) ->
+                            movement.dragged && movement.fromIndex == 0 && first.id /= mutation.imageId
+
+                        _ ->
+                            False
+            in
+            if promotedDefault then
+                message ++ " Bild an Position 1 ist jetzt das Standardbild."
+
+            else
+                message
 
         _ ->
             "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden."

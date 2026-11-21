@@ -169,7 +169,11 @@ editorStatus model =
                 "Der aktuelle Stand konnte nicht bestätigt werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
 
             else if model.galleryPreview /= Nothing && model.galleryMutation /= Nothing then
-                "Die vorgemerkte Bildreihenfolge wird gespeichert oder aktualisiert."
+                if model.galleryMutation |> Maybe.map .writing |> Maybe.withDefault False then
+                    "Die vorgemerkte Bildreihenfolge wird gespeichert."
+
+                else
+                    "Reihenfolge gespeichert. Die aktuelle Bildreihenfolge wird geladen."
 
             else if model.galleryDrag /= Nothing then
                 "Bildreihenfolge wird vorgemerkt."

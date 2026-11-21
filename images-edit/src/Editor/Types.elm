@@ -39,6 +39,7 @@ type alias GalleryMovement =
     { direction : MoveDirection
     , fromIndex : Int
     , toIndex : Int
+    , dragged : Bool
     }
 
 

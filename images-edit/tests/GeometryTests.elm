@@ -280,6 +280,31 @@ galleryTests =
         dragSuccess =
             apply (Reordered dragDrop.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) dragDrop
 
+        firstDrag =
+            apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/1" ) ]) threeImages
+                |> apply (dragEvent "gallery-drag-move" [ ( "index", E.int 2 ) ])
+                |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
+
+        firstDragSuccess =
+            apply (Reordered firstDrag.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) firstDrag
+
+        differentRead =
+            RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })
+
+        firstDragReady =
+            apply (GotRecipe firstDragSuccess.galleryToken differentRead) firstDragSuccess
+
+        firstDragReconciled =
+            apply (ApplyGallery firstDragReady.galleryToken) firstDragReady
+
+        unknownFirstDrag =
+            apply (Reordered firstDrag.mutationToken (RemoteData.Failure "Ungewiss")) firstDrag
+
+        unknownCommitted =
+            apply
+                (GotRecipe unknownFirstDrag.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" } ] })))
+                unknownFirstDrag
+
         dragFailedRead : Editor.Model -> Editor.Model
         dragFailedRead model =
             apply (GotRecipe model.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Nothing }))) model
@@ -545,6 +570,26 @@ galleryTests =
             && retried.galleryToken
             == failed.galleryToken
             + 1
+      )
+    , ( "nonadjacent drag preserves other opaque IDs and reconciles a different authoritative default"
+      , Maybe.map (List.map .id) firstDrag.galleryPreview
+            == Just [ "opaque/2", "opaque/3", "opaque/1" ]
+            && currentIds firstDragReconciled
+            == [ "opaque/3", "opaque/1", "opaque/2" ]
+            && firstDragReconciled.galleryPreview
+            == Nothing
+            && Maybe.map .message firstDragReconciled.galleryFeedback
+            == Just "Bild an Position 2 verschoben. Bild an Position 1 ist jetzt das Standardbild."
+      )
+    , ( "unknown write that committed uses the authoritative collection without retry"
+      , currentIds unknownCommitted
+            == [ "opaque/2", "opaque/3", "opaque/1" ]
+            && unknownCommitted.galleryPreview
+            == Nothing
+            && Maybe.map .kind unknownCommitted.galleryFeedback
+            == Just Editor.ReorderingUnconfirmed
+            && unknownCommitted.mutationToken
+            == 1
       )
     , ( "middle Down swaps only its adjacent neighbor and preserves membership"
       , currentIds middleDownReconciled
