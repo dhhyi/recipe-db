@@ -196,7 +196,7 @@ step msg model =
                             ( refreshing, request ) =
                                 reconcileGallery next
                         in
-                        ( refreshing, Cmd.batch [ request, focus "editor-status" ] )
+                        ( refreshing, Cmd.batch [ request, focusWithoutScroll "editor-status" ] )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -390,10 +390,15 @@ shouldAnimateGallery model recipe =
         ( Just mutation, Just feedback, RemoteData.Success (Just data) ) ->
             case ( currentImages model, data.images ) of
                 ( Just oldImages, Just newImages ) ->
-                    mutation.movement
-                        /= Nothing
-                        && feedback.kind
+                    (feedback.kind
                         == ReorderingSucceeded
+                        && mutation.movement
+                        /= Nothing
+                        || feedback.kind
+                        == DeletionSucceeded
+                        && mutation.movement
+                        == Nothing
+                    )
                         && List.map .id oldImages
                         /= List.map .id newImages
 
@@ -734,7 +739,7 @@ startGalleryDeletion model imageId =
               }
             , Cmd.batch
                 [ RecipeDB.makeDeleteImageRequest model.recipeId imageId (Deleted token)
-                , focus "editor-status"
+                , focusWithoutScroll "editor-status"
                 ]
             )
 
@@ -766,17 +771,17 @@ focusAfterDeletion model mutation =
             case image of
                 Just entry ->
                     if canDelete model entry.id then
-                        focus ("delete-image-" ++ entry.id)
+                        focusWithoutScroll ("delete-image-" ++ entry.id)
 
                     else
-                        focus "gallery-heading"
+                        focusWithoutScroll "gallery-heading"
 
                 Nothing ->
                     if canAdd model then
-                        focus "upload-image"
+                        focusWithoutScroll "upload-image"
 
                     else
-                        focus "gallery-heading"
+                        focusWithoutScroll "gallery-heading"
 
         next : Maybe RecipeDB.GalleryImage
         next =

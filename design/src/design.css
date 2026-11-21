@@ -192,7 +192,7 @@ header-component > header:focus-within {
   }
 }
 
-:root:active-view-transition-type(gallery-reorder) {
+:root:active-view-transition-type(gallery-change) {
   [data-gallery-card] {
     view-transition-name: match-element;
   }

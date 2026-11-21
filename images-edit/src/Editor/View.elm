@@ -206,7 +206,17 @@ galleryFeedback model =
         Just feedback ->
             case feedback.kind of
                 DeletionSucceeded ->
-                    p [ attribute "role" "status", class "feedback success" ] [ text feedback.message ]
+                    p
+                        [ attribute "role" "status"
+                        , class
+                            (if model.galleryError /= Nothing then
+                                "feedback warning"
+
+                             else
+                                "sr-only"
+                            )
+                        ]
+                        [ text feedback.message ]
 
                 ImageAlreadyAbsent ->
                     p [ attribute "role" "status", class "feedback warning" ] [ text feedback.message ]

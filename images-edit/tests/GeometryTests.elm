@@ -318,11 +318,37 @@ galleryTests =
         writeCompleted =
             apply (Deleted acceptedDelete.mutationToken (RemoteData.Success True)) acceptedDelete
 
-        reconciled : Editor.Model
-        reconciled =
+        deletionReady : Editor.Model
+        deletionReady =
             apply
                 (GotRecipe writeCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" } ] })))
                 writeCompleted
+
+        unchangedAfterDelete : Editor.Model
+        unchangedAfterDelete =
+            apply
+                (GotRecipe writeCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just (entries 2) })))
+                writeCompleted
+
+        failedConfirmedDeleteRefresh : Editor.Model
+        failedConfirmedDeleteRefresh =
+            apply
+                (GotRecipe writeCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Nothing })))
+                writeCompleted
+
+        retriedConfirmedDelete : Editor.Model
+        retriedConfirmedDelete =
+            apply RetryGallery failedConfirmedDeleteRefresh
+
+        retriedDeletionReady : Editor.Model
+        retriedDeletionReady =
+            apply
+                (GotRecipe retriedConfirmedDelete.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" } ] })))
+                retriedConfirmedDelete
+
+        reconciled : Editor.Model
+        reconciled =
+            apply (ApplyGallery deletionReady.galleryToken) deletionReady
 
         rejectedWrite : Editor.Model
         rejectedWrite =
@@ -364,11 +390,15 @@ galleryTests =
         atLimitWritten =
             apply (Deleted atLimitAccepted.mutationToken (RemoteData.Success True)) atLimitAccepted
 
-        atNine : Editor.Model
-        atNine =
+        atNineReady : Editor.Model
+        atNineReady =
             apply
                 (GotRecipe atLimitWritten.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just (List.drop 1 (entries 10)) })))
                 atLimitWritten
+
+        atNine : Editor.Model
+        atNine =
+            apply (ApplyGallery atNineReady.galleryToken) atNineReady
     in
     [ ( "unconfirmed gallery or capabilities never enable Add"
       , not (Editor.canAdd authorized)
@@ -501,6 +531,34 @@ galleryTests =
             == [ "opaque/1", "opaque/2" ]
             && not (Editor.canAdd acceptedDelete)
             && not (Editor.canDelete acceptedDelete "opaque/2")
+      )
+    , ( "confirmed deletion waits for transition and ignores stale callbacks"
+      , currentIds deletionReady
+            == [ "opaque/1", "opaque/2" ]
+            && deletionReady.galleryRefreshing
+            && not (Editor.canDelete deletionReady "opaque/2")
+            && apply (ApplyGallery (deletionReady.galleryToken + 1)) deletionReady
+            == deletionReady
+      )
+    , ( "unchanged deletion refresh applies without a transition"
+      , unchangedAfterDelete.galleryMutation
+            == Nothing
+            && unchangedAfterDelete.pendingGallery
+            == Nothing
+            && currentIds unchangedAfterDelete
+            == [ "opaque/1", "opaque/2" ]
+      )
+    , ( "failed deletion refresh preserves the gallery and retry animates the confirmed result"
+      , failedConfirmedDeleteRefresh.galleryError
+            /= Nothing
+            && failedConfirmedDeleteRefresh.pendingGallery
+            == Nothing
+            && currentIds failedConfirmedDeleteRefresh
+            == [ "opaque/1", "opaque/2" ]
+            && retriedDeletionReady.pendingGallery
+            /= Nothing
+            && currentIds (apply (ApplyGallery retriedDeletionReady.galleryToken) retriedDeletionReady)
+            == [ "opaque/2" ]
       )
     , ( "confirmed success reconciles order and clears pending state"
       , not reconciled.galleryRefreshing

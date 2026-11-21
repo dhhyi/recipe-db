@@ -212,7 +212,7 @@ test("gallery reconciliation happens inside the view transition update", async (
   let update;
   const bridge = harness({
     startViewTransition: (options) => {
-      assert.deepEqual(Array.from(options.types), ["gallery-reorder"]);
+      assert.deepEqual(Array.from(options.types), ["gallery-change"]);
       update = options.update;
     },
   });

@@ -893,6 +893,82 @@ transitionTest(
   },
 );
 
+transitionTest(
+  "confirmed deletion fades the removed card and moves remaining cards",
+  async ({ page, multiImageRecipe }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.addInitScript(() => {
+      window.galleryTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (options) => {
+        const transition = start(options);
+        transition.ready.then(() => {
+          const animations = document.getAnimations();
+          const movements = animations
+            .filter((animation) =>
+              animation.effect?.pseudoElement?.startsWith(
+                "::view-transition-group(match-element",
+              ),
+            )
+            .map((animation) => {
+              const frames = animation.effect.getKeyframes();
+              return (
+                new DOMMatrixReadOnly(frames[1].transform).m42 -
+                new DOMMatrixReadOnly(frames[0].transform).m42
+              );
+            });
+          const pseudos = animations.map(
+            (animation) => animation.effect?.pseudoElement,
+          );
+          window.galleryTransitions.push({
+            movements,
+            removed:
+              pseudos.filter((pseudo) =>
+                pseudo?.startsWith("::view-transition-old(match-element"),
+              ).length >
+              pseudos.filter((pseudo) =>
+                pseudo?.startsWith("::view-transition-new(match-element"),
+              ).length,
+          });
+        });
+        return transition;
+      };
+    });
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const firstTop = (await rows.first().boundingBox()).y;
+    page.once("dialog", (dialog) => dialog.accept());
+    await rows
+      .first()
+      .getByRole("button", { name: /löschen$/ })
+      .click();
+    await expect
+      .poll(() => page.evaluate(() => window.galleryTransitions.length))
+      .toBe(1);
+    const transition = await page.evaluate(() => window.galleryTransitions[0]);
+    expect(transition.removed).toBe(true);
+    expect(transition.movements.some((distance) => distance < 0)).toBe(true);
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      multiImageRecipe.images[1].thumbUrl,
+    );
+    await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+      "sr-only",
+    );
+    expect((await rows.first().boundingBox()).y).toBeCloseTo(firstTop, 0);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    page.once("dialog", (dialog) => dialog.accept());
+    await rows
+      .first()
+      .getByRole("button", { name: /löschen$/ })
+      .click();
+    await expect(page.getByText("Kein Bild vorhanden.")).toBeVisible();
+    expect(await page.evaluate(() => window.galleryTransitions.length)).toBe(1);
+  },
+);
+
 test("reorder rejection and unknown outcome reconcile without automatic retry", async ({
   page,
   multiImageRecipe,
@@ -1089,7 +1165,9 @@ test("native confirmation can cancel or delete the sole image with exact identit
   );
   expect((await response.json()).data.deleteImage).toBe(true);
   expect(deletes).toHaveLength(1);
-  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+    "sr-only",
+  );
   await expect(
     page.getByText("Kein Bild vorhanden.", { exact: true }),
   ).toBeVisible();
@@ -1274,7 +1352,9 @@ test("successful deletion stays successful when refresh fails and Retry only rea
     imageId,
   });
   expect((await response.json()).data.deleteImage).toBe(true);
-  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+    "feedback warning",
+  );
   await expect(
     page.getByText(
       "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden.",
@@ -1302,7 +1382,9 @@ test("successful deletion stays successful when refresh fails and Retry only rea
   await expect(
     page.getByText("Kein Bild vorhanden.", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+    "sr-only",
+  );
   expect(galleryReads).toBe(2);
   expect(deletes).toHaveLength(1);
 });

@@ -406,14 +406,14 @@
             window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
             !CSS.supports("view-transition-name", "match-element") ||
             !CSS.supports(
-              "selector(:active-view-transition-type(gallery-reorder))",
+              "selector(:active-view-transition-type(gallery-change))",
             )
           ) {
             apply();
             return;
           }
           document.startViewTransition({
-            types: ["gallery-reorder"],
+            types: ["gallery-change"],
             update: apply,
           });
         }
