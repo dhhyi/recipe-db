@@ -73,9 +73,6 @@ backupRole: cleanup-participant
 backupData: { kind: json, file: db.json }
 storageVersion:
   value: 1
-  file: storage_version_generated.lua
-  template: |
-    return {{STORAGE_VERSION}}
 prettier:
   ignore:
     - "*.lua"
@@ -90,5 +87,5 @@ format:
 check: |
   luarocks make --tree lua_modules
   lua -v
-  luacheck *.lua tests/*.lua
-test: luarocks make --tree lua_modules; rm -rf tests/storage-fixture; mkdir -p tests/storage-fixture; lua tests/storage.lua tests/storage-fixture; set result $status; rm -rf tests/storage-fixture; exit $result
+  luacheck *.lua
+test: luarocks make --tree lua_modules

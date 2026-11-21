@@ -1,7 +1,6 @@
 import std/[algorithm, json, os, posix, strutils, times, uri]
 import nimcrypto/sha2
 import pixie
-import storage_version_generated
 
 type
   ImageStorage* = object
@@ -53,75 +52,6 @@ proc initialize*(store: ImageStorage) =
   createDir(store.publicFolder)
   createDir(store.manifestFolder)
 
-proc restrictFreshRoot*(store: ImageStorage) =
-  createDir(store.root)
-  setFilePermissions(store.root, {fpUserRead, fpUserWrite, fpUserExec})
-
-proc storageFailure(marker, reason: string) {.noreturn.} =
-  raise newException(StorageError, "images storage version failure at " &
-    marker & ": expected " & $expectedStorageVersion & ", " & reason)
-
-proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
-  let marker = store.root / "storage-version"
-  var version = -1
-  if fileExists(marker) or dirExists(marker):
-    let info = getFileInfo(marker, followSymlink = false)
-    if info.kind != pcFile:
-      storageFailure(marker, "unsafe marker file type")
-    try:
-      let contents = readFile(marker)
-      if not contents.endsWith("\n") or contents.len < 2 or
-          contents[0 .. ^2].len == 0 or contents[0] == '0':
-        storageFailure(marker, "invalid marker contents")
-      for c in contents[0 .. ^2]:
-        if c notin {'0'..'9'}:
-          storageFailure(marker, "invalid marker contents")
-      version = parseInt(contents[0 .. ^2])
-      if version <= 0:
-        storageFailure(marker, "invalid marker contents")
-    except StorageError:
-      raise
-    except CatchableError:
-      storageFailure(marker, "cannot read marker")
-  elif fileExists(store.root):
-    storageFailure(marker, "cannot inspect data root")
-
-  var hasEntries: bool
-  if dirExists(store.root):
-    try:
-      for kind, path in walkDir(store.root, checkDir = true):
-        let name = extractFilename(path)
-        if name == "storage-version":
-          if kind != pcFile:
-            storageFailure(marker, "unsafe marker file type")
-          continue
-        hasEntries = true
-    except StorageError:
-      raise
-    except CatchableError:
-      storageFailure(marker, "cannot inspect data root")
-
-  if version == -1:
-    if hasEntries:
-      storageFailure(marker, "marker missing; existing data found")
-    if mode == "backup":
-      storageFailure(marker, "marker missing; backup mode cannot initialize")
-    return true
-  if mode == "backup" and
-      (not dirExists(store.publicFolder) or not dirExists(store.manifestFolder)):
-    storageFailure(marker, "application data missing; backup mode cannot initialize")
-  false
-
-proc publishStorageVersion*(store: ImageStorage) =
-  let marker = store.root / "storage-version"
-  let temporary = marker & ".pending-" & $getpid()
-  try:
-    writeFile(temporary, $expectedStorageVersion & "\n")
-    if posix.link(temporary.cstring, marker.cstring) != 0:
-      storageFailure(marker, "cannot atomically publish marker")
-  finally:
-    if fileExists(temporary):
-      removeFile(temporary)
 
 var nextTemporary = 0
 

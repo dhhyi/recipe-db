@@ -27,14 +27,14 @@ defmodule Recipes.RepositoryTest do
     Application.put_env(:recipes, :mode, :backup)
     on_exit(fn -> Application.put_env(:recipes, :mode, previous_mode) end)
 
-    assert {:stop, message} = Repository.init(database: database, validate_storage: true)
+    assert {:stop, message} = Repository.init(database: database)
     assert message =~ "recipes schema unavailable in backup mode"
     assert File.read!(database) == original
 
     {:ok, connection} = Exqlite.start_link(database: database)
     assert {:ok, _} = Exqlite.query(connection, "CREATE TABLE recipes (id TEXT, document TEXT)")
     GenServer.stop(connection)
-    assert {:ok, backup_connection} = Repository.init(database: database, validate_storage: true)
+    assert {:ok, backup_connection} = Repository.init(database: database)
     GenServer.stop(backup_connection)
   end
 

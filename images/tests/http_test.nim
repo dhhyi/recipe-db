@@ -58,7 +58,7 @@ suite "backend HTTP publication contract":
     for mode in ["", "Production", " production", "testing "]:
       checkInvalidMode(mode)
 
-  test "startup does not publish a marker after rejecting storage or failing setup":
+  test "startup initializes missing image folders and fails on invalid roots":
     let startupRoot = root & "-startup"
     createDir(startupRoot)
     defer: removeDir(startupRoot)
@@ -69,14 +69,13 @@ suite "backend HTTP publication contract":
     let environment = serverEnvironment(some("production"),
         40_000_000, 10 * 1024 * 1024)
     environment["DATA_LOCATION"] = startupRoot
-    let rejected = startProcess("./server", env = environment,
+    let initialized = startProcess("./server", env = environment,
         options = {poParentStreams})
-    check rejected.waitForExit(5000) == 1
-    rejected.close()
+    sleep(100)
+    initialized.close()
     check dirExists(legacy)
-    check not dirExists(startupRoot / "manifests")
+    check dirExists(startupRoot / "manifests")
     check getFilePermissions(startupRoot) == permissions
-    check not fileExists(startupRoot / "storage-version")
 
     let blocker = startupRoot / "not-a-directory"
     writeFile(blocker, "untouched")

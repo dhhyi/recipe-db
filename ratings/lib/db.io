@@ -1,5 +1,3 @@
-doFile("lib/storage_version_generated.io")
-
 DB := SQLite3 clone
 
 DB clone := DB
@@ -20,96 +18,8 @@ DB databaseLocation := method(
     return "data/db.sqlite"
 )
 
-DB storageVersion := method(
-    StorageVersionGenerated
-)
-
 DB shellQuote := method(value,
     "'" .. value asString asMutable replaceSeq("'", "'\\''") .. "'"
-)
-
-DB storageFailure := method(marker, reason,
-    writeln("ratings storage version failure at " .. marker ..
-        ": expected " .. storageVersion asString .. ", " .. reason)
-    System exit(1)
-)
-
-DB checkStorageVersion := method(
-    database := databaseLocation
-    root := File clone setPath(database) parentDirectory path
-    marker := root .. "/storage-version"
-    markerFile := File clone setPath(marker)
-    version := nil
-    if (System system("test -L " .. shellQuote(marker)) == 0,
-        storageFailure(marker, "unsafe marker file type")
-    )
-    rootFile := File clone setPath(root)
-    if (rootFile exists and rootFile isDirectory == false,
-        storageFailure(marker, "data root is not a directory")
-    )
-    if (markerFile exists,
-        if (System system("test -f " .. shellQuote(marker)) != 0,
-            storageFailure(marker, "unsafe marker file type")
-        )
-        contents := nil
-        readError := try(contents = markerFile contents)
-        if (readError != nil,
-            storageFailure(marker, "cannot read marker: " .. readError asString)
-        )
-        if (contents endsWithSeq("\n") == false or
-            contents size < 2 or contents exSlice(0, contents size - 1) asNumber asString !=
-            contents exSlice(0, contents size - 1),
-            storageFailure(marker, "invalid marker contents")
-        )
-        digits := contents exSlice(0, contents size - 1)
-        if (digits at(0) < 49 or digits at(0) > 57,
-            storageFailure(marker, "invalid marker contents")
-        )
-        digits foreach(digit,
-            if (digit < 48 or digit > 57,
-                storageFailure(marker, "invalid marker contents")
-            )
-        )
-        version = contents exSlice(0, contents size - 1) asNumber
-    )
-
-    entries := list()
-    rootDirectory := Directory with(root)
-    if (rootDirectory exists,
-        rootDirectory files foreach(entry,
-            if (entry name != "storage-version", entries append(entry name))
-        )
-        rootDirectory directories foreach(entry,
-            entries append(entry name)
-        )
-    )
-    fresh := entries size == 0
-    if (version == nil and fresh == false,
-        storageFailure(marker, "marker missing; existing data found")
-    )
-    if (version == nil or fresh,
-        if (System getEnvironmentVariable("MODE") == "backup",
-            storageFailure(marker, "application data missing or unversioned; backup mode cannot initialize")
-        )
-        return version == nil
-    )
-    if (File clone setPath(database) exists == false,
-        storageFailure(marker, "database missing; existing data found")
-    )
-    false
-)
-
-DB publishStorageVersion := method(
-    database := databaseLocation
-    root := File clone setPath(database) parentDirectory path
-    marker := root .. "/storage-version"
-    temporary := marker .. ".pending"
-    writeStatus := System system("printf '%s\\n' " ..
-        shellQuote(storageVersion asString) .. " > " .. shellQuote(temporary))
-    if (writeStatus != 0, storageFailure(marker, "cannot write temporary marker"))
-    status := System system("ln -T -- " .. shellQuote(temporary) .. " " .. shellQuote(marker))
-    System system("rm -f -- " .. shellQuote(temporary))
-    if (status != 0, storageFailure(marker, "cannot atomically publish marker"))
 )
 
 DB openOrCreate := method(
@@ -119,10 +29,18 @@ DB openOrCreate := method(
 
     writeln("DB Location: " .. dbFile path)
 
-    if (dbFile exists,
-        writeln("Found existing database"),
-        writeln("Creating new database")
-        Directory with(dbFile parentDirectory path) createIfAbsent
+    if (System getEnvironmentVariable("MODE") == "backup",
+        if (dbFile exists == false,
+            writeln("ERROR database missing; backup mode cannot initialize")
+            System exit(1)
+        )
+    ,
+        if (dbFile exists,
+            writeln("Found existing database")
+        ,
+            writeln("Creating new database")
+            Directory with(dbFile parentDirectory path) createIfAbsent
+        )
     )
 
     setPath(dbFile path)
@@ -131,7 +49,6 @@ DB openOrCreate := method(
 )
 
 DB initialize := method(
-    freshStorage := checkStorageVersion
     openOrCreate
 
     tables := exec("SELECT name FROM sqlite_master WHERE type='table' AND name='Ratings';")
@@ -160,7 +77,6 @@ DB initialize := method(
         );")
         checkNoError
     )
-    if (freshStorage, publishStorageVersion)
 )
 
 DB clear := method(

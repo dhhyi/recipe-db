@@ -5,7 +5,6 @@ load test_helper
 @test "project schema requires authoritative storage declarations and rejects invalid versions" {
   run python3 - << 'PY'
 import json
-import re
 from pathlib import Path
 
 schema = json.loads(Path(".scripts/project-schema.json").read_text())
@@ -28,7 +27,7 @@ forbidden = set(rule["else"]["not"]["required"])
 assert "storageVersion" in forbidden
 version = schema["properties"]["storageVersion"]
 assert version["type"] == "object"
-assert set(version["required"]) == {"value", "file", "template"}
+assert set(version["required"]) == {"value"}
 assert version["properties"]["value"]["type"] == "integer"
 assert version["properties"]["value"]["minimum"] == 1
 
@@ -47,32 +46,16 @@ def valid(project):
         return False
     if "storageVersion" in project:
         declaration = project["storageVersion"]
-        if not isinstance(declaration, dict) or set(declaration) != {"value", "file", "template"}:
+        if not isinstance(declaration, dict) or set(declaration) != {"value"}:
             return False
         value = declaration["value"]
         if type(value) is not int or value < version["properties"]["value"]["minimum"]:
-            return False
-        if not isinstance(declaration["file"], str) or not re.fullmatch(
-            r"[A-Za-z0-9._/-]+", declaration["file"]
-        ):
-            return False
-        if any(part in {"", ".", ".."} for part in declaration["file"].split("/")):
-            return False
-        if declaration["file"].startswith("/") or "//" in declaration["file"] or declaration["file"].endswith("/"):
-            return False
-        if not isinstance(declaration["template"], str) or declaration["template"].count(
-            "{{STORAGE_VERSION}}"
-        ) != 1:
             return False
     return True
 
 
 for role in data_roles:
-    storage = {
-        "value": 1,
-        "file": "src/storage_version_generated.ml",
-        "template": "let value = {{STORAGE_VERSION}}",
-    }
+    storage = {"value": 1}
     declaration = {"backupRole": role, "backupData": {"kind": "json"}, "storageVersion": storage}
     assert valid(declaration)
     for invalid_storage in [
@@ -82,11 +65,6 @@ for role in data_roles:
         storage | {"value": "1"},
         storage | {"value": True},
         storage | {"value": None},
-        storage | {"file": "../escape.ml"},
-        storage | {"file": "/absolute.ml"},
-        storage | {"file": "src//generated.ml"},
-        storage | {"template": "let value = 1"},
-        storage | {"template": "{{STORAGE_VERSION}} {{STORAGE_VERSION}}"},
     ]:
         assert not valid(declaration | {"storageVersion": invalid_storage})
     assert not valid(declaration | {"backupData": None})

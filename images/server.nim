@@ -349,13 +349,11 @@ proc main() =
     levelThreshold = if verbose: lvlInfo else: lvlWarn,
     fmtStr = "$levelname ",
   ))
-  let freshStorage = store.checkStorageVersion(runtimeMode)
-  if runtimeMode != "backup":
-    if freshStorage:
-      store.restrictFreshRoot()
+  if runtimeMode == "backup":
+    if not dirExists(store.publicFolder) or not dirExists(store.manifestFolder):
+      raise newException(StorageError, "images backup storage missing application data")
+  else:
     store.initialize()
-  if freshStorage:
-    store.publishStorageVersion()
   info "Data location '", dataFolder, "'"
   if runtimeMode == "production":
     info "Running in production mode"

@@ -71,9 +71,6 @@ backupCompact: true
 backupData: { kind: images }
 storageVersion:
   value: 2
-  file: storage_version_generated.nim
-  template: |
-    const expectedStorageVersion* = {{STORAGE_VERSION}}
 prettier:
   ignore:
     - "*.nim"

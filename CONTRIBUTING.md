@@ -63,8 +63,6 @@ Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project cov
 
 ## Generated source synchronization
 
-`mise run sync-storage-version-templates` tracks project metadata and derives its outputs from each project's `storageVersion.file`. Unchanged inputs and outputs skip generation; editing or deleting a generated source triggers repair. Adding or relocating an output requires only updating the metadata, not the Mise task.
-
 `mise run merge-graphql-schemas` tracks the canonical cached SDL and project metadata, deriving consumer output paths from `graphqlSchema`. Distribution skips unchanged copies and repairs edited or missing copies. The schema-export prerequisite still checks whether the canonical SDL needs rebuilding before distribution can skip.
 
 `mise run sync-tailwind` tracks project metadata and the design Dockerfile, generating the shared stylesheet and Docker COPY block only when needed. Its `check-tailwind-sources` prerequisite always validates declared paths with one metadata read. Editing source contents does not regenerate the path lists; removing a declared file or directory still fails validation, even on a generation cache hit.

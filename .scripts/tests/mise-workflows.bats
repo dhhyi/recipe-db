@@ -9,7 +9,7 @@ setup() {
   for script in create-auth-accounts create-auth-test-fixture create-oauth-secrets create-search-key; do
     cp "$BATS_TEST_DIRNAME/../$script.sh" .scripts/
   done
-  for script in merge-graphql-schemas sync-storage-version-templates run-migrator-tests; do
+  for script in merge-graphql-schemas run-migrator-tests; do
     cp "$BATS_TEST_DIRNAME/../$script.sh" .scripts/
   done
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
@@ -23,11 +23,9 @@ setup() {
 }
 
 @test "metadata-derived task outputs support repositories without projects" {
-  for task in sync-storage-version-templates merge-graphql-schemas; do
-    run --separate-stderr mise tasks info "$task" --json
-    [ "$status" -eq 0 ]
-    printf '%s' "$output" | jq -e '(.outputs // []) | all(.[]; . == "")'
-  done
+  run --separate-stderr mise tasks info merge-graphql-schemas --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '(.outputs // []) | all(.[]; . == "")'
 }
 
 @test "metadata-derived task outputs still report malformed project metadata" {
@@ -35,15 +33,13 @@ setup() {
   printf '%s\n' '[' > invalid/.project.yaml
   mkdir -p .generated/graphql
   printf '%s\n' 'type Query { fixture: Boolean! }' > .generated/graphql/recipe-db.graphqls
-  for task in sync-storage-version-templates merge-graphql-schemas; do
-    run mise tasks info "$task" --json
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Error: bad file 'invalid/.project.yaml'"* ]]
+  run mise tasks info merge-graphql-schemas --json
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Error: bad file 'invalid/.project.yaml'"* ]]
 
-    run mise run --skip-deps --raw "$task"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"invalid/.project.yaml"* ]]
-  done
+  run mise run --skip-deps --raw merge-graphql-schemas
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid/.project.yaml"* ]]
 }
 
 @test "production publishing continues to use build metadata without Compose tasks" {

@@ -8,7 +8,6 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/release-validation.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../migrator-manifest.schema.json" .scripts/
-  cp "$BATS_TEST_DIRNAME/../sync-storage-version-templates.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../create-production-release-inventory.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-production-release.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/

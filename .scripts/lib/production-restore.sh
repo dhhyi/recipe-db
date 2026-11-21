@@ -1995,6 +1995,20 @@ restore_run() {
   restore_current_phase=installing-stopped-workloads
   restore_phase "$restore_current_phase"
   yq '(select(.kind == "Deployment").spec.replicas) = 0 |
+    (select(.kind == "Deployment" and (.metadata.name == "recipes" or .metadata.name == "images" or .metadata.name == "ratings" or .metadata.name == "tags" or .metadata.name == "inspirations")).spec.template.spec.initContainers[].env[] |
+      select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and (.metadata.name == "recipes" or .metadata.name == "images" or .metadata.name == "ratings" or .metadata.name == "tags" or .metadata.name == "inspirations")).spec.template.spec.containers[] |
+      select(.name == "storage-version").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "recipes").spec.template.spec.containers[] |
+      select(.name == "recipes").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "images").spec.template.spec.containers[] |
+      select(.name == "images").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "ratings").spec.template.spec.containers[] |
+      select(.name == "ratings").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "tags").spec.template.spec.containers[] |
+      select(.name == "tags").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "inspirations").spec.template.spec.containers[] |
+      select(.name == "inspirations").env[] | select(.name == "MODE").value) = "backup" |
     (select(.kind == "Deployment" and .metadata.name == "graphql").spec.template.spec.containers[] |
       select(.name == "graphql").env[] | select(.name == "MODE").value) = "backup" |
     (select(.kind == "Deployment" and (.metadata.name == "browse" or .metadata.name == "mcp")).spec.template.spec.containers[].env[] |

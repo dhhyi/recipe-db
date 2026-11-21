@@ -39,9 +39,6 @@ script_root=$(cd "$(dirname "$0")/.." && pwd)
 project_root=${5:-$script_root}
 project_root=$(cd "$project_root" && pwd)
 . "$script_root/.scripts/lib/project-metadata.sh"
-if [ "$#" -lt 5 ]; then
-  sh "$project_root/.scripts/sync-storage-version-templates.sh"
-fi
 temporary_directory=$(mktemp -d)
 trap 'rm -rf "$temporary_directory"' EXIT
 project_fragments="$temporary_directory/project-fragments.jsonl"

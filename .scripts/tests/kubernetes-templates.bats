@@ -400,6 +400,46 @@ render() {
   done
 }
 
+@test "storage-version sidecar waits for health, preserves markers, and never publishes in backup" {
+  render values.json
+  command=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "recipes")
+    | .spec.template.spec.containers[]
+    | select(.name == "storage-version")
+    | .command[2]
+  ' manifests.json)
+  root="$BATS_TEST_TMPDIR/sidecar"
+  mkdir "$root"
+  command=${command//\/data/$root}
+
+  run env MODE=backup EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
+  [ "$status" -ne 0 ]
+  [[ $output == *"missing marker in backup mode"* ]]
+  [ ! -e "$root/storage-version" ]
+
+  python3 -c 'from http.server import BaseHTTPRequestHandler,HTTPServer
+class H(BaseHTTPRequestHandler):
+ def do_GET(self):
+  self.send_response(204 if self.path == "/health" else 404); self.end_headers()
+ def log_message(self,*args): pass
+HTTPServer(("127.0.0.1",18432),H).serve_forever()' \
+    > "$BATS_TEST_TMPDIR/health.log" 2>&1 &
+  health_pid=$!
+  trap 'kill "$health_pid" 2>/dev/null || true' EXIT
+  sleep 0.2
+  run timeout 3s env MODE=production EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
+  [ "$status" -eq 124 ] || [ "$status" -eq 143 ] || [ "$status" -eq 137 ]
+  [ "$(cat "$root/storage-version")" = "1" ]
+
+  kill "$health_pid" 2> /dev/null || true
+  wait "$health_pid" 2> /dev/null || true
+  cp "$root/storage-version" "$root/marker-copy"
+  run timeout 1s env MODE=backup EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
+  [ "$status" -eq 124 ] || [ "$status" -eq 143 ] || [ "$status" -eq 137 ] || [ "$status" -eq 0 ]
+  cmp "$root/storage-version" "$root/marker-copy"
+  trap - EXIT
+}
+
 @test "search readiness checks completed baseline independently of process liveness" {
   render values.json
   jq -e '
