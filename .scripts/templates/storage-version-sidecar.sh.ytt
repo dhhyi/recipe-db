@@ -5,6 +5,9 @@ expected=${EXPECTED_STORAGE_VERSION:-}
 port=${BACKEND_PORT:-}
 root=/data
 marker="$root/storage-version"
+# Bind readiness to PID 1's start time so a previous container run cannot report ready.
+ready=/tmp/storage-version-ready
+rm -f "$ready"
 if [ -L "$marker" ]; then
   printf 'storage-version sidecar: unsafe marker file type\n' >&2
   exit 1
@@ -13,15 +16,22 @@ if [ -e "$marker" ]; then
   [ -f "$marker" ] || { printf 'storage-version sidecar: unsafe marker file type\n' >&2; exit 1; }
   actual=$(cat "$marker") || { printf 'storage-version sidecar: cannot read marker\n' >&2; exit 1; }
   [ "$actual" = "$expected" ] || { printf 'storage-version sidecar: storage version mismatch: expected %s, actual %s\n' "$expected" "$actual" >&2; exit 1; }
-  while :; do sleep 3600; done
+  sync "$marker" && sync "$root" || { printf 'storage-version sidecar: cannot synchronize marker\n' >&2; exit 1; }
+  awk '{print $22}' /proc/1/stat > "$ready"
+  while :; do sleep 1; done
 fi
 [ "$mode" = production ] || { printf 'storage-version sidecar: missing marker in backup mode\n' >&2; exit 1; }
-until wget -q -O /dev/null "http://127.0.0.1:$port/health"; do
+until wget -T 2 -q -O /dev/null "http://127.0.0.1:$port/health"; do
   sleep 1
 done
 temporary="$marker.pending-$$"
 if ! printf '%s\n' "$expected" > "$temporary"; then
   printf 'storage-version sidecar: cannot write marker\n' >&2
+  exit 1
+fi
+if ! sync "$temporary"; then
+  rm -f "$temporary"
+  printf 'storage-version sidecar: cannot synchronize marker\n' >&2
   exit 1
 fi
 if ! ln "$temporary" "$marker"; then
@@ -30,4 +40,6 @@ if ! ln "$temporary" "$marker"; then
   exit 1
 fi
 rm -f "$temporary"
-while :; do sleep 3600; done
+sync "$root" || { printf 'storage-version sidecar: cannot synchronize data root\n' >&2; exit 1; }
+awk '{print $22}' /proc/1/stat > "$ready"
+while :; do sleep 1; done

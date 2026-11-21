@@ -292,7 +292,9 @@ render() {
       ($items | map(select(.kind == "Deployment" and .metadata.name == $name))[0]) as $deployment |
       $project.storageVersion.value as $expected |
       $deployment.spec.template.spec as $pod |
-      $pod.initContainers[0].name == "storage-version"
+      $pod.initContainers[0].name == "storage-version-gate"
+      and ([$pod.initContainers[].name] + [$pod.containers[].name] | unique | length) ==
+        (($pod.initContainers | length) + ($pod.containers | length))
       and $pod.initContainers[0].image == $values[0].config.infrastructure.maintenance
       and $pod.initContainers[0].command[0:2] == ["/bin/sh","-ec"]
       and any($pod.initContainers[0].env[];
@@ -413,11 +415,27 @@ render() {
   root="$BATS_TEST_TMPDIR/sidecar"
   mkdir "$root"
   command=${command//\/data/$root}
+  command=${command//\/tmp\/storage-version-ready/$BATS_TEST_TMPDIR\/ready}
+  readiness=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "recipes")
+    | .spec.template.spec.containers[]
+    | select(.name == "storage-version")
+    | .readinessProbe.exec.command[2]
+  ' manifests.json)
+  readiness=${readiness//\/data/$root}
+  readiness=${readiness//\/tmp\/storage-version-ready/$BATS_TEST_TMPDIR\/ready}
 
   run env MODE=backup EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
   [ "$status" -ne 0 ]
   [[ $output == *"missing marker in backup mode"* ]]
   [ ! -e "$root/storage-version" ]
+  run env EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$readiness"
+  [ "$status" -ne 0 ]
+  printf 'stale\n' > "$BATS_TEST_TMPDIR/ready"
+  printf '1\n' > "$root/storage-version"
+  run env EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$readiness"
+  [ "$status" -ne 0 ]
+  rm "$BATS_TEST_TMPDIR/ready" "$root/storage-version"
 
   python3 -c 'from http.server import BaseHTTPRequestHandler,HTTPServer
 class H(BaseHTTPRequestHandler):
@@ -427,19 +445,84 @@ class H(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1",18432),H).serve_forever()' \
     > "$BATS_TEST_TMPDIR/health.log" 2>&1 &
   health_pid=$!
-  trap 'kill "$health_pid" 2>/dev/null || true' EXIT
+  trap 'kill "$health_pid" 2>/dev/null || true; if [ -n "${sidecar_pid:-}" ]; then kill "$sidecar_pid" 2>/dev/null || true; fi' EXIT
   sleep 0.2
-  run timeout 3s env MODE=production EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
-  [ "$status" -eq 124 ] || [ "$status" -eq 143 ] || [ "$status" -eq 137 ]
+  env MODE=production EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command" &
+  sidecar_pid=$!
+  for _ in {1..50}; do
+    [ ! -f "$BATS_TEST_TMPDIR/ready" ] || break
+    sleep 0.1
+  done
+  run env EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$readiness"
+  [ "$status" -eq 0 ]
   [ "$(cat "$root/storage-version")" = "1" ]
+  kill -TERM "$sidecar_pid"
+  wait "$sidecar_pid"
+  sidecar_pid=
 
   kill "$health_pid" 2> /dev/null || true
   wait "$health_pid" 2> /dev/null || true
   cp "$root/storage-version" "$root/marker-copy"
-  run timeout 1s env MODE=backup EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
-  [ "$status" -eq 124 ] || [ "$status" -eq 143 ] || [ "$status" -eq 137 ] || [ "$status" -eq 0 ]
+  rm "$BATS_TEST_TMPDIR/ready"
+  env MODE=backup EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command" &
+  sidecar_pid=$!
+  for _ in {1..50}; do
+    [ ! -f "$BATS_TEST_TMPDIR/ready" ] || break
+    sleep 0.1
+  done
+  [ -f "$BATS_TEST_TMPDIR/ready" ]
+  kill -TERM "$sidecar_pid"
+  wait "$sidecar_pid"
+  sidecar_pid=
   cmp "$root/storage-version" "$root/marker-copy"
   trap - EXIT
+}
+
+@test "storage-version readiness requires successful marker and directory synchronization" {
+  render values.json
+  command=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "recipes")
+    | .spec.template.spec.containers[] | select(.name == "storage-version") | .command[2]
+  ' manifests.json)
+  root="$BATS_TEST_TMPDIR/sidecar"
+  mkdir "$root" "$BATS_TEST_TMPDIR/bin"
+  command=${command//\/data/$root}
+  command=${command//\/tmp\/storage-version-ready/$BATS_TEST_TMPDIR\/ready}
+  cat > "$BATS_TEST_TMPDIR/bin/wget" << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+  cat > "$BATS_TEST_TMPDIR/bin/sync" << 'EOF'
+#!/bin/sh
+if [ -e "$TEST_ROOT/storage-version" ]; then state=published; else state=unpublished; fi
+printf '%s %s\n' "$1" "$state" >> "$SYNC_LOG"
+case "$SYNC_FAIL:$state" in
+  file:unpublished|directory:published) exit 1 ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/wget" "$BATS_TEST_TMPDIR/bin/sync"
+  for failure in file directory; do
+    rm -f "$root/storage-version" "$BATS_TEST_TMPDIR/ready" "$BATS_TEST_TMPDIR/sync.log"
+    run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" TEST_ROOT="$root" \
+      SYNC_LOG="$BATS_TEST_TMPDIR/sync.log" SYNC_FAIL="$failure" MODE=production \
+      EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
+    [ "$status" -ne 0 ]
+    [[ $output == *"cannot synchronize"* ]]
+    [ ! -e "$BATS_TEST_TMPDIR/ready" ]
+    grep -q 'storage-version.pending-.* unpublished' "$BATS_TEST_TMPDIR/sync.log"
+    if [ "$failure" = directory ]; then
+      [ "$(cat "$root/storage-version")" = 1 ]
+      grep -Fq "$root published" "$BATS_TEST_TMPDIR/sync.log"
+      run env PATH="$BATS_TEST_TMPDIR/bin:$PATH" TEST_ROOT="$root" \
+        SYNC_LOG="$BATS_TEST_TMPDIR/sync.log" SYNC_FAIL=directory MODE=backup \
+        EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command"
+      [ "$status" -ne 0 ]
+      [ ! -e "$BATS_TEST_TMPDIR/ready" ]
+      [ "$(cat "$root/storage-version")" = 1 ]
+    else
+      [ ! -e "$root/storage-version" ]
+    fi
+  done
 }
 
 @test "search readiness checks completed baseline independently of process liveness" {

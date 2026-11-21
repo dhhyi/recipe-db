@@ -309,10 +309,16 @@ render() {
     '{config:$config[0],projects:$projects,release:$release[0],artifact:$artifact,
       files:{nats:$nats,maintenanceNginx:$maintenanceNginx,maintenanceHtml:$maintenanceHtml,oauthConfig:$oauthConfig,designNginx:$designNginx}}' \
     > "$work/template-values.json"
+  local storage_input
+  local storage_inputs=()
+  for storage_input in storage-version-gate.sh.ytt storage-version-sidecar.sh.ytt; do
+    if [[ -f $release_root/.scripts/templates/$storage_input ]]; then
+      storage_inputs+=(-f "$release_root/.scripts/templates/$storage_input")
+    fi
+  done
   ytt -f "$release_root/.scripts/templates/kubernetes-template.yml" \
     -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
-    -f "$release_root/.scripts/templates/storage-version-gate.sh.ytt" \
-    -f "$release_root/.scripts/templates/storage-version-sidecar.sh.ytt" \
+    "${storage_inputs[@]}" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
   if [[ $command == restore || $command == recovery-* || $command == release-migration-recover ]]; then
     restore_ingress_values
@@ -863,12 +869,29 @@ backup_scale_zero() {
   backup_wait_selected_pvcs_unmounted || return 1
 }
 
+backup_mode_containers() {
+  jq -er --arg name "$1" '
+    [.items[] | select(.metadata.name == $name) | .spec.template.spec |
+      [$name] + [.initContainers[]? | select(.name == "storage-version" or .name == "storage-version-gate") | .name]
+      + [.containers[]? | select(.name == "storage-version") | .name] | unique]
+    | if length == 1 then .[0][] else empty end' "$2"
+}
+
+backup_set_backend_mode() {
+  local name=$1 mode=$2 deployments=$3 containers container
+  containers=$(backup_mode_containers "$name" "$deployments") || return 1
+  while IFS= read -r container; do
+    kube set env "deployment/$name" "MODE=$mode" "--containers=$container" > /dev/null || return 1
+  done <<< "$containers"
+}
+
 backup_start_modes() {
   local name replicas
   # Every normal backend is gone before any backup-mode process can mount a data PVC.
   backup_scale_zero || return 1
+  kube get deployments -o json > "$work/mode-deployments.json" || return 1
   while IFS= read -r name; do
-    kube set env "deployment/$name" MODE=backup "--containers=$name,storage-version" > /dev/null || return 1
+    backup_set_backend_mode "$name" backup "$work/mode-deployments.json" || return 1
     replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
       "$work/prior-workloads.json") || return 1
     ((replicas > 0)) || replicas=1
@@ -1063,8 +1086,13 @@ backup_verify_recovered_workloads() {
   ' "$work/recovered-deployments.json" > /dev/null || return 1
   while IFS= read -r name; do
     jq -e --arg name "$name" '
-      any(.items[]; .metadata.name == $name and any(.spec.template.spec.containers[];
-        .name == $name and any(.env[]?; .name == "MODE" and .value == "production")))
+      any(.items[]; .metadata.name == $name and
+        any(.spec.template.spec.containers[];
+          .name == $name and any(.env[]?; .name == "MODE" and .value == "production")) and
+        all(.spec.template.spec.initContainers[]? | select(.name == "storage-version" or .name == "storage-version-gate");
+          [.env[]? | select(.name == "MODE") | .value] == ["production"]) and
+        all(.spec.template.spec.containers[] | select(.name == "storage-version");
+          [.env[]? | select(.name == "MODE") | .value] == ["production"]))
     ' "$work/recovered-deployments.json" > /dev/null || return 1
   done < <(jq --argjson names "$names" -r '
     (. + ["graphql"])[] | select(. != "browse" and (. as $name | $names | index($name)))
@@ -1112,8 +1140,11 @@ backup_restore_production() {
   }
   backup_scale_zero || failed=true
   if ! $failed; then
+    kube get deployments -o json > "$work/mode-deployments.json" || failed=true
+  fi
+  if ! $failed; then
     while IFS= read -r name; do
-      kube set env "deployment/$name" MODE=production "--containers=$name" > /dev/null || failed=true
+      backup_set_backend_mode "$name" production "$work/mode-deployments.json" || failed=true
       replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
         "$work/prior-workloads.json") || {
         failed=true
