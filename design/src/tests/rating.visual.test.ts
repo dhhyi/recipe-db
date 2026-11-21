@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { page } from "vitest/browser";
 
-import "./rating.ts";
+import "../components/rating.ts";
 import "../design.css";
 
 const examples: {

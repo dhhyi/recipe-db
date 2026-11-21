@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 
-import "./rating.ts";
+import "../components/rating.ts";
 import "../design.css";
 
 type RatingComponent = HTMLElement & {

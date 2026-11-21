@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cdp, page, userEvent } from "vitest/browser";
 
-import "./header.ts";
+import "../components/header.ts";
 import "../design.css";
 
 const settle = () =>

@@ -1,2 +1,2 @@
 e2e-test/tests/__screenshots__/**/*.png filter=lfs diff=lfs merge=lfs -text
-design/src/components/__screenshots__/**/*.png filter=lfs diff=lfs merge=lfs -text
+design/src/tests/__screenshots__/**/*.png filter=lfs diff=lfs merge=lfs -text
