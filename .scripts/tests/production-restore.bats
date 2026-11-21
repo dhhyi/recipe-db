@@ -793,19 +793,31 @@ restore_browse_port=4100
 restore_graphql() {
   local variables=${2:-'{}'} id
   case "$1" in
-    'query { recipes { id name image { url thumbUrl } } }')
-      if [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
-        printf '{"data":{"recipes":[{"id":"first","name":"First","image":null},{"id":"second","name":"Second","image":null}]}}\n' \
+    'query { recipes { id name } }')
+      if [[ ${RESTORE_LARGE:-false} == true ]]; then
+        jq -n '{data:{recipes:[range(0;12) | {id:("recipe-" + (if . < 10 then "0" else "" end) + tostring),name:"First"}]}}' \
+          > "$work/restore-response.json"
+      elif [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
+        printf '{"data":{"recipes":[{"id":"first","name":"First"},{"id":"second","name":"Second"}]}}\n' \
           > "$work/restore-response.json"
       else
-        printf '{"data":{"recipes":[{"id":"recipe-no-image","name":"First","image":null},{"id":"recipe-with-image","name":"Image","image":{"url":"/public/image.bin","thumbUrl":"/public/thumb.bin"}}]}}\n' \
+        printf '{"data":{"recipes":[{"id":"recipe-no-image","name":"First"},{"id":"recipe-with-image","name":"Image"}]}}\n' \
           > "$work/restore-response.json"
       fi
       ;;
+    'query($id: ID!) { recipe(id:$id) { id image { url thumbUrl } } }')
+      id=$(jq -r .id <<< "$variables")
+      printf '%s\n' "$id" >> "$work/image-samples"
+      if [[ $id == recipe-with-image || $id == recipe-11 ]]; then
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,image:{url:"/public/image.bin",thumbUrl:"/public/thumb.bin"}}}}' \
+          > "$work/restore-response.json"
+      else
+        jq -n --arg id "$id" '{data:{recipe:{id:$id,image:null}}}' > "$work/restore-response.json"
+      fi ;;
     *'recipe(id:$id)'*)
       id=$(jq -r .id <<< "$variables")
       [[ $id == "${EXPECTED_RECIPE_ID:?}" ]] || return 1
-      if [[ ${RESTORE_IMAGE_FREE:-false} == true ]]; then
+      if [[ ${RESTORE_IMAGE_FREE:-false} == true || ${RESTORE_LARGE:-false} == true ]]; then
         jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"First",image:null,rating:{count:1}}}}' \
           > "$work/restore-response.json"
       else
@@ -836,6 +848,11 @@ EOF
   [ "$status" -eq 0 ]
   run env RESTORE_IMAGE_FREE=true EXPECTED_RECIPE_ID=first bash restore-image-harness.sh
   [ "$status" -eq 0 ]
+  rm -f work/image-samples
+  run env RESTORE_LARGE=true EXPECTED_RECIPE_ID=recipe-00 bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < work/image-samples)" -eq 10 ]
+  run ! grep -Fxq recipe-11 work/image-samples
 }
 
 @test "restore propagation does not mutate until the GraphQL route is ready" {
@@ -875,13 +892,26 @@ restore_graphql() {
       cp "$work/probe-name" "$work/probe-original"
       printf '{"data":{"createRecipe":{"id":"probe"}}}\n' > "$work/restore-response.json" ;;
     *updateRecipe*)
-      jq -r .name <<< "$variables" > "$work/probe-name" ;;
+      name=$(jq -r .name <<< "$variables")
+      if [[ $name == *Primed ]]; then
+        [[ -e $work/fresh-cache ]] || return 1
+      else
+        printf '%s\n' "$name" > "$work/changed-name"
+      fi
+      printf '%s\n' "$name" > "$work/probe-name" ;;
     *deleteRecipe*) touch "$work/deleted" ;;
     *searchRecipes*)
       name=$(jq -r '.options.q' <<< "$variables")
-      if [[ $name == *Changed && ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
+      if [[ $name == *Changed ]]; then
+        touch "$work/searched-change"
+        if [[ ${CASE:-} == slow-search ]]; then SECONDS=$((SECONDS + 65)); fi
+      fi
       if [[ -e $work/deleted ]]; then
-        printf '{"data":{"searchRecipes":{"recipes":[]}}}\n' > "$work/restore-response.json"
+        if [[ ${CASE:-} == stale-index ]]; then
+          printf '{"data":{"searchRecipes":{"found":1,"recipes":[null]}}}\n' > "$work/restore-response.json"
+        else
+          printf '{"data":{"searchRecipes":{"found":0}}}\n' > "$work/restore-response.json"
+        fi
       else
         jq -n --arg name "$(cat "$work/probe-name")" \
           '{data:{searchRecipes:{recipes:[{id:"probe",name:$name}]}}}' > "$work/restore-response.json"
@@ -898,17 +928,22 @@ curl() {
     cat "$work/probe-name"
   elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
     cat "$work/probe-original"
+  elif [[ ${CASE:-} == stale-prime-update && $(cat "$work/probe-name") == *Primed ]]; then
+    cat "$work/changed-name"
   else
+    if [[ -e $work/searched-change && $(cat "$work/probe-name") == *Changed ]]; then
+      touch "$work/fresh-cache"
+    fi
     cat "$work/probe-name"
   fi
 }
-sleep() { SECONDS=$((SECONDS + 2)); }
+sleep() { SECONDS=$((SECONDS + $1)); }
 restore_verify_propagation
 EOF
   run env CASE=slow-search bash propagation-cache.sh
   [ "$status" -eq 0 ]
-  for case in slow-prime stale-update stale-delete; do
-    rm -f work/deleted work/prime-delayed
+  for case in slow-prime stale-update stale-delete stale-prime-update stale-index; do
+    rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
     run env CASE="$case" bash propagation-cache.sh
     [ "$status" -ne 0 ]
   done
@@ -1121,6 +1156,29 @@ EOF
   [ "$status" -ne 0 ]
   [[ $output == *"restored volume verification failed"* ]]
   [ ! -e helper-deleted ]
+}
+
+@test "restore import permits implicit parent directories" {
+  python3 - << 'PY'
+import hashlib, io, json, pathlib, tarfile
+root = pathlib.Path("work")
+content = b"nested data"
+with tarfile.open(root / "validated/recipes.tar", "w") as archive:
+    item = tarfile.TarInfo("nested/opaque.bin")
+    item.size = len(content)
+    archive.addfile(item, io.BytesIO(content))
+manifest = json.loads((root / "restore-manifest.json").read_text())
+manifest["inventory"][0]["directories"] = []
+manifest["inventory"][0]["files"] = [{
+    "path": "nested/opaque.bin", "sizeBytes": len(content),
+    "sha256": hashlib.sha256(content).hexdigest(),
+}]
+(root / "restore-manifest.json").write_text(json.dumps(manifest))
+PY
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -eq 0 ]
+  [ -f data/nested/opaque.bin ]
+  [ -e helper-deleted ]
 }
 
 @test "restore import rejects another Pod mounted on the selected PVC before extracting any bytes" {

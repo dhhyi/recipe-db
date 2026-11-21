@@ -210,7 +210,8 @@ def check_inner_bounds(archive):
     names = set()
     total = 0
     files = 0
-    directories = 0
+    file_names = set()
+    directories = set()
     with open(archive, "rb") as raw, tarfile.open(
             fileobj=BoundedReader(raw, archive.stat().st_size), mode="r|") as source:
         for member in source:
@@ -229,13 +230,23 @@ def check_inner_bounds(archive):
                     or not 0 <= member.uid < 2**32 - 1 or not 0 <= member.gid < 2**32 - 1:
                 raise ValueError("unsafe or duplicate snapshot path")
             names.add(name)
+            for parent in path.parents:
+                if str(parent) != ".":
+                    if str(parent) in file_names:
+                        raise ValueError("archive file is a parent directory")
+                    directories.add(str(parent))
+                    if len(directories) > upload.MAX_DIRECTORIES:
+                        raise ValueError("too many archive directories")
             if member.isdir():
                 if name != ".":
-                    directories += 1
-                    if directories > upload.MAX_DIRECTORIES:
+                    directories.add(name)
+                    if len(directories) > upload.MAX_DIRECTORIES:
                         raise ValueError("too many archive directories")
                 continue
             if member.isreg() and member.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                if name in directories:
+                    raise ValueError("archive file is a parent directory")
+                file_names.add(name)
                 files += 1
                 if files > MAX_FILES:
                     raise ValueError("too many archive files")

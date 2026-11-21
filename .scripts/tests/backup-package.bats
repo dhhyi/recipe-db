@@ -386,6 +386,7 @@ elif group == "unsafe":
         entries["images"] + [("nested/hardlink", b"", tarfile.LNKTYPE)],
         entries["images"] + [("nested/fifo", b"", tarfile.FIFOTYPE)],
         entries["images"] + [("nested", b"", tarfile.DIRTYPE)],
+        [("parent", b"file", None), ("parent/child", b"file", None)],
     ]:
         reject(lambda c, m, a, p, s, values=values: repack(m, a, inner=tar_bytes(values)))
 elif group == "storage":

@@ -1400,7 +1400,8 @@ restore_import() {
       > "$work/restored-$name-files.json" || return 1
     jq -e --slurpfile actual "$work/restored-$name-files.json" \
       '(.files | sort_by(.path)) == ($actual[0].files | sort_by(.path))
-       and ((has("directories") | not) or .directories == $actual[0].directories)' \
+       and ($actual[0].directories as $dirs |
+         all(.directories[]?; . as $dir | $dirs | index($dir) != null))' \
       <<< "$entry" > /dev/null || {
       printf 'production: restored volume verification failed: %s\n' "$name" >&2
       return 1
@@ -1497,14 +1498,26 @@ restore_graphql() {
 
 # black-box only; use application interfaces, not stored data formats or application internals
 restore_verify_reads() {
-  local recipe id name image_url encoded url
-  restore_graphql 'query { recipes { id name image { url thumbUrl } } }' || return 1
+  local recipe candidate id name encoded url
+  restore_graphql 'query { recipes { id name } }' || return 1
   jq -e '.data.recipes | type == "array" and
     all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string"))' \
     "$work/restore-response.json" > /dev/null || return 1
-  recipe=$(jq -c '.data.recipes | sort_by(.id) as $recipes |
-    ($recipes | map(select(.image != null)) | .[0]) // $recipes[0] // empty' \
-    "$work/restore-response.json")
+  jq -c '.data.recipes | sort_by(.id) | .[:10][]' "$work/restore-response.json" \
+    > "$work/restore-recipe-sample.jsonl" || return 1
+  recipe=
+  while IFS= read -r candidate; do
+    [[ -n $recipe ]] || recipe=$candidate
+    id=$(jq -r .id <<< "$candidate")
+    restore_graphql 'query($id: ID!) { recipe(id:$id) { id image { url thumbUrl } } }' \
+      "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
+    jq -e --arg id "$id" '.data.recipe.id == $id and (.data.recipe | has("image"))' \
+      "$work/restore-response.json" > /dev/null || return 1
+    if jq -e '.data.recipe.image != null' "$work/restore-response.json" > /dev/null; then
+      recipe=$candidate
+      break
+    fi
+  done < "$work/restore-recipe-sample.jsonl"
   [[ -n $recipe ]] || return 0
   id=$(jq -r .id <<< "$recipe")
   name=$(jq -r .name <<< "$recipe")
@@ -1541,7 +1554,7 @@ restore_wait_reads() {
 }
 
 restore_verify_propagation() {
-  local id encoded deadline cache_deadline prime_started probe
+  local id encoded deadline cache_deadline prime_started changed_started changed_observed probe
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
   deadline=$((SECONDS + timeout))
   until restore_graphql 'query { __typename }'; do
@@ -1585,6 +1598,7 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+  changed_started=$SECONDS
   restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
     "$(jq -cn --arg id "$id" --arg name "${probe}Changed" '{id:$id,name:$name}')" || return 1
   while :; do
@@ -1593,6 +1607,7 @@ restore_verify_propagation() {
       "http://127.0.0.1:$restore_browse_port/recipe/$encoded" > "$work/restore-probe.html" \
       2> "$work/restore-request-error" && grep -Fq "${probe}Changed" "$work/restore-probe.html"; then
       ((SECONDS < cache_deadline)) || return 1
+      changed_observed=$SECONDS
       break
     fi
     sleep 2
@@ -1607,11 +1622,27 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
-  # A separate update makes the deletion cache fresh even if search took longer than its TTL.
+  cache_deadline=$((changed_started + 60))
+  if ((SECONDS >= cache_deadline)); then
+    # A slow search wait may have expired the observed cache; establish a fresh one.
+    while ((SECONDS < changed_observed + 61)); do
+      sleep "$((changed_observed + 61 - SECONDS))"
+    done
+    cache_deadline=$((SECONDS + 60))
+  fi
+  while :; do
+    ((SECONDS < cache_deadline)) || return 1
+    if curl --silent --show-error --fail --max-time "$timeout" \
+      "http://127.0.0.1:$restore_browse_port/recipe/$encoded" > "$work/restore-probe.html" \
+      2> "$work/restore-request-error" && grep -Fq "${probe}Changed" "$work/restore-probe.html"; then
+      ((SECONDS < cache_deadline)) || return 1
+      break
+    fi
+    sleep 2
+  done
   prime_started=$SECONDS
   restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
     "$(jq -cn --arg id "$id" --arg name "${probe}Primed" '{id:$id,name:$name}')" || return 1
-  cache_deadline=$((prime_started + 60))
   while :; do
     ((SECONDS < cache_deadline)) || return 1
     if curl --silent --show-error --fail --max-time "$timeout" \
@@ -1622,6 +1653,7 @@ restore_verify_propagation() {
     fi
     sleep 2
   done
+  cache_deadline=$((prime_started + 60))
   restore_graphql 'mutation($id:ID!) { deleteRecipe(id:$id) }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
   while :; do
@@ -1636,9 +1668,9 @@ restore_verify_propagation() {
   done
   deadline=$((SECONDS + timeout))
   while :; do
-    if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id } } }' \
+    if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { found } }' \
       "$(jq -cn --arg id "$id" '{options:{q:"*",query_by:"name",filter_by:("id:=`"+$id+"`")}}')" \
-      && jq -e --arg id "$id" 'all(.data.searchRecipes.recipes[]; .id != $id)' \
+      && jq -e '.data.searchRecipes.found == 0' \
         "$work/restore-response.json" > /dev/null; then break; fi
     ((SECONDS < deadline)) || return 1
     sleep 2

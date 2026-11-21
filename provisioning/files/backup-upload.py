@@ -217,6 +217,7 @@ def validate_snapshot(snapshot, require_storage_versions=False):
         observed = {}
         observed_members = set()
         observed_directories = []
+        materialized_directories = set()
         observed_storage_version = None
         try:
             with tarfile.open(archive, "r:") as source_tar:
@@ -236,15 +237,25 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                     if name in observed_members:
                         raise ValueError("duplicate archive path")
                     observed_members.add(name)
+                    for parent in path.parents:
+                        if str(parent) != ".":
+                            if str(parent) in observed:
+                                raise ValueError("archive file is a parent directory")
+                            materialized_directories.add(str(parent))
+                            if len(materialized_directories) > MAX_DIRECTORIES:
+                                raise ValueError("too many archive directories")
                     if member.isdir():
                         if name == ".":
                             continue
-                        if len(observed_directories) >= MAX_DIRECTORIES:
+                        materialized_directories.add(name)
+                        if len(materialized_directories) > MAX_DIRECTORIES:
                             raise ValueError("too many archive directories")
                         observed_directories.append(name)
                         continue
                     if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                         raise ValueError("unsafe archive member")
+                    if name in materialized_directories:
+                        raise ValueError("archive file is a parent directory")
                     if len(observed) >= MAX_FILES:
                         raise ValueError("too many archive files")
                     if name == "storage-version" and member.size > 64:

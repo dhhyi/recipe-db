@@ -14,8 +14,10 @@ MAX_DIRECTORIES = 100_000
 
 def validate(archive, require_storage_version=False, include_directories=False):
     members = set()
+    files = set()
     inventory = []
     directories = []
+    materialized_directories = set()
     storage_version = None
     with tarfile.open(archive, "r:") as source:
         for member in source:
@@ -34,17 +36,28 @@ def validate(archive, require_storage_version=False, include_directories=False):
             if name in members:
                 raise ValueError("archive contains a duplicate path")
             members.add(name)
+            for parent in path.parents:
+                if str(parent) != ".":
+                    if str(parent) in files:
+                        raise ValueError("archive file is a parent directory")
+                    materialized_directories.add(str(parent))
+                    if len(materialized_directories) > MAX_DIRECTORIES:
+                        raise ValueError("too many archive directories")
             if member.isdir():
                 if name == ".":
                     continue
-                if len(directories) >= MAX_DIRECTORIES:
+                materialized_directories.add(name)
+                if len(materialized_directories) > MAX_DIRECTORIES:
                     raise ValueError("too many archive directories")
                 directories.append(name)
                 continue
             if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                 raise ValueError("archive contains a link or special file")
+            if name in materialized_directories:
+                raise ValueError("archive file is a parent directory")
             if len(inventory) >= MAX_FILES:
                 raise ValueError("too many archive files")
+            files.add(name)
             if name == "storage-version" and member.size > 64:
                 raise ValueError("malformed storage-version marker")
             stream = source.extractfile(member)

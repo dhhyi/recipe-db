@@ -110,6 +110,10 @@ check([directory("."), directory("./")], False)
 module.MAX_DIRECTORIES = 2
 check([directory("."), directory("one"), directory("two")], True)
 check([directory("."), directory("one"), directory("two"), directory("three")], False)
+check([tarfile.TarInfo("one/two/file")], True)
+check([tarfile.TarInfo("one/two/three/file")], False)
+check([tarfile.TarInfo("one"), tarfile.TarInfo("one/file")], False)
+check([tarfile.TarInfo("one/file"), tarfile.TarInfo("one")], False)
 module.MAX_FILES = 2
 check([tarfile.TarInfo("one"), tarfile.TarInfo("two")], True)
 check([tarfile.TarInfo("one"), tarfile.TarInfo("two"), tarfile.TarInfo("three")], False)

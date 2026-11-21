@@ -499,11 +499,21 @@ state_path.write_text(json.dumps(state))
         manifest["inventory"][0]["sha256"] = backup.file_hash(archive_path)
         manifest["inventory"][0].pop("directories")
         manifest_path.write_bytes(backup.json_bytes(manifest))
-        with patch.object(backup, "MAX_DIRECTORIES", 1):
+        with patch.object(backup, "MAX_DIRECTORIES", 2):
             with self.assertRaisesRegex(ValueError, "too many archive directories"):
                 backup.validate_snapshot(source)
-        with patch.object(backup, "MAX_DIRECTORIES", 2):
+        with patch.object(backup, "MAX_DIRECTORIES", 3):
             backup.validate_snapshot(source)
+
+        implicit = self.make_snapshot("implicit", files={"one/two/file": b"data"})
+        with patch.object(backup, "MAX_DIRECTORIES", 1):
+            with self.assertRaisesRegex(ValueError, "too many archive directories"):
+                backup.validate_snapshot(implicit)
+        with patch.object(backup, "MAX_DIRECTORIES", 2):
+            backup.validate_snapshot(implicit)
+        collision = self.make_snapshot("collision", files={"parent": b"file", "parent/child": b"data"})
+        with self.assertRaisesRegex(ValueError, "archive file is a parent directory"):
+            backup.validate_snapshot(collision)
 
         second = source / "second.tar"
         second.write_bytes(original)

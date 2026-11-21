@@ -89,9 +89,11 @@ case "$query" in
       touch "$MOCK_LOG.probe-paused"
       sleep 2
     fi
-    if [[ $query == *"found"* && $(jq -r '.variables.options.q' "$file") == "*" ]]; then
+    if [[ $(jq -r '.variables.options.filter_by // empty' "$file") == 'id:=`old`' ]]; then
       echo '{"data":{"searchRecipes":{"recipes":[{"id":"old","name":"Old"}],"found":1}}}'
-    elif [[ -e $MOCK_LOG.probe-deleted || ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
+    elif [[ -e $MOCK_LOG.probe-deleted ]]; then
+      echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
+    elif [[ ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
     else jq -n --rawfile name "$MOCK_LOG.probe-name" '{data:{searchRecipes:{recipes:[{id:"probe",name:($name|rtrimstr("\n"))}]}}}'; fi ;;
   *"recipe(id"*)
     if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
