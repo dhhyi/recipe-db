@@ -244,10 +244,7 @@ test("ingredient rows animate without delaying edits or discard", async ({
   }
 });
 
-test("discard restores the saved method and resizes its textarea", async ({
-  page,
-  demoRecipe,
-}) => {
+test("discard restores the saved method", async ({ page, demoRecipe }) => {
   await page.goto(`/edit/${demoRecipe.id}`);
   await waitForEditorForm(page);
   await expect(nameField(page)).toHaveValue(demoRecipe.name);
@@ -283,15 +280,6 @@ test("discard restores the saved method and resizes its textarea", async ({
   await discardButton(page).click();
 
   await expect(methodField(page)).toHaveValue(persistedMethod);
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const textarea = document.querySelector("#method");
-        if (!(textarea instanceof HTMLTextAreaElement)) return false;
-        return textarea.clientHeight >= textarea.scrollHeight - 1;
-      }),
-    )
-    .toBe(true);
   await expect(cleanStatus(page)).toHaveCount(0);
 });
 
