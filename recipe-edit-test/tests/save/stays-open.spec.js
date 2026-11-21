@@ -7,6 +7,7 @@ test("saving freezes controls and navigation until the existing recipe is saved"
   page,
   graphqlGates,
 }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   const gate = graphqlGates.hold("UpdateRecipe");
   let updateCount = 0;
   page.on("request", (request) => {
@@ -85,9 +86,49 @@ test("saving freezes controls and navigation until the existing recipe is saved"
   });
   await expect(page).toHaveURL("/edit/recipe-1");
 
+  await page.evaluate(() => {
+    document.addEventListener("animationstart", (event) => {
+      if (event.target.getAttribute("role") === "status") {
+        event.target.getAnimations().forEach((animation) => animation.pause());
+      }
+    });
+  });
   gate.release();
 
-  await expect(page.getByRole("status")).toHaveText("Gespeichert");
+  const status = page.getByRole("status");
+  await expect(status).toHaveText("Gespeichert");
+  await expect
+    .poll(() =>
+      status.evaluate((element) =>
+        element
+          .getAnimations()
+          .some((animation) => animation.playState === "paused"),
+      ),
+    )
+    .toBe(true);
+  const animationFrames = await status.evaluate((element) => {
+    const animation = element
+      .getAnimations()
+      .find((item) => item.playState === "paused");
+    animation.currentTime = 0;
+    const start = {
+      opacity: Number(getComputedStyle(element).opacity),
+      transform: getComputedStyle(element).transform,
+    };
+    animation.currentTime = animation.effect.getTiming().duration / 2;
+    const middle = {
+      opacity: Number(getComputedStyle(element).opacity),
+      transform: getComputedStyle(element).transform,
+    };
+    animation.finish();
+    return { start, middle };
+  });
+  expect(animationFrames.middle.opacity).toBeGreaterThan(
+    animationFrames.start.opacity,
+  );
+  expect(animationFrames.middle.transform).not.toBe(
+    animationFrames.start.transform,
+  );
   await expect(page).toHaveURL("/edit/recipe-1");
   await expect(name).toHaveValue("Soup updated");
   await expect(save).toBeDisabled();
