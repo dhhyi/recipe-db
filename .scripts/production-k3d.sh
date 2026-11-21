@@ -868,14 +868,7 @@ backup_start_modes() {
   # Every normal backend is gone before any backup-mode process can mount a data PVC.
   backup_scale_zero || return 1
   while IFS= read -r name; do
-    case "$name" in
-      recipes | images | ratings | tags | inspirations)
-        kube set env "deployment/$name" MODE=backup "--containers=$name,storage-version" > /dev/null || return 1
-        ;;
-      *)
-        kube set env "deployment/$name" MODE=backup "--containers=$name" > /dev/null || return 1
-        ;;
-    esac
+    kube set env "deployment/$name" MODE=backup "--containers=$name,storage-version" > /dev/null || return 1
     replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
       "$work/prior-workloads.json") || return 1
     ((replicas > 0)) || replicas=1

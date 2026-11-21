@@ -186,6 +186,30 @@ EOF
   chmod +x bin/curl
 }
 
+@test "backup mode selects the storage sidecar for an unlisted PVC owner" {
+  local test_work="$FIXTURE_ROOT/start-modes"
+  mkdir -p "$test_work"
+  jq -n '[{name:"future-storage",replicas:2}]' > "$test_work/prior-workloads.json"
+  printf '{"name":"future-storage"}\n' > "$test_work/backup-pvcs.jsonl"
+  cat > "$test_work/harness.sh" << 'EOF'
+backup_scale_zero() { :; }
+kube() { printf '%s\n' "$*" >> "$FIXTURE_ROOT/start-modes/commands.log"; }
+EOF
+  sed -n '/^backup_start_modes() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh" \
+    >> "$test_work/harness.sh"
+  cat >> "$test_work/harness.sh" << 'EOF'
+work="$FIXTURE_ROOT/start-modes"
+timeout=60
+backup_start_modes
+EOF
+
+  run bash "$test_work/harness.sh"
+  [ "$status" -eq 0 ]
+  grep -Fqx 'set env deployment/future-storage MODE=backup --containers=future-storage,storage-version' \
+    "$test_work/commands.log"
+  grep -Fqx 'scale deployment/future-storage --replicas=2' "$test_work/commands.log"
+}
+
 @test "backup uses the deploy Lease, GraphQL barrier, metadata-selected PVCs and read-only copies" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-success"
