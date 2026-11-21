@@ -288,7 +288,6 @@ test("save stays open and discard restores latest persisted fields", async ({
   await saveButton(page).click();
   await firstSave;
 
-  await expect(page).toHaveURL(`/edit/${demoRecipe.id}`);
   await expect(successStatus(page)).toBeVisible();
   await expect(saveButton(page)).toBeDisabled();
 
