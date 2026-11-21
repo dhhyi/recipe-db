@@ -203,6 +203,72 @@ let test_backup_rejects_missing_tables () =
       Sys.remove path)
     [ "tags"; "assignments" ]
 
+let test_backup_rejects_missing_database_paths () =
+  let root = Filename.temp_file "tags-backup-startup" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o700;
+  let existing = Filename.concat root "existing" in
+  let absent_database = Filename.concat root "absent.sqlite" in
+  let orphan_database = Filename.concat root "orphan.sqlite" in
+  let orphan_wal = orphan_database ^ "-wal" in
+  let missing_parent = Filename.concat root "missing" in
+  let database_in_missing_parent = Filename.concat missing_parent "tags.sqlite" in
+  let write_file path contents =
+    Out_channel.with_open_bin path (fun channel -> output_string channel contents)
+  in
+  let read_file path = In_channel.with_open_bin path In_channel.input_all in
+  let remove_if_exists path = if Sys.file_exists path then Sys.remove path in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter remove_if_exists
+        [
+          existing;
+          absent_database;
+          orphan_database;
+          orphan_wal;
+          orphan_database ^ "-shm";
+          database_in_missing_parent;
+          database_in_missing_parent ^ "-wal";
+          database_in_missing_parent ^ "-shm";
+        ];
+      if Sys.file_exists missing_parent then Unix.rmdir missing_parent;
+      Unix.rmdir root)
+    (fun () ->
+      write_file existing "preserve this file";
+      expect_database_error (fun () ->
+          Tags.open_database ~mode:Tags.Backup (Some absent_database));
+      check (not (Sys.file_exists absent_database))
+        "backup rejection must not create an absent database";
+      check (not (Sys.file_exists (absent_database ^ "-wal")))
+        "backup rejection must not create a WAL beside an absent database";
+      check (not (Sys.file_exists (absent_database ^ "-shm")))
+        "backup rejection must not create shared memory beside an absent database";
+      check (read_file existing = "preserve this file")
+        "backup rejection must preserve existing files";
+      write_file orphan_wal "orphaned WAL data";
+      expect_database_error (fun () ->
+          Tags.open_database ~mode:Tags.Backup (Some orphan_database));
+      check (not (Sys.file_exists orphan_database))
+        "backup rejection must not create a database beside an orphaned WAL";
+      check (not (Sys.file_exists (orphan_database ^ "-shm")))
+        "backup rejection must not create shared memory beside an orphaned WAL";
+      check (read_file orphan_wal = "orphaned WAL data")
+        "backup rejection must preserve an orphaned WAL";
+      check (read_file existing = "preserve this file")
+        "backup rejection must preserve unrelated existing files";
+      expect_database_error (fun () ->
+          Tags.open_database ~mode:Tags.Backup (Some database_in_missing_parent));
+      check (not (Sys.file_exists missing_parent))
+        "backup rejection must not create a missing parent directory";
+      check (not (Sys.file_exists database_in_missing_parent))
+        "backup rejection must not create a database in a missing parent";
+      check (not (Sys.file_exists (database_in_missing_parent ^ "-wal")))
+        "backup rejection must not create a WAL in a missing parent";
+      check (not (Sys.file_exists (database_in_missing_parent ^ "-shm")))
+        "backup rejection must not create shared memory in a missing parent";
+      check (read_file existing = "preserve this file")
+        "backup rejection must preserve existing files")
+
 let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =
   Dream.test (Tags.router ~mode db)
     (Dream.request ~method_ ~target
@@ -382,6 +448,7 @@ let () =
   test_restart_persistence ();
   test_reset_is_complete_and_transactional ();
   test_backup_rejects_missing_tables ();
+  test_backup_rejects_missing_database_paths ();
   test_runtime_modes_and_http_reset ();
   test_http_errors_and_rollback ();
   test_http_other_category_flow ();

@@ -88,6 +88,41 @@ suite "backend HTTP publication contract":
     check readFile(blocker) == "untouched"
     check not fileExists(inaccessibleRoot / "storage-version")
 
+  test "backup startup rejects missing image folders without changing data":
+    let startupRoot = root & "-backup-startup"
+    createDir(startupRoot)
+    defer: removeDir(startupRoot)
+
+    let sentinel = startupRoot / "existing"
+    writeFile(sentinel, "untouched")
+    let environment = serverEnvironment(some("backup"),
+        40_000_000, 10 * 1024 * 1024)
+    for missing in ["root", "public", "manifests"]:
+      let dataRoot = startupRoot / missing
+      environment["DATA_LOCATION"] = dataRoot
+      if missing != "root":
+        let existingFolder = dataRoot /
+            (if missing == "public": "manifests" else: "public")
+        createDir(existingFolder)
+        writeFile(existingFolder / "existing", "untouched")
+
+      let server = startProcess("./server", env = environment,
+          options = {poParentStreams})
+      let exitCode = server.waitForExit(5000)
+      if exitCode == -1:
+        server.terminate()
+        discard server.waitForExit()
+      server.close()
+      check exitCode == 1
+      check readFile(sentinel) == "untouched"
+      if missing == "root":
+        check not dirExists(dataRoot)
+      else:
+        check not dirExists(dataRoot / missing)
+        let existingFolder = dataRoot /
+            (if missing == "public": "manifests" else: "public")
+        check readFile(existingFolder / "existing") == "untouched"
+
   test "off-center crop pixels, strict errors and failed saves preserve the complete pair":
     if dirExists(root):
       removeDir(root)
