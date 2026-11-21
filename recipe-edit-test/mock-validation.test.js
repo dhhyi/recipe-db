@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSchema } from "graphql";
+import { createMockGates } from "./mock-gates.js";
 import { takeMockResponse, validateMock } from "./mock-validation.js";
 
 const schema = buildSchema(`
@@ -197,4 +198,34 @@ test("consumes sequential responses and fails explicitly when exhausted", () => 
   const reusable = { response: second };
   assert.equal(takeMockResponse(reusable), second);
   assert.equal(takeMockResponse(reusable), second);
+});
+
+test("holds the selected operation until release", async () => {
+  const gates = createMockGates();
+  const gate = gates.hold("Save");
+  let completed = false;
+  const pending = gates.run("Save", () => {
+    completed = true;
+  });
+  await gate.started;
+  assert.equal(completed, false);
+  await gates.run("Load", () => assert.equal(completed, false));
+  gate.release();
+  await pending;
+  assert.equal(completed, true);
+  assert.throws(() => gates.hold("Save"), /already held/);
+});
+
+test("cleanup releases and awaits held responses", async () => {
+  const gates = createMockGates();
+  const gate = gates.hold("Save");
+  let completed = false;
+  const pending = gates.run("Save", async () => {
+    await Promise.resolve();
+    completed = true;
+  });
+  await gate.started;
+  await gates.releaseAll();
+  assert.equal(completed, true);
+  await pending;
 });

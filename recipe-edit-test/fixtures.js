@@ -2,6 +2,7 @@ import { test as base, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { buildSchema, getOperationAST, parse, print } from "graphql";
+import { createMockGates } from "./mock-gates.js";
 import { takeMockResponse, validateMock } from "./mock-validation.js";
 
 const schema = buildSchema(
@@ -13,9 +14,19 @@ export const test = base.extend({
   graphqlMocks: [[], { option: true }],
   identityHtml: [undefined, { option: true }],
   returnDocument: [undefined, { option: true }],
+  graphqlGates: async ({}, use) => {
+    await use(createMockGates());
+  },
   mockBackend: [
     async (
-      { context, baseURL, graphqlMocks, identityHtml, returnDocument },
+      {
+        context,
+        baseURL,
+        graphqlMocks,
+        graphqlGates,
+        identityHtml,
+        returnDocument,
+      },
       use,
     ) => {
       const origin = new URL(baseURL).origin;
@@ -55,9 +66,15 @@ export const test = base.extend({
               );
             }
             const response = takeMockResponse(mock);
-            await route.fulfill({
-              contentType: "application/json",
-              body: JSON.stringify(response),
+            await graphqlGates.run(operation.name?.value, async () => {
+              try {
+                await route.fulfill({
+                  contentType: "application/json",
+                  body: JSON.stringify(response),
+                });
+              } catch (error) {
+                await reject(`GraphQL mock failed: ${error.message}`);
+              }
             });
           } catch (error) {
             await reject(`GraphQL mock failed: ${error.message}`);
@@ -103,7 +120,11 @@ export const test = base.extend({
       try {
         await use();
       } finally {
-        await context.close();
+        try {
+          await graphqlGates.releaseAll();
+        } finally {
+          await context.close();
+        }
         expect(failures, "All backend requests must be mocked").toEqual([]);
       }
     },

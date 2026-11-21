@@ -6,6 +6,6 @@ RUN npm install -g pnpm@12.6.0 playwright@${PLAYWRIGHT_VERSION}
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile && pnpm exec playwright install --with-deps chromium && chmod -R a+rX /app /ms-playwright
-COPY playwright.config.js fixtures.js mock-validation.js recipe-db.graphqls ./
+COPY playwright.config.js fixtures.js mock-gates.js mock-validation.js recipe-db.graphqls ./
 COPY tests ./tests
 CMD ["pnpm", "integration"]
