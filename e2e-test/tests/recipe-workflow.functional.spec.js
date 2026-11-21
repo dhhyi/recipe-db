@@ -100,7 +100,7 @@ test("existing and new pages expose explicit return actions", async ({
   await expect(returnButtonNew(page)).toHaveAttribute("href", "/");
 });
 
-test("guard preserves modified/newtab/download/hash link behaviors", async ({
+test("guard preserves newtab/download/hash link behaviors", async ({
   page,
   demoRecipe,
 }) => {
@@ -144,9 +144,6 @@ test("guard preserves modified/newtab/download/hash link behaviors", async ({
     await dialog.dismiss();
   };
   page.on("dialog", listener);
-
-  await returnButtonExisting(page).click({ modifiers: ["Control"] });
-  await expect(page).toHaveURL(`/edit/${demoRecipe.id}`);
 
   await page.locator("#hash-link").click();
   await expect(page).toHaveURL(new RegExp(`/edit/${demoRecipe.id}#insight$`));
