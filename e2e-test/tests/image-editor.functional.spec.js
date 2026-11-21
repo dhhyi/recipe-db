@@ -818,7 +818,14 @@ test("drag start preserves previous error and horizontal motion is a no-op", asy
       writes++;
       if (writes === 1) {
         await route.fulfill({
-          json: { errors: [{ message: "Image collection changed", extensions: { code: "image-order-conflict" } }] },
+          json: {
+            errors: [
+              {
+                message: "Image collection changed",
+                extensions: { code: "image-order-conflict" },
+              },
+            ],
+          },
         });
       } else {
         await release.promise;
@@ -836,7 +843,9 @@ test("drag start preserves previous error and horizontal motion is a no-op", asy
     const error = page.getByText(/zwischenzeitlich geändert/);
     await expect(error).toBeVisible();
     await expect(rows.nth(1).locator("button").first()).toBeEnabled();
-    const original = await rows.evaluateAll((elements) => elements.map((row) => row.dataset.galleryId));
+    const original = await rows.evaluateAll((elements) =>
+      elements.map((row) => row.dataset.galleryId),
+    );
     const handle = rows.nth(1).locator(".gallery-handle");
     const box = await handle.boundingBox();
     const rowTop = (await rows.nth(1).boundingBox()).y;
@@ -844,12 +853,18 @@ test("drag start preserves previous error and horizontal motion is a no-op", asy
     const y = box.y + 1;
     await page.mouse.move(x, y);
     await page.mouse.down();
-    await expect(page.locator("#gallery-drag-status")).toHaveText("Bildreihenfolge wird vorgemerkt.");
+    await expect(page.locator("#gallery-drag-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
     await expect(error).toBeVisible();
     expect((await rows.nth(1).boundingBox()).y).toBe(rowTop);
     await page.mouse.move(x + 12, y);
     await page.mouse.up();
-    expect(await rows.evaluateAll((elements) => elements.map((row) => row.dataset.galleryId))).toEqual(original);
+    expect(
+      await rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      ),
+    ).toEqual(original);
     await expect(error).toBeVisible();
     expect(writes).toBe(1);
 
@@ -863,10 +878,16 @@ test("drag start preserves previous error and horizontal motion is a no-op", asy
     expect(writes).toBe(1);
 
     const source = await rows.nth(1).locator(".gallery-handle").boundingBox();
-    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.move(
+      source.x + source.width / 2,
+      source.y + source.height / 2,
+    );
     await page.mouse.down();
     const target = await rows.first().boundingBox();
-    await page.mouse.move(source.x + source.width / 2, target.y + target.height / 2);
+    await page.mouse.move(
+      source.x + source.width / 2,
+      target.y + target.height / 2,
+    );
     await page.mouse.up();
     await expect.poll(() => writes).toBe(2);
     await expect(error).toHaveCount(0);
@@ -949,14 +970,11 @@ test("three-row drag uses live layout, gates both phases and reconciles a differ
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await rows.nth(1).locator("button").first().click({ force: true });
-    await rows
-      .nth(1)
-      .locator(".gallery-handle")
-      .dispatchEvent("pointerdown", {
-        isPrimary: true,
-        button: 0,
-        pointerId: 99,
-      });
+    await rows.nth(1).locator(".gallery-handle").dispatchEvent("pointerdown", {
+      isPrimary: true,
+      button: 0,
+      pointerId: 99,
+    });
     expect(writes).toBe(1);
     writeRelease.resolve();
     await expect.poll(() => reads).toBe(1);
@@ -968,14 +986,11 @@ test("three-row drag uses live layout, gates both phases and reconciles a differ
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await rows.nth(1).locator("button").first().click({ force: true });
-    await rows
-      .nth(1)
-      .locator(".gallery-handle")
-      .dispatchEvent("pointerdown", {
-        isPrimary: true,
-        button: 0,
-        pointerId: 100,
-      });
+    await rows.nth(1).locator(".gallery-handle").dispatchEvent("pointerdown", {
+      isPrimary: true,
+      button: 0,
+      pointerId: 100,
+    });
     expect(writes).toBe(1);
     readRelease.resolve();
     await expect.poll(ids).toEqual([second.id, third.id, first.id]);
@@ -1003,7 +1018,9 @@ test("non-default drag announces a concurrent authoritative default change", asy
 }) => {
   await page.setViewportSize({ width: 360, height: 900 });
   const file = pngFile();
-  const newest = await uploadImage(request, multiImageRecipe, file.name, { buffer: file.buffer });
+  const newest = await uploadImage(request, multiImageRecipe, file.name, {
+    buffer: file.buffer,
+  });
   const [middle, last] = multiImageRecipe.images;
   let written = false;
   await page.route("**/graphql", async (route) => {
@@ -1027,15 +1044,40 @@ test("non-default drag announces a concurrent authoritative default change", asy
   await expect(rows).toHaveCount(3);
   await rows.last().scrollIntoViewIfNeeded();
   const source = await rows.nth(1).locator(".gallery-handle").boundingBox();
-  await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+  await page.mouse.move(
+    source.x + source.width / 2,
+    source.y + source.height / 2,
+  );
   await page.mouse.down();
-  await expect(page.locator("#gallery-drag-status")).toHaveText("Bildreihenfolge wird vorgemerkt.");
+  await expect(page.locator("#gallery-drag-status")).toHaveText(
+    "Bildreihenfolge wird vorgemerkt.",
+  );
   const target = await rows.nth(2).boundingBox();
-  await page.mouse.move(source.x + source.width / 2, target.y + target.height / 2);
-  await expect.poll(() => rows.evaluateAll((elements) => elements.map((row) => row.dataset.galleryId))).toEqual([newest.id, last.id, middle.id]);
+  await page.mouse.move(
+    source.x + source.width / 2,
+    target.y + target.height / 2,
+  );
+  await expect
+    .poll(() =>
+      rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      ),
+    )
+    .toEqual([newest.id, last.id, middle.id]);
   await page.mouse.up();
-  await expect.poll(() => rows.evaluateAll((elements) => elements.map((row) => row.dataset.galleryId))).toEqual([last.id, newest.id, middle.id]);
-  await expect(page.getByText("Bild an Position 3 verschoben. Bild an Position 1 ist jetzt das Standardbild.", { exact: true })).toHaveClass("sr-only");
+  await expect
+    .poll(() =>
+      rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      ),
+    )
+    .toEqual([last.id, newest.id, middle.id]);
+  await expect(
+    page.getByText(
+      "Bild an Position 3 verschoben. Bild an Position 1 ist jetzt das Standardbild.",
+      { exact: true },
+    ),
+  ).toHaveClass("sr-only");
 });
 
 test("dragging near the viewport edge does not auto-scroll", async ({
@@ -1062,7 +1104,10 @@ test("dragging near the viewport edge does not auto-scroll", async ({
   const scrollY = await page.evaluate(() => window.scrollY);
   expect(
     await page.evaluate(
-      () => document.documentElement.scrollHeight - window.innerHeight - window.scrollY,
+      () =>
+        document.documentElement.scrollHeight -
+        window.innerHeight -
+        window.scrollY,
     ),
   ).toBeGreaterThan(150);
   await page.waitForTimeout(500);
