@@ -94,6 +94,18 @@
       .image-editor .crop-dimensions {
         overflow-wrap: anywhere;
       }
+      .image-editor .gallery-handle {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        font-size: 1.5rem;
+        user-select: none;
+      }
+      .image-editor .gallery-handle[data-enabled="true"] {
+        touch-action: none;
+        cursor: grab;
+      }
     </style>
   </head>
 
@@ -272,13 +284,29 @@
           }
         }
 
-        function endPointer(notify = true) {
+        function endPointer(notify = true, cancelled = true) {
           if (!pointer) return;
           const previous = pointer;
           pointer = null;
           if (previous.stage.hasPointerCapture(previous.id))
             previous.stage.releasePointerCapture(previous.id);
-          if (notify) send({ kind: "end" });
+          if (notify)
+            send(
+              previous.gallery
+                ? { kind: "gallery-drag-end", cancelled }
+                : { kind: "end" },
+            );
+        }
+
+        function galleryPosition(event, current) {
+          const rows = [...current.stage.querySelectorAll("[data-gallery-id]")];
+          if (!rows.length) return;
+          let index = rows.findIndex((row) => {
+            const box = row.getBoundingClientRect();
+            return event.clientY < box.top + box.height / 2;
+          });
+          if (index < 0) index = rows.length - 1;
+          send({ kind: "gallery-drag-move", index });
         }
 
         function position(event, current) {
@@ -294,6 +322,22 @@
         }
 
         document.addEventListener("pointerdown", (event) => {
+          const handle = event.target.closest("[data-gallery-handle]");
+          const list = handle && handle.closest(".gallery-list");
+          if (handle && list) {
+            if (
+              pointer ||
+              handle.dataset.enabled !== "true" ||
+              !event.isPrimary ||
+              event.button !== 0
+            )
+              return;
+            event.preventDefault();
+            pointer = { id: event.pointerId, stage: list, gallery: true };
+            list.setPointerCapture(event.pointerId);
+            send({ kind: "gallery-drag-start", imageId: handle.dataset.galleryHandle });
+            return;
+          }
           const target = event.target.closest("[data-handle]");
           const stage = target && target.closest(".crop-stage");
           if (
@@ -318,6 +362,11 @@
           "pointermove",
           (event) => {
             if (!pointer || event.pointerId !== pointer.id) return;
+            if (pointer.gallery) {
+              event.preventDefault();
+              galleryPosition(event, pointer);
+              return;
+            }
             if (pointer.stage.dataset.editable !== "true") {
               endPointer();
               return;
@@ -329,6 +378,11 @@
         );
         document.addEventListener("pointerup", (event) => {
           if (!pointer || event.pointerId !== pointer.id) return;
+          if (pointer.gallery) {
+            galleryPosition(event, pointer);
+            endPointer(true, false);
+            return;
+          }
           send({ ...position(event, pointer), event: "move" });
           endPointer();
         });
@@ -336,6 +390,12 @@
           document.addEventListener(name, (event) => {
             if (pointer && event.pointerId === pointer.id) endPointer();
           });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape" && pointer?.gallery) {
+            event.preventDefault();
+            endPointer();
+          }
+        });
         window.addEventListener("resize", endPointer);
         window.addEventListener("blur", endPointer);
         document.addEventListener(
