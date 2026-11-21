@@ -84,7 +84,7 @@ entries = {
 }
 
 
-def fixture():
+def fixture(include_metadata=False):
     global counter
     counter += 1
     case = root / str(counter)
@@ -111,6 +111,10 @@ def fixture():
             "archive": name, "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
             "fileCount": len(files), "files": files,
         })
+        if include_metadata:
+            observed = module.snapshot.validate(capture / name, include_directories=True)
+            inventory[-1]["directories"] = observed["directories"]
+            inventory[-1]["directoryMetadata"] = observed["directoryMetadata"]
     manifest = {
         "format": module.upload.FORMAT, "formatVersion": 1, "backupId": "selected-backup",
         "capturedAt": "2026-10-31T12:00:00Z",
@@ -227,6 +231,10 @@ if group == "valid":
         pass
     else:
         raise AssertionError("existing output accepted")
+    assert module.upload.validate_snapshot(output) == manifest
+    case, metadata, archive, projects, manifest = fixture(include_metadata=True)
+    output = case / "snapshot"
+    assert module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup") == manifest
     assert module.upload.validate_snapshot(output) == manifest
 elif group == "identity":
     for key, value in [
