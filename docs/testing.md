@@ -159,4 +159,4 @@ Revisit a test's placement when the behavior or its owner changes. For example:
 
 Apply the same placement questions as for a new test. Its current location is not a reason to keep it there.
 
-Before moving or removing coverage, identify the behavior and boundaries it protects. Confirm that existing coverage or a tested replacement still protects them. Keep higher-level coverage when it verifies a distinct integration contract, even if the underlying logic now has unit tests.
+Before moving or removing coverage, identify the behavior and boundaries it protects. A test may be removed without replacement if its value does not justify its maintenance cost and the remaining risk is acceptable. Otherwise, confirm that existing coverage or a tested replacement still protects those behaviors and boundaries. Keep higher-level coverage when it verifies a distinct integration contract, even if the underlying logic now has unit tests.
