@@ -379,7 +379,7 @@ galleryRow model failed index image =
                 div [ class "gallery-move-controls flex flex-col gap-1" ]
                     [ button
                         [ type_ "button"
-                        , class "outline m-0"
+                        , class "outline m-0 flex aspect-square items-center justify-center"
                         , id ("move-up-" ++ image.id)
                         , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach oben verschieben")
                         , disabled (not (canMove model image.id MoveUp))
@@ -388,7 +388,7 @@ galleryRow model failed index image =
                         [ Html.node "recipe-chevron" [ class "inline-block h-3 w-3 -rotate-90 [&>svg]:block [&>svg]:h-full [&>svg]:w-full", attribute "aria-hidden" "true" ] [] ]
                     , button
                         [ type_ "button"
-                        , class "outline m-0"
+                        , class "outline m-0 flex aspect-square items-center justify-center"
                         , id ("move-down-" ++ image.id)
                         , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach unten verschieben")
                         , disabled (not (canMove model image.id MoveDown))

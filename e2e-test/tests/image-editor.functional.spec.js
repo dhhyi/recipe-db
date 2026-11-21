@@ -713,6 +713,9 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
   await expect(rows.locator("article")).toHaveCount(2);
   await expect(page.locator(".gallery-handle")).toHaveCount(0);
+  await expect(
+    rows.first().locator(".gallery-move-controls button"),
+  ).toHaveCount(2);
   expect(
     await rows
       .first()
@@ -729,12 +732,29 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   ).toBe(true);
   expect(
     await rows
-      .locator("button")
       .first()
-      .evaluate((button) => {
-        const { width, height } = button.getBoundingClientRect();
-        return width >= 44 && height >= 44;
-      }),
+      .locator(".gallery-move-controls button")
+      .evaluateAll((buttons) =>
+        buttons.every((button) => {
+          const { width, height } = button.getBoundingClientRect();
+          return width >= 44 && height >= 44;
+        }),
+      ),
+  ).toBe(true);
+  expect(
+    await rows
+      .first()
+      .locator(".gallery-move-controls button")
+      .evaluateAll((buttons) =>
+        buttons.every((button) => {
+          const box = button.getBoundingClientRect();
+          const icon = button.querySelector("path").getBoundingClientRect();
+          return (
+            Math.abs(box.x + box.width / 2 - icon.x - icon.width / 2) < 0.5 &&
+            Math.abs(box.y + box.height / 2 - icon.y - icon.height / 2) < 0.5
+          );
+        }),
+      ),
   ).toBe(true);
 
   const moveUp = rows.nth(1).locator("button").nth(0);
