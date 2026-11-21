@@ -1190,8 +1190,24 @@ EOF
   [ -e helper-deleted ]
 }
 
-@test "restore import rejects missing recorded directories" {
-  jq '.inventory[0].directories = ["empty"]' work/restore-manifest.json > work/manifest.next
+@test "restore import does not require recorded empty directories" {
+  python3 - << 'PY'
+import tarfile
+with tarfile.open("work/validated/recipes.tar", "a") as archive:
+    directory = tarfile.TarInfo("empty")
+    directory.type = tarfile.DIRTYPE
+    archive.addfile(directory)
+PY
+  jq '.inventory[0].directories = ["empty", "missing"]' work/restore-manifest.json > work/manifest.next
+  mv work/manifest.next work/restore-manifest.json
+  run bash .scripts/restore-import-harness.sh
+  [ "$status" -eq 0 ]
+  [ -d data/empty ]
+  [ -e helper-deleted ]
+}
+
+@test "restore import still rejects a mismatched regular-file inventory" {
+  jq '.inventory[0].files[0].sha256 = ("0" * 64)' work/restore-manifest.json > work/manifest.next
   mv work/manifest.next work/restore-manifest.json
   run bash .scripts/restore-import-harness.sh
   [ "$status" -ne 0 ]

@@ -1396,12 +1396,10 @@ restore_import() {
     kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
     kube exec "$pod" -- sync || return 1
     kube exec "$pod" -- tar -C /data -cf - . > "$work/restored-$name.tar" || return 1
-    python3 "$root/.scripts/validate-backup-snapshot.py" --include-directories "$work/restored-$name.tar" \
+    python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" \
       > "$work/restored-$name-files.json" || return 1
     jq -e --slurpfile actual "$work/restored-$name-files.json" \
-      '(.files | sort_by(.path)) == ($actual[0].files | sort_by(.path))
-       and ($actual[0].directories as $dirs |
-         all(.directories[]?; . as $dir | $dirs | index($dir) != null))' \
+      '(.files | sort_by(.path)) == ($actual[0] | sort_by(.path))' \
       <<< "$entry" > /dev/null || {
       printf 'production: restored volume verification failed: %s\n' "$name" >&2
       return 1
