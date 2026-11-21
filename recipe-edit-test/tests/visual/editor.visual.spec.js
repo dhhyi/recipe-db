@@ -8,6 +8,8 @@ for (const role of ["anonymous", "member", "owner"]) {
     ["new", true, "new-recipe.png"],
     ["new", false, "degraded-new-recipe.png"],
   ]) {
+    if (!online && role !== "owner") continue;
+
     test.describe(`${role} ${snapshot}`, () => {
       test.use({
         graphqlMocks: [
