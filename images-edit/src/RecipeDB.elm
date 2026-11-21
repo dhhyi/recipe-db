@@ -1,4 +1,4 @@
-module RecipeDB exposing (Capabilities, CapabilitiesModel, DeleteModel, GalleryImage, RecipeData, RecipeModel, UploadModel, UploadedImage, decodeDeleteImage, decodeUpload, makeCapabilitiesRequest, makeDeleteImageRequest, makeRecipeRequest, makeUploadRequest)
+module RecipeDB exposing (Capabilities, CapabilitiesModel, DeleteModel, GalleryImage, RecipeData, RecipeModel, ReorderModel, ReorderResult(..), UploadModel, UploadedImage, decodeDeleteImage, decodeReorderImages, decodeUpload, makeCapabilitiesRequest, makeDeleteImageRequest, makeRecipeRequest, makeReorderImagesRequest, makeUploadRequest)
 
 import Api.Object exposing (Recipe)
 import Api.Object.ImageMetadata as ImageMetadata
@@ -90,6 +90,16 @@ type alias UploadModel =
 
 type alias DeleteModel =
     RemoteData.RemoteData String Bool
+
+
+type ReorderResult
+    = ReorderConfirmed
+    | ReorderRejected String
+    | ReorderUnconfirmed String
+
+
+type alias ReorderModel =
+    RemoteData.RemoteData String ReorderResult
 
 
 type alias UploadedImage =
@@ -233,6 +243,116 @@ deleteTransportError error =
 
         _ ->
             "Die Löschung konnte nicht bestätigt werden."
+
+
+makeReorderImagesRequest : String -> List String -> (ReorderModel -> msg) -> Cmd msg
+makeReorderImagesRequest recipeId imageIds targetMsg =
+    let
+        body : String
+        body =
+            Encode.object
+                [ ( "query"
+                  , Encode.string
+                        "mutation ($recipeId: ID!, $imageIds: [ID!]!) { reorderImages(recipeId: $recipeId, imageIds: $imageIds) { id url thumbUrl size width height } }"
+                  )
+                , ( "variables"
+                  , Encode.object
+                        [ ( "recipeId", Encode.string recipeId )
+                        , ( "imageIds", Encode.list Encode.string imageIds )
+                        ]
+                  )
+                ]
+                |> Encode.encode 0
+    in
+    Http.request
+        { method = "POST"
+        , headers = []
+        , url = "/graphql"
+        , body = Http.stringBody "application/json" body
+        , timeout = Nothing
+        , tracker = Nothing
+        , expect =
+            Http.expectString
+                (\result ->
+                    (case result of
+                        Ok payload ->
+                            decodeReorderImages payload
+
+                        Err error ->
+                            reorderTransportError error
+                    )
+                        |> RemoteData.fromResult
+                        |> targetMsg
+                )
+        }
+
+
+reorderTransportError : Http.Error -> Result String ReorderResult
+reorderTransportError error =
+    case error of
+        Http.BadStatus 401 ->
+            Ok (ReorderRejected "Anmeldung erforderlich oder abgelaufen. Die Reihenfolge wurde nicht geändert.")
+
+        Http.BadStatus 403 ->
+            Ok (ReorderRejected "Keine Berechtigung zum Verwalten dieses Bildes. Die Reihenfolge wurde nicht geändert.")
+
+        _ ->
+            Ok (ReorderUnconfirmed "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.")
+
+
+decodeReorderImages : String -> Result String ReorderResult
+decodeReorderImages body =
+    Decode.decodeString Decode.value body
+        |> Result.mapError (\_ -> "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.")
+        |> Result.andThen decodeReorderResponse
+
+
+decodeReorderResponse : Decode.Value -> Result String ReorderResult
+decodeReorderResponse value =
+    case Decode.decodeValue (field "errors" (Decode.list Decode.value)) value of
+        Ok (first :: _) ->
+            Ok (reorderGraphQLError first)
+
+        _ ->
+            Decode.decodeValue (field "data" (field "reorderImages" reorderMetadata)) value
+                |> Result.map (always ReorderConfirmed)
+                |> Result.mapError
+                    (\_ ->
+                        "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen."
+                    )
+
+
+reorderMetadata : Decode.Decoder (List ())
+reorderMetadata =
+    Decode.list
+        (Decode.map6
+            (\_ _ _ _ _ _ -> ())
+            (field "id" string)
+            (field "url" string)
+            (field "thumbUrl" string)
+            (field "size" int)
+            (field "width" int)
+            (field "height" int)
+        )
+
+
+reorderGraphQLError : Decode.Value -> ReorderResult
+reorderGraphQLError value =
+    case Decode.decodeValue (Decode.at [ "extensions", "code" ] string) value of
+        Ok "image-order-conflict" ->
+            ReorderRejected "Die Bildreihenfolge wurde zwischenzeitlich geändert. Der aktuelle Stand wird neu geladen."
+
+        Ok "invalid-image-order" ->
+            ReorderRejected "Die Bildreihenfolge wurde abgelehnt, weil sich die Bildauswahl geändert hat. Der aktuelle Stand wird neu geladen."
+
+        Ok "authentication-required" ->
+            ReorderRejected "Anmeldung erforderlich oder abgelaufen. Die Reihenfolge wurde nicht geändert."
+
+        Ok "forbidden" ->
+            ReorderRejected "Keine Berechtigung zum Verwalten dieses Bildes. Die Reihenfolge wurde nicht geändert."
+
+        _ ->
+            ReorderUnconfirmed "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen."
 
 
 decodeDeleteImage : String -> Result String Bool

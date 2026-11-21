@@ -1,7 +1,7 @@
 module Editor.View exposing (view)
 
 import Crop exposing (Crop)
-import Editor.Types exposing (GalleryFeedbackKind(..), Model, Msg(..), Phase(..), Session, canAdd, canDelete, imageLimit)
+import Editor.Types exposing (GalleryFeedbackKind(..), Model, MoveDirection(..), Msg(..), Phase(..), Session, canAdd, canDelete, canMove, imageLimit)
 import File exposing (File)
 import Html exposing (Html, a, button, div, h1, img, input, label, li, p, span, text)
 import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
@@ -164,7 +164,12 @@ editorStatus model =
                 "Galerie wird aktualisiert. Die angezeigten Bilder zeigen den zuletzt geladenen Stand."
 
             else if model.galleryMutation /= Nothing then
-                "Bild wird gelöscht."
+                case model.galleryMutation |> Maybe.andThen .movement of
+                    Just _ ->
+                        "Bildreihenfolge wird gespeichert."
+
+                    Nothing ->
+                        "Bild wird gelöscht."
 
             else if model.phase == Viewing && model.savedFeedback then
                 "Bild gespeichert."
@@ -209,6 +214,15 @@ galleryFeedback model =
                     p [ attribute "role" "status", class "feedback warning" ] [ text feedback.message ]
 
                 DeletionUnconfirmed ->
+                    p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
+
+                ReorderingSucceeded ->
+                    p [ attribute "role" "status", class "feedback success" ] [ text feedback.message ]
+
+                ReorderingRejected ->
+                    p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
+
+                ReorderingUnconfirmed ->
                     p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
 
         Nothing ->
@@ -335,10 +349,45 @@ galleryRow model failed index image =
         description : String
         description =
             "Rezeptbild " ++ String.fromInt (index + 1)
+
+        imageCount : Int
+        imageCount =
+            case model.recipe of
+                RemoteData.Success (Just recipe) ->
+                    recipe.images |> Maybe.map List.length |> Maybe.withDefault 0
+
+                _ ->
+                    0
     in
     ( image.id
-    , li [ class "gallery-row" ]
-        [ if Set.member image.id failed then
+    , li [ class "gallery-row", id ("gallery-image-" ++ image.id), attribute "tabindex" "-1" ]
+        [ span [ class "gallery-handle", attribute "aria-hidden" "true" ]
+            (List.repeat 6 (span [] []))
+        , if imageCount > 1 then
+            div [ class "gallery-move-controls" ]
+                [ button
+                    [ type_ "button"
+                    , class "outline"
+                    , id ("move-up-" ++ image.id)
+                    , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach oben verschieben")
+                    , disabled (not (canMove model image.id MoveUp))
+                    , onClick (MoveImage image.id MoveUp)
+                    ]
+                    [ span [ attribute "aria-hidden" "true" ] [ text "⌃" ] ]
+                , button
+                    [ type_ "button"
+                    , class "outline"
+                    , id ("move-down-" ++ image.id)
+                    , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach unten verschieben")
+                    , disabled (not (canMove model image.id MoveDown))
+                    , onClick (MoveImage image.id MoveDown)
+                    ]
+                    [ span [ attribute "aria-hidden" "true" ] [ text "⌄" ] ]
+                ]
+
+          else
+            text ""
+        , if Set.member image.id failed then
             span
                 [ class "gallery-thumbnail gallery-thumbnail-unavailable"
                 , attribute "role" "img"

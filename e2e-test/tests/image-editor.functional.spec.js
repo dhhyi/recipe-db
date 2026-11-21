@@ -12,6 +12,7 @@ import {
   handle,
   isGalleryRead,
   isImageDelete,
+  isImageReorder,
   isImageUpload,
   observeUploads,
   orientedJpegFile,
@@ -689,6 +690,265 @@ test("a mirrored rotated JPEG uses the same oriented coordinates in preview and 
   await expectCropPixels(thumbnail, file, selected, 300, 225);
 });
 
+test("gallery up and down immediately save opaque IDs without optimistic movement", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  const releaseMutation = Promise.withResolvers();
+  const reorderRequests = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      reorderRequests.push(route.request());
+      await releaseMutation.promise;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator("button").nth(0)).toBeDisabled();
+  await expect(rows.nth(1).locator("button").nth(1)).toBeDisabled();
+  await expect(rows.nth(0).locator("button").nth(1)).toBeEnabled();
+  await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
+  await expect(page.locator(".gallery-handle")).toHaveCount(2);
+  await expect(page.locator(".gallery-handle").first()).toHaveAttribute(
+    "aria-hidden",
+    "true",
+  );
+  expect(
+    await rows
+      .locator("button")
+      .first()
+      .evaluate((button) => {
+        const { width, height } = button.getBoundingClientRect();
+        return width >= 44 && height >= 44;
+      }),
+  ).toBe(true);
+
+  const moveUp = rows.nth(1).locator("button").nth(0);
+  const responsePromise = page.waitForResponse((response) =>
+    isImageReorder(response.request()),
+  );
+  const requestPromise = page.waitForRequest(isImageReorder);
+  await moveUp.click();
+  const reorderRequest = await requestPromise;
+  const request = reorderRequest.postDataJSON();
+  expect(request.variables).toEqual({
+    recipeId: multiImageRecipe.id,
+    imageIds: [second.id, first.id],
+  });
+  expect(request.query).toContain(
+    "reorderImages(recipeId: $recipeId, imageIds: $imageIds)",
+  );
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(rows.nth(1).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.locator("button")).toHaveCount(6);
+  await expect(rows.locator("button").nth(0)).toBeDisabled();
+  await expect(page.locator("#upload-image")).toBeDisabled();
+  await expect(page.locator("#editor-status")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  expect(
+    await rows
+      .locator("button")
+      .evaluateAll((buttons) => buttons.every((button) => button.disabled)),
+  ).toBe(true);
+  await moveUp.click({ force: true });
+  expect(reorderRequests).toHaveLength(1);
+
+  releaseMutation.resolve();
+  const response = await responsePromise;
+  const result = await response.json();
+  expect(result.data.reorderImages.map((image) => image.id)).toEqual([
+    second.id,
+    first.id,
+  ]);
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(0).getByText("Standardbild")).toBeVisible();
+  await expect(
+    rows.locator("span").filter({ hasText: "Standardbild" }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByText(
+      "Bild an Position 1 verschoben und als Standardbild festgelegt.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe(
+    `move-down-${second.id}`,
+  );
+
+  const moveDown = page.locator(`[id="move-down-${second.id}"]`);
+  const downResponsePromise = page.waitForResponse((response) =>
+    isImageReorder(response.request()),
+  );
+  await moveDown.click();
+  const downResponse = await downResponsePromise;
+  expect(downResponse.request().postDataJSON().variables).toEqual({
+    recipeId: multiImageRecipe.id,
+    imageIds: [first.id, second.id],
+  });
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(1).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(
+    page.getByText("Bild an Position 2 verschoben.", { exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe(
+    `move-up-${second.id}`,
+  );
+  expect(reorderRequests).toHaveLength(2);
+});
+
+test("reorder rejection and unknown outcome reconcile without automatic retry", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  let attempts = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      attempts += 1;
+      if (attempts === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/graphql-response+json",
+          body: JSON.stringify({
+            errors: [
+              {
+                message: "Image collection changed",
+                extensions: { code: "image-order-conflict" },
+              },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.abort();
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  const secondUp = rows.nth(1).locator("button").nth(0);
+  await secondUp.click();
+  await expect(
+    page.getByText(
+      "Die Bildreihenfolge wurde zwischenzeitlich geändert. Der aktuelle Stand wird neu geladen.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+
+  await rows.nth(1).locator("button").nth(0).click();
+  await expect(
+    page.getByText(
+      "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
+  expect(attempts).toBe(2);
+});
+
+test("successful reorder with failed refresh stays confirmed and Retry only reads", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  let galleryReads = 0;
+  const reorders = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      reorders.push(route.request());
+      await route.fallback();
+      return;
+    }
+    if (
+      isGalleryRead(route.request()) &&
+      reorders.length > 0 &&
+      ++galleryReads === 1
+    ) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({
+          data: null,
+          errors: [{ message: "Gallery unavailable" }],
+        }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await rows.nth(1).locator("button").nth(0).click();
+  await expect(
+    page.getByText("Reihenfolge gespeichert.", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(page.locator("#upload-image")).toBeDisabled();
+  await expect(rows.locator("button")).toHaveCount(6);
+  await expect(rows.locator("button").nth(0)).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Erneut laden" }),
+  ).toBeVisible();
+  expect(reorders).toHaveLength(1);
+
+  await page.getByRole("button", { name: "Erneut laden" }).click();
+  await expect(
+    page.getByText(
+      "Bild an Position 1 verschoben und als Standardbild festgelegt.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(0).locator("button").nth(0)).toBeDisabled();
+  expect(galleryReads).toBe(2);
+  expect(reorders).toHaveLength(1);
+});
+
 test("native confirmation can cancel or delete the sole image with exact identity", async ({
   page,
   request,
@@ -712,6 +972,7 @@ test("native confirmation can cancel or delete the sole image with exact identit
   });
   await expect(deleteButton).toBeVisible();
   await expect(deleteButton).toBeEnabled();
+  await expect(page.locator(".gallery-move-controls")).toHaveCount(0);
 
   const cancelledDialog = page.waitForEvent("dialog");
   await deleteButton.focus();
@@ -761,6 +1022,7 @@ test("native confirmation can cancel or delete the sole image with exact identit
   ).toBeVisible();
   await expect(addInput(page)).toBeEnabled();
   await expect(addInput(page)).toBeFocused();
+  await expect(page.locator(".gallery-move-controls")).toHaveCount(0);
 });
 
 test("first-image deletion keeps the confirmed order and focuses the promoted default", async ({

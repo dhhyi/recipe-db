@@ -165,6 +165,7 @@ tests =
       )
     ]
         ++ sourceTests
+        ++ reorderResponseTests
         ++ galleryTests
         ++ List.concatMap
             (\( name, handle ) ->
@@ -242,6 +243,46 @@ galleryTests =
         first : Editor.Model
         first =
             loaded (Just (entries 2))
+
+        threeImages : Editor.Model
+        threeImages =
+            loaded (Just (entries 3))
+
+        pendingMove : Editor.Model
+        pendingMove =
+            apply (MoveImage "opaque/2" Editor.MoveUp) threeImages
+
+        moveWriteCompleted : Editor.Model
+        moveWriteCompleted =
+            apply (Reordered pendingMove.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) pendingMove
+
+        movedReconciled : Editor.Model
+        movedReconciled =
+            apply
+                (GotRecipe moveWriteCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" } ] })))
+                moveWriteCompleted
+
+        rejectedMove : Editor.Model
+        rejectedMove =
+            apply
+                (Reordered pendingMove.mutationToken (RemoteData.Success (RecipeDB.ReorderRejected "Die Bildreihenfolge wurde zwischenzeitlich geändert.")))
+                pendingMove
+
+        failedMoveRefresh : Editor.Model
+        failedMoveRefresh =
+            apply
+                (GotRecipe rejectedMove.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Nothing })))
+                rejectedMove
+
+        retriedMoveRefresh : Editor.Model
+        retriedMoveRefresh =
+            apply RetryGallery failedMoveRefresh
+
+        recoveredMoveRefresh : Editor.Model
+        recoveredMoveRefresh =
+            apply
+                (GotRecipe retriedMoveRefresh.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" } ] })))
+                retriedMoveRefresh
 
         pendingDelete : Editor.Model
         pendingDelete =
@@ -340,6 +381,67 @@ galleryTests =
       , Editor.canDelete first "opaque/1"
             && not (Editor.canDelete first "/thumb")
             && not (Editor.canDelete (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) first) "opaque/1")
+      )
+    , ( "movement controls respect boundaries, collection size and capability"
+      , not (Editor.canMove threeImages "opaque/1" Editor.MoveUp)
+            && Editor.canMove threeImages "opaque/1" Editor.MoveDown
+            && Editor.canMove threeImages "opaque/2" Editor.MoveUp
+            && Editor.canMove threeImages "opaque/2" Editor.MoveDown
+            && not (Editor.canMove threeImages "opaque/3" Editor.MoveDown)
+            && not (Editor.canMove (loaded (Just (entries 1))) "opaque/1" Editor.MoveUp)
+            && not (Editor.canMove (loaded (Just [])) "opaque/1" Editor.MoveDown)
+            && not (Editor.canMove (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) threeImages) "opaque/2" Editor.MoveUp)
+      )
+    , ( "pending move keeps the confirmed order and gates all gallery mutations"
+      , currentIds pendingMove
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && Maybe.map .imageId pendingMove.galleryMutation
+            == Just "opaque/2"
+            && Maybe.map (.movement >> Maybe.map .toIndex) pendingMove.galleryMutation
+            == Just (Just 0)
+            && Maybe.map .writing pendingMove.galleryMutation
+            == Just True
+            && not (Editor.canAdd pendingMove)
+            && not (Editor.canDelete pendingMove "opaque/1")
+            && not (Editor.canMove pendingMove "opaque/2" Editor.MoveDown)
+      )
+    , ( "confirmed move reloads authoritative order and announces default change"
+      , currentIds movedReconciled
+            == [ "opaque/2", "opaque/1", "opaque/3" ]
+            && movedReconciled.galleryMutation
+            == Nothing
+            && Maybe.map .kind movedReconciled.galleryFeedback
+            == Just Editor.ReorderingSucceeded
+            && Maybe.map .message movedReconciled.galleryFeedback
+            == Just "Bild an Position 1 verschoben und als Standardbild festgelegt."
+      )
+    , ( "rejected move preserves explicit error and Retry only reads"
+      , currentIds failedMoveRefresh
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && failedMoveRefresh.galleryError
+            /= Nothing
+            && failedMoveRefresh.galleryMutation
+            /= Nothing
+            && Maybe.map .message failedMoveRefresh.galleryFeedback
+            == Just "Die Bildreihenfolge wurde zwischenzeitlich geändert."
+            && not (Editor.canAdd failedMoveRefresh)
+            && not (Editor.canDelete failedMoveRefresh "opaque/1")
+            && not (Editor.canMove failedMoveRefresh "opaque/2" Editor.MoveUp)
+            && retriedMoveRefresh.mutationToken
+            == failedMoveRefresh.mutationToken
+            && retriedMoveRefresh.galleryToken
+            == failedMoveRefresh.galleryToken
+            + 1
+            && recoveredMoveRefresh.galleryMutation
+            == Nothing
+            && currentIds recoveredMoveRefresh
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+      )
+    , ( "duplicate reorder callbacks cannot start a second reconciliation"
+      , apply
+            (Reordered pendingMove.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed))
+            failedMoveRefresh
+            == failedMoveRefresh
       )
     , ( "confirmation cancel preserves the collection and starts no mutation"
       , let
@@ -449,6 +551,27 @@ currentIds model =
 
         _ ->
             []
+
+
+reorderResponseTests : List ( String, Bool )
+reorderResponseTests =
+    [ ( "complete reorder metadata confirms the write"
+      , RecipeDB.decodeReorderImages """{"data":{"reorderImages":[{"id":"opaque/id","url":"/full","thumbUrl":"/thumb","size":12,"width":648,"height":486}]}}"""
+            == Ok RecipeDB.ReorderConfirmed
+      )
+    , ( "backend membership conflict remains an explicit rejection"
+      , RecipeDB.decodeReorderImages """{"errors":[{"message":"Image collection changed","extensions":{"code":"image-order-conflict"}}]}"""
+            == Ok (RecipeDB.ReorderRejected "Die Bildreihenfolge wurde zwischenzeitlich geändert. Der aktuelle Stand wird neu geladen.")
+      )
+    , ( "malformed reorder response cannot confirm success"
+      , case RecipeDB.decodeReorderImages """{"data":{"reorderImages":[{"id":"opaque/id"}]}}""" of
+            Err _ ->
+                True
+
+            _ ->
+                False
+      )
+    ]
 
 
 sourceTests : List ( String, Bool )

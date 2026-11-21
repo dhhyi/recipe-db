@@ -4,7 +4,7 @@ import Browser.Dom
 import Crop exposing (Crop, Handle, Point)
 import Editor.Bridge exposing (Incoming(..), command, incoming, release)
 import Editor.Source as Source
-import Editor.Types exposing (GalleryFeedback, GalleryFeedbackKind(..), GalleryMutation, Model, Msg(..), Phase(..), canAdd, canDelete, dirty)
+import Editor.Types exposing (GalleryFeedback, GalleryFeedbackKind(..), GalleryMovement, GalleryMutation, Model, MoveDirection(..), Msg(..), Phase(..), canAdd, canDelete, canMove, dirty)
 import File
 import Json.Decode as D
 import Json.Encode as E
@@ -70,6 +70,7 @@ step msg model =
                             | recipe = displayedRecipe
                             , galleryRefreshing = False
                             , galleryError = readError
+                            , galleryFeedback = galleryFeedbackAfterRead model readError displayedRecipe
                             , galleryMutation =
                                 if readError == Nothing then
                                     Nothing
@@ -97,7 +98,7 @@ step msg model =
                                     Cmd.none
 
                             ( False, Just mutation, Nothing ) ->
-                                focusAfterDeletion next mutation
+                                focusAfterMutation next mutation
 
                             _ ->
                                 Cmd.none
@@ -117,6 +118,49 @@ step msg model =
 
                 else
                     reconcileGallery model
+
+            else
+                ( model, Cmd.none )
+
+        MoveImage imageId direction ->
+            if canMove model imageId direction then
+                case ( currentImages model, imageIndex model imageId ) of
+                    ( Just images, Just index ) ->
+                        let
+                            targetIndex : Int
+                            targetIndex =
+                                moveTarget direction index
+
+                            reordered : List RecipeDB.GalleryImage
+                            reordered =
+                                swapImages index targetIndex images
+
+                            token : Int
+                            token =
+                                model.mutationToken + 1
+
+                            movement : GalleryMovement
+                            movement =
+                                { direction = direction, fromIndex = index, toIndex = targetIndex }
+
+                            mutation : GalleryMutation
+                            mutation =
+                                { token = token, imageId = imageId, index = targetIndex, movement = Just movement, writing = True }
+                        in
+                        ( { model
+                            | galleryMutation = Just mutation
+                            , mutationToken = token
+                            , galleryFeedback = Nothing
+                            , savedFeedback = False
+                          }
+                        , Cmd.batch
+                            [ RecipeDB.makeReorderImagesRequest model.recipeId (List.map .id reordered) (Reordered token)
+                            , focus "editor-status"
+                            ]
+                        )
+
+                    _ ->
+                        ( model, Cmd.none )
 
             else
                 ( model, Cmd.none )
@@ -163,7 +207,7 @@ step msg model =
         Deleted token response ->
             case model.galleryMutation of
                 Just mutation ->
-                    if token /= mutation.token then
+                    if token /= mutation.token || mutation.movement /= Nothing || not mutation.writing || model.galleryRefreshing then
                         ( model, Cmd.none )
 
                     else
@@ -193,7 +237,57 @@ step msg model =
 
                             next : Model
                             next =
-                                { model | galleryFeedback = Just feedback }
+                                { model
+                                    | galleryFeedback = Just feedback
+                                    , galleryMutation = Just { mutation | writing = False }
+                                }
+
+                            ( refreshing, request ) =
+                                reconcileGallery next
+                        in
+                        ( refreshing, Cmd.batch [ request, focus "editor-status" ] )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Reordered token response ->
+            case model.galleryMutation of
+                Just mutation ->
+                    if token /= mutation.token || mutation.movement == Nothing || not mutation.writing || model.galleryRefreshing then
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            feedback : GalleryFeedback
+                            feedback =
+                                case response of
+                                    RemoteData.Success RecipeDB.ReorderConfirmed ->
+                                        { kind = ReorderingSucceeded
+                                        , message = "Reihenfolge gespeichert. Die aktuelle Position wird geladen."
+                                        }
+
+                                    RemoteData.Success (RecipeDB.ReorderRejected message) ->
+                                        { kind = ReorderingRejected, message = message }
+
+                                    RemoteData.Success (RecipeDB.ReorderUnconfirmed message) ->
+                                        { kind = ReorderingUnconfirmed, message = message }
+
+                                    RemoteData.Failure message ->
+                                        { kind = ReorderingUnconfirmed
+                                        , message = message
+                                        }
+
+                                    _ ->
+                                        { kind = ReorderingUnconfirmed
+                                        , message = "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen."
+                                        }
+
+                            next : Model
+                            next =
+                                { model
+                                    | galleryFeedback = Just feedback
+                                    , galleryMutation = Just { mutation | writing = False }
+                                }
 
                             ( refreshing, request ) =
                                 reconcileGallery next
@@ -582,7 +676,7 @@ startGalleryDeletion model imageId =
 
                 mutation : GalleryMutation
                 mutation =
-                    { token = token, imageId = imageId, index = index }
+                    { token = token, imageId = imageId, index = index, movement = Nothing, writing = True }
             in
             ( { model
                 | galleryMutation = Just mutation
@@ -598,6 +692,16 @@ startGalleryDeletion model imageId =
 
         Nothing ->
             ( model, Cmd.none )
+
+
+focusAfterMutation : Model -> GalleryMutation -> Cmd Msg
+focusAfterMutation model mutation =
+    case mutation.movement of
+        Just movement ->
+            focusAfterReordering model mutation movement
+
+        Nothing ->
+            focusAfterDeletion model mutation
 
 
 focusAfterDeletion : Model -> GalleryMutation -> Cmd Msg
@@ -636,3 +740,109 @@ focusAfterDeletion model mutation =
 
         Nothing ->
             focusRow (List.take mutation.index remaining |> List.reverse |> List.head)
+
+
+focusAfterReordering : Model -> GalleryMutation -> GalleryMovement -> Cmd Msg
+focusAfterReordering model mutation movement =
+    let
+        focusDirection : MoveDirection -> Cmd Msg
+        focusDirection direction =
+            focus
+                ((case direction of
+                    MoveUp ->
+                        "move-up-"
+
+                    MoveDown ->
+                        "move-down-"
+                 )
+                    ++ mutation.imageId
+                )
+
+        opposite : MoveDirection
+        opposite =
+            case movement.direction of
+                MoveUp ->
+                    MoveDown
+
+                MoveDown ->
+                    MoveUp
+    in
+    if canMove model mutation.imageId movement.direction then
+        focusDirection movement.direction
+
+    else if canMove model mutation.imageId opposite then
+        focusDirection opposite
+
+    else
+        focus ("gallery-image-" ++ mutation.imageId)
+
+
+galleryFeedbackAfterRead : Model -> Maybe String -> RecipeDB.RecipeModel -> Maybe GalleryFeedback
+galleryFeedbackAfterRead model readError recipe =
+    case ( model.galleryMutation, model.galleryFeedback, readError ) of
+        ( Just mutation, Just feedback, Just _ ) ->
+            if mutation.movement /= Nothing && feedback.kind == ReorderingSucceeded then
+                Just { feedback | message = "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden." }
+
+            else
+                Just feedback
+
+        ( Just mutation, Just feedback, Nothing ) ->
+            if mutation.movement /= Nothing && feedback.kind == ReorderingSucceeded then
+                Just { feedback | message = reorderingSuccessMessage recipe mutation }
+
+            else
+                Just feedback
+
+        _ ->
+            model.galleryFeedback
+
+
+reorderingSuccessMessage : RecipeDB.RecipeModel -> GalleryMutation -> String
+reorderingSuccessMessage recipe mutation =
+    case recipe of
+        RemoteData.Success (Just data) ->
+            case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
+                Just index ->
+                    if index == 0 then
+                        "Bild an Position 1 verschoben und als Standardbild festgelegt."
+
+                    else
+                        "Bild an Position " ++ String.fromInt (index + 1) ++ " verschoben."
+
+                Nothing ->
+                    "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
+
+        _ ->
+            "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden."
+
+
+moveTarget : MoveDirection -> Int -> Int
+moveTarget direction index =
+    case direction of
+        MoveUp ->
+            index - 1
+
+        MoveDown ->
+            index + 1
+
+
+swapImages : Int -> Int -> List RecipeDB.GalleryImage -> List RecipeDB.GalleryImage
+swapImages fromIndex toIndex images =
+    case ( List.drop fromIndex images |> List.head, List.drop toIndex images |> List.head ) of
+        ( Just fromImage, Just toImage ) ->
+            images
+                |> List.indexedMap
+                    (\index image ->
+                        if index == fromIndex then
+                            toImage
+
+                        else if index == toIndex then
+                            fromImage
+
+                        else
+                            image
+                    )
+
+        _ ->
+            images

@@ -1,4 +1,4 @@
-module Editor.Types exposing (Drag, GalleryFeedback, GalleryFeedbackKind(..), GalleryMutation, Model, Msg(..), Phase(..), Session, canAdd, canDelete, capacityWarning, dirty, imageLimit, init)
+module Editor.Types exposing (Drag, GalleryFeedback, GalleryFeedbackKind(..), GalleryMovement, GalleryMutation, Model, MoveDirection(..), Msg(..), Phase(..), Session, canAdd, canDelete, canMove, capacityWarning, dirty, imageLimit, init)
 
 import Crop exposing (Crop, Handle, Point, Size)
 import File exposing (File)
@@ -30,10 +30,24 @@ type alias Drag =
     { start : Point, crop : Crop, handle : Maybe Handle }
 
 
+type MoveDirection
+    = MoveUp
+    | MoveDown
+
+
+type alias GalleryMovement =
+    { direction : MoveDirection
+    , fromIndex : Int
+    , toIndex : Int
+    }
+
+
 type alias GalleryMutation =
     { token : Int
     , imageId : String
     , index : Int
+    , movement : Maybe GalleryMovement
+    , writing : Bool
     }
 
 
@@ -41,6 +55,9 @@ type GalleryFeedbackKind
     = DeletionSucceeded
     | ImageAlreadyAbsent
     | DeletionUnconfirmed
+    | ReorderingSucceeded
+    | ReorderingRejected
+    | ReorderingUnconfirmed
 
 
 type alias GalleryFeedback =
@@ -77,9 +94,11 @@ type Msg
     = GotRecipe Int RecipeDB.RecipeModel
     | GotCapabilities RecipeDB.CapabilitiesModel
     | RetryGallery
+    | MoveImage String MoveDirection
     | DeleteImage String
     | DeleteConfirmed String Int Bool
     | Deleted Int RecipeDB.DeleteModel
+    | Reordered Int RecipeDB.ReorderModel
     | ThumbnailFailed String
     | GotFile File
     | Bridge D.Value
@@ -171,3 +190,45 @@ canDelete model imageId =
 
             _ ->
                 False
+
+
+canMove : Model -> String -> MoveDirection -> Bool
+canMove model imageId direction =
+    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryError /= Nothing then
+        False
+
+    else
+        case ( model.capabilities, model.recipe ) of
+            ( RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
+                if not capabilities.canManageImages then
+                    False
+
+                else
+                    recipe.images
+                        |> Maybe.map
+                            (\images ->
+                                case imagePosition imageId images of
+                                    Just index ->
+                                        case direction of
+                                            MoveUp ->
+                                                index > 0
+
+                                            MoveDown ->
+                                                index < List.length images - 1
+
+                                    Nothing ->
+                                        False
+                            )
+                        |> Maybe.withDefault False
+
+            _ ->
+                False
+
+
+imagePosition : String -> List RecipeDB.GalleryImage -> Maybe Int
+imagePosition imageId images =
+    images
+        |> List.indexedMap Tuple.pair
+        |> List.filter (Tuple.second >> .id >> (==) imageId)
+        |> List.head
+        |> Maybe.map Tuple.first
