@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/web-components-vite";
 import { html, nothing } from "lit";
+import { expect } from "storybook/test";
 
 import "../design.css";
 
@@ -10,6 +11,20 @@ const meta = {
 
 export default meta;
 type Story = StoryObj;
+
+const assertDialogInitialState = ({
+  canvasElement,
+}: {
+  canvasElement: HTMLElement;
+}) => {
+  const dialog = canvasElement.querySelector("dialog");
+  expect(dialog).not.toHaveAttribute("open");
+  expect(dialog).toHaveAttribute("aria-labelledby", `${dialog?.id}-title`);
+  expect(dialog?.querySelector("h2")).toHaveTextContent("Example dialog");
+  expect(
+    dialog?.querySelector('button[aria-label="Close"]'),
+  ).toBeInTheDocument();
+};
 
 const editorDialog = (id: string, withActions: boolean) => html`
   <main class="container">
@@ -54,9 +69,17 @@ const editorDialog = (id: string, withActions: boolean) => html`
 `;
 
 export const HeaderOnly: Story = {
+  play: assertDialogInitialState,
   render: () => editorDialog("editor-dialog", false),
 };
 
 export const WithFooterActions: Story = {
+  play: async (context) => {
+    assertDialogInitialState(context);
+    const dialog = context.canvasElement.querySelector("dialog");
+    expect(dialog?.querySelector("footer")).toBeInTheDocument();
+    expect(dialog?.querySelector("footer")).toHaveTextContent("Cancel");
+    expect(dialog?.querySelector("footer")).toHaveTextContent("OK");
+  },
   render: () => editorDialog("editor-dialog-with-actions", true),
 };

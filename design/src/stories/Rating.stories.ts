@@ -15,6 +15,9 @@ type Story = StoryObj;
 
 export const Feedback: Story = {
   play: async ({ canvasElement, args }) => {
+    const rating = canvasElement.querySelector("rating-component");
+    expect(rating).toHaveAttribute("rating", String(args.rating));
+    expect(rating).toHaveAttribute("count", String(args.count));
     await waitFor(() => {
       expect(
         canvasElement.querySelectorAll("rating-component svg"),
@@ -62,6 +65,9 @@ export const Static: Story = {
         canvasElement.querySelectorAll("rating-component svg"),
       ).toHaveLength(5);
     });
+    const rating = canvasElement.querySelector("rating-component");
+    expect(rating).not.toHaveAttribute("hx-post");
+    expect(rating?.querySelectorAll(".own-rating")).toHaveLength(0);
   },
   args: {
     rating: 3.5,
