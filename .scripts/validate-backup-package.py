@@ -291,7 +291,8 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
         for item in validated["inventory"]:
             observed = snapshot.validate(output / item["archive"], include_directories=True)
             if observed["files"] != item["files"] or (
-                    "directories" in item and observed["directories"] != item["directories"]):
+                    "directories" in item and observed["directories"] != item["directories"]) or (
+                    "directoryMetadata" in item and observed["directoryMetadata"] != item["directoryMetadata"]):
                 raise ValueError("file inventory mismatch")
         for item in validated["inventory"]:
             item.pop("layout", None)

@@ -17,6 +17,7 @@ def validate(archive, require_storage_version=False, include_directories=False):
     files = set()
     inventory = []
     directories = []
+    directory_metadata = []
     materialized_directories = set()
     storage_version = None
     with tarfile.open(archive, "r:") as source:
@@ -44,6 +45,8 @@ def validate(archive, require_storage_version=False, include_directories=False):
                     if len(materialized_directories) > MAX_DIRECTORIES:
                         raise ValueError("too many archive directories")
             if member.isdir():
+                directory_metadata.append({"path": name, "mode": member.mode,
+                                           "uid": member.uid, "gid": member.gid})
                 if name == ".":
                     continue
                 materialized_directories.add(name)
@@ -82,7 +85,8 @@ def validate(archive, require_storage_version=False, include_directories=False):
         raise ValueError("missing storage-version marker")
     inventory = sorted(inventory, key=lambda item: item["path"])
     if include_directories:
-        return {"files": inventory, "directories": sorted(directories)}
+        return {"files": inventory, "directories": sorted(directories),
+                "directoryMetadata": sorted(directory_metadata, key=lambda item: item["path"])}
     return inventory
 
 

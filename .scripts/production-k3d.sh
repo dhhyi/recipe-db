@@ -941,7 +941,7 @@ backup_copy_pvc() {
     --slurpfile files "$work/$name-files.json" \
     '{service:$name,role:$role,pvc:$pvc,archive:$archive,sha256:$sha256,
       sizeBytes:$sizeBytes,fileCount:$fileCount,files:$files[0].files,
-      directories:$files[0].directories,
+      directories:$files[0].directories,directoryMetadata:$files[0].directoryMetadata,
       storage:$storage}'
 }
 

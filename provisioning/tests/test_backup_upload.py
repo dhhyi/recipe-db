@@ -22,7 +22,7 @@ SPEC.loader.exec_module(backup)
 
 def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at="2026-10-31T10:00:00Z",
              artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64, revision="a" * 40,
-             mtime=1730000000, root_directory=False, directories=None):
+             mtime=1730000000, root_directory=False, directories=None, directory_metadata=None):
     files = files or {"nested/opaque.data": b"opaque data"}
     path.mkdir(parents=True)
     entries = []
@@ -31,11 +31,15 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
         if root_directory:
             root = tarfile.TarInfo(".")
             root.type = tarfile.DIRTYPE
+            for key, value in (directory_metadata or {}).get(".", {}).items():
+                setattr(root, key, value)
             archive.addfile(root)
         for name in sorted(directories or []):
             member = tarfile.TarInfo(name)
             member.type = tarfile.DIRTYPE
             member.mtime = mtime
+            for key, value in (directory_metadata or {}).get(name, {}).items():
+                setattr(member, key, value)
             archive.addfile(member)
         for name, content in sorted(files.items()):
             member = tarfile.TarInfo(name)
@@ -63,6 +67,11 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
     }
     if directories is not None:
         manifest["inventory"][0]["directories"] = sorted(directories)
+    if directory_metadata is not None:
+        with tarfile.open(archive_path, "r:") as archive:
+            manifest["inventory"][0]["directoryMetadata"] = sorted(
+                ({"path": member.name, "mode": member.mode, "uid": member.uid, "gid": member.gid}
+                 for member in archive if member.isdir()), key=lambda item: item["path"])
     (path / "manifest.json").write_bytes(backup.json_bytes(manifest))
     return path
 
@@ -411,6 +420,29 @@ state_path.write_text(json.dumps(state))
         manifest["inventory"][0]["directories"] = []
         (first / "manifest.json").write_bytes(backup.json_bytes(manifest))
         with self.assertRaisesRegex(ValueError, "directory inventory mismatch"):
+            backup.validate_snapshot(first)
+
+    def test_directory_metadata_changes_trigger_upload_without_timestamp_churn(self):
+        first = self.make_snapshot("metadata-first", root_directory=True, directories=["nested"],
+                                   directory_metadata={})
+        later = self.make_snapshot("metadata-later", root_directory=True, directories=["nested"],
+                                   directory_metadata={}, mtime=1760000000)
+        first_fingerprint = backup.content_fingerprint(backup.validate_snapshot(first))
+        self.assertEqual(first_fingerprint, backup.content_fingerprint(backup.validate_snapshot(later)))
+        self.assertEqual(backup.upload_snapshot(first, self.config), "verified-upload")
+        self.assertEqual(backup.upload_snapshot(later, self.config), "verified-unchanged")
+        for path, key, value in [(".", "mode", 0o700), ("nested", "mode", 0o700),
+                                 ("nested", "uid", 123), ("nested", "gid", 456)]:
+            name = f"metadata-{path.replace('.', 'root')}-{key}"
+            changed = self.make_snapshot(name, backup_id=name,
+                                         root_directory=True, directories=["nested"],
+                                         directory_metadata={path: {key: value}})
+            self.assertNotEqual(first_fingerprint, backup.content_fingerprint(backup.validate_snapshot(changed)))
+            self.assertEqual(backup.upload_snapshot(changed, self.config), "verified-upload")
+        manifest = json.loads((first / "manifest.json").read_text())
+        manifest["inventory"][0]["directoryMetadata"][0]["uid"] = 123
+        (first / "manifest.json").write_bytes(backup.json_bytes(manifest))
+        with self.assertRaisesRegex(ValueError, "directory metadata mismatch"):
             backup.validate_snapshot(first)
 
     def test_incomplete_and_corrupt_snapshots_are_rejected(self):

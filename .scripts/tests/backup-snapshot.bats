@@ -48,7 +48,11 @@ assert inventory == [
      "sha256":hashlib.sha256(b"47\n").hexdigest(), "storageVersion":47},
 ]
 assert module.validate("fixture.tar", include_directories=True) == {
-    "files": inventory, "directories": ["nested", "nested/deeper"]
+    "files": inventory, "directories": ["nested", "nested/deeper"],
+    "directoryMetadata": [
+        {"path": "nested", "mode": 0o644, "uid": 0, "gid": 0},
+        {"path": "nested/deeper", "mode": 0o644, "uid": 0, "gid": 0},
+    ],
 }
 assert module.validate(archive({"unversioned.bin":b"anything"})) == [
     {"path":"unversioned.bin", "sizeBytes":8, "sha256":hashlib.sha256(b"anything").hexdigest()}

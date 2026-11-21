@@ -217,6 +217,7 @@ def validate_snapshot(snapshot, require_storage_versions=False):
         observed = {}
         observed_members = set()
         observed_directories = []
+        observed_directory_metadata = []
         materialized_directories = set()
         observed_storage_version = None
         try:
@@ -245,6 +246,8 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                             if len(materialized_directories) > MAX_DIRECTORIES:
                                 raise ValueError("too many archive directories")
                     if member.isdir():
+                        observed_directory_metadata.append(
+                            {"path": name, "mode": member.mode, "uid": member.uid, "gid": member.gid})
                         if name == ".":
                             continue
                         materialized_directories.add(name)
@@ -282,6 +285,9 @@ def validate_snapshot(snapshot, require_storage_versions=False):
             raise ValueError("archive integrity mismatch")
         if "directories" in pvc and pvc["directories"] != sorted(observed_directories):
             raise ValueError("directory inventory mismatch")
+        if "directoryMetadata" in pvc and pvc["directoryMetadata"] != sorted(
+                observed_directory_metadata, key=lambda item: item["path"]):
+            raise ValueError("directory metadata mismatch")
         if observed_storage_version != expected_storage_version:
             raise ValueError("storage-version marker does not match the inventory")
         if require_storage_versions and expected_storage_version is None:
@@ -308,6 +314,7 @@ def content_fingerprint(manifest):
                 "storage": item.get("storage"),
                 "files": item["files"],
                 **({"directories": item["directories"]} if "directories" in item else {}),
+                **({"directoryMetadata": item["directoryMetadata"]} if "directoryMetadata" in item else {}),
             }
             for item in sorted(manifest["inventory"], key=lambda item: item["archive"])
         ],
