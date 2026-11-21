@@ -218,6 +218,7 @@ for project in "${projects[@]}"; do
     group_open=true
   fi
   echo "Running $project; report log: $project/target/integration-tests/run.log"
+  started=$SECONDS
   set +e
   if [[ $project == e2e-test || $project == graphql-test || $project == search-test || $project == mcp-test ]]; then
     tokens_file=e2e-test/.secrets/auth-tokens.json
@@ -245,5 +246,13 @@ for project in "${projects[@]}"; do
   fi
   if ((status != 0)); then
     exit "$status"
+  fi
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    elapsed=$((SECONDS - started))
+    if ((elapsed < 60)); then
+      echo "Integration test finished: $project, ${elapsed}s" >&2
+    else
+      echo "Integration test finished: $project, $((elapsed / 60))m $((elapsed % 60))s" >&2
+    fi
   fi
 done

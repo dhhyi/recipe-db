@@ -162,6 +162,7 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"e2e-test deletes all recipes, ratings, images, inspirations, and tags before each attempt"* ]]
   [[ "$output" == *"preserving the final attempt's data; volumes are not reset."* ]]
+  [[ "$output" != *"Integration test finished:"* ]]
   cat > expected-calls << 'EOF'
 docker compose --profile test config --format json
 docker compose --profile test build fixtures recipes-test ratings-test
@@ -207,11 +208,44 @@ EOF
   run --separate-stderr env GITHUB_ACTIONS=true bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
 
   [ "$status" -eq 0 ]
-  [ "$(grep -c '^::group::integration tests: ' <<< "$stderr")" -eq 2 ]
-  [ "$(grep -c '^::endgroup::$' <<< "$stderr")" -eq 2 ]
-  [[ "$stderr" == *"::group::integration tests: recipes-test"* ]]
-  [[ "$stderr" == *"::group::integration tests: ratings-test"* ]]
-  [[ "$stderr" != *"::warning::"* ]]
+  mapfile -t lines <<< "$stderr"
+  [ "${#lines[@]}" -eq 6 ]
+  [ "${lines[0]}" = "::group::integration tests: recipes-test" ]
+  [ "${lines[1]}" = "::endgroup::" ]
+  [[ "${lines[2]}" =~ ^Integration\ test\ finished:\ recipes-test,\ [0-9]+s$ ]]
+  [ "${lines[3]}" = "::group::integration tests: ratings-test" ]
+  [ "${lines[4]}" = "::endgroup::" ]
+  [[ "${lines[5]}" =~ ^Integration\ test\ finished:\ ratings-test,\ [0-9]+s$ ]]
+}
+
+@test "reports successful test durations in seconds or minutes outside the group" {
+  for duration in 59 60 61 6000; do
+    case "$duration" in
+      59) expected=59s ;;
+      60) expected='1m 0s' ;;
+      61) expected='1m 1s' ;;
+      6000) expected='100m 0s' ;;
+    esac
+
+    # The DEBUG trap must expand these variables when the sourced script runs.
+    # shellcheck disable=SC2016
+    run --separate-stderr env GITHUB_ACTIONS=true TEST_ELAPSED="$duration" bash -c '
+      set -T
+      trap '\''if [[ $BASH_COMMAND == "elapsed=\$((SECONDS - started))" ]]; then SECONDS=$((started + TEST_ELAPSED)); fi'\'' DEBUG
+      source .scripts/run-integration-tests.sh --development recipes-test
+    '
+
+    [ "$status" -eq 0 ]
+    [ "$stderr" = "$(printf '%s\n' '::group::integration tests: recipes-test' '::endgroup::' "Integration test finished: recipes-test, $expected")" ]
+  done
+}
+
+@test "failed GitHub Actions tests close their group without reporting success" {
+  run --separate-stderr env GITHUB_ACTIONS=true RUN_STATUS=19 \
+    bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
+
+  [ "$status" -eq 19 ]
+  [ "$stderr" = "$(printf '%s\n' '::group::integration tests: recipes-test' '::endgroup::')" ]
 }
 
 @test "runs discovered jobs in alphabetical order including their API and fixture readiness checks" {
