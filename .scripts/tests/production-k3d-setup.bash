@@ -1616,9 +1616,13 @@ if [[ ${MOCK_RESTORE:-false} != true ]]; then
 fi
 request_file=
 url=
+output=
+headers=
 while (($#)); do
   case "$1" in
     --data-binary) request_file=${2#@}; shift ;;
+    --output) output=$2; shift ;;
+    --dump-header) headers=$2; shift ;;
     http://*) url=$1 ;;
   esac
   shift
@@ -1671,11 +1675,14 @@ elif [[ $url == */graphql ]]; then
 elif [[ $url == */recipe/recovery-probe && ! -f $MOCK_LOG.probe-name ]]; then
   printf '404'
 elif [[ $url == */recipe/* && -f $MOCK_LOG.probe-name ]]; then
+  if [[ -n $headers ]]; then printf 'ETag: "cached"\r\n' > "$headers"; fi
   cat "$MOCK_LOG.probe-name"
 elif [[ -n $restore_image_url && $url == *"$restore_image_url" ]]; then
-  cat "$FIXTURE_ROOT/recovery-image-full"
+  cat "$FIXTURE_ROOT/recovery-image-full" > "$output"
+  printf 200
 elif [[ -n $restore_image_thumb_url && $url == *"$restore_image_thumb_url" ]]; then
-  cat "$FIXTURE_ROOT/recovery-image-thumbnail"
+  cat "$FIXTURE_ROOT/recovery-image-thumbnail" > "$output"
+  printf 200
 elif [[ $url == */recipe/* ]]; then
   echo 'Recovery fixture recipe'
 else

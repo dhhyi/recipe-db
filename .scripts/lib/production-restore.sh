@@ -1498,7 +1498,7 @@ restore_graphql() {
 
 # black-box only; use application interfaces, not stored data formats or application internals
 restore_verify_reads() {
-  local recipe candidate id name encoded url
+  local recipe candidate id name encoded url status
   restore_graphql 'query { recipes { id name } }' || return 1
   jq -e '.data.recipes | type == "array" and
     all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string"))' \
@@ -1524,12 +1524,17 @@ restore_verify_reads() {
   restore_graphql 'query($id: ID!) { recipe(id:$id) { id name image { url thumbUrl } rating { count } } }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
   jq -e --arg id "$id" --arg name "$name" '.data.recipe.id == $id and .data.recipe.name == $name
-    and .data.recipe.rating != null' "$work/restore-response.json" > /dev/null || return 1
+    and .data.recipe.rating != null and (.data.recipe.image == null or
+      ((.data.recipe.image.url | type == "string" and length > 0) and
+       (.data.recipe.image.thumbUrl | type == "string" and length > 0)))' \
+    "$work/restore-response.json" > /dev/null || return 1
   while IFS= read -r url; do
     [[ -n $url ]] || continue
-    curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
-      "http://127.0.0.1:$restore_graphql_port$url" > /dev/null \
-      2> "$work/restore-request-error" || return 1
+    status=$(curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+      --output "$work/restore-image.bin" --write-out '%{http_code}' \
+      "http://127.0.0.1:$restore_graphql_port$url" \
+      2> "$work/restore-request-error") || return 1
+    [[ $status == 200 && -s $work/restore-image.bin ]] || return 1
   done < <(jq -r '.data.recipe.image.url // empty, .data.recipe.image.thumbUrl // empty' \
     "$work/restore-response.json")
   restore_graphql 'query($options: JSON!) { searchRecipes(options:$options) { recipes { id name } found } }' \
@@ -1540,6 +1545,15 @@ restore_verify_reads() {
   curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
     "http://127.0.0.1:$restore_browse_port/recipe/$encoded" \
     > "$work/restore-browse.html" 2> "$work/restore-request-error" || return 1
+}
+
+restore_browse_cached_page() {
+  local url=$1 expected=$2
+  curl --silent --show-error --fail --max-time "$timeout" \
+    --dump-header "$work/restore-probe-headers" "$url" > "$work/restore-probe.html" \
+    2> "$work/restore-request-error" \
+    && grep -Eiq '^etag:[[:space:]]*[^[:space:]]' "$work/restore-probe-headers" \
+    && grep -Fq "$expected" "$work/restore-probe.html"
 }
 
 restore_wait_reads() {
@@ -1555,6 +1569,7 @@ restore_wait_reads() {
 
 restore_verify_propagation() {
   local id encoded deadline cache_deadline prime_started changed_started changed_observed probe
+  local browse_url prime_retry=false
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
   deadline=$((SECONDS + timeout))
   until restore_graphql 'query { __typename }'; do
@@ -1577,6 +1592,7 @@ restore_verify_propagation() {
       "$restore_state/restore-state.json" || return 1
   fi
   encoded=$(jq -rn --arg id "$id" '$id | @uri')
+  browse_url="http://127.0.0.1:$restore_browse_port/recipe/$encoded"
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
@@ -1587,16 +1603,21 @@ restore_verify_propagation() {
     sleep 2
   done
   deadline=$((SECONDS + timeout))
-  cache_deadline=$((SECONDS + 60))
   while :; do
-    ((SECONDS < cache_deadline)) || return 1
-    if curl --silent --show-error --fail --max-time "$timeout" \
-      "http://127.0.0.1:$restore_browse_port/recipe/$encoded" > "$work/restore-probe.html" \
-      2> "$work/restore-request-error" && grep -Fq "$probe" "$work/restore-probe.html"; then
-      ((SECONDS < cache_deadline)) || return 1
-      break
+    prime_started=$SECONDS
+    if restore_browse_cached_page "$browse_url" "$probe"; then
+      if ! $prime_retry; then
+        cache_deadline=$((prime_started + 60))
+        ((SECONDS < cache_deadline)) || return 1
+        break
+      fi
+      # A failed request may have populated the cache; let this response expire too.
+      sleep 61
+      prime_retry=false
+      continue
     fi
     ((SECONDS < deadline)) || return 1
+    prime_retry=true
     sleep 2
   done
   changed_started=$SECONDS
@@ -1604,9 +1625,7 @@ restore_verify_propagation() {
     "$(jq -cn --arg id "$id" --arg name "${probe}Changed" '{id:$id,name:$name}')" || return 1
   while :; do
     ((SECONDS < cache_deadline)) || return 1
-    if curl --silent --show-error --fail --max-time "$timeout" \
-      "http://127.0.0.1:$restore_browse_port/recipe/$encoded" > "$work/restore-probe.html" \
-      2> "$work/restore-request-error" && grep -Fq "${probe}Changed" "$work/restore-probe.html"; then
+    if restore_browse_cached_page "$browse_url" "${probe}Changed"; then
       ((SECONDS < cache_deadline)) || return 1
       changed_observed=$SECONDS
       break
@@ -1633,9 +1652,7 @@ restore_verify_propagation() {
   fi
   while :; do
     ((SECONDS < cache_deadline)) || return 1
-    if curl --silent --show-error --fail --max-time "$timeout" \
-      "http://127.0.0.1:$restore_browse_port/recipe/$encoded" > "$work/restore-probe.html" \
-      2> "$work/restore-request-error" && grep -Fq "${probe}Changed" "$work/restore-probe.html"; then
+    if restore_browse_cached_page "$browse_url" "${probe}Changed"; then
       ((SECONDS < cache_deadline)) || return 1
       break
     fi
@@ -1646,9 +1663,7 @@ restore_verify_propagation() {
     "$(jq -cn --arg id "$id" --arg name "${probe}Primed" '{id:$id,name:$name}')" || return 1
   while :; do
     ((SECONDS < cache_deadline)) || return 1
-    if curl --silent --show-error --fail --max-time "$timeout" \
-      "http://127.0.0.1:$restore_browse_port/recipe/$encoded" > "$work/restore-probe.html" \
-      2> "$work/restore-request-error" && grep -Fq "${probe}Primed" "$work/restore-probe.html"; then
+    if restore_browse_cached_page "$browse_url" "${probe}Primed"; then
       ((SECONDS < cache_deadline)) || return 1
       break
     fi

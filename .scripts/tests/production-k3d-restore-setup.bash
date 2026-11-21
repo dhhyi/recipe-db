@@ -54,7 +54,13 @@ if [[ $* == *"api/http/routers"* ]]; then
 fi
 if [[ $* == *"/public/"* ]]; then
   url="${*: -1}"; name="${url##*/}"
-  cat "$FIXTURE_ROOT/tar-data/images/public/$name"
+  previous=
+  for argument in "$@"; do
+    if [[ $previous == --output ]]; then output=$argument; fi
+    previous=$argument
+  done
+  cat "$FIXTURE_ROOT/tar-data/images/public/$name" > "$output"
+  printf 200
   exit
 fi
 if [[ $* == *"18082"* ]]; then
@@ -62,6 +68,11 @@ if [[ $* == *"18082"* ]]; then
   if [[ -e $MOCK_LOG.probe-deleted ]]; then
     if [[ $* == *"--write-out"* ]]; then printf 404; exit; else exit 22; fi
   fi
+  previous=
+  for argument in "$@"; do
+    if [[ $previous == --dump-header ]]; then printf 'ETag: "cached"\r\n' > "$argument"; fi
+    previous=$argument
+  done
   cat "$MOCK_LOG.probe-name"; exit
 fi
 file=

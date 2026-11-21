@@ -834,9 +834,19 @@ restore_graphql() {
   esac
 }
 curl() {
-  local url="${*: -1}"
+  local url="${*: -1}" output= arg previous=
+  for arg in "$@"; do
+    [[ $previous != --output ]] || output=$arg
+    previous=$arg
+  done
   case "$url" in
-    http://127.0.0.1:4000/public/*) printf 'opaque image bytes' ;;
+    http://127.0.0.1:4000/public/*)
+      if [[ ${IMAGE_FAILURE:-} != "empty:${url##*/}" ]]; then
+        printf 'opaque image bytes' > "$output"
+      else
+        : > "$output"
+      fi
+      if [[ ${IMAGE_FAILURE:-} == "redirect:${url##*/}" ]]; then printf 302; else printf 200; fi ;;
     "http://127.0.0.1:4100/recipe/$EXPECTED_RECIPE_ID") printf 'restored recipe page\n' ;;
     *) return 1 ;;
   esac
@@ -846,6 +856,10 @@ restore_verify_reads
 EOF
   run env EXPECTED_RECIPE_ID=recipe-with-image bash restore-image-harness.sh
   [ "$status" -eq 0 ]
+  for failure in redirect:image.bin redirect:thumb.bin empty:image.bin empty:thumb.bin; do
+    run env IMAGE_FAILURE="$failure" EXPECTED_RECIPE_ID=recipe-with-image bash restore-image-harness.sh
+    [ "$status" -ne 0 ]
+  done
   run env RESTORE_IMAGE_FREE=true EXPECTED_RECIPE_ID=first bash restore-image-harness.sh
   [ "$status" -eq 0 ]
   rm -f work/image-samples
@@ -925,9 +939,12 @@ restore_graphql() {
 curl() {
   if [[ " $* " == *' --write-out '* ]]; then
     if [[ ${CASE:-} == stale-delete ]]; then printf 200; else printf 404; fi
+  elif [[ ${CASE:-} == outage && $SECONDS -lt 65 ]]; then
+    return 1
   elif [[ ${CASE:-} == slow-prime && ! -e $work/prime-delayed ]]; then
     touch "$work/prime-delayed"
     SECONDS=$((SECONDS + 61))
+    printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
     cat "$work/probe-name"
   elif [[ ${CASE:-} == slow-initial-search && ! -e $work/prime-delayed ]]; then
     touch "$work/prime-delayed"
@@ -935,15 +952,26 @@ curl() {
   elif [[ ${CASE:-} == stale-update && $(cat "$work/probe-name") == *Changed ]]; then
     cat "$work/probe-original"
   elif [[ ${CASE:-} == stale-prime-update && $(cat "$work/probe-name") == *Primed ]]; then
+    printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
     cat "$work/changed-name"
   else
+    if [[ ${CASE:-} != degraded ]] && \
+        [[ ${CASE:-} != degraded-change || $(cat "$work/probe-name") != *Changed ]] && \
+        [[ ${CASE:-} != degraded-primed || $(cat "$work/probe-name") != *Primed ]]; then
+      printf 'ETag: "cached"\r\n' > "$work/restore-probe-headers"
+    else
+      printf 'Cache-Control: no-store\r\n' > "$work/restore-probe-headers"
+    fi
     if [[ -e $work/searched-change && $(cat "$work/probe-name") == *Changed ]]; then
       touch "$work/fresh-cache"
     fi
     cat "$work/probe-name"
   fi
 }
-sleep() { SECONDS=$((SECONDS + $1)); }
+sleep() {
+  if [[ $1 == 61 ]]; then touch "$work/cache-expired"; fi
+  SECONDS=$((SECONDS + $1))
+}
 restore_verify_propagation
 EOF
   run env CASE=slow-search bash propagation-cache.sh
@@ -951,8 +979,12 @@ EOF
   rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
   run env CASE=slow-initial-search bash propagation-cache.sh
   [ "$status" -eq 0 ]
-  for case in slow-prime stale-update stale-delete stale-prime-update stale-index; do
-    rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache
+  rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache work/cache-expired
+  run env CASE=outage bash propagation-cache.sh
+  [ "$status" -eq 0 ]
+  [ -e work/cache-expired ]
+  for case in slow-prime stale-update stale-delete stale-prime-update stale-index degraded degraded-change degraded-primed; do
+    rm -f work/deleted work/prime-delayed work/searched-change work/fresh-cache work/cache-expired
     run env CASE="$case" bash propagation-cache.sh
     [ "$status" -ne 0 ]
   done
