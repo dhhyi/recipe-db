@@ -8,6 +8,10 @@ Link issues through the pull request's Development sidebar or use `Closes #<numb
 
 To keep a pull request in draft, open it as a draft with `[WIP]` in the title. Remove `[WIP]` when it is ready: the metadata workflow automatically marks drafts without this marker ready for review. Publish validates ready PRs, not drafts. To put a ready PR back into draft, add `[WIP]` before converting it to draft.
 
+## Frontend design
+
+Follow the [design guidelines](design/README.md) when designing or changing a frontend.
+
 ## Documentation
 
 Documentation consists of two types: **cookbooks**, which help readers complete a task, and **guides**, which help readers understand a topic or make decisions.
