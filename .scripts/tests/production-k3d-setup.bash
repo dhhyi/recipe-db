@@ -66,38 +66,46 @@ setup() {
   printf 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=' > oauth2-cookie-secret
   cat > .scripts/lib/project-metadata.sh << 'EOF'
   project_metadata_to_jsonl() {
-    if [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+    if [[ ${MOCK_HISTORICAL_STORAGE_VERSION:-false} == true ]]; then
       cat << 'JSONL' > "$2"
-{"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":3}}
-{"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":2}}
-{"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
-{"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-{"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":2}}
+{"name":"recipes","backupRole":"authoritative-read-only","storageVersion":{"value":3}}
+{"name":"images","backupRole":"authoritative-read-only","storageVersion":2}
+{"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"tags","backupRole":"cleanup-participant","storageVersion":2}
+JSONL
+    elif [[ $MOCK_MULTI_MIGRATIONS == true ]]; then
+      cat << 'JSONL' > "$2"
+{"name":"recipes","backupRole":"authoritative-read-only","storageVersion":3}
+{"name":"images","backupRole":"authoritative-read-only","storageVersion":2}
+{"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+{"name":"tags","backupRole":"cleanup-participant","storageVersion":2}
 JSONL
     elif [[ $MOCK_MIGRATIONS == true ]]; then
       cat << 'JSONL' > "$2"
-  {"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"images","backupRole":"authoritative-read-only","backupData":{"kind":"images"},"storageVersion":{"value":2}}
-  {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+  {"name":"recipes","backupRole":"authoritative-read-only","storageVersion":1}
+  {"name":"images","backupRole":"authoritative-read-only","storageVersion":2}
+  {"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"tags","backupRole":"cleanup-participant","storageVersion":1}
 JSONL
     else
       cat << 'JSONL' > "$2"
-  {"name":"recipes","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"images","backupRole":"cleanup-participant","backupData":{"kind":"images"},"storageVersion":{"value":1}}
-  {"name":"ratings","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"ratings.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"inspirations","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"inspirations.sqlite3"},"storageVersion":{"value":1}}
-  {"name":"tags","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"storageVersion":{"value":1}}
+  {"name":"recipes","backupRole":"authoritative-read-only","storageVersion":1}
+  {"name":"images","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"ratings","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"inspirations","backupRole":"cleanup-participant","storageVersion":1}
+  {"name":"tags","backupRole":"cleanup-participant","storageVersion":1}
 JSONL
     fi
   }
 application_project_metadata_to_jsonl() {
   if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true || $MOCK_RESTORE = true ]]; then
     printf '%s\n' \
-      '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","backupData":{"kind":"sqlite","file":"recipes.sqlite3"},"devcontainer":{"ports":[8081],"environment":{}}}' \
-      '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"backupData":{"kind":"images"},"devcontainer":{"ports":[8082],"environment":{}}}' \
-      '{"name":"tags","category":"backend","backupRole":"cleanup-participant","backupData":{"kind":"sqlite","file":"tags.sqlite"},"devcontainer":{"ports":[8090],"environment":{}}}' \
+      '{"name":"recipes","category":"backend","backupRole":"authoritative-read-only","storageVersion":1,"devcontainer":{"ports":[8081],"environment":{}}}' \
+      '{"name":"images","category":"backend","backupRole":"cleanup-participant","backupCompact":true,"storageVersion":1,"devcontainer":{"ports":[8082],"environment":{}}}' \
+      '{"name":"tags","category":"backend","backupRole":"cleanup-participant","storageVersion":1,"devcontainer":{"ports":[8090],"environment":{}}}' \
       '{"name":"search","category":"backend","backupRole":"derived-stateless","devcontainer":{"ports":[3000],"environment":{}}}' \
       '{"name":"browse","category":"frontend","devcontainer":{"ports":[3000],"environment":{}}}' \
       > "$2"
@@ -1608,9 +1616,13 @@ if [[ ${MOCK_RESTORE:-false} != true ]]; then
 fi
 request_file=
 url=
+output=
+headers=
 while (($#)); do
   case "$1" in
     --data-binary) request_file=${2#@}; shift ;;
+    --output) output=$2; shift ;;
+    --dump-header) headers=$2; shift ;;
     http://*) url=$1 ;;
   esac
   shift
@@ -1641,7 +1653,10 @@ elif [[ $url == */graphql ]]; then
       echo '{"data":{"deleteRecipe":true}}' ;;
     *"searchRecipes"*)
       search=$(jq -r '.variables.options.q' "$request_file")
-      if [[ $search == '*' ]]; then
+      filter=$(jq -r '.variables.options.filter_by // empty' "$request_file")
+      if [[ $filter == 'id:=`recovery-probe`' && ! -f $MOCK_LOG.probe-name ]]; then
+        echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
+      elif [[ $search == '*' ]]; then
         echo '{"data":{"searchRecipes":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}],"found":1}}}'
       elif [[ -f $MOCK_LOG.probe-name && $search == "$(cat "$MOCK_LOG.probe-name")" ]]; then
         jq -n --arg name "$search" \
@@ -1663,11 +1678,14 @@ elif [[ $url == */graphql ]]; then
 elif [[ $url == */recipe/recovery-probe && ! -f $MOCK_LOG.probe-name ]]; then
   printf '404'
 elif [[ $url == */recipe/* && -f $MOCK_LOG.probe-name ]]; then
+  if [[ -n $headers ]]; then printf 'ETag: "cached"\r\n' > "$headers"; fi
   cat "$MOCK_LOG.probe-name"
 elif [[ -n $restore_image_url && $url == *"$restore_image_url" ]]; then
-  cat "$FIXTURE_ROOT/recovery-image-full"
+  cat "$FIXTURE_ROOT/recovery-image-full" > "$output"
+  printf 200
 elif [[ -n $restore_image_thumb_url && $url == *"$restore_image_thumb_url" ]]; then
-  cat "$FIXTURE_ROOT/recovery-image-thumbnail"
+  cat "$FIXTURE_ROOT/recovery-image-thumbnail" > "$output"
+  printf 200
 elif [[ $url == */recipe/* ]]; then
   echo 'Recovery fixture recipe'
 else

@@ -485,6 +485,18 @@ backup_storage_versions_from_manifest() {
   ' "$manifest"
 }
 
+source_storage_versions_from_projects() {
+  local projects=$1
+  # TODO remove storageVersion.value compatibility after historical release metadata is retired.
+  jq -sc '
+    [.[] | select(.storageVersion != null)
+      | {service:.name,
+         version:(if (.storageVersion | type) == "object"
+           then .storageVersion.value else .storageVersion end)}]
+    | sort_by(.service)
+  ' "$projects"
+}
+
 deployed_release_images_match_inventory() {
   local deployments=$1 release_file=$2
   jq -e --slurpfile release "$release_file" '
@@ -1140,10 +1152,7 @@ workload_image_inventory_matches_rendered \
   "$work/deployed-workloads.json" "$work/source-rendered.yml" \
   || die 'live Pi Deployment containers do not exactly match the source-rendered workload inventory'
 deployed_image_inventory_verified=true
-source_storage_versions=$(jq -sc '
-  [.[] | select(.storageVersion != null)
-    | {service:.name,version:.storageVersion.value}] | sort_by(.service)
-' "$work/source-projects.jsonl")
+source_storage_versions=$(source_storage_versions_from_projects "$work/source-projects.jsonl")
 backup_storage_versions=$(backup_storage_versions_from_manifest "$manifest")
 jq -e --argjson source "$source_storage_versions" \
   --argjson backup "$backup_storage_versions" '

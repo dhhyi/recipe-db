@@ -290,7 +290,7 @@ render() {
       . as $name |
       ($projects | map(select(.name == $name))[0]) as $project |
       ($items | map(select(.kind == "Deployment" and .metadata.name == $name))[0]) as $deployment |
-      $project.storageVersion.value as $expected |
+      $project.storageVersion as $expected |
       $deployment.spec.template.spec as $pod |
       $pod.initContainers[0].name == "storage-version-gate"
       and ([$pod.initContainers[].name] + [$pod.containers[].name] | unique | length) ==
@@ -319,7 +319,7 @@ render() {
   for service in recipes images ratings tags inspirations; do
     local expected command root marker mismatch
     expected=$(jq -s -er --arg name "$service" \
-      'map(select(.name == $name))[0].storageVersion.value' projects.jsonl)
+      'map(select(.name == $name))[0].storageVersion' projects.jsonl)
     command=$(jq -er --arg name "$service" '
       .items[] | select(.kind == "Deployment" and .metadata.name == $name)
       | .spec.template.spec.initContainers[0].command[2]

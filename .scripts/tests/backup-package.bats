@@ -17,7 +17,6 @@ import io
 import json
 from pathlib import Path
 import subprocess
-import sqlite3
 import sys
 import tarfile
 
@@ -37,6 +36,13 @@ def write(path, content):
 def tar_bytes(entries, mode=None):
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+        directories = {"/".join(name.split("/")[:index])
+                       for name, _, kind in entries if not kind
+                       for index in range(1, len(name.split("/")))}
+        for name in sorted(directories):
+            member = tarfile.TarInfo(name)
+            member.type = tarfile.DIRTYPE
+            tar.addfile(member)
         for name, content, kind in entries:
             member = tarfile.TarInfo(name)
             if mode is not None:
@@ -55,111 +61,30 @@ def storage_marker(archive, content):
     entries = []
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
         for member in source:
-            if member.isdir():
-                entries.append((member.name, b"", tarfile.DIRTYPE))
-            elif member.isfile():
+            if member.isfile():
                 entries.append((member.name, source.extractfile(member).read(), None))
     entries = [item for item in entries if item[0] != "storage-version"]
     entries.append(("storage-version", content, None))
     return tar_bytes(entries)
 
 
-normal, thumb = b"normal image", b"thumbnail"
-normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
-thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
-image_entry = {
-    "recipeId": "a", "url": "/public/" + normal_name,
-    "thumbUrl": "/public/" + thumb_name, "size": len(normal),
+roles = {
+    "recipes": "authoritative-read-only",
+    "tags": "cleanup-participant",
+    "images": "cleanup-participant",
+    "inspirations": "cleanup-participant",
+    "ratings": "cleanup-participant",
 }
-
-
-def image_files_for(version, document=None, marker=None):
-    if document is None:
-        document = image_entry if version == 1 else [
-            image_entry | {"id": hashlib.sha256(normal).hexdigest()}
-        ]
-    if marker is None:
-        marker = f"{version}\n".encode()
-    return [
-        ("public", b"", tarfile.DIRTYPE),
-        ("manifests", b"", tarfile.DIRTYPE),
-        ("public/" + normal_name, normal, None),
-        ("public/" + thumb_name, thumb, None),
-        ("manifests/a.json", json.dumps(document).encode(), None),
-        ("storage-version", marker, None),
-    ]
-
-
-def image_collection(count):
-    values = [
-        ("public", b"", tarfile.DIRTYPE),
-        ("manifests", b"", tarfile.DIRTYPE),
-    ]
-    entries = []
-    for index in range(count):
-        normal = b"normal image " + str(index).encode()
-        thumb = b"thumbnail " + str(index).encode()
-        normal_sha = hashlib.sha256(normal).hexdigest()
-        thumb_sha = hashlib.sha256(thumb).hexdigest()
-        normal_name = f"a-{normal_sha}.png"
-        thumb_name = f"a-{thumb_sha}-thumb.png"
-        values.extend([
-            ("public/" + normal_name, normal, None),
-            ("public/" + thumb_name, thumb, None),
-        ])
-        entries.append({
-            "recipeId": "a", "url": "/public/" + normal_name,
-            "thumbUrl": "/public/" + thumb_name, "size": len(normal), "id": normal_sha,
-        })
-    values.extend([
-        ("manifests/a.json", json.dumps(entries).encode(), None),
-        ("storage-version", b"2\n", None),
-    ])
-    return values
-
-
-image_files = image_files_for(1)
-layouts = {
-    "recipes": ("authoritative-read-only", {"kind": "sqlite", "file": "recipes.sqlite3"}),
-    "tags": ("cleanup-participant", {"kind": "sqlite", "file": "tags.sqlite"}),
-    "images": ("cleanup-participant", {"kind": "images"}),
-    "inspirations": ("cleanup-participant", {"kind": "json", "file": "db.json"}),
-    "ratings": ("cleanup-participant", {"kind": "sqlite", "file": "db.sqlite"}),
-}
-
-
-def sqlite_files(name, wal=False):
-    path = root / (name + ".sqlite")
-    connection = sqlite3.connect(path)
-    if wal:
-        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
-    connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT)")
-    connection.execute("INSERT INTO records VALUES (1, 'baseline')")
-    connection.commit()
-    if wal:
-        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        connection.execute("INSERT INTO records VALUES (2, 'WAL-only recent row')")
-        connection.commit()
-    values = [(layouts[name][1]["file"], path.read_bytes(), None)]
-    if wal:
-        for suffix in ("-wal", "-shm"):
-            values.append((layouts[name][1]["file"] + suffix,
-                           path.with_name(path.name + suffix).read_bytes(), None))
-        assert len(values[1][1]) > 32
-    connection.close()
-    return values
-
-
 entries = {
-    "recipes": sqlite_files("recipes"),
-    "tags": sqlite_files("tags", wal=True),
-    "images": image_files,
-    "inspirations": [("db.json", b"{}", None)],
-    "ratings": sqlite_files("ratings") + [("db.sqlite-journal", b"", None)],
+    service: [
+        ("nested/deeper/opaque.data", b"\x00opaque data for " + service.encode(), None),
+        ("storage-version", b"2\n", None),
+    ]
+    for service in roles
 }
 
 
-def fixture(image_version=1, image_count=None):
+def fixture(include_metadata=False):
     global counter
     counter += 1
     case = root / str(counter)
@@ -168,8 +93,6 @@ def fixture(image_version=1, image_count=None):
     capture.mkdir(mode=0o700)
     inventory = []
     for service, values in entries.items():
-        if service == "images":
-            values = image_collection(image_count) if image_count is not None else image_files_for(image_version)
         data = tar_bytes(values)
         name = service + ".tar"
         write(capture / name, data)
@@ -184,10 +107,14 @@ def fixture(image_version=1, image_count=None):
                     if name == "storage-version" and not kind
                 ).strip())
         inventory.append({
-            "service": service, "role": layouts[service][0], "pvc": service,
+            "service": service, "role": roles[service], "pvc": service,
             "archive": name, "sizeBytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
             "fileCount": len(files), "files": files,
         })
+        if include_metadata:
+            observed = module.snapshot.validate(capture / name, include_directories=True)
+            inventory[-1]["directories"] = observed["directories"]
+            inventory[-1]["directoryMetadata"] = observed["directoryMetadata"]
     manifest = {
         "format": module.upload.FORMAT, "formatVersion": 1, "backupId": "selected-backup",
         "capturedAt": "2026-10-31T12:00:00Z",
@@ -205,10 +132,10 @@ def fixture(image_version=1, image_count=None):
     metadata = case / package_info["manifest"]
     projects = case / "projects.jsonl"
     classifications = [
-        {"name": service, "category": "backend", "backupRole": role, "backupData": layout}
-        for service, (role, layout) in layouts.items()
-    ] + [{"name": "graphql", "category": "api", "backupRole": "derived-stateless", "backupData": None},
-         {"name": "link-extract", "category": "backend", "backupRole": "excluded-external-cache", "backupData": None},
+        {"name": service, "category": "backend", "backupRole": role}
+        for service, role in roles.items()
+    ] + [{"name": "graphql", "category": "api", "backupRole": "derived-stateless"},
+         {"name": "link-extract", "category": "backend", "backupRole": "excluded-external-cache"},
          {"name": "browse", "category": "frontend"}]
     write(projects, b"".join(module.upload.json_bytes(item) for item in classifications))
     return case, metadata, archive, projects, manifest
@@ -281,31 +208,34 @@ def update(metadata, key, value):
 
 group = sys.argv[1]
 if group == "valid":
-    for version, count in ((1, None), (2, None), (2, 10)):
-        case, metadata, archive, projects, manifest = fixture(version, count)
-        output = case / "snapshot"
-        result = subprocess.run([
-            sys.executable, ".scripts/validate-backup-package.py", str(metadata), str(archive),
-            str(output), str(projects), "selected-backup",
-        ], text=True, capture_output=True)
-        assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout) == manifest
-        assert output.stat().st_mode & 0o777 == 0o700
-        assert {path.name for path in output.iterdir()} == {"manifest.json"} | {
-            item["archive"] for item in manifest["inventory"]
-        }
-        assert all(path.stat().st_mode & 0o777 == 0o600 for path in output.iterdir())
-        assert all((output / item["archive"]).read_bytes()
-                   == (case / "capture" / item["archive"]).read_bytes()
-                   for item in manifest["inventory"])
-        assert module.upload.validate_snapshot(output) == manifest
-        try:
-            module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("existing output accepted")
-        assert module.upload.validate_snapshot(output) == manifest
+    case, metadata, archive, projects, manifest = fixture()
+    output = case / "snapshot"
+    result = subprocess.run([
+        sys.executable, ".scripts/validate-backup-package.py", str(metadata), str(archive),
+        str(output), str(projects), "selected-backup",
+    ], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == manifest
+    assert output.stat().st_mode & 0o777 == 0o700
+    assert {path.name for path in output.iterdir()} == {"manifest.json"} | {
+        item["archive"] for item in manifest["inventory"]
+    }
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in output.iterdir())
+    assert all((output / item["archive"]).read_bytes()
+               == (case / "capture" / item["archive"]).read_bytes()
+               for item in manifest["inventory"])
+    assert module.upload.validate_snapshot(output) == manifest
+    try:
+        module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("existing output accepted")
+    assert module.upload.validate_snapshot(output) == manifest
+    case, metadata, archive, projects, manifest = fixture(include_metadata=True)
+    output = case / "snapshot"
+    assert module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup") == manifest
+    assert module.upload.validate_snapshot(output) == manifest
 elif group == "identity":
     for key, value in [
         ("format", "other"), ("formatVersion", 2), ("formatVersion", True),
@@ -394,66 +324,11 @@ elif group == "identity":
         s["inventory"][0]["files"][0]["path"] = "../escape"
         repack(m, a, s)
     reject(unsafe_inventory)
-    def invalid_database(c, m, a, p, s):
-        write(c / "capture" / "recipes.tar", tar_bytes([("recipes.sqlite3", b"not SQLite", None)]))
-        item = s["inventory"][0]
-        data = (c / "capture" / item["archive"]).read_bytes()
-        item["sizeBytes"] = len(data)
-        item["sha256"] = hashlib.sha256(data).hexdigest()
-        item["files"][0]["sizeBytes"] = len(b"not SQLite")
-        item["files"][0]["sha256"] = hashlib.sha256(b"not SQLite").hexdigest()
-        repack(m, a, s)
-    reject(invalid_database)
     original_limit = module.MAX_BYTES
     def bounded(*args):
         module.MAX_BYTES = 100
     reject(bounded, before=True)
     module.MAX_BYTES = original_limit
-elif group == "sqlite":
-    case, metadata, archive, projects, manifest = fixture()
-    output = case / "snapshot"
-    output.mkdir(mode=0o700)
-    original_connect = module.sqlite3.connect
-    observed = []
-    def checking_connect(database_uri, **kwargs):
-        assert "?mode=ro" in database_uri
-        database = output / ".sqlite-check" / "tags.sqlite"
-        assert database.stat().st_mode & 0o777 == 0o600
-        assert database.with_name(database.name + "-wal").is_file()
-        assert database.with_name(database.name + "-shm").is_file()
-        connection = original_connect(database_uri, **kwargs)
-        observed.extend(connection.execute("SELECT value FROM records ORDER BY id").fetchall())
-        return connection
-    module.sqlite3.connect = checking_connect
-    try:
-        module.validate_sqlite(case / "capture" / "tags.tar", layouts["tags"][1], output)
-    finally:
-        module.sqlite3.connect = original_connect
-    assert observed == [("baseline",), ("WAL-only recent row",)]
-    assert not (output / ".sqlite-check").exists()
-    assert (case / "capture" / "tags.tar").read_bytes() == tar_bytes(entries["tags"])
-    for offset in (0, 100, 4096):
-        values = list(entries["recipes"])
-        name, content, kind = values[0]
-        corrupt = bytearray(content)
-        corrupt[offset] ^= 0xff
-        values[0] = (name, bytes(corrupt), kind)
-        reject(lambda c, m, a, p, s, values=values:
-               repack(m, a, inner=tar_bytes(values), inner_service="recipes"))
-    for offset in (0, 24, 32 + 16, 32 + 24):
-        values = list(entries["tags"])
-        name, content, kind = values[1]
-        corrupt = bytearray(content)
-        corrupt[offset] ^= 0xff
-        values[1] = (name, bytes(corrupt), kind)
-        reject(lambda c, m, a, p, s, values=values:
-               repack(m, a, inner=tar_bytes(values), inner_service="tags"))
-    for length in (16, len(entries["tags"][1][1]) - 1):
-        values = list(entries["tags"])
-        name, content, kind = values[1]
-        values[1] = (name, content[:length], kind)
-        reject(lambda c, m, a, p, s, values=values:
-               repack(m, a, inner=tar_bytes(values), inner_service="tags"))
 elif group == "unsafe":
     for name, kind in [
         ("../escape", None), ("/absolute", None), ("./recipes.tar", None),
@@ -474,71 +349,100 @@ elif group == "unsafe":
         document["archive"]["sha256"] = module.upload.file_hash(a)
         write(m, module.upload.json_bytes(document))
     reject(trailing, before=True)
-    reject(lambda c, m, a, p, s: repack(m, a, inner=tar_bytes(image_files)
-           + tar_bytes([("public/hidden", b"hidden", None)])))
     for mode in (0o4755, 0o2755, 0o1755):
         reject(lambda c, m, a, p, s, mode=mode: repack(m, a, mode=mode), before=True)
-        reject(lambda c, m, a, p, s, mode=mode: repack(m, a, inner=tar_bytes(image_files, mode)))
+        reject(lambda c, m, a, p, s, mode=mode:
+               repack(m, a, inner=tar_bytes(entries["images"], mode)))
+    def root_archive(modes, owners=None, pax=False, name="."):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            for index, mode in enumerate(modes):
+                root = tarfile.TarInfo(name)
+                root.type = tarfile.DIRTYPE
+                root.mode = mode
+                if owners:
+                    root.uid, root.gid = owners
+                if pax:
+                    root.pax_headers = {"comment": "unsafe"}
+                archive.addfile(root)
+        return data.getvalue()
+    for data in (root_archive([0o4755]), root_archive([0o755, 0o755]),
+                 root_archive([0o755], owners=(2**32 - 1, 0)), root_archive([0o755], pax=True),
+                 root_archive([0o755], name="/"), root_archive([0o755], name="////"),
+                 root_archive([0o2770], name="nested")):
+        reject(lambda c, m, a, p, s, data=data: repack(m, a, inner=data))
+    # Files and directories have independent bounds.
+    case, metadata, archive, projects, manifest = fixture()
+    module.MAX_FILES = 2
+    module.check_inner_bounds(case / "capture" / "images.tar")
+    module.upload.MAX_DIRECTORIES = 1
+    try:
+        module.check_inner_bounds(case / "capture" / "images.tar")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("directory limit not enforced")
+    module.upload.MAX_DIRECTORIES = 100_000
+    module.MAX_FILES = 100_000
     for values in [
-        [value for value in image_files if value[0] != "public/" + thumb_name],
-        image_files + [("public/old.png", b"old", None)],
-        image_files + [("public", b"", tarfile.DIRTYPE)],
-        image_files + [image_files[-1]],
-        image_files + [("../escape", b"bad", None)],
-        image_files + [("/absolute", b"bad", None)],
-        image_files + [("public/link", b"", tarfile.SYMTYPE)],
-        image_files + [("public/hardlink", b"", tarfile.LNKTYPE)],
-        image_files + [("public/fifo", b"", tarfile.FIFOTYPE)],
-        image_files + [("extra", b"", tarfile.DIRTYPE)],
-        [value if value[0] != "public/" + normal_name else (value[0], b"corrupt", None)
-         for value in image_files],
+        entries["images"] + [("nested/deeper/opaque.data", b"duplicate", None)],
+        entries["images"] + [("../escape", b"bad", None)],
+        entries["images"] + [("/absolute", b"bad", None)],
+        entries["images"] + [(".", b"bad", None)],
+        entries["images"] + [("nested\\escape", b"bad", None)],
+        entries["images"] + [("nested/link", b"", tarfile.SYMTYPE)],
+        entries["images"] + [("nested/hardlink", b"", tarfile.LNKTYPE)],
+        entries["images"] + [("nested/fifo", b"", tarfile.FIFOTYPE)],
+        entries["images"] + [("nested", b"", tarfile.DIRTYPE)],
+        [("parent", b"file", None), ("parent/child", b"file", None)],
     ]:
         reject(lambda c, m, a, p, s, values=values: repack(m, a, inner=tar_bytes(values)))
-elif group == "images":
-    valid_v2 = image_files_for(2)
-    entry = json.loads(next(
-        content for name, content, kind in valid_v2 if name == "manifests/a.json"
-    ))[0]
-    for values in [
-        image_files_for(1, document=[image_entry]),
-        image_files_for(2, document=[]),
-        image_files_for(2, document=image_entry),
-        image_files_for(2, document=[entry, entry | {"recipeId": "other"}]),
-        image_files_for(2, document=[entry, entry | {"thumbUrl": "/public/missing.png"}]),
-        image_files_for(2, document=[entry, entry | {"size": len(normal) + 1}]),
-        image_files_for(2, document=[entry | {"id": "0" * 64}]),
-        image_files_for(2, document=[entry, entry | {"id": "0" * 64}]),
-        image_files_for(2, document=[entry, entry]),
-        image_files_for(2, document=[entry] * 11),
-        image_collection(11),
-        image_files_for(2, document=[entry | {"thumbUrl": "/public/missing.png"}]),
-        image_files_for(2, marker=b"3\n"),
-        image_files_for(2, marker=b"2"),
-        [value for value in valid_v2 if value[0] != "storage-version"],
-    ]:
-        reject(lambda c, m, a, p, s, values=values:
-               repack(m, a, inner=tar_bytes(values)))
 elif group == "storage":
     case, metadata, archive, projects, manifest = fixture()
     inners = {}
     for item in manifest["inventory"]:
         source = (case / "capture" / item["archive"]).read_bytes()
-        inners[item["service"]] = storage_marker(
-            source, b"1\n" if item["service"] == "images" else b"4\n"
-        )
+        inners[item["service"]] = storage_marker(source, b"47\n")
     repack(metadata, archive, manifest, inner=inners)
     output = case / "snapshot"
     module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
     for item in manifest["inventory"]:
         with tarfile.open(output / item["archive"], "r:") as restored:
-            expected = b"1\n" if item["service"] == "images" else b"4\n"
-            assert restored.extractfile("storage-version").read() == expected
+            assert restored.extractfile("storage-version").read() == b"47\n"
 
     def malformed(c, m, a, p, s):
         recipes = next(item for item in s["inventory"] if item["service"] == "recipes")
         source = (c / "capture" / recipes["archive"]).read_bytes()
         repack(m, a, s, inner={"recipes": storage_marker(source, b"4")})
     reject(malformed)
+elif group == "legacy-layout":
+    case, metadata, archive, projects, manifest = fixture()
+    for item in manifest["inventory"]:
+        item["layout"] = {"kind": "sqlite", "file": "legacy.data"}
+    repack(metadata, archive, manifest)
+    output = case / "snapshot"
+    validated = module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
+    assert validated == manifest
+    assert all("layout" not in item for item in json.loads(
+        (output / "manifest.json").read_bytes()
+    )["inventory"])
+
+    def tamper_legacy_layout(c, m, a, p, s):
+        for item in s["inventory"]:
+            item["layout"] = {"kind": "json", "file": "changed"}
+        document = json.loads(m.read_bytes())
+        document["snapshotManifest"] = s
+        bundle = [("manifest.json", module.upload.json_bytes(s), None)]
+        bundle.extend(
+            (item["archive"], (c / "capture" / item["archive"]).read_bytes(), None)
+            for item in s["inventory"]
+        )
+        import gzip
+        write(a, gzip.compress(tar_bytes(bundle), mtime=0))
+        document["archive"]["sizeBytes"] = a.stat().st_size
+        document["archive"]["sha256"] = module.upload.file_hash(a)
+        write(m, module.upload.json_bytes(document))
+    reject(tamper_legacy_layout, before=True)
 else:
     raise AssertionError(group)
 PY
@@ -604,48 +508,41 @@ PY
   package_cases identity
 }
 
-@test "backup package rejects unsafe outer and inner entries and incomplete image pairs" {
+@test "backup package rejects unsafe outer and inner entries while allowing nested data" {
   package_cases unsafe
 }
 
-@test "backup package rejects malformed, empty and unsupported image manifest versions" {
-  package_cases images
-}
-
-@test "backup package checks real SQLite integrity and WAL-only recent rows without changing staged archives" {
-  package_cases sqlite
-}
-
-@test "backup package preserves valid storage markers and rejects malformed markers" {
+@test "backup package preserves any valid storage marker and rejects malformed markers" {
   package_cases storage
+}
+
+@test "backup package verifies legacy layout integrity before discarding it" {
+  package_cases legacy-layout
 }
 
 @test "snapshot validation preserves actual storage versions and can require every marker" {
   mkdir -p marker-data
-  printf 'SQLite format 3\000database' > marker-data/recipes.sqlite3
-  tar -C marker-data -cf versioned.tar recipes.sqlite3
-  run python3 .scripts/validate-backup-snapshot.py versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  printf 'opaque data' > marker-data/nested.data
+  tar -C marker-data -cf versioned.tar nested.data
+  run python3 .scripts/validate-backup-snapshot.py versioned.tar
   [ "$status" -eq 0 ]
-  run python3 .scripts/validate-backup-snapshot.py --require-storage-version \
-    versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  run python3 .scripts/validate-backup-snapshot.py --require-storage-version versioned.tar
   [ "$status" -ne 0 ]
 
-  printf '3\n' > marker-data/storage-version
-  tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version
-  run python3 .scripts/validate-backup-snapshot.py --require-storage-version \
-    versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  printf '47\n' > marker-data/storage-version
+  tar -C marker-data -cf versioned.tar nested.data storage-version
+  run python3 .scripts/validate-backup-snapshot.py --require-storage-version versioned.tar
   [ "$status" -eq 0 ]
-  jq -e 'any(.[]; .path == "storage-version" and .storageVersion == 3)' \
+  jq -e 'any(.[]; .path == "storage-version" and .storageVersion == 47)' \
     <<< "$output" > /dev/null
 
-  printf '3' > marker-data/storage-version
-  tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version
-  run python3 .scripts/validate-backup-snapshot.py versioned.tar \
-    '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  printf '47' > marker-data/storage-version
+  tar -C marker-data -cf versioned.tar nested.data storage-version
+  run python3 .scripts/validate-backup-snapshot.py versioned.tar
   [ "$status" -ne 0 ]
 
   printf '0\n' > marker-data/storage-version
-  tar -C marker-data -cf versioned.tar recipes.sqlite3 storage-version
-  run python3 .scripts/validate-backup-snapshot.py versioned.tar '{"kind":"sqlite","file":"recipes.sqlite3"}'
+  tar -C marker-data -cf versioned.tar nested.data storage-version
+  run python3 .scripts/validate-backup-snapshot.py versioned.tar
   [ "$status" -ne 0 ]
 }

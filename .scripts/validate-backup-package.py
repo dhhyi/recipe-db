@@ -9,9 +9,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-import sqlite3
 import stat
-import struct
 import sys
 import tarfile
 
@@ -30,7 +28,7 @@ upload = load_module("backup_upload", ROOT / "provisioning/files/backup-upload.p
 snapshot = load_module("backup_snapshot", ROOT / ".scripts/validate-backup-snapshot.py")
 MAX_BYTES = upload.DEFAULT_MAX_STAGING_BYTES
 MAX_METADATA = upload.MAX_MANIFEST_BYTES
-MAX_FILES = 100_000
+MAX_FILES = upload.MAX_FILES
 MAX_SERVICES = 256
 DATA_ROLES = {"authoritative-read-only", "cleanup-participant"}
 OTHER_ROLES = {"derived-stateless", "excluded-external-cache"}
@@ -70,21 +68,14 @@ def projects_from(path):
                 or category not in ("api", "backend", "frontend"):
             raise ValueError("invalid or duplicate project classification")
         if category == "frontend":
-            projects[name] = (None, None)
+            projects[name] = None
             continue
         if role not in DATA_ROLES | OTHER_ROLES:
             raise ValueError("unclassified API or backend project")
-        layout = item.get("backupData")
-        if role in DATA_ROLES:
-            if not isinstance(layout, dict) or layout.get("kind") not in ("sqlite", "json", "images"):
-                raise ValueError("missing authoritative project layout")
-            if layout["kind"] != "images" and (not isinstance(layout.get("file"), str)
-                    or not upload.NAME_PATTERN.fullmatch(layout["file"])):
-                raise ValueError("invalid authoritative database filename")
-        projects[name] = (role, layout)
-    expected = {name: value for name, value in projects.items() if value[0] in DATA_ROLES}
-    if sum(role == "authoritative-read-only" for role, _ in expected.values()) != 1 \
-            or not any(role == "cleanup-participant" for role, _ in expected.values()):
+        projects[name] = role
+    expected = {name: role for name, role in projects.items() if role in DATA_ROLES}
+    if sum(role == "authoritative-read-only" for role in expected.values()) != 1 \
+            or not any(role == "cleanup-participant" for role in expected.values()):
         raise ValueError("requires one authoritative source and cleanup participants")
     return expected
 
@@ -130,7 +121,7 @@ def check_manifest(package, archive, backup_id, projects):
     total_files = 0
     for item in inventory:
         service, role, claim = item["service"], item["role"], item["pvc"]
-        if service not in projects or service in services or role != projects[service][0] \
+        if service not in projects or service in services or role != projects[service] \
                 or claim != service or claim in claims:
             raise ValueError("snapshot dataset classification mismatch")
         services.add(service)
@@ -217,121 +208,56 @@ def bundle_pass(archive, manifest, expected, output=None):
 
 def check_inner_bounds(archive):
     names = set()
-    total = json_total = 0
+    total = 0
+    files = 0
+    file_names = set()
+    directories = set()
     with open(archive, "rb") as raw, tarfile.open(
             fileobj=BoundedReader(raw, archive.stat().st_size), mode="r|") as source:
         for member in source:
             name = member.name.removeprefix("./")
-            if name in ("", "."):
-                name = "."
+            if not name or name.startswith("/"):
+                raise ValueError("unsafe or duplicate snapshot path")
+            if member.isdir():
+                name = name.rstrip("/")
+                if name in ("", "."):
+                    name = "."
             path = PurePosixPath(name)
             if path.is_absolute() or ".." in path.parts or "\\" in name \
-                    or (name not in ("", ".") and str(path) != name) or name in names \
-                    or len(names) >= MAX_FILES + 3 or member.pax_headers \
+                    or str(path) != name or (member.isfile() and name == ".") or name in names \
+                    or member.pax_headers \
                     or member.mode & 0o7000 \
                     or not 0 <= member.uid < 2**32 - 1 or not 0 <= member.gid < 2**32 - 1:
                 raise ValueError("unsafe or duplicate snapshot path")
             names.add(name)
+            for parent in path.parents:
+                if str(parent) != ".":
+                    if str(parent) in file_names:
+                        raise ValueError("archive file is a parent directory")
+                    directories.add(str(parent))
+                    if len(directories) > upload.MAX_DIRECTORIES:
+                        raise ValueError("too many archive directories")
             if member.isdir():
-                if name not in ("", ".", "public", "manifests"):
-                    raise ValueError("unexpected snapshot directory")
-            elif member.isreg() and member.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                if name != ".":
+                    directories.add(name)
+                    if len(directories) > upload.MAX_DIRECTORIES:
+                        raise ValueError("too many archive directories")
+                continue
+            if member.isreg() and member.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                if name in directories:
+                    raise ValueError("archive file is a parent directory")
+                file_names.add(name)
+                files += 1
+                if files > MAX_FILES:
+                    raise ValueError("too many archive files")
                 total += member.size
-                if name.endswith(".json"):
-                    json_total += member.size
-                if total > MAX_BYTES or member.size < 0 \
-                        or json_total > MAX_METADATA:
+                if total > MAX_BYTES or member.size < 0:
                     raise ValueError("snapshot content limit exceeded")
             else:
                 raise ValueError("unsafe snapshot member")
         while block := source.fileobj.read(1024 * 1024):
             if block.strip(b"\x00"):
                 raise ValueError("unexpected trailing snapshot data")
-
-
-def wal_checksum(data, order, checksum=(0, 0)):
-    words = struct.unpack(order + str(len(data) // 4) + "I", data)
-    first, second = checksum
-    for index in range(0, len(words), 2):
-        first = (first + words[index] + second) & 0xffffffff
-        second = (second + words[index + 1] + first) & 0xffffffff
-    return first, second
-
-
-def validate_wal(database):
-    wal = database.with_name(database.name + "-wal")
-    if not wal.exists() or wal.stat().st_size == 0:
-        return
-    with open(wal, "rb") as source:
-        header = source.read(32)
-        if len(header) != 32:
-            raise ValueError("truncated SQLite WAL header")
-        magic, version, page_size = struct.unpack(">III", header[:12])
-        if magic not in (0x377f0682, 0x377f0683) or version != 3007000 \
-                or page_size < 512 or page_size > 65536 or page_size & (page_size - 1) \
-                or (wal.stat().st_size - 32) % (24 + page_size):
-            raise ValueError("invalid SQLite WAL format")
-        with open(database, "rb") as data:
-            data.seek(16)
-            database_page_size = int.from_bytes(data.read(2), "big")
-        if page_size != (65536 if database_page_size == 1 else database_page_size):
-            raise ValueError("SQLite WAL page size mismatch")
-        order = "<" if magic == 0x377f0682 else ">"
-        checksum = wal_checksum(header[:24], order)
-        if checksum != struct.unpack(">II", header[24:32]):
-            raise ValueError("SQLite WAL header checksum mismatch")
-        while frame := source.read(24 + page_size):
-            if frame[8:16] != header[16:24] or int.from_bytes(frame[:4], "big") == 0:
-                raise ValueError("SQLite WAL frame identity mismatch")
-            checksum = wal_checksum(frame[:8] + frame[24:], order, checksum)
-            if checksum != struct.unpack(">II", frame[16:24]):
-                raise ValueError("SQLite WAL frame checksum mismatch")
-
-
-def validate_sqlite(archive, layout, output):
-    private = output / ".sqlite-check"
-    private.mkdir(mode=0o700)
-    try:
-        allowed = {layout["file"] + suffix for suffix in ("", "-wal", "-shm", "-journal")}
-        copied = 0
-        with tarfile.open(archive, "r:") as source:
-            for member in source:
-                if member.isdir():
-                    continue
-                name = member.name.removeprefix("./")
-                if name == "storage-version":
-                    continue
-                if name not in allowed or not member.isreg():
-                    raise ValueError("unclassified SQLite validation input")
-                copied += member.size
-                if copied > archive.stat().st_size:
-                    raise ValueError("SQLite validation staging limit exceeded")
-                descriptor = os.open(private / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-                with os.fdopen(descriptor, "wb") as destination:
-                    stream = source.extractfile(member)
-                    remaining = member.size
-                    while remaining:
-                        block = stream.read(min(1024 * 1024, remaining))
-                        if not block:
-                            raise ValueError("truncated SQLite validation input")
-                        destination.write(block)
-                        remaining -= len(block)
-        database = private / layout["file"]
-        validate_wal(database)
-        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)
-        try:
-            connection.execute("PRAGMA query_only=ON")
-            connection.execute("PRAGMA trusted_schema=OFF")
-            connection.execute("PRAGMA cache_size=-8192")
-            connection.execute("PRAGMA mmap_size=0")
-            if connection.execute("PRAGMA integrity_check(1)").fetchall() != [("ok",)]:
-                raise ValueError("SQLite database integrity check failed")
-        finally:
-            connection.close()
-    except sqlite3.Error as error:
-        raise ValueError("SQLite database is unreadable or corrupt") from error
-    finally:
-        shutil.rmtree(private)
 
 
 def validate(package_path, archive_path, output_path, projects_path, backup_id):
@@ -363,13 +289,15 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
             check_inner_bounds(output / item["archive"])
         validated = upload.validate_snapshot(output)
         for item in validated["inventory"]:
-            layout = projects[item["service"]][1]
-            observed = snapshot.validate(output / item["archive"], layout)
-            if observed != item["files"]:
-                raise ValueError("authoritative file inventory mismatch")
-            if layout["kind"] == "sqlite":
-                validate_sqlite(output / item["archive"], layout, output)
-        return validated
+            observed = snapshot.validate(output / item["archive"], include_directories=True)
+            if observed["files"] != item["files"] or (
+                    "directories" in item and observed["directories"] != item["directories"]) or (
+                    "directoryMetadata" in item and observed["directoryMetadata"] != item["directoryMetadata"]):
+                raise ValueError("file inventory mismatch")
+        for item in validated["inventory"]:
+            item.pop("layout", None)
+        (output / "manifest.json").write_bytes(upload.json_bytes(validated))
+        return manifest
     except BaseException:
         shutil.rmtree(output)
         raise

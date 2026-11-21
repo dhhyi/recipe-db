@@ -10,11 +10,7 @@ setup() {
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
-storageVersion:
-  value: 1
-  file: generated/storage_version.lua
-  template: |
-    return {{STORAGE_VERSION}}
+storageVersion: 1
 prettier:
   ignore:
     - generated/

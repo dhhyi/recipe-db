@@ -68,9 +68,7 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 backupCompact: true
-backupData: { kind: images }
-storageVersion:
-  value: 2
+storageVersion: 2
 prettier:
   ignore:
     - "*.nim"

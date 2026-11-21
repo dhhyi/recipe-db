@@ -22,8 +22,8 @@ SPEC.loader.exec_module(backup)
 
 def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at="2026-10-31T10:00:00Z",
              artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64, revision="a" * 40,
-             mtime=1730000000, root_directory=False):
-    files = files or {"recipes.sqlite3": b"sqlite data"}
+             mtime=1730000000, root_directory=False, directories=None, directory_metadata=None):
+    files = files or {"nested/opaque.data": b"opaque data"}
     path.mkdir(parents=True)
     entries = []
     archive_path = path / "recipes.tar"
@@ -31,7 +31,16 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
         if root_directory:
             root = tarfile.TarInfo(".")
             root.type = tarfile.DIRTYPE
+            for key, value in (directory_metadata or {}).get(".", {}).items():
+                setattr(root, key, value)
             archive.addfile(root)
+        for name in sorted(directories or []):
+            member = tarfile.TarInfo(name)
+            member.type = tarfile.DIRTYPE
+            member.mtime = mtime
+            for key, value in (directory_metadata or {}).get(name, {}).items():
+                setattr(member, key, value)
+            archive.addfile(member)
         for name, content in sorted(files.items()):
             member = tarfile.TarInfo(name)
             member.size = len(content)
@@ -56,6 +65,13 @@ def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at
                        "archive": "recipes.tar", "sizeBytes": len(raw_archive), "fileCount": len(entries),
                        "sha256": hashlib.sha256(raw_archive).hexdigest(), "files": entries}],
     }
+    if directories is not None:
+        manifest["inventory"][0]["directories"] = sorted(directories)
+    if directory_metadata is not None:
+        with tarfile.open(archive_path, "r:") as archive:
+            manifest["inventory"][0]["directoryMetadata"] = sorted(
+                ({"path": member.name, "mode": member.mode, "uid": member.uid, "gid": member.gid}
+                 for member in archive if member.isdir()), key=lambda item: item["path"])
     (path / "manifest.json").write_bytes(backup.json_bytes(manifest))
     return path
 
@@ -341,7 +357,6 @@ manifest = {{
         "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
         "fileCount": 1, "files":[{{"path":"recipes.sqlite3","sizeBytes":len(data),
             "sha256":hashlib.sha256(data).hexdigest()}}],
-        "layout": {{"kind":"sqlite","file":"recipes.sqlite3"}},
         "storage": {{"uid":"claim-recipes","volumeName":"pv-recipes",
             "storageClassName":"local-path","requestedStorage":"1Gi","capacity":"1Gi",
             "accessModes":["ReadWriteOnce"],"volumeMode":"Filesystem"}},
@@ -377,14 +392,65 @@ state_path.write_text(json.dumps(state))
         self.assertEqual((stage_a / a["archive"]).read_bytes(), (stage_b / b["archive"]).read_bytes())
         with tarfile.open(stage_a / a["archive"], "r:gz") as archive:
             self.assertEqual([member.name for member in archive], ["manifest.json", "recipes.tar"])
-        added = self.make_snapshot("added", files={"new.json": b"{}", "recipes.sqlite3": b"sqlite data"})
-        with_extra = self.make_snapshot("with-extra", files={"obsolete.json": b"[]",
-                                                             "recipes.sqlite3": b"sqlite data"})
-        deleted = self.make_snapshot("deleted", files={"recipes.sqlite3": b"sqlite data"})
+        added = self.make_snapshot("added", files={"nested/new.data": b"new", "opaque.data": b"opaque"})
+        with_extra = self.make_snapshot("with-extra", files={"nested/obsolete.data": b"old",
+                                                             "opaque.data": b"opaque"})
+        deleted = self.make_snapshot("deleted", files={"opaque.data": b"opaque"})
         self.assertNotEqual(backup.content_fingerprint(manifest),
                             backup.content_fingerprint(backup.validate_snapshot(added)))
         self.assertNotEqual(backup.content_fingerprint(backup.validate_snapshot(with_extra)),
                             backup.content_fingerprint(backup.validate_snapshot(deleted)))
+
+    def test_empty_directory_changes_trigger_upload_without_timestamp_churn(self):
+        first = self.make_snapshot("directory-first", directories=["empty"])
+        later = self.make_snapshot("directory-later", directories=["empty"], mtime=1760000000,
+                                   backup_id="later")
+        removed = self.make_snapshot("directory-removed", directories=[], backup_id="removed")
+        added = self.make_snapshot("directory-added", directories=["another", "empty"], backup_id="added")
+        fingerprints = [backup.content_fingerprint(backup.validate_snapshot(path))
+                        for path in (first, later, removed, added)]
+        self.assertEqual(fingerprints[0], fingerprints[1])
+        self.assertNotEqual(fingerprints[0], fingerprints[2])
+        self.assertNotEqual(fingerprints[0], fingerprints[3])
+        self.assertEqual(backup.upload_snapshot(first, self.config), "verified-upload")
+        self.assertEqual(backup.upload_snapshot(later, self.config), "verified-unchanged")
+        self.assertEqual(backup.upload_snapshot(removed, self.config), "verified-upload")
+        self.assertEqual(backup.upload_snapshot(added, self.config), "verified-upload")
+        manifest = json.loads((first / "manifest.json").read_text())
+        manifest["inventory"][0]["directories"] = []
+        (first / "manifest.json").write_bytes(backup.json_bytes(manifest))
+        with self.assertRaisesRegex(ValueError, "directory inventory mismatch"):
+            backup.validate_snapshot(first)
+
+    def test_directory_metadata_changes_trigger_upload_without_timestamp_churn(self):
+        first = self.make_snapshot("metadata-first", root_directory=True, directories=["nested"],
+                                   directory_metadata={})
+        later = self.make_snapshot("metadata-later", root_directory=True, directories=["nested"],
+                                   directory_metadata={}, mtime=1760000000)
+        first_fingerprint = backup.content_fingerprint(backup.validate_snapshot(first))
+        self.assertEqual(first_fingerprint, backup.content_fingerprint(backup.validate_snapshot(later)))
+        self.assertEqual(backup.upload_snapshot(first, self.config), "verified-upload")
+        self.assertEqual(backup.upload_snapshot(later, self.config), "verified-unchanged")
+        for path, key, value in [(".", "mode", 0o700), ("nested", "mode", 0o700),
+                                 ("nested", "uid", 123), ("nested", "gid", 456)]:
+            name = f"metadata-{path.replace('.', 'root')}-{key}"
+            changed = self.make_snapshot(name, backup_id=name,
+                                         root_directory=True, directories=["nested"],
+                                         directory_metadata={path: {key: value}})
+            self.assertNotEqual(first_fingerprint, backup.content_fingerprint(backup.validate_snapshot(changed)))
+            self.assertEqual(backup.upload_snapshot(changed, self.config), "verified-upload")
+        manifest = json.loads((first / "manifest.json").read_text())
+        manifest["inventory"][0]["directoryMetadata"][0]["uid"] = 123
+        (first / "manifest.json").write_bytes(backup.json_bytes(manifest))
+        with self.assertRaisesRegex(ValueError, "directory metadata mismatch"):
+            backup.validate_snapshot(first)
+        typed = self.make_snapshot("metadata-typed", directories=["nested"],
+                                   directory_metadata={"nested": {"uid": 1}})
+        manifest = json.loads((typed / "manifest.json").read_text())
+        manifest["inventory"][0]["directoryMetadata"][0]["uid"] = True
+        (typed / "manifest.json").write_bytes(backup.json_bytes(manifest))
+        with self.assertRaisesRegex(ValueError, "directory metadata mismatch"):
+            backup.validate_snapshot(typed)
 
     def test_incomplete_and_corrupt_snapshots_are_rejected(self):
         incomplete = self.make_snapshot("incomplete")
@@ -406,13 +472,13 @@ state_path.write_text(json.dumps(state))
     def test_missing_check_record_is_overdue(self):
         self.assertEqual(backup.report_status(self.config)["status"], "overdue")
 
-    def test_image_snapshot_with_owned_directories_is_accepted(self):
-        image_dir = self.root / "image-snapshot"
+    def test_nested_opaque_snapshot_files_are_accepted(self):
+        image_dir = self.root / "nested-snapshot"
         image_dir.mkdir()
-        files = {"public/a.png": b"image", "manifests/a.json": b'{"recipeId":"a"}'}
-        archive_path = image_dir / "images.tar"
+        files = {"nested/deeper/opaque.data": b"\x00unclassified bytes"}
+        archive_path = image_dir / "data.tar"
         with tarfile.open(archive_path, "w") as archive:
-            for name in ("public", "manifests"):
+            for name in ("nested", "nested/deeper"):
                 directory = tarfile.TarInfo(name)
                 directory.type = tarfile.DIRTYPE
                 archive.addfile(directory)
@@ -424,17 +490,78 @@ state_path.write_text(json.dumps(state))
                    for name, value in sorted(files.items())]
         archive_bytes = archive_path.read_bytes()
         manifest = {
-            "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-images",
+            "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-nested",
             "capturedAt": "2026-10-31T10:00:00Z",
             "source": {"target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
                        "namespace": "recipe-db", "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
                        "revision": "a" * 40},
-            "inventory": [{"service": "images", "role": "cleanup-participant", "pvc": "images",
-                           "archive": "images.tar", "sizeBytes": len(archive_bytes), "fileCount": len(entries),
+            "inventory": [{"service": "data", "role": "cleanup-participant", "pvc": "data",
+                           "archive": "data.tar", "sizeBytes": len(archive_bytes), "fileCount": len(entries),
                            "sha256": hashlib.sha256(archive_bytes).hexdigest(), "files": entries}],
         }
         (image_dir / "manifest.json").write_bytes(backup.json_bytes(manifest))
         self.assertEqual(backup.validate_snapshot(image_dir), manifest)
+
+    def test_root_named_regular_file_is_rejected(self):
+        source = self.make_snapshot(files={".": b"not a volume-root directory"})
+        with self.assertRaisesRegex(ValueError, "unsafe file path"):
+            backup.validate_snapshot(source)
+
+    def test_archive_safety_and_limits_before_upload(self):
+        source = self.make_snapshot(directories=["one", "two"], root_directory=True)
+        manifest_path = source / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        archive_path = source / "recipes.tar"
+        original = archive_path.read_bytes()
+
+        def replace(members):
+            with tarfile.open(archive_path, "w") as archive:
+                for member in members:
+                    archive.addfile(member)
+            manifest["inventory"][0]["sizeBytes"] = archive_path.stat().st_size
+            manifest["inventory"][0]["sha256"] = backup.file_hash(archive_path)
+            manifest_path.write_bytes(backup.json_bytes(manifest))
+
+        def directory(name, mode=0o755):
+            member = tarfile.TarInfo(name)
+            member.type = tarfile.DIRTYPE
+            member.mode = mode
+            return member
+
+        for member in (directory("/"), directory("////"), directory(".", 0o2755),
+                       directory("nested", 0o2770)):
+            replace([member])
+            with self.assertRaisesRegex(ValueError, "unsafe archive metadata"):
+                backup.validate_snapshot(source)
+        archive_path.write_bytes(original)
+        manifest["inventory"][0]["sizeBytes"] = archive_path.stat().st_size
+        manifest["inventory"][0]["sha256"] = backup.file_hash(archive_path)
+        manifest["inventory"][0].pop("directories")
+        manifest_path.write_bytes(backup.json_bytes(manifest))
+        with patch.object(backup, "MAX_DIRECTORIES", 2):
+            with self.assertRaisesRegex(ValueError, "too many archive directories"):
+                backup.validate_snapshot(source)
+        with patch.object(backup, "MAX_DIRECTORIES", 3):
+            backup.validate_snapshot(source)
+
+        implicit = self.make_snapshot("implicit", files={"one/two/file": b"data"})
+        with patch.object(backup, "MAX_DIRECTORIES", 1):
+            with self.assertRaisesRegex(ValueError, "too many archive directories"):
+                backup.validate_snapshot(implicit)
+        with patch.object(backup, "MAX_DIRECTORIES", 2):
+            backup.validate_snapshot(implicit)
+        collision = self.make_snapshot("collision", files={"parent": b"file", "parent/child": b"data"})
+        with self.assertRaisesRegex(ValueError, "archive file is a parent directory"):
+            backup.validate_snapshot(collision)
+
+        second = source / "second.tar"
+        second.write_bytes(original)
+        other = dict(manifest["inventory"][0], service="other", pvc="other", archive="second.tar")
+        manifest["inventory"].append(other)
+        manifest_path.write_bytes(backup.json_bytes(manifest))
+        with patch.object(backup, "MAX_FILES", 1):
+            with self.assertRaisesRegex(ValueError, "too many snapshot files"):
+                backup.validate_snapshot(source)
 
     def test_verified_upload_then_unchanged_requires_remote_readback(self):
         first = self.make_snapshot()

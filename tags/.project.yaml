@@ -58,9 +58,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 backupRole: cleanup-participant
-backupData: { kind: sqlite, file: tags.sqlite }
-storageVersion:
-  value: 2
+storageVersion: 2
 format:
   - check: opam exec --switch=5.3.0 -- dune fmt --preview
     apply: format-apply-copy 'opam exec --switch=5.3.0 -- dune fmt; or opam exec --switch=5.3.0 -- dune fmt' $argv

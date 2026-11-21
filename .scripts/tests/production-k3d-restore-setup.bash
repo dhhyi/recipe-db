@@ -7,36 +7,20 @@ restore_fixture() {
   export RESTORE_STATE="$FIXTURE_ROOT/backups/restore"
   printf '1\n' > "$FIXTURE_ROOT/tar-data/images/storage-version"
   printf '{"anonymous":{"role":"anonymous"},"tokens":[{"id":"restore-owner","secret":"private-restore-token","role":"owner"}],"googleAccounts":{}}\n' > auth-accounts.json
-  rm "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3"
-  python3 - "$FIXTURE_ROOT/tar-data/recipes/recipes.sqlite3" << 'PY'
-import json, sqlite3, sys
-with sqlite3.connect(sys.argv[1]) as db:
-    db.execute("CREATE TABLE recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)")
-    db.execute("INSERT INTO recipes VALUES (?, ?)", ("old", json.dumps({"name":"Old"})))
-PY
+  rm -rf "$FIXTURE_ROOT/tar-data/recipes"
+  mkdir -p "$FIXTURE_ROOT/tar-data/recipes/nested"
+  printf '\000opaque recipe volume data\n' \
+    > "$FIXTURE_ROOT/tar-data/recipes/nested/data.bin"
   if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
     printf 'restored-full-image\n' > image-full
     printf 'restored-thumbnail\n' > image-thumb
-    full_sha=$(sha256sum image-full)
-    full_sha=${full_sha%% *}
-    thumb_sha=$(sha256sum image-thumb)
-    thumb_sha=${thumb_sha%% *}
-    cp image-full "$FIXTURE_ROOT/tar-data/images/public/old-$full_sha.png"
-    cp image-thumb "$FIXTURE_ROOT/tar-data/images/public/old-$thumb_sha-thumb.png"
-    jq -n --arg full "/public/old-$full_sha.png" --arg thumb "/public/old-$thumb_sha-thumb.png" \
-      --argjson size "$(stat -c '%s' image-full)" \
-      '{recipeId:"old",url:$full,thumbUrl:$thumb,size:$size}' \
-      > "$FIXTURE_ROOT/tar-data/images/manifests/old.json"
+    cp image-full "$FIXTURE_ROOT/tar-data/images/public/full.bin"
+    cp image-thumb "$FIXTURE_ROOT/tar-data/images/public/thumb.bin"
   fi
   : > restore-archives.jsonl
   for name in recipes images tags; do
     tar -C "$FIXTURE_ROOT/tar-data/$name" -cf "$FIXTURE_ROOT/$name.tar" .
-    case "$name" in
-      recipes) layout='{"kind":"sqlite","file":"recipes.sqlite3"}' ;;
-      tags) layout='{"kind":"sqlite","file":"tags.sqlite"}' ;;
-      images) layout='{"kind":"images"}' ;;
-    esac
-    python3 .scripts/validate-backup-snapshot.py "$FIXTURE_ROOT/$name.tar" "$layout" > "$name-files.json"
+    python3 .scripts/validate-backup-snapshot.py "$FIXTURE_ROOT/$name.tar" > "$name-files.json"
     jq -cn --arg name "$name" --slurpfile files "$name-files.json" \
       '{service:$name,archive:($name+".tar"),files:$files[0]}' >> restore-archives.jsonl
   done
@@ -70,7 +54,13 @@ if [[ $* == *"api/http/routers"* ]]; then
 fi
 if [[ $* == *"/public/"* ]]; then
   url="${*: -1}"; name="${url##*/}"
-  cat "$FIXTURE_ROOT/tar-data/images/public/$name"
+  previous=
+  for argument in "$@"; do
+    if [[ $previous == --output ]]; then output=$argument; fi
+    previous=$argument
+  done
+  cat "$FIXTURE_ROOT/tar-data/images/public/$name" > "$output"
+  printf 200
   exit
 fi
 if [[ $* == *"18082"* ]]; then
@@ -78,6 +68,11 @@ if [[ $* == *"18082"* ]]; then
   if [[ -e $MOCK_LOG.probe-deleted ]]; then
     if [[ $* == *"--write-out"* ]]; then printf 404; exit; else exit 22; fi
   fi
+  previous=
+  for argument in "$@"; do
+    if [[ $previous == --dump-header ]]; then printf 'ETag: "cached"\r\n' > "$argument"; fi
+    previous=$argument
+  done
   cat "$MOCK_LOG.probe-name"; exit
 fi
 file=
@@ -105,14 +100,15 @@ case "$query" in
       touch "$MOCK_LOG.probe-paused"
       sleep 2
     fi
-    if [[ $* == *"restore-request"* && $(jq -r '.variables.options.q' "$file") == "*" ]]; then
+    if [[ $(jq -r '.variables.options.filter_by // empty' "$file") == 'id:=`old`' ]]; then
       echo '{"data":{"searchRecipes":{"recipes":[{"id":"old","name":"Old"}],"found":1}}}'
-    elif [[ -e $MOCK_LOG.probe-deleted || ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
+    elif [[ -e $MOCK_LOG.probe-deleted ]]; then
+      echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
+    elif [[ ${MOCK_RESTORE_PROPAGATION_FAIL:-false} == true ]]; then echo '{"data":{"searchRecipes":{"recipes":[]}}}'
     else jq -n --rawfile name "$MOCK_LOG.probe-name" '{data:{searchRecipes:{recipes:[{id:"probe",name:($name|rtrimstr("\n"))}]}}}'; fi ;;
   *"recipe(id"*)
     if [[ ${MOCK_RESTORE_IMAGE:-false} == true ]]; then
-      jq '{data:{recipe:{id:"old",name:"Old",image:{url:.url,thumbUrl:.thumbUrl},rating:{count:0}}}}' \
-        "$FIXTURE_ROOT/tar-data/images/manifests/old.json"
+      echo '{"data":{"recipe":{"id":"old","name":"Old","image":{"url":"/public/full.bin","thumbUrl":"/public/thumb.bin"},"rating":{"count":0}}}}'
     else echo '{"data":{"recipe":{"id":"old","name":"Old","image":null,"rating":{"count":0}}}}'; fi ;;
   *) echo '{"data":{"recipes":[{"id":"old","name":"Old"}]}}' ;;
 esac
@@ -131,12 +127,10 @@ restore_real_package_fixture() {
   mkdir -p provisioning/files capture
   chmod 700 capture
   cp "$BATS_TEST_DIRNAME/../../provisioning/files/backup-upload.py" provisioning/files/
-  rm "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" "$FIXTURE_ROOT/tar-data/tags/tags.sqlite-wal"
-  python3 - "$FIXTURE_ROOT/tar-data/tags/tags.sqlite" << 'PY'
-import sqlite3, sys
-with sqlite3.connect(sys.argv[1]) as database:
-    database.execute("CREATE TABLE records (id TEXT PRIMARY KEY, value TEXT)")
-PY
+  rm -rf "$FIXTURE_ROOT/tar-data/tags"
+  mkdir -p "$FIXTURE_ROOT/tar-data/tags"
+  printf '\000opaque nested service data\n' \
+    > "$FIXTURE_ROOT/tar-data/tags/opaque.bin"
   python3 - "$FIXTURE_ROOT" "$RESTORE_ID" "$ARTIFACT" "$MOCK_REVISION" << 'PY'
 import hashlib, importlib.util, json, pathlib, sys, tarfile
 root, backup_id, artifact, revision = sys.argv[1:]
@@ -148,14 +142,12 @@ spec = importlib.util.spec_from_file_location("snapshot", root / ".scripts/valid
 snapshot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(snapshot)
 inventory = []
-layouts = {"recipes":{"kind":"sqlite","file":"recipes.sqlite3"},
-           "tags":{"kind":"sqlite","file":"tags.sqlite"}, "images":{"kind":"images"}}
-for name, layout in layouts.items():
+for name in ("recipes", "tags", "images"):
     archive = root / "capture" / f"{name}.tar"
     with tarfile.open(archive, "w", format=tarfile.USTAR_FORMAT) as output:
         output.add(root / "tar-data" / name, arcname=".")
     archive.chmod(0o600)
-    files = snapshot.validate(archive, layout)
+    files = snapshot.validate(archive)
     inventory.append({"service":name,
                       "role":"authoritative-read-only" if name == "recipes" else "cleanup-participant",
                       "pvc":name, "archive":archive.name, "sizeBytes":archive.stat().st_size,

@@ -59,7 +59,7 @@
         "required": ["backupRole"]
       },
       "then": {
-        "required": ["backupData", "storageVersion"]
+        "required": ["storageVersion"]
       },
       "else": {
         "not": {
@@ -87,27 +87,10 @@
       "description": "Opt a cleanup participant into image compaction for its surviving recipe IDs; defaults to false.",
       "type": "boolean"
     },
-    "backupData": {
-      "description": "Authoritative PVC layout consumed by snapshot validation; no derived files or secrets are permitted.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind"],
-      "properties": {
-        "kind": { "enum": ["sqlite", "json", "images"] },
-        "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
-      }
-    },
     "storageVersion": {
       "description": "Declared positive storage-version requirement for Kubernetes and release tooling.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["value"],
-      "properties": {
-        "value": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
+      "type": "integer",
+      "minimum": 1
     },
     "graphqlSchema": {
       "type": "string",
