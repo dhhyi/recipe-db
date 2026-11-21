@@ -9,6 +9,8 @@ setup() {
   export FIXTURE_ROOT
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy design
+  cp "$BATS_TEST_DIRNAME/../templates/storage-version-gate.sh.ytt" .scripts/templates/
+  cp "$BATS_TEST_DIRNAME/../templates/storage-version-sidecar.sh.ytt" .scripts/templates/
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
@@ -1671,7 +1673,9 @@ EOF
           volumes:(if .claim == null then [] else [{name:"data",persistentVolumeClaim:{claimName:.claim}}] end)}}},
       status:{readyReplicas:1}})}' > "$MOCK_LOG.deployments"
   git init -q
-  git add .scripts/production-k3d.sh .scripts/lib/*.sh message-bus/nats.conf \
+  git add .scripts/production-k3d.sh .scripts/lib/*.sh \
+    .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt \
+    message-bus/nats.conf \
     browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg design/nginx.conf
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture release inputs'
   export MOCK_REVISION

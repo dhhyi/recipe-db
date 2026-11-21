@@ -30,6 +30,8 @@ render() {
   mise exec -- ytt \
     -f "$ROOT/.scripts/templates/kubernetes-template.yml" \
     -f "$ROOT/.scripts/templates/kubernetes.lib.yml" \
+    -f "$ROOT/.scripts/templates/storage-version-gate.sh.ytt" \
+    -f "$ROOT/.scripts/templates/storage-version-sidecar.sh.ytt" \
     --data-values-file "$1" -o json | jq -s '{items: .}' > manifests.json
 }
 

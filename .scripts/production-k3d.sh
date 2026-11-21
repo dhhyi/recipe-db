@@ -263,6 +263,7 @@ pull_release() {
     backup-run | backup-enter | backup-capture | backup-exit | restore | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
+        .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
         .scripts/templates/traefik-template.yml .scripts/templates/browse-maintenance-template.lib.yml
         .scripts/templates/service-template.lib.yml package.json
         message-bus/nats.conf browse-maintenance/nginx.conf browse-maintenance/unavailable.html
@@ -310,6 +311,8 @@ render() {
     > "$work/template-values.json"
   ytt -f "$release_root/.scripts/templates/kubernetes-template.yml" \
     -f "$release_root/.scripts/templates/kubernetes.lib.yml" \
+    -f "$release_root/.scripts/templates/storage-version-gate.sh.ytt" \
+    -f "$release_root/.scripts/templates/storage-version-sidecar.sh.ytt" \
     --data-values-file "$work/template-values.json" > "$work/rendered-base.yml"
   if [[ $command == restore || $command == recovery-* || $command == release-migration-recover ]]; then
     restore_ingress_values

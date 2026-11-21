@@ -1,0 +1,33 @@
+set -eu
+trap 'exit 0' TERM QUIT
+mode=${MODE:-production}
+expected=${EXPECTED_STORAGE_VERSION:-}
+port=${BACKEND_PORT:-}
+root=/data
+marker="$root/storage-version"
+if [ -L "$marker" ]; then
+  printf 'storage-version sidecar: unsafe marker file type\n' >&2
+  exit 1
+fi
+if [ -e "$marker" ]; then
+  [ -f "$marker" ] || { printf 'storage-version sidecar: unsafe marker file type\n' >&2; exit 1; }
+  actual=$(cat "$marker") || { printf 'storage-version sidecar: cannot read marker\n' >&2; exit 1; }
+  [ "$actual" = "$expected" ] || { printf 'storage-version sidecar: storage version mismatch: expected %s, actual %s\n' "$expected" "$actual" >&2; exit 1; }
+  while :; do sleep 3600; done
+fi
+[ "$mode" = production ] || { printf 'storage-version sidecar: missing marker in backup mode\n' >&2; exit 1; }
+until wget -q -O /dev/null "http://127.0.0.1:$port/health"; do
+  sleep 1
+done
+temporary="$marker.pending-$$"
+if ! printf '%s\n' "$expected" > "$temporary"; then
+  printf 'storage-version sidecar: cannot write marker\n' >&2
+  exit 1
+fi
+if ! ln "$temporary" "$marker"; then
+  rm -f "$temporary"
+  printf 'storage-version sidecar: cannot atomically publish marker\n' >&2
+  exit 1
+fi
+rm -f "$temporary"
+while :; do sleep 3600; done

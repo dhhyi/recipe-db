@@ -257,6 +257,8 @@ make_gate_pod() {
     "$work/gate-values.json" > "$work/$name-values.json"
   ytt -f "$repository_root/.scripts/templates/kubernetes-template.yml" \
     -f "$repository_root/.scripts/templates/kubernetes.lib.yml" \
+    -f "$repository_root/.scripts/templates/storage-version-gate.sh.ytt" \
+    -f "$repository_root/.scripts/templates/storage-version-sidecar.sh.ytt" \
     --data-values-file "$work/$name-values.json" -o json \
     | jq -s 'map(select(.kind == "Deployment" and .metadata.name == "images"))
       | if length == 1 then .[0].spec.template.spec.initContainers[0] else error("missing images gate") end' \
