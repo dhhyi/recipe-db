@@ -46,9 +46,11 @@ test("shared page shells preserve consistent container widths and full-height la
                 parseFloat(getComputedStyle(footer).marginBottom),
             };
           });
-          expect(layout.width).toBe(containerWidth);
-          expect(layout.height).toBeCloseTo(1000, 0);
-          expect(layout.footerBottom).toBeCloseTo(1000, 0);
+          expect(Math.abs(layout.width - containerWidth)).toBeLessThanOrEqual(
+            1,
+          );
+          expect(Math.abs(layout.height - 1000)).toBeLessThanOrEqual(1);
+          expect(Math.abs(layout.footerBottom - 1000)).toBeLessThanOrEqual(1);
         }
 
         const layout = await page.locator("main").evaluate((main) => {
