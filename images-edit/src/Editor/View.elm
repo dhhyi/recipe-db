@@ -395,7 +395,7 @@ galleryRow model failed index image =
     in
     ( image.id
     , li [ id ("gallery-image-" ++ image.id), attribute "data-gallery-id" image.id, attribute "tabindex" "-1" ]
-        [ article [ class "m-0 flex flex-wrap items-center gap-2", attribute "data-gallery-card" "" ]
+        [ article [ class "m-0 flex flex-wrap items-center gap-1 p-2 sm:gap-2", attribute "data-gallery-card" "" ]
             [ if imageCount > 1 then
                 span
                     [ class "gallery-handle"

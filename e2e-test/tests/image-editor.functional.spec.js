@@ -724,6 +724,15 @@ test("gallery drag previews, cancels and saves a single complete order", async (
     await page.mouse.down();
     await page.mouse.move(x, firstBox.y + firstBox.height / 2);
     await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+    await page.mouse.move(x, y);
+    await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+    await page.mouse.up();
+    expect(writes).toHaveLength(0);
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, firstBox.y + firstBox.height / 2);
+    await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
     await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await page.keyboard.press("Escape");
@@ -793,6 +802,40 @@ test("touch drag cancels and drops from the handle, not the row", async ({
   await expect.poll(() => writes.length).toBe(1);
   await expect(rows.first().getByText("Standardbild", { exact: true })).toBeVisible();
   await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+  await client.detach();
+});
+
+test("touch scrolling works outside the handle but not from the handle", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 390, height: 500 });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  await page.evaluate(() => {
+    const spacer = document.createElement("div");
+    spacer.style.height = "1200px";
+    document.body.append(spacer);
+    window.scrollTo(0, 0);
+  });
+  const client = await page.context().newCDPSession(page);
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  const swipe = async (target) => {
+    const box = await target.boundingBox();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    for (let distance = 25; distance <= 125; distance += 25) {
+      await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - distance }] });
+    }
+    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  };
+  await swipe(rows.nth(1).getByRole("img"));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await swipe(rows.nth(1).locator(".gallery-handle"));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await client.detach();
 });
 
