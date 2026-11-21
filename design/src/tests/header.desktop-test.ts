@@ -198,3 +198,29 @@ describe("shared header scrolling", () => {
     await expectHidden(false);
   });
 });
+
+describe("shared header login", () => {
+  it("uses the current path, query and fragment when login is activated", async () => {
+    const originalURL = window.location.href;
+    const originalState = history.state;
+    try {
+      await mountHeader();
+      const login = document.querySelector<HTMLAnchorElement>(
+        'header-component a[href^="/oauth2/start"]',
+      )!;
+      login.addEventListener("click", (event) => event.preventDefault());
+
+      for (const currentURL of [
+        "/edit/recipe-1?tab=ingredients&return=%252F#editor%2Fform",
+        "/recipe/recipe-1?filter_by=tag_ids%3A%22a%2Bb%22&extra=one&extra=two#method",
+      ]) {
+        history.replaceState(null, "", currentURL);
+        await userEvent.click(login);
+        expect(new URL(login.href).searchParams.get("rd")).toBe(currentURL);
+      }
+    } finally {
+      history.replaceState(originalState, "", originalURL);
+      document.body.replaceChildren();
+    }
+  });
+});
