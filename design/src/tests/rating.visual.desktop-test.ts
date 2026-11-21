@@ -37,8 +37,6 @@ async function assertRatingScreenshots() {
         display: inline-flex;
         align-items: center;
         padding: 1rem;
-        color: var(--pico-color);
-        background: var(--pico-background-color);
       `;
       const rating = document.createElement("rating-component");
       rating.setAttribute("rating", String(example.rating));
@@ -66,8 +64,6 @@ async function assertRatingScreenshots() {
       display: grid;
       gap: 0.25rem;
       padding: 1rem;
-      color: var(--pico-color);
-      background: var(--pico-background-color);
     `;
     for (let ratingValue = 0; ratingValue <= 5; ratingValue += 0.5) {
       const rating = document.createElement("rating-component");
