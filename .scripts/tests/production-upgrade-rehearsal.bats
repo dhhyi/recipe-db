@@ -322,7 +322,7 @@ SH
   local projects="$FIXTURE_ROOT/source-projects.jsonl"
   local manifest="$FIXTURE_ROOT/package.manifest.json" required actual
   load_scenario_functions
-  cat > "$projects" <<'JSONL'
+  cat > "$projects" << 'JSONL'
 {"name":"recipes","storageVersion":{"value":2}}
 {"name":"images","storageVersion":1}
 JSONL
