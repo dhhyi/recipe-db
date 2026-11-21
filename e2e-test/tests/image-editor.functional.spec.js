@@ -710,6 +710,9 @@ test("gallery drag previews, cancels and saves a single complete order", async (
     const handles = rows.locator(".gallery-handle");
     await expect(handles).toHaveCount(2);
     await expect(handles.first()).toHaveCSS("touch-action", "none");
+    await expect(handles.first()).toHaveCSS("cursor", "grab");
+    await expect(handles.first()).toHaveCSS("width", "44px");
+    await expect(handles.first()).toHaveCSS("height", "44px");
     await expect(rows.first().locator("article")).toHaveCSS(
       "touch-action",
       "auto",
@@ -760,6 +763,8 @@ test("gallery drag previews, cancels and saves a single complete order", async (
       rows.first().getByText("Vorgemerktes Standardbild"),
     ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
+    await expect(handles.first()).toHaveCSS("touch-action", "auto");
+    await expect(handles.first()).toHaveCSS("cursor", "auto");
     await page.keyboard.press("Escape");
     await page.mouse.up();
     await expect(rows.first().getByRole("img")).toHaveAttribute(

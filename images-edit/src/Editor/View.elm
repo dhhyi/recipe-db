@@ -408,7 +408,7 @@ galleryRow model failed index image =
         [ article [ class "m-0 flex flex-wrap items-center gap-1 p-2 sm:gap-2", attribute "data-gallery-card" "" ]
             [ if imageCount > 1 then
                 span
-                    [ class "gallery-handle"
+                    [ class "gallery-handle grid h-[44px] w-[44px] select-none place-items-center text-[1.5rem] data-[enabled=true]:cursor-grab data-[enabled=true]:touch-none"
                     , attribute "data-gallery-handle" image.id
                     , attribute "data-enabled" (boolString (canMove model image.id MoveUp || canMove model image.id MoveDown))
                     , attribute "aria-hidden" "true"
