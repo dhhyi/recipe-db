@@ -754,6 +754,113 @@ test("gallery drag previews, cancels and saves a single complete order", async (
   }
 });
 
+test("touch drag cancels and drops from the handle, not the row", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  const writes = [];
+  page.on("request", (request) => {
+    if (isImageReorder(request)) writes.push(request);
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  const handles = rows.locator(".gallery-handle");
+  const client = await page.context().newCDPSession(page);
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  const gesture = async (target, destination, cancel) => {
+    const source = await target.boundingBox();
+    const end = await destination.boundingBox();
+    const point = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(source)] });
+    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(end)] });
+    if (cancel !== undefined) {
+      await client.send("Input.dispatchTouchEvent", {
+        type: cancel ? "touchCancel" : "touchEnd",
+        touchPoints: [],
+      });
+    }
+  };
+  await gesture(rows.nth(1).getByRole("img"), rows.first().getByRole("img"), false);
+  expect(writes).toHaveLength(0);
+  await gesture(handles.nth(1), handles.first());
+  await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+  await client.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+  await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+  expect(writes).toHaveLength(0);
+  await gesture(handles.nth(1), handles.first(), false);
+  await expect.poll(() => writes.length).toBe(1);
+  await expect(rows.first().getByText("Standardbild", { exact: true })).toBeVisible();
+  await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+  await client.detach();
+});
+
+for (const outcome of ["rejected", "unknown", "success"]) {
+  test(`drag ${outcome} with failed refresh retains the correct order and retries only the read`, async ({
+    page,
+    multiImageRecipe,
+  }) => {
+    const [first, second] = multiImageRecipe.images;
+    let writes = 0;
+    let reads = 0;
+    await page.route("**/graphql", async (route) => {
+      if (isImageReorder(route.request())) {
+        writes++;
+        if (outcome === "rejected") {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/graphql-response+json",
+            body: JSON.stringify({ errors: [{ message: "Image collection changed", extensions: { code: "image-order-conflict" } }] }),
+          });
+        } else if (outcome === "unknown") {
+          await route.abort();
+        } else {
+          await route.fallback();
+        }
+        return;
+      }
+      if (writes && isGalleryRead(route.request()) && ++reads === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/graphql-response+json",
+          body: JSON.stringify({ data: null, errors: [{ message: "Gallery unavailable" }] }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const handles = rows.locator(".gallery-handle");
+    await expect(handles).toHaveCount(2);
+    const from = await handles.nth(1).boundingBox();
+    const to = await handles.first().boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + from.width / 2, to.y + to.height / 2);
+    await page.mouse.up();
+    await expect(page.getByRole("button", { name: "Erneut laden" })).toBeVisible();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src", outcome === "success" ? second.thumbUrl : first.thumbUrl,
+    );
+    if (outcome === "success") {
+      await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
+      await expect(page.getByText("Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden.")).toBeVisible();
+    } else {
+      await expect(page.getByText(outcome === "rejected" ? /zwischenzeitlich geändert/ : /konnte nicht bestätigt werden/).first()).toBeVisible();
+    }
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await page.getByRole("button", { name: "Erneut laden" }).click();
+    await expect(page.locator("#upload-image")).toBeEnabled();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src", outcome === "success" ? second.thumbUrl : first.thumbUrl,
+    );
+    expect(writes).toBe(1);
+    expect(reads).toBe(2);
+  });
+}
+
 test("gallery up and down immediately save opaque IDs without optimistic movement", async ({
   page,
   multiImageRecipe,

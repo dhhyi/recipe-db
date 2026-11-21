@@ -282,7 +282,7 @@ galleryTests =
 
         dragFailedRead : Editor.Model -> Editor.Model
         dragFailedRead model =
-            apply (GotRecipe model.galleryToken (RemoteData.Failure "read failed")) model
+            apply (GotRecipe model.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Nothing }))) model
 
         middleDownMove : Editor.Model
         middleDownMove =
