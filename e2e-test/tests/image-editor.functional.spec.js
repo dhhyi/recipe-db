@@ -710,7 +710,10 @@ test("gallery drag previews, cancels and saves a single complete order", async (
     const handles = rows.locator(".gallery-handle");
     await expect(handles).toHaveCount(2);
     await expect(handles.first()).toHaveCSS("touch-action", "none");
-    await expect(rows.first().locator("article")).toHaveCSS("touch-action", "auto");
+    await expect(rows.first().locator("article")).toHaveCSS(
+      "touch-action",
+      "auto",
+    );
     const firstBox = await handles.first().boundingBox();
     const secondBox = await handles.nth(1).boundingBox();
     const x = secondBox.x + secondBox.width / 2;
@@ -718,44 +721,74 @@ test("gallery drag previews, cancels and saves a single complete order", async (
 
     await page.mouse.click(x, y);
     expect(writes).toHaveLength(0);
-    await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      first.thumbUrl,
+    );
 
     await page.mouse.move(x, y);
     await page.mouse.down();
     await page.mouse.move(x, firstBox.y + firstBox.height / 2);
-    await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      second.thumbUrl,
+    );
     await page.mouse.move(x, y);
-    await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      first.thumbUrl,
+    );
     await page.mouse.up();
     expect(writes).toHaveLength(0);
 
     await page.mouse.move(x, y);
     await page.mouse.down();
     await page.mouse.move(x, firstBox.y + firstBox.height / 2);
-    await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
-    await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      second.thumbUrl,
+    );
+    await expect(
+      rows.first().getByText("Vorgemerktes Standardbild"),
+    ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     await page.keyboard.press("Escape");
     await page.mouse.up();
-    await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      first.thumbUrl,
+    );
     expect(writes).toHaveLength(0);
 
     const source = await handles.nth(1).boundingBox();
     const destination = await handles.first().boundingBox();
-    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.move(
+      source.x + source.width / 2,
+      source.y + source.height / 2,
+    );
     await page.mouse.down();
-    await page.mouse.move(source.x + source.width / 2, destination.y + destination.height / 2);
-    await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+    await page.mouse.move(
+      source.x + source.width / 2,
+      destination.y + destination.height / 2,
+    );
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      second.thumbUrl,
+    );
     await page.mouse.up();
     await expect.poll(() => writes.length).toBe(1);
     expect(writes[0].postDataJSON().variables).toEqual({
       recipeId: multiImageRecipe.id,
       imageIds: [second.id, first.id],
     });
-    await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
+    await expect(
+      rows.first().getByText("Vorgemerktes Standardbild"),
+    ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeDisabled();
     release.resolve();
-    await expect(rows.first().getByText("Standardbild", { exact: true })).toBeVisible();
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
     await expect(page.locator("#upload-image")).toBeEnabled();
     expect(writes).toHaveLength(1);
   } finally {
@@ -781,9 +814,18 @@ test("touch drag cancels and drops from the handle, not the row", async ({
   const gesture = async (target, destination, cancel) => {
     const source = await target.boundingBox();
     const end = await destination.boundingBox();
-    const point = (box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
-    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(source)] });
-    await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(end)] });
+    const point = (box) => ({
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2,
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [point(source)],
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [point(end)],
+    });
     if (cancel !== undefined) {
       await client.send("Input.dispatchTouchEvent", {
         type: cancel ? "touchCancel" : "touchEnd",
@@ -791,17 +833,35 @@ test("touch drag cancels and drops from the handle, not the row", async ({
       });
     }
   };
-  await gesture(rows.nth(1).getByRole("img"), rows.first().getByRole("img"), false);
+  await gesture(
+    rows.nth(1).getByRole("img"),
+    rows.first().getByRole("img"),
+    false,
+  );
   expect(writes).toHaveLength(0);
   await gesture(handles.nth(1), handles.first());
-  await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
-  await client.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
-  await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchCancel",
+    touchPoints: [],
+  });
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
   expect(writes).toHaveLength(0);
   await gesture(handles.nth(1), handles.first(), false);
   await expect.poll(() => writes.length).toBe(1);
-  await expect(rows.first().getByText("Standardbild", { exact: true })).toBeVisible();
-  await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+  await expect(
+    rows.first().getByText("Standardbild", { exact: true }),
+  ).toBeVisible();
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
   await client.detach();
 });
 
@@ -825,16 +885,27 @@ test("touch scrolling works outside the handle but not from the handle", async (
     const box = await target.boundingBox();
     const x = box.x + box.width / 2;
     const y = box.y + box.height / 2;
-    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y }],
+    });
     for (let distance = 25; distance <= 125; distance += 25) {
-      await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - distance }] });
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: y - distance }],
+      });
     }
-    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchCancel",
+      touchPoints: [],
+    });
   };
-  await swipe(rows.nth(1).getByRole("img"));
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await swipe(rows.first().getByRole("img"));
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(0);
   await page.evaluate(() => window.scrollTo(0, 0));
-  await swipe(rows.nth(1).locator(".gallery-handle"));
+  await swipe(rows.first().locator(".gallery-handle"));
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await client.detach();
 });
@@ -854,7 +925,14 @@ for (const outcome of ["rejected", "unknown", "success"]) {
           await route.fulfill({
             status: 200,
             contentType: "application/graphql-response+json",
-            body: JSON.stringify({ errors: [{ message: "Image collection changed", extensions: { code: "image-order-conflict" } }] }),
+            body: JSON.stringify({
+              errors: [
+                {
+                  message: "Image collection changed",
+                  extensions: { code: "image-order-conflict" },
+                },
+              ],
+            }),
           });
         } else if (outcome === "unknown") {
           await route.abort();
@@ -867,7 +945,10 @@ for (const outcome of ["rejected", "unknown", "success"]) {
         await route.fulfill({
           status: 200,
           contentType: "application/graphql-response+json",
-          body: JSON.stringify({ data: null, errors: [{ message: "Gallery unavailable" }] }),
+          body: JSON.stringify({
+            data: null,
+            errors: [{ message: "Gallery unavailable" }],
+          }),
         });
         return;
       }
@@ -883,21 +964,39 @@ for (const outcome of ["rejected", "unknown", "success"]) {
     await page.mouse.down();
     await page.mouse.move(from.x + from.width / 2, to.y + to.height / 2);
     await page.mouse.up();
-    await expect(page.getByRole("button", { name: "Erneut laden" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Erneut laden" }),
+    ).toBeVisible();
     await expect(rows.first().getByRole("img")).toHaveAttribute(
-      "src", outcome === "success" ? second.thumbUrl : first.thumbUrl,
+      "src",
+      outcome === "success" ? second.thumbUrl : first.thumbUrl,
     );
     if (outcome === "success") {
-      await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
-      await expect(page.getByText("Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden.")).toBeVisible();
+      await expect(
+        rows.first().getByText("Vorgemerktes Standardbild"),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden.",
+        ),
+      ).toBeVisible();
     } else {
-      await expect(page.getByText(outcome === "rejected" ? /zwischenzeitlich geändert/ : /konnte nicht bestätigt werden/).first()).toBeVisible();
+      await expect(
+        page
+          .getByText(
+            outcome === "rejected"
+              ? /zwischenzeitlich geändert/
+              : /konnte nicht bestätigt werden/,
+          )
+          .first(),
+      ).toBeVisible();
     }
     await expect(page.locator("#upload-image")).toBeDisabled();
     await page.getByRole("button", { name: "Erneut laden" }).click();
     await expect(page.locator("#upload-image")).toBeEnabled();
     await expect(rows.first().getByRole("img")).toHaveAttribute(
-      "src", outcome === "success" ? second.thumbUrl : first.thumbUrl,
+      "src",
+      outcome === "success" ? second.thumbUrl : first.thumbUrl,
     );
     expect(writes).toBe(1);
     expect(reads).toBe(2);

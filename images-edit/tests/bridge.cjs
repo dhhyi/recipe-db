@@ -296,7 +296,11 @@ test("active pointer coordinates do not jump when status layout moves the stage"
   const target = {
     dataset: { handle: "move" },
     closest: (selector) =>
-      selector === "[data-handle]" ? target : selector === ".crop-stage" ? stage : null,
+      selector === "[data-handle]"
+        ? target
+        : selector === ".crop-stage"
+          ? stage
+          : null,
   };
   const event = {
     target,
@@ -328,24 +332,39 @@ test("gallery pointer uses stable list capture, ignores clicks and cancels safel
   }));
   const list = {
     querySelectorAll: () => rows,
-    setPointerCapture() { captured = true; },
+    setPointerCapture() {
+      captured = true;
+    },
     hasPointerCapture: () => captured,
-    releasePointerCapture() { captured = false; },
+    releasePointerCapture() {
+      captured = false;
+    },
   };
   const handle = {
     dataset: { enabled: "true", galleryHandle: "b" },
-    closest: (selector) => selector === ".gallery-list" ? list : null,
+    closest: (selector) => (selector === ".gallery-list" ? list : null),
   };
-  const target = { closest: (selector) => selector === "[data-gallery-handle]" ? handle : null };
+  const target = {
+    closest: (selector) =>
+      selector === "[data-gallery-handle]" ? handle : null,
+  };
   const event = {
-    target, isPrimary: true, button: 0, pointerId: 7,
-    clientX: 20, clientY: 150, preventDefault() {},
+    target,
+    isPrimary: true,
+    button: 0,
+    pointerId: 7,
+    clientX: 20,
+    clientY: 150,
+    preventDefault() {},
   };
   bridge.dispatch("pointerdown", event);
   assert.equal(captured, true);
   shift = 60;
   bridge.dispatch("pointerup", event);
-  assert.deepEqual(bridge.events.map((e) => e.kind), ["gallery-drag-start", "gallery-drag-end"]);
+  assert.deepEqual(
+    bridge.events.map((e) => e.kind),
+    ["gallery-drag-start", "gallery-drag-end"],
+  );
   assert.equal(bridge.events[1].cancelled, false);
 
   shift = 0;

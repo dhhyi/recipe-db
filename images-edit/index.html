@@ -357,7 +357,10 @@
               moved: false,
             };
             list.setPointerCapture(event.pointerId);
-            send({ kind: "gallery-drag-start", imageId: handle.dataset.galleryHandle });
+            send({
+              kind: "gallery-drag-start",
+              imageId: handle.dataset.galleryHandle,
+            });
             return;
           }
           const target = event.target.closest("[data-handle]");
