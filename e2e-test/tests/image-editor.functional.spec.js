@@ -953,6 +953,7 @@ test("dragging near the viewport edge does not auto-scroll", async ({
 
 test("unknown drag outcome that committed is reconciled without a retry", async ({
   page,
+  request,
   multiImageRecipe,
 }) => {
   const [first, second] = multiImageRecipe.images;
@@ -960,8 +961,16 @@ test("unknown drag outcome that committed is reconciled without a retry", async 
   await page.route("**/graphql", async (route) => {
     if (isImageReorder(route.request())) {
       writes++;
-      const response = await route.fetch();
+      const response = await request.post("/graphql", {
+        data: route.request().postDataJSON(),
+      });
       expect(response.ok()).toBe(true);
+      const body = await response.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.reorderImages.map((image) => image.id)).toEqual([
+        second.id,
+        first.id,
+      ]);
       await route.abort();
       return;
     }
