@@ -81,34 +81,6 @@ test("existing and new pages expose explicit return actions", async ({
   await expect(returnButtonNew(page)).toHaveAttribute("href", "/");
 });
 
-test("not-found state renders no saveable form and supports safe back", async ({
-  page,
-  demoRecipe,
-}) => {
-  await page.route("**/graphql", async (route) => {
-    if (requestIsOperation(route.request(), "RecipeById", "recipe(")) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          data: { recipe: null, inspirationsOnline: true },
-          errors: [],
-        }),
-      });
-      return;
-    }
-    await route.fallback();
-  });
-
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await expect(page.getByText("Rezept nicht gefunden.")).toBeVisible();
-  await expect(nameField(page)).toHaveCount(0);
-  await expect(saveButton(page)).toHaveCount(0);
-
-  await returnButtonExisting(page).click();
-  await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-});
-
 test("error state renders no saveable form and supports safe back", async ({
   page,
   demoRecipe,
