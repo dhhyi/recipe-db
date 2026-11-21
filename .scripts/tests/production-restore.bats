@@ -790,6 +790,8 @@ work="$FIXTURE_ROOT/work"
 timeout=5
 restore_graphql_port=4000
 restore_browse_port=4100
+jq '.origin = "https://recipe.test"' "$work/config.json" > "$work/config.next"
+mv "$work/config.next" "$work/config.json"
 restore_graphql() {
   local variables=${2:-'{}'} id
   case "$1" in
@@ -809,7 +811,9 @@ restore_graphql() {
       id=$(jq -r .id <<< "$variables")
       printf '%s\n' "$id" >> "$work/image-samples"
       if [[ $id == recipe-with-image || $id == recipe-11 ]]; then
-        jq -n --arg id "$id" '{data:{recipe:{id:$id,image:{url:"/public/image.bin",thumbUrl:"/public/thumb.bin"}}}}' \
+        jq -n --arg id "$id" --arg url "${IMAGE_URL:-/public/image.bin}" \
+          --arg thumb "${THUMB_URL:-/public/thumb.bin}" \
+          '{data:{recipe:{id:$id,image:{url:$url,thumbUrl:$thumb}}}}' \
           > "$work/restore-response.json"
       else
         jq -n --arg id "$id" '{data:{recipe:{id:$id,image:null}}}' > "$work/restore-response.json"
@@ -821,8 +825,9 @@ restore_graphql() {
         jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"First",image:null,rating:{count:1}}}}' \
           > "$work/restore-response.json"
       else
-        jq -n --arg id "$id" '{data:{recipe:{id:$id,name:"Image",
-          image:{url:"/public/image.bin",thumbUrl:"/public/thumb.bin"},rating:{count:1}}}}' \
+        jq -n --arg id "$id" --arg url "${IMAGE_URL:-/public/image.bin}" \
+          --arg thumb "${THUMB_URL:-/public/thumb.bin}" '{data:{recipe:{id:$id,name:"Image",
+          image:{url:$url,thumbUrl:$thumb},rating:{count:1}}}}' \
           > "$work/restore-response.json"
       fi
       ;;
@@ -841,6 +846,7 @@ curl() {
   done
   case "$url" in
     http://127.0.0.1:4000/public/*)
+      printf '%s\n' "$url" >> "$MOCK_LOG"
       if [[ ${IMAGE_FAILURE:-} != "empty:${url##*/}" ]]; then
         printf 'opaque image bytes' > "$output"
       else
@@ -856,6 +862,35 @@ restore_verify_reads
 EOF
   run env EXPECTED_RECIPE_ID=recipe-with-image bash restore-image-harness.sh
   [ "$status" -eq 0 ]
+  : > "$MOCK_LOG"
+  run env EXPECTED_RECIPE_ID=recipe-with-image \
+    IMAGE_URL='https://RECIPE.test:443/public/image.bin?signature=abc' \
+    THUMB_URL='public/thumb.bin?rev=2' bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  grep -Fxq 'http://127.0.0.1:4000/public/image.bin?signature=abc' "$MOCK_LOG"
+  grep -Fxq 'http://127.0.0.1:4000/public/thumb.bin?rev=2' "$MOCK_LOG"
+  : > "$MOCK_LOG"
+  run env EXPECTED_RECIPE_ID=recipe-with-image \
+    IMAGE_URL='//recipe.test/public/image.bin?size=full#fragment' \
+    THUMB_URL='https://recipe.test/public/thumb.bin' bash restore-image-harness.sh
+  [ "$status" -eq 0 ]
+  grep -Fxq 'http://127.0.0.1:4000/public/image.bin?size=full' "$MOCK_LOG"
+  for url in 'https://cdn.example.test/public/image.bin' \
+    '//evil.example/public/image.bin' 'https://recipe.test@evil.example/public/image.bin' \
+    'https://recipe.test:444/public/image.bin' 'https://recipe.test:0/public/image.bin' \
+    'file:///public/image.bin'; do
+    : > "$MOCK_LOG"
+    run env EXPECTED_RECIPE_ID=recipe-with-image IMAGE_URL="$url" bash restore-image-harness.sh
+    [ "$status" -ne 0 ]
+    [[ $output == *"outside the configured origin"* ]]
+    [ ! -s "$MOCK_LOG" ]
+  done
+  : > "$MOCK_LOG"
+  run env EXPECTED_RECIPE_ID=recipe-with-image \
+    THUMB_URL='https://evil.example/public/thumb.bin' bash restore-image-harness.sh
+  [ "$status" -ne 0 ]
+  [[ $output == *"outside the configured origin"* ]]
+  [ "$(wc -l < "$MOCK_LOG")" -eq 1 ]
   for failure in redirect:image.bin redirect:thumb.bin empty:image.bin empty:thumb.bin; do
     run env IMAGE_FAILURE="$failure" EXPECTED_RECIPE_ID=recipe-with-image bash restore-image-harness.sh
     [ "$status" -ne 0 ]

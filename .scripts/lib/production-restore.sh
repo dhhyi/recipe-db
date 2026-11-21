@@ -1494,9 +1494,36 @@ restore_graphql() {
     "$work/restore-response.json" > /dev/null
 }
 
+restore_image_url() {
+  local origin
+  origin=$(jq -er '.origin | strings' "$work/config.json") || return 1
+  python3 - "$origin" "$restore_graphql_port" "$1" << 'PY'
+import sys
+from urllib.parse import urljoin, urlsplit, urlunsplit
+
+origin, port, reference = sys.argv[1:]
+try:
+    if any(ord(char) <= 32 or ord(char) == 127 for char in reference):
+        raise ValueError("invalid URL characters")
+    base = urlsplit(origin)
+    target = urlsplit(urljoin(origin + "/", reference))
+    def identity(url):
+        default_port = 443 if url.scheme.lower() == "https" else 80
+        return (url.scheme.lower(), url.hostname, url.port if url.port is not None else default_port)
+    if (target.scheme not in ("http", "https") or not target.hostname
+            or target.username is not None or target.password is not None
+            or identity(target) != identity(base)):
+        raise ValueError("URL is not on the configured origin")
+    print(urlunsplit(("http", "127.0.0.1:" + port, target.path, target.query, "")))
+except ValueError:
+    print("production: restore image URL is invalid or outside the configured origin", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 # black-box only; use application interfaces, not stored data formats or application internals
 restore_verify_reads() {
-  local recipe candidate id name encoded url status
+  local recipe candidate id name encoded url request_url status
   restore_graphql 'query { recipes { id name } }' || return 1
   jq -e '.data.recipes | type == "array" and
     all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string"))' \
@@ -1528,9 +1555,10 @@ restore_verify_reads() {
     "$work/restore-response.json" > /dev/null || return 1
   while IFS= read -r url; do
     [[ -n $url ]] || continue
-    status=$(curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+    request_url=$(restore_image_url "$url") || return 1
+    status=$(curl --silent --show-error --fail --globoff --connect-timeout 5 --max-time "$timeout" \
       --output "$work/restore-image.bin" --write-out '%{http_code}' \
-      "http://127.0.0.1:$restore_graphql_port$url" \
+      "$request_url" \
       2> "$work/restore-request-error") || return 1
     [[ $status == 200 && -s $work/restore-image.bin ]] || return 1
   done < <(jq -r '.data.recipe.image.url // empty, .data.recipe.image.thumbUrl // empty' \
