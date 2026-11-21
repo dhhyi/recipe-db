@@ -1537,7 +1537,7 @@ restore_wait_reads() {
 }
 
 restore_verify_propagation() {
-  local id encoded deadline probe
+  local id encoded deadline cache_deadline probe
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
   deadline=$((SECONDS + timeout))
   until restore_graphql 'query { __typename }'; do
@@ -1573,11 +1573,13 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+  cache_deadline=$((SECONDS + 60))
   # Prime browse's cache before the update, proving invalidation rather than a first uncached read.
   restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
     "$(jq -cn --arg id "$id" --arg name "${probe}Changed" '{id:$id,name:$name}')" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
+    ((SECONDS < cache_deadline)) || return 1
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
       "$(jq -cn --arg name "${probe}Changed" '{options:{q:$name,query_by:"name"}}')" \
       && jq -e --arg id "$id" --arg name "${probe}Changed" \
@@ -1590,10 +1592,12 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
+  cache_deadline=$((SECONDS + 60))
   restore_graphql 'mutation($id:ID!) { deleteRecipe(id:$id) }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
+    ((SECONDS < cache_deadline)) || return 1
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id } } }' \
       "$(jq -cn --arg name "${probe}Changed" '{options:{q:$name,query_by:"name"}}')" \
       && jq -e --arg id "$id" 'all(.data.searchRecipes.recipes[]; .id != $id)' \
