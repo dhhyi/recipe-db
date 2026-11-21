@@ -1,15 +1,5 @@
 import { test as base, expect } from "./fixtures.js";
 
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 function operationNameFromQuery(query) {
   return query.match(/\b(?:query|mutation)\s+([_A-Za-z][_0-9A-Za-z]*)/)?.[1];
 }
@@ -89,34 +79,6 @@ test("existing and new pages expose explicit return actions", async ({
   await page.goto("/edit/new");
   await waitForEditorForm(page);
   await expect(returnButtonNew(page)).toHaveAttribute("href", "/");
-});
-
-test("loading state renders no saveable form and supports safe back", async ({
-  page,
-  demoRecipe,
-}) => {
-  const release = deferred();
-
-  await page.route("**/graphql", async (route) => {
-    if (requestIsOperation(route.request(), "RecipeById", "recipe(")) {
-      await release.promise;
-    }
-    await route.fallback();
-  });
-
-  try {
-    await page.goto(`/edit/${demoRecipe.id}`);
-    await expect(
-      page.locator("[aria-busy='true'][aria-label='Rezept wird geladen']"),
-    ).toBeVisible();
-    await expect(nameField(page)).toHaveCount(0);
-    await expect(saveButton(page)).toHaveCount(0);
-
-    await returnButtonExisting(page).click();
-    await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-  } finally {
-    release.resolve();
-  }
 });
 
 test("not-found state renders no saveable form and supports safe back", async ({

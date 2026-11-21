@@ -3,8 +3,18 @@ import { graphqlMocks, identityHtml } from "./amount-edit.mocks.js";
 
 test.use({ graphqlMocks: [graphqlMocks, { scope: "test" }], identityHtml });
 
-test("editing an ingredient amount enables saving", async ({ page }) => {
+test("loading an existing recipe before editing an ingredient amount", async ({
+  page,
+  graphqlGates,
+}) => {
+  const gate = graphqlGates.hold("RecipeById");
   await page.goto("/edit/recipe-1");
+  await gate.started;
+  await expect(
+    page.locator("[aria-busy='true'][aria-label='Rezept wird geladen']"),
+  ).toBeVisible();
+  await expect(page.locator("form")).toHaveCount(0);
+  gate.release();
 
   const amount = page.getByRole("textbox", { name: "Menge/Einheit" }).first();
   const save = page.getByRole("button", { name: "Speichern", exact: true });
