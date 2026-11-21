@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/web-components-vite";
 import { html, nothing } from "lit";
-import { expect, fireEvent, fn, waitFor } from "storybook/test";
+import { expect, fn, waitFor } from "storybook/test";
 
 import "../components/rating.ts";
 import "../design.css";
@@ -15,6 +15,9 @@ type Story = StoryObj;
 
 export const Feedback: Story = {
   play: async ({ canvasElement, args }) => {
+    const rating = canvasElement.querySelector("rating-component");
+    expect(rating).toHaveAttribute("rating", String(args.rating));
+    expect(rating).toHaveAttribute("count", String(args.count));
     await waitFor(() => {
       expect(
         canvasElement.querySelectorAll("rating-component svg"),
@@ -27,31 +30,6 @@ export const Feedback: Story = {
         expectedOverlays,
       );
     });
-    fireEvent.mouseEnter(stars);
-    await waitFor(() => {
-      expect(stars.querySelectorAll(".own-rating")).toHaveLength(0);
-    });
-    fireEvent.mouseLeave(stars);
-    await waitFor(() => {
-      expect(stars.querySelectorAll(".own-rating")).toHaveLength(
-        expectedOverlays,
-      );
-    });
-    args.onRated.mockClear();
-    if (args.myRating !== undefined) {
-      const currentStar = stars.querySelectorAll("svg")[args.myRating - 1];
-      fireEvent.click(currentStar);
-      expect(args.onRated).not.toHaveBeenCalled();
-      expect(currentStar.getAnimations()).toHaveLength(0);
-    }
-    const changedRating = args.myRating === 1 ? 2 : 1;
-    const changedStar = stars.querySelectorAll("svg")[changedRating - 1];
-    fireEvent.click(changedStar);
-    expect(args.onRated).toHaveBeenCalledTimes(1);
-    expect(args.onRated).toHaveBeenCalledWith(changedRating);
-    expect(changedStar.getAnimations()).toHaveLength(
-      matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1,
-    );
   },
   args: {
     rating: 3.5,
@@ -87,9 +65,9 @@ export const Static: Story = {
         canvasElement.querySelectorAll("rating-component svg"),
       ).toHaveLength(5);
     });
-    const star = canvasElement.querySelector("rating-component svg")!;
-    fireEvent.click(star);
-    expect(star.getAnimations()).toHaveLength(0);
+    const rating = canvasElement.querySelector("rating-component");
+    expect(rating).not.toHaveAttribute("hx-post");
+    expect(rating?.querySelectorAll(".own-rating")).toHaveLength(0);
   },
   args: {
     rating: 3.5,

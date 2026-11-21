@@ -74,6 +74,7 @@ extras:
   - traefik
   - tmux
 namedVolumes:
+  $HOME/.cache/ms-playwright: recipe-db-playwright-browsers
   node_modules: recipe-db-design-node-modules
   .pnpm-store: recipe-db-design-pnpm-store
 traefik:
@@ -117,6 +118,7 @@ check: |
   pnpm --version
   pnpm exec storybook --version
   pnpm build
+test: pnpm test
 prettier:
   ignore:
     - nginx.conf

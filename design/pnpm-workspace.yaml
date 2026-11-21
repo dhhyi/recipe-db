@@ -3,3 +3,5 @@ storeDir: .pnpm-store
 packageImportMethod: copy
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - "@storybook/addon-vitest@10.6.8"

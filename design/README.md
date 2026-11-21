@@ -8,6 +8,12 @@ Shared UI component library, implemented using [Lit](https://lit.dev/) web compo
 
 Use Storybook's theme switch to review every story in light and dark mode. Do not create dedicated light/dark stories or hard-code a theme in a story; stories should describe distinct component states and follow the selected theme.
 
+Story `play` functions run automatically when a story opens, including in the published static Storybook. Keep them assertion-only: verify the story's initial rendered state and do not click, type, scroll, resize, or otherwise drive interactions. Put browser interaction scenarios in separate Vitest Browser tests. Present candidate additional initial-state assertions for review before adding them.
+
+Run Design's local browser tests with `mise run --raw in-devcontainer design test`. The command runs Storybook story-render smoke tests and assertion-only `play` functions, plus standalone Vitest Browser interaction and visual tests. It does not require the shared application stack and is run in CI, not pre-commit. The Vitest addon is configured for the test command only; the normal static Storybook does not include its test-running UI.
+
+Use deterministic, isolated fixtures for data-fetching stories; unexpected requests should fail closed rather than reach application services. Keep app-specific header wiring and representative assembled-page screenshots in E2E, where they protect a distinct integration boundary.
+
 ## Form labels
 
 - Do not use floating labels or visible labels above text-like inputs (`text`, `url`, `search`).

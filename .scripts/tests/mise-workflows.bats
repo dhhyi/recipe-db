@@ -224,10 +224,12 @@ EOF
   [[ "$output" == *"Missing required migrator test: migrators/missing-test/test-migrator.sh"* ]]
 }
 
-@test "only ARM64 validation downloads LFS screenshot baselines" {
+@test "quality and ARM64 validation download LFS screenshot baselines" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
-  [ "$(yq '.jobs.arm64-validation.steps[] | select(.name == "checkout") | .with.lfs' "$workflow")" = true ]
-  for job in quality-checks publish-devcontainers publish-release; do
+  for job in quality-checks arm64-validation; do
+    [ "$(yq ".jobs.$job.steps[] | select(.name == \"checkout\") | .with.lfs" "$workflow")" = true ]
+  done
+  for job in publish-devcontainers publish-release; do
     [ "$(yq ".jobs.$job.steps[] | select(.name == \"checkout\") | .with.lfs // false" "$workflow")" = false ]
   done
 }
