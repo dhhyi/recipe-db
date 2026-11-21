@@ -244,7 +244,7 @@ test("ingredient rows animate without delaying edits or discard", async ({
   }
 });
 
-test("save stays open and discard restores latest persisted fields", async ({
+test("discard restores the saved method and resizes its textarea", async ({
   page,
   demoRecipe,
 }) => {
@@ -252,30 +252,16 @@ test("save stays open and discard restores latest persisted fields", async ({
   await waitForEditorForm(page);
   await expect(nameField(page)).toHaveValue(demoRecipe.name);
 
-  const persisted = {
-    name: `${demoRecipe.name} gespeichert`,
-    method: [
-      "Milch langsam erhitzen und einmal aufkochen.",
-      "Reis einstreuen und gründlich verrühren.",
-      "Bei kleiner Hitze weiterköcheln lassen.",
-      "Zwischendurch regelmäßig umrühren.",
-      "Zum Schluss mit Zimt abschmecken.",
-      "Vor dem Servieren kurz ruhen lassen.",
-    ].join("\n\n"),
-    ingredients: [
-      { amountUnit: "333 g", name: "Milchreis Spezial" },
-      { amountUnit: "750 ml", name: "Hafermilch" },
-      { amountUnit: "Prise", name: "Meersalz" },
-      { amountUnit: "optional", name: "Zimt" },
-    ],
-  };
+  const persistedMethod = [
+    "Milch langsam erhitzen und einmal aufkochen.",
+    "Reis einstreuen und gründlich verrühren.",
+    "Bei kleiner Hitze weiterköcheln lassen.",
+    "Zwischendurch regelmäßig umrühren.",
+    "Zum Schluss mit Zimt abschmecken.",
+    "Vor dem Servieren kurz ruhen lassen.",
+  ].join("\n\n");
 
-  await nameField(page).fill(persisted.name);
-  await methodField(page).fill(persisted.method);
-  for (const [index, ingredient] of persisted.ingredients.entries()) {
-    await amountUnitField(page, index).fill(ingredient.amountUnit);
-    await ingredientNameField(page, index).fill(ingredient.name);
-  }
+  await methodField(page).fill(persistedMethod);
 
   const firstSave = page.waitForResponse((response) => {
     if (response.status() !== 200) return false;
@@ -291,16 +277,12 @@ test("save stays open and discard restores latest persisted fields", async ({
   await expect(successStatus(page)).toBeVisible();
   await expect(saveButton(page)).toBeDisabled();
 
-  await nameField(page).fill(`${persisted.name} unsaved`);
   await methodField(page).fill("Unpersisted method");
-  await amountUnitField(page, 0).fill("999 kg");
-  await ingredientNameField(page, 0).fill("Nicht gespeichert");
   await expect(dirtyStatus(page)).toBeVisible();
   await expect(statusLine(page)).toHaveText("Ungespeicherte Änderungen.");
   await discardButton(page).click();
 
-  await expect(nameField(page)).toHaveValue(persisted.name);
-  await expect(methodField(page)).toHaveValue(persisted.method);
+  await expect(methodField(page)).toHaveValue(persistedMethod);
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -310,12 +292,6 @@ test("save stays open and discard restores latest persisted fields", async ({
       }),
     )
     .toBe(true);
-  for (const [index, ingredient] of persisted.ingredients.entries()) {
-    await expect(amountUnitField(page, index)).toHaveValue(
-      ingredient.amountUnit,
-    );
-    await expect(ingredientNameField(page, index)).toHaveValue(ingredient.name);
-  }
   await expect(cleanStatus(page)).toHaveCount(0);
 });
 

@@ -421,11 +421,13 @@
   (let [db {:status :idle
             :form {:name "Modified"
                    :method "Changed"
-                   :ingredients (model/normalize-ingredients [])
+                   :ingredients (model/normalize-ingredients
+                                 [{:name "Pepper" :amount "2" :unit "g" :optional false}])
                    :inspirations (model/normalize-inspirations [])}
             :baseline {:name "Original"
                        :method "Original"
-                       :ingredients (model/normalize-ingredients [])
+                       :ingredients (model/normalize-ingredients
+                                     [{:name "Salt" :amount "1" :unit "g" :optional true}])
                        :inspirations (model/normalize-inspirations [])}
             :name-error? true
             :save-failed? true
