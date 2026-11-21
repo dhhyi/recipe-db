@@ -3,7 +3,7 @@ set -Eeuo pipefail
 set +x
 umask 077
 
-for tool in docker jq k3d kubectl yq; do
+for tool in docker jq k3d kubectl yq ytt; do
   command -v "$tool" > /dev/null || {
     printf 'Migration k3d test: required tool not found: %s\n' "$tool" >&2
     exit 1
@@ -250,6 +250,33 @@ make_pod() {
     }' > "$work/$name.json"
 }
 
+make_gate_pod() {
+  local name=$1 expected=$2
+  jq --argjson expected "$expected" \
+    '.projects |= map(if .name == "images" then .storageVersion.value = $expected else . end)' \
+    "$work/gate-values.json" > "$work/$name-values.json"
+  ytt -f "$repository_root/.scripts/templates/kubernetes-template.yml" \
+    -f "$repository_root/.scripts/templates/kubernetes.lib.yml" \
+    --data-values-file "$work/$name-values.json" -o json \
+    | jq -s 'map(select(.kind == "Deployment" and .metadata.name == "images"))
+      | if length == 1 then .[0].spec.template.spec.initContainers[0] else error("missing images gate") end' \
+      > "$work/$name-gate.json"
+  jq -n --arg name "$name" --arg namespace "$namespace" --arg image "$image" \
+    --slurpfile gate "$work/$name-gate.json" '
+    {
+      apiVersion:"v1",kind:"Pod",
+      metadata:{name:$name,namespace:$namespace},
+      spec:{
+        restartPolicy:"Never",activeDeadlineSeconds:60,automountServiceAccountToken:false,
+        initContainers:[$gate[0]],
+        containers:[{name:"backend",image:$image,imagePullPolicy:"Never",
+          command:["sh","-ec","echo backend-started; sleep 300"],
+          volumeMounts:[{name:"data",mountPath:"/data"}]}],
+        volumes:[{name:"data",persistentVolumeClaim:{claimName:"images"}}]
+      }
+    }' > "$work/$name.json"
+}
+
 wait_pod_gone() {
   local name=$1
   kube wait --for=delete "pod/$name" --timeout=60s > "$work/$name-delete-wait.log"
@@ -303,6 +330,56 @@ kube delete pod migration-seed --wait=true --timeout=60s > "$work/seed-delete.lo
 wait_pod_gone migration-seed
 assert_no_storage_pods
 
+phase=storage-version-gate
+source "$repository_root/.scripts/lib/project-metadata.sh"
+application_project_metadata_to_jsonl "$repository_root" "$work/gate-projects.jsonl"
+yq -o=json '.' "$repository_root/deploy/local.yaml" > "$work/gate-config.json"
+jq -n --slurpfile projects "$work/gate-projects.jsonl" --slurpfile config "$work/gate-config.json" '
+  {config:$config[0],projects:$projects,
+   artifact:("ghcr.io/dhhyi/recipe-db-releases@sha256:" + ("a" * 64)),
+   release:{schemaVersion:1,revision:("b" * 40),
+     images:($projects | map({key:.name,value:("ghcr.io/dhhyi/recipe-db-" + .name + "@sha256:" + ("c" * 64))}) | from_entries)},
+   files:{nats:"port: 4222",maintenanceNginx:"server {}",maintenanceHtml:"unavailable",
+     oauthConfig:"reverse_proxy=true",designNginx:"server {}"}}
+' > "$work/gate-values.json"
+make_gate_pod storage-gate-mismatch 2
+kube create -f "$work/storage-gate-mismatch.json" > "$work/storage-gate-mismatch-create.log"
+kube wait --for=jsonpath='{.status.phase}'=Failed pod/storage-gate-mismatch \
+  --timeout=60s > "$work/storage-gate-mismatch-wait.log"
+kube get pod storage-gate-mismatch -o json > "$work/storage-gate-mismatch.json"
+jq -e '
+  .status.phase == "Failed"
+  and all(.status.containerStatuses[]; .state.running == null and .started == false)
+  and (.status.initContainerStatuses[0].state.terminated.exitCode // 0) > 0
+' "$work/storage-gate-mismatch.json" > /dev/null \
+  || die 'mismatched storage did not block the backend container'
+kube logs pod/storage-gate-mismatch -c storage-version \
+  | grep -Fxq 'storage-version gate: storage version mismatch: expected 2' \
+  || die 'mismatched storage gate did not report its rejection'
+kube delete pod storage-gate-mismatch --wait=true --timeout=60s \
+  > "$work/storage-gate-mismatch-delete.log"
+wait_pod_gone storage-gate-mismatch
+
+make_gate_pod storage-gate-matching 1
+kube create -f "$work/storage-gate-matching.json" > "$work/storage-gate-matching-create.log"
+kube wait --for=condition=Ready pod/storage-gate-matching \
+  --timeout=60s > "$work/storage-gate-matching-wait.log"
+kube get pod storage-gate-matching -o json > "$work/storage-gate-matching.json"
+jq -e '
+  .status.phase == "Running"
+  and .status.containerStatuses[0].name == "backend"
+  and .status.containerStatuses[0].state.running != null
+' "$work/storage-gate-matching.json" > /dev/null \
+  || die 'matching storage did not allow the backend container to start'
+kube logs pod/storage-gate-matching -c backend \
+  | grep -Fxq 'backend-started' \
+  || die 'matching storage backend did not run'
+kube delete pod storage-gate-matching --wait=true --timeout=60s \
+  > "$work/storage-gate-matching-delete.log"
+wait_pod_gone storage-gate-matching
+assert_no_storage_pods
+
+phase=read-only-probe
 make_pod migration-inspect probe 1 true
 jq -e '.spec.containers[0].volumeMounts[0].readOnly == true
   and .spec.volumes[0].persistentVolumeClaim.readOnly == true

@@ -13,6 +13,31 @@ defmodule Recipes.RepositoryTest do
     %{repository: name}
   end
 
+  test "backup rejects a missing recipes table without initializing it" do
+    root = Path.join(System.tmp_dir!(), "recipes-backup-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    database = Path.join(root, "recipes.sqlite3")
+    File.write!(Path.join(root, "storage-version"), "2\n")
+    {:ok, connection} = Exqlite.start_link(database: database)
+    assert {:ok, _} = Exqlite.query(connection, "CREATE TABLE unrelated (value TEXT)")
+    GenServer.stop(connection)
+    original = File.read!(database)
+    previous_mode = Application.fetch_env!(:recipes, :mode)
+    Application.put_env(:recipes, :mode, :backup)
+    on_exit(fn -> Application.put_env(:recipes, :mode, previous_mode) end)
+
+    assert {:stop, message} = Repository.init(database: database, validate_storage: true)
+    assert message =~ "recipes schema unavailable in backup mode"
+    assert File.read!(database) == original
+
+    {:ok, connection} = Exqlite.start_link(database: database)
+    assert {:ok, _} = Exqlite.query(connection, "CREATE TABLE recipes (id TEXT, document TEXT)")
+    GenServer.stop(connection)
+    assert {:ok, backup_connection} = Repository.init(database: database, validate_storage: true)
+    GenServer.stop(backup_connection)
+  end
+
   test "stores, patches, lists, and deletes recipes", %{repository: repository} do
     assert {:ok, created} =
              Repository.create(

@@ -107,8 +107,6 @@ proc checkStorageVersion*(store: ImageStorage, mode: string): bool =
     if mode == "backup":
       storageFailure(marker, "marker missing; backup mode cannot initialize")
     return true
-  if version != expectedStorageVersion:
-    storageFailure(marker, "actual " & $version)
   if mode == "backup" and
       (not dirExists(store.publicFolder) or not dirExists(store.manifestFolder)):
     storageFailure(marker, "application data missing; backup mode cannot initialize")

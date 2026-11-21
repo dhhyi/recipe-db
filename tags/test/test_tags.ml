@@ -247,17 +247,27 @@ let test_storage_version_startup_gates () =
   | exception Failure _ -> ());
   check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
     "failed publication preserves marker";
-  let channel = open_out_bin marker in
-  output_string channel "1\n";
-  close_out channel;
-  (match Tags.check_storage_version (Some root) Tags.Testing with
-  | _ -> fail "mismatched marker was accepted"
-  | exception Failure message ->
-      check (String.ends_with ~suffix:"actual 1" message)
-        "mismatch reports actual version");
-  check (In_channel.with_open_bin marker In_channel.input_all = "1\n")
-    "mismatched marker remains unchanged";
   cleanup ()
+
+let test_backup_rejects_missing_tables () =
+  let valid_path = Filename.temp_file "tags-backup-valid" ".sqlite" in
+  let valid_db = Tags.open_database (Some valid_path) in
+  Tags.close_database valid_db;
+  let backup_db = Tags.open_database ~mode:Tags.Backup (Some valid_path) in
+  Tags.close_database backup_db;
+  Sys.remove valid_path;
+  List.iter
+    (fun missing ->
+      let path = Filename.temp_file "tags-backup" ".sqlite" in
+      let db = Tags.open_database (Some path) in
+      Tags.exec db ("DROP TABLE " ^ missing);
+      Tags.close_database db;
+      let original = In_channel.with_open_bin path In_channel.input_all in
+      expect_database_error (fun () -> Tags.open_database ~mode:Tags.Backup (Some path));
+      check (In_channel.with_open_bin path In_channel.input_all = original)
+        "backup rejection leaves the database unchanged";
+      Sys.remove path)
+    [ "tags"; "assignments" ]
 
 let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =
   Dream.test (Tags.router ~mode db)
@@ -438,6 +448,7 @@ let () =
   test_restart_persistence ();
   test_reset_is_complete_and_transactional ();
   test_storage_version_startup_gates ();
+  test_backup_rejects_missing_tables ();
   test_runtime_modes_and_http_reset ();
   test_http_errors_and_rollback ();
   test_http_other_category_flow ();

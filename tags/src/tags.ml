@@ -109,8 +109,6 @@ let check_storage_version configured_location mode =
         storage_failure marker expected "marker missing; backup mode cannot initialize";
       true
   | None -> storage_failure marker expected "marker missing; existing data found"
-  | Some actual when actual <> expected ->
-      storage_failure marker expected (Printf.sprintf "actual %d" actual)
   | Some _ when empty ->
       if mode = Backup then
         storage_failure marker expected
@@ -354,23 +352,37 @@ let rec ensure_directory path =
     ensure_directory (Filename.dirname path);
     Unix.mkdir path 0o755)
 
-let open_database configured_location =
+let open_database ?(mode = Production) configured_location =
   let path = database_file configured_location in
   ensure_directory (Filename.dirname path);
   let db = Sqlite3.db_open path in
   Sqlite3.busy_timeout db 5000;
+  (try
+     if mode = Backup then
+       List.iter
+         (fun table ->
+           with_statement db
+             ("SELECT name FROM sqlite_master WHERE type='table' AND name='" ^ table ^ "'")
+             (fun statement ->
+               if not (step db statement) then
+                 database_failure ("missing " ^ table ^ " table in backup mode")))
+         [ "tags"; "assignments" ]
+   with error ->
+     ignore (Sqlite3.db_close db);
+     raise error);
   exec db "PRAGMA foreign_keys = ON";
   exec db "PRAGMA journal_mode = WAL";
-  exec db
-    "CREATE TABLE IF NOT EXISTS tags (\
-     id TEXT PRIMARY KEY NOT NULL,\
-     category TEXT NOT NULL CHECK (category IN ('cuisine', 'dietary-style', 'course', 'other')),\
-     name TEXT NOT NULL)";
-  exec db
-    "CREATE TABLE IF NOT EXISTS assignments (\
-     recipe_id TEXT NOT NULL,\
-     tag_id TEXT NOT NULL REFERENCES tags(id),\
-     PRIMARY KEY (recipe_id, tag_id)) WITHOUT ROWID";
+  if mode <> Backup then (
+    exec db
+      "CREATE TABLE IF NOT EXISTS tags (\
+       id TEXT PRIMARY KEY NOT NULL,\
+       category TEXT NOT NULL CHECK (category IN ('cuisine', 'dietary-style', 'course', 'other')),\
+       name TEXT NOT NULL)";
+    exec db
+      "CREATE TABLE IF NOT EXISTS assignments (\
+       recipe_id TEXT NOT NULL,\
+       tag_id TEXT NOT NULL REFERENCES tags(id),\
+       PRIMARY KEY (recipe_id, tag_id)) WITHOUT ROWID");
   db
 
 let close_database db = ignore (Sqlite3.db_close db)

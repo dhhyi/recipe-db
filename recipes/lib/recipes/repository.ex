@@ -40,15 +40,35 @@ defmodule Recipes.Repository do
              database: database,
              busy_timeout: 5_000,
              default_transaction_mode: :immediate
-           ),
-         {:ok, _result} <-
-           Exqlite.query(
-             connection,
-             "CREATE TABLE IF NOT EXISTS recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)"
            ) do
-      if storage_state == :fresh, do: Recipes.StorageVersion.publish!(database)
-      {:ok, connection}
+      initialize_connection(connection, database, storage_state)
     end
+  end
+
+  defp initialize_connection(connection, database, storage_state) do
+    case prepare_schema(connection, Application.get_env(:recipes, :mode)) do
+      {:ok, _result} ->
+        if storage_state == :fresh, do: Recipes.StorageVersion.publish!(database)
+        {:ok, connection}
+
+      {:error, error} ->
+        GenServer.stop(connection)
+        {:stop, error}
+    end
+  end
+
+  defp prepare_schema(connection, :backup) do
+    case Exqlite.query(connection, "SELECT id, document FROM recipes LIMIT 0") do
+      {:ok, result} -> {:ok, result}
+      {:error, error} -> {:error, "recipes schema unavailable in backup mode: #{inspect(error)}"}
+    end
+  end
+
+  defp prepare_schema(connection, _mode) do
+    Exqlite.query(
+      connection,
+      "CREATE TABLE IF NOT EXISTS recipes (id TEXT PRIMARY KEY, document TEXT NOT NULL)"
+    )
   end
 
   @impl true

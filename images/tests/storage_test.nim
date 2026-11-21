@@ -51,7 +51,7 @@ suite "immutable image storage":
         "a-" & hash & ".png.pending-1", ".manifest.json"]:
       check not parseImageName(name).valid
 
-  test "storage version gates fresh, existing, empty-marked, and invalid roots":
+  test "storage initialization preserves marker and refuses unmarked data or backup initialization":
     cleanDirectory(versionRoot)
     let versionedStore = ImageStorage(root: versionRoot)
     check versionedStore.checkStorageVersion("production")
@@ -96,21 +96,6 @@ suite "immutable image storage":
         discard versionedStore.checkStorageVersion("backup")
       check not dirExists(folder)
       createDir(folder)
-
-    writeFile(versionRoot / "storage-version", "1\n")
-    writeFile(versionedStore.manifestFolder / "recipe.json", "{}")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("production")
-    check readFile(versionRoot / "storage-version") == "1\n"
-
-    writeFile(versionRoot / "storage-version", "3\n")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("production")
-    check readFile(versionRoot / "storage-version") == "3\n"
-    writeFile(versionRoot / "storage-version", "not-a-version")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("testing")
-    check readFile(versionRoot / "storage-version") == "not-a-version"
     cleanDirectory(versionRoot)
 
   test "restart, retention, identical uploads and A to B to A":
