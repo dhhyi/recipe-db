@@ -10,6 +10,7 @@ export default mergeConfig(
       include: [
         "src/components/**/*.test.ts",
         "src/stories/header.visual.desktop.test.ts",
+        "src/stories/rating.visual.test.ts",
       ],
       browser: {
         enabled: true,

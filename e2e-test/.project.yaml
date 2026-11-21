@@ -43,6 +43,9 @@ vscode:
       command: pnpm exec playwright show-report target/playwright-report --host 0.0.0.0
 extras:
   - traefik
+  - named-volumes
+namedVolumes:
+  $HOME/.cache/ms-playwright: recipe-db-playwright-browsers
 traefik:
   network: intranet
 ---

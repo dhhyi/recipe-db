@@ -37,7 +37,9 @@ async function mountHeader() {
     <header-component auth-role="anonymous" auth-enabled></header-component>
     <main style="height: 3000px"><button>Page control</button></main>
   `;
-  const component = document.querySelector("header-component") as HTMLElement & {
+  const component = document.querySelector(
+    "header-component",
+  ) as HTMLElement & {
     updateComplete: Promise<unknown>;
   };
   await customElements.whenDefined("header-component");
