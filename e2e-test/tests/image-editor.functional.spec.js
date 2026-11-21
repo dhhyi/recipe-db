@@ -714,7 +714,6 @@ test("gallery drag previews, cancels and saves a single complete order", async (
       "touch-action",
       "auto",
     );
-    const firstBox = await handles.first().boundingBox();
     const secondBox = await handles.nth(1).boundingBox();
     const x = secondBox.x + secondBox.width / 2;
     const y = secondBox.y + secondBox.height / 2;
@@ -728,12 +727,17 @@ test("gallery drag previews, cancels and saves a single complete order", async (
 
     await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(x, firstBox.y + firstBox.height / 2);
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    let destination = await rows.first().boundingBox();
+    await page.mouse.move(x, destination.y + destination.height / 2);
     await expect(rows.first().getByRole("img")).toHaveAttribute(
       "src",
       second.thumbUrl,
     );
-    await page.mouse.move(x, y);
+    destination = await rows.nth(1).boundingBox();
+    await page.mouse.move(x, destination.y + destination.height / 2);
     await expect(rows.first().getByRole("img")).toHaveAttribute(
       "src",
       first.thumbUrl,
@@ -743,7 +747,11 @@ test("gallery drag previews, cancels and saves a single complete order", async (
 
     await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(x, firstBox.y + firstBox.height / 2);
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    destination = await rows.first().boundingBox();
+    await page.mouse.move(x, destination.y + destination.height / 2);
     await expect(rows.first().getByRole("img")).toHaveAttribute(
       "src",
       second.thumbUrl,
@@ -761,12 +769,15 @@ test("gallery drag previews, cancels and saves a single complete order", async (
     expect(writes).toHaveLength(0);
 
     const source = await handles.nth(1).boundingBox();
-    const destination = await handles.first().boundingBox();
     await page.mouse.move(
       source.x + source.width / 2,
       source.y + source.height / 2,
     );
     await page.mouse.down();
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    destination = await rows.first().boundingBox();
     await page.mouse.move(
       source.x + source.width / 2,
       destination.y + destination.height / 2,
@@ -794,6 +805,199 @@ test("gallery drag previews, cancels and saves a single complete order", async (
   } finally {
     release.resolve();
   }
+});
+
+test("three-row drag uses live layout, gates both phases and reconciles a different default", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 360, height: 900 });
+  const file = pngFile();
+  const third = await uploadImage(request, multiImageRecipe, file.name, {
+    buffer: file.buffer,
+  });
+  const [first, second] = multiImageRecipe.images;
+  const writeRelease = Promise.withResolvers();
+  const readRelease = Promise.withResolvers();
+  let writes = 0;
+  let requested;
+  let reads = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes++;
+      requested = route.request().postDataJSON().variables;
+      await writeRelease.promise;
+      await route.fallback();
+      return;
+    }
+    if (writes && isGalleryRead(route.request())) {
+      reads++;
+      await readRelease.promise;
+      const response = await route.fetch();
+      const body = await response.json();
+      const images = body.data.recipe.images;
+      body.data.recipe.images = [images[1], images[2], images[0]];
+      await route.fulfill({ response, json: body });
+      return;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const ids = () =>
+      rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      );
+    await expect(rows).toHaveCount(3);
+    await rows.last().scrollIntoViewIfNeeded();
+    const start = await rows.first().locator(".gallery-handle").boundingBox();
+    await page.mouse.move(
+      start.x + start.width / 2,
+      start.y + start.height / 2,
+    );
+    await page.mouse.down();
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    const target = await rows.nth(2).boundingBox();
+    await page.mouse.move(
+      start.x + start.width / 2,
+      target.y + target.height / 2,
+    );
+    await expect.poll(ids).toEqual([first.id, second.id, third.id]);
+    await page.mouse.up();
+    await expect.poll(() => writes).toBe(1);
+    expect(requested).toEqual({
+      recipeId: multiImageRecipe.id,
+      imageIds: [first.id, second.id, third.id],
+    });
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Die vorgemerkte Bildreihenfolge wird gespeichert.",
+    );
+    await expect(
+      rows.first().getByText("Vorgemerktes Standardbild"),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await rows.nth(1).locator("button").first().click({ force: true });
+    await rows
+      .nth(1)
+      .locator(".gallery-handle")
+      .dispatchEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 99,
+      });
+    expect(writes).toBe(1);
+    writeRelease.resolve();
+    await expect.poll(() => reads).toBe(1);
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Reihenfolge gespeichert. Die aktuelle Bildreihenfolge wird geladen.",
+    );
+    await expect(
+      rows.first().getByText("Vorgemerktes Standardbild"),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await rows.nth(1).locator("button").first().click({ force: true });
+    await rows
+      .nth(1)
+      .locator(".gallery-handle")
+      .dispatchEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 100,
+      });
+    expect(writes).toBe(1);
+    readRelease.resolve();
+    await expect.poll(ids).toEqual([second.id, third.id, first.id]);
+    await expect(
+      page.getByText(
+        "Bild an Position 2 verschoben. Bild an Position 1 ist jetzt das Standardbild.",
+        { exact: true },
+      ),
+    ).toHaveClass("sr-only");
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeEnabled();
+    expect(writes).toBe(1);
+  } finally {
+    writeRelease.resolve();
+    readRelease.resolve();
+  }
+});
+
+test("dragging near the viewport edge does not auto-scroll", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 360, height: 500 });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const handle = page.locator(".gallery-handle").first();
+  await expect(handle).toBeVisible();
+  await handle.scrollIntoViewIfNeeded();
+  const box = await handle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(page.locator("#editor-status")).toHaveText(
+    "Bildreihenfolge wird vorgemerkt.",
+  );
+  await page.mouse.move(box.x + box.width / 2, 498);
+  const scrollY = await page.evaluate(() => window.scrollY);
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+});
+
+test("unknown drag outcome that committed is reconciled without a retry", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  let writes = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes++;
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      await route.abort();
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  const source = await rows.nth(1).locator(".gallery-handle").boundingBox();
+  await page.mouse.move(
+    source.x + source.width / 2,
+    source.y + source.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator("#editor-status")).toHaveText(
+    "Bildreihenfolge wird vorgemerkt.",
+  );
+  const target = await rows.first().boundingBox();
+  await page.mouse.move(
+    source.x + source.width / 2,
+    target.y + target.height / 2,
+  );
+  await page.mouse.up();
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(1).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(
+    page.getByText(/konnte nicht bestätigt werden/).first(),
+  ).toBeVisible();
+  await expect(page.locator("#upload-image")).toBeEnabled();
+  expect(writes).toBe(1);
 });
 
 test("touch drag cancels and drops from the handle, not the row", async ({

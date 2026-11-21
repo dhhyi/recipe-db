@@ -302,7 +302,11 @@
           const dx = event.clientX - current.startX;
           const dy = event.clientY - current.startY;
           if (!current.moved && Math.hypot(dx, dy) < 5) return;
-          if (current.moved && event.clientX === current.lastX && event.clientY === current.lastY)
+          if (
+            current.moved &&
+            event.clientX === current.lastX &&
+            event.clientY === current.lastY
+          )
             return;
           current.moved = true;
           current.lastX = event.clientX;
@@ -311,10 +315,14 @@
           if (!rows.length) return;
           const distances = rows.map((row) => {
             const box = row.getBoundingClientRect();
-            return Math.max(box.top - event.clientY, 0, event.clientY - box.bottom);
+            return Math.max(
+              box.top - event.clientY,
+              0,
+              event.clientY - box.bottom,
+            );
           });
           const index = distances.reduce(
-            (best, value, i) => value < distances[best] ? i : best,
+            (best, value, i) => (value < distances[best] ? i : best),
             0,
           );
           send({ kind: "gallery-drag-move", index });

@@ -393,13 +393,21 @@ test("gallery pointer uses stable list capture, ignores clicks and cancels safel
 
 test("gallery hit-testing follows live row bounds after layout and preview change", () => {
   const bridge = harness();
-  let boxes = [[0, 100], [100, 200], [200, 300]];
+  let boxes = [
+    [0, 100],
+    [100, 200],
+    [200, 300],
+  ];
   const ids = ["a", "b", "c"];
   const list = {
-    querySelectorAll: () => ids.map((id, index) => ({
-      dataset: { galleryId: id },
-      getBoundingClientRect: () => ({ top: boxes[index][0], bottom: boxes[index][1] }),
-    })),
+    querySelectorAll: () =>
+      ids.map((id, index) => ({
+        dataset: { galleryId: id },
+        getBoundingClientRect: () => ({
+          top: boxes[index][0],
+          bottom: boxes[index][1],
+        }),
+      })),
     setPointerCapture() {},
     hasPointerCapture: () => true,
     releasePointerCapture() {},
@@ -408,14 +416,33 @@ test("gallery hit-testing follows live row bounds after layout and preview chang
     dataset: { enabled: "true", galleryHandle: "a" },
     closest: () => list,
   };
-  const target = { closest: (selector) => selector === "[data-gallery-handle]" ? handle : null };
-  const start = { target, isPrimary: true, button: 0, pointerId: 1, clientX: 20, clientY: 50, preventDefault() {} };
+  const target = {
+    closest: (selector) =>
+      selector === "[data-gallery-handle]" ? handle : null,
+  };
+  const start = {
+    target,
+    isPrimary: true,
+    button: 0,
+    pointerId: 1,
+    clientX: 20,
+    clientY: 50,
+    preventDefault() {},
+  };
   bridge.dispatch("pointerdown", start);
-  boxes = [[120, 200], [200, 320], [320, 500]];
+  boxes = [
+    [120, 200],
+    [200, 320],
+    [320, 500],
+  ];
   bridge.dispatch("pointermove", { ...start, clientY: 450 });
   assert.equal(bridge.events.at(-1).index, 2);
   ids.splice(0, 3, "b", "c", "a");
-  boxes = [[120, 240], [240, 420], [420, 500]];
+  boxes = [
+    [120, 240],
+    [240, 420],
+    [420, 500],
+  ];
   const count = bridge.events.length;
   bridge.dispatch("pointerup", { ...start, clientY: 450 });
   assert.equal(bridge.events.length, count + 1);
