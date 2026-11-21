@@ -80,4 +80,4 @@ prettier:
   ignore:
     - "*.io"
 check: io --version
-test: timeout 10 io tests/coroutines.io && io tests/maintenance.io
+test: timeout 10 io tests/coroutines.io && io tests/run.io

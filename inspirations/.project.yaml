@@ -88,4 +88,4 @@ check: |
   luarocks make --tree lua_modules
   lua -v
   luacheck *.lua
-test: luarocks make --tree lua_modules
+test: luarocks make --tree lua_modules && lua tests/storage.lua tests/storage-fixture
