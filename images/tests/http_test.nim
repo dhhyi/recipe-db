@@ -72,7 +72,7 @@ suite "backend HTTP publication contract":
     let initialized = startProcess("./server", env = environment,
         options = {poParentStreams})
     sleep(100)
-    initialized.close()
+    stopServer(initialized)
     check dirExists(legacy)
     check dirExists(startupRoot / "manifests")
     check getFilePermissions(startupRoot) == permissions

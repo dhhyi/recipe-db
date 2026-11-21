@@ -24,7 +24,11 @@ local function database_location()
 end
 
 local db_location = database_location()
+local data_root = db_location:match("^(.*)/[^/]*$") or "."
+if data_root == "" then data_root = "/" end
 print("Database location: " .. db_location)
+
+local function shell_quote(value) return "'" .. value:gsub("'", "'\\''") .. "'" end
 
 -- function that loads data from a file
 local function load_data()
@@ -285,6 +289,13 @@ if not load_data() then
     if mode == "backup" then
         io.stderr:write("Cannot initialize inspirations storage: ",
                         "application data missing; backup mode cannot initialize\n")
+        os.exit(1)
+    end
+    local directory_status =
+        os.execute("mkdir -p -- " .. shell_quote(data_root))
+    if directory_status ~= true and directory_status ~= 0 then
+        io.stderr:write("Cannot initialize inspirations storage: ",
+                        "cannot create data root\n")
         os.exit(1)
     end
     local saved, save_error = save_data(data)
