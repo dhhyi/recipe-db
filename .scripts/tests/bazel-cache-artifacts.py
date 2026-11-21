@@ -377,7 +377,8 @@ class CacheArtifactTests(unittest.TestCase):
                              by_attempt[(run_id, attempt)]["jobs"]), \
                 patch.object(CACHE, "request_delete",
                              side_effect=lambda url, token: deleted.append(url) or True):
-            with redirect_stdout(io.StringIO()) as output:
+            with redirect_stdout(io.StringIO()) as output, \
+                    redirect_stderr(io.StringIO()) as errors:
                 status = CACHE.cleanup_artifacts(
                     "https://api.github.com/repos/owner/repo", "token", "owner/repo"
                 )
@@ -427,6 +428,62 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertEqual(len(deleted), 4)
         deleted_ids = {int(url.rsplit("/", 1)[1]) for url in deleted}
         self.assertEqual(deleted_ids, {300, 301, 400, 401})
+
+    def test_cleanup_isolates_unverifiable_job_from_other_job_retention(self):
+        fixtures = []
+        for job, start in (("quality-checks", 500), ("arm64-validation", 600)):
+            for offset in range(7):
+                fixture = cleanup_fixture(start + offset, offset + 1)
+                fixture["artifact"]["name"] = (
+                    f"bazel-cache-v2-{job}-main-r{fixture['run']['id']}-a1"
+                )
+                fixture["jobs"] = [{"name": job, "steps": [
+                    {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
+                ]}]
+                fixtures.append(fixture)
+        deleted = []
+        by_attempt = {
+            (fixture["run"]["id"], fixture["run"]["run_attempt"]): fixture
+            for fixture in fixtures
+        }
+
+        def fake_jobs(base, token, run_id, attempt):
+            fixture = by_attempt[(run_id, attempt)]
+            if fixture["jobs"][0]["name"] == "quality-checks":
+                return [
+                    fixture["jobs"][0],
+                    {
+                        "name": "quality-checks",
+                        "steps": [{"name": CACHE.UPLOAD_STEP, "conclusion": "failure"}],
+                    },
+                ]
+            return fixture["jobs"]
+
+        def fake_json(url, token):
+            if url == "https://api.github.com/repos/owner/repo":
+                return {"id": 9, "full_name": "owner/repo"}
+            return {"artifacts": [fixture["artifact"] for fixture in fixtures]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt",
+                             side_effect=lambda base, token, run, attempt:
+                             by_attempt[(run["id"], attempt)]["run"]), \
+                patch.object(CACHE, "jobs_for_attempt", side_effect=fake_jobs), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=lambda url, token: deleted.append(url) or True):
+            with redirect_stdout(io.StringIO()) as output, \
+                    redirect_stderr(io.StringIO()) as errors:
+                status = CACHE.cleanup_artifacts(
+                    "https://api.github.com/repos/owner/repo", "token", "owner/repo"
+                )
+
+        self.assertEqual(status, 1)
+        deleted_ids = {int(url.rsplit("/", 1)[1]) for url in deleted}
+        self.assertEqual(deleted_ids, {600, 601})
+        self.assertTrue(deleted_ids.isdisjoint({500, 501, 502, 503, 504, 505, 506}))
+        self.assertIn("main-retention skipped for job=quality-checks",
+                      output.getvalue())
+        self.assertIn("cleanup: incomplete", errors.getvalue())
 
     def test_cleanup_deletes_only_merged_pr_artifacts(self):
         fixtures = [
@@ -749,6 +806,46 @@ class CacheArtifactTests(unittest.TestCase):
             requests, [("workflow_runs", CACHE.WORKFLOW_RUNS_PAGE_SIZE)]
         )
 
+    def test_restore_scope_downloads_only_requested_job_artifacts(self):
+        run = {
+            "id": 40, "run_number": 40, "run_attempt": 1,
+            "head_sha": "head", "event": "pull_request", "conclusion": "failure",
+        }
+        args = SimpleNamespace(
+            run_id="100", run_number=100, run_attempt="1",
+            repository="owner/repo", job="arm64-validation",
+        )
+        artifacts = [
+            {"id": 1, "name": "bazel-cache-v2-quality-checks-pr-17-r40-a1",
+             "workflow_run": {"id": 40}},
+            {"id": 2, "name": "bazel-cache-v2-arm64-validation-pr-17-r40-a1",
+             "workflow_run": {"id": 40}},
+        ]
+        downloads = []
+
+        def fake_paginated(url, token, key, page_size=100, strict=False):
+            return iter([run])
+
+        def fake_download(base, token, artifact, cache_path, repository, run,
+                          scope, pr_number, **kwargs):
+            downloads.append((artifact["name"], kwargs))
+            return None
+
+        with patch.object(CACHE, "paginated", side_effect=fake_paginated), \
+                patch.object(CACHE, "artifacts_for_run", return_value=artifacts), \
+                patch.object(CACHE, "download_candidate", side_effect=fake_download), \
+                redirect_stdout(io.StringIO()):
+            restored = CACHE.restore_scope(
+                args, "https://api.github.com/repos/owner/repo", "token",
+                "pr", 17, {}, self.root / "cache", head_branch="feature",
+            )
+
+        self.assertTrue(restored)
+        self.assertEqual(downloads, [(
+            "bazel-cache-v2-arm64-validation-pr-17-r40-a1",
+            {"job": "arm64-validation"},
+        )])
+
     def test_discovery_stops_on_recent_snapshot_and_filters_workflow_and_branch(self):
         requests = []
         runs = [
@@ -954,7 +1051,7 @@ class CacheArtifactTests(unittest.TestCase):
         args = SimpleNamespace(
             repository="owner/repo", event_path=str(event_path), event_name="push",
             pr_number="", run_id="999", run_number=999, run_attempt="1", commit=squash_sha,
-            cache=str(self.root / "cache"),
+            cache=str(self.root / "cache"), job="quality-checks",
         )
         pull = {"number": 17, "head": {"sha": final_head, "ref": "feature"}}
         main_run = {"id": 1, "run_number": 1, "head_sha": "base", "event": "push",
@@ -1071,7 +1168,7 @@ class CacheArtifactTests(unittest.TestCase):
         args = SimpleNamespace(
             repository="owner/repo", event_path=str(event_path), event_name="push",
             pr_number="", run_id="999", run_number=999, run_attempt="1", commit=squash_sha,
-            cache=str(self.root / "cache"),
+            cache=str(self.root / "cache"), job="arm64-validation",
         )
         pull = {"number": 17, "head": {"sha": final_head, "ref": "feature/merged"}}
         main_run = {"id": 1, "run_number": 1, "head_sha": "base", "event": "push",
@@ -1087,7 +1184,10 @@ class CacheArtifactTests(unittest.TestCase):
 
         def artifacts(base, token, run):
             scope = "main" if run["id"] == 1 else "pr-17"
-            return [{"name": f"bazel-cache-v2-{scope}-r{run['id']}-a1"}]
+            return [
+                {"name": f"bazel-cache-v2-quality-checks-{scope}-r{run['id']}-a1"},
+                {"name": f"bazel-cache-v2-arm64-validation-{scope}-r{run['id']}-a1"},
+            ]
 
         with patch.dict(os.environ, {"GITHUB_TOKEN": "fixture"}), \
                 patch.object(CACHE, "run_history", return_value={squash_sha: 0, "base": 1}), \
@@ -1105,7 +1205,8 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertIn("event=pull_request&branch=feature%2Fmerged", requests[1])
         self.assertEqual([call.args[2]["id"] for call in listing.call_args_list], [1, 2])
         self.assertEqual(download.call_args.kwargs,
-                         {"expected_head": final_head, "require_trusted_writer": True})
+                         {"job": "arm64-validation", "expected_head": final_head,
+                          "require_trusted_writer": True})
         union.assert_called_once()
 
     def test_round_trip_validates_action_references_and_excludes_temporary_files(self):
@@ -2546,6 +2647,12 @@ class CacheArtifactTests(unittest.TestCase):
             CACHE.verify_producer(
                 run, detail, jobs, manifest,
                 "bazel-cache-v2-quality-checks-main-r25-a2",
+                "main", None, "owner/repo", job="arm64-validation",
+            )
+        ambiguous_jobs = [dict(jobs[0]), dict(jobs[0])]
+        with self.assertRaisesRegex(CACHE.Invalid, "ambiguous"):
+            CACHE.verify_producer(
+                run, detail, ambiguous_jobs, manifest, name,
                 "main", None, "owner/repo", job="arm64-validation",
             )
 

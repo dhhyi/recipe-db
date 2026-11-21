@@ -1123,8 +1123,13 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
             raise Invalid("PR artifact has an invalid producer event")
         if base is None or token is None:
             raise Invalid("commit-to-PR identity verifier is unavailable")
-    matching_job = next((candidate for candidate in jobs if candidate.get("name") == job), None)
-    if matching_job is None or not any(
+    matching_jobs = [candidate for candidate in jobs if candidate.get("name") == job]
+    if not matching_jobs:
+        raise Invalid("producer did not complete the cache upload step")
+    if len(matching_jobs) != 1:
+        raise Invalid("producer job name is ambiguous")
+    matching_job = matching_jobs[0]
+    if not any(
         step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
         for step in matching_job.get("steps", [])
     ):
@@ -1315,8 +1320,13 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
             or manifest.get("runAttempt") != int(detail["run_attempt"]) \
             or manifest.get("event") != detail.get("event"):
         raise Invalid("manifest identity does not match GitHub run metadata")
-    matching_job = next((candidate for candidate in jobs if candidate.get("name") == job), None)
-    if matching_job is None or not any(
+    matching_jobs = [candidate for candidate in jobs if candidate.get("name") == job]
+    if not matching_jobs:
+        raise Invalid("producer did not complete the cache upload step")
+    if len(matching_jobs) != 1:
+        raise Invalid("producer job name is ambiguous")
+    matching_job = matching_jobs[0]
+    if not any(
         step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
         for step in matching_job.get("steps", [])
     ):
