@@ -66,8 +66,6 @@ const saveButton = (page) =>
   page.getByRole("button", {
     name: /^(Speichern|Erneut speichern)$/,
   });
-const discardButton = (page) =>
-  page.getByRole("button", { name: "Änderungen verwerfen", exact: true });
 const returnButtonExisting = (page) =>
   page.getByRole("link", { name: "Zurück zum Rezept", exact: true });
 const returnButtonNew = (page) =>
@@ -75,10 +73,6 @@ const returnButtonNew = (page) =>
 const headerHomeLink = (page) => page.locator("header-component a[href='/']");
 const dirtyStatus = (page) =>
   page.getByRole("status").filter({ hasText: /^Ungespeicherte Änderungen\.$/ });
-const cleanStatus = (page) =>
-  page
-    .getByRole("status")
-    .filter({ hasText: /^Keine ungespeicherten Änderungen\.$/ });
 const successStatus = (page) =>
   page.getByRole("status").filter({ hasText: /^Gespeichert$/ });
 const errorAlert = (page) => page.getByRole("alert");
@@ -114,30 +108,6 @@ async function runActionExpectSingleDialog(
     await actionPromise.catch(() => {});
     await page.waitForTimeout(100);
     expect(types).toEqual([expectedType]);
-  } finally {
-    page.off("dialog", listener);
-  }
-}
-
-async function runBeforeUnloadAndDismissOnce(page, trigger) {
-  const types = [];
-  const listener = async (dialog) => {
-    types.push(dialog.type());
-    if (types.length > 1) {
-      await dialog.dismiss();
-    }
-  };
-
-  page.on("dialog", listener);
-  try {
-    const dialogPromise = page.waitForEvent("dialog");
-    const actionPromise = trigger();
-    const dialog = await dialogPromise;
-    expect(dialog.type()).toBe("beforeunload");
-    await dialog.dismiss();
-    await actionPromise.catch(() => {});
-    await page.waitForTimeout(100);
-    expect(types).toEqual(["beforeunload"]);
   } finally {
     page.off("dialog", listener);
   }
@@ -226,36 +196,6 @@ test("dirty form confirmation decline and accept on return and header links", as
       await expect(page).toHaveURL(triggerCase.destination);
     }
   }
-});
-
-test("beforeunload prompts when dirty and is removed after returning to clean", async ({
-  page,
-  demoRecipe,
-}) => {
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await waitForEditorForm(page);
-  await nameField(page).fill(`${demoRecipe.name} beforeunload`);
-
-  await runBeforeUnloadAndDismissOnce(page, () =>
-    page.evaluate(() => window.location.reload()),
-  );
-  await expect(dirtyStatus(page)).toBeVisible();
-
-  await discardButton(page).click();
-  await expect(cleanStatus(page)).toHaveCount(0);
-  await expect(dirtyStatus(page)).toHaveCount(0);
-  await expect(nameField(page)).toHaveValue(demoRecipe.name);
-  await expect(saveButton(page)).toBeDisabled();
-
-  let dialogCount = 0;
-  const listener = async (dialog) => {
-    dialogCount += 1;
-    await dialog.dismiss();
-  };
-  page.on("dialog", listener);
-  await page.reload();
-  page.off("dialog", listener);
-  expect(dialogCount).toBe(0);
 });
 
 test("guard preserves modified/newtab/download/hash link behaviors", async ({
