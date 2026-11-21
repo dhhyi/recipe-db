@@ -299,13 +299,18 @@
         }
 
         function galleryPosition(event, current) {
-          const rows = [...current.stage.querySelectorAll("[data-gallery-id]")];
-          if (!rows.length) return;
-          let index = rows.findIndex((row) => {
-            const box = row.getBoundingClientRect();
-            return event.clientY < box.top + box.height / 2;
-          });
-          if (index < 0) index = rows.length - 1;
+          const dx = event.clientX - current.startX;
+          const dy = event.clientY - current.startY;
+          if (!current.moved && Math.hypot(dx, dy) < 5) return;
+          current.moved = true;
+          const center = current.centers[current.startIndex] + dy;
+          const index = current.centers.reduce(
+            (best, value, i, centers) =>
+              Math.abs(value - center) < Math.abs(centers[best] - center)
+                ? i
+                : best,
+            0,
+          );
           send({ kind: "gallery-drag-move", index });
         }
 
@@ -332,8 +337,25 @@
               event.button !== 0
             )
               return;
+            const rows = [...list.querySelectorAll("[data-gallery-id]")];
+            const startIndex = rows.findIndex(
+              (row) => row.dataset.galleryId === handle.dataset.galleryHandle,
+            );
+            if (startIndex < 0) return;
             event.preventDefault();
-            pointer = { id: event.pointerId, stage: list, gallery: true };
+            pointer = {
+              id: event.pointerId,
+              stage: list,
+              gallery: true,
+              startX: event.clientX,
+              startY: event.clientY,
+              startIndex,
+              centers: rows.map((row) => {
+                const box = row.getBoundingClientRect();
+                return box.top + box.height / 2;
+              }),
+              moved: false,
+            };
             list.setPointerCapture(event.pointerId);
             send({ kind: "gallery-drag-start", imageId: handle.dataset.galleryHandle });
             return;

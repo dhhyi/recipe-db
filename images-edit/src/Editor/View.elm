@@ -272,7 +272,7 @@ galleryLoadError model =
                                 "Rezeptbilder konnten nicht aktualisiert werden. Die gespeicherte Reihenfolge wird vorgemerkt angezeigt, der aktuelle Stand ist unbekannt."
 
                             else
-                            "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
+                                "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
 
                         Nothing ->
                             "Rezeptbilder konnten nicht geladen werden."
@@ -449,7 +449,15 @@ galleryRow model failed index image =
                         ]
                         []
                 , if index == 0 then
-                    span [] [ text (if model.galleryPreview /= Nothing then "Vorgemerktes Standardbild" else "Standardbild") ]
+                    span []
+                        [ text
+                            (if model.galleryPreview /= Nothing then
+                                "Vorgemerktes Standardbild"
+
+                             else
+                                "Standardbild"
+                            )
+                        ]
 
                   else
                     text ""

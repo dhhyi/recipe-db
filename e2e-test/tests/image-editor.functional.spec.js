@@ -690,6 +690,70 @@ test("a mirrored rotated JPEG uses the same oriented coordinates in preview and 
   await expectCropPixels(thumbnail, file, selected, 300, 225);
 });
 
+test("gallery drag previews, cancels and saves a single complete order", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  const release = Promise.withResolvers();
+  const writes = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes.push(route.request());
+      await release.promise;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const handles = rows.locator(".gallery-handle");
+    await expect(handles).toHaveCount(2);
+    await expect(handles.first()).toHaveCSS("touch-action", "none");
+    await expect(rows.first().locator("article")).toHaveCSS("touch-action", "auto");
+    const firstBox = await handles.first().boundingBox();
+    const secondBox = await handles.nth(1).boundingBox();
+    const x = secondBox.x + secondBox.width / 2;
+    const y = secondBox.y + secondBox.height / 2;
+
+    await page.mouse.click(x, y);
+    expect(writes).toHaveLength(0);
+    await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, firstBox.y + firstBox.height / 2);
+    await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+    await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(rows.first().getByRole("img")).toHaveAttribute("src", first.thumbUrl);
+    expect(writes).toHaveLength(0);
+
+    const source = await handles.nth(1).boundingBox();
+    const destination = await handles.first().boundingBox();
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + source.width / 2, destination.y + destination.height / 2);
+    await expect(rows.first().getByRole("img")).toHaveAttribute("src", second.thumbUrl);
+    await page.mouse.up();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].postDataJSON().variables).toEqual({
+      recipeId: multiImageRecipe.id,
+      imageIds: [second.id, first.id],
+    });
+    await expect(rows.first().getByText("Vorgemerktes Standardbild")).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    release.resolve();
+    await expect(rows.first().getByText("Standardbild", { exact: true })).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeEnabled();
+    expect(writes).toHaveLength(1);
+  } finally {
+    release.resolve();
+  }
+});
+
 test("gallery up and down immediately save opaque IDs without optimistic movement", async ({
   page,
   multiImageRecipe,
@@ -712,7 +776,7 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await expect(rows.nth(0).locator("button").nth(1)).toBeEnabled();
   await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
   await expect(rows.locator("article")).toHaveCount(2);
-  await expect(page.locator(".gallery-handle")).toHaveCount(0);
+  await expect(page.locator(".gallery-handle")).toHaveCount(2);
   await expect(
     rows.first().locator(".gallery-move-controls button"),
   ).toHaveCount(2);

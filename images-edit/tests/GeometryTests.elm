@@ -252,6 +252,38 @@ galleryTests =
         pendingMove =
             apply (MoveImage "opaque/2" Editor.MoveUp) threeImages
 
+        dragEvent : String -> List ( String, E.Value ) -> Msg
+        dragEvent kind fields =
+            Bridge (E.object (( "kind", E.string kind ) :: fields))
+
+        dragStart : Editor.Model
+        dragStart =
+            apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/2" ) ]) threeImages
+
+        dragPreview : Editor.Model
+        dragPreview =
+            apply (dragEvent "gallery-drag-move" [ ( "index", E.int 0 ) ]) dragStart
+
+        dragDrop : Editor.Model
+        dragDrop =
+            apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragPreview
+
+        dragRejected : Editor.Model
+        dragRejected =
+            apply (Reordered dragDrop.mutationToken (RemoteData.Success (RecipeDB.ReorderRejected "Konflikt"))) dragDrop
+
+        dragUnknown : Editor.Model
+        dragUnknown =
+            apply (Reordered dragDrop.mutationToken (RemoteData.Failure "Ungewiss")) dragDrop
+
+        dragSuccess : Editor.Model
+        dragSuccess =
+            apply (Reordered dragDrop.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) dragDrop
+
+        dragFailedRead : Editor.Model -> Editor.Model
+        dragFailedRead model =
+            apply (GotRecipe model.galleryToken (RemoteData.Failure "read failed")) model
+
         middleDownMove : Editor.Model
         middleDownMove =
             apply (MoveImage "opaque/2" Editor.MoveDown) threeImages
@@ -456,6 +488,63 @@ galleryTests =
             && not (Editor.canAdd pendingMove)
             && not (Editor.canDelete pendingMove "opaque/1")
             && not (Editor.canMove pendingMove "opaque/2" Editor.MoveDown)
+      )
+    , ( "drag preview keeps confirmed IDs separately and disables mutations"
+      , currentIds dragPreview
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && Maybe.map (List.map .id) dragPreview.galleryPreview
+            == Just [ "opaque/2", "opaque/1", "opaque/3" ]
+            && not (Editor.canAdd dragPreview)
+            && not (Editor.canDelete dragPreview "opaque/1")
+            && not (Editor.canMove dragPreview "opaque/2" Editor.MoveUp)
+            && apply (MoveImage "opaque/2" Editor.MoveUp) dragPreview
+            == dragPreview
+      )
+    , ( "drop starts one optimistic write; cancel and no-op do not write"
+      , dragDrop.galleryMutation
+            /= Nothing
+            && dragDrop.mutationToken
+            == 1
+            && dragDrop.galleryPreview
+            == dragPreview.galleryPreview
+            && (apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool True ) ]) dragPreview).galleryPreview
+            == Nothing
+            && (apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragStart).mutationToken
+            == 0
+            && apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragDrop
+            == dragDrop
+      )
+    , ( "failed or unknown writes discard preview and keep last confirmed order on failed read"
+      , List.all
+            (\model ->
+                model.galleryPreview
+                    == Nothing
+                    && currentIds (dragFailedRead model)
+                    == [ "opaque/1", "opaque/2", "opaque/3" ]
+                    && not (Editor.canAdd (dragFailedRead model))
+            )
+            [ dragRejected, dragUnknown ]
+      )
+    , ( "successful drag with failed read retains optimistic order and retry only reads"
+      , let
+            failed =
+                dragFailedRead dragSuccess
+
+            retried =
+                apply RetryGallery failed
+        in
+        Maybe.map (List.map .id) failed.galleryPreview
+            == Just [ "opaque/2", "opaque/1", "opaque/3" ]
+            && currentIds failed
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && Maybe.map .kind failed.galleryFeedback
+            == Just Editor.ReorderingSucceeded
+            && not (Editor.canAdd failed)
+            && retried.mutationToken
+            == failed.mutationToken
+            && retried.galleryToken
+            == failed.galleryToken
+            + 1
       )
     , ( "middle Down swaps only its adjacent neighbor and preserves membership"
       , currentIds middleDownReconciled
