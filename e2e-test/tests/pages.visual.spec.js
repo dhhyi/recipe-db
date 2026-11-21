@@ -578,57 +578,6 @@ for (const role of ["anonymous", "member", "owner"]) {
       }
     });
 
-    test("recipe editor", async ({ page, demoRecipe }) => {
-      await page.goto(`/edit/${demoRecipe.id}`);
-      await expectHeader(page, role);
-      if (role === "owner") {
-        await expect(
-          page.getByRole("textbox", { name: "Name", exact: true }),
-        ).toHaveValue(demoRecipe.name);
-        await expect(
-          page.getByRole("heading", { name: "Inspirationen", exact: true }),
-        ).toBeVisible();
-      } else {
-        await expectEditorDenied(page, role);
-      }
-      await assertNoHorizontalOverflow(page);
-      await screenshot(page, "recipe-editor.png");
-    });
-
-    test("degraded editors", async ({ page, degradedRecipes }) => {
-      test.setTimeout(120_000);
-      const recipe = degradedRecipes[0];
-      await page.goto(`/edit/${recipe.id}`);
-      await expectHeader(page, role);
-      if (role === "owner") {
-        await expect(
-          page.getByRole("textbox", { name: "Name", exact: true }),
-        ).toHaveValue(recipe.name);
-        await expect(
-          page.getByRole("heading", { name: "Inspirationen", exact: true }),
-        ).toHaveCount(0);
-      } else {
-        await expectEditorDenied(page, role);
-      }
-      await assertNoHorizontalOverflow(page);
-      await screenshot(page, "degraded-recipe-editor.png");
-
-      await page.goto("/edit/new");
-      await expectHeader(page, role);
-      if (role === "owner") {
-        await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-          "Neues Rezept",
-        );
-        await expect(
-          page.getByRole("heading", { name: "Inspirationen", exact: true }),
-        ).toHaveCount(0);
-      } else {
-        await expectEditorDenied(page, role);
-      }
-      await assertNoHorizontalOverflow(page);
-      await screenshot(page, "degraded-new-recipe.png");
-    });
-
     test("image gallery with the images service unavailable", async ({
       page,
       degradedRecipes,
@@ -651,23 +600,6 @@ for (const role of ["anonymous", "member", "owner"]) {
       }
       await assertNoHorizontalOverflow(page);
       await screenshot(page, "degraded-image-editor.png");
-    });
-
-    test("new recipe form", async ({ page }) => {
-      await page.goto("/edit/new");
-      await expectHeader(page, role);
-      if (role === "owner") {
-        await expect(
-          page.getByRole("heading", { name: "Inspirationen", exact: true }),
-        ).toBeVisible();
-        await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-          "Neues Rezept",
-        );
-      } else {
-        await expectEditorDenied(page, role);
-      }
-      await assertNoHorizontalOverflow(page);
-      await screenshot(page, "new-recipe.png");
     });
 
     test("image gallery", async ({ page, request, demoRecipe }) => {

@@ -136,6 +136,12 @@ test("edit a seeded recipe and see the saved changes in the browser", async ({
     "Mit Zimt und Hafermilch kochen.",
   );
   await waitForRecipePageHeading(page.request, demoRecipe.id, updatedName);
+  await page
+    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
+    .click();
+  await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(updatedName);
+
   const context = await browser.newContext({
     baseURL,
     viewport: page.viewportSize(),

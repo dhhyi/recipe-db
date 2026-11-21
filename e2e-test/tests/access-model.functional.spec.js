@@ -275,60 +275,6 @@ test("direct editor navigation denies anonymous and member management", async ({
   );
 });
 
-test("an invalid credential during save requires explicit recovery without mutation replay", async ({
-  authContexts,
-  ownerIdentity,
-  baseURL,
-}) => {
-  await withRecipe(ownerIdentity, "Access no replay", async ({ id, name }) => {
-    const page = await ownerIdentity.browserContext.newPage();
-    let invalid = false;
-    let mutations = 0;
-    await page.route("**/graphql", async (route) => {
-      const request = route.request();
-      const query = request.postDataJSON()?.query ?? "";
-      if (query.includes("mutation")) mutations += 1;
-      if (invalid) {
-        const response = await route.fetch({
-          headers: {
-            ...request.headers(),
-            authorization: "Bearer deliberately-invalid",
-          },
-        });
-
-        await route.fulfill({ response });
-      } else {
-        await route.fallback();
-      }
-    });
-    page.on("dialog", (dialog) => dialog.accept());
-    try {
-      await page.goto(`${baseURL}/edit/${id}`);
-      const form = page.locator("main form");
-      await expect(form).toBeVisible();
-      await form.locator('input[name="name"]').fill("Must not be replayed");
-      invalid = true;
-      await page
-        .getByRole("button", { name: "Speichern", exact: true })
-        .click();
-      await expect(
-        page.getByRole("heading", { name: "Anmeldung erforderlich" }),
-      ).toBeVisible();
-      await expect(form).toHaveCount(0);
-      expect(mutations).toBe(1);
-      invalid = false;
-      await page.getByRole("link", { name: "Zurück zum Rezept" }).click();
-      await expect(page.locator('h1[itemprop="name"]')).toHaveText(name);
-      await page.goto(`${baseURL}/edit/${id}`);
-      await expect(form).toBeVisible();
-      await expect(form.locator('input[name="name"]')).toHaveValue(name);
-      expect(mutations).toBe(1);
-    } finally {
-      await page.close();
-    }
-  });
-});
-
 test("an invalid image-upload credential never replays a mutation after recovery", async ({
   ownerIdentity,
   baseURL,

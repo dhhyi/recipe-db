@@ -62,6 +62,18 @@ outputs = [
   "fixtures/.update_devcontainer.sh",
 ]
 
+["sync-devcontainer:recipe-edit-test"]
+description = "Synchronize the recipe-edit-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - recipe-edit-test/.project.yaml recipe-edit-test"
+sources = ["recipe-edit-test/.project.yaml"]
+outputs = [
+  "recipe-edit-test/.devcontainer/devcontainer.json",
+  "recipe-edit-test/.devcontainer/Dockerfile",
+  "recipe-edit-test/.vscode/tasks.json",
+  "recipe-edit-test/.update_devcontainer.sh",
+]
+
 ["sync-devcontainer:graphql"]
 description = "Synchronize the graphql devcontainer"
 shell = "bash -o pipefail -c"

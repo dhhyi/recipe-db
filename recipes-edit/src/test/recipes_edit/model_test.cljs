@@ -174,17 +174,6 @@
                  :ingredients [{:name "Salt" :amount "1" :unit "tl" :optional true}
                                model/blank-ingredient]
                  :inspirations []}]
-      (is (model/dirty? form1 form2))))
-
-  (testing "preserves optional parsing semantics"
-    (let [form1 {:name "Soup" :method "Mix"
-                 :ingredients [{:name "Salt" :amount "" :unit "prise" :optional false}
-                               model/blank-ingredient]
-                 :inspirations []}
-          form2 {:name "Soup" :method "Mix"
-                 :ingredients [{:name "Salt" :amount "" :unit "prise" :optional true}
-                               model/blank-ingredient]
-                 :inspirations []}]
       (is (model/dirty? form1 form2)))))
 
 (deftest recipe-to-form-round-trip

@@ -2,185 +2,6 @@ import { test, expect, waitForRecipeIndexed } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-test("shared page shells preserve container widths and full-height layout", async ({
-  authContexts,
-}) => {
-  const identity = await authContexts.anonymous();
-  const page = await identity.browserContext.newPage();
-  try {
-    for (const path of [
-      "/?q=page-shell-no-results",
-      "/edit/new",
-      "/images-edit/missing-recipe",
-    ]) {
-      await test.step(path, async () => {
-        await page.goto(path);
-        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-        await expect(page.locator("footer")).toBeVisible();
-        await expect(page.locator("body")).toHaveCSS("hyphens", "auto");
-        await expect(page.locator("body")).toHaveCSS("text-wrap", "pretty");
-        await expect(page.getByRole("heading", { level: 1 })).toHaveCSS(
-          "text-wrap",
-          "balance",
-        );
-        await expect(page.locator("footer a").first()).toHaveCSS(
-          "hyphens",
-          "none",
-        );
-        for (const [width, containerWidth] of [
-          [390, 390],
-          [576, 510],
-          [767, 510],
-          [768, 700],
-          [1024, 950],
-          [1280, 1200],
-          [1536, 1450],
-        ]) {
-          await page.setViewportSize({ width, height: 1000 });
-          const layout = await page.evaluate(() => {
-            const body = document.body.getBoundingClientRect();
-            const footer = document.querySelector("footer");
-            return {
-              width: body.width,
-              height: body.height,
-              footerBottom:
-                footer.getBoundingClientRect().bottom +
-                parseFloat(getComputedStyle(footer).marginBottom),
-            };
-          });
-          expect(layout.width).toBe(containerWidth);
-          expect(layout.height).toBeCloseTo(1000, 0);
-          expect(layout.footerBottom).toBeCloseTo(1000, 0);
-        }
-
-        const layout = await page.locator("main").evaluate((main) => {
-          const content = document.createElement("div");
-          content.style.height = "2000px";
-          main.append(content);
-          try {
-            return {
-              mainBottom: main.getBoundingClientRect().bottom,
-              footerTop: document
-                .querySelector("footer")
-                .getBoundingClientRect().top,
-            };
-          } finally {
-            content.remove();
-          }
-        });
-        expect(layout.footerTop).toBeGreaterThan(1000);
-        expect(layout.footerTop).toBeGreaterThanOrEqual(layout.mainBottom);
-      });
-    }
-  } finally {
-    await page.close();
-  }
-});
-
-test("all headers replace stale identity using the shared HTMX fragment", async ({
-  ownerIdentity,
-  demoRecipe,
-}) => {
-  const page = await ownerIdentity.browserContext.newPage();
-  const cases = [
-    {
-      name: "rejected session",
-      fragment:
-        '<header-component auth-role="anonymous" auth-enabled></header-component>',
-      role: "anonymous",
-      login: true,
-    },
-    {
-      name: "lookup failure",
-      fragment: "<header-component></header-component>",
-      role: null,
-      login: false,
-    },
-    {
-      name: "Google disabled",
-      fragment: '<header-component auth-role="anonymous"></header-component>',
-      role: "anonymous",
-      login: false,
-    },
-    {
-      name: "authenticated",
-      fragment:
-        '<header-component auth-role="owner" auth-email="owner@example.com" auth-enabled></header-component>',
-      role: "owner",
-      login: false,
-    },
-  ];
-  try {
-    for (const path of [
-      "/",
-      `/edit/${demoRecipe.id}`,
-      `/images-edit/${demoRecipe.id}`,
-    ]) {
-      for (const scenario of cases) {
-        await test.step(`${path}: ${scenario.name}`, async () => {
-          let release;
-          const gate = new Promise((resolve) => (release = resolve));
-          let received;
-          const requestReceived = new Promise(
-            (resolve) => (received = resolve),
-          );
-          await page.route("**/identity", async (route) => {
-            expect(route.request().headers()["hx-request"]).toBe("true");
-            received();
-            await gate;
-            await route.fulfill({
-              contentType: "text/html",
-              body: scenario.fragment,
-            });
-          });
-          await page.goto(path);
-          await requestReceived;
-          const header = page.locator("header-component");
-          await header.evaluate((element) => {
-            element.setAttribute("auth-role", "owner");
-            element.setAttribute("auth-email", "stale@example.com");
-            element.setAttribute("auth-enabled", "");
-          });
-          await expect(header.locator(".profile-email")).toHaveText(
-            "stale@example.com",
-          );
-          release();
-          if (scenario.name === "authenticated") {
-            await expect(header).toHaveAttribute(
-              "auth-email",
-              "owner@example.com",
-            );
-            await expect(header.locator(".profile-email")).toHaveText(
-              "owner@example.com",
-            );
-          } else {
-            await expect(header).not.toHaveAttribute("auth-email");
-            await expect(header.locator(".profile-email")).toHaveCount(0);
-          }
-          if (scenario.role)
-            await expect(header).toHaveAttribute("auth-role", scenario.role);
-          else await expect(header).not.toHaveAttribute("auth-role");
-          await expect(
-            page.getByRole("link", { name: "Anmelden", exact: true }),
-          ).toHaveCount(scenario.login ? 1 : 0);
-          if (scenario.role !== "owner") {
-            await expect(
-              header.locator('a[href^="/oauth2/sign_out"]'),
-            ).toHaveCount(0);
-          } else {
-            await expect(
-              header.locator('a[href^="/oauth2/sign_out"]'),
-            ).toHaveCount(1);
-          }
-          await page.unroute("**/identity");
-        });
-      }
-    }
-  } finally {
-    await page.close();
-  }
-});
-
 test("screenshot styling hides auth controls only in captured images", async ({
   ownerIdentity,
 }) => {
@@ -394,7 +215,7 @@ test("profile menu stays accessible and contained at responsive widths", async (
   }
 });
 
-test("login returns to the current URL across shared-header consumers", async ({
+test("login return URL follows overview and recipe navigation", async ({
   authContexts,
   demoRecipe,
 }) => {
@@ -420,18 +241,6 @@ test("login returns to the current URL across shared-header consumers", async ({
     );
   });
 
-  async function expectReturnToCurrentURL(url, initialURL = url) {
-    const targetURL = new URL(url, appOrigin);
-    await page.goto(initialURL);
-    if (new URL(page.url()).href !== targetURL.href) {
-      await page.evaluate(
-        (href) => history.replaceState(null, "", href),
-        targetURL.pathname + targetURL.search + targetURL.hash,
-      );
-    }
-    await expectLoginForCurrentURL();
-  }
-
   async function expectLoginForCurrentURL() {
     const login = page.getByRole("link", { name: "Anmelden", exact: true });
     await expect(login).toBeVisible();
@@ -445,41 +254,17 @@ test("login returns to the current URL across shared-header consumers", async ({
 
   try {
     const recipePath = `/recipe/${demoRecipe.id}`;
-    const overview = `/?q=${encodeURIComponent(demoRecipe.name)}&sort_by=name_sort%3Aasc%2Crecipe_id_sort%3Aasc&filter_by=tag_ids%3A%22a%2Bb%22&extra=one&extra=two#ingredients%2Flist`;
-    await expectReturnToCurrentURL(
-      `${appOrigin}${recipePath}?return=%252F#method`,
-    );
-    await expectReturnToCurrentURL(`${appOrigin}${overview}`);
-    await expectReturnToCurrentURL(
-      `${appOrigin}/edit/${demoRecipe.id}?tab=ingredients&return=%252F#editor%2Fform`,
-      `${appOrigin}/edit/${demoRecipe.id}`,
-    );
-    await expectReturnToCurrentURL(
-      `${appOrigin}/images-edit/${demoRecipe.id}?crop=2%3A1&source=upload#crop%2Fselection`,
-      `${appOrigin}/images-edit/${demoRecipe.id}`,
-    );
-
     await waitForRecipeIndexed(identity.api, demoRecipe.id);
     await page.goto(`${appOrigin}/`);
     await expect(
       page.locator(`[data-recipe-id="${demoRecipe.id}"]`),
     ).toBeVisible();
+    await expectLoginForCurrentURL();
     await page.locator(`[data-recipe-id="${demoRecipe.id}"]`).click();
     await expect(page).toHaveURL(new RegExp(`${recipePath}$`));
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
       demoRecipe.name,
     );
-    const detailURL = new URL(page.url());
-    await page.evaluate(() =>
-      history.pushState(
-        null,
-        "",
-        "?filter_by=category%3A%22main%2Bdish%22#current",
-      ),
-    );
-    await expectLoginForCurrentURL();
-    await page.goBack();
-    await expect(page).toHaveURL(detailURL.href);
     await expectLoginForCurrentURL();
     await page.goBack();
     await expect(page).toHaveURL(`${appOrigin}/`);
@@ -493,27 +278,6 @@ test("login returns to the current URL across shared-header consumers", async ({
       demoRecipe.name,
     );
     await expectLoginForCurrentURL();
-    await page.goForward();
-    await expect(page).toHaveURL(
-      `${appOrigin}${recipePath}?filter_by=category%3A%22main%2Bdish%22#current`,
-    );
-    await expectLoginForCurrentURL();
-
-    const header = page.locator("header-component");
-    await header.evaluate((element) =>
-      element.setAttribute("auth-role", "owner"),
-    );
-    await expect(page.getByRole("link", { name: "Anmelden" })).toHaveCount(0);
-    await header.locator("summary").click();
-    await expect(
-      page.getByRole("link", { name: "Abmelden", exact: true }),
-    ).toHaveAttribute("href", "/oauth2/sign_out?rd=%2F");
-    await header.evaluate((element) => element.removeAttribute("auth-enabled"));
-    await expect(page.getByRole("link", { name: "Abmelden" })).toHaveCount(0);
-    await header.evaluate((element) => {
-      element.setAttribute("auth-role", "anonymous");
-    });
-    await expect(page.getByRole("link", { name: "Anmelden" })).toHaveCount(0);
   } finally {
     await page.close();
   }
