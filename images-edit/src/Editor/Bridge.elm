@@ -18,6 +18,9 @@ type Incoming
     | DeleteConfirmation String Int Bool
     | Pointer String String Point { width : Float, height : Float }
     | EndPointer
+    | GalleryDragStart String
+    | GalleryDragMove Int
+    | GalleryDragEnd Bool
 
 
 command : String -> List ( String, E.Value ) -> Cmd msg
@@ -69,6 +72,15 @@ incoming =
 
                     "end" ->
                         D.succeed EndPointer
+
+                    "gallery-drag-start" ->
+                        D.map GalleryDragStart (D.field "imageId" D.string)
+
+                    "gallery-drag-move" ->
+                        D.map GalleryDragMove (D.field "index" D.int)
+
+                    "gallery-drag-end" ->
+                        D.map GalleryDragEnd (D.field "cancelled" D.bool)
 
                     _ ->
                         D.fail "Unbekanntes Editorereignis"

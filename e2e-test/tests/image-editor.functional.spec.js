@@ -690,6 +690,779 @@ test("a mirrored rotated JPEG uses the same oriented coordinates in preview and 
   await expectCropPixels(thumbnail, file, selected, 300, 225);
 });
 
+test("gallery drag previews, cancels and saves a single complete order", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  const release = Promise.withResolvers();
+  const writes = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes.push(route.request());
+      await release.promise;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const handles = rows.locator("[data-gallery-handle]");
+    await expect(handles).toHaveCount(2);
+    await expect(handles.first()).toHaveCSS("touch-action", "none");
+    await expect(handles.first()).toHaveCSS("cursor", "grab");
+    const handleBox = await handles.first().boundingBox();
+    expect(handleBox.width).toBeGreaterThanOrEqual(40);
+    expect(handleBox.height).toBeCloseTo(handleBox.width, 1);
+    await expect(rows.first().locator("article")).toHaveCSS(
+      "touch-action",
+      "auto",
+    );
+    const secondBox = await handles.nth(1).boundingBox();
+    const x = secondBox.x + secondBox.width / 2;
+    const y = secondBox.y + secondBox.height / 2;
+
+    await page.mouse.click(x, y);
+    expect(writes).toHaveLength(0);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      first.thumbUrl,
+    );
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(page.locator("#gallery-drag-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    let destination = await rows.first().boundingBox();
+    await page.mouse.move(x, destination.y + destination.height / 2);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      second.thumbUrl,
+    );
+    destination = await rows.nth(1).boundingBox();
+    await page.mouse.move(x, destination.y + destination.height / 2);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      first.thumbUrl,
+    );
+    await page.mouse.up();
+    expect(writes).toHaveLength(0);
+
+    const grabbed = await rows.nth(1).boundingBox();
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(page.locator("#gallery-drag-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    destination = await rows.first().boundingBox();
+    const pointerY = destination.y + destination.height / 2;
+    await page.mouse.move(x, pointerY);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      second.thumbUrl,
+    );
+    await expect
+      .poll(async () => (await rows.first().boundingBox()).y)
+      .toBeCloseTo(pointerY - (y - grabbed.y), 0);
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await expect(handles.first()).toHaveCSS("touch-action", "auto");
+    await expect(handles.first()).toHaveCSS("cursor", "auto");
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      first.thumbUrl,
+    );
+    await expect(rows.nth(1)).toHaveCSS("transform", "none");
+    expect(writes).toHaveLength(0);
+
+    const source = await handles.nth(1).boundingBox();
+    await page.mouse.move(
+      source.x + source.width / 2,
+      source.y + source.height / 2,
+    );
+    await page.mouse.down();
+    await expect(page.locator("#gallery-drag-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    destination = await rows.first().boundingBox();
+    await page.mouse.move(
+      source.x + source.width / 2,
+      destination.y + destination.height / 2,
+    );
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      second.thumbUrl,
+    );
+    await page.mouse.up();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0].postDataJSON().variables).toEqual({
+      recipeId: multiImageRecipe.id,
+      imageIds: [second.id, first.id],
+    });
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    release.resolve();
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeEnabled();
+    expect(writes).toHaveLength(1);
+  } finally {
+    release.resolve();
+  }
+});
+
+test("unequal gallery rows remain stable across small moves and allow reversal", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 500, height: 1000 });
+  const file = pngFile();
+  await uploadImage(request, multiImageRecipe, file.name, {
+    buffer: file.buffer,
+  });
+  const writes = [];
+  page.on("request", (request) => {
+    if (isImageReorder(request)) writes.push(request.postDataJSON().variables);
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(3);
+  const ids = () =>
+    rows.evaluateAll((elements) =>
+      elements.map((row) => row.dataset.galleryId),
+    );
+  const original = await ids();
+  await rows.nth(1).evaluate((row) => {
+    row.style.minHeight = "300px";
+  });
+  const source = await rows
+    .first()
+    .locator("[data-gallery-handle]")
+    .boundingBox();
+  const x = source.x + source.width / 2;
+  await page.mouse.move(x, source.y + source.height / 2);
+  await page.mouse.down();
+  const destination = await rows.nth(1).boundingBox();
+  const y = destination.y + destination.height / 2;
+  await page.mouse.move(x, y);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  await page.mouse.move(x, y - 2);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  await page.mouse.move(x, y + 2);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  const preceding = await rows.first().boundingBox();
+  await page.mouse.move(x, preceding.y + preceding.height / 2 - 2);
+  await expect.poll(ids).toEqual(original);
+  const targetAgain = await rows.nth(1).boundingBox();
+  await page.mouse.move(x, targetAgain.y + targetAgain.height / 2);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  await page.mouse.up();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].imageIds).toEqual([original[1], original[0], original[2]]);
+});
+
+test("drag start preserves previous error and horizontal motion is a no-op", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  let writes = 0;
+  const release = Promise.withResolvers();
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes++;
+      if (writes === 1) {
+        await route.fulfill({
+          json: {
+            errors: [
+              {
+                message: "Image collection changed",
+                extensions: { code: "image-order-conflict" },
+              },
+            ],
+          },
+        });
+      } else {
+        await release.promise;
+        await route.fallback();
+      }
+      return;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    await expect(rows).toHaveCount(2);
+    await rows.nth(1).locator("button").first().click();
+    const error = page.getByText(/zwischenzeitlich geändert/);
+    await expect(error).toBeVisible();
+    await expect(rows.nth(1).locator("button").first()).toBeEnabled();
+    const original = await rows.evaluateAll((elements) =>
+      elements.map((row) => row.dataset.galleryId),
+    );
+    const handle = rows.nth(1).locator("[data-gallery-handle]");
+    const box = await handle.boundingBox();
+    const rowTop = (await rows.nth(1).boundingBox()).y;
+    const x = box.x + box.width / 2;
+    const y = box.y + 1;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await expect(page.locator("#gallery-drag-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    await expect(error).toBeVisible();
+    expect((await rows.nth(1).boundingBox()).y).toBe(rowTop);
+    await page.mouse.move(x + 12, y);
+    await page.mouse.up();
+    expect(
+      await rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      ),
+    ).toEqual(original);
+    await expect(error).toBeVisible();
+    expect(writes).toBe(1);
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    const first = await rows.first().boundingBox();
+    await page.mouse.move(x, first.y + first.height / 2);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(error).toBeVisible();
+    expect(writes).toBe(1);
+
+    const source = await rows
+      .nth(1)
+      .locator("[data-gallery-handle]")
+      .boundingBox();
+    await page.mouse.move(
+      source.x + source.width / 2,
+      source.y + source.height / 2,
+    );
+    await page.mouse.down();
+    const target = await rows.first().boundingBox();
+    await page.mouse.move(
+      source.x + source.width / 2,
+      target.y + target.height / 2,
+    );
+    await page.mouse.up();
+    await expect.poll(() => writes).toBe(2);
+    await expect(error).toHaveCount(0);
+  } finally {
+    release.resolve();
+  }
+});
+
+test("three-row drag uses live layout, gates both phases and reconciles a different default", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 360, height: 900 });
+  const file = pngFile();
+  const third = await uploadImage(request, multiImageRecipe, file.name, {
+    buffer: file.buffer,
+  });
+  const [first, second] = multiImageRecipe.images;
+  const writeRelease = Promise.withResolvers();
+  const readRelease = Promise.withResolvers();
+  let writes = 0;
+  let requested;
+  let reads = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes++;
+      requested = route.request().postDataJSON().variables;
+      await writeRelease.promise;
+      await route.fallback();
+      return;
+    }
+    if (writes && isGalleryRead(route.request())) {
+      reads++;
+      await readRelease.promise;
+      const response = await route.fetch();
+      const body = await response.json();
+      const images = body.data.recipe.images;
+      body.data.recipe.images = [images[1], images[2], images[0]];
+      await route.fulfill({ response, json: body });
+      return;
+    }
+    await route.fallback();
+  });
+  try {
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const ids = () =>
+      rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      );
+    await expect(rows).toHaveCount(3);
+    await rows.last().scrollIntoViewIfNeeded();
+    const start = await rows
+      .first()
+      .locator("[data-gallery-handle]")
+      .boundingBox();
+    await page.mouse.move(
+      start.x + start.width / 2,
+      start.y + start.height / 2,
+    );
+    await page.mouse.down();
+    await expect(page.locator("#gallery-drag-status")).toHaveText(
+      "Bildreihenfolge wird vorgemerkt.",
+    );
+    const target = await rows.nth(2).boundingBox();
+    await page.mouse.move(
+      start.x + start.width / 2,
+      target.y + target.height / 2,
+    );
+    await expect.poll(ids).toEqual([first.id, second.id, third.id]);
+    await page.mouse.up();
+    await expect.poll(() => writes).toBe(1);
+    expect(requested).toEqual({
+      recipeId: multiImageRecipe.id,
+      imageIds: [first.id, second.id, third.id],
+    });
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Die vorgemerkte Bildreihenfolge wird gespeichert.",
+    );
+    await expect(page.locator("#editor-status")).toHaveClass("sr-only");
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await rows.nth(1).locator("button").first().click({ force: true });
+    await rows
+      .nth(1)
+      .locator("[data-gallery-handle]")
+      .dispatchEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 99,
+      });
+    expect(writes).toBe(1);
+    writeRelease.resolve();
+    await expect.poll(() => reads).toBe(1);
+    await expect(page.locator("#editor-status")).toHaveText(
+      "Reihenfolge gespeichert. Die aktuelle Bildreihenfolge wird geladen.",
+    );
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await rows.nth(1).locator("button").first().click({ force: true });
+    await rows
+      .nth(1)
+      .locator("[data-gallery-handle]")
+      .dispatchEvent("pointerdown", {
+        isPrimary: true,
+        button: 0,
+        pointerId: 100,
+      });
+    expect(writes).toBe(1);
+    readRelease.resolve();
+    await expect.poll(ids).toEqual([second.id, third.id, first.id]);
+    await expect(
+      page.getByText(
+        "Bild an Position 2 verschoben. Bild an Position 1 ist jetzt das Standardbild.",
+        { exact: true },
+      ),
+    ).toHaveClass("sr-only");
+    await expect(
+      rows.first().getByText("Standardbild", { exact: true }),
+    ).toBeVisible();
+    await expect(page.locator("#upload-image")).toBeEnabled();
+    expect(writes).toBe(1);
+  } finally {
+    writeRelease.resolve();
+    readRelease.resolve();
+  }
+});
+
+test("non-default drag announces a concurrent authoritative default change", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 360, height: 900 });
+  const file = pngFile();
+  const newest = await uploadImage(request, multiImageRecipe, file.name, {
+    buffer: file.buffer,
+  });
+  const [middle, last] = multiImageRecipe.images;
+  let written = false;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      written = true;
+      await route.fallback();
+      return;
+    }
+    if (written && isGalleryRead(route.request())) {
+      const response = await route.fetch();
+      const body = await response.json();
+      const images = body.data.recipe.images;
+      body.data.recipe.images = [images[1], images[0], images[2]];
+      await route.fulfill({ response, json: body });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(3);
+  await rows.last().scrollIntoViewIfNeeded();
+  const source = await rows
+    .nth(1)
+    .locator("[data-gallery-handle]")
+    .boundingBox();
+  await page.mouse.move(
+    source.x + source.width / 2,
+    source.y + source.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator("#gallery-drag-status")).toHaveText(
+    "Bildreihenfolge wird vorgemerkt.",
+  );
+  const target = await rows.nth(2).boundingBox();
+  await page.mouse.move(
+    source.x + source.width / 2,
+    target.y + target.height / 2,
+  );
+  await expect
+    .poll(() =>
+      rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      ),
+    )
+    .toEqual([newest.id, last.id, middle.id]);
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      rows.evaluateAll((elements) =>
+        elements.map((row) => row.dataset.galleryId),
+      ),
+    )
+    .toEqual([last.id, newest.id, middle.id]);
+  await expect(
+    page.getByText(
+      "Bild an Position 3 verschoben. Bild an Position 1 ist jetzt das Standardbild.",
+      { exact: true },
+    ),
+  ).toHaveClass("sr-only");
+});
+
+test("dragging near the viewport edge does not auto-scroll", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 360, height: 500 });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  await page.evaluate(() => {
+    const spacer = document.createElement("div");
+    spacer.style.height = "1200px";
+    document.body.append(spacer);
+  });
+  const handle = page.locator("[data-gallery-handle]").first();
+  await expect(handle).toBeVisible();
+  await handle.scrollIntoViewIfNeeded();
+  const box = await handle.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(page.locator("#gallery-drag-status")).toHaveText(
+    "Bildreihenfolge wird vorgemerkt.",
+  );
+  await page.mouse.move(box.x + box.width / 2, 498);
+  const scrollY = await page.evaluate(() => window.scrollY);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollHeight -
+        window.innerHeight -
+        window.scrollY,
+    ),
+  ).toBeGreaterThan(150);
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrollY);
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+});
+
+test("unknown drag outcome that committed is reconciled without a retry", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  let writes = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      writes++;
+      const response = await request.post("/graphql", {
+        data: route.request().postDataJSON(),
+      });
+      expect(response.ok()).toBe(true);
+      const body = await response.json();
+      expect(body.errors).toBeUndefined();
+      expect(body.data.reorderImages.map((image) => image.id)).toEqual([
+        second.id,
+        first.id,
+      ]);
+      await route.abort();
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  const source = await rows
+    .nth(1)
+    .locator("[data-gallery-handle]")
+    .boundingBox();
+  await page.mouse.move(
+    source.x + source.width / 2,
+    source.y + source.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator("#gallery-drag-status")).toHaveText(
+    "Bildreihenfolge wird vorgemerkt.",
+  );
+  const target = await rows.first().boundingBox();
+  await page.mouse.move(
+    source.x + source.width / 2,
+    target.y + target.height / 2,
+  );
+  await page.mouse.up();
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(1).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(
+    page.getByText(/konnte nicht bestätigt werden/).first(),
+  ).toBeVisible();
+  await expect(page.locator("#upload-image")).toBeEnabled();
+  expect(writes).toBe(1);
+});
+
+test("touch drag cancels and drops from the handle, not the row", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  const writes = [];
+  page.on("request", (request) => {
+    if (isImageReorder(request)) writes.push(request);
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  const handles = rows.locator("[data-gallery-handle]");
+  const client = await page.context().newCDPSession(page);
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  const gesture = async (target, destination, cancel) => {
+    const source = await target.boundingBox();
+    const end = await destination.boundingBox();
+    const point = (box) => ({
+      x: box.x + box.width / 2,
+      y: box.y + box.height / 2,
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [point(source)],
+    });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [point(end)],
+    });
+    if (cancel !== undefined) {
+      await client.send("Input.dispatchTouchEvent", {
+        type: cancel ? "touchCancel" : "touchEnd",
+        touchPoints: [],
+      });
+    }
+  };
+  await gesture(
+    rows.nth(1).getByRole("img"),
+    rows.first().getByRole("img"),
+    false,
+  );
+  expect(writes).toHaveLength(0);
+  await gesture(handles.nth(1), handles.first());
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await client.send("Input.dispatchTouchEvent", {
+    type: "touchCancel",
+    touchPoints: [],
+  });
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  expect(writes).toHaveLength(0);
+  await gesture(handles.nth(1), handles.first(), false);
+  await expect.poll(() => writes.length).toBe(1);
+  await expect(
+    rows.first().getByText("Standardbild", { exact: true }),
+  ).toBeVisible();
+  await expect(rows.first().getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await client.detach();
+});
+
+test("touch scrolling works outside the handle but not from the handle", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 390, height: 500 });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  await page.evaluate(() => {
+    const spacer = document.createElement("div");
+    spacer.style.height = "1200px";
+    document.body.append(spacer);
+    window.scrollTo(0, 0);
+  });
+  const client = await page.context().newCDPSession(page);
+  await client.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+  const swipe = async (target) => {
+    const box = await target.boundingBox();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x, y }],
+    });
+    for (let distance = 25; distance <= 125; distance += 25) {
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x, y: y - distance }],
+      });
+    }
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchCancel",
+      touchPoints: [],
+    });
+  };
+  await swipe(rows.first().getByRole("img"));
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(0);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await swipe(rows.first().locator("[data-gallery-handle]"));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await client.detach();
+});
+
+for (const outcome of ["rejected", "unknown", "success"]) {
+  test(`drag ${outcome} with failed refresh retains the correct order and retries only the read`, async ({
+    page,
+    multiImageRecipe,
+  }) => {
+    const [first, second] = multiImageRecipe.images;
+    let writes = 0;
+    let reads = 0;
+    await page.route("**/graphql", async (route) => {
+      if (isImageReorder(route.request())) {
+        writes++;
+        if (outcome === "rejected") {
+          await route.fulfill({
+            status: 200,
+            contentType: "application/graphql-response+json",
+            body: JSON.stringify({
+              errors: [
+                {
+                  message: "Image collection changed",
+                  extensions: { code: "image-order-conflict" },
+                },
+              ],
+            }),
+          });
+        } else if (outcome === "unknown") {
+          await route.abort();
+        } else {
+          await route.fallback();
+        }
+        return;
+      }
+      if (writes && isGalleryRead(route.request()) && ++reads === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/graphql-response+json",
+          body: JSON.stringify({
+            data: null,
+            errors: [{ message: "Gallery unavailable" }],
+          }),
+        });
+        return;
+      }
+      await route.fallback();
+    });
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const handles = rows.locator("[data-gallery-handle]");
+    await expect(handles).toHaveCount(2);
+    const from = await handles.nth(1).boundingBox();
+    const to = await handles.first().boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(from.x + from.width / 2, to.y + to.height / 2);
+    await page.mouse.up();
+    await expect(
+      page.getByRole("button", { name: "Erneut laden" }),
+    ).toBeVisible();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      outcome === "success" ? second.thumbUrl : first.thumbUrl,
+    );
+    if (outcome === "success") {
+      await expect(
+        rows.first().getByText("Standardbild", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden.",
+        ),
+      ).toBeVisible();
+    } else {
+      await expect(
+        page
+          .getByText(
+            outcome === "rejected"
+              ? /zwischenzeitlich geändert/
+              : /konnte nicht bestätigt werden/,
+          )
+          .first(),
+      ).toBeVisible();
+    }
+    await expect(page.locator("#upload-image")).toBeDisabled();
+    await page.getByRole("button", { name: "Erneut laden" }).click();
+    await expect(page.locator("#upload-image")).toBeEnabled();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      outcome === "success" ? second.thumbUrl : first.thumbUrl,
+    );
+    expect(writes).toBe(1);
+    expect(reads).toBe(2);
+  });
+}
+
 test("gallery up and down immediately save opaque IDs without optimistic movement", async ({
   page,
   multiImageRecipe,
@@ -712,7 +1485,7 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await expect(rows.nth(0).locator("button").nth(1)).toBeEnabled();
   await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
   await expect(rows.locator("article")).toHaveCount(2);
-  await expect(page.locator(".gallery-handle")).toHaveCount(0);
+  await expect(page.locator("[data-gallery-handle]")).toHaveCount(2);
   await expect(
     rows.first().locator(".gallery-move-controls button"),
   ).toHaveCount(2);

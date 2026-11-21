@@ -92,7 +92,7 @@ step msg model =
 
                             movement : GalleryMovement
                             movement =
-                                { direction = direction, fromIndex = index, toIndex = targetIndex }
+                                { direction = direction, fromIndex = index, toIndex = targetIndex, dragged = False }
 
                             mutation : GalleryMutation
                             mutation =
@@ -238,6 +238,12 @@ step msg model =
                                 { model
                                     | galleryFeedback = Just feedback
                                     , galleryMutation = Just { mutation | writing = False }
+                                    , galleryPreview =
+                                        if feedback.kind == ReorderingSucceeded then
+                                            model.galleryPreview
+
+                                        else
+                                            Nothing
                                 }
 
                             ( refreshing, request ) =
@@ -443,6 +449,12 @@ applyGallery model recipe =
         next =
             { model
                 | recipe = displayedRecipe
+                , galleryPreview =
+                    if readError == Nothing then
+                        Nothing
+
+                    else
+                        model.galleryPreview
                 , galleryRefreshing = False
                 , galleryError = readError
                 , galleryFeedback = galleryFeedbackAfterRead model readError displayedRecipe
@@ -615,6 +627,79 @@ handleEvent event model =
 
         DeleteConfirmation imageId session accepted ->
             step (DeleteConfirmed imageId session accepted) model
+
+        GalleryDragStart imageId ->
+            if model.galleryConfirmation == Nothing && (canMove model imageId MoveUp || canMove model imageId MoveDown) then
+                case ( currentImages model, imageIndex model imageId ) of
+                    ( Just images, Just index ) ->
+                        ( { model | galleryDrag = Just ( imageId, index ), galleryPreview = Just images }, Cmd.none )
+
+                    _ ->
+                        ( model, Cmd.none )
+
+            else
+                ( model, Cmd.none )
+
+        GalleryDragMove index ->
+            case ( model.galleryDrag, model.galleryPreview ) of
+                ( Just ( imageId, _ ), Just images ) ->
+                    case imageIndexIn images imageId of
+                        Just from ->
+                            if index >= 0 && index < List.length images then
+                                ( { model | galleryPreview = Just (moveImage from index images) }, Cmd.none )
+
+                            else
+                                ( model, Cmd.none )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GalleryDragEnd cancelled ->
+            case ( model.galleryDrag, model.galleryPreview ) of
+                ( Just ( imageId, from ), Just images ) ->
+                    case imageIndexIn images imageId of
+                        Just target ->
+                            if cancelled || target == from then
+                                ( { model | galleryDrag = Nothing, galleryPreview = Nothing }, Cmd.none )
+
+                            else
+                                let
+                                    token : Int
+                                    token =
+                                        model.mutationToken + 1
+
+                                    movement : GalleryMovement
+                                    movement =
+                                        { direction =
+                                            if target < from then
+                                                MoveUp
+
+                                            else
+                                                MoveDown
+                                        , fromIndex = from
+                                        , toIndex = target
+                                        , dragged = True
+                                        }
+
+                                    mutation : GalleryMutation
+                                    mutation =
+                                        { token = token, imageId = imageId, index = target, movement = Just movement, writing = True }
+                                in
+                                ( { model | galleryDrag = Nothing, galleryMutation = Just mutation, mutationToken = token, savedFeedback = False, galleryFeedback = Nothing }
+                                , Cmd.batch
+                                    [ RecipeDB.makeReorderImagesRequest model.recipeId (List.map .id images) (Reordered token)
+                                    , focusWithoutScroll "editor-status"
+                                    ]
+                                )
+
+                        Nothing ->
+                            ( { model | galleryDrag = Nothing, galleryPreview = Nothing }, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
 
         EndPointer ->
             ( { model | drag = Nothing }, Cmd.none )
@@ -844,7 +929,7 @@ galleryFeedbackAfterRead model readError recipe =
 
         ( Just mutation, Just feedback, Nothing ) ->
             if mutation.movement /= Nothing && feedback.kind == ReorderingSucceeded then
-                Just { feedback | message = reorderingSuccessMessage recipe mutation }
+                Just { feedback | message = reorderingSuccessMessage model.recipe recipe mutation }
 
             else
                 Just feedback
@@ -853,20 +938,43 @@ galleryFeedbackAfterRead model readError recipe =
             model.galleryFeedback
 
 
-reorderingSuccessMessage : RecipeDB.RecipeModel -> GalleryMutation -> String
-reorderingSuccessMessage recipe mutation =
+reorderingSuccessMessage : RecipeDB.RecipeModel -> RecipeDB.RecipeModel -> GalleryMutation -> String
+reorderingSuccessMessage confirmed recipe mutation =
     case recipe of
         RemoteData.Success (Just data) ->
-            case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
-                Just index ->
-                    if index == 0 then
-                        "Bild an Position 1 verschoben und als Standardbild festgelegt."
+            let
+                message : String
+                message =
+                    case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
+                        Just index ->
+                            if index == 0 then
+                                "Bild an Position 1 verschoben und als Standardbild festgelegt."
 
-                    else
-                        "Bild an Position " ++ String.fromInt (index + 1) ++ " verschoben."
+                            else
+                                "Bild an Position " ++ String.fromInt (index + 1) ++ " verschoben."
 
-                Nothing ->
-                    "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
+                        Nothing ->
+                            "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
+
+                promotedDefault : Bool
+                promotedDefault =
+                    case ( mutation.movement, confirmed ) of
+                        ( Just movement, RemoteData.Success (Just previous) ) ->
+                            case ( previous.images |> Maybe.andThen List.head, data.images |> Maybe.andThen List.head ) of
+                                ( Just oldFirst, Just first ) ->
+                                    movement.dragged && oldFirst.id /= first.id && first.id /= mutation.imageId
+
+                                _ ->
+                                    False
+
+                        _ ->
+                            False
+            in
+            if promotedDefault then
+                message ++ " Bild an Position 1 ist jetzt das Standardbild."
+
+            else
+                message
 
         _ ->
             "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden."
@@ -900,4 +1008,19 @@ swapImages fromIndex toIndex images =
                     )
 
         _ ->
+            images
+
+
+moveImage : Int -> Int -> List RecipeDB.GalleryImage -> List RecipeDB.GalleryImage
+moveImage fromIndex toIndex images =
+    case List.drop fromIndex images |> List.head of
+        Just image ->
+            let
+                remaining : List RecipeDB.GalleryImage
+                remaining =
+                    List.take fromIndex images ++ List.drop (fromIndex + 1) images
+            in
+            List.take toIndex remaining ++ [ image ] ++ List.drop toIndex remaining
+
+        Nothing ->
             images

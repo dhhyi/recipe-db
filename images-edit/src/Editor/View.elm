@@ -4,7 +4,7 @@ import Crop exposing (Crop)
 import Editor.Types exposing (GalleryFeedbackKind(..), Model, MoveDirection(..), Msg(..), Phase(..), Session, canAdd, canDelete, canMove, imageLimit)
 import File exposing (File)
 import Html exposing (Html, a, article, button, div, h1, img, input, label, li, p, span, text)
-import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
+import Html.Attributes exposing (accept, alt, attribute, class, classList, disabled, href, id, src, style, type_)
 import Html.Events exposing (on, onClick, stopPropagationOn)
 import Html.Keyed
 import Json.Decode as D
@@ -162,8 +162,18 @@ editorStatus model =
     let
         message : String
         message =
-            if model.galleryMutation /= Nothing && model.galleryError /= Nothing then
+            if model.galleryPreview /= Nothing && model.galleryError /= Nothing then
+                "Reihenfolge gespeichert. Die angezeigte Reihenfolge ist vorgemerkt; der aktuelle Stand konnte nicht geladen werden."
+
+            else if model.galleryMutation /= Nothing && model.galleryError /= Nothing then
                 "Der aktuelle Stand konnte nicht bestätigt werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
+
+            else if model.galleryPreview /= Nothing && model.galleryMutation /= Nothing then
+                if model.galleryMutation |> Maybe.map .writing |> Maybe.withDefault False then
+                    "Die vorgemerkte Bildreihenfolge wird gespeichert."
+
+                else
+                    "Reihenfolge gespeichert. Die aktuelle Bildreihenfolge wird geladen."
 
             else if model.galleryMutation /= Nothing && model.galleryRefreshing then
                 "Galerie wird aktualisiert. Die angezeigten Bilder zeigen den zuletzt geladenen Stand."
@@ -256,7 +266,11 @@ galleryLoadError model =
                 message =
                     case model.galleryMutation of
                         Just _ ->
-                            "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
+                            if model.galleryPreview /= Nothing then
+                                "Rezeptbilder konnten nicht aktualisiert werden. Die gespeicherte Reihenfolge wird vorgemerkt angezeigt, der aktuelle Stand ist unbekannt."
+
+                            else
+                                "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden."
 
                         Nothing ->
                             "Rezeptbilder konnten nicht geladen werden."
@@ -276,12 +290,17 @@ galleryView model =
 
         images : Maybe (List RecipeDB.GalleryImage)
         images =
-            case model.recipe of
-                RemoteData.Success (Just recipe) ->
-                    recipe.images
+            case model.galleryPreview of
+                Just preview ->
+                    Just preview
 
-                _ ->
-                    Nothing
+                Nothing ->
+                    case model.recipe of
+                        RemoteData.Success (Just recipe) ->
+                            recipe.images
+
+                        _ ->
+                            Nothing
     in
     editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
@@ -310,6 +329,15 @@ galleryView model =
                 ]
             ]
         , editorStatus model
+        , p [ id "gallery-drag-status", class "sr-only", attribute "role" "status" ]
+            [ text
+                (if model.galleryDrag /= Nothing then
+                    "Bildreihenfolge wird vorgemerkt."
+
+                 else
+                    ""
+                )
+            ]
         , galleryFeedback model
         , p [ id "gallery-file-help" ] [ text "JPEG oder PNG, maximal 10 MiB." ]
         , Maybe.withDefault (text "")
@@ -342,7 +370,7 @@ galleryContent model images failed =
 
                   else
                     Html.Keyed.node "ol"
-                        [ class "flex list-none flex-col gap-2 p-0", attribute "aria-label" "Rezeptbilder" ]
+                        [ class "gallery-list flex list-none flex-col gap-2 p-0", attribute "aria-label" "Rezeptbilder" ]
                         (List.indexedMap (galleryRow model failed) entries)
                 ]
 
@@ -371,11 +399,31 @@ galleryRow model failed index image =
 
                 _ ->
                     0
+
+        dragging : Bool
+        dragging =
+            Maybe.map Tuple.first model.galleryDrag == Just image.id
     in
     ( image.id
-    , li [ id ("gallery-image-" ++ image.id), attribute "tabindex" "-1" ]
-        [ article [ class "m-0 flex flex-wrap items-center gap-2", attribute "data-gallery-card" "" ]
+    , li
+        [ id ("gallery-image-" ++ image.id)
+        , attribute "data-gallery-id" image.id
+        , attribute "tabindex" "-1"
+        , classList [ ( "relative z-10", dragging ) ]
+        ]
+        [ article [ class "m-0 flex flex-wrap items-center gap-1 p-2 sm:gap-2", classList [ ( "shadow-xl", dragging ) ], attribute "data-gallery-card" "" ]
             [ if imageCount > 1 then
+                span
+                    [ class "grid size-8 select-none place-items-center data-[enabled=true]:cursor-grab data-[enabled=true]:touch-none"
+                    , attribute "data-gallery-handle" image.id
+                    , attribute "data-enabled" (boolString (canMove model image.id MoveUp || canMove model image.id MoveDown))
+                    , attribute "aria-hidden" "true"
+                    ]
+                    [ text "⠿" ]
+
+              else
+                text ""
+            , if imageCount > 1 then
                 div [ class "gallery-move-controls flex flex-col gap-1" ]
                     [ button
                         [ type_ "button"
