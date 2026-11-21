@@ -13,7 +13,7 @@ done
 run_id=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 cluster="recipe-migration-$run_id"
 context="k3d-$cluster"
-namespace=recipe-migration-test
+namespace='recipe-migration-test'
 image="recipe-db-migration-test:$run_id"
 work="$(pwd -P)/.migration-k3d-$run_id"
 mkdir -m 700 "$work"
@@ -559,10 +559,10 @@ tar -C "$work/recovery-source/recipes" -cf "$work/recovery-backup-recipes.tar" .
 tar -C "$work/recovery-source/images" \
   -cf "$work/recovery-backup-images.tar" public manifests storage-version
 python3 .scripts/validate-backup-snapshot.py --require-storage-version \
-  "$work/recovery-backup-recipes.tar" '{"kind":"sqlite","file":"recipes.sqlite3"}' \
+  "$work/recovery-backup-recipes.tar" \
   > "$work/recovery-recipes-files.json"
 python3 .scripts/validate-backup-snapshot.py --require-storage-version \
-  "$work/recovery-backup-images.tar" '{"kind":"images"}' \
+  "$work/recovery-backup-images.tar" \
   > "$work/recovery-images-files.json"
 cp -a "$work/recovery-source/images" "$work/recovery-source-v2"
 printf '2\n' > "$work/recovery-source-v2/storage-version"
@@ -574,7 +574,7 @@ mv "$work/recovery-source-v2/manifests/fixture-recipe.json.next" \
 tar -C "$work/recovery-source-v2" \
   -cf "$work/recovery-backup-images-v2.tar" public manifests storage-version
 python3 .scripts/validate-backup-snapshot.py --require-storage-version \
-  "$work/recovery-backup-images-v2.tar" '{"kind":"images"}' \
+  "$work/recovery-backup-images-v2.tar" \
   > "$work/recovery-images-v2-files.json"
 jq -e 'any(.[]; .path == "storage-version" and .storageVersion == 2)' \
   "$work/recovery-images-v2-files.json" > /dev/null

@@ -345,6 +345,27 @@ elif group == "unsafe":
         reject(lambda c, m, a, p, s, mode=mode: repack(m, a, mode=mode), before=True)
         reject(lambda c, m, a, p, s, mode=mode:
                repack(m, a, inner=tar_bytes(entries["images"], mode)))
+    def root_archive(modes, owners=None, pax=False):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            for index, mode in enumerate(modes):
+                root = tarfile.TarInfo(".")
+                root.type = tarfile.DIRTYPE
+                root.mode = mode
+                if owners:
+                    root.uid, root.gid = owners
+                if pax:
+                    root.pax_headers = {"comment": "unsafe"}
+                archive.addfile(root)
+        return data.getvalue()
+    for data in (root_archive([0o4755]), root_archive([0o755, 0o755]),
+                 root_archive([0o755], owners=(2**32 - 1, 0)), root_archive([0o755], pax=True)):
+        reject(lambda c, m, a, p, s, data=data: repack(m, a, inner=data))
+    # Directory entries are bounded by archive size, not the regular-file inventory limit.
+    case, metadata, archive, projects, manifest = fixture()
+    module.MAX_FILES = 2
+    module.check_inner_bounds(case / "capture" / "images.tar")
+    module.MAX_FILES = 100_000
     for values in [
         entries["images"] + [("nested/deeper/opaque.data", b"duplicate", None)],
         entries["images"] + [("../escape", b"bad", None)],
@@ -382,7 +403,7 @@ elif group == "legacy-layout":
     repack(metadata, archive, manifest)
     output = case / "snapshot"
     validated = module.validate(str(metadata), str(archive), str(output), str(projects), "selected-backup")
-    assert all("layout" not in item for item in validated["inventory"])
+    assert validated == manifest
     assert all("layout" not in item for item in json.loads(
         (output / "manifest.json").read_bytes()
     )["inventory"])

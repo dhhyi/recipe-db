@@ -64,7 +64,7 @@ for entries, special in [
     ({"nested/fifo":b""}, tarfile.FIFOTYPE),
 ]:
     try:
-        module.validate(archive(entries, special), require_storage_version=entries.get("storage-version") is None)
+        module.validate(archive(entries, special))
     except ValueError:
         pass
     else:

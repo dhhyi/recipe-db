@@ -216,11 +216,11 @@ def check_inner_bounds(archive):
             if member.isdir():
                 name = name.rstrip("/")
                 if name in ("", "."):
-                    continue
+                    name = "."
             path = PurePosixPath(name)
             if path.is_absolute() or ".." in path.parts or "\\" in name \
                     or str(path) != name or (member.isfile() and name == ".") or name in names \
-                    or len(names) >= MAX_FILES + 1 or member.pax_headers \
+                    or member.pax_headers \
                     or member.mode & 0o7000 \
                     or not 0 <= member.uid < 2**32 - 1 or not 0 <= member.gid < 2**32 - 1:
                 raise ValueError("unsafe or duplicate snapshot path")
@@ -273,7 +273,7 @@ def validate(package_path, archive_path, output_path, projects_path, backup_id):
         for item in validated["inventory"]:
             item.pop("layout", None)
         (output / "manifest.json").write_bytes(upload.json_bytes(validated))
-        return validated
+        return manifest
     except BaseException:
         shutil.rmtree(output)
         raise
