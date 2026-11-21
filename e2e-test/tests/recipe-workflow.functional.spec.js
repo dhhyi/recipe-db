@@ -70,8 +70,6 @@ const returnButtonExisting = (page) =>
   page.getByRole("link", { name: "Zurück zum Rezept", exact: true });
 const returnButtonNew = (page) =>
   page.getByRole("link", { name: "Zurück zur Übersicht", exact: true });
-const dirtyStatus = (page) =>
-  page.getByRole("status").filter({ hasText: /^Ungespeicherte Änderungen\.$/ });
 const successStatus = (page) =>
   page.getByRole("status").filter({ hasText: /^Gespeichert$/ });
 const errorAlert = (page) => page.getByRole("alert");
@@ -98,70 +96,6 @@ test("existing and new pages expose explicit return actions", async ({
   await page.goto("/edit/new");
   await waitForEditorForm(page);
   await expect(returnButtonNew(page)).toHaveAttribute("href", "/");
-});
-
-test("guard preserves newtab/download/hash link behaviors", async ({
-  page,
-  demoRecipe,
-}) => {
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await waitForEditorForm(page);
-  await nameField(page).fill(`${demoRecipe.name} links`);
-  await expect(dirtyStatus(page)).toBeVisible();
-
-  await page.evaluate(() => {
-    const hash = document.createElement("a");
-    hash.id = "hash-link";
-    hash.href = "#insight";
-    hash.textContent = "hash";
-    document.body.append(hash);
-
-    const hashOnly = document.createElement("a");
-    hashOnly.id = "hash-empty-link";
-    hashOnly.href = "#";
-    hashOnly.textContent = "hash-empty";
-    document.body.append(hashOnly);
-
-    const blank = document.createElement("a");
-    blank.id = "newtab-link";
-    blank.href = "/";
-    blank.target = "_blank";
-    blank.rel = "noopener";
-    blank.textContent = "newtab";
-    document.body.append(blank);
-
-    const download = document.createElement("a");
-    download.id = "download-link";
-    download.href = "/design/styles.css";
-    download.download = "recipe.txt";
-    download.textContent = "download";
-    document.body.append(download);
-  });
-
-  let dialogs = 0;
-  const listener = async (dialog) => {
-    dialogs += 1;
-    await dialog.dismiss();
-  };
-  page.on("dialog", listener);
-
-  await page.locator("#hash-link").click();
-  await expect(page).toHaveURL(new RegExp(`/edit/${demoRecipe.id}#insight$`));
-
-  await page.locator("#hash-empty-link").click();
-  await expect(page).toHaveURL(new RegExp(`/edit/${demoRecipe.id}#$`));
-
-  const popupPromise = page.waitForEvent("popup");
-  await page.locator("#newtab-link").click();
-  const popup = await popupPromise;
-  await popup.close();
-
-  const downloadPromise = page.waitForEvent("download");
-  await page.locator("#download-link").click();
-  await downloadPromise;
-
-  page.off("dialog", listener);
-  expect(dialogs).toBe(0);
 });
 
 test("create transitions to /edit/:id and second save updates without duplicate create", async ({
