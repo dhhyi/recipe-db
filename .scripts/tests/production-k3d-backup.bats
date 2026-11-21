@@ -606,7 +606,10 @@ EOF
   jq -e 'all(.inventory[]; has("layout") | not) and
     any(.inventory[] | select(.service == "tags").files[];
       .path == "nested/data.bin") and
-    any(.inventory[] | select(.service == "tags").directories[]; . == "empty")' "$snapshot/manifest.json"
+    any(.inventory[] | select(.service == "tags").directories[]; . == "empty") and
+    any(.inventory[] | select(.service == "tags").directoryMetadata[];
+      .path == "empty" and (.mode | type == "number") and
+      (.uid | type == "number") and (.gid | type == "number"))' "$snapshot/manifest.json"
   [ ! -e "$MOCK_LOG.lease" ]
 }
 

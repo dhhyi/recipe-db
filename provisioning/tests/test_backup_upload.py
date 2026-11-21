@@ -444,6 +444,13 @@ state_path.write_text(json.dumps(state))
         (first / "manifest.json").write_bytes(backup.json_bytes(manifest))
         with self.assertRaisesRegex(ValueError, "directory metadata mismatch"):
             backup.validate_snapshot(first)
+        typed = self.make_snapshot("metadata-typed", directories=["nested"],
+                                   directory_metadata={"nested": {"uid": 1}})
+        manifest = json.loads((typed / "manifest.json").read_text())
+        manifest["inventory"][0]["directoryMetadata"][0]["uid"] = True
+        (typed / "manifest.json").write_bytes(backup.json_bytes(manifest))
+        with self.assertRaisesRegex(ValueError, "directory metadata mismatch"):
+            backup.validate_snapshot(typed)
 
     def test_incomplete_and_corrupt_snapshots_are_rejected(self):
         incomplete = self.make_snapshot("incomplete")

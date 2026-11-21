@@ -285,8 +285,8 @@ def validate_snapshot(snapshot, require_storage_versions=False):
             raise ValueError("archive integrity mismatch")
         if "directories" in pvc and pvc["directories"] != sorted(observed_directories):
             raise ValueError("directory inventory mismatch")
-        if "directoryMetadata" in pvc and pvc["directoryMetadata"] != sorted(
-                observed_directory_metadata, key=lambda item: item["path"]):
+        if "directoryMetadata" in pvc and json_bytes(pvc["directoryMetadata"]) != json_bytes(
+                sorted(observed_directory_metadata, key=lambda item: item["path"])):
             raise ValueError("directory metadata mismatch")
         if observed_storage_version != expected_storage_version:
             raise ValueError("storage-version marker does not match the inventory")
