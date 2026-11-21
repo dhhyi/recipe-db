@@ -39,6 +39,12 @@ TRUSTED_BOT_IDENTITIES = {
     TRUSTED_COPILOT_ACTOR: "pinned Copilot identity",
     TRUSTED_PR_METADATA_ACTOR: "pinned PR metadata app identity",
 }
+JOB_MAIN_ARTIFACT_PATTERN = re.compile(
+    r"bazel-cache-v2-([A-Za-z0-9_-]+)-main-r([1-9]\d*)-a([1-9]\d*)"
+)
+JOB_PR_ARTIFACT_PATTERN = re.compile(
+    r"bazel-cache-v2-([A-Za-z0-9_-]+)-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)"
+)
 MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-main-r([1-9]\d*)-a([1-9]\d*)")
 PR_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v2-pr-([1-9]\d*)-r([1-9]\d*)-a([1-9]\d*)")
 LEGACY_MAIN_ARTIFACT_PATTERN = re.compile(r"bazel-cache-v1-main-r([1-9]\d*)-a([1-9]\d*)")
@@ -75,6 +81,70 @@ class UnassociatedPRHead(Invalid):
 
 class ApiFailure(RuntimeError):
     pass
+
+
+def parse_cache_artifact_name(name):
+    job_match = JOB_MAIN_ARTIFACT_PATTERN.fullmatch(name)
+    if job_match:
+        return {
+            "job": job_match.group(1),
+            "scope": "main",
+            "runId": int(job_match.group(2)),
+            "attempt": int(job_match.group(3)),
+            "pr": None,
+            "legacy": False,
+        }
+    job_match = JOB_PR_ARTIFACT_PATTERN.fullmatch(name)
+    if job_match:
+        return {
+            "job": job_match.group(1),
+            "scope": "pr",
+            "pr": int(job_match.group(2)),
+            "runId": int(job_match.group(3)),
+            "attempt": int(job_match.group(4)),
+            "legacy": False,
+        }
+    main_match = MAIN_ARTIFACT_PATTERN.fullmatch(name)
+    if main_match:
+        return {
+            "job": JOB,
+            "scope": "main",
+            "runId": int(main_match.group(1)),
+            "attempt": int(main_match.group(2)),
+            "pr": None,
+            "legacy": False,
+        }
+    pr_match = PR_ARTIFACT_PATTERN.fullmatch(name)
+    if pr_match:
+        return {
+            "job": JOB,
+            "scope": "pr",
+            "pr": int(pr_match.group(1)),
+            "runId": int(pr_match.group(2)),
+            "attempt": int(pr_match.group(3)),
+            "legacy": False,
+        }
+    legacy_match = LEGACY_MAIN_ARTIFACT_PATTERN.fullmatch(name)
+    if legacy_match:
+        return {
+            "job": JOB,
+            "scope": "main",
+            "runId": int(legacy_match.group(1)),
+            "attempt": int(legacy_match.group(2)),
+            "pr": None,
+            "legacy": True,
+        }
+    legacy_match = LEGACY_PR_ARTIFACT_PATTERN.fullmatch(name)
+    if legacy_match:
+        return {
+            "job": JOB,
+            "scope": "pr",
+            "pr": int(legacy_match.group(1)),
+            "runId": int(legacy_match.group(2)),
+            "attempt": int(legacy_match.group(3)),
+            "legacy": True,
+        }
+    return None
 
 
 def parse_json(data):
@@ -522,12 +592,15 @@ def make_manifest(args, archive):
     pr = event.get("pull_request") if args.event_name == "pull_request" else None
     if pr is not None and pr.get("head", {}).get("sha") != args.commit:
         raise Invalid("verified source revision differs from the pull request head")
+    job = getattr(args, "job", JOB)
+    if not isinstance(job, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", job):
+        raise Invalid("invalid GitHub job identifier")
     identity = {
         "format": FORMAT,
         "formatVersion": FORMAT_VERSION,
         "repository": args.repository,
         "workflow": WORKFLOW,
-        "job": JOB,
+        "job": job,
         "runId": int(args.run_id),
         "runAttempt": int(args.run_attempt),
         "event": args.event_name,
@@ -1002,19 +1075,14 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
     if not isinstance(detail, dict):
         raise Invalid("artifact producer metadata is missing")
     name = artifact.get("name", "")
-    main_match = MAIN_ARTIFACT_PATTERN.fullmatch(name) \
-        or LEGACY_MAIN_ARTIFACT_PATTERN.fullmatch(name)
-    pr_match = PR_ARTIFACT_PATTERN.fullmatch(name) \
-        or LEGACY_PR_ARTIFACT_PATTERN.fullmatch(name)
-    if main_match:
-        scope, run_id, attempt = "main", int(main_match.group(1)), int(main_match.group(2))
-        pr_number = None
-    elif pr_match:
-        scope, pr_number, run_id, attempt = (
-            "pr", int(pr_match.group(1)), int(pr_match.group(2)), int(pr_match.group(3))
-        )
-    else:
+    parsed = parse_cache_artifact_name(name)
+    if parsed is None:
         raise Invalid("unrecognized Bazel cache artifact identity")
+    scope = parsed["scope"]
+    run_id = parsed["runId"]
+    attempt = parsed["attempt"]
+    pr_number = parsed["pr"]
+    job = parsed["job"]
 
     workflow_run = artifact.get("workflow_run")
     run_repository = detail.get("repository")
@@ -1055,7 +1123,7 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
             raise Invalid("PR artifact has an invalid producer event")
         if base is None or token is None:
             raise Invalid("commit-to-PR identity verifier is unavailable")
-    matching_job = next((job for job in jobs if job.get("name") == JOB), None)
+    matching_job = next((candidate for candidate in jobs if candidate.get("name") == job), None)
     if matching_job is None or not any(
         step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
         for step in matching_job.get("steps", [])
@@ -1078,13 +1146,14 @@ def cleanup_artifact_identity(artifact, detail, jobs, repository, repository_id,
         "runNumber": int(detail["run_number"]),
         "attempt": attempt,
         "runId": run_id,
+        "job": job,
     }
 
 
 def cleanup_artifacts(base, token, repository):
     failures = []
     identities = []
-    unresolved_main = False
+    unresolved_main_jobs = set()
     try:
         repository_data = request_json(base, token)
         if not isinstance(repository_data, dict) \
@@ -1095,28 +1164,22 @@ def cleanup_artifacts(base, token, repository):
         artifacts = paginated(f"{base}/actions/artifacts", token, "artifacts")
         for artifact in artifacts:
             name = artifact.get("name", "") if isinstance(artifact, dict) else ""
-            if not name.startswith(("bazel-cache-v1-", f"{ARTIFACT_PREFIX}-")):
+            parsed = parse_cache_artifact_name(name)
+            if parsed is None:
                 continue
-            main_candidate = name.startswith(("bazel-cache-v1-main-", f"{ARTIFACT_PREFIX}-main-"))
             if artifact.get("expired"):
                 continue
             try:
-                match = MAIN_ARTIFACT_PATTERN.fullmatch(name) \
-                    or PR_ARTIFACT_PATTERN.fullmatch(name) \
-                    or LEGACY_MAIN_ARTIFACT_PATTERN.fullmatch(name) \
-                    or LEGACY_PR_ARTIFACT_PATTERN.fullmatch(name)
-                if not match:
-                    raise Invalid("unrecognized Bazel cache artifact identity")
-                run_id = int(match.group(1)) if main_candidate else int(match.group(2))
-                attempt = int(match.group(2)) if main_candidate else int(match.group(3))
+                run_id = parsed["runId"]
+                attempt = parsed["attempt"]
                 run = producer_attempt(base, token, {"id": run_id}, attempt)
                 jobs = jobs_for_attempt(base, token, run_id, attempt)
                 identities.append(cleanup_artifact_identity(
                     artifact, run, jobs, repository, repository_data["id"], base, token
                 ))
             except (ApiFailure, Invalid, TypeError, ValueError) as error:
-                if main_candidate:
-                    unresolved_main = True
+                if parsed["scope"] == "main":
+                    unresolved_main_jobs.add(parsed["job"])
                 failures.append(f"artifact={name}: {error}")
                 print(f"cleanup: identity-error artifact={name}: {error}", file=sys.stderr)
 
@@ -1142,16 +1205,26 @@ def cleanup_artifacts(base, token, repository):
                 failures.append(f"pull-request={pr_number}: {error}")
                 print(f"cleanup: pull-request-error pr={pr_number}: {error}", file=sys.stderr)
 
-        main_artifacts = sorted(
-            (item for item in identities if item["scope"] == "main"),
-            key=lambda item: (item["runNumber"], item["attempt"], item["runId"]),
-            reverse=True,
-        )
         delete = []
-        if unresolved_main:
-            print("cleanup: main-retention skipped; an artifact identity could not be verified")
-        else:
-            delete.extend(main_artifacts[MAIN_ARTIFACT_RETENTION:])
+        main_artifacts = [item for item in identities if item["scope"] == "main"]
+        retained_main = {}
+        for job in sorted(set(item["job"] for item in main_artifacts) | unresolved_main_jobs):
+            if job in unresolved_main_jobs:
+                print(
+                    f"cleanup: main-retention skipped for job={job}; "
+                    "an artifact identity could not be verified"
+                )
+                retained_main[job] = [
+                    item for item in main_artifacts if item["job"] == job
+                ][-MAIN_ARTIFACT_RETENTION:]
+                continue
+            ranked = sorted(
+                (item for item in main_artifacts if item["job"] == job),
+                key=lambda item: (item["runNumber"], item["attempt"], item["runId"]),
+                reverse=True,
+            )
+            retained_main[job] = ranked[:MAIN_ARTIFACT_RETENTION]
+            delete.extend(ranked[MAIN_ARTIFACT_RETENTION:])
         delete.extend(
             item for item in identities
             if item["scope"] == "pr" and (
@@ -1189,7 +1262,11 @@ def cleanup_artifacts(base, token, repository):
             print(f"cleanup: incomplete; {len(failures)} identity or service errors",
                   file=sys.stderr)
             return 1
-        print(f"cleanup: complete retained-main={min(len(main_artifacts), MAIN_ARTIFACT_RETENTION)} "
+        retained_count = sum(
+            min(len(items), MAIN_ARTIFACT_RETENTION)
+            for items in retained_main.values()
+        )
+        print(f"cleanup: complete retained-main={retained_count} "
               f"deleted={deleted} already-gone={already_gone} "
               f"deleted-unassociated-pr={deleted_unassociated_pr}")
         return 0
@@ -1199,10 +1276,21 @@ def cleanup_artifacts(base, token, repository):
 
 
 def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number,
-                    repository, associated_pr=None, expected_head=None):
+                    repository, associated_pr=None, expected_head=None, job=None):
+    manifest_job = manifest.get("job")
+    if manifest_job is None:
+        raise Invalid("manifest is missing the GitHub job identifier")
+    if job is not None and manifest_job != job:
+        raise Invalid("manifest job does not match the requested GitHub job")
+    job = manifest_job
     expected_scope = "main" if scope == "main" else f"pr-{pr_number}"
-    expected_prefix = f"{ARTIFACT_PREFIX}-{expected_scope}-r{run['id']}-a{detail['run_attempt']}"
-    if artifact_name != expected_prefix:
+    if not isinstance(job, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", job):
+        raise Invalid("manifest has an invalid or ambiguous job identifier")
+    expected_prefix = f"{ARTIFACT_PREFIX}-{job}-{expected_scope}-r{run['id']}-a{detail['run_attempt']}"
+    expected_unnamed = f"{ARTIFACT_PREFIX}-{expected_scope}-r{run['id']}-a{detail['run_attempt']}"
+    if artifact_name != expected_prefix and not (
+        job == JOB and artifact_name == expected_unnamed
+    ):
         raise Invalid("artifact name does not match producer identity")
     run_repository = run.get("repository")
     detail_repository = detail.get("repository")
@@ -1223,11 +1311,11 @@ def verify_producer(run, detail, jobs, manifest, artifact_name, scope, pr_number
             or int(detail.get("run_attempt", -1)) != int(artifact_name.rsplit("-a", 1)[1]):
         raise Invalid("artifact producer metadata mismatch")
     if manifest.get("repository") != repository or manifest.get("workflow") != WORKFLOW \
-            or manifest.get("job") != JOB or manifest.get("runId") != int(run["id"]) \
+            or manifest.get("runId") != int(run["id"]) \
             or manifest.get("runAttempt") != int(detail["run_attempt"]) \
             or manifest.get("event") != detail.get("event"):
         raise Invalid("manifest identity does not match GitHub run metadata")
-    matching_job = next((job for job in jobs if job.get("name") == JOB), None)
+    matching_job = next((candidate for candidate in jobs if candidate.get("name") == job), None)
     if matching_job is None or not any(
         step.get("name") == UPLOAD_STEP and step.get("conclusion") == "success"
         for step in matching_job.get("steps", [])
@@ -1323,7 +1411,7 @@ def validate_manifest(manifest):
 
 def download_candidate(base, token, artifact, cache_path, repository,
                       run, scope, pr_number, expected_head=None,
-                      require_trusted_writer=False):
+                      require_trusted_writer=False, job=None):
     with tempfile.TemporaryDirectory(prefix="bazel-artifact-") as directory:
         root = Path(directory)
         zipped = root / "artifact.zip"
@@ -1386,7 +1474,7 @@ def download_candidate(base, token, artifact, cache_path, repository,
                 run.get("repository", {}).get("id"),
             )
         verify_producer(run, detail, jobs, actual_manifest, artifact["name"], scope,
-                        pr_number, repository, associated_pr, expected_head)
+                        pr_number, repository, associated_pr, expected_head, job)
         if require_trusted_writer and not trusted_pr_writer(
             base, token, run, detail, repository, pr_number
         ):
@@ -1523,6 +1611,7 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
     inspected = 0
     attempted = 0
     api_failed = False
+    job = getattr(args, "job", JOB)
 
     def finish(reason, restored=False):
         print(f"cache: discovery source={scope} inspected-runs={inspected} "
@@ -1588,16 +1677,21 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
                 continue
             for artifact in artifacts:
                 artifact_scope = "main" if scope == "main" else f"pr-{pr_number}"
-                legacy_pattern = LEGACY_MAIN_ARTIFACT_PATTERN if scope == "main" \
-                    else LEGACY_PR_ARTIFACT_PATTERN
-                if legacy_pattern.fullmatch(artifact.get("name", "")):
+                name = artifact.get("name", "")
+                parsed = parse_cache_artifact_name(name)
+                if parsed is not None and parsed["legacy"]:
                     print(f"cache: migration-skip source={scope} artifact={artifact['name']}: "
                           "legacy synthetic-build format is not consumable")
                     continue
                 match = re.fullmatch(
-                    rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
-                    artifact.get("name", ""),
+                    rf"{ARTIFACT_PREFIX}-{re.escape(job)}-{artifact_scope}-r(\d+)-a(\d+)",
+                    name,
                 )
+                if match is None and job == JOB:
+                    match = re.fullmatch(
+                        rf"{ARTIFACT_PREFIX}-{artifact_scope}-r(\d+)-a(\d+)",
+                        name,
+                    )
                 if match is None or int(match.group(1)) != int(run["id"]):
                     continue
                 if artifact.get("expired"):
@@ -1617,9 +1711,10 @@ def restore_scope(args, base, token, scope, pr_number, history, destination,
                         extra["expected_head"] = expected_head
                     if require_trusted_writer:
                         extra["require_trusted_writer"] = True
+                    job_extra = {} if job == JOB else {"job": job}
                     downloaded = download_candidate(
                         base, token, artifact, destination, args.repository, run, scope,
-                        pr_number, **extra,
+                        pr_number, **job_extra, **extra,
                     )
                     if downloaded is None:
                         return finish("restored snapshot", True)
@@ -2043,7 +2138,8 @@ def upload(args):
         with manifest_path.open("x") as stream:
             stream.write(json.dumps(manifest, sort_keys=True) + "\n")
         identity = f"pr-{manifest['pullRequest']['number']}" if manifest["pullRequest"] else "main"
-        name = f"{ARTIFACT_PREFIX}-{identity}-r{args.run_id}-a{args.run_attempt}"
+        job = manifest["job"]
+        name = f"{ARTIFACT_PREFIX}-{job}-{identity}-r{args.run_id}-a{args.run_attempt}"
         write_outputs(args.output, {"name": name, "status": "success"})
         print(f"cache: snapshot ready name={name} source={args.commit} "
               f"stats={json.dumps(stats)} totalSeconds={round(time.monotonic() - started, 3)} "
@@ -2158,6 +2254,7 @@ def main():
     create.add_argument("--run-id", required=True)
     create.add_argument("--run-attempt", required=True)
     create.add_argument("--commit", required=True)
+    create.add_argument("--job", required=True)
     create.add_argument("--pr-number", default="")
     create.add_argument("--output", default="")
     create.add_argument("--build-start", required=True, type=int)
@@ -2174,6 +2271,7 @@ def main():
     restore.add_argument("--run-number", required=True, type=int)
     restore.add_argument("--run-attempt", required=True)
     restore.add_argument("--commit", required=True)
+    restore.add_argument("--job", required=True)
     restore.add_argument("--pr-number", default="")
     restore.add_argument("--output", default="")
     cleanup = commands.add_parser("cleanup")

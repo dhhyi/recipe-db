@@ -136,6 +136,34 @@ class CacheArtifactTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
+    def test_job_aware_artifact_names_are_separate(self):
+        quality = CACHE.parse_cache_artifact_name(
+            "bazel-cache-v2-quality-checks-main-r42-a2"
+        )
+        arm = CACHE.parse_cache_artifact_name(
+            "bazel-cache-v2-arm64-validation-main-r42-a2"
+        )
+        pr = CACHE.parse_cache_artifact_name(
+            "bazel-cache-v2-quality-checks-pr-17-r42-a2"
+        )
+        self.assertEqual(quality["job"], "quality-checks")
+        self.assertEqual(quality["scope"], "main")
+        self.assertEqual(arm["job"], "arm64-validation")
+        self.assertEqual(pr["job"], "quality-checks")
+        self.assertEqual(pr["pr"], 17)
+        self.assertIsNotNone(CACHE.parse_cache_artifact_name(
+            "bazel-cache-v2-main-r42-a2"
+        ))
+        self.assertIsNotNone(CACHE.parse_cache_artifact_name(
+            "bazel-cache-v1-main-r42-a2"
+        ))
+        self.assertTrue(CACHE.parse_cache_artifact_name(
+            "bazel-cache-v1-main-r42-a2"
+        )["legacy"])
+        self.assertIsNone(CACHE.parse_cache_artifact_name(
+            "bazel-cache-v2-other-main-r0-a1"
+        ))
+
     def test_restore_reports_missing_token_as_cache_failure(self):
         output = self.root / "restore-output"
         args = SimpleNamespace(output=str(output))
@@ -358,6 +386,47 @@ class CacheArtifactTests(unittest.TestCase):
         self.assertEqual(len(page_requests), 2)
         self.assertEqual([url.rsplit("/", 1)[1] for url in deleted], ["202", "201"])
         self.assertIn("cleanup: complete retained-main=5 deleted=2", output.getvalue())
+
+    def test_cleanup_retains_five_main_artifacts_independently_per_job(self):
+        fixtures = []
+        for job, start in (("quality-checks", 300), ("arm64-validation", 400)):
+            for offset in range(7):
+                fixture = cleanup_fixture(start + offset, offset + 1)
+                fixture["artifact"]["name"] = (
+                    f"bazel-cache-v2-{job}-main-r{fixture['run']['id']}-a1"
+                )
+                fixture["jobs"] = [{"name": job, "steps": [
+                    {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
+                ]}]
+                fixtures.append(fixture)
+        deleted = []
+        by_attempt = {
+            (fixture["run"]["id"], fixture["run"]["run_attempt"]): fixture
+            for fixture in fixtures
+        }
+
+        def fake_json(url, token):
+            if url == "https://api.github.com/repos/owner/repo":
+                return {"id": 9, "full_name": "owner/repo"}
+            return {"artifacts": [fixture["artifact"] for fixture in fixtures]}
+
+        with patch.object(CACHE, "request_json", side_effect=fake_json), \
+                patch.object(CACHE, "producer_attempt",
+                             side_effect=lambda base, token, run, attempt:
+                             by_attempt[(run["id"], attempt)]["run"]), \
+                patch.object(CACHE, "jobs_for_attempt",
+                             side_effect=lambda base, token, run_id, attempt:
+                             by_attempt[(run_id, attempt)]["jobs"]), \
+                patch.object(CACHE, "request_delete",
+                             side_effect=lambda url, token: deleted.append(url) or True):
+            status = CACHE.cleanup_artifacts(
+                "https://api.github.com/repos/owner/repo", "token", "owner/repo"
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(len(deleted), 4)
+        deleted_ids = {int(url.rsplit("/", 1)[1]) for url in deleted}
+        self.assertEqual(deleted_ids, {300, 301, 400, 401})
 
     def test_cleanup_deletes_only_merged_pr_artifacts(self):
         fixtures = [
@@ -2441,6 +2510,44 @@ class CacheArtifactTests(unittest.TestCase):
 
         self.assertEqual(calls, [(2, 22, "main")])
         self.assertIn("fallback scope=pr", output.getvalue())
+
+    def test_verify_producer_rejects_manifest_or_artifact_job_mismatch(self):
+        head = "a" * 40
+        run = {
+            "id": 25, "run_number": 4, "run_attempt": 2, "workflow_id": 9,
+            "head_sha": head, "event": "push", "head_branch": "main",
+            "repository": {"id": 9, "full_name": "owner/repo"},
+        }
+        detail = {
+            **run, "repository": {"id": 9, "full_name": "owner/repo"},
+            "path": CACHE.WORKFLOW, "name": "Publish",
+        }
+        jobs = [{"name": "arm64-validation", "steps": [
+            {"name": CACHE.UPLOAD_STEP, "conclusion": "success"},
+        ]}]
+        manifest = {
+            "repository": "owner/repo", "workflow": CACHE.WORKFLOW,
+            "job": "arm64-validation", "runId": 25, "runAttempt": 2,
+            "event": "push", "builtCommit": head, "sourceCommit": head,
+            "producerHeadSha": head, "baseCommit": None, "pullRequest": None,
+        }
+        name = "bazel-cache-v2-arm64-validation-main-r25-a2"
+        CACHE.verify_producer(
+            run, detail, jobs, manifest, name, "main", None, "owner/repo",
+            job="arm64-validation",
+        )
+        mismatched = dict(manifest, job="quality-checks")
+        with self.assertRaisesRegex(CACHE.Invalid, "manifest job"):
+            CACHE.verify_producer(
+                run, detail, jobs, mismatched, name, "main", None, "owner/repo",
+                job="arm64-validation",
+            )
+        with self.assertRaisesRegex(CACHE.Invalid, "artifact name"):
+            CACHE.verify_producer(
+                run, detail, jobs, manifest,
+                "bazel-cache-v2-quality-checks-main-r25-a2",
+                "main", None, "owner/repo", job="arm64-validation",
+            )
 
     def test_identity_validation_rejects_wrong_repository_workflow_or_pr(self):
         head = "a" * 40
