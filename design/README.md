@@ -72,7 +72,9 @@ Use deterministic, isolated fixtures for data-fetching stories; unexpected reque
 
 ## App-specific styles
 
-Shared look and feel (colors, buttons, links, feedback, typography) lives in `design.css`. Apps may keep CSS for components that only they use, such as the image editor's crop area, but must not restyle or extend shared elements locally.
+Use semantic HTML and the existing Blades and shared component defaults first. For layout and spacing, prefer Tailwind utilities with the values configured in `design.css`. Avoid arbitrary values and custom CSS when the existing defaults and utilities meet the need.
+
+Shared look and feel (colors, buttons, links, feedback, typography) lives in `design.css`. Apps must not restyle or extend shared elements locally. App-specific CSS is reserved for needs that the shared defaults and utilities cannot reasonably meet, such as the image editor's crop area.
 
 ## Tailwind CSS
 

@@ -12,6 +12,7 @@ import {
   handle,
   isGalleryRead,
   isImageDelete,
+  isImageReorder,
   isImageUpload,
   observeUploads,
   orientedJpegFile,
@@ -689,6 +690,437 @@ test("a mirrored rotated JPEG uses the same oriented coordinates in preview and 
   await expectCropPixels(thumbnail, file, selected, 300, 225);
 });
 
+test("gallery up and down immediately save opaque IDs without optimistic movement", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  const releaseMutations = [Promise.withResolvers(), Promise.withResolvers()];
+  const reorderRequests = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      reorderRequests.push(route.request());
+      await releaseMutations[reorderRequests.length - 1].promise;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).locator("button").nth(0)).toBeDisabled();
+  await expect(rows.nth(1).locator("button").nth(1)).toBeDisabled();
+  await expect(rows.nth(0).locator("button").nth(1)).toBeEnabled();
+  await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
+  await expect(rows.locator("article")).toHaveCount(2);
+  await expect(page.locator(".gallery-handle")).toHaveCount(0);
+  await expect(
+    rows.first().locator(".gallery-move-controls button"),
+  ).toHaveCount(2);
+  expect(
+    await rows
+      .first()
+      .locator("article")
+      .evaluate((article) => {
+        const card = article.getBoundingClientRect();
+        const button = article
+          .querySelector('[id^="delete-image-"]')
+          .getBoundingClientRect();
+        return (
+          Math.abs(card.y + card.height / 2 - button.y - button.height / 2) < 1
+        );
+      }),
+  ).toBe(true);
+  expect(
+    await rows
+      .first()
+      .locator(".gallery-move-controls button")
+      .evaluateAll((buttons) =>
+        buttons.every((button) => {
+          const { width, height } = button.getBoundingClientRect();
+          return width >= 44 && height >= 44;
+        }),
+      ),
+  ).toBe(true);
+  expect(
+    await rows
+      .first()
+      .locator(".gallery-move-controls button")
+      .evaluateAll((buttons) =>
+        buttons.every((button) => {
+          const box = button.getBoundingClientRect();
+          const icon = button.querySelector("path").getBoundingClientRect();
+          return (
+            Math.abs(box.x + box.width / 2 - icon.x - icon.width / 2) < 0.5 &&
+            Math.abs(box.y + box.height / 2 - icon.y - icon.height / 2) < 0.5
+          );
+        }),
+      ),
+  ).toBe(true);
+
+  const moveUp = rows.nth(1).locator("button").nth(0);
+  const firstRowTop = (await rows.first().boundingBox()).y;
+  const responsePromise = page.waitForResponse((response) =>
+    isImageReorder(response.request()),
+  );
+  const requestPromise = page.waitForRequest(isImageReorder);
+  await moveUp.click();
+  const reorderRequest = await requestPromise;
+  const request = reorderRequest.postDataJSON();
+  expect(request.variables).toEqual({
+    recipeId: multiImageRecipe.id,
+    imageIds: [second.id, first.id],
+  });
+  expect(request.query).toContain(
+    "reorderImages(recipeId: $recipeId, imageIds: $imageIds)",
+  );
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(rows.nth(1).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.locator("button")).toHaveCount(6);
+  await expect(rows.locator("button").nth(0)).toBeDisabled();
+  await expect(page.locator("#upload-image")).toBeDisabled();
+  await expect(page.locator("#editor-status")).toHaveText(
+    "Bildreihenfolge wird gespeichert.",
+  );
+  await expect(page.locator('main [aria-busy="true"]')).toHaveCount(0);
+  expect((await rows.first().boundingBox()).y).toBeCloseTo(firstRowTop, 0);
+  expect(
+    await rows
+      .locator("button")
+      .evaluateAll((buttons) => buttons.every((button) => button.disabled)),
+  ).toBe(true);
+  await moveUp.click({ force: true });
+  expect(reorderRequests).toHaveLength(1);
+
+  releaseMutations[0].resolve();
+  const response = await responsePromise;
+  const result = await response.json();
+  expect(result.data.reorderImages.map((image) => image.id)).toEqual([
+    second.id,
+    first.id,
+  ]);
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(0).getByText("Standardbild")).toBeVisible();
+  await expect(
+    rows.locator("span").filter({ hasText: "Standardbild" }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByText(
+      "Bild an Position 1 verschoben und als Standardbild festgelegt.",
+      { exact: true },
+    ),
+  ).toHaveClass("sr-only");
+  await expect(page.locator(`[id="move-down-${second.id}"]`)).toBeFocused();
+
+  const moveDown = page.locator(`[id="move-down-${second.id}"]`);
+  const downResponsePromise = page.waitForResponse((response) =>
+    isImageReorder(response.request()),
+  );
+  const downRequestPromise = page.waitForRequest(isImageReorder);
+  await moveDown.click();
+  const downRequest = await downRequestPromise;
+  expect(downRequest.postDataJSON().variables).toEqual({
+    recipeId: multiImageRecipe.id,
+    imageIds: [first.id, second.id],
+  });
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(1).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  releaseMutations[1].resolve();
+  await downResponsePromise;
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(
+    page.getByText("Bild an Position 2 verschoben.", { exact: true }),
+  ).toHaveClass("sr-only");
+  await expect(page.locator(`[id="move-up-${second.id}"]`)).toBeFocused();
+  expect(reorderRequests).toHaveLength(2);
+});
+
+const transitionTest = test.extend({ viewTransitions: true });
+
+transitionTest(
+  "confirmed gallery moves animate both cards and respect reduced motion",
+  async ({ page, multiImageRecipe }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.addInitScript(() => {
+      window.galleryTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (options) => {
+        const transition = start(options);
+        transition.ready.then(() => {
+          const movements = document
+            .getAnimations()
+            .filter((animation) =>
+              animation.effect?.pseudoElement?.startsWith(
+                "::view-transition-group(match-element",
+              ),
+            )
+            .map((animation) => {
+              const frames = animation.effect.getKeyframes();
+              return (
+                new DOMMatrixReadOnly(frames[1].transform).m42 -
+                new DOMMatrixReadOnly(frames[0].transform).m42
+              );
+            });
+          window.galleryTransitions.push(movements);
+        });
+        return transition;
+      };
+    });
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    await rows
+      .nth(1)
+      .getByRole("button", { name: /nach oben verschieben/ })
+      .click();
+    await expect
+      .poll(() => page.evaluate(() => window.galleryTransitions.length))
+      .toBe(1);
+    const movements = await page.evaluate(() => window.galleryTransitions[0]);
+    expect(movements.some((distance) => distance < 0)).toBe(true);
+    expect(movements.some((distance) => distance > 0)).toBe(true);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      multiImageRecipe.images[1].thumbUrl,
+    );
+    await expect(
+      page.getByText("Bild an Position 1 verschoben", { exact: false }),
+    ).toHaveClass("sr-only");
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await rows
+      .first()
+      .getByRole("button", { name: /nach unten verschieben/ })
+      .click();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      multiImageRecipe.images[0].thumbUrl,
+    );
+    expect(await page.evaluate(() => window.galleryTransitions.length)).toBe(1);
+  },
+);
+
+transitionTest(
+  "confirmed deletion fades the removed card and moves remaining cards",
+  async ({ page, multiImageRecipe }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.addInitScript(() => {
+      window.galleryTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (options) => {
+        const transition = start(options);
+        transition.ready.then(() => {
+          const animations = document.getAnimations();
+          const movements = animations
+            .filter((animation) =>
+              animation.effect?.pseudoElement?.startsWith(
+                "::view-transition-group(match-element",
+              ),
+            )
+            .map((animation) => {
+              const frames = animation.effect.getKeyframes();
+              return (
+                new DOMMatrixReadOnly(frames[1].transform).m42 -
+                new DOMMatrixReadOnly(frames[0].transform).m42
+              );
+            });
+          const pseudos = animations.map(
+            (animation) => animation.effect?.pseudoElement,
+          );
+          window.galleryTransitions.push({
+            movements,
+            removed:
+              pseudos.filter((pseudo) =>
+                pseudo?.startsWith("::view-transition-old(match-element"),
+              ).length >
+              pseudos.filter((pseudo) =>
+                pseudo?.startsWith("::view-transition-new(match-element"),
+              ).length,
+          });
+        });
+        return transition;
+      };
+    });
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    const firstTop = (await rows.first().boundingBox()).y;
+    page.once("dialog", (dialog) => dialog.accept());
+    await rows
+      .first()
+      .getByRole("button", { name: /löschen$/ })
+      .click();
+    await expect
+      .poll(() => page.evaluate(() => window.galleryTransitions.length))
+      .toBe(1);
+    const transition = await page.evaluate(() => window.galleryTransitions[0]);
+    expect(transition.removed).toBe(true);
+    expect(transition.movements.some((distance) => distance < 0)).toBe(true);
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      multiImageRecipe.images[1].thumbUrl,
+    );
+    await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+      "sr-only",
+    );
+    expect((await rows.first().boundingBox()).y).toBeCloseTo(firstTop, 0);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    page.once("dialog", (dialog) => dialog.accept());
+    await rows
+      .first()
+      .getByRole("button", { name: /löschen$/ })
+      .click();
+    await expect(page.getByText("Kein Bild vorhanden.")).toBeVisible();
+    expect(await page.evaluate(() => window.galleryTransitions.length)).toBe(1);
+  },
+);
+
+test("reorder rejection and unknown outcome reconcile without automatic retry", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  let attempts = 0;
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      attempts += 1;
+      if (attempts === 1) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/graphql-response+json",
+          body: JSON.stringify({
+            errors: [
+              {
+                message: "Image collection changed",
+                extensions: { code: "image-order-conflict" },
+              },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.abort();
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  const secondUp = rows.nth(1).locator("button").nth(0);
+  await secondUp.click();
+  await expect(
+    page.getByText(
+      "Die Bildreihenfolge wurde zwischenzeitlich geändert. Der aktuelle Stand wird neu geladen.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+
+  await rows.nth(1).locator("button").nth(0).click();
+  await expect(
+    page.getByText(
+      "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
+  expect(attempts).toBe(2);
+});
+
+test("successful reorder with failed refresh stays confirmed and Retry only reads", async ({
+  page,
+  multiImageRecipe,
+}) => {
+  const [first, second] = multiImageRecipe.images;
+  let galleryReads = 0;
+  const reorders = [];
+  await page.route("**/graphql", async (route) => {
+    if (isImageReorder(route.request())) {
+      reorders.push(route.request());
+      await route.fallback();
+      return;
+    }
+    if (
+      isGalleryRead(route.request()) &&
+      reorders.length > 0 &&
+      ++galleryReads === 1
+    ) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/graphql-response+json",
+        body: JSON.stringify({
+          data: null,
+          errors: [{ message: "Gallery unavailable" }],
+        }),
+      });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await rows.nth(1).locator("button").nth(0).click();
+  await expect(
+    page.getByText("Reihenfolge gespeichert.", { exact: false }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    first.thumbUrl,
+  );
+  await expect(page.locator("#upload-image")).toBeDisabled();
+  await expect(rows.locator("button")).toHaveCount(6);
+  await expect(rows.locator("button").nth(0)).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Erneut laden" }),
+  ).toBeVisible();
+  expect(reorders).toHaveLength(1);
+
+  await page.getByRole("button", { name: "Erneut laden" }).click();
+  await expect(
+    page.getByText(
+      "Bild an Position 1 verschoben und als Standardbild festgelegt.",
+      { exact: true },
+    ),
+  ).toHaveClass("sr-only");
+  await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
+    "src",
+    second.thumbUrl,
+  );
+  await expect(rows.nth(0).locator("button").nth(0)).toBeDisabled();
+  expect(galleryReads).toBe(2);
+  expect(reorders).toHaveLength(1);
+});
+
 test("native confirmation can cancel or delete the sole image with exact identity", async ({
   page,
   request,
@@ -712,6 +1144,7 @@ test("native confirmation can cancel or delete the sole image with exact identit
   });
   await expect(deleteButton).toBeVisible();
   await expect(deleteButton).toBeEnabled();
+  await expect(page.locator(".gallery-move-controls")).toHaveCount(0);
 
   const cancelledDialog = page.waitForEvent("dialog");
   await deleteButton.focus();
@@ -755,12 +1188,15 @@ test("native confirmation can cancel or delete the sole image with exact identit
   );
   expect((await response.json()).data.deleteImage).toBe(true);
   expect(deletes).toHaveLength(1);
-  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+    "sr-only",
+  );
   await expect(
     page.getByText("Kein Bild vorhanden.", { exact: true }),
   ).toBeVisible();
   await expect(addInput(page)).toBeEnabled();
   await expect(addInput(page)).toBeFocused();
+  await expect(page.locator(".gallery-move-controls")).toHaveCount(0);
 });
 
 test("first-image deletion keeps the confirmed order and focuses the promoted default", async ({
@@ -787,7 +1223,9 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await page.goto(`/images-edit/${multiImageRecipe.id}`);
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(2);
-  const otherImageDelete = rows.nth(1).getByRole("button");
+  const otherImageDelete = rows
+    .nth(1)
+    .getByRole("button", { name: /löschen$/ });
   const cancelDialogPromise = page.waitForEvent("dialog");
   const cancelClick = otherImageDelete.click();
   const cancelDialog = await cancelDialogPromise;
@@ -797,7 +1235,7 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await expect(otherImageDelete).toBeFocused();
   expect(deletes).toHaveLength(0);
 
-  const deleteButton = rows.first().getByRole("button");
+  const deleteButton = rows.first().getByRole("button", { name: /löschen$/ });
   const requestPromise = page.waitForRequest(isImageDelete);
   const dialogPromise = page.waitForEvent("dialog");
   const clickPromise = deleteButton.click();
@@ -808,14 +1246,17 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await dialog.accept();
   await clickPromise;
   await requestPromise;
-  await expect(rows.locator("button")).toHaveCount(2);
-  await expect(rows.locator("button").nth(0)).toBeDisabled();
-  await expect(rows.locator("button").nth(1)).toBeDisabled();
+  await expect(rows.locator("button")).toHaveCount(6);
+  expect(
+    await rows
+      .locator("button")
+      .evaluateAll((buttons) => buttons.every((button) => button.disabled)),
+  ).toBe(true);
   await expect(addInput(page)).toBeDisabled();
-  await expect(page.locator("#editor-status")).toHaveAttribute(
-    "aria-busy",
-    "true",
+  await expect(page.locator("#editor-status")).toHaveText(
+    "Bild wird gelöscht.",
   );
+  await expect(page.locator('main [aria-busy="true"]')).toHaveCount(0);
   expect(deletes).toHaveLength(1);
   releaseMutation.resolve();
 
@@ -832,11 +1273,9 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
   await expect(
     rows.first().getByRole("img", { name: "Rezeptbild 1" }),
   ).toHaveAttribute("src", multiImageRecipe.images[1].thumbUrl);
-  await expect(rows.first().getByRole("button")).toBeFocused();
-  await expect(rows.first().getByRole("button")).toHaveAttribute(
-    "id",
-    `delete-image-${next.id}`,
-  );
+  await expect(
+    rows.first().locator(`[id="delete-image-${next.id}"]`),
+  ).toBeFocused();
   expect(deletes).toHaveLength(1);
 });
 
@@ -859,7 +1298,7 @@ test("accepted non-first deletion keeps the default and focuses the preceding ro
   await page.goto(`/images-edit/${multiImageRecipe.id}`);
   const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
   await expect(rows).toHaveCount(2);
-  const deleteButton = rows.nth(1).getByRole("button");
+  const deleteButton = rows.nth(1).getByRole("button", { name: /löschen$/ });
   const responsePromise = page.waitForResponse((response) =>
     isImageDelete(response.request()),
   );
@@ -880,11 +1319,9 @@ test("accepted non-first deletion keeps the default and focuses the preceding ro
   await expect(
     rows.first().getByRole("img", { name: "Rezeptbild 1" }),
   ).toHaveAttribute("src", defaultImage.thumbUrl);
-  await expect(rows.first().getByRole("button")).toBeFocused();
-  await expect(rows.first().getByRole("button")).toHaveAttribute(
-    "id",
-    `delete-image-${defaultImage.id}`,
-  );
+  await expect(
+    rows.first().locator(`[id="delete-image-${defaultImage.id}"]`),
+  ).toBeFocused();
   expect(deletes).toHaveLength(1);
 });
 
@@ -938,7 +1375,9 @@ test("successful deletion stays successful when refresh fails and Retry only rea
     imageId,
   });
   expect((await response.json()).data.deleteImage).toBe(true);
-  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+    "feedback warning",
+  );
   await expect(
     page.getByText(
       "Rezeptbilder konnten nicht aktualisiert werden. Die angezeigten Bilder stammen aus dem letzten erfolgreichen Laden.",
@@ -966,7 +1405,9 @@ test("successful deletion stays successful when refresh fails and Retry only rea
   await expect(
     page.getByText("Kein Bild vorhanden.", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Bild gelöscht.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bild gelöscht.", { exact: true })).toHaveClass(
+    "sr-only",
+  );
   expect(galleryReads).toBe(2);
   expect(deletes).toHaveLength(1);
 });

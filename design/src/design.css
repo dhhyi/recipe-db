@@ -192,6 +192,20 @@ header-component > header:focus-within {
   }
 }
 
+:root:active-view-transition-type(gallery-change) {
+  [data-gallery-card] {
+    view-transition-name: match-element;
+  }
+
+  &::view-transition-old(root) {
+    display: none;
+  }
+
+  &::view-transition-new(root) {
+    animation: none;
+  }
+}
+
 :root:active-view-transition-type(tag-edit, tag-search) {
   .recipe-image,
   .recipe-rating,
@@ -345,8 +359,13 @@ recipe-image-carousel {
   display: block;
 }
 
+recipe-image-carousel recipe-chevron {
+  display: contents;
+}
+
 recipe-image-carousel :is(.swiper-button-prev, .swiper-button-next) {
   opacity: 0.7;
+  padding: 12px 16px;
 }
 
 recipe-image-carousel

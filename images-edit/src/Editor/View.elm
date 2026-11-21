@@ -1,11 +1,11 @@
 module Editor.View exposing (view)
 
 import Crop exposing (Crop)
-import Editor.Types exposing (GalleryFeedbackKind(..), Model, Msg(..), Phase(..), Session, canAdd, canDelete, imageLimit)
+import Editor.Types exposing (GalleryFeedbackKind(..), Model, MoveDirection(..), Msg(..), Phase(..), Session, canAdd, canDelete, canMove, imageLimit)
 import File exposing (File)
-import Html exposing (Html, a, button, div, h1, img, input, label, li, p, span, text)
+import Html exposing (Html, a, article, button, div, h1, img, input, label, li, p, span, text)
 import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
-import Html.Events exposing (on, onClick)
+import Html.Events exposing (on, onClick, stopPropagationOn)
 import Html.Keyed
 import Json.Decode as D
 import RecipeDB
@@ -148,7 +148,12 @@ loadingPlaceholder loadingLabel =
 
 editorPage : List (Html Msg) -> Html Msg
 editorPage content =
-    Html.main_ [ class "image-editor" ]
+    Html.main_
+        [ class "image-editor"
+
+        -- Stop-propagation events make Elm render synchronously inside the view transition.
+        , stopPropagationOn "apply-gallery" (D.map (\token -> ( ApplyGallery token, True )) (D.field "detail" D.int))
+        ]
         content
 
 
@@ -164,7 +169,12 @@ editorStatus model =
                 "Galerie wird aktualisiert. Die angezeigten Bilder zeigen den zuletzt geladenen Stand."
 
             else if model.galleryMutation /= Nothing then
-                "Bild wird gelöscht."
+                case model.galleryMutation |> Maybe.andThen .movement of
+                    Just _ ->
+                        "Bildreihenfolge wird gespeichert."
+
+                    Nothing ->
+                        "Bild wird gelöscht."
 
             else if model.phase == Viewing && model.savedFeedback then
                 "Bild gespeichert."
@@ -176,24 +186,17 @@ editorStatus model =
                 ""
     in
     p
-        ([ id "editor-status"
-         , attribute "role" "status"
-         , attribute "tabindex" "-1"
-         , class
+        [ id "editor-status"
+        , attribute "role" "status"
+        , attribute "tabindex" "-1"
+        , class
             (if model.phase == Viewing && model.savedFeedback && model.galleryMutation == Nothing then
                 "feedback success save-feedback"
 
              else
-                "editor-announcement"
+                "sr-only"
             )
-         ]
-            ++ (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
-                    [ attribute "aria-busy" "true" ]
-
-                else
-                    []
-               )
-        )
+        ]
         [ text message ]
 
 
@@ -203,12 +206,41 @@ galleryFeedback model =
         Just feedback ->
             case feedback.kind of
                 DeletionSucceeded ->
-                    p [ attribute "role" "status", class "feedback success" ] [ text feedback.message ]
+                    p
+                        [ attribute "role" "status"
+                        , class
+                            (if model.galleryError /= Nothing then
+                                "feedback warning"
+
+                             else
+                                "sr-only"
+                            )
+                        ]
+                        [ text feedback.message ]
 
                 ImageAlreadyAbsent ->
                     p [ attribute "role" "status", class "feedback warning" ] [ text feedback.message ]
 
                 DeletionUnconfirmed ->
+                    p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
+
+                ReorderingSucceeded ->
+                    p
+                        [ attribute "role" "status"
+                        , class
+                            (if model.galleryError /= Nothing then
+                                "feedback warning"
+
+                             else
+                                "sr-only"
+                            )
+                        ]
+                        [ text feedback.message ]
+
+                ReorderingRejected ->
+                    p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
+
+                ReorderingUnconfirmed ->
                     p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
 
         Nothing ->
@@ -254,7 +286,7 @@ galleryView model =
     editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
             [ h1
-                ([ id "gallery-heading", attribute "tabindex" "-1" ]
+                ([ id "gallery-heading", attribute "tabindex" "-1", class "focus:outline-2 focus:outline-offset-2" ]
                     ++ (if model.savedFeedback then
                             [ attribute "aria-describedby" "editor-status" ]
 
@@ -263,10 +295,11 @@ galleryView model =
                        )
                 )
                 [ text (model.recipeName |> Maybe.map (\name -> "Bilder für " ++ name ++ " verwalten") |> Maybe.withDefault "Rezeptbilder verwalten") ]
-            , label [ class "gallery-add" ]
+            , label [ class "relative inline-block cursor-pointer rounded border border-current px-3 py-2 focus-within:outline-2 focus-within:outline-offset-2 has-disabled:cursor-default has-disabled:opacity-50" ]
                 [ text "Bild hinzufügen"
                 , input
                     [ id "upload-image"
+                    , class "absolute inset-0 m-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
                     , type_ "file"
                     , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
                     , attribute "aria-describedby" "gallery-file-help"
@@ -302,20 +335,14 @@ galleryContent : Model -> Maybe (List RecipeDB.GalleryImage) -> Set String -> Ht
 galleryContent model images failed =
     case ( model.recipe, images ) of
         ( RemoteData.Success (Just _), Just entries ) ->
-            div
-                (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
-                    [ attribute "aria-busy" "true" ]
-
-                 else
-                    []
-                )
+            div []
                 [ p [] [ text (String.fromInt (List.length entries) ++ " / " ++ String.fromInt imageLimit) ]
                 , if List.isEmpty entries then
                     p [] [ text "Kein Bild vorhanden." ]
 
                   else
                     Html.Keyed.node "ol"
-                        [ class "gallery-list", attribute "aria-label" "Rezeptbilder" ]
+                        [ class "flex list-none flex-col gap-2 p-0", attribute "aria-label" "Rezeptbilder" ]
                         (List.indexedMap (galleryRow model failed) entries)
                 ]
 
@@ -335,39 +362,76 @@ galleryRow model failed index image =
         description : String
         description =
             "Rezeptbild " ++ String.fromInt (index + 1)
+
+        imageCount : Int
+        imageCount =
+            case model.recipe of
+                RemoteData.Success (Just recipe) ->
+                    recipe.images |> Maybe.map List.length |> Maybe.withDefault 0
+
+                _ ->
+                    0
     in
     ( image.id
-    , li [ class "gallery-row" ]
-        [ if Set.member image.id failed then
-            span
-                [ class "gallery-thumbnail gallery-thumbnail-unavailable"
-                , attribute "role" "img"
-                , attribute "aria-label" description
-                ]
-                [ text "Vorschaubild nicht verfügbar" ]
+    , li [ id ("gallery-image-" ++ image.id), attribute "tabindex" "-1" ]
+        [ article [ class "m-0 flex flex-wrap items-center gap-2", attribute "data-gallery-card" "" ]
+            [ if imageCount > 1 then
+                div [ class "gallery-move-controls flex flex-col gap-1" ]
+                    [ button
+                        [ type_ "button"
+                        , class "outline m-0 flex aspect-square items-center justify-center"
+                        , id ("move-up-" ++ image.id)
+                        , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach oben verschieben")
+                        , disabled (not (canMove model image.id MoveUp))
+                        , onClick (MoveImage image.id MoveUp)
+                        ]
+                        [ Html.node "recipe-chevron" [ class "inline-block h-3 w-3 -rotate-90 [&>svg]:block [&>svg]:h-full [&>svg]:w-full", attribute "aria-hidden" "true" ] [] ]
+                    , button
+                        [ type_ "button"
+                        , class "outline m-0 flex aspect-square items-center justify-center"
+                        , id ("move-down-" ++ image.id)
+                        , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach unten verschieben")
+                        , disabled (not (canMove model image.id MoveDown))
+                        , onClick (MoveImage image.id MoveDown)
+                        ]
+                        [ Html.node "recipe-chevron" [ class "inline-block h-3 w-3 rotate-90 [&>svg]:block [&>svg]:h-full [&>svg]:w-full", attribute "aria-hidden" "true" ] [] ]
+                    ]
 
-          else
-            img
-                [ src image.thumbUrl
-                , alt description
-                , class "gallery-thumbnail"
-                , on "error" (D.succeed (ThumbnailFailed image.id))
-                ]
-                []
-        , if index == 0 then
-            span [] [ text "Standardbild" ]
+              else
+                text ""
+            , div [ class "flex flex-col items-center gap-1 sm:flex-row sm:gap-2" ]
+                [ if Set.member image.id failed then
+                    span
+                        [ class "grid aspect-4/3 w-21 max-w-full place-items-center border border-current text-center"
+                        , attribute "role" "img"
+                        , attribute "aria-label" description
+                        ]
+                        [ text "Vorschaubild nicht verfügbar" ]
 
-          else
-            text ""
-        , button
-            [ type_ "button"
-            , class "outline"
-            , id ("delete-image-" ++ image.id)
-            , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " löschen")
-            , disabled (not (canDelete model image.id))
-            , onClick (DeleteImage image.id)
+                  else
+                    img
+                        [ src image.thumbUrl
+                        , alt description
+                        , class "aspect-4/3 w-21 max-w-full object-contain"
+                        , on "error" (D.succeed (ThumbnailFailed image.id))
+                        ]
+                        []
+                , if index == 0 then
+                    span [] [ text "Standardbild" ]
+
+                  else
+                    text ""
+                ]
+            , button
+                [ type_ "button"
+                , class "outline m-0 ml-auto"
+                , id ("delete-image-" ++ image.id)
+                , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " löschen")
+                , disabled (not (canDelete model image.id))
+                , onClick (DeleteImage image.id)
+                ]
+                [ text "Löschen" ]
             ]
-            [ text "Löschen" ]
         ]
     )
 

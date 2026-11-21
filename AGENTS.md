@@ -1,5 +1,9 @@
 # Agent instructions
 
+## Frontend design
+
+Before designing or changing a frontend, read and follow the [design guidelines](design/README.md).
+
 ## README changes
 
 Do not add new content to README.md files unless the user explicitly asks for it. Update existing content when changes make it outdated.

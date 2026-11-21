@@ -4,7 +4,7 @@ import Browser.Dom
 import Crop exposing (Crop, Handle, Point)
 import Editor.Bridge exposing (Incoming(..), command, incoming, release)
 import Editor.Source as Source
-import Editor.Types exposing (GalleryFeedback, GalleryFeedbackKind(..), GalleryMutation, Model, Msg(..), Phase(..), canAdd, canDelete, dirty)
+import Editor.Types exposing (GalleryFeedback, GalleryFeedbackKind(..), GalleryMovement, GalleryMutation, Model, MoveDirection(..), Msg(..), Phase(..), canAdd, canDelete, canMove, dirty)
 import File
 import Json.Decode as D
 import Json.Encode as E
@@ -35,77 +35,29 @@ step : Msg -> Model -> ( Model, Cmd Msg )
 step msg model =
     case msg of
         GotRecipe token recipe ->
-            if model.phase == Viewing && model.galleryRefreshing && token == model.galleryToken then
-                let
-                    readError : Maybe String
-                    readError =
-                        case recipe of
-                            RemoteData.Failure _ ->
-                                Just "Rezeptbilder konnten nicht geladen werden."
+            if model.phase == Viewing && model.galleryRefreshing && token == model.galleryToken && model.pendingGallery == Nothing then
+                if shouldAnimateGallery model recipe then
+                    ( { model | pendingGallery = Just ( token, recipe ) }
+                    , command "transition-gallery" [ ( "token", E.int token ) ]
+                    )
 
-                            RemoteData.Loading ->
-                                Just "Rezeptbilder konnten nicht geladen werden."
-
-                            RemoteData.Success (Just data) ->
-                                if data.images == Nothing then
-                                    Just "Rezeptbilder konnten nicht geladen werden."
-
-                                else
-                                    Nothing
-
-                            _ ->
-                                Nothing
-
-                    displayedRecipe : RecipeDB.RecipeModel
-                    displayedRecipe =
-                        if readError /= Nothing && model.galleryMutation /= Nothing then
-                            model.recipe
-
-                        else
-                            recipe
-
-                    next : Model
-                    next =
-                        { model
-                            | recipe = displayedRecipe
-                            , galleryRefreshing = False
-                            , galleryError = readError
-                            , galleryMutation =
-                                if readError == Nothing then
-                                    Nothing
-
-                                else
-                                    model.galleryMutation
-                            , recipeName =
-                                case displayedRecipe of
-                                    RemoteData.Success (Just data) ->
-                                        Just data.name
-
-                                    _ ->
-                                        model.recipeName
-                            , focusAfterCancel = False
-                        }
-
-                    focusCommand : Cmd Msg
-                    focusCommand =
-                        case ( model.focusAfterCancel, model.galleryMutation, readError ) of
-                            ( True, _, Nothing ) ->
-                                if canAdd next then
-                                    focus "upload-image"
-
-                                else
-                                    Cmd.none
-
-                            ( False, Just mutation, Nothing ) ->
-                                focusAfterDeletion next mutation
-
-                            _ ->
-                                Cmd.none
-                in
-                ( next, focusCommand )
+                else
+                    applyGallery model recipe
 
             else
                 ( model, Cmd.none )
+
+        ApplyGallery token ->
+            case model.pendingGallery of
+                Just ( pendingToken, recipe ) ->
+                    if token == pendingToken && token == model.galleryToken && model.phase == Viewing && model.galleryRefreshing then
+                        applyGallery { model | pendingGallery = Nothing } recipe
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         GotCapabilities capabilities ->
             ( { model | capabilities = capabilities }, Cmd.none )
@@ -117,6 +69,49 @@ step msg model =
 
                 else
                     reconcileGallery model
+
+            else
+                ( model, Cmd.none )
+
+        MoveImage imageId direction ->
+            if canMove model imageId direction then
+                case ( currentImages model, imageIndex model imageId ) of
+                    ( Just images, Just index ) ->
+                        let
+                            targetIndex : Int
+                            targetIndex =
+                                moveTarget direction index
+
+                            reordered : List RecipeDB.GalleryImage
+                            reordered =
+                                swapImages index targetIndex images
+
+                            token : Int
+                            token =
+                                model.mutationToken + 1
+
+                            movement : GalleryMovement
+                            movement =
+                                { direction = direction, fromIndex = index, toIndex = targetIndex }
+
+                            mutation : GalleryMutation
+                            mutation =
+                                { token = token, imageId = imageId, index = targetIndex, movement = Just movement, writing = True }
+                        in
+                        ( { model
+                            | galleryMutation = Just mutation
+                            , mutationToken = token
+                            , galleryFeedback = Nothing
+                            , savedFeedback = False
+                          }
+                        , Cmd.batch
+                            [ RecipeDB.makeReorderImagesRequest model.recipeId (List.map .id reordered) (Reordered token)
+                            , focusWithoutScroll "editor-status"
+                            ]
+                        )
+
+                    _ ->
+                        ( model, Cmd.none )
 
             else
                 ( model, Cmd.none )
@@ -163,7 +158,7 @@ step msg model =
         Deleted token response ->
             case model.galleryMutation of
                 Just mutation ->
-                    if token /= mutation.token then
+                    if token /= mutation.token || mutation.movement /= Nothing || not mutation.writing || model.galleryRefreshing then
                         ( model, Cmd.none )
 
                     else
@@ -193,12 +188,62 @@ step msg model =
 
                             next : Model
                             next =
-                                { model | galleryFeedback = Just feedback }
+                                { model
+                                    | galleryFeedback = Just feedback
+                                    , galleryMutation = Just { mutation | writing = False }
+                                }
 
                             ( refreshing, request ) =
                                 reconcileGallery next
                         in
-                        ( refreshing, Cmd.batch [ request, focus "editor-status" ] )
+                        ( refreshing, Cmd.batch [ request, focusWithoutScroll "editor-status" ] )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        Reordered token response ->
+            case model.galleryMutation of
+                Just mutation ->
+                    if token /= mutation.token || mutation.movement == Nothing || not mutation.writing || model.galleryRefreshing then
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            feedback : GalleryFeedback
+                            feedback =
+                                case response of
+                                    RemoteData.Success RecipeDB.ReorderConfirmed ->
+                                        { kind = ReorderingSucceeded
+                                        , message = "Reihenfolge gespeichert. Die aktuelle Position wird geladen."
+                                        }
+
+                                    RemoteData.Success (RecipeDB.ReorderRejected message) ->
+                                        { kind = ReorderingRejected, message = message }
+
+                                    RemoteData.Success (RecipeDB.ReorderUnconfirmed message) ->
+                                        { kind = ReorderingUnconfirmed, message = message }
+
+                                    RemoteData.Failure message ->
+                                        { kind = ReorderingUnconfirmed
+                                        , message = message
+                                        }
+
+                                    _ ->
+                                        { kind = ReorderingUnconfirmed
+                                        , message = "Die Änderung der Bildreihenfolge konnte nicht bestätigt werden. Der aktuelle Stand wird neu geladen."
+                                        }
+
+                            next : Model
+                            next =
+                                { model
+                                    | galleryFeedback = Just feedback
+                                    , galleryMutation = Just { mutation | writing = False }
+                                }
+
+                            ( refreshing, request ) =
+                                reconcileGallery next
+                        in
+                        ( refreshing, Cmd.batch [ request, focusWithoutScroll "editor-status" ] )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -339,6 +384,103 @@ step msg model =
             ( model, Cmd.none )
 
 
+shouldAnimateGallery : Model -> RecipeDB.RecipeModel -> Bool
+shouldAnimateGallery model recipe =
+    case ( model.galleryMutation, model.galleryFeedback, recipe ) of
+        ( Just mutation, Just feedback, RemoteData.Success (Just data) ) ->
+            case ( currentImages model, data.images ) of
+                ( Just oldImages, Just newImages ) ->
+                    (feedback.kind
+                        == ReorderingSucceeded
+                        && mutation.movement
+                        /= Nothing
+                        || feedback.kind
+                        == DeletionSucceeded
+                        && mutation.movement
+                        == Nothing
+                    )
+                        && List.map .id oldImages
+                        /= List.map .id newImages
+
+                _ ->
+                    False
+
+        _ ->
+            False
+
+
+applyGallery : Model -> RecipeDB.RecipeModel -> ( Model, Cmd Msg )
+applyGallery model recipe =
+    let
+        readError : Maybe String
+        readError =
+            case recipe of
+                RemoteData.Failure _ ->
+                    Just "Rezeptbilder konnten nicht geladen werden."
+
+                RemoteData.Loading ->
+                    Just "Rezeptbilder konnten nicht geladen werden."
+
+                RemoteData.Success (Just data) ->
+                    if data.images == Nothing then
+                        Just "Rezeptbilder konnten nicht geladen werden."
+
+                    else
+                        Nothing
+
+                _ ->
+                    Nothing
+
+        displayedRecipe : RecipeDB.RecipeModel
+        displayedRecipe =
+            if readError /= Nothing && model.galleryMutation /= Nothing then
+                model.recipe
+
+            else
+                recipe
+
+        next : Model
+        next =
+            { model
+                | recipe = displayedRecipe
+                , galleryRefreshing = False
+                , galleryError = readError
+                , galleryFeedback = galleryFeedbackAfterRead model readError displayedRecipe
+                , galleryMutation =
+                    if readError == Nothing then
+                        Nothing
+
+                    else
+                        model.galleryMutation
+                , recipeName =
+                    case displayedRecipe of
+                        RemoteData.Success (Just data) ->
+                            Just data.name
+
+                        _ ->
+                            model.recipeName
+                , focusAfterCancel = False
+            }
+
+        focusCommand : Cmd Msg
+        focusCommand =
+            case ( model.focusAfterCancel, model.galleryMutation, readError ) of
+                ( True, _, Nothing ) ->
+                    if canAdd next then
+                        focus "upload-image"
+
+                    else
+                        Cmd.none
+
+                ( False, Just mutation, Nothing ) ->
+                    focusAfterMutation next mutation
+
+                _ ->
+                    Cmd.none
+    in
+    ( next, focusCommand )
+
+
 loadGallery : Model -> ( Model, Cmd Msg )
 loadGallery model =
     let
@@ -407,6 +549,11 @@ returnToGallery saved model token =
 focus : String -> Cmd Msg
 focus target =
     Browser.Dom.focus target |> Task.attempt (\_ -> Focused)
+
+
+focusWithoutScroll : String -> Cmd Msg
+focusWithoutScroll target =
+    command "focus-without-scroll" [ ( "id", E.string target ) ]
 
 
 loadFailed : Int -> Source.Problem -> Model -> ( Model, Cmd Msg )
@@ -582,7 +729,7 @@ startGalleryDeletion model imageId =
 
                 mutation : GalleryMutation
                 mutation =
-                    { token = token, imageId = imageId, index = index }
+                    { token = token, imageId = imageId, index = index, movement = Nothing, writing = True }
             in
             ( { model
                 | galleryMutation = Just mutation
@@ -592,12 +739,22 @@ startGalleryDeletion model imageId =
               }
             , Cmd.batch
                 [ RecipeDB.makeDeleteImageRequest model.recipeId imageId (Deleted token)
-                , focus "editor-status"
+                , focusWithoutScroll "editor-status"
                 ]
             )
 
         Nothing ->
             ( model, Cmd.none )
+
+
+focusAfterMutation : Model -> GalleryMutation -> Cmd Msg
+focusAfterMutation model mutation =
+    case mutation.movement of
+        Just movement ->
+            focusAfterReordering model mutation movement
+
+        Nothing ->
+            focusAfterDeletion model mutation
 
 
 focusAfterDeletion : Model -> GalleryMutation -> Cmd Msg
@@ -614,17 +771,17 @@ focusAfterDeletion model mutation =
             case image of
                 Just entry ->
                     if canDelete model entry.id then
-                        focus ("delete-image-" ++ entry.id)
+                        focusWithoutScroll ("delete-image-" ++ entry.id)
 
                     else
-                        focus "gallery-heading"
+                        focusWithoutScroll "gallery-heading"
 
                 Nothing ->
                     if canAdd model then
-                        focus "upload-image"
+                        focusWithoutScroll "upload-image"
 
                     else
-                        focus "gallery-heading"
+                        focusWithoutScroll "gallery-heading"
 
         next : Maybe RecipeDB.GalleryImage
         next =
@@ -636,3 +793,111 @@ focusAfterDeletion model mutation =
 
         Nothing ->
             focusRow (List.take mutation.index remaining |> List.reverse |> List.head)
+
+
+focusAfterReordering : Model -> GalleryMutation -> GalleryMovement -> Cmd Msg
+focusAfterReordering model mutation movement =
+    let
+        focusDirection : MoveDirection -> Cmd Msg
+        focusDirection direction =
+            focusWithoutScroll
+                ((case direction of
+                    MoveUp ->
+                        "move-up-"
+
+                    MoveDown ->
+                        "move-down-"
+                 )
+                    ++ mutation.imageId
+                )
+    in
+    if canMove model mutation.imageId movement.direction then
+        focusDirection movement.direction
+
+    else
+        let
+            opposite : MoveDirection
+            opposite =
+                case movement.direction of
+                    MoveUp ->
+                        MoveDown
+
+                    MoveDown ->
+                        MoveUp
+        in
+        if canMove model mutation.imageId opposite then
+            focusDirection opposite
+
+        else
+            focusWithoutScroll ("gallery-image-" ++ mutation.imageId)
+
+
+galleryFeedbackAfterRead : Model -> Maybe String -> RecipeDB.RecipeModel -> Maybe GalleryFeedback
+galleryFeedbackAfterRead model readError recipe =
+    case ( model.galleryMutation, model.galleryFeedback, readError ) of
+        ( Just mutation, Just feedback, Just _ ) ->
+            if mutation.movement /= Nothing && feedback.kind == ReorderingSucceeded then
+                Just { feedback | message = "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden." }
+
+            else
+                Just feedback
+
+        ( Just mutation, Just feedback, Nothing ) ->
+            if mutation.movement /= Nothing && feedback.kind == ReorderingSucceeded then
+                Just { feedback | message = reorderingSuccessMessage recipe mutation }
+
+            else
+                Just feedback
+
+        _ ->
+            model.galleryFeedback
+
+
+reorderingSuccessMessage : RecipeDB.RecipeModel -> GalleryMutation -> String
+reorderingSuccessMessage recipe mutation =
+    case recipe of
+        RemoteData.Success (Just data) ->
+            case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
+                Just index ->
+                    if index == 0 then
+                        "Bild an Position 1 verschoben und als Standardbild festgelegt."
+
+                    else
+                        "Bild an Position " ++ String.fromInt (index + 1) ++ " verschoben."
+
+                Nothing ->
+                    "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
+
+        _ ->
+            "Reihenfolge gespeichert. Die aktuelle Position konnte nicht geladen werden."
+
+
+moveTarget : MoveDirection -> Int -> Int
+moveTarget direction index =
+    case direction of
+        MoveUp ->
+            index - 1
+
+        MoveDown ->
+            index + 1
+
+
+swapImages : Int -> Int -> List RecipeDB.GalleryImage -> List RecipeDB.GalleryImage
+swapImages fromIndex toIndex images =
+    case ( List.drop fromIndex images |> List.head, List.drop toIndex images |> List.head ) of
+        ( Just fromImage, Just toImage ) ->
+            images
+                |> List.indexedMap
+                    (\index image ->
+                        if index == fromIndex then
+                            toImage
+
+                        else if index == toIndex then
+                            fromImage
+
+                        else
+                            image
+                    )
+
+        _ ->
+            images

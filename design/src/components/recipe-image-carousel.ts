@@ -4,6 +4,7 @@ import "swiper/css";
 import "swiper/css/navigation";
 import "swiper/css/pagination";
 import imageNotAvailableUrl from "../assets/image-not-available.svg?no-inline";
+import "./recipe-chevron.ts";
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -40,6 +41,10 @@ export class RecipeImageCarousel extends HTMLElement {
 
     this.dataset.enhanced = "true";
     try {
+      for (const control of [previous, next]) {
+        if (!control.querySelector("recipe-chevron"))
+          control.append(document.createElement("recipe-chevron"));
+      }
       this.swiper = new Swiper(container, {
         modules: [Navigation, Pagination, A11y],
         loop: false,
@@ -47,6 +52,7 @@ export class RecipeImageCarousel extends HTMLElement {
         navigation: {
           prevEl: previous,
           nextEl: next,
+          addIcons: false,
         },
         pagination: {
           el: pagination,
