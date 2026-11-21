@@ -7,7 +7,7 @@ export default mergeConfig(
   viteConfig,
   defineConfig({
     test: {
-      include: ["src/tests/header.visual.touch.test.ts"],
+      include: ["src/tests/**/*.touch-test.ts"],
       browser: {
         enabled: true,
         provider: playwright({ contextOptions: { hasTouch: true } }),
