@@ -484,8 +484,19 @@ test("unequal rows do not oscillate after a midpoint is crossed", () => {
     dataset: { enabled: "true", galleryHandle: "a" },
     closest: () => list,
   };
-  const target = { closest: (selector) => selector === "[data-gallery-handle]" ? handle : null };
-  const event = { target, isPrimary: true, button: 0, pointerId: 1, clientX: 20, clientY: 90, preventDefault() {} };
+  const target = {
+    closest: (selector) =>
+      selector === "[data-gallery-handle]" ? handle : null,
+  };
+  const event = {
+    target,
+    isPrimary: true,
+    button: 0,
+    pointerId: 1,
+    clientX: 20,
+    clientY: 90,
+    preventDefault() {},
+  };
   bridge.dispatch("pointerdown", event);
   bridge.dispatch("pointermove", { ...event, clientY: 240 });
   assert.equal(bridge.events.at(-1).index, 1);

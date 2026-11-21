@@ -276,52 +276,54 @@ galleryTests =
         dragUnknown =
             apply (Reordered dragDrop.mutationToken (RemoteData.Failure "Ungewiss")) dragDrop
 
-        dragSuccess : Editor.Model
-        dragSuccess =
-            apply (Reordered dragDrop.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) dragDrop
-
+        firstDrag : Editor.Model
         firstDrag =
             apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/1" ) ]) threeImages
                 |> apply (dragEvent "gallery-drag-move" [ ( "index", E.int 2 ) ])
                 |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
 
+        firstDragSuccess : Editor.Model
         firstDragSuccess =
             apply (Reordered firstDrag.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) firstDrag
 
+        differentRead : RecipeDB.RecipeModel
         differentRead =
             RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })
 
+        firstDragReady : Editor.Model
         firstDragReady =
             apply (GotRecipe firstDragSuccess.galleryToken differentRead) firstDragSuccess
 
+        firstDragReconciled : Editor.Model
         firstDragReconciled =
             apply (ApplyGallery firstDragReady.galleryToken) firstDragReady
 
+        nonDefaultDrag : Editor.Model
         nonDefaultDrag =
             apply (dragEvent "gallery-drag-move" [ ( "index", E.int 2 ) ]) dragStart
                 |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
 
+        nonDefaultWritten : Editor.Model
         nonDefaultWritten =
             apply (Reordered nonDefaultDrag.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) nonDefaultDrag
 
+        concurrentRead : RecipeDB.RecipeModel
         concurrentRead =
             RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })
 
+        nonDefaultReady : Editor.Model
         nonDefaultReady =
             apply (GotRecipe nonDefaultWritten.galleryToken concurrentRead) nonDefaultWritten
 
+        nonDefaultReconciled : Editor.Model
         nonDefaultReconciled =
             apply (ApplyGallery nonDefaultReady.galleryToken) nonDefaultReady
 
-        withPriorError =
-            { threeImages | galleryFeedback = Just { kind = Editor.ReorderingRejected, message = "Konflikt" } }
-
-        priorErrorDrag =
-            apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/2" ) ]) withPriorError
-
+        unknownFirstDrag : Editor.Model
         unknownFirstDrag =
             apply (Reordered firstDrag.mutationToken (RemoteData.Failure "Ungewiss")) firstDrag
 
+        unknownCommitted : Editor.Model
         unknownCommitted =
             apply
                 (GotRecipe unknownFirstDrag.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" } ] })))
@@ -563,12 +565,23 @@ galleryTests =
       )
     , ( "cancel and no-op retain prior mutation error; a new write clears it"
       , let
+            withPriorError : Editor.Model
+            withPriorError =
+                { threeImages | galleryFeedback = Just { kind = Editor.ReorderingRejected, message = "Konflikt" } }
+
+            priorErrorDrag : Editor.Model
+            priorErrorDrag =
+                apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/2" ) ]) withPriorError
+
+            cancel : Editor.Model
             cancel =
                 apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool True ) ]) priorErrorDrag
 
+            noOp : Editor.Model
             noOp =
                 apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) priorErrorDrag
 
+            dropped : Editor.Model
             dropped =
                 apply (dragEvent "gallery-drag-move" [ ( "index", E.int 0 ) ]) priorErrorDrag
                     |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
@@ -595,9 +608,15 @@ galleryTests =
       )
     , ( "successful drag with failed read retains optimistic order and retry only reads"
       , let
+            dragSuccess : Editor.Model
+            dragSuccess =
+                apply (Reordered dragDrop.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) dragDrop
+
+            failed : Editor.Model
             failed =
                 dragFailedRead dragSuccess
 
+            retried : Editor.Model
             retried =
                 apply RetryGallery failed
         in

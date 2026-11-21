@@ -402,15 +402,6 @@ galleryRow model failed index image =
 
                 _ ->
                     0
-
-        pendingDefault : Bool
-        pendingDefault =
-            case ( model.galleryPreview, model.recipe ) of
-                ( Just preview, RemoteData.Success (Just recipe) ) ->
-                    model.galleryMutation /= Nothing || Just preview /= recipe.images
-
-                _ ->
-                    False
     in
     ( image.id
     , li [ id ("gallery-image-" ++ image.id), attribute "data-gallery-id" image.id, attribute "tabindex" "-1" ]
@@ -468,6 +459,16 @@ galleryRow model failed index image =
                         ]
                         []
                 , if index == 0 then
+                    let
+                        pendingDefault : Bool
+                        pendingDefault =
+                            case ( model.galleryPreview, model.recipe ) of
+                                ( Just preview, RemoteData.Success (Just recipe) ) ->
+                                    model.galleryMutation /= Nothing || Just preview /= recipe.images
+
+                                _ ->
+                                    False
+                    in
                     span []
                         [ text
                             (if pendingDefault then

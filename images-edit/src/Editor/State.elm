@@ -667,9 +667,11 @@ handleEvent event model =
 
                             else
                                 let
+                                    token : Int
                                     token =
                                         model.mutationToken + 1
 
+                                    movement : GalleryMovement
                                     movement =
                                         { direction =
                                             if target < from then
@@ -682,6 +684,7 @@ handleEvent event model =
                                         , dragged = True
                                         }
 
+                                    mutation : GalleryMutation
                                     mutation =
                                         { token = token, imageId = imageId, index = target, movement = Just movement, writing = True }
                                 in
@@ -940,6 +943,7 @@ reorderingSuccessMessage confirmed recipe mutation =
     case recipe of
         RemoteData.Success (Just data) ->
             let
+                message : String
                 message =
                     case data.images |> Maybe.andThen (\images -> imageIndexIn images mutation.imageId) of
                         Just index ->
@@ -952,6 +956,7 @@ reorderingSuccessMessage confirmed recipe mutation =
                         Nothing ->
                             "Reihenfolge gespeichert. Das Bild ist im aktuellen Stand nicht mehr vorhanden."
 
+                promotedDefault : Bool
                 promotedDefault =
                     case ( mutation.movement, confirmed ) of
                         ( Just movement, RemoteData.Success (Just previous) ) ->
@@ -1011,6 +1016,7 @@ moveImage fromIndex toIndex images =
     case List.drop fromIndex images |> List.head of
         Just image ->
             let
+                remaining : List RecipeDB.GalleryImage
                 remaining =
                     List.take fromIndex images ++ List.drop (fromIndex + 1) images
             in

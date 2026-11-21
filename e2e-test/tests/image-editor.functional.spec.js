@@ -807,6 +807,54 @@ test("gallery drag previews, cancels and saves a single complete order", async (
   }
 });
 
+test("unequal gallery rows remain stable across small moves and allow reversal", async ({
+  page,
+  request,
+  multiImageRecipe,
+}) => {
+  await page.setViewportSize({ width: 500, height: 1000 });
+  const file = pngFile();
+  await uploadImage(request, multiImageRecipe, file.name, {
+    buffer: file.buffer,
+  });
+  const writes = [];
+  page.on("request", (request) => {
+    if (isImageReorder(request)) writes.push(request.postDataJSON().variables);
+  });
+  await page.goto(`/images-edit/${multiImageRecipe.id}`);
+  const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+  await expect(rows).toHaveCount(3);
+  const ids = () =>
+    rows.evaluateAll((elements) =>
+      elements.map((row) => row.dataset.galleryId),
+    );
+  const original = await ids();
+  await rows.nth(1).evaluate((row) => {
+    row.style.minHeight = "300px";
+  });
+  const source = await rows.first().locator(".gallery-handle").boundingBox();
+  const x = source.x + source.width / 2;
+  await page.mouse.move(x, source.y + source.height / 2);
+  await page.mouse.down();
+  const destination = await rows.nth(1).boundingBox();
+  const y = destination.y + destination.height / 2;
+  await page.mouse.move(x, y);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  await page.mouse.move(x, y - 2);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  await page.mouse.move(x, y + 2);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  const preceding = await rows.first().boundingBox();
+  await page.mouse.move(x, preceding.y + preceding.height / 2 - 2);
+  await expect.poll(ids).toEqual(original);
+  const targetAgain = await rows.nth(1).boundingBox();
+  await page.mouse.move(x, targetAgain.y + targetAgain.height / 2);
+  await expect.poll(ids).toEqual([original[1], original[0], original[2]]);
+  await page.mouse.up();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].imageIds).toEqual([original[1], original[0], original[2]]);
+});
+
 test("drag start preserves previous error and horizontal motion is a no-op", async ({
   page,
   multiImageRecipe,
