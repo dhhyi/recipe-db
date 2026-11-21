@@ -3,6 +3,7 @@ import "./components/footer.ts";
 import "./components/rating.ts";
 import "./components/recipe-tile.ts";
 import "./components/recipe-image-carousel.ts";
+import "./components/recipe-chevron.ts";
 
 let historyTransition:
   "browse-return" | "browse-results" | "history-page" | undefined;

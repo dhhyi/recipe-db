@@ -393,6 +393,30 @@
           if (guarded) window.addEventListener("beforeunload", beforeUnload);
           else window.removeEventListener("beforeunload", beforeUnload);
         }
+        function transitionGallery(token) {
+          const apply = () =>
+            document
+              .querySelector("main.image-editor")
+              .dispatchEvent(
+                new CustomEvent("apply-gallery", { detail: token }),
+              );
+          if (
+            !document.startViewTransition ||
+            document.visibilityState === "hidden" ||
+            window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+            !CSS.supports("view-transition-name", "match-element") ||
+            !CSS.supports(
+              "selector(:active-view-transition-type(gallery-reorder))",
+            )
+          ) {
+            apply();
+            return;
+          }
+          document.startViewTransition({
+            types: ["gallery-reorder"],
+            update: apply,
+          });
+        }
         window.addEventListener("pagehide", (event) => {
           endPointer();
           if (event.persisted) return;
@@ -430,6 +454,17 @@
                 imageId: message.imageId,
                 session: message.session,
                 accepted: window.confirm(message.message),
+              });
+              break;
+            case "transition-gallery":
+              transitionGallery(message.token);
+              break;
+            case "focus-without-scroll":
+              requestAnimationFrame(() => {
+                const target = document.getElementById(message.id);
+                if (target) target.focus({ preventScroll: true });
+                else
+                  console.error("Could not focus gallery element", message.id);
               });
               break;
             case "navigate":

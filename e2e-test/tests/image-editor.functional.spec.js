@@ -738,6 +738,7 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   ).toBe(true);
 
   const moveUp = rows.nth(1).locator("button").nth(0);
+  const firstRowTop = (await rows.first().boundingBox()).y;
   const responsePromise = page.waitForResponse((response) =>
     isImageReorder(response.request()),
   );
@@ -763,10 +764,11 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await expect(rows.locator("button")).toHaveCount(6);
   await expect(rows.locator("button").nth(0)).toBeDisabled();
   await expect(page.locator("#upload-image")).toBeDisabled();
-  await expect(page.locator("#editor-status")).toHaveAttribute(
-    "aria-busy",
-    "true",
+  await expect(page.locator("#editor-status")).toHaveText(
+    "Bildreihenfolge wird gespeichert.",
   );
+  await expect(page.locator('main [aria-busy="true"]')).toHaveCount(0);
+  expect((await rows.first().boundingBox()).y).toBeCloseTo(firstRowTop, 0);
   expect(
     await rows
       .locator("button")
@@ -795,10 +797,8 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
       "Bild an Position 1 verschoben und als Standardbild festgelegt.",
       { exact: true },
     ),
-  ).toBeVisible();
-  expect(await page.evaluate(() => document.activeElement?.id)).toBe(
-    `move-down-${second.id}`,
-  );
+  ).toHaveClass("sr-only");
+  await expect(page.locator(`[id="move-down-${second.id}"]`)).toBeFocused();
 
   const moveDown = page.locator(`[id="move-down-${second.id}"]`);
   const downResponsePromise = page.waitForResponse((response) =>
@@ -824,12 +824,74 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   );
   await expect(
     page.getByText("Bild an Position 2 verschoben.", { exact: true }),
-  ).toBeVisible();
-  expect(await page.evaluate(() => document.activeElement?.id)).toBe(
-    `move-up-${second.id}`,
-  );
+  ).toHaveClass("sr-only");
+  await expect(page.locator(`[id="move-up-${second.id}"]`)).toBeFocused();
   expect(reorderRequests).toHaveLength(2);
 });
+
+const transitionTest = test.extend({ viewTransitions: true });
+
+transitionTest(
+  "confirmed gallery moves animate both cards and respect reduced motion",
+  async ({ page, multiImageRecipe }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.addInitScript(() => {
+      window.galleryTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (options) => {
+        const transition = start(options);
+        transition.ready.then(() => {
+          const movements = document
+            .getAnimations()
+            .filter((animation) =>
+              animation.effect?.pseudoElement?.startsWith(
+                "::view-transition-group(match-element",
+              ),
+            )
+            .map((animation) => {
+              const frames = animation.effect.getKeyframes();
+              return (
+                new DOMMatrixReadOnly(frames[1].transform).m42 -
+                new DOMMatrixReadOnly(frames[0].transform).m42
+              );
+            });
+          window.galleryTransitions.push(movements);
+        });
+        return transition;
+      };
+    });
+    await page.goto(`/images-edit/${multiImageRecipe.id}`);
+    const rows = page.getByRole("list", { name: "Rezeptbilder" }).locator("li");
+    await rows
+      .nth(1)
+      .getByRole("button", { name: /nach oben verschieben/ })
+      .click();
+    await expect
+      .poll(() => page.evaluate(() => window.galleryTransitions.length))
+      .toBe(1);
+    const movements = await page.evaluate(() => window.galleryTransitions[0]);
+    expect(movements.some((distance) => distance < 0)).toBe(true);
+    expect(movements.some((distance) => distance > 0)).toBe(true);
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      multiImageRecipe.images[1].thumbUrl,
+    );
+    await expect(
+      page.getByText("Bild an Position 1 verschoben", { exact: false }),
+    ).toHaveClass("sr-only");
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await rows
+      .first()
+      .getByRole("button", { name: /nach unten verschieben/ })
+      .click();
+    await expect(rows.first().getByRole("img")).toHaveAttribute(
+      "src",
+      multiImageRecipe.images[0].thumbUrl,
+    );
+    expect(await page.evaluate(() => window.galleryTransitions.length)).toBe(1);
+  },
+);
 
 test("reorder rejection and unknown outcome reconcile without automatic retry", async ({
   page,
@@ -950,7 +1012,7 @@ test("successful reorder with failed refresh stays confirmed and Retry only read
       "Bild an Position 1 verschoben und als Standardbild festgelegt.",
       { exact: true },
     ),
-  ).toBeVisible();
+  ).toHaveClass("sr-only");
   await expect(rows.nth(0).getByRole("img")).toHaveAttribute(
     "src",
     second.thumbUrl,
@@ -1090,10 +1152,10 @@ test("first-image deletion keeps the confirmed order and focuses the promoted de
       .evaluateAll((buttons) => buttons.every((button) => button.disabled)),
   ).toBe(true);
   await expect(addInput(page)).toBeDisabled();
-  await expect(page.locator("#editor-status")).toHaveAttribute(
-    "aria-busy",
-    "true",
+  await expect(page.locator("#editor-status")).toHaveText(
+    "Bild wird gelöscht.",
   );
+  await expect(page.locator('main [aria-busy="true"]')).toHaveCount(0);
   expect(deletes).toHaveLength(1);
   releaseMutation.resolve();
 

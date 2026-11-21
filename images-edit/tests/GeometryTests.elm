@@ -260,21 +260,29 @@ galleryTests =
         middleDownWriteCompleted =
             apply (Reordered middleDownMove.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) middleDownMove
 
-        middleDownReconciled : Editor.Model
-        middleDownReconciled =
+        middleDownReady : Editor.Model
+        middleDownReady =
             apply
                 (GotRecipe middleDownWriteCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })))
                 middleDownWriteCompleted
+
+        middleDownReconciled : Editor.Model
+        middleDownReconciled =
+            apply (ApplyGallery middleDownReady.galleryToken) middleDownReady
 
         moveWriteCompleted : Editor.Model
         moveWriteCompleted =
             apply (Reordered pendingMove.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) pendingMove
 
-        movedReconciled : Editor.Model
-        movedReconciled =
+        movedReady : Editor.Model
+        movedReady =
             apply
                 (GotRecipe moveWriteCompleted.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" } ] })))
                 moveWriteCompleted
+
+        movedReconciled : Editor.Model
+        movedReconciled =
+            apply (ApplyGallery movedReady.galleryToken) movedReady
 
         rejectedMove : Editor.Model
         rejectedMove =
@@ -424,6 +432,13 @@ galleryTests =
             == [ "opaque/1", "opaque/3", "opaque/2" ]
             && middleDownReconciled.galleryMutation
             == Nothing
+      )
+    , ( "confirmed order waits for the transition callback and ignores stale callbacks"
+      , currentIds movedReady
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && movedReady.galleryRefreshing
+            && apply (ApplyGallery (movedReady.galleryToken + 1)) movedReady
+            == movedReady
       )
     , ( "confirmed move reloads authoritative order and announces default change"
       , currentIds movedReconciled

@@ -35,78 +35,29 @@ step : Msg -> Model -> ( Model, Cmd Msg )
 step msg model =
     case msg of
         GotRecipe token recipe ->
-            if model.phase == Viewing && model.galleryRefreshing && token == model.galleryToken then
-                let
-                    readError : Maybe String
-                    readError =
-                        case recipe of
-                            RemoteData.Failure _ ->
-                                Just "Rezeptbilder konnten nicht geladen werden."
+            if model.phase == Viewing && model.galleryRefreshing && token == model.galleryToken && model.pendingGallery == Nothing then
+                if shouldAnimateGallery model recipe then
+                    ( { model | pendingGallery = Just ( token, recipe ) }
+                    , command "transition-gallery" [ ( "token", E.int token ) ]
+                    )
 
-                            RemoteData.Loading ->
-                                Just "Rezeptbilder konnten nicht geladen werden."
-
-                            RemoteData.Success (Just data) ->
-                                if data.images == Nothing then
-                                    Just "Rezeptbilder konnten nicht geladen werden."
-
-                                else
-                                    Nothing
-
-                            _ ->
-                                Nothing
-
-                    displayedRecipe : RecipeDB.RecipeModel
-                    displayedRecipe =
-                        if readError /= Nothing && model.galleryMutation /= Nothing then
-                            model.recipe
-
-                        else
-                            recipe
-
-                    next : Model
-                    next =
-                        { model
-                            | recipe = displayedRecipe
-                            , galleryRefreshing = False
-                            , galleryError = readError
-                            , galleryFeedback = galleryFeedbackAfterRead model readError displayedRecipe
-                            , galleryMutation =
-                                if readError == Nothing then
-                                    Nothing
-
-                                else
-                                    model.galleryMutation
-                            , recipeName =
-                                case displayedRecipe of
-                                    RemoteData.Success (Just data) ->
-                                        Just data.name
-
-                                    _ ->
-                                        model.recipeName
-                            , focusAfterCancel = False
-                        }
-
-                    focusCommand : Cmd Msg
-                    focusCommand =
-                        case ( model.focusAfterCancel, model.galleryMutation, readError ) of
-                            ( True, _, Nothing ) ->
-                                if canAdd next then
-                                    focus "upload-image"
-
-                                else
-                                    Cmd.none
-
-                            ( False, Just mutation, Nothing ) ->
-                                focusAfterMutation next mutation
-
-                            _ ->
-                                Cmd.none
-                in
-                ( next, focusCommand )
+                else
+                    applyGallery model recipe
 
             else
                 ( model, Cmd.none )
+
+        ApplyGallery token ->
+            case model.pendingGallery of
+                Just ( pendingToken, recipe ) ->
+                    if token == pendingToken && token == model.galleryToken && model.phase == Viewing && model.galleryRefreshing then
+                        applyGallery { model | pendingGallery = Nothing } recipe
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
 
         GotCapabilities capabilities ->
             ( { model | capabilities = capabilities }, Cmd.none )
@@ -155,7 +106,7 @@ step msg model =
                           }
                         , Cmd.batch
                             [ RecipeDB.makeReorderImagesRequest model.recipeId (List.map .id reordered) (Reordered token)
-                            , focus "editor-status"
+                            , focusWithoutScroll "editor-status"
                             ]
                         )
 
@@ -292,7 +243,7 @@ step msg model =
                             ( refreshing, request ) =
                                 reconcileGallery next
                         in
-                        ( refreshing, Cmd.batch [ request, focus "editor-status" ] )
+                        ( refreshing, Cmd.batch [ request, focusWithoutScroll "editor-status" ] )
 
                 Nothing ->
                     ( model, Cmd.none )
@@ -433,6 +384,98 @@ step msg model =
             ( model, Cmd.none )
 
 
+shouldAnimateGallery : Model -> RecipeDB.RecipeModel -> Bool
+shouldAnimateGallery model recipe =
+    case ( model.galleryMutation, model.galleryFeedback, recipe ) of
+        ( Just mutation, Just feedback, RemoteData.Success (Just data) ) ->
+            case ( currentImages model, data.images ) of
+                ( Just oldImages, Just newImages ) ->
+                    mutation.movement
+                        /= Nothing
+                        && feedback.kind
+                        == ReorderingSucceeded
+                        && List.map .id oldImages
+                        /= List.map .id newImages
+
+                _ ->
+                    False
+
+        _ ->
+            False
+
+
+applyGallery : Model -> RecipeDB.RecipeModel -> ( Model, Cmd Msg )
+applyGallery model recipe =
+    let
+        readError : Maybe String
+        readError =
+            case recipe of
+                RemoteData.Failure _ ->
+                    Just "Rezeptbilder konnten nicht geladen werden."
+
+                RemoteData.Loading ->
+                    Just "Rezeptbilder konnten nicht geladen werden."
+
+                RemoteData.Success (Just data) ->
+                    if data.images == Nothing then
+                        Just "Rezeptbilder konnten nicht geladen werden."
+
+                    else
+                        Nothing
+
+                _ ->
+                    Nothing
+
+        displayedRecipe : RecipeDB.RecipeModel
+        displayedRecipe =
+            if readError /= Nothing && model.galleryMutation /= Nothing then
+                model.recipe
+
+            else
+                recipe
+
+        next : Model
+        next =
+            { model
+                | recipe = displayedRecipe
+                , galleryRefreshing = False
+                , galleryError = readError
+                , galleryFeedback = galleryFeedbackAfterRead model readError displayedRecipe
+                , galleryMutation =
+                    if readError == Nothing then
+                        Nothing
+
+                    else
+                        model.galleryMutation
+                , recipeName =
+                    case displayedRecipe of
+                        RemoteData.Success (Just data) ->
+                            Just data.name
+
+                        _ ->
+                            model.recipeName
+                , focusAfterCancel = False
+            }
+
+        focusCommand : Cmd Msg
+        focusCommand =
+            case ( model.focusAfterCancel, model.galleryMutation, readError ) of
+                ( True, _, Nothing ) ->
+                    if canAdd next then
+                        focus "upload-image"
+
+                    else
+                        Cmd.none
+
+                ( False, Just mutation, Nothing ) ->
+                    focusAfterMutation next mutation
+
+                _ ->
+                    Cmd.none
+    in
+    ( next, focusCommand )
+
+
 loadGallery : Model -> ( Model, Cmd Msg )
 loadGallery model =
     let
@@ -501,6 +544,11 @@ returnToGallery saved model token =
 focus : String -> Cmd Msg
 focus target =
     Browser.Dom.focus target |> Task.attempt (\_ -> Focused)
+
+
+focusWithoutScroll : String -> Cmd Msg
+focusWithoutScroll target =
+    command "focus-without-scroll" [ ( "id", E.string target ) ]
 
 
 loadFailed : Int -> Source.Problem -> Model -> ( Model, Cmd Msg )
@@ -747,7 +795,7 @@ focusAfterReordering model mutation movement =
     let
         focusDirection : MoveDirection -> Cmd Msg
         focusDirection direction =
-            focus
+            focusWithoutScroll
                 ((case direction of
                     MoveUp ->
                         "move-up-"
@@ -776,7 +824,7 @@ focusAfterReordering model mutation movement =
             focusDirection opposite
 
         else
-            focus ("gallery-image-" ++ mutation.imageId)
+            focusWithoutScroll ("gallery-image-" ++ mutation.imageId)
 
 
 galleryFeedbackAfterRead : Model -> Maybe String -> RecipeDB.RecipeModel -> Maybe GalleryFeedback

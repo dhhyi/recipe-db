@@ -5,7 +5,7 @@ import Editor.Types exposing (GalleryFeedbackKind(..), Model, MoveDirection(..),
 import File exposing (File)
 import Html exposing (Html, a, article, button, div, h1, img, input, label, li, p, span, text)
 import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
-import Html.Events exposing (on, onClick)
+import Html.Events exposing (on, onClick, stopPropagationOn)
 import Html.Keyed
 import Json.Decode as D
 import RecipeDB
@@ -148,7 +148,12 @@ loadingPlaceholder loadingLabel =
 
 editorPage : List (Html Msg) -> Html Msg
 editorPage content =
-    Html.main_ [ class "image-editor" ]
+    Html.main_
+        [ class "image-editor"
+
+        -- Stop-propagation events make Elm render synchronously inside the view transition.
+        , stopPropagationOn "apply-gallery" (D.map (\token -> ( ApplyGallery token, True )) (D.field "detail" D.int))
+        ]
         content
 
 
@@ -181,24 +186,17 @@ editorStatus model =
                 ""
     in
     p
-        ([ id "editor-status"
-         , attribute "role" "status"
-         , attribute "tabindex" "-1"
-         , class
+        [ id "editor-status"
+        , attribute "role" "status"
+        , attribute "tabindex" "-1"
+        , class
             (if model.phase == Viewing && model.savedFeedback && model.galleryMutation == Nothing then
                 "feedback success save-feedback"
 
              else
                 "sr-only"
             )
-         ]
-            ++ (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
-                    [ attribute "aria-busy" "true" ]
-
-                else
-                    []
-               )
-        )
+        ]
         [ text message ]
 
 
@@ -217,7 +215,17 @@ galleryFeedback model =
                     p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
 
                 ReorderingSucceeded ->
-                    p [ attribute "role" "status", class "feedback success" ] [ text feedback.message ]
+                    p
+                        [ attribute "role" "status"
+                        , class
+                            (if model.galleryError /= Nothing then
+                                "feedback warning"
+
+                             else
+                                "sr-only"
+                            )
+                        ]
+                        [ text feedback.message ]
 
                 ReorderingRejected ->
                     p [ attribute "role" "alert", class "feedback error" ] [ text feedback.message ]
@@ -317,13 +325,7 @@ galleryContent : Model -> Maybe (List RecipeDB.GalleryImage) -> Set String -> Ht
 galleryContent model images failed =
     case ( model.recipe, images ) of
         ( RemoteData.Success (Just _), Just entries ) ->
-            div
-                (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
-                    [ attribute "aria-busy" "true" ]
-
-                 else
-                    []
-                )
+            div []
                 [ p [] [ text (String.fromInt (List.length entries) ++ " / " ++ String.fromInt imageLimit) ]
                 , if List.isEmpty entries then
                     p [] [ text "Kein Bild vorhanden." ]
@@ -362,7 +364,7 @@ galleryRow model failed index image =
     in
     ( image.id
     , li [ id ("gallery-image-" ++ image.id), attribute "tabindex" "-1" ]
-        [ article [ class "m-0 flex flex-wrap items-center gap-2" ]
+        [ article [ class "m-0 flex flex-wrap items-center gap-2", attribute "data-gallery-card" "" ]
             [ if imageCount > 1 then
                 div [ class "gallery-move-controls flex flex-col gap-1" ]
                     [ button
@@ -373,7 +375,7 @@ galleryRow model failed index image =
                         , disabled (not (canMove model image.id MoveUp))
                         , onClick (MoveImage image.id MoveUp)
                         ]
-                        [ span [ attribute "aria-hidden" "true" ] [ text "⌃" ] ]
+                        [ Html.node "recipe-chevron" [ class "inline-block h-3 w-3 -rotate-90 [&>svg]:block [&>svg]:h-full [&>svg]:w-full", attribute "aria-hidden" "true" ] [] ]
                     , button
                         [ type_ "button"
                         , class "outline m-0"
@@ -382,7 +384,7 @@ galleryRow model failed index image =
                         , disabled (not (canMove model image.id MoveDown))
                         , onClick (MoveImage image.id MoveDown)
                         ]
-                        [ span [ attribute "aria-hidden" "true" ] [ text "⌄" ] ]
+                        [ Html.node "recipe-chevron" [ class "inline-block h-3 w-3 rotate-90 [&>svg]:block [&>svg]:h-full [&>svg]:w-full", attribute "aria-hidden" "true" ] [] ]
                     ]
 
               else

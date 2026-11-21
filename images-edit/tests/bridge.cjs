@@ -70,7 +70,12 @@ function harness(options = {}) {
   const windowListeners = new Map();
   const documentListeners = new Map();
   const navigations = [];
-  const input = { value: "selected", files: [] };
+  const input = {
+    value: "selected",
+    files: [],
+    focus: (options) => (input.focusOptions = options),
+  };
+  const galleryEvents = [];
   let receive;
   const app = {
     ports: {
@@ -94,13 +99,20 @@ function harness(options = {}) {
   vm.runInNewContext(script, {
     Elm: { Main: { init: () => app } },
     document: {
+      visibilityState: options.visibilityState ?? "visible",
+      startViewTransition: options.startViewTransition,
       querySelector: (selector) =>
-        selector === "header-component" ? header : {},
+        selector === "header-component"
+          ? header
+          : selector === "main.image-editor"
+            ? { dispatchEvent: (event) => galleryEvents.push(event) }
+            : {},
       getElementById: () => input,
       addEventListener: (name, listener) =>
         documentListeners.set(name, listener),
     },
     window: {
+      matchMedia: () => ({ matches: options.reducedMotion ?? false }),
       location: {
         href: "http://recipe.test/images/123",
         assign: (url) => navigations.push(url),
@@ -121,15 +133,25 @@ function harness(options = {}) {
       }
     },
     Image,
+    CSS: { supports: () => options.transitionSupported ?? true },
+    requestAnimationFrame: (callback) => setImmediate(callback),
+    CustomEvent: class {
+      constructor(type, options) {
+        this.type = type;
+        this.detail = options.detail;
+      }
+    },
     DataView,
     Uint8Array,
   });
   return {
     events,
+    galleryEvents,
     metadata,
     revoked,
     decoded,
     header,
+    input,
     windowListeners,
     navigations,
     dispatch: (name, event) => documentListeners.get(name)?.(event),
@@ -171,6 +193,42 @@ function harness(options = {}) {
     },
   };
 }
+
+test("gallery reconciliation falls back when transitions cannot run", () => {
+  for (const options of [
+    {},
+    { startViewTransition: () => assert.fail(), reducedMotion: true },
+    { startViewTransition: () => assert.fail(), visibilityState: "hidden" },
+    { startViewTransition: () => assert.fail(), transitionSupported: false },
+  ]) {
+    const bridge = harness(options);
+    bridge.receive({ action: "transition-gallery", token: 7 });
+    assert.equal(bridge.galleryEvents[0].type, "apply-gallery");
+    assert.equal(bridge.galleryEvents[0].detail, 7);
+  }
+});
+
+test("gallery reconciliation happens inside the view transition update", async () => {
+  let update;
+  const bridge = harness({
+    startViewTransition: (options) => {
+      assert.deepEqual(Array.from(options.types), ["gallery-reorder"]);
+      update = options.update;
+    },
+  });
+  bridge.receive({ action: "transition-gallery", token: 4 });
+  assert.equal(bridge.galleryEvents.length, 0);
+  await update();
+  assert.equal(bridge.galleryEvents[0].type, "apply-gallery");
+  assert.equal(bridge.galleryEvents[0].detail, 4);
+});
+
+test("gallery focus does not scroll the page", async () => {
+  const bridge = harness();
+  bridge.receive({ action: "focus-without-scroll", id: "move-down-image" });
+  await new Promise(setImmediate);
+  assert.equal(bridge.input.focusOptions.preventScroll, true);
+});
 
 test("saving locks shared header navigation and clean state removes unload listener", () => {
   const bridge = harness();

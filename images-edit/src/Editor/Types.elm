@@ -75,6 +75,7 @@ type alias Model =
     , galleryError : Maybe String
     , galleryConfirmation : Maybe ( String, Int )
     , galleryMutation : Maybe GalleryMutation
+    , pendingGallery : Maybe ( Int, RecipeDB.RecipeModel )
     , mutationToken : Int
     , galleryFeedback : Maybe GalleryFeedback
     , recipeName : Maybe String
@@ -92,6 +93,7 @@ type alias Model =
 
 type Msg
     = GotRecipe Int RecipeDB.RecipeModel
+    | ApplyGallery Int
     | GotCapabilities RecipeDB.CapabilitiesModel
     | RetryGallery
     | MoveImage String MoveDirection
@@ -120,6 +122,7 @@ init recipeId =
     , galleryError = Nothing
     , galleryConfirmation = Nothing
     , galleryMutation = Nothing
+    , pendingGallery = Nothing
     , mutationToken = 0
     , galleryFeedback = Nothing
     , recipeName = Nothing
