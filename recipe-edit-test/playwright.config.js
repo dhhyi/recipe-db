@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   testDir: "./tests",
@@ -6,7 +7,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   timeout: 45_000,
-  expect: { timeout: 15_000 },
+  expect: {
+    timeout: 15_000,
+    toHaveScreenshot: {
+      animations: "disabled",
+      stylePath: fileURLToPath(
+        new URL("./tests/visual/screenshot.css", import.meta.url),
+      ),
+    },
+  },
   outputDir: "target/test-results",
   reporter: [
     ["list"],
