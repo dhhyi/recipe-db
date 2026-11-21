@@ -97,6 +97,7 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --commit "${{ steps.source.outputs.sha }}" \
             --pr-number "$PR_NUMBER" \
+            --job "$GITHUB_JOB" \
             --output "$GITHUB_OUTPUT"
 
       - name: record Bazel cache build start
@@ -209,6 +210,7 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --commit "${{ steps.source.outputs.sha }}" \
             --build-start "${{ steps.cache-build-start.outputs.epoch }}" \
+            --job "$GITHUB_JOB" \
             --prune-eligible "$CACHE_PRUNE_ELIGIBLE" \
             --prune-required "${CACHE_PRUNE_REQUIRED:-false}" \
             --prune-succeeded "$CACHE_PRUNE_SUCCEEDED" \

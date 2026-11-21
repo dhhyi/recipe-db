@@ -33,6 +33,14 @@ load test_helper
   grep -F 'actions: read' "$workflow"
   grep -F 'fetch-depth: 0' "$workflow"
   grep -F -- "--run-number \"\$GITHUB_RUN_NUMBER\"" "$workflow"
+  # shellcheck disable=SC2016
+  run yq -r '.jobs.quality-checks.steps[] | select(.id == "restore-cache") | .run | contains("--job \"$GITHUB_JOB\"")' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = true ]
+  # shellcheck disable=SC2016
+  run yq -r '.jobs.quality-checks.steps[] | select(.id == "prepare-bazel-cache") | .run | contains("--job \"$GITHUB_JOB\"")' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = true ]
   grep -F "retention-days: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}" "$workflow"
   run grep -F 'uses: actions/cache@' "$workflow"
   [ "$status" -eq 1 ]
