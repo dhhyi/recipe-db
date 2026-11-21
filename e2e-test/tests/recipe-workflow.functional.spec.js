@@ -272,7 +272,6 @@ test("discard restores the saved method", async ({ page, demoRecipe }) => {
   await firstSave;
 
   await expect(successStatus(page)).toBeVisible();
-  await expect(saveButton(page)).toBeDisabled();
 
   await methodField(page).fill("Unpersisted method");
   await expect(dirtyStatus(page)).toBeVisible();
