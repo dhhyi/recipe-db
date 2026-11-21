@@ -51,52 +51,6 @@ suite "immutable image storage":
         "a-" & hash & ".png.pending-1", ".manifest.json"]:
       check not parseImageName(name).valid
 
-  test "storage initialization preserves marker and refuses unmarked data or backup initialization":
-    cleanDirectory(versionRoot)
-    let versionedStore = ImageStorage(root: versionRoot)
-    check versionedStore.checkStorageVersion("production")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("backup")
-
-    createDir(versionRoot)
-    check versionedStore.checkStorageVersion("testing")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("backup")
-    for folder in [versionedStore.publicFolder, versionedStore.manifestFolder]:
-      createDir(folder)
-      expect StorageError:
-        discard versionedStore.checkStorageVersion("testing")
-      check dirExists(folder)
-      removeDir(folder)
-    createDir(versionedStore.publicFolder)
-    createDir(versionedStore.manifestFolder)
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("production")
-    check not fileExists(versionRoot / "storage-version")
-    removeDir(versionedStore.publicFolder)
-    removeDir(versionedStore.manifestFolder)
-
-    writeFile(versionRoot / ".unknown", "untouched")
-    expect StorageError:
-      discard versionedStore.checkStorageVersion("production")
-    check readFile(versionRoot / ".unknown") == "untouched"
-    removeFile(versionRoot / ".unknown")
-
-    versionedStore.initialize()
-    versionedStore.publishStorageVersion()
-    check readFile(versionRoot / "storage-version") == "2\n"
-    expect StorageError:
-      versionedStore.publishStorageVersion()
-    check readFile(versionRoot / "storage-version") == "2\n"
-    check not versionedStore.checkStorageVersion("production")
-    check not versionedStore.checkStorageVersion("backup")
-    for folder in [versionedStore.publicFolder, versionedStore.manifestFolder]:
-      removeDir(folder)
-      expect StorageError:
-        discard versionedStore.checkStorageVersion("backup")
-      check not dirExists(folder)
-      createDir(folder)
-    cleanDirectory(versionRoot)
 
   test "restart, retention, identical uploads and A to B to A":
     let a = outputs("#ff0000")

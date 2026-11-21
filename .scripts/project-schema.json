@@ -98,31 +98,14 @@
       }
     },
     "storageVersion": {
-      "description": "Required storage version and language-specific source template generated into the project.",
+      "description": "Declared positive storage-version requirement for Kubernetes and release tooling.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["value", "file", "template"],
+      "required": ["value"],
       "properties": {
         "value": {
           "type": "integer",
           "minimum": 1
-        },
-        "file": {
-          "description": "Project-relative path to the ignored generated source file.",
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9._/-]+$",
-          "allOf": [
-            { "not": { "pattern": "^/" } },
-            { "not": { "pattern": "/$" } },
-            { "not": { "pattern": "//" } },
-            { "not": { "pattern": "(^|/)\\.\\.?(/|$)" } }
-          ]
-        },
-        "template": {
-          "description": "Source content with exactly one {{STORAGE_VERSION}} placeholder.",
-          "type": "string",
-          "minLength": 1
         }
       }
     },

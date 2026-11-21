@@ -1449,6 +1449,18 @@ restore_start() {
   backup_refresh_projections || return 1
 }
 
+restore_start_production_backends() {
+  local name
+  kube get deployments -o json > "$work/restore-mode-deployments.json" || return 1
+  while IFS= read -r name; do
+    backup_set_backend_mode "$name" production "$work/restore-mode-deployments.json" || return 1
+    kube rollout status "deployment/$name" --timeout="${timeout}s" || return 1
+  done < <(jq -r '.items[] | .metadata.name as $name |
+    select($name != "graphql" and any(.spec.template.spec.containers[];
+      .name == $name and any(.env[]?; .name == "MODE" and .value == "backup"))) | $name' \
+    "$work/restore-mode-deployments.json")
+}
+
 restore_forward() {
   local resource=$1 port=$2 file=$3 pid forward_namespace=$namespace deadline=$((SECONDS + timeout))
   [[ $resource != deployment/traefik ]] || forward_namespace=kube-system
@@ -1995,6 +2007,21 @@ restore_run() {
   restore_current_phase=installing-stopped-workloads
   restore_phase "$restore_current_phase"
   yq '(select(.kind == "Deployment").spec.replicas) = 0 |
+    (select(.kind == "Deployment" and (.metadata.name == "recipes" or .metadata.name == "images" or .metadata.name == "ratings" or .metadata.name == "tags" or .metadata.name == "inspirations") and .spec.template.spec.initContainers != null and (.spec.template.spec.initContainers | map(select(.name == "storage-version" or .name == "storage-version-gate")) | length > 0)).spec.template.spec.initContainers[] |
+      select(.name == "storage-version" or .name == "storage-version-gate").env[] |
+      select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and (.metadata.name == "recipes" or .metadata.name == "images" or .metadata.name == "ratings" or .metadata.name == "tags" or .metadata.name == "inspirations") and (.spec.template.spec.containers | map(select(.name == "storage-version")) | length > 0)).spec.template.spec.containers[] |
+      select(.name == "storage-version").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "recipes").spec.template.spec.containers[] |
+      select(.name == "recipes").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "images").spec.template.spec.containers[] |
+      select(.name == "images").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "ratings").spec.template.spec.containers[] |
+      select(.name == "ratings").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "tags").spec.template.spec.containers[] |
+      select(.name == "tags").env[] | select(.name == "MODE").value) = "backup" |
+    (select(.kind == "Deployment" and .metadata.name == "inspirations").spec.template.spec.containers[] |
+      select(.name == "inspirations").env[] | select(.name == "MODE").value) = "backup" |
     (select(.kind == "Deployment" and .metadata.name == "graphql").spec.template.spec.containers[] |
       select(.name == "graphql").env[] | select(.name == "MODE").value) = "backup" |
     (select(.kind == "Deployment" and (.metadata.name == "browse" or .metadata.name == "mcp")).spec.template.spec.containers[].env[] |
@@ -2033,6 +2060,8 @@ restore_run() {
   restore_forward service/browse 3000 "$work/restore-browse-forward.log" > "$work/restore-browse-port"
   restore_browse_port=$(cat "$work/restore-browse-port")
   restore_wait_reads
+  restore_start_production_backends \
+    || production_fail "restored backends could not be switched to production; public ingress remains blocked"
   restore_current_phase=verifying-propagation
   restore_phase "$restore_current_phase"
   backup_projection_route 4000

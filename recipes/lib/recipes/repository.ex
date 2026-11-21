@@ -25,30 +25,34 @@ defmodule Recipes.Repository do
   @impl true
   def init(options) do
     database = Keyword.get_lazy(options, :database, &database_path/0)
+    mode = Application.get_env(:recipes, :mode)
 
-    storage_state =
-      if Keyword.get(options, :validate_storage, false) do
-        Recipes.StorageVersion.check!(database, Application.get_env(:recipes, :mode))
-      else
-        :skip
+    if mode == :backup or mode == "backup" do
+      case File.stat(database) do
+        {:ok, %File.Stat{type: :regular}} -> start_connection(database)
+        {:ok, _stat} -> {:stop, "recipes database missing or not a regular file in backup mode"}
+        {:error, _reason} -> {:stop, "recipes database missing in backup mode"}
       end
+    else
+      database |> Path.dirname() |> File.mkdir_p!()
+      start_connection(database)
+    end
+  end
 
-    database |> Path.dirname() |> File.mkdir_p!()
-
+  defp start_connection(database) do
     with {:ok, connection} <-
            Exqlite.start_link(
              database: database,
              busy_timeout: 5_000,
              default_transaction_mode: :immediate
            ) do
-      initialize_connection(connection, database, storage_state)
+      initialize_connection(connection)
     end
   end
 
-  defp initialize_connection(connection, database, storage_state) do
+  defp initialize_connection(connection) do
     case prepare_schema(connection, Application.get_env(:recipes, :mode)) do
       {:ok, _result} ->
-        if storage_state == :fresh, do: Recipes.StorageVersion.publish!(database)
         {:ok, connection}
 
       {:error, error} ->

@@ -24,12 +24,7 @@ run = [
 description = "Validate file layout and synchronize shared generated files"
 depends = ["check-forbidden-files"]
 run = [
-  { tasks = [
-    "sync-tailwind",
-    "sync-ignore-files",
-    "sync-storage-version-templates",
-    "sync-vscode-settings"
-  ] },
+  { tasks = ["sync-tailwind", "sync-ignore-files", "sync-vscode-settings"] },
 ]
 
 [sync-ignore-files]
@@ -40,21 +35,6 @@ sources = [
   "*/{.project.yaml,.gitignore,Dockerfile,.prettierignore}"
 ]
 outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
-
-[sync-storage-version-templates]
-description = "Generate service source files for declared storage versions"
-file = ".scripts/sync-storage-version-templates.sh"
-sources = ["*/.project.yaml"]
-outputs = [
-  '''
-{%- set paths = exec(command="set -- */.project.yaml; if [ -f \"$1\" ]; then yq -r 'select(documentIndex == 1) | select(.storageVersion.value != null) | (filename | sub(\"/.project.yaml$\", \"\")) + \"/\" + .storageVersion.file' \"$@\"; fi") | split(pat="\n") -%}
-{%- if paths | length > 1 -%}
-  {{ "{" ~ paths | join(sep=",") ~ "}" }}
-{%- else -%}
-  {{ paths | first }}
-{%- endif -%}
-'''
-]
 
 [sync-tailwind]
 description = "Generate shared Tailwind sources and Docker build inputs"

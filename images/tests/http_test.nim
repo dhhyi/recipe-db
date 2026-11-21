@@ -58,7 +58,7 @@ suite "backend HTTP publication contract":
     for mode in ["", "Production", " production", "testing "]:
       checkInvalidMode(mode)
 
-  test "startup does not publish a marker after rejecting storage or failing setup":
+  test "startup initializes missing image folders and fails on invalid roots":
     let startupRoot = root & "-startup"
     createDir(startupRoot)
     defer: removeDir(startupRoot)
@@ -69,14 +69,13 @@ suite "backend HTTP publication contract":
     let environment = serverEnvironment(some("production"),
         40_000_000, 10 * 1024 * 1024)
     environment["DATA_LOCATION"] = startupRoot
-    let rejected = startProcess("./server", env = environment,
+    let initialized = startProcess("./server", env = environment,
         options = {poParentStreams})
-    check rejected.waitForExit(5000) == 1
-    rejected.close()
+    sleep(100)
+    stopServer(initialized)
     check dirExists(legacy)
-    check not dirExists(startupRoot / "manifests")
+    check dirExists(startupRoot / "manifests")
     check getFilePermissions(startupRoot) == permissions
-    check not fileExists(startupRoot / "storage-version")
 
     let blocker = startupRoot / "not-a-directory"
     writeFile(blocker, "untouched")
@@ -88,6 +87,41 @@ suite "backend HTTP publication contract":
     failed.close()
     check readFile(blocker) == "untouched"
     check not fileExists(inaccessibleRoot / "storage-version")
+
+  test "backup startup rejects missing image folders without changing data":
+    let startupRoot = root & "-backup-startup"
+    createDir(startupRoot)
+    defer: removeDir(startupRoot)
+
+    let sentinel = startupRoot / "existing"
+    writeFile(sentinel, "untouched")
+    let environment = serverEnvironment(some("backup"),
+        40_000_000, 10 * 1024 * 1024)
+    for missing in ["root", "public", "manifests"]:
+      let dataRoot = startupRoot / missing
+      environment["DATA_LOCATION"] = dataRoot
+      if missing != "root":
+        let existingFolder = dataRoot /
+            (if missing == "public": "manifests" else: "public")
+        createDir(existingFolder)
+        writeFile(existingFolder / "existing", "untouched")
+
+      let server = startProcess("./server", env = environment,
+          options = {poParentStreams})
+      let exitCode = server.waitForExit(5000)
+      if exitCode == -1:
+        server.terminate()
+        discard server.waitForExit()
+      server.close()
+      check exitCode == 1
+      check readFile(sentinel) == "untouched"
+      if missing == "root":
+        check not dirExists(dataRoot)
+      else:
+        check not dirExists(dataRoot / missing)
+        let existingFolder = dataRoot /
+            (if missing == "public": "manifests" else: "public")
+        check readFile(existingFolder / "existing") == "untouched"
 
   test "off-center crop pixels, strict errors and failed saves preserve the complete pair":
     if dirExists(root):

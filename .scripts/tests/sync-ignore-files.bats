@@ -52,7 +52,6 @@ EOF
   grep -Fx node_modules example/.dockerignore
   grep -Fx /target example/.dockerignore
   grep -Fx .project.yaml example/.dockerignore
-  grep -Fx '!/generated/storage_version.lua' example/.dockerignore
   [ ! -e config-only/.dockerignore ]
 }
 

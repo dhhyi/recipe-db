@@ -112,13 +112,6 @@ for project in $projects; do
       echo
     fi
     echo .project.yaml
-    storage_version_file=$(mise exec -- yq -r \
-      'select(documentIndex == 1) | .storageVersion.file // ""' "$project/.project.yaml")
-    if [ -n "$storage_version_file" ]; then
-      echo
-      echo "# generated storage-version source"
-      echo "!/$storage_version_file"
-    fi
     cat << 'EOF'
 
 .gitignore

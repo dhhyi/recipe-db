@@ -59,7 +59,6 @@ release:
       - .scripts/publish-production-github-release.sh
       - .scripts/smoke-production-image.sh
       - .scripts/generate-production-build-metadata.sh
-      - .scripts/sync-storage-version-templates.sh
       - package.json
     .scripts/tests/production-upgrade-rehearsal.bats:
       - .scripts/production-upgrade-rehearsal-k3d.sh
@@ -95,7 +94,9 @@ deploy:
   suite_inputs:
     .scripts/tests/kubernetes-templates.bats:
       - .scripts/templates/kubernetes*.yml
+      - .scripts/templates/storage-version-*.sh.ytt
       - .scripts/templates/traefik-service-template.lib.yml
+      - .scripts/test-migrations-k3d.sh
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"
       - deploy/**
@@ -376,7 +377,6 @@ tooling:
     - .scripts/tests/merge-graphql-schemas.bats
     - .scripts/tests/project-schema.bats
     - .scripts/tests/sync-ignore-files.bats
-    - .scripts/tests/sync-storage-version-templates.bats
     - .scripts/tests/sync-tailwind.bats
   suite_inputs:
     .scripts/tests/check-forbidden-files.bats:
@@ -410,12 +410,6 @@ tooling:
       - .scripts/tests/mocks/devcontainer-*
       - ":(glob)*/.project.yaml"
       - ":(glob)*/.gitignore"
-    .scripts/tests/sync-storage-version-templates.bats:
-      - .scripts/sync-storage-version-templates.sh
-      - .scripts/tests/groups.yaml
-      - .mise/tasks/repository-sync.toml
-      - .mise/config.toml
-      - mise.toml
       - ":(glob)*/.project.yaml"
     .scripts/tests/sync-tailwind.bats:
       - .scripts/sync-tailwind.sh

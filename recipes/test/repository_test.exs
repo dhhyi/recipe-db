@@ -18,7 +18,6 @@ defmodule Recipes.RepositoryTest do
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf!(root) end)
     database = Path.join(root, "recipes.sqlite3")
-    File.write!(Path.join(root, "storage-version"), "2\n")
     {:ok, connection} = Exqlite.start_link(database: database)
     assert {:ok, _} = Exqlite.query(connection, "CREATE TABLE unrelated (value TEXT)")
     GenServer.stop(connection)
@@ -27,15 +26,82 @@ defmodule Recipes.RepositoryTest do
     Application.put_env(:recipes, :mode, :backup)
     on_exit(fn -> Application.put_env(:recipes, :mode, previous_mode) end)
 
-    assert {:stop, message} = Repository.init(database: database, validate_storage: true)
+    assert {:stop, message} = Repository.init(database: database)
     assert message =~ "recipes schema unavailable in backup mode"
     assert File.read!(database) == original
 
     {:ok, connection} = Exqlite.start_link(database: database)
     assert {:ok, _} = Exqlite.query(connection, "CREATE TABLE recipes (id TEXT, document TEXT)")
     GenServer.stop(connection)
-    assert {:ok, backup_connection} = Repository.init(database: database, validate_storage: true)
+    assert {:ok, backup_connection} = Repository.init(database: database)
     GenServer.stop(backup_connection)
+  end
+
+  test "backup rejects an absent database without creating paths or changing existing files" do
+    root =
+      Path.join(System.tmp_dir!(), "recipes-backup-absent-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    database = Path.join(root, "recipes.sqlite3")
+    existing_file = Path.join(root, "existing")
+    File.write!(existing_file, "untouched")
+    previous_mode = Application.fetch_env!(:recipes, :mode)
+    Application.put_env(:recipes, :mode, :backup)
+    on_exit(fn -> Application.put_env(:recipes, :mode, previous_mode) end)
+
+    assert {:stop, message} = Repository.init(database: database)
+    assert message =~ "recipes database missing in backup mode"
+    refute File.exists?(database)
+    refute File.exists?("#{database}-wal")
+    assert File.ls!(root) == ["existing"]
+    assert File.read!(existing_file) == "untouched"
+  end
+
+  test "backup rejects an orphaned SQLite WAL without creating paths or changing existing files" do
+    root =
+      Path.join(System.tmp_dir!(), "recipes-backup-wal-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    database = Path.join(root, "recipes.sqlite3")
+    wal = "#{database}-wal"
+    existing_file = Path.join(root, "existing")
+    File.write!(existing_file, "untouched")
+    File.write!(wal, "orphaned WAL")
+    previous_mode = Application.fetch_env!(:recipes, :mode)
+    Application.put_env(:recipes, :mode, :backup)
+    on_exit(fn -> Application.put_env(:recipes, :mode, previous_mode) end)
+
+    assert {:stop, message} = Repository.init(database: database)
+    assert message =~ "recipes database missing in backup mode"
+    refute File.exists?(database)
+    assert File.read!(wal) == "orphaned WAL"
+    assert Enum.sort(File.ls!(root)) == ["existing", Path.basename(wal)]
+    assert File.read!(existing_file) == "untouched"
+  end
+
+  test "backup rejects a missing database parent without creating paths or changing existing files" do
+    root =
+      Path.join(System.tmp_dir!(), "recipes-backup-parent-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    parent = Path.join(root, "missing")
+    database = Path.join(parent, "recipes.sqlite3")
+    existing_file = Path.join(root, "existing")
+    File.write!(existing_file, "untouched")
+    previous_mode = Application.fetch_env!(:recipes, :mode)
+    Application.put_env(:recipes, :mode, :backup)
+    on_exit(fn -> Application.put_env(:recipes, :mode, previous_mode) end)
+
+    assert {:stop, message} = Repository.init(database: database)
+    assert message =~ "recipes database missing in backup mode"
+    refute File.exists?(parent)
+    refute File.exists?(database)
+    refute File.exists?("#{database}-wal")
+    assert File.ls!(root) == ["existing"]
+    assert File.read!(existing_file) == "untouched"
   end
 
   test "stores, patches, lists, and deletes recipes", %{repository: repository} do

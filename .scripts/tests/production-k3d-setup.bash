@@ -9,6 +9,8 @@ setup() {
   export FIXTURE_ROOT
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT"
   mkdir -p .scripts/lib .scripts/templates message-bus browse-maintenance oauth2-proxy design
+  cp "$BATS_TEST_DIRNAME/../templates/storage-version-gate.sh.ytt" .scripts/templates/
+  cp "$BATS_TEST_DIRNAME/../templates/storage-version-sidecar.sh.ytt" .scripts/templates/
   cp "$BATS_TEST_DIRNAME/../lib/production-config.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/cluster-operation-lock.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
@@ -531,11 +533,19 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"; exit ;;
       *"set env deployment/"*"MODE="*)
         name="${*: -3:1}"; name="${name#deployment/}"; mode="${*: -2:1}"; mode="${mode#MODE=}"
-        jq --arg name "$name" --arg mode "$mode" '
-          (.items[] | select(.metadata.name == $name).spec.template.spec.containers[].env[] |
+        if [[ $name == recipes && $mode == production ]]; then touch "$MOCK_LOG.recipes-production"; fi
+        selected="${*: -1}"; selected="${selected#--containers=}"
+        jq --arg name "$name" --arg mode "$mode" --arg selected "$selected" '
+          (.items[] | select(.metadata.name == $name).spec.template.spec |
+            (.containers[]?, .initContainers[]?) |
+            select(.name == $selected).env[]? |
             select(.name == "MODE").value)=$mode' \
           "$MOCK_LOG.restore-deployments" > "$MOCK_LOG.restore-deployments.next"
         mv "$MOCK_LOG.restore-deployments.next" "$MOCK_LOG.restore-deployments"; exit ;;
+      *"rollout status deployment/recipes "*)
+        if [[ ${MOCK_RESTORE_PRODUCTION_ROLLOUT_FAIL:-false} == true && -e $MOCK_LOG.recipes-production ]]; then
+          exit 1
+        fi ;;
     esac
   fi
   if [[ $MOCK_BACKUP = true || $MOCK_RELEASE_LIFECYCLE = true ]]; then
@@ -1058,10 +1068,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         service="${*: -3:1}"
         service=${service#deployment/}
         mode="${*: -2:1}"
+        selected="${*: -1}"; selected="${selected#--containers=}"
         if [[ $service == graphql && ${MOCK_GRAPHQL_REOPEN_FAIL:-false} = true &&
           -e $MOCK_LOG.reopening ]]; then exit 1; fi
-        jq --arg service "$service" --arg mode "${mode#MODE=}" \
-          '(.items[] | select(.metadata.name == $service).spec.template.spec.containers[0].env[0].value)=$mode' \
+        jq --arg service "$service" --arg mode "${mode#MODE=}" --arg selected "$selected" \
+          '(.items[] | select(.metadata.name == $service).spec.template.spec |
+            (.containers[]?, .initContainers[]?) |
+            select(.name == $selected).env[]? |
+            select(.name == "MODE").value)=$mode' \
           "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
         mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
         handled=true ;;
@@ -1379,9 +1393,18 @@ if jq -e 'has("config")' "$2" > /dev/null; then
       {apiVersion:"apps/v1",kind:"Deployment",metadata:{name:$name,namespace:"recipe-db",
         labels:{"app.kubernetes.io/part-of":"recipe-db"}},
       spec:{replicas:1,template:{metadata:{annotations:{"recipe-db/release":$input.artifact}},
-      spec:{containers:[{name:$name,image:($input.release.images[$name] // "infrastructure"),
+      spec:({containers:([{name:$name,image:($input.release.images[$name] // "infrastructure"),
         env:([{name:"MODE",value:"production"}] +
-          (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}]}}}}' "$2" | while IFS= read -r doc; do
+          (if $name == "browse" then [{name:"GRAPHQL_URL",value:"http://traefik/graphql"}] else [] end))}] +
+        (if env.MOCK_RESTORE_STORAGE_HELPERS == "true" and (["recipes","images","tags"] | index($name)) then
+          [{name:"storage-version",image:"infrastructure",env:[{name:"MODE",value:"production"}]}]
+        else [] end))} +
+        (if env.MOCK_RESTORE_STORAGE_HELPERS == "true" and (["recipes","images","tags"] | index($name)) then
+          {initContainers:[{name:"storage-version-gate",image:"infrastructure",env:[{name:"MODE",value:"production"}]},
+            {name:"unrelated",image:"infrastructure",env:[{name:"MODE",value:"custom"}]}]}
+        elif env.MOCK_RESTORE_UNRELATED_INIT == "true" and $name == "recipes" then
+          {initContainers:[{name:"unrelated",image:"infrastructure",env:[{name:"MODE",value:"custom"}]}]}
+        else {} end))}}}' "$2" | while IFS= read -r doc; do
         printf '%s\n---\n' "$doc"
       done
     if [[ ${MOCK_PI:-false} != true ]]; then
@@ -1671,7 +1694,9 @@ EOF
           volumes:(if .claim == null then [] else [{name:"data",persistentVolumeClaim:{claimName:.claim}}] end)}}},
       status:{readyReplicas:1}})}' > "$MOCK_LOG.deployments"
   git init -q
-  git add .scripts/production-k3d.sh .scripts/lib/*.sh message-bus/nats.conf \
+  git add .scripts/production-k3d.sh .scripts/lib/*.sh \
+    .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt \
+    message-bus/nats.conf \
     browse-maintenance/nginx.conf browse-maintenance/unavailable.html oauth2-proxy/oauth2-proxy.cfg design/nginx.conf
   git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Fixture release inputs'
   export MOCK_REVISION

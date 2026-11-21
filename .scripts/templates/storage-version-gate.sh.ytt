@@ -1,0 +1,33 @@
+set -eu
+gate_failure() {
+  printf 'storage-version gate: %s\n' "$1" >&2
+  exit 1
+}
+expected=${EXPECTED_STORAGE_VERSION:-}
+mode=${MODE-production}
+case "$expected" in
+  ''|*[!0-9]*|0*) gate_failure "invalid expected storage version" ;;
+esac
+case "$mode" in production|testing|backup) ;; *) gate_failure "invalid runtime mode" ;; esac
+root=/data
+marker="$root/storage-version"
+[ -d "$root" ] || gate_failure "data root is not a directory"
+[ -r "$root" ] && [ -x "$root" ] || gate_failure "cannot read data root"
+if ! entries=$(find "$root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null); then
+  gate_failure "cannot inspect data root"
+fi
+if [ -L "$marker" ]; then
+  gate_failure "unsafe marker file type"
+elif [ -e "$marker" ]; then
+  [ -f "$marker" ] || gate_failure "unsafe marker file type"
+  [ -r "$marker" ] || gate_failure "cannot read marker"
+  actual=$(cat "$marker") || gate_failure "cannot read marker"
+  printf "%s\n" "$actual" | cmp -s "$marker" - || gate_failure "invalid marker contents"
+  case "$actual" in
+    ''|0*|*[!0-9]*) gate_failure "invalid marker contents" ;;
+  esac
+  [ "$actual" = "$expected" ] || gate_failure "storage version mismatch: expected $expected, actual $actual"
+else
+  [ -z "$entries" ] || gate_failure "marker missing; existing data found"
+  [ "$mode" != backup ] || gate_failure "marker missing; backup mode cannot initialize"
+fi

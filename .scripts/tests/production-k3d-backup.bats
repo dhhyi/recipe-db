@@ -186,6 +186,109 @@ EOF
   chmod +x bin/curl
 }
 
+@test "backup mode selects the storage sidecar for an unlisted PVC owner" {
+  local test_work="$FIXTURE_ROOT/start-modes"
+  mkdir -p "$test_work"
+  jq -n '[{name:"future-storage",replicas:2}]' > "$test_work/prior-workloads.json"
+  printf '{"name":"future-storage"}\n' > "$test_work/backup-pvcs.jsonl"
+  jq -n '{items:[{metadata:{name:"future-storage"},spec:{template:{spec:{
+    containers:[{name:"future-storage"},{name:"storage-version"}],
+    initContainers:[{name:"storage-version-gate",env:[{name:"MODE",value:"production"}]},
+      {name:"unrelated",env:[{name:"MODE",value:"custom"}]}]}}}}]}' \
+    > "$test_work/deployments.json"
+  cat > "$test_work/harness.sh" << 'EOF'
+backup_scale_zero() { :; }
+kube() {
+  printf '%s\n' "$*" >> "$FIXTURE_ROOT/start-modes/commands.log"
+  if [[ $* == "get deployments -o json" ]]; then cat "$FIXTURE_ROOT/start-modes/deployments.json"; fi
+}
+EOF
+  {
+    sed -n '/^backup_mode_containers() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh"
+    sed -n '/^backup_set_backend_mode() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh"
+    sed -n '/^backup_start_modes() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh"
+    cat << 'EOF'
+work="$FIXTURE_ROOT/start-modes"
+timeout=60
+backup_start_modes
+EOF
+  } >> "$test_work/harness.sh"
+
+  run bash "$test_work/harness.sh"
+  [ "$status" -eq 0 ]
+  for container in future-storage storage-version storage-version-gate; do
+    grep -Fqx "set env deployment/future-storage MODE=backup --containers=$container" "$test_work/commands.log"
+  done
+  run ! grep -q 'containers=.*,' "$test_work/commands.log"
+  grep -Fqx 'scale deployment/future-storage --replicas=2' "$test_work/commands.log"
+  jq '(.items[0].spec.template.spec.initContainers[0].name)="storage-version" |
+    .items[0].spec.template.spec.containers |= map(select(.name != "storage-version"))' \
+    "$test_work/deployments.json" > "$test_work/legacy.json"
+  mv "$test_work/legacy.json" "$test_work/deployments.json"
+  : > "$test_work/commands.log"
+  run bash "$test_work/harness.sh"
+  [ "$status" -eq 0 ]
+  grep -Fqx 'set env deployment/future-storage MODE=backup --containers=future-storage' "$test_work/commands.log"
+  grep -Fqx 'set env deployment/future-storage MODE=backup --containers=storage-version' "$test_work/commands.log"
+  run ! grep -q 'storage-version-gate\|unrelated' "$test_work/commands.log"
+}
+
+@test "backup recovery resets and verifies both storage helper modes" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/snapshot-helpers"
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec) |=
+    (.initContainers=[{name:"storage-version-gate",env:[{name:"MODE",value:"production"}]}] |
+     .containers += [{name:"storage-version",env:[{name:"MODE",value:"production"}]}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+
+  run bash .scripts/production-k3d.sh backup-run "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  local mode container
+  for mode in backup production; do
+    for container in recipes storage-version storage-version-gate; do
+      grep -Fq "set env deployment/recipes MODE=$mode --containers=$container" "$MOCK_LOG"
+    done
+  done
+  jq -e '.items[] | select(.metadata.name == "recipes") | .spec.template.spec |
+    all((.containers[], .initContainers[]); all(.env[]? | select(.name == "MODE"); .value == "production"))' \
+    "$MOCK_LOG.deployments"
+}
+
+@test "backup recovered workload verification rejects a helper left in backup mode" {
+  local test_work="$FIXTURE_ROOT/verify-helpers"
+  mkdir -p "$test_work"
+  printf '["recipes"]\n' > "$test_work/maintenance-workloads.json"
+  printf '[{"name":"recipes","replicas":1,"release":"r"}]\n' > "$test_work/prior-workloads.json"
+  jq -n '{items:[{metadata:{name:"recipes"},spec:{replicas:1,template:{
+    metadata:{annotations:{"recipe-db/release":"r"}},spec:{
+      containers:[{name:"recipes",env:[{name:"MODE",value:"production"}]},
+        {name:"storage-version",env:[{name:"MODE",value:"production"}]}],
+      initContainers:[{name:"storage-version-gate",env:[{name:"MODE",value:"production"}]},
+        {name:"unrelated",env:[{name:"MODE",value:"custom"}]}]}}},
+    status:{readyReplicas:1}}]}' > "$test_work/deployments.json"
+  cat > "$test_work/harness.sh" << 'EOF'
+work="$FIXTURE_ROOT/verify-helpers"
+kube() { cat "$work/deployments.json"; }
+backup_validate_workload_images() { :; }
+EOF
+  sed -n '/^backup_verify_recovered_workloads() {/,/^}/p' "$BATS_TEST_DIRNAME/../production-k3d.sh" \
+    >> "$test_work/harness.sh"
+  printf '%s\n' 'backup_verify_recovered_workloads '"'"'["recipes"]'"'" >> "$test_work/harness.sh"
+  run bash "$test_work/harness.sh"
+  [ "$status" -eq 0 ]
+  local path
+  for path in '.initContainers[0]' '.containers[1]'; do
+    jq "(.items[0].spec.template.spec$path.env[0].value) = \"backup\"" \
+      "$test_work/deployments.json" > "$test_work/drift.json"
+    cp "$test_work/deployments.json" "$test_work/healthy.json"
+    cp "$test_work/drift.json" "$test_work/deployments.json"
+    run bash "$test_work/harness.sh"
+    [ "$status" -ne 0 ]
+    cp "$test_work/healthy.json" "$test_work/deployments.json"
+  done
+}
+
 @test "backup uses the deploy Lease, GraphQL barrier, metadata-selected PVCs and read-only copies" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/snapshot-success"

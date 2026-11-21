@@ -257,6 +257,8 @@ make_gate_pod() {
     "$work/gate-values.json" > "$work/$name-values.json"
   ytt -f "$repository_root/.scripts/templates/kubernetes-template.yml" \
     -f "$repository_root/.scripts/templates/kubernetes.lib.yml" \
+    -f "$repository_root/.scripts/templates/storage-version-gate.sh.ytt" \
+    -f "$repository_root/.scripts/templates/storage-version-sidecar.sh.ytt" \
     --data-values-file "$work/$name-values.json" -o json \
     | jq -s 'map(select(.kind == "Deployment" and .metadata.name == "images"))
       | if length == 1 then .[0].spec.template.spec.initContainers[0] else error("missing images gate") end' \
@@ -353,8 +355,8 @@ jq -e '
   and (.status.initContainerStatuses[0].state.terminated.exitCode // 0) > 0
 ' "$work/storage-gate-mismatch.json" > /dev/null \
   || die 'mismatched storage did not block the backend container'
-kube logs pod/storage-gate-mismatch -c storage-version \
-  | grep -Fxq 'storage-version gate: storage version mismatch: expected 2' \
+kube logs pod/storage-gate-mismatch -c storage-version-gate \
+  | grep -Fxq 'storage-version gate: storage version mismatch: expected 2, actual 1' \
   || die 'mismatched storage gate did not report its rejection'
 kube delete pod storage-gate-mismatch --wait=true --timeout=60s \
   > "$work/storage-gate-mismatch-delete.log"

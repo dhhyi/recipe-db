@@ -183,72 +183,6 @@ let test_reset_is_complete_and_transactional () =
         (Tags.assigned_tags database "orphan" = [])
         "reset clears even orphaned assignments")
 
-let test_storage_version_startup_gates () =
-  let root = "storage-version-fixture" in
-  let database_path = Filename.concat root "tags.sqlite" in
-  let marker = Filename.concat root "storage-version" in
-  let cleanup () =
-    List.iter
-      (fun path -> if Sys.file_exists path then Sys.remove path)
-      [ database_path; database_path ^ "-wal"; database_path ^ "-shm"; marker ];
-    if Sys.file_exists root then Unix.rmdir root
-  in
-  cleanup ();
-  Unix.mkdir root 0o700;
-  check (Tags.check_storage_version (Some root) Tags.Testing)
-    "empty storage is eligible for testing initialization";
-  let channel = open_out_bin database_path in
-  output_string channel "existing";
-  close_out channel;
-  (match Tags.check_storage_version (Some root) Tags.Testing with
-  | _ -> fail "unversioned database was accepted"
-  | exception Failure message ->
-      check (String.starts_with ~prefix:"tags storage version failure at " message)
-        "storage error identifies service and marker");
-  check (In_channel.with_open_bin database_path In_channel.input_all = "existing")
-    "rejected storage remains unchanged";
-  Sys.remove database_path;
-  let database = Tags.open_database (Some root) in
-  Tags.publish_storage_version (Some root);
-  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
-    "marker is published after database initialization";
-  check (not (Tags.check_storage_version (Some root) Tags.Production))
-    "versioned database starts";
-  Tags.reset_database database;
-  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
-    "reset preserves marker";
-  Tags.close_database database;
-  let sidecar_root = Filename.concat root "sidecar-only" in
-  Unix.mkdir sidecar_root 0o700;
-  let sidecar_marker = Filename.concat sidecar_root "storage-version" in
-  let sidecar_database = Filename.concat sidecar_root "tags.sqlite" in
-  let write path content =
-    let channel = open_out_bin path in
-    output_string channel content;
-    close_out channel
-  in
-  write sidecar_marker "2\n";
-  write (sidecar_database ^ "-wal") "";
-  let missing_database_rejected =
-    try
-      ignore (Tags.check_storage_version (Some sidecar_root) Tags.Backup);
-      false
-    with Failure _ -> true
-  in
-  check missing_database_rejected
-    "backup startup rejects a marker and SQLite sidecar without the database";
-  check (not (Sys.file_exists sidecar_database))
-    "missing database stays absent after rejected startup";
-  Sys.remove (sidecar_database ^ "-wal");
-  Sys.remove sidecar_marker;
-  Unix.rmdir sidecar_root;
-  (match Tags.publish_storage_version (Some root) with
-  | () -> fail "existing marker was overwritten"
-  | exception Failure _ -> ());
-  check (In_channel.with_open_bin marker In_channel.input_all = "2\n")
-    "failed publication preserves marker";
-  cleanup ()
-
 let test_backup_rejects_missing_tables () =
   let valid_path = Filename.temp_file "tags-backup-valid" ".sqlite" in
   let valid_db = Tags.open_database (Some valid_path) in
@@ -268,6 +202,72 @@ let test_backup_rejects_missing_tables () =
         "backup rejection leaves the database unchanged";
       Sys.remove path)
     [ "tags"; "assignments" ]
+
+let test_backup_rejects_missing_database_paths () =
+  let root = Filename.temp_file "tags-backup-startup" "" in
+  Sys.remove root;
+  Unix.mkdir root 0o700;
+  let existing = Filename.concat root "existing" in
+  let absent_database = Filename.concat root "absent.sqlite" in
+  let orphan_database = Filename.concat root "orphan.sqlite" in
+  let orphan_wal = orphan_database ^ "-wal" in
+  let missing_parent = Filename.concat root "missing" in
+  let database_in_missing_parent = Filename.concat missing_parent "tags.sqlite" in
+  let write_file path contents =
+    Out_channel.with_open_bin path (fun channel -> output_string channel contents)
+  in
+  let read_file path = In_channel.with_open_bin path In_channel.input_all in
+  let remove_if_exists path = if Sys.file_exists path then Sys.remove path in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter remove_if_exists
+        [
+          existing;
+          absent_database;
+          orphan_database;
+          orphan_wal;
+          orphan_database ^ "-shm";
+          database_in_missing_parent;
+          database_in_missing_parent ^ "-wal";
+          database_in_missing_parent ^ "-shm";
+        ];
+      if Sys.file_exists missing_parent then Unix.rmdir missing_parent;
+      Unix.rmdir root)
+    (fun () ->
+      write_file existing "preserve this file";
+      expect_database_error (fun () ->
+          Tags.open_database ~mode:Tags.Backup (Some absent_database));
+      check (not (Sys.file_exists absent_database))
+        "backup rejection must not create an absent database";
+      check (not (Sys.file_exists (absent_database ^ "-wal")))
+        "backup rejection must not create a WAL beside an absent database";
+      check (not (Sys.file_exists (absent_database ^ "-shm")))
+        "backup rejection must not create shared memory beside an absent database";
+      check (read_file existing = "preserve this file")
+        "backup rejection must preserve existing files";
+      write_file orphan_wal "orphaned WAL data";
+      expect_database_error (fun () ->
+          Tags.open_database ~mode:Tags.Backup (Some orphan_database));
+      check (not (Sys.file_exists orphan_database))
+        "backup rejection must not create a database beside an orphaned WAL";
+      check (not (Sys.file_exists (orphan_database ^ "-shm")))
+        "backup rejection must not create shared memory beside an orphaned WAL";
+      check (read_file orphan_wal = "orphaned WAL data")
+        "backup rejection must preserve an orphaned WAL";
+      check (read_file existing = "preserve this file")
+        "backup rejection must preserve unrelated existing files";
+      expect_database_error (fun () ->
+          Tags.open_database ~mode:Tags.Backup (Some database_in_missing_parent));
+      check (not (Sys.file_exists missing_parent))
+        "backup rejection must not create a missing parent directory";
+      check (not (Sys.file_exists database_in_missing_parent))
+        "backup rejection must not create a database in a missing parent";
+      check (not (Sys.file_exists (database_in_missing_parent ^ "-wal")))
+        "backup rejection must not create a WAL in a missing parent";
+      check (not (Sys.file_exists (database_in_missing_parent ^ "-shm")))
+        "backup rejection must not create shared memory in a missing parent";
+      check (read_file existing = "preserve this file")
+        "backup rejection must preserve existing files")
 
 let request ?(mode = Tags.Testing) ?(method_ = `GET) ?(body = "") db target =
   Dream.test (Tags.router ~mode db)
@@ -447,8 +447,8 @@ let () =
   test_bulk_validation_and_conflicts ();
   test_restart_persistence ();
   test_reset_is_complete_and_transactional ();
-  test_storage_version_startup_gates ();
   test_backup_rejects_missing_tables ();
+  test_backup_rejects_missing_database_paths ();
   test_runtime_modes_and_http_reset ();
   test_http_errors_and_rollback ();
   test_http_other_category_flow ();

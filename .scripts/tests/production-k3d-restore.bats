@@ -25,6 +25,29 @@ load production-k3d-restore-setup
   jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
 }
 
+@test "historical restore renders a pinned release without optional storage helper inputs" {
+  export MOCK_RESTORE_UNRELATED_INIT=true
+  git rm -q .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'Historical release without helper inputs'
+  export MOCK_REVISION
+  MOCK_REVISION=$(git rev-parse HEAD)
+  export MOCK_SOURCE_REVISION="$MOCK_REVISION"
+  restore_fixture
+  printf '*\n' > .gitignore
+  printf 'new tooling input\n' > message-bus/nats.conf
+  git add -f .gitignore message-bus/nats.conf
+  git -c user.name=Test -c user.email=test@example.invalid commit -qm 'New tooling inputs'
+
+  run bash .scripts/production-k3d.sh --release-sources-from-git restore "$VALUES" \
+    "$RESTORE_MANIFEST" "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
+  [ "$status" -eq 0 ]
+  grep -q "ytt .*source-$MOCK_REVISION/.scripts/templates/kubernetes-template.yml" "$MOCK_LOG"
+  run ! grep -E '^ytt .*storage-version-(gate|sidecar)\.sh\.ytt' "$MOCK_LOG"
+  jq -e '.status == "succeeded" and .phase == "complete"' "$RESTORE_STATE/restore-state.json"
+  jq -e '.items[] | select(.metadata.name == "recipes") |
+    .spec.template.spec.initContainers[0].env[0].value == "custom"' "$MOCK_LOG.restore-deployments"
+}
+
 @test "historical recovery preview requires matching sources or explicit immutable Git release sources" {
   restore_fixture
   export MOCK_SOURCE_REVISION="$MOCK_REVISION"
@@ -188,6 +211,44 @@ load production-k3d-restore-setup
   opening=$(awk '/from-file=routes.yml=.*restore-final-routes/ {print NR; exit}' "$MOCK_LOG")
   [ "$propagation" -lt "$opening" ]
   [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "restore rolls backends and storage helpers into production after reads and before propagation" {
+  export MOCK_RESTORE_STORAGE_HELPERS=true
+  restore_fixture
+  run_restore
+  [ "$status" -eq 0 ]
+  local reads transition rollout propagation name container helper_transition
+  reads=$(awk '/curl .*recipe\/old/ {print NR; exit}' "$MOCK_LOG")
+  propagation=$(awk '/exec deployment\/nats -- wget/ {print NR; exit}' "$MOCK_LOG")
+  [ -n "$reads" ] && [ -n "$propagation" ]
+  for name in recipes images tags; do
+    transition=$(awk -v name="$name" '$0 ~ "set env deployment/" name " MODE=production --containers=" {print NR; exit}' "$MOCK_LOG")
+    rollout=$(awk -v name="$name" -v start="$transition" 'NR > start && $0 ~ "rollout status deployment/" name " " {print NR; exit}' "$MOCK_LOG")
+    [ "$reads" -lt "$transition" ] && [ "$transition" -lt "$rollout" ] && [ "$rollout" -lt "$propagation" ]
+    for container in "$name" storage-version storage-version-gate; do
+      helper_transition=$(awk -v name="$name" -v container="$container" \
+        'index($0, "set env deployment/" name " MODE=production") && $NF == "--containers=" container {print NR; exit}' "$MOCK_LOG")
+      [ -n "$helper_transition" ] && [ "$helper_transition" -lt "$rollout" ]
+    done
+  done
+  jq -e '[.items[] | select(.metadata.name == "recipes" or .metadata.name == "images" or .metadata.name == "tags") |
+    .spec.template.spec |
+    all((.containers[], .initContainers[] | select(.name != "unrelated"));
+      all(.env[]? | select(.name == "MODE"); .value == "production")) and
+    any(.initContainers[]; .name == "unrelated" and .env[0].value == "custom")] | all' \
+    "$MOCK_LOG.restore-deployments"
+}
+
+@test "restore retains the barrier when a production backend rollout fails" {
+  export MOCK_RESTORE_PRODUCTION_ROLLOUT_FAIL=true
+  restore_fixture
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restored backends could not be switched to production"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  run ! grep -q 'from-file=routes.yml=.*restore-final-routes' "$MOCK_LOG"
+  [ ! -e "$MOCK_LOG.probe-created" ]
 }
 
 @test "Google-enabled restore waits for Redis before starting OAuth and reopens only after verification" {

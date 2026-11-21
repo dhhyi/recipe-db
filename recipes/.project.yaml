@@ -63,13 +63,6 @@ backupRole: authoritative-read-only
 backupData: { kind: sqlite, file: recipes.sqlite3 }
 storageVersion:
   value: 1
-  file: lib/recipes/storage_version_generated.ex
-  template: |
-    defmodule Recipes.StorageVersionGenerated do
-      @moduledoc false
-
-      def value, do: {{STORAGE_VERSION}}
-    end
 format:
   - check: mix format --check-formatted $argv
     apply: mix format $argv
