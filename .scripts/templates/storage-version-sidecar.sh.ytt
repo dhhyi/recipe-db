@@ -1,6 +1,10 @@
 set -eu
 trap 'exit 0' TERM QUIT
-mode=${MODE:-production}
+mode=${MODE-production}
+case "$mode" in
+  production|testing|backup) ;;
+  *) printf 'storage-version sidecar: invalid runtime mode\n' >&2; exit 1 ;;
+esac
 expected=${EXPECTED_STORAGE_VERSION:-}
 port=${BACKEND_PORT:-}
 root=/data

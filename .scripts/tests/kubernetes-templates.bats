@@ -404,6 +404,78 @@ render() {
   done
 }
 
+@test "storage-version helpers reject invalid modes with or without a marker" {
+  render values.json
+  gate=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "recipes")
+    | .spec.template.spec.initContainers[0].command[2]
+  ' manifests.json)
+  sidecar=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "recipes")
+    | .spec.template.spec.containers[] | select(.name == "storage-version") | .command[2]
+  ' manifests.json)
+  root="$BATS_TEST_TMPDIR/modes"
+  mkdir "$root"
+  gate=${gate//\/data/$root}
+  sidecar=${sidecar//\/data/$root}
+  sidecar=${sidecar//\/tmp\/storage-version-ready/$BATS_TEST_TMPDIR\/ready}
+  for state in missing present; do
+    if [ "$state" = present ]; then printf '1\n' > "$root/storage-version"; fi
+    for mode in "" invalid; do
+      run env MODE="$mode" EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$gate"
+      [ "$status" -ne 0 ]
+      [[ $output == *"invalid runtime mode"* ]]
+      run env MODE="$mode" EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$sidecar"
+      [ "$status" -ne 0 ]
+      [[ $output == *"invalid runtime mode"* ]]
+      [ ! -e "$BATS_TEST_TMPDIR/ready" ]
+      if [ "$state" = missing ]; then
+        [ ! -e "$root/storage-version" ]
+      else
+        [ "$(cat "$root/storage-version")" = 1 ]
+      fi
+    done
+    for mode in production testing backup; do
+      run env MODE="$mode" EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$gate"
+      if [ "$state" = missing ] && [ "$mode" = backup ]; then
+        [ "$status" -ne 0 ]
+      else
+        [ "$status" -eq 0 ]
+      fi
+    done
+    run env -u MODE EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$gate"
+    [ "$status" -eq 0 ]
+  done
+}
+
+@test "migration rehearsal reads the real mismatch diagnostic from the gate container" {
+  render values.json
+  gate=$(jq -er '
+    .items[] | select(.kind == "Deployment" and .metadata.name == "recipes")
+    | .spec.template.spec.initContainers[0].command[2]
+  ' manifests.json)
+  root="$BATS_TEST_TMPDIR/rehearsal"
+  mkdir "$root"
+  printf '1\n' > "$root/storage-version"
+  gate=${gate//\/data/$root}
+  run env EXPECTED_STORAGE_VERSION=2 /bin/sh -ec "$gate"
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/gate.log"
+  cat > "$BATS_TEST_TMPDIR/log-check.sh" << 'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+kube() {
+  [[ $* == "logs pod/storage-gate-mismatch -c storage-version-gate" ]] || return 1
+  cat "$GATE_LOG"
+}
+die() { printf '%s\n' "$*" >&2; exit 1; }
+EOF
+  sed -n '/^kube logs pod\/storage-gate-mismatch /,/|| die /p' \
+    "$ROOT/.scripts/test-migrations-k3d.sh" >> "$BATS_TEST_TMPDIR/log-check.sh"
+  run env GATE_LOG="$BATS_TEST_TMPDIR/gate.log" bash "$BATS_TEST_TMPDIR/log-check.sh"
+  [ "$status" -eq 0 ]
+}
+
 @test "storage-version sidecar waits for health, preserves markers, and never publishes in backup" {
   render values.json
   command=$(jq -er '
@@ -437,18 +509,39 @@ render() {
   [ "$status" -ne 0 ]
   rm "$BATS_TEST_TMPDIR/ready" "$root/storage-version"
 
-  python3 -c 'from http.server import BaseHTTPRequestHandler,HTTPServer
+  python3 -c 'import pathlib, sys
+from http.server import BaseHTTPRequestHandler,HTTPServer
+ready, requests, portfile = map(pathlib.Path, sys.argv[1:])
 class H(BaseHTTPRequestHandler):
  def do_GET(self):
-  self.send_response(204 if self.path == "/health" else 404); self.end_headers()
+  status = (204 if ready.exists() else 503) if self.path == "/health" else 404
+  self.send_response(status); self.end_headers()
+  if status == 503: requests.write_text("503")
  def log_message(self,*args): pass
-HTTPServer(("127.0.0.1",18432),H).serve_forever()' \
+server = HTTPServer(("127.0.0.1",0),H)
+portfile.write_text(str(server.server_port))
+server.serve_forever()' "$BATS_TEST_TMPDIR/healthy" "$BATS_TEST_TMPDIR/request" "$BATS_TEST_TMPDIR/port" \
     > "$BATS_TEST_TMPDIR/health.log" 2>&1 &
   health_pid=$!
   trap 'kill "$health_pid" 2>/dev/null || true; if [ -n "${sidecar_pid:-}" ]; then kill "$sidecar_pid" 2>/dev/null || true; fi' EXIT
-  sleep 0.2
-  env MODE=production EXPECTED_STORAGE_VERSION=1 BACKEND_PORT=18432 /bin/sh -ec "$command" &
+  for _ in {1..50}; do
+    [ ! -f "$BATS_TEST_TMPDIR/port" ] || break
+    sleep 0.1
+  done
+  port=$(cat "$BATS_TEST_TMPDIR/port")
+  env -u MODE EXPECTED_STORAGE_VERSION=1 BACKEND_PORT="$port" /bin/sh -ec "$command" &
   sidecar_pid=$!
+  for _ in {1..50}; do
+    [ ! -f "$BATS_TEST_TMPDIR/request" ] || break
+    sleep 0.1
+  done
+  [ "$(cat "$BATS_TEST_TMPDIR/request")" = 503 ]
+  kill -0 "$sidecar_pid"
+  [ ! -e "$root/storage-version" ]
+  [ ! -e "$BATS_TEST_TMPDIR/ready" ]
+  run env EXPECTED_STORAGE_VERSION=1 /bin/sh -ec "$readiness"
+  [ "$status" -ne 0 ]
+  touch "$BATS_TEST_TMPDIR/healthy"
   for _ in {1..50}; do
     [ ! -f "$BATS_TEST_TMPDIR/ready" ] || break
     sleep 0.1

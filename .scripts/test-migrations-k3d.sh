@@ -355,8 +355,8 @@ jq -e '
   and (.status.initContainerStatuses[0].state.terminated.exitCode // 0) > 0
 ' "$work/storage-gate-mismatch.json" > /dev/null \
   || die 'mismatched storage did not block the backend container'
-kube logs pod/storage-gate-mismatch -c storage-version \
-  | grep -Fxq 'storage-version gate: storage version mismatch: expected 2' \
+kube logs pod/storage-gate-mismatch -c storage-version-gate \
+  | grep -Fxq 'storage-version gate: storage version mismatch: expected 2, actual 1' \
   || die 'mismatched storage gate did not report its rejection'
 kube delete pod storage-gate-mismatch --wait=true --timeout=60s \
   > "$work/storage-gate-mismatch-delete.log"
