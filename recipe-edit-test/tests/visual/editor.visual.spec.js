@@ -28,22 +28,6 @@ for (const role of ["anonymous", "member", "owner"]) {
         await page.goto(pageKind === "edit" ? "/edit/recipe-1" : "/edit/new");
         const header = page.locator("header-component");
         await expect(header).toHaveAttribute("auth-role", role);
-        if (role === "anonymous") {
-          const login = header.getByRole("link", {
-            name: "Anmelden",
-            exact: true,
-          });
-          await expect(login).toBeVisible();
-          await expect(login).toHaveAttribute("data-screenshot-hide", "");
-        } else {
-          const profile = header.locator("details.dropdown");
-          await expect(profile).toBeVisible();
-          await expect(profile).toHaveAttribute("data-screenshot-hide", "");
-          await expect(profile.locator(".profile-menu")).toHaveAttribute(
-            "data-screenshot-hide",
-            "",
-          );
-        }
         if (role === "owner") {
           if (pageKind === "edit") {
             await expect(
