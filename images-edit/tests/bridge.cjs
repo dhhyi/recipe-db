@@ -295,7 +295,12 @@ test("active pointer coordinates do not jump when status layout moves the stage"
   };
   const target = {
     dataset: { handle: "move" },
-    closest: (selector) => (selector === "[data-handle]" ? target : stage),
+    closest: (selector) =>
+      selector === "[data-handle]"
+        ? target
+        : selector === ".crop-stage"
+          ? stage
+          : null,
   };
   const event = {
     target,
@@ -315,6 +320,196 @@ test("active pointer coordinates do not jump when status layout moves the stage"
   assert.equal(bridge.events[0].y, bridge.events[1].y);
   assert.equal(bridge.events[1].displayHeight, 450);
   assert.equal(bridge.events[2].kind, "end");
+});
+
+test("gallery pointer uses stable list capture, ignores clicks and cancels safely", () => {
+  const bridge = harness();
+  let shift = 0;
+  let captured = false;
+  const rows = ["a", "b", "c"].map((id, index) => ({
+    dataset: { galleryId: id },
+    getBoundingClientRect: () => ({
+      top: index * 100 + shift,
+      bottom: index * 100 + shift + 100,
+      height: 100,
+    }),
+  }));
+  const list = {
+    querySelectorAll: () => rows,
+    setPointerCapture() {
+      captured = true;
+    },
+    hasPointerCapture: () => captured,
+    releasePointerCapture() {
+      captured = false;
+    },
+  };
+  const handle = {
+    dataset: { enabled: "true", galleryHandle: "b" },
+    closest: (selector) => (selector === ".gallery-list" ? list : null),
+  };
+  const target = {
+    closest: (selector) =>
+      selector === "[data-gallery-handle]" ? handle : null,
+  };
+  const event = {
+    target,
+    isPrimary: true,
+    button: 0,
+    pointerId: 7,
+    clientX: 20,
+    clientY: 150,
+    preventDefault() {},
+  };
+  bridge.dispatch("pointerdown", event);
+  assert.equal(captured, true);
+  shift = 60;
+  bridge.dispatch("pointerup", event);
+  assert.deepEqual(
+    bridge.events.map((e) => e.kind),
+    ["gallery-drag-start", "gallery-drag-end"],
+  );
+  assert.equal(bridge.events[1].cancelled, false);
+
+  shift = 0;
+  bridge.dispatch("pointerdown", event);
+  shift = 110;
+  bridge.dispatch("pointermove", { ...event, clientX: 36 });
+  bridge.dispatch("pointerup", { ...event, clientX: 36 });
+  assert.deepEqual(
+    bridge.events.slice(2).map((e) => e.kind),
+    ["gallery-drag-start", "gallery-drag-end"],
+  );
+
+  shift = 0;
+  bridge.dispatch("pointerdown", event);
+  shift = 60;
+  bridge.dispatch("pointermove", { ...event, clientY: 40 });
+  assert.equal(bridge.events.at(-1).index, 0);
+  bridge.dispatch("keydown", { key: "Escape", preventDefault() {} });
+  assert.equal(bridge.events.at(-1).cancelled, true);
+  assert.equal(captured, false);
+
+  bridge.dispatch("pointerdown", event);
+  bridge.dispatch("pointercancel", event);
+  assert.equal(bridge.events.at(-1).cancelled, true);
+  const count = bridge.events.length;
+  bridge.dispatch("pointerdown", { ...event, target: { closest: () => null } });
+  assert.equal(bridge.events.length, count);
+  handle.dataset.enabled = "false";
+  bridge.dispatch("pointerdown", event);
+  assert.equal(bridge.events.length, count);
+});
+
+test("gallery hit-testing follows live row bounds after layout and preview change", () => {
+  const bridge = harness();
+  let boxes = [
+    [0, 100],
+    [100, 200],
+    [200, 300],
+  ];
+  const ids = ["a", "b", "c"];
+  const list = {
+    querySelectorAll: () =>
+      ids.map((id, index) => ({
+        dataset: { galleryId: id },
+        getBoundingClientRect: () => ({
+          top: boxes[index][0],
+          bottom: boxes[index][1],
+        }),
+      })),
+    setPointerCapture() {},
+    hasPointerCapture: () => true,
+    releasePointerCapture() {},
+  };
+  const handle = {
+    dataset: { enabled: "true", galleryHandle: "a" },
+    closest: () => list,
+  };
+  const target = {
+    closest: (selector) =>
+      selector === "[data-gallery-handle]" ? handle : null,
+  };
+  const start = {
+    target,
+    isPrimary: true,
+    button: 0,
+    pointerId: 1,
+    clientX: 20,
+    clientY: 50,
+    preventDefault() {},
+  };
+  bridge.dispatch("pointerdown", start);
+  boxes = [
+    [120, 200],
+    [200, 320],
+    [320, 500],
+  ];
+  bridge.dispatch("pointermove", { ...start, clientY: 450 });
+  assert.equal(bridge.events.at(-1).index, 2);
+  ids.splice(0, 3, "b", "c", "a");
+  boxes = [
+    [120, 240],
+    [240, 420],
+    [420, 500],
+  ];
+  const count = bridge.events.length;
+  bridge.dispatch("pointerup", { ...start, clientY: 450 });
+  assert.equal(bridge.events.length, count + 1);
+  assert.equal(bridge.events.at(-1).kind, "gallery-drag-end");
+});
+
+test("unequal rows do not oscillate after a midpoint is crossed", () => {
+  const bridge = harness();
+  const ids = ["a", "b", "c"];
+  const heights = { a: 100, b: 200, c: 120 };
+  const list = {
+    querySelectorAll: () => {
+      let top = 40;
+      return ids.map((id) => {
+        const bottom = top + heights[id];
+        const row = {
+          dataset: { galleryId: id },
+          getBoundingClientRect: () => ({ top: bottom - heights[id], bottom }),
+        };
+        top = bottom;
+        return row;
+      });
+    },
+    setPointerCapture() {},
+    hasPointerCapture: () => true,
+    releasePointerCapture() {},
+  };
+  const handle = {
+    dataset: { enabled: "true", galleryHandle: "a" },
+    closest: () => list,
+  };
+  const target = {
+    closest: (selector) =>
+      selector === "[data-gallery-handle]" ? handle : null,
+  };
+  const event = {
+    target,
+    isPrimary: true,
+    button: 0,
+    pointerId: 1,
+    clientX: 20,
+    clientY: 90,
+    preventDefault() {},
+  };
+  bridge.dispatch("pointerdown", event);
+  bridge.dispatch("pointermove", { ...event, clientY: 240 });
+  assert.equal(bridge.events.at(-1).index, 1);
+  ids.splice(0, 3, "b", "a", "c");
+  bridge.dispatch("pointermove", { ...event, clientY: 239 });
+  assert.equal(bridge.events.at(-1).index, 1);
+  bridge.dispatch("pointermove", { ...event, clientY: 241 });
+  assert.equal(bridge.events.at(-1).index, 1);
+  bridge.dispatch("pointermove", { ...event, clientY: 139 });
+  assert.equal(bridge.events.at(-1).index, 0);
+  ids.splice(0, 3, "a", "b", "c");
+  bridge.dispatch("pointerup", { ...event, clientY: 139 });
+  assert.equal(bridge.events.at(-1).cancelled, false);
 });
 
 for (const little of [true, false]) {

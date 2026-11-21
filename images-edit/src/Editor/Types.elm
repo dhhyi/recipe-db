@@ -39,6 +39,7 @@ type alias GalleryMovement =
     { direction : MoveDirection
     , fromIndex : Int
     , toIndex : Int
+    , dragged : Bool
     }
 
 
@@ -75,6 +76,8 @@ type alias Model =
     , galleryError : Maybe String
     , galleryConfirmation : Maybe ( String, Int )
     , galleryMutation : Maybe GalleryMutation
+    , galleryDrag : Maybe ( String, Int )
+    , galleryPreview : Maybe (List RecipeDB.GalleryImage)
     , pendingGallery : Maybe ( Int, RecipeDB.RecipeModel )
     , mutationToken : Int
     , galleryFeedback : Maybe GalleryFeedback
@@ -122,6 +125,8 @@ init recipeId =
     , galleryError = Nothing
     , galleryConfirmation = Nothing
     , galleryMutation = Nothing
+    , galleryDrag = Nothing
+    , galleryPreview = Nothing
     , pendingGallery = Nothing
     , mutationToken = 0
     , galleryFeedback = Nothing
@@ -164,7 +169,7 @@ capacityWarning images =
 
 canAdd : Model -> Bool
 canAdd model =
-    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing then
+    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryDrag /= Nothing || model.galleryError /= Nothing then
         False
 
     else
@@ -179,7 +184,7 @@ canAdd model =
 
 canDelete : Model -> String -> Bool
 canDelete model imageId =
-    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryError /= Nothing then
+    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryDrag /= Nothing || model.galleryError /= Nothing then
         False
 
     else
@@ -197,7 +202,7 @@ canDelete model imageId =
 
 canMove : Model -> String -> MoveDirection -> Bool
 canMove model imageId direction =
-    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryError /= Nothing then
+    if model.phase /= Viewing || model.galleryRefreshing || model.galleryMutation /= Nothing || model.galleryDrag /= Nothing || model.galleryError /= Nothing then
         False
 
     else

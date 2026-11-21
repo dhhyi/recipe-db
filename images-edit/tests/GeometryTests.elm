@@ -252,6 +252,87 @@ galleryTests =
         pendingMove =
             apply (MoveImage "opaque/2" Editor.MoveUp) threeImages
 
+        dragEvent : String -> List ( String, E.Value ) -> Msg
+        dragEvent kind fields =
+            Bridge (E.object (( "kind", E.string kind ) :: fields))
+
+        dragStart : Editor.Model
+        dragStart =
+            apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/2" ) ]) threeImages
+
+        dragPreview : Editor.Model
+        dragPreview =
+            apply (dragEvent "gallery-drag-move" [ ( "index", E.int 0 ) ]) dragStart
+
+        dragDrop : Editor.Model
+        dragDrop =
+            apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragPreview
+
+        dragRejected : Editor.Model
+        dragRejected =
+            apply (Reordered dragDrop.mutationToken (RemoteData.Success (RecipeDB.ReorderRejected "Konflikt"))) dragDrop
+
+        dragUnknown : Editor.Model
+        dragUnknown =
+            apply (Reordered dragDrop.mutationToken (RemoteData.Failure "Ungewiss")) dragDrop
+
+        firstDrag : Editor.Model
+        firstDrag =
+            apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/1" ) ]) threeImages
+                |> apply (dragEvent "gallery-drag-move" [ ( "index", E.int 2 ) ])
+                |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
+
+        firstDragSuccess : Editor.Model
+        firstDragSuccess =
+            apply (Reordered firstDrag.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) firstDrag
+
+        differentRead : RecipeDB.RecipeModel
+        differentRead =
+            RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })
+
+        firstDragReady : Editor.Model
+        firstDragReady =
+            apply (GotRecipe firstDragSuccess.galleryToken differentRead) firstDragSuccess
+
+        firstDragReconciled : Editor.Model
+        firstDragReconciled =
+            apply (ApplyGallery firstDragReady.galleryToken) firstDragReady
+
+        nonDefaultDrag : Editor.Model
+        nonDefaultDrag =
+            apply (dragEvent "gallery-drag-move" [ ( "index", E.int 2 ) ]) dragStart
+                |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
+
+        nonDefaultWritten : Editor.Model
+        nonDefaultWritten =
+            apply (Reordered nonDefaultDrag.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) nonDefaultDrag
+
+        concurrentRead : RecipeDB.RecipeModel
+        concurrentRead =
+            RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" }, { id = "opaque/2", thumbUrl = "/thumb" } ] })
+
+        nonDefaultReady : Editor.Model
+        nonDefaultReady =
+            apply (GotRecipe nonDefaultWritten.galleryToken concurrentRead) nonDefaultWritten
+
+        nonDefaultReconciled : Editor.Model
+        nonDefaultReconciled =
+            apply (ApplyGallery nonDefaultReady.galleryToken) nonDefaultReady
+
+        unknownFirstDrag : Editor.Model
+        unknownFirstDrag =
+            apply (Reordered firstDrag.mutationToken (RemoteData.Failure "Ungewiss")) firstDrag
+
+        unknownCommitted : Editor.Model
+        unknownCommitted =
+            apply
+                (GotRecipe unknownFirstDrag.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Just [ { id = "opaque/2", thumbUrl = "/thumb" }, { id = "opaque/3", thumbUrl = "/thumb" }, { id = "opaque/1", thumbUrl = "/thumb" } ] })))
+                unknownFirstDrag
+
+        dragFailedRead : Editor.Model -> Editor.Model
+        dragFailedRead model =
+            apply (GotRecipe model.galleryToken (RemoteData.Success (Just { name = "Testrezept", images = Nothing }))) model
+
         middleDownMove : Editor.Model
         middleDownMove =
             apply (MoveImage "opaque/2" Editor.MoveDown) threeImages
@@ -456,6 +537,127 @@ galleryTests =
             && not (Editor.canAdd pendingMove)
             && not (Editor.canDelete pendingMove "opaque/1")
             && not (Editor.canMove pendingMove "opaque/2" Editor.MoveDown)
+      )
+    , ( "drag preview keeps confirmed IDs separately and disables mutations"
+      , currentIds dragPreview
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && Maybe.map (List.map .id) dragPreview.galleryPreview
+            == Just [ "opaque/2", "opaque/1", "opaque/3" ]
+            && not (Editor.canAdd dragPreview)
+            && not (Editor.canDelete dragPreview "opaque/1")
+            && not (Editor.canMove dragPreview "opaque/2" Editor.MoveUp)
+            && apply (MoveImage "opaque/2" Editor.MoveUp) dragPreview
+            == dragPreview
+      )
+    , ( "drop starts one optimistic write; cancel and no-op do not write"
+      , dragDrop.galleryMutation
+            /= Nothing
+            && dragDrop.mutationToken
+            == 1
+            && dragDrop.galleryPreview
+            == dragPreview.galleryPreview
+            && (apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool True ) ]) dragPreview).galleryPreview
+            == Nothing
+            && (apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragStart).mutationToken
+            == 0
+            && apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) dragDrop
+            == dragDrop
+      )
+    , ( "cancel and no-op retain prior mutation error; a new write clears it"
+      , let
+            withPriorError : Editor.Model
+            withPriorError =
+                { threeImages | galleryFeedback = Just { kind = Editor.ReorderingRejected, message = "Konflikt" } }
+
+            priorErrorDrag : Editor.Model
+            priorErrorDrag =
+                apply (dragEvent "gallery-drag-start" [ ( "imageId", E.string "opaque/2" ) ]) withPriorError
+
+            cancel : Editor.Model
+            cancel =
+                apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool True ) ]) priorErrorDrag
+
+            noOp : Editor.Model
+            noOp =
+                apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ]) priorErrorDrag
+
+            dropped : Editor.Model
+            dropped =
+                apply (dragEvent "gallery-drag-move" [ ( "index", E.int 0 ) ]) priorErrorDrag
+                    |> apply (dragEvent "gallery-drag-end" [ ( "cancelled", E.bool False ) ])
+        in
+        priorErrorDrag.galleryFeedback
+            == withPriorError.galleryFeedback
+            && cancel.galleryFeedback
+            == withPriorError.galleryFeedback
+            && noOp.galleryFeedback
+            == withPriorError.galleryFeedback
+            && dropped.galleryFeedback
+            == Nothing
+      )
+    , ( "failed or unknown writes discard preview and keep last confirmed order on failed read"
+      , List.all
+            (\model ->
+                model.galleryPreview
+                    == Nothing
+                    && currentIds (dragFailedRead model)
+                    == [ "opaque/1", "opaque/2", "opaque/3" ]
+                    && not (Editor.canAdd (dragFailedRead model))
+            )
+            [ dragRejected, dragUnknown ]
+      )
+    , ( "successful drag with failed read retains optimistic order and retry only reads"
+      , let
+            dragSuccess : Editor.Model
+            dragSuccess =
+                apply (Reordered dragDrop.mutationToken (RemoteData.Success RecipeDB.ReorderConfirmed)) dragDrop
+
+            failed : Editor.Model
+            failed =
+                dragFailedRead dragSuccess
+
+            retried : Editor.Model
+            retried =
+                apply RetryGallery failed
+        in
+        Maybe.map (List.map .id) failed.galleryPreview
+            == Just [ "opaque/2", "opaque/1", "opaque/3" ]
+            && currentIds failed
+            == [ "opaque/1", "opaque/2", "opaque/3" ]
+            && Maybe.map .kind failed.galleryFeedback
+            == Just Editor.ReorderingSucceeded
+            && not (Editor.canAdd failed)
+            && retried.mutationToken
+            == failed.mutationToken
+            && retried.galleryToken
+            == failed.galleryToken
+            + 1
+      )
+    , ( "nonadjacent drag preserves other opaque IDs and reconciles a different authoritative default"
+      , Maybe.map (List.map .id) firstDrag.galleryPreview
+            == Just [ "opaque/2", "opaque/3", "opaque/1" ]
+            && currentIds firstDragReconciled
+            == [ "opaque/3", "opaque/1", "opaque/2" ]
+            && firstDragReconciled.galleryPreview
+            == Nothing
+            && Maybe.map .message firstDragReconciled.galleryFeedback
+            == Just "Bild an Position 2 verschoben. Bild an Position 1 ist jetzt das Standardbild."
+      )
+    , ( "non-default drag announces a concurrent authoritative default change"
+      , currentIds nonDefaultReconciled
+            == [ "opaque/3", "opaque/1", "opaque/2" ]
+            && Maybe.map .message nonDefaultReconciled.galleryFeedback
+            == Just "Bild an Position 3 verschoben. Bild an Position 1 ist jetzt das Standardbild."
+      )
+    , ( "unknown write that committed uses the authoritative collection without retry"
+      , currentIds unknownCommitted
+            == [ "opaque/2", "opaque/3", "opaque/1" ]
+            && unknownCommitted.galleryPreview
+            == Nothing
+            && Maybe.map .kind unknownCommitted.galleryFeedback
+            == Just Editor.ReorderingUnconfirmed
+            && unknownCommitted.mutationToken
+            == 1
       )
     , ( "middle Down swaps only its adjacent neighbor and preserves membership"
       , currentIds middleDownReconciled
