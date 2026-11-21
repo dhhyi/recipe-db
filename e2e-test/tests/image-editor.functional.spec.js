@@ -711,11 +711,22 @@ test("gallery up and down immediately save opaque IDs without optimistic movemen
   await expect(rows.nth(1).locator("button").nth(1)).toBeDisabled();
   await expect(rows.nth(0).locator("button").nth(1)).toBeEnabled();
   await expect(rows.nth(1).locator("button").nth(0)).toBeEnabled();
-  await expect(page.locator(".gallery-handle")).toHaveCount(2);
-  await expect(page.locator(".gallery-handle").first()).toHaveAttribute(
-    "aria-hidden",
-    "true",
-  );
+  await expect(rows.locator("article")).toHaveCount(2);
+  await expect(page.locator(".gallery-handle")).toHaveCount(0);
+  expect(
+    await rows
+      .first()
+      .locator("article")
+      .evaluate((article) => {
+        const card = article.getBoundingClientRect();
+        const button = article
+          .querySelector('[id^="delete-image-"]')
+          .getBoundingClientRect();
+        return (
+          Math.abs(card.y + card.height / 2 - button.y - button.height / 2) < 1
+        );
+      }),
+  ).toBe(true);
   expect(
     await rows
       .locator("button")

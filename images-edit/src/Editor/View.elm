@@ -3,7 +3,7 @@ module Editor.View exposing (view)
 import Crop exposing (Crop)
 import Editor.Types exposing (GalleryFeedbackKind(..), Model, MoveDirection(..), Msg(..), Phase(..), Session, canAdd, canDelete, canMove, imageLimit)
 import File exposing (File)
-import Html exposing (Html, a, button, div, h1, img, input, label, li, p, span, text)
+import Html exposing (Html, a, article, button, div, h1, img, input, label, li, p, span, text)
 import Html.Attributes exposing (accept, alt, attribute, class, disabled, href, id, src, style, type_)
 import Html.Events exposing (on, onClick)
 import Html.Keyed
@@ -189,7 +189,7 @@ editorStatus model =
                 "feedback success save-feedback"
 
              else
-                "editor-announcement"
+                "sr-only"
             )
          ]
             ++ (if model.galleryRefreshing || (model.galleryMutation /= Nothing && model.galleryError == Nothing) then
@@ -268,7 +268,7 @@ galleryView model =
     editorPage
         [ div [ class "flex flex-wrap items-center justify-between gap-2" ]
             [ h1
-                ([ id "gallery-heading", attribute "tabindex" "-1" ]
+                ([ id "gallery-heading", attribute "tabindex" "-1", class "focus:outline-2 focus:outline-offset-2" ]
                     ++ (if model.savedFeedback then
                             [ attribute "aria-describedby" "editor-status" ]
 
@@ -277,10 +277,11 @@ galleryView model =
                        )
                 )
                 [ text (model.recipeName |> Maybe.map (\name -> "Bilder für " ++ name ++ " verwalten") |> Maybe.withDefault "Rezeptbilder verwalten") ]
-            , label [ class "gallery-add" ]
+            , label [ class "relative inline-block cursor-pointer rounded border border-current px-3 py-2 focus-within:outline-2 focus-within:outline-offset-2 has-disabled:cursor-default has-disabled:opacity-50" ]
                 [ text "Bild hinzufügen"
                 , input
                     [ id "upload-image"
+                    , class "absolute inset-0 m-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
                     , type_ "file"
                     , accept "image/jpeg,image/png,.jpg,.jpeg,.png"
                     , attribute "aria-describedby" "gallery-file-help"
@@ -329,7 +330,7 @@ galleryContent model images failed =
 
                   else
                     Html.Keyed.node "ol"
-                        [ class "gallery-list", attribute "aria-label" "Rezeptbilder" ]
+                        [ class "flex list-none flex-col gap-2 p-0", attribute "aria-label" "Rezeptbilder" ]
                         (List.indexedMap (galleryRow model failed) entries)
                 ]
 
@@ -360,63 +361,65 @@ galleryRow model failed index image =
                     0
     in
     ( image.id
-    , li [ class "gallery-row", id ("gallery-image-" ++ image.id), attribute "tabindex" "-1" ]
-        [ span [ class "gallery-handle", attribute "aria-hidden" "true" ]
-            (List.repeat 6 (span [] []))
-        , if imageCount > 1 then
-            div [ class "gallery-move-controls" ]
-                [ button
-                    [ type_ "button"
-                    , class "outline"
-                    , id ("move-up-" ++ image.id)
-                    , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach oben verschieben")
-                    , disabled (not (canMove model image.id MoveUp))
-                    , onClick (MoveImage image.id MoveUp)
+    , li [ id ("gallery-image-" ++ image.id), attribute "tabindex" "-1" ]
+        [ article [ class "m-0 flex flex-wrap items-center gap-2" ]
+            [ if imageCount > 1 then
+                div [ class "gallery-move-controls flex flex-col gap-1" ]
+                    [ button
+                        [ type_ "button"
+                        , class "outline m-0"
+                        , id ("move-up-" ++ image.id)
+                        , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach oben verschieben")
+                        , disabled (not (canMove model image.id MoveUp))
+                        , onClick (MoveImage image.id MoveUp)
+                        ]
+                        [ span [ attribute "aria-hidden" "true" ] [ text "⌃" ] ]
+                    , button
+                        [ type_ "button"
+                        , class "outline m-0"
+                        , id ("move-down-" ++ image.id)
+                        , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach unten verschieben")
+                        , disabled (not (canMove model image.id MoveDown))
+                        , onClick (MoveImage image.id MoveDown)
+                        ]
+                        [ span [ attribute "aria-hidden" "true" ] [ text "⌄" ] ]
                     ]
-                    [ span [ attribute "aria-hidden" "true" ] [ text "⌃" ] ]
-                , button
-                    [ type_ "button"
-                    , class "outline"
-                    , id ("move-down-" ++ image.id)
-                    , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " nach unten verschieben")
-                    , disabled (not (canMove model image.id MoveDown))
-                    , onClick (MoveImage image.id MoveDown)
-                    ]
-                    [ span [ attribute "aria-hidden" "true" ] [ text "⌄" ] ]
-                ]
 
-          else
-            text ""
-        , if Set.member image.id failed then
-            span
-                [ class "gallery-thumbnail gallery-thumbnail-unavailable"
-                , attribute "role" "img"
-                , attribute "aria-label" description
-                ]
-                [ text "Vorschaubild nicht verfügbar" ]
+              else
+                text ""
+            , div [ class "flex flex-col items-center gap-1 sm:flex-row sm:gap-2" ]
+                [ if Set.member image.id failed then
+                    span
+                        [ class "grid aspect-4/3 w-21 max-w-full place-items-center border border-current text-center"
+                        , attribute "role" "img"
+                        , attribute "aria-label" description
+                        ]
+                        [ text "Vorschaubild nicht verfügbar" ]
 
-          else
-            img
-                [ src image.thumbUrl
-                , alt description
-                , class "gallery-thumbnail"
-                , on "error" (D.succeed (ThumbnailFailed image.id))
-                ]
-                []
-        , if index == 0 then
-            span [] [ text "Standardbild" ]
+                  else
+                    img
+                        [ src image.thumbUrl
+                        , alt description
+                        , class "aspect-4/3 w-21 max-w-full object-contain"
+                        , on "error" (D.succeed (ThumbnailFailed image.id))
+                        ]
+                        []
+                , if index == 0 then
+                    span [] [ text "Standardbild" ]
 
-          else
-            text ""
-        , button
-            [ type_ "button"
-            , class "outline"
-            , id ("delete-image-" ++ image.id)
-            , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " löschen")
-            , disabled (not (canDelete model image.id))
-            , onClick (DeleteImage image.id)
+                  else
+                    text ""
+                ]
+            , button
+                [ type_ "button"
+                , class "outline m-0 ml-auto"
+                , id ("delete-image-" ++ image.id)
+                , attribute "aria-label" ("Bild " ++ String.fromInt (index + 1) ++ " aus " ++ (model.recipeName |> Maybe.withDefault "Rezept") ++ " löschen")
+                , disabled (not (canDelete model image.id))
+                , onClick (DeleteImage image.id)
+                ]
+                [ text "Löschen" ]
             ]
-            [ text "Löschen" ]
         ]
     )
 
