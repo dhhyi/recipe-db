@@ -1653,7 +1653,10 @@ elif [[ $url == */graphql ]]; then
       echo '{"data":{"deleteRecipe":true}}' ;;
     *"searchRecipes"*)
       search=$(jq -r '.variables.options.q' "$request_file")
-      if [[ $search == '*' ]]; then
+      filter=$(jq -r '.variables.options.filter_by // empty' "$request_file")
+      if [[ $filter == 'id:=`recovery-probe`' && ! -f $MOCK_LOG.probe-name ]]; then
+        echo '{"data":{"searchRecipes":{"recipes":[],"found":0}}}'
+      elif [[ $search == '*' ]]; then
         echo '{"data":{"searchRecipes":{"recipes":[{"id":"fixture-recipe","name":"Recovery fixture recipe"}],"found":1}}}'
       elif [[ -f $MOCK_LOG.probe-name && $search == "$(cat "$MOCK_LOG.probe-name")" ]]; then
         jq -n --arg name "$search" \
