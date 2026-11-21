@@ -2,7 +2,7 @@ import { test as base, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { buildSchema, getOperationAST, parse, print } from "graphql";
-import { validateMock } from "./mock-validation.js";
+import { takeMockResponse, validateMock } from "./mock-validation.js";
 
 const schema = buildSchema(
   readFileSync(new URL("./recipe-db.graphqls", import.meta.url), "utf8"),
@@ -54,10 +54,10 @@ export const test = base.extend({
                 `Unexpected GraphQL operation or variables: ${JSON.stringify(body)}`,
               );
             }
-            validateMock(schema, mock);
+            const response = takeMockResponse(mock);
             await route.fulfill({
               contentType: "application/json",
-              body: JSON.stringify(mock.response),
+              body: JSON.stringify(response),
             });
           } catch (error) {
             await reject(`GraphQL mock failed: ${error.message}`);

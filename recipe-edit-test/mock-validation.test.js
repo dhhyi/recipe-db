@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSchema } from "graphql";
-import { validateMock } from "./mock-validation.js";
+import { takeMockResponse, validateMock } from "./mock-validation.js";
 
 const schema = buildSchema(`
   type Query {
@@ -161,4 +161,40 @@ test("rejects malformed GraphQL response envelopes and errors", () => {
     () => validateMock(schema, mock({ data, unexpected: true })),
     /not a GraphQL response property/,
   );
+});
+
+test("validates every response in a sequence", () => {
+  const { response, ...request } = mock({ data });
+  assert.equal(
+    validateMock(schema, {
+      ...request,
+      responses: [{ errors: [{ message: "Failed" }] }, response],
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMock(schema, { ...request, responses: [response, {}] }),
+    /data or non-empty errors/,
+  );
+  assert.throws(
+    () => validateMock(schema, { ...request, responses: [] }),
+    /non-empty array/,
+  );
+  assert.throws(
+    () => validateMock(schema, { ...request, response, responses: [response] }),
+    /either response or responses/,
+  );
+});
+
+test("consumes sequential responses and fails explicitly when exhausted", () => {
+  const first = { errors: [{ message: "Failed" }] };
+  const second = { data };
+  const sequence = { operationName: "RecipeList", responses: [first, second] };
+  assert.equal(takeMockResponse(sequence), first);
+  assert.equal(takeMockResponse(sequence), second);
+  assert.throws(() => takeMockResponse(sequence), /responses exhausted/);
+
+  const reusable = { response: second };
+  assert.equal(takeMockResponse(reusable), second);
+  assert.equal(takeMockResponse(reusable), second);
 });
