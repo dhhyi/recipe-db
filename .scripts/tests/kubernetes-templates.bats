@@ -336,11 +336,19 @@ render() {
 
     mismatch=1
     [ "$expected" != "$mismatch" ] || mismatch=2
-    printf '%s\n' "$mismatch" > "$marker"
-    run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+    for mismatch in "$mismatch" "${expected}0"; do
+      printf '%s\n' "$mismatch" > "$marker"
+      run env EXPECTED_STORAGE_VERSION="$expected" /bin/sh -ec "$command"
+      [ "$status" -ne 0 ]
+      [[ $output == *"storage version mismatch: expected $expected, actual $mismatch"* ]]
+      [ "$(cat "$marker")" = "$mismatch" ]
+    done
+
+    printf '1\n' > "$marker"
+    run env EXPECTED_STORAGE_VERSION=10 /bin/sh -ec "$command"
     [ "$status" -ne 0 ]
-    [[ $output == *"storage version mismatch"* ]]
-    [ "$(cat "$marker")" = "$mismatch" ]
+    [[ $output == *"storage version mismatch: expected 10, actual 1"* ]]
+    [ "$(cat "$marker")" = 1 ]
 
     for contents in "0"$'\n' "01"$'\n' "$expected" "$expected"$'\n\n' "$expected"$'\nextra'; do
       printf '%s' "$contents" > "$marker"
