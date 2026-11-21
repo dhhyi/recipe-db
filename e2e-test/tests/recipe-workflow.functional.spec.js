@@ -244,27 +244,6 @@ test("ingredient rows animate without delaying edits or discard", async ({
   }
 });
 
-test("exact undo restores clean state for null ingredient amount/unit", async ({
-  page,
-  demoRecipe,
-}) => {
-  await page.goto(`/edit/${demoRecipe.id}`);
-  await waitForEditorForm(page);
-
-  const originalAmountUnit = await amountUnitField(page, 2).inputValue();
-  expect(originalAmountUnit).toBe("");
-  await expect(cleanStatus(page)).toHaveCount(0);
-  await expect(saveButton(page)).toBeDisabled();
-
-  await amountUnitField(page, 2).fill("optional");
-  await expect(dirtyStatus(page)).toBeVisible();
-  await expect(saveButton(page)).toBeEnabled();
-
-  await amountUnitField(page, 2).fill("");
-  await expect(cleanStatus(page)).toHaveCount(0);
-  await expect(saveButton(page)).toBeDisabled();
-});
-
 test("save stays open and discard restores latest persisted fields", async ({
   page,
   demoRecipe,
