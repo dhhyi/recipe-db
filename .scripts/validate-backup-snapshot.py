@@ -8,6 +8,9 @@ import re
 import sys
 import tarfile
 
+MAX_FILES = 100_000
+MAX_DIRECTORIES = 100_000
+
 
 def validate(archive, require_storage_version=False, include_directories=False):
     members = set()
@@ -17,10 +20,13 @@ def validate(archive, require_storage_version=False, include_directories=False):
     with tarfile.open(archive, "r:") as source:
         for member in source:
             name = member.name.removeprefix("./")
+            if not name or name.startswith("/") or member.pax_headers or member.mode & 0o7000 \
+                    or not 0 <= member.uid < 2**32 - 1 or not 0 <= member.gid < 2**32 - 1:
+                raise ValueError("unsafe archive metadata")
             if member.isdir():
                 name = name.rstrip("/")
                 if name in ("", "."):
-                    continue
+                    name = "."
             path = PurePosixPath(name)
             if path.is_absolute() or ".." in path.parts or "\\" in name or str(path) != name \
                     or (member.isfile() and name == "."):
@@ -29,10 +35,16 @@ def validate(archive, require_storage_version=False, include_directories=False):
                 raise ValueError("archive contains a duplicate path")
             members.add(name)
             if member.isdir():
+                if name == ".":
+                    continue
+                if len(directories) >= MAX_DIRECTORIES:
+                    raise ValueError("too many archive directories")
                 directories.append(name)
                 continue
             if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                 raise ValueError("archive contains a link or special file")
+            if len(inventory) >= MAX_FILES:
+                raise ValueError("too many archive files")
             if name == "storage-version" and member.size > 64:
                 raise ValueError("malformed storage-version marker")
             stream = source.extractfile(member)

@@ -995,6 +995,10 @@ backup_capture() {
     backup_copy_pvc "$name" "$pvc" "$role" >> "$inventory" || return 1
   done < "$work/backup-pvcs.jsonl"
   jq -s '.' "$inventory" > "$work/archive-inventory.json" || return 1
+  jq -e '[.[].fileCount] | add <= 100000' "$work/archive-inventory.json" > /dev/null || {
+    printf 'production: too many snapshot files\n' >&2
+    return 1
+  }
   captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   jq --arg capturedAt "$captured_at" '.capturedAt=$capturedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \

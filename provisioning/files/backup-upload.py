@@ -25,6 +25,8 @@ PACKAGE_FORMAT = "recipe-db-backup"
 STATUS_FORMAT = "recipe-db-backup-status"
 DEFAULT_MAX_STAGING_BYTES = 8 * 1024**3
 MAX_MANIFEST_BYTES = 64 * 1024**2
+MAX_FILES = 100_000
+MAX_DIRECTORIES = 100_000
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 BACKUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -148,6 +150,7 @@ def validate_snapshot(snapshot, require_storage_versions=False):
     if not isinstance(inventory, list) or not inventory:
         raise ValueError("empty snapshot inventory")
     seen_archives = set()
+    total_files = 0
     for pvc in inventory:
         if not isinstance(pvc, dict):
             raise ValueError("invalid inventory")
@@ -184,6 +187,9 @@ def validate_snapshot(snapshot, require_storage_versions=False):
         if type(pvc.get("fileCount")) is not int or pvc["fileCount"] < 0 \
                 or not isinstance(files, list) or len(files) != pvc["fileCount"]:
             raise ValueError("invalid file inventory")
+        total_files += len(files)
+        if total_files > MAX_FILES:
+            raise ValueError("too many snapshot files")
         expected_files = {}
         expected_storage_version = None
         for entry in files:
@@ -216,10 +222,13 @@ def validate_snapshot(snapshot, require_storage_versions=False):
             with tarfile.open(archive, "r:") as source_tar:
                 for member in source_tar:
                     name = member.name.removeprefix("./")
+                    if not name or name.startswith("/") or member.pax_headers or member.mode & 0o7000 \
+                            or not 0 <= member.uid < 2**32 - 1 or not 0 <= member.gid < 2**32 - 1:
+                        raise ValueError("unsafe archive metadata")
                     if member.isdir():
                         name = name.rstrip("/")
                         if name in ("", "."):
-                            continue
+                            name = "."
                     path = PurePosixPath(name)
                     if path.is_absolute() or ".." in path.parts or "\\" in name \
                             or str(path) != name or (member.isfile() and name == "."):
@@ -228,10 +237,16 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                         raise ValueError("duplicate archive path")
                     observed_members.add(name)
                     if member.isdir():
+                        if name == ".":
+                            continue
+                        if len(observed_directories) >= MAX_DIRECTORIES:
+                            raise ValueError("too many archive directories")
                         observed_directories.append(name)
                         continue
                     if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                         raise ValueError("unsafe archive member")
+                    if len(observed) >= MAX_FILES:
+                        raise ValueError("too many archive files")
                     if name == "storage-version" and member.size > 64:
                         raise ValueError("malformed storage-version marker")
                     stream = source_tar.extractfile(member)

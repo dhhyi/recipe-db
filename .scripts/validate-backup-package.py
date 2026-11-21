@@ -28,7 +28,7 @@ upload = load_module("backup_upload", ROOT / "provisioning/files/backup-upload.p
 snapshot = load_module("backup_snapshot", ROOT / ".scripts/validate-backup-snapshot.py")
 MAX_BYTES = upload.DEFAULT_MAX_STAGING_BYTES
 MAX_METADATA = upload.MAX_MANIFEST_BYTES
-MAX_FILES = 100_000
+MAX_FILES = upload.MAX_FILES
 MAX_SERVICES = 256
 DATA_ROLES = {"authoritative-read-only", "cleanup-participant"}
 OTHER_ROLES = {"derived-stateless", "excluded-external-cache"}
@@ -209,10 +209,14 @@ def bundle_pass(archive, manifest, expected, output=None):
 def check_inner_bounds(archive):
     names = set()
     total = 0
+    files = 0
+    directories = 0
     with open(archive, "rb") as raw, tarfile.open(
             fileobj=BoundedReader(raw, archive.stat().st_size), mode="r|") as source:
         for member in source:
             name = member.name.removeprefix("./")
+            if not name or name.startswith("/"):
+                raise ValueError("unsafe or duplicate snapshot path")
             if member.isdir():
                 name = name.rstrip("/")
                 if name in ("", "."):
@@ -226,8 +230,15 @@ def check_inner_bounds(archive):
                 raise ValueError("unsafe or duplicate snapshot path")
             names.add(name)
             if member.isdir():
+                if name != ".":
+                    directories += 1
+                    if directories > upload.MAX_DIRECTORIES:
+                        raise ValueError("too many archive directories")
                 continue
             if member.isreg() and member.type in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                files += 1
+                if files > MAX_FILES:
+                    raise ValueError("too many archive files")
                 total += member.size
                 if total > MAX_BYTES or member.size < 0:
                     raise ValueError("snapshot content limit exceeded")

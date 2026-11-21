@@ -468,6 +468,52 @@ state_path.write_text(json.dumps(state))
         with self.assertRaisesRegex(ValueError, "unsafe file path"):
             backup.validate_snapshot(source)
 
+    def test_archive_safety_and_limits_before_upload(self):
+        source = self.make_snapshot(directories=["one", "two"], root_directory=True)
+        manifest_path = source / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        archive_path = source / "recipes.tar"
+        original = archive_path.read_bytes()
+
+        def replace(members):
+            with tarfile.open(archive_path, "w") as archive:
+                for member in members:
+                    archive.addfile(member)
+            manifest["inventory"][0]["sizeBytes"] = archive_path.stat().st_size
+            manifest["inventory"][0]["sha256"] = backup.file_hash(archive_path)
+            manifest_path.write_bytes(backup.json_bytes(manifest))
+
+        def directory(name, mode=0o755):
+            member = tarfile.TarInfo(name)
+            member.type = tarfile.DIRTYPE
+            member.mode = mode
+            return member
+
+        for member in (directory("/"), directory("////"), directory(".", 0o2755),
+                       directory("nested", 0o2770)):
+            replace([member])
+            with self.assertRaisesRegex(ValueError, "unsafe archive metadata"):
+                backup.validate_snapshot(source)
+        archive_path.write_bytes(original)
+        manifest["inventory"][0]["sizeBytes"] = archive_path.stat().st_size
+        manifest["inventory"][0]["sha256"] = backup.file_hash(archive_path)
+        manifest["inventory"][0].pop("directories")
+        manifest_path.write_bytes(backup.json_bytes(manifest))
+        with patch.object(backup, "MAX_DIRECTORIES", 1):
+            with self.assertRaisesRegex(ValueError, "too many archive directories"):
+                backup.validate_snapshot(source)
+        with patch.object(backup, "MAX_DIRECTORIES", 2):
+            backup.validate_snapshot(source)
+
+        second = source / "second.tar"
+        second.write_bytes(original)
+        other = dict(manifest["inventory"][0], service="other", pvc="other", archive="second.tar")
+        manifest["inventory"].append(other)
+        manifest_path.write_bytes(backup.json_bytes(manifest))
+        with patch.object(backup, "MAX_FILES", 1):
+            with self.assertRaisesRegex(ValueError, "too many snapshot files"):
+                backup.validate_snapshot(source)
+
     def test_verified_upload_then_unchanged_requires_remote_readback(self):
         first = self.make_snapshot()
         self.assertEqual(backup.upload_snapshot(first, self.config), "verified-upload")

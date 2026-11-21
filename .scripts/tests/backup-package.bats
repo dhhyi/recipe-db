@@ -345,11 +345,11 @@ elif group == "unsafe":
         reject(lambda c, m, a, p, s, mode=mode: repack(m, a, mode=mode), before=True)
         reject(lambda c, m, a, p, s, mode=mode:
                repack(m, a, inner=tar_bytes(entries["images"], mode)))
-    def root_archive(modes, owners=None, pax=False):
+    def root_archive(modes, owners=None, pax=False, name="."):
         data = io.BytesIO()
         with tarfile.open(fileobj=data, mode="w") as archive:
             for index, mode in enumerate(modes):
-                root = tarfile.TarInfo(".")
+                root = tarfile.TarInfo(name)
                 root.type = tarfile.DIRTYPE
                 root.mode = mode
                 if owners:
@@ -359,12 +359,22 @@ elif group == "unsafe":
                 archive.addfile(root)
         return data.getvalue()
     for data in (root_archive([0o4755]), root_archive([0o755, 0o755]),
-                 root_archive([0o755], owners=(2**32 - 1, 0)), root_archive([0o755], pax=True)):
+                 root_archive([0o755], owners=(2**32 - 1, 0)), root_archive([0o755], pax=True),
+                 root_archive([0o755], name="/"), root_archive([0o755], name="////"),
+                 root_archive([0o2770], name="nested")):
         reject(lambda c, m, a, p, s, data=data: repack(m, a, inner=data))
-    # Directory entries are bounded by archive size, not the regular-file inventory limit.
+    # Files and directories have independent bounds.
     case, metadata, archive, projects, manifest = fixture()
     module.MAX_FILES = 2
     module.check_inner_bounds(case / "capture" / "images.tar")
+    module.upload.MAX_DIRECTORIES = 1
+    try:
+        module.check_inner_bounds(case / "capture" / "images.tar")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("directory limit not enforced")
+    module.upload.MAX_DIRECTORIES = 100_000
     module.MAX_FILES = 100_000
     for values in [
         entries["images"] + [("nested/deeper/opaque.data", b"duplicate", None)],

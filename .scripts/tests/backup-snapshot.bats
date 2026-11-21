@@ -75,3 +75,44 @@ for entries, special in [
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "snapshot rejects unsafe directory metadata and enforces member limits" {
+  run python3 - << 'PY'
+import importlib.util
+import tarfile
+
+spec = importlib.util.spec_from_file_location("snapshot", ".scripts/validate-backup-snapshot.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+def check(members, accepted):
+    with tarfile.open("fixture.tar", "w") as archive:
+        for member in members:
+            archive.addfile(member)
+    try:
+        module.validate("fixture.tar")
+    except ValueError:
+        assert not accepted
+    else:
+        assert accepted
+
+def directory(name, mode=0o755):
+    item = tarfile.TarInfo(name)
+    item.type = tarfile.DIRTYPE
+    item.mode = mode
+    return item
+
+for name in ("/", "////"):
+    check([directory(name)], False)
+check([directory(".", 0o2755)], False)
+check([directory("nested", 0o2770)], False)
+check([directory("."), directory("./")], False)
+module.MAX_DIRECTORIES = 2
+check([directory("."), directory("one"), directory("two")], True)
+check([directory("."), directory("one"), directory("two"), directory("three")], False)
+module.MAX_FILES = 2
+check([tarfile.TarInfo("one"), tarfile.TarInfo("two")], True)
+check([tarfile.TarInfo("one"), tarfile.TarInfo("two"), tarfile.TarInfo("three")], False)
+PY
+  [ "$status" -eq 0 ]
+}
