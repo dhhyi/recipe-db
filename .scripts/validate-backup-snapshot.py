@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the declared authoritative layout of one read-only PVC archive."""
+"""Inventory one read-only PVC archive without interpreting its contents."""
 
 import hashlib
 import json
@@ -7,131 +7,52 @@ from pathlib import PurePosixPath
 import re
 import sys
 import tarfile
-from urllib.parse import unquote
-
-MAX_IMAGES_PER_RECIPE = 10
 
 
-def validate(archive, layout, require_storage_version=False):
-    files = {}
-    directories = set()
+def validate(archive, require_storage_version=False):
+    members = set()
     inventory = []
     storage_version = None
     with tarfile.open(archive, "r:") as source:
         for member in source:
             name = member.name.removeprefix("./")
-            if name in ("", ".") and member.isdir():
-                continue
-            path = PurePosixPath(name)
-            if path.is_absolute() or ".." in path.parts or str(path) != name:
-                raise ValueError("unsafe archive path")
             if member.isdir():
-                if layout["kind"] != "images" or name not in ("public", "manifests"):
-                    raise ValueError("unclassified archive directory")
-                directories.add(name)
+                name = name.rstrip("/")
+                if name in ("", "."):
+                    continue
+            path = PurePosixPath(name)
+            if path.is_absolute() or ".." in path.parts or "\\" in name or str(path) != name \
+                    or (member.isfile() and name == "."):
+                raise ValueError("unsafe archive path")
+            if name in members:
+                raise ValueError("archive contains a duplicate path")
+            members.add(name)
+            if member.isdir():
                 continue
-            if not member.isfile() or name in files:
-                raise ValueError("archive contains a link, special file or duplicate")
+            if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
+                raise ValueError("archive contains a link or special file")
             if name == "storage-version" and member.size > 64:
                 raise ValueError("malformed storage-version marker")
             stream = source.extractfile(member)
             if stream is None:
                 raise ValueError("archive file is unreadable")
             digest = hashlib.sha256()
-            content = bytearray()
-            keep_content = name.endswith(".json") or name == "storage-version"
-            first = b""
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
+            marker = bytearray()
+            size = 0
+            while block := stream.read(1024 * 1024):
                 digest.update(block)
-                if not first:
-                    first = block[:16]
-                if keep_content:
-                    content.extend(block)
-            value = bytes(content)
+                size += len(block)
+                if name == "storage-version":
+                    marker.extend(block)
+            entry = {"path": name, "sizeBytes": size, "sha256": digest.hexdigest()}
             if name == "storage-version":
-                if not re.fullmatch(rb"[1-9][0-9]*\n", value):
+                if not re.fullmatch(rb"[1-9][0-9]*\n", marker):
                     raise ValueError("malformed storage-version marker")
-                storage_version = int(value.strip())
-            files[name] = (member.size, digest.hexdigest(), value, first)
-            entry = {"path": name, "sizeBytes": member.size, "sha256": digest.hexdigest()}
-            if name == "storage-version":
+                storage_version = int(marker.strip())
                 entry["storageVersion"] = storage_version
             inventory.append(entry)
     if require_storage_version and storage_version is None:
         raise ValueError("missing storage-version marker")
-    kind = layout["kind"]
-    if kind in ("sqlite", "json"):
-        name = layout["file"]
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
-            raise ValueError("unsafe declared database filename")
-        allowed = {name}
-        if kind == "sqlite":
-            allowed.update({name + "-wal", name + "-shm", name + "-journal"})
-        allowed.add("storage-version")
-        if name not in files or not set(files).issubset(allowed):
-            raise ValueError("missing authoritative database or unclassified PVC data")
-        if kind == "sqlite" and files[name][3] != b"SQLite format 3\x00":
-            raise ValueError("authoritative database is not SQLite")
-        if kind == "json":
-            document = json.loads(files[name][2])
-            if not isinstance(document, dict) and document != []:
-                raise ValueError("authoritative JSON database is not an object or empty array")
-    elif kind == "images":
-        if directories != {"public", "manifests"}:
-            raise ValueError("image PVC lacks its authoritative storage directories")
-        if storage_version not in (1, 2):
-            raise ValueError("unsupported or missing image storage-version marker")
-        selected = set()
-        for path, (_, _, content, _) in files.items():
-            if not path.startswith("manifests/") or not path.endswith(".json"):
-                continue
-            manifest = json.loads(content)
-            recipe_id = PurePosixPath(path).name[:-5]
-            if not recipe_id or len(recipe_id) > 128 or ".." in recipe_id or "\\" in recipe_id:
-                raise ValueError("invalid image manifest recipe ID")
-            if storage_version == 1:
-                if not isinstance(manifest, dict):
-                    raise ValueError("version-1 image manifest is not an object")
-                documents = [manifest]
-            else:
-                if not isinstance(manifest, list) or not manifest:
-                    raise ValueError("version-2 image manifest is not a non-empty array")
-                if len(manifest) > MAX_IMAGES_PER_RECIPE:
-                    raise ValueError("version-2 image manifest exceeds the per-recipe image limit")
-                documents = manifest
-            selected.add(path)
-            image_ids = set()
-            for document in documents:
-                if not isinstance(document, dict) or document.get("recipeId") != recipe_id:
-                    raise ValueError("image manifest identity mismatch")
-                image_id = None
-                for field in ("url", "thumbUrl"):
-                    url = document.get(field)
-                    if not isinstance(url, str) or not url.startswith("/public/"):
-                        raise ValueError("invalid image manifest URL")
-                    name = unquote(url[len("/public/"):])
-                    suffix = "-thumb" if field == "thumbUrl" else ""
-                    match = re.fullmatch(re.escape(recipe_id) + r"-([0-9a-f]{64})" + suffix + r"\.png", name)
-                    output = "public/" + name
-                    if match is None or output not in files or files[output][1] != match[1]:
-                        raise ValueError("image manifest references a missing or corrupt pair")
-                    if field == "url" and storage_version == 2 and document.get("id") != match[1]:
-                        raise ValueError("image manifest ID does not match its normal image digest")
-                    if field == "url" and files[output][0] != document.get("size"):
-                        raise ValueError("image manifest size mismatch")
-                    selected.add(output)
-                    if field == "url":
-                        image_id = match[1]
-                if storage_version == 2:
-                    if image_id in image_ids:
-                        raise ValueError("version-2 image manifest contains duplicate image IDs")
-                    image_ids.add(image_id)
-        if "storage-version" in files:
-            selected.add("storage-version")
-        if selected != set(files):
-            raise ValueError("image archive contains unselected or unclassified data")
-    else:
-        raise ValueError("unclassified authoritative layout")
     return sorted(inventory, key=lambda item: item["path"])
 
 
@@ -141,9 +62,9 @@ def main():
     if "--require-storage-version" in arguments:
         arguments.remove("--require-storage-version")
         require_storage_version = True
-    if len(arguments) != 2:
-        raise ValueError("usage: validate-backup-snapshot.py [--require-storage-version] ARCHIVE LAYOUT_JSON")
-    print(json.dumps(validate(arguments[0], json.loads(arguments[1]), require_storage_version)))
+    if len(arguments) != 1:
+        raise ValueError("usage: validate-backup-snapshot.py [--require-storage-version] ARCHIVE")
+    print(json.dumps(validate(arguments[0], require_storage_version)))
 
 
 if __name__ == "__main__":

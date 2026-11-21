@@ -6,12 +6,11 @@ setup() {
   setup_fixture validate-backup-snapshot.py
 }
 
-@test "snapshot validation covers SQLite sidecars, JSON, image pairs and unsafe or missing data" {
+@test "snapshot validation inventories opaque nested files and rejects unsafe archive members" {
   run python3 - << 'PY'
 import hashlib
 import importlib.util
 import io
-import json
 import tarfile
 from pathlib import Path
 
@@ -19,120 +18,57 @@ spec = importlib.util.spec_from_file_location("snapshot", ".scripts/validate-bac
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-def archive(entries, link=False):
+def archive(entries, special=None):
     path = Path("fixture.tar")
     with tarfile.open(path, "w") as output:
-        if any(name.startswith(("public/", "manifests/")) for name in entries):
-            for name in ("public", "manifests"):
+        directories = {"/".join(name.split("/")[:index])
+                       for name in entries for index in range(1, len(name.split("/")))}
+        for name in sorted(directories):
                 directory = tarfile.TarInfo(name)
                 directory.type = tarfile.DIRTYPE
                 output.addfile(directory)
         for name, content in entries.items():
             member = tarfile.TarInfo(name)
-            if link:
-                member.type = tarfile.SYMTYPE
-                member.linkname = "/etc/passwd"
+            if special:
+                member.type = special
+                member.linkname = "/outside"
                 output.addfile(member)
             else:
                 member.size = len(content)
                 output.addfile(member, io.BytesIO(content))
     return str(path)
 
-sqlite = {"kind":"sqlite", "file":"tags.sqlite"}
-files = {"tags.sqlite":b"SQLite format 3\x00database", "tags.sqlite-wal":b"wal", "tags.sqlite-shm":b"shm"}
-assert len(module.validate(archive(files), sqlite)) == 3
-for document in (b"{}", b"[]", b'{"recipe":["https://example.com"]}'):
-    assert len(module.validate(archive({"db.json":document}), {"kind":"json","file":"db.json"})) == 1
-normal, thumb = b"normal image", b"thumbnail"
-normal_name = "a-" + hashlib.sha256(normal).hexdigest() + ".png"
-thumb_name = "a-" + hashlib.sha256(thumb).hexdigest() + "-thumb.png"
-second_normal, second_thumb = b"second normal image", b"second thumbnail"
-second_normal_name = "a-" + hashlib.sha256(second_normal).hexdigest() + ".png"
-second_thumb_name = "a-" + hashlib.sha256(second_thumb).hexdigest() + "-thumb.png"
-entry = {"recipeId":"a","url":"/public/"+normal_name,
-    "thumbUrl":"/public/"+thumb_name,"size":len(normal)}
-v2_entry = entry | {"id": hashlib.sha256(normal).hexdigest()}
-v2_second_entry = {
-    "recipeId":"a", "url":"/public/"+second_normal_name,
-    "thumbUrl":"/public/"+second_thumb_name, "size":len(second_normal),
-    "id":hashlib.sha256(second_normal).hexdigest(),
-}
+files = {"nested/deeper/opaque.data":b"\x00not a known storage format",
+         "storage-version":b"47\n"}
+inventory = module.validate(archive(files), require_storage_version=True)
+assert inventory == [
+    {"path":"nested/deeper/opaque.data", "sizeBytes":len(files["nested/deeper/opaque.data"]),
+     "sha256":hashlib.sha256(files["nested/deeper/opaque.data"]).hexdigest()},
+    {"path":"storage-version", "sizeBytes":3,
+     "sha256":hashlib.sha256(b"47\n").hexdigest(), "storageVersion":47},
+]
+assert module.validate(archive({"unversioned.bin":b"anything"})) == [
+    {"path":"unversioned.bin", "sizeBytes":8, "sha256":hashlib.sha256(b"anything").hexdigest()}
+]
 
-
-def image_collection(count):
-    values, entries = {}, []
-    for index in range(count):
-        image = f"image {index}".encode()
-        thumbnail = f"thumbnail {index}".encode()
-        image_sha = hashlib.sha256(image).hexdigest()
-        thumbnail_sha = hashlib.sha256(thumbnail).hexdigest()
-        image_name = f"a-{image_sha}.png"
-        thumbnail_name = f"a-{thumbnail_sha}-thumb.png"
-        values["public/"+image_name] = image
-        values["public/"+thumbnail_name] = thumbnail
-        entries.append({
-            "recipeId":"a", "url":"/public/"+image_name,
-            "thumbUrl":"/public/"+thumbnail_name, "size":len(image), "id":image_sha,
-        })
-    return values | {
-        "manifests/a.json":json.dumps(entries).encode(), "storage-version":b"2\n",
-    }
-
-
-images = {"public/"+normal_name:normal, "public/"+thumb_name:thumb}
-images_v2 = images | {
-    "public/"+second_normal_name:second_normal,
-    "public/"+second_thumb_name:second_thumb,
-}
-for version, manifest, image_files in (
-    (1, entry, images),
-    (2, [v2_entry, v2_second_entry], images_v2),
-):
-    values = image_files | {"manifests/a.json":json.dumps(manifest).encode(),
-        "storage-version":f"{version}\n".encode()}
-    assert len(module.validate(archive(values), {"kind":"images"})) == len(image_files) + 2
-valid_at_capacity = image_collection(10)
-assert len(module.validate(archive(valid_at_capacity), {"kind":"images"})) == len(valid_at_capacity)
-over_capacity = image_collection(11)
-images = images | {"manifests/a.json":json.dumps(entry).encode(), "storage-version":b"1\n"}
-for entries, layout, link in [
-    ({}, sqlite, False),
-    ({"tags.sqlite":b"not sqlite"}, sqlite, False),
-    (files | {"secret":b"credentials"}, sqlite, False),
-    (files | {"../escape":b"bad"}, sqlite, False),
-    (files | {"/absolute":b"bad"}, sqlite, False),
-    (files, sqlite, True),
-    ({}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b"["}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b'[{"recipe":[]}]'}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b'["https://example.com"]'}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b"[[]]"}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b"null"}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b"false"}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b"0"}, {"kind":"json","file":"db.json"}, False),
-    ({"db.json":b'""'}, {"kind":"json","file":"db.json"}, False),
-    ({name:value for name,value in images.items() if name != "public/"+thumb_name}, {"kind":"images"}, False),
-    (images | {"public/old.png":b"old"}, {"kind":"images"}, False),
-    (images | {"public/"+normal_name:b"corrupted"}, {"kind":"images"}, False),
-    ({name:value for name,value in images.items() if name != "storage-version"}, {"kind":"images"}, False),
-    (images | {"storage-version":b"3\n"}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":b"[]"}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps(entry).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"1\n", "manifests/a.json":json.dumps([entry]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry | {"recipeId":"b"}]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"thumbUrl":"/public/missing.png"}]).encode()}, {"kind":"images"}, False),
-    (images_v2 | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_second_entry | {"size":len(second_normal)+1}]).encode()}, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry, v2_entry]).encode()}, {"kind":"images"}, False),
-    (over_capacity, {"kind":"images"}, False),
-    (images | {"storage-version":b"2\n", "manifests/a.json":json.dumps([v2_entry | {"id":"0" * 64}]).encode()}, {"kind":"images"}, False),
-    ({}, {"kind":"images"}, False),
+for entries, special in [
+    ({"../escape":b"bad"}, None),
+    ({"/absolute":b"bad"}, None),
+    ({"nested\\escape":b"bad"}, None),
+    ({"storage-version":b"1\n", ".":b"bad"}, None),
+    ({"storage-version":b"47"}, None),
+    ({"storage-version":b"0\n"}, None),
+    ({"storage-version":b"4\n7\n"}, None),
+    ({"nested/link":b""}, tarfile.SYMTYPE),
+    ({"nested/hardlink":b""}, tarfile.LNKTYPE),
+    ({"nested/fifo":b""}, tarfile.FIFOTYPE),
 ]:
     try:
-        module.validate(archive(entries, link), layout)
-    except (ValueError, KeyError):
+        module.validate(archive(entries, special), require_storage_version=entries.get("storage-version") is None)
+    except ValueError:
         pass
     else:
-        raise AssertionError((entries, layout, link))
+        raise AssertionError((entries, special))
 PY
   [ "$status" -eq 0 ]
 }

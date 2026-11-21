@@ -22,13 +22,13 @@
 #@ end
 
 #@ def storage_version_gate(project):
-#@   expected = str(project["storageVersion"]["value"])
+#@   expected = str(project["storageVersion"])
 #@   command = data.read("storage-version-gate.sh.ytt")
 #@   return {"name": "storage-version-gate", "image": cfg["infrastructure"]["maintenance"], "command": ["/bin/sh", "-ec", command], "env": [{"name": "EXPECTED_STORAGE_VERSION", "value": expected}, {"name": "MODE", "value": "production"}], "resources": cfg["resources"], "volumeMounts": [{"name": "data", "mountPath": "/data", "readOnly": True}]}
 #@ end
 
 #@ def storage_version_sidecar(project, port):
-#@   expected = str(project["storageVersion"]["value"])
+#@   expected = str(project["storageVersion"])
 #@   command = data.read("storage-version-sidecar.sh.ytt")
 #@   return {"name": "storage-version", "image": cfg["infrastructure"]["maintenance"], "command": ["/bin/sh", "-ec", command], "env": [{"name": "EXPECTED_STORAGE_VERSION", "value": expected}, {"name": "MODE", "value": "production"}, {"name": "BACKEND_PORT", "value": str(port)}], "resources": cfg["resources"], "volumeMounts": [{"name": "data", "mountPath": "/data"}], "readinessProbe": {"exec": {"command": ["/bin/sh", "-ec", "test -s /tmp/storage-version-ready && test \"$(cat /tmp/storage-version-ready)\" = \"$(awk '{print $22}' /proc/1/stat)\" && test -f /data/storage-version && test -r /data/storage-version && test \"$(cat /data/storage-version)\" = \"$EXPECTED_STORAGE_VERSION\""]}, "periodSeconds": 1, "timeoutSeconds": 3, "failureThreshold": 1}}
 #@ end

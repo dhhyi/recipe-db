@@ -50,13 +50,7 @@ devcontainer: {}
 ---
 category: test
 backupRole: authoritative-read-only
-backupData:
-  kind: sqlite
-  file: storage.db
-storageVersion:
-  value: 1
-  file: generated/version.txt
-  template: 'version={{STORAGE_VERSION}}'
+storageVersion: 1
 EOF
   REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   export REVISION
@@ -184,7 +178,7 @@ EOF
 devcontainer: {}
 ---
 backupRole: authoritative-read-only
-storageVersion: {value: 1}
+storageVersion: 1
 EOF
   cat > "$MIGRATOR_ROOT/migrators/images-copy/migration.json" << 'EOF'
 {
@@ -222,13 +216,7 @@ devcontainer: {}
 ---
 category: backend
 backupRole: cleanup-participant
-backupData:
-  kind: sqlite
-  file: storage.db
-storageVersion:
-  value: 1
-  file: generated/version.txt
-  template: 'version={{STORAGE_VERSION}}'
+storageVersion: 1
 EOF
   mkdir -p migrators/tags-1-to-2
   cat > migrators/tags-1-to-2/migration.json << 'EOF'

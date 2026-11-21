@@ -1374,12 +1374,11 @@ restore_verify_volume_identity() {
 }
 
 restore_import() {
-  local entry name archive layout pod
+  local entry name archive pod
   while IFS= read -r entry; do
     name=$(jq -r .service <<< "$entry")
     archive=$(jq -r .archive <<< "$entry")
     pod="restore-volume-$name"
-    layout=$(jq -ce --arg name "$name" 'select(.name == $name) | .backupData' "$work/projects.jsonl") || return 1
     restore_current_phase="import-$name"
     restore_phase "$restore_current_phase" || return 1
     restore_verify_volume_identity "$name" || return 1
@@ -1397,11 +1396,11 @@ restore_import() {
     kube exec -i "$pod" -- tar -xpkf - --numeric-owner -C /data < "$work/validated/$archive" || return 1
     kube exec "$pod" -- sync || return 1
     kube exec "$pod" -- tar -C /data -cf - . > "$work/restored-$name.tar" || return 1
-    python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" "$layout" \
+    python3 "$root/.scripts/validate-backup-snapshot.py" "$work/restored-$name.tar" \
       > "$work/restored-$name-files.json" || return 1
     jq -e --slurpfile actual "$work/restored-$name-files.json" \
       '.files | sort_by(.path) == ($actual[0] | sort_by(.path))' <<< "$entry" > /dev/null || {
-      printf 'production: restored authoritative data/image pair verification failed: %s\n' "$name" >&2
+      printf 'production: restored volume verification failed: %s\n' "$name" >&2
       return 1
     }
   done < <(jq -c '.inventory[]' "$work/restore-manifest.json")
@@ -1494,76 +1493,28 @@ restore_graphql() {
     "$work/restore-response.json" > /dev/null
 }
 
-restore_prepare_expected_reads() {
-  # Extract only an already validated SQLite layout into private staging; no target mutations.
-  python3 - "$work/validated/recipes.tar" "$work" > "$work/restore-expected-recipes.json" << 'PY'
-import json, pathlib, shutil, sqlite3, sys, tarfile
-root = pathlib.Path(sys.argv[2])
-with tarfile.open(sys.argv[1], "r:") as source:
-    for member in source:
-        name = member.name.removeprefix("./")
-        if name.startswith("recipes.sqlite3") and member.isfile():
-            with (root / name).open("wb") as destination:
-                shutil.copyfileobj(source.extractfile(member), destination)
-with sqlite3.connect(f"file:{root / 'recipes.sqlite3'}?mode=ro", uri=True) as database:
-    recipes = [{"id": row[0], "name": json.loads(row[1])["name"]}
-               for row in database.execute("SELECT id, document FROM recipes ORDER BY id")]
-ids = {recipe["id"] for recipe in recipes}
-images = []
-image_documents = []
-storage_version = None
-with tarfile.open(root / "validated/images.tar", "r:") as source:
-    for member in source:
-        name = member.name.removeprefix("./")
-        if name == "storage-version" and member.isfile():
-            storage_version = int(source.extractfile(member).read())
-        elif name.startswith("manifests/") and member.isfile():
-            image_documents.append(json.load(source.extractfile(member)))
-if storage_version not in (1, 2):
-    raise ValueError("unsupported or missing image storage-version marker")
-for document in image_documents:
-    image = document[0] if storage_version == 2 else document
-    if image["recipeId"] not in ids:
-        raise ValueError("image manifest references an absent authoritative recipe")
-    images.append(image)
-(root / "restore-expected-image.json").write_text(json.dumps(
-    sorted(images, key=lambda image: image["recipeId"])[0] if images else None))
-print(json.dumps(recipes))
-PY
-}
-
+# black-box only; use application interfaces, not stored data formats or application internals
 restore_verify_reads() {
-  local expected name id encoded image url sha observed
+  local recipe id name image_url encoded url
   restore_graphql 'query { recipes { id name } }' || return 1
-  jq -e --slurpfile expected "$work/restore-expected-recipes.json" \
-    '(.data.recipes | sort_by(.id)) == ($expected[0] | sort_by(.id))' \
+  jq -e '.data.recipes | type == "array" and
+    all(.[]; (.id | type == "string" and length > 0) and (.name | type == "string"))' \
     "$work/restore-response.json" > /dev/null || return 1
-  expected=$(jq -c '.[0] // empty' "$work/restore-expected-recipes.json")
-  [[ -n $expected ]] || return 0
-  image=$(cat "$work/restore-expected-image.json")
-  if [[ $image != null ]]; then
-    expected=$(jq -c --arg id "$(jq -r .recipeId <<< "$image")" '.[] | select(.id == $id)' \
-      "$work/restore-expected-recipes.json")
-  fi
-  id=$(jq -r .id <<< "$expected")
-  name=$(jq -r .name <<< "$expected")
+  recipe=$(jq -c '.data.recipes | sort_by(.id) | .[0] // empty' "$work/restore-response.json")
+  [[ -n $recipe ]] || return 0
+  id=$(jq -r .id <<< "$recipe")
+  name=$(jq -r .name <<< "$recipe")
   restore_graphql 'query($id: ID!) { recipe(id:$id) { id name image { url thumbUrl } rating { count } } }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
   jq -e --arg id "$id" --arg name "$name" '.data.recipe.id == $id and .data.recipe.name == $name
     and .data.recipe.rating != null' "$work/restore-response.json" > /dev/null || return 1
-  if [[ $image != null ]]; then
-    jq -e --argjson expected "$image" '.data.recipe.image.url == $expected.url
-      and .data.recipe.image.thumbUrl == $expected.thumbUrl' "$work/restore-response.json" > /dev/null || return 1
-    while IFS= read -r url; do
-      sha=$(jq -er --arg path "${url#/}" '.inventory[] | select(.service == "images") |
-        .files[] | select(.path == $path) | .sha256' "$work/restore-manifest.json") || return 1
-      curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
-        "http://127.0.0.1:$restore_graphql_port$url" > "$work/restore-image.bin" \
-        2> "$work/restore-request-error" || return 1
-      observed=$(sha256sum "$work/restore-image.bin") || return 1
-      [[ ${observed%% *} == "$sha" ]] || return 1
-    done < <(jq -r '.url,.thumbUrl' <<< "$image")
-  fi
+  while IFS= read -r url; do
+    [[ -n $url ]] || continue
+    curl --silent --show-error --fail --connect-timeout 5 --max-time "$timeout" \
+      "http://127.0.0.1:$restore_graphql_port$url" > /dev/null \
+      2> "$work/restore-request-error" || return 1
+  done < <(jq -r '.data.recipe.image.url // empty, .data.recipe.image.thumbUrl // empty' \
+    "$work/restore-response.json")
   restore_graphql 'query($options: JSON!) { searchRecipes(options:$options) { recipes { id name } found } }' \
     "$(jq -cn --arg id "$id" '{options:{q:"*",query_by:"name",filter_by:("id:=`"+$id+"`")}}')" || return 1
   jq -e --arg id "$id" 'any(.data.searchRecipes.recipes[]; .id == $id)' \
@@ -1578,42 +1529,15 @@ restore_wait_reads() {
   local deadline=$((SECONDS + timeout))
   until restore_verify_reads; do
     if ((SECONDS >= deadline)); then
-      printf 'production: restored data, images, search or browse did not pass read verification\n' >&2
+      printf 'production: restored data did not pass application-interface read verification\n' >&2
       return 1
     fi
     sleep 2
   done
 }
 
-restore_stream_sequence() {
-  kube exec deployment/nats -- wget -qO- \
-    'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true&config=true' \
-    > "$work/restore-consumers.json" || return 1
-  jq -er '[.account_details[]?.stream_detail[]? | select(.name == "RECIPE_EVENTS")] |
-    select(length == 1) | .[0].state.last_seq |
-    select(type == "number" and . >= 0 and floor == .)' "$work/restore-consumers.json"
-}
-
-restore_wait_consumers() {
-  local before=$1 sequence deadline=$((SECONDS + timeout))
-  while :; do
-    if sequence=$(restore_stream_sequence) && ((sequence > before)) \
-      && jq -e --argjson sequence "$sequence" '
-        [.account_details[]?.stream_detail[]? | select(.name == "RECIPE_EVENTS") |
-          .consumer_detail[]? | select(.name == "search-index-v1" or .name == "browse-cache-v1")] |
-        length == 2 and (map(.name) | unique | length) == 2 and
-        all(.[]; .config.ack_policy == "explicit" and
-          .config.filter_subject == "recipes.events.v1" and
-          (.ack_floor.stream_seq | type == "number" and . >= $sequence) and
-          .num_ack_pending == 0 and .num_pending == 0)
-      ' "$work/restore-consumers.json" > /dev/null; then return 0; fi
-    ((SECONDS < deadline)) || return 1
-    sleep 2
-  done
-}
-
 restore_verify_propagation() {
-  local id encoded deadline probe before
+  local id encoded deadline probe
   probe="RestoreProbe$(date -u +%Y%m%d%H%M%S)$$"
   deadline=$((SECONDS + timeout))
   until restore_graphql 'query { __typename }'; do
@@ -1623,7 +1547,6 @@ restore_verify_propagation() {
     fi
     sleep 2
   done
-  before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($name:String!) { createRecipe(value:{name:$name}) { id } }' \
     "$(jq -cn --arg name "$probe" '{name:$name}')" || return 1
   id=$(jq -er '.data.createRecipe.id | select(type == "string" and length > 0)' \
@@ -1637,7 +1560,6 @@ restore_verify_propagation() {
       "$restore_state/restore-state.json" || return 1
   fi
   encoded=$(jq -rn --arg id "$id" '$id | @uri')
-  restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
@@ -1652,10 +1574,8 @@ restore_verify_propagation() {
     sleep 2
   done
   # Prime browse's cache before the update, proving invalidation rather than a first uncached read.
-  before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($id:ID!,$name:String!) { updateRecipe(id:$id,value:{name:$name}) { id } }' \
     "$(jq -cn --arg id "$id" --arg name "${probe}Changed" '{id:$id,name:$name}')" || return 1
-  restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id name } } }' \
@@ -1670,10 +1590,8 @@ restore_verify_propagation() {
     ((SECONDS < deadline)) || return 1
     sleep 2
   done
-  before=$(restore_stream_sequence) || return 1
   restore_graphql 'mutation($id:ID!) { deleteRecipe(id:$id) }' \
     "$(jq -cn --arg id "$id" '{id:$id}')" || return 1
-  restore_wait_consumers "$before" || return 1
   deadline=$((SECONDS + timeout))
   while :; do
     if restore_graphql 'query($options:JSON!) { searchRecipes(options:$options) { recipes { id } } }' \
@@ -1830,7 +1748,6 @@ restore_run() {
   if [[ $mode == migration-recovery ]]; then
     restore_validate_migration_secrets
   fi
-  restore_prepare_expected_reads
   # A real mutation, through normal trusted GraphQL ingress, is required to prove propagation.
   jq -er '[.tokens[]? | select(.role == "owner") | .secret][0] |
     select(type == "string" and test("^[A-Za-z0-9._~+/-]+=*$"))' \

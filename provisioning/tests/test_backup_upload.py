@@ -23,7 +23,7 @@ SPEC.loader.exec_module(backup)
 def snapshot(path, files=None, backup_id="backup-20261031T100000-1", captured_at="2026-10-31T10:00:00Z",
              artifact="ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64, revision="a" * 40,
              mtime=1730000000, root_directory=False):
-    files = files or {"recipes.sqlite3": b"sqlite data"}
+    files = files or {"nested/opaque.data": b"opaque data"}
     path.mkdir(parents=True)
     entries = []
     archive_path = path / "recipes.tar"
@@ -341,7 +341,6 @@ manifest = {{
         "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
         "fileCount": 1, "files":[{{"path":"recipes.sqlite3","sizeBytes":len(data),
             "sha256":hashlib.sha256(data).hexdigest()}}],
-        "layout": {{"kind":"sqlite","file":"recipes.sqlite3"}},
         "storage": {{"uid":"claim-recipes","volumeName":"pv-recipes",
             "storageClassName":"local-path","requestedStorage":"1Gi","capacity":"1Gi",
             "accessModes":["ReadWriteOnce"],"volumeMode":"Filesystem"}},
@@ -377,10 +376,10 @@ state_path.write_text(json.dumps(state))
         self.assertEqual((stage_a / a["archive"]).read_bytes(), (stage_b / b["archive"]).read_bytes())
         with tarfile.open(stage_a / a["archive"], "r:gz") as archive:
             self.assertEqual([member.name for member in archive], ["manifest.json", "recipes.tar"])
-        added = self.make_snapshot("added", files={"new.json": b"{}", "recipes.sqlite3": b"sqlite data"})
-        with_extra = self.make_snapshot("with-extra", files={"obsolete.json": b"[]",
-                                                             "recipes.sqlite3": b"sqlite data"})
-        deleted = self.make_snapshot("deleted", files={"recipes.sqlite3": b"sqlite data"})
+        added = self.make_snapshot("added", files={"nested/new.data": b"new", "opaque.data": b"opaque"})
+        with_extra = self.make_snapshot("with-extra", files={"nested/obsolete.data": b"old",
+                                                             "opaque.data": b"opaque"})
+        deleted = self.make_snapshot("deleted", files={"opaque.data": b"opaque"})
         self.assertNotEqual(backup.content_fingerprint(manifest),
                             backup.content_fingerprint(backup.validate_snapshot(added)))
         self.assertNotEqual(backup.content_fingerprint(backup.validate_snapshot(with_extra)),
@@ -406,13 +405,13 @@ state_path.write_text(json.dumps(state))
     def test_missing_check_record_is_overdue(self):
         self.assertEqual(backup.report_status(self.config)["status"], "overdue")
 
-    def test_image_snapshot_with_owned_directories_is_accepted(self):
-        image_dir = self.root / "image-snapshot"
+    def test_nested_opaque_snapshot_files_are_accepted(self):
+        image_dir = self.root / "nested-snapshot"
         image_dir.mkdir()
-        files = {"public/a.png": b"image", "manifests/a.json": b'{"recipeId":"a"}'}
-        archive_path = image_dir / "images.tar"
+        files = {"nested/deeper/opaque.data": b"\x00unclassified bytes"}
+        archive_path = image_dir / "data.tar"
         with tarfile.open(archive_path, "w") as archive:
-            for name in ("public", "manifests"):
+            for name in ("nested", "nested/deeper"):
                 directory = tarfile.TarInfo(name)
                 directory.type = tarfile.DIRTYPE
                 archive.addfile(directory)
@@ -424,17 +423,22 @@ state_path.write_text(json.dumps(state))
                    for name, value in sorted(files.items())]
         archive_bytes = archive_path.read_bytes()
         manifest = {
-            "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-images",
+            "format": "recipe-db-pvc-snapshot", "formatVersion": 1, "backupId": "backup-nested",
             "capturedAt": "2026-10-31T10:00:00Z",
             "source": {"target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
                        "namespace": "recipe-db", "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
                        "revision": "a" * 40},
-            "inventory": [{"service": "images", "role": "cleanup-participant", "pvc": "images",
-                           "archive": "images.tar", "sizeBytes": len(archive_bytes), "fileCount": len(entries),
+            "inventory": [{"service": "data", "role": "cleanup-participant", "pvc": "data",
+                           "archive": "data.tar", "sizeBytes": len(archive_bytes), "fileCount": len(entries),
                            "sha256": hashlib.sha256(archive_bytes).hexdigest(), "files": entries}],
         }
         (image_dir / "manifest.json").write_bytes(backup.json_bytes(manifest))
         self.assertEqual(backup.validate_snapshot(image_dir), manifest)
+
+    def test_root_named_regular_file_is_rejected(self):
+        source = self.make_snapshot(files={".": b"not a volume-root directory"})
+        with self.assertRaisesRegex(ValueError, "unsafe file path"):
+            backup.validate_snapshot(source)
 
     def test_verified_upload_then_unchanged_requires_remote_readback(self):
         first = self.make_snapshot()

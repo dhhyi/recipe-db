@@ -4,5 +4,4 @@ devcontainer:
 ---
 category: backend
 backupRole: authoritative-read-only
-storageVersion:
-  value: 1
+storageVersion: 1

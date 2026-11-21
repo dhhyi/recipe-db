@@ -154,10 +154,6 @@ def validate_snapshot(snapshot, require_storage_versions=False):
         if not all(isinstance(pvc.get(key), str) and pvc[key]
                    for key in ("service", "role", "pvc")):
             raise ValueError("invalid inventory identity")
-        layout = pvc.get("layout")
-        if layout is not None and (not isinstance(layout, dict)
-                                   or layout.get("kind") not in ("images", "sqlite", "json")):
-            raise ValueError("invalid storage layout")
         storage = pvc.get("storage")
         if storage is not None and (
             not isinstance(storage, dict)
@@ -195,7 +191,8 @@ def validate_snapshot(snapshot, require_storage_versions=False):
                 raise ValueError("invalid file entry")
             name, size, digest = entry.get("path"), entry.get("sizeBytes"), entry.get("sha256")
             path = PurePosixPath(name) if isinstance(name, str) else None
-            if path is None or path.is_absolute() or ".." in path.parts or str(path) != name or not name:
+            if path is None or path.is_absolute() or ".." in path.parts or str(path) != name \
+                    or not name or name == ".":
                 raise ValueError("unsafe file path")
             if name in expected_files or type(size) is not int or size < 0 or not HASH_PATTERN.fullmatch(digest or ""):
                 raise ValueError("invalid file entry")
@@ -212,23 +209,26 @@ def validate_snapshot(snapshot, require_storage_versions=False):
         if require_storage_versions and expected_storage_version is None:
             raise ValueError("missing storage-version marker")
         observed = {}
+        observed_members = set()
         observed_storage_version = None
-        directories = set()
         try:
             with tarfile.open(archive, "r:") as source_tar:
                 for member in source_tar:
                     name = member.name.removeprefix("./")
-                    if name in ("", ".") and member.isdir():
-                        continue
-                    path = PurePosixPath(name)
-                    if path.is_absolute() or ".." in path.parts or str(path) != name:
-                        raise ValueError("unsafe archive path")
                     if member.isdir():
-                        if name not in ("public", "manifests") or name in directories:
-                            raise ValueError("unclassified archive directory")
-                        directories.add(name)
+                        name = name.rstrip("/")
+                        if name in ("", "."):
+                            continue
+                    path = PurePosixPath(name)
+                    if path.is_absolute() or ".." in path.parts or "\\" in name \
+                            or str(path) != name or (member.isfile() and name == "."):
+                        raise ValueError("unsafe archive path")
+                    if name in observed_members:
+                        raise ValueError("duplicate archive path")
+                    observed_members.add(name)
+                    if member.isdir():
                         continue
-                    if not member.isfile() or name in observed:
+                    if not member.isfile() or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE):
                         raise ValueError("unsafe archive member")
                     if name == "storage-version" and member.size > 64:
                         raise ValueError("malformed storage-version marker")
@@ -254,12 +254,6 @@ def validate_snapshot(snapshot, require_storage_versions=False):
             raise ValueError("archive integrity mismatch")
         if observed_storage_version != expected_storage_version:
             raise ValueError("storage-version marker does not match the inventory")
-        if directories and directories != {"public", "manifests"}:
-            raise ValueError("incomplete image directories")
-        if pvc["service"] == "images" and directories != {"public", "manifests"}:
-            raise ValueError("image snapshot lacks storage directories")
-        if pvc["service"] != "images" and directories:
-            raise ValueError("unclassified archive directories")
         if require_storage_versions and expected_storage_version is None:
             raise ValueError("missing storage-version marker")
     if {entry.name for entry in snapshot.iterdir()} != expected_names:
