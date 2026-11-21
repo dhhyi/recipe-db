@@ -1,0 +1,23 @@
+{
+  "name": "recipe-edit-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Recipes Edit browser tests with isolated GraphQL mocks",
+  "scripts": {
+    "check": "for file in *.js tests/*/*.js; do node --check \"$file\" || exit; done && node check-mocks.js",
+    "integration": "playwright test"
+  },
+  "license": "MIT",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.6.0",
+      "onFail": "download"
+    }
+  },
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "graphql": "16.12.0"
+  }
+}

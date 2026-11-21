@@ -6,6 +6,7 @@ updates:
       - /design
       - /e2e-test
       - /images-edit
+      - /recipe-edit-test
       - /recipes-edit
     schedule:
       interval: daily

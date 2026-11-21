@@ -489,7 +489,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: arm64-e2e-reports
-          path: e2e-test/target/
+          path: |
+            e2e-test/target/
+            recipe-edit-test/target/
           if-no-files-found: ignore
           retention-days: 7
 

@@ -72,6 +72,22 @@ EOF
   [ "$(wc -l < "$MOCK_LOG")" -eq 1 ]
 }
 
+@test "mocked recipe editor tests wait for frontend assets without auth tokens or backend probes" {
+  add_test_project recipe-edit-test
+  rm e2e-test/.secrets/auth-tokens.json
+  jq '.services["recipe-edit-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development recipe-edit-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
+  grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
+  run grep -F '/graphql' "$MOCK_LOG"
+  [ "$status" -eq 1 ]
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh recipe-edit-test -c echo tested' "$MOCK_LOG"
+}
+
 @test "a test-only project is ignored by stack integration discovery" {
   run bash .scripts/run-integration-tests.sh --development unit-only
 
