@@ -283,7 +283,7 @@ EOF
   run -1 grep -F 'docker compose --profile test run --pull never --rm --entrypoint /bin/sh ratings-test' "$MOCK_LOG"
 
   : > "$MOCK_LOG"
-  for attempt in 1 2; do
+  for _ in 1 2; do
     run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
       bash .scripts/run-integration-tests.sh --development recipes-test
 
