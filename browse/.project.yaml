@@ -87,6 +87,8 @@ graphqlSchema: "."
 docker:
   ignore:
     - "**/*_test.go"
+    - "**/*_templ.go"
+    - src/generated/
 tailwindSources:
   - src
 generate:
