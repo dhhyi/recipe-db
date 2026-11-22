@@ -84,6 +84,9 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
+docker:
+  ignore:
+    - "**/*_test.go"
 tailwindSources:
   - src
 generate:
