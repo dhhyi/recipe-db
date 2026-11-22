@@ -415,10 +415,37 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fx 'curl HEAD http://127.0.0.1:8080/graphql' "$MOCK_LOG"
   grep -Fx 'curl HEAD http://127.0.0.1:8080/' "$MOCK_LOG"
+  grep -Fx 'curl POST http://127.0.0.1:3000/search {"q":"*","per_page":1}' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/images-edit/' "$MOCK_LOG"
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh e2e-test -c echo tested' "$MOCK_LOG"
+}
+
+@test "browser tests wait for search queries to succeed before running" {
+  add_test_project e2e-test
+  jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run env SEARCH_NOT_READY_ONCE=503 bash .scripts/run-integration-tests.sh --development e2e-test
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -Fxc 'curl POST http://127.0.0.1:3000/search {"q":"*","per_page":1}' "$MOCK_LOG")" -eq 2 ]
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh e2e-test -c echo tested' "$MOCK_LOG"
+}
+
+@test "browser tests fail before running when search queries remain unavailable" {
+  add_test_project e2e-test
+  jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  # shellcheck disable=SC2016
+  run env SEARCH_RESPONSE=503 bash -c \
+    'sleep() { SECONDS=$((SECONDS + 40)); }; source .scripts/run-integration-tests.sh --development e2e-test'
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Timed out waiting for search query readiness at http://127.0.0.1:3000/search (expected HTTP 200, last got 503)."* ]]
+  run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
 }
 
 @test "GraphQL tests receive configured auth principals" {
