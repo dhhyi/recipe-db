@@ -203,6 +203,7 @@ EOF
 
 @test "integration targets track transitive metadata, identities and selective NATS configuration" {
   mkdir -p suite-test frontend-app backend-service suite-empty suite-nats unrelated message-bus
+  printf '%s\n' 'name: graphql' '---' 'category: api' > graphql/.project.yaml
   cat > suite-test/.project.yaml << 'EOF'
 name: suite-test
 ---
@@ -317,6 +318,7 @@ EOF
   printf '%s\n' '8.5.0' > .bazelversion
   : > MODULE.bazel
   mkdir -p app app-other suite-test suite-other .generated/integration-identities
+  printf '%s\n' 'name: graphql' '---' 'category: api' > graphql/.project.yaml
   cat > app/.project.yaml << 'EOF'
 name: app
 ---
