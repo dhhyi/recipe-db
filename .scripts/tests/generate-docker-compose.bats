@@ -13,7 +13,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../../.mise/tasks/compose.toml" .mise/tasks/
   cp "$BATS_TEST_DIRNAME/../../.mise/tasks/repository-sync.toml" .mise/tasks/
   cp "$BATS_TEST_DIRNAME/../../.mise/config.toml" .mise/
-  unset CI REGISTRY_CACHE_SUFFIX GOOGLE_OAUTH_CLIENT_ID \
+  unset CI BUILD_CACHE_MODE PR_NUMBER REGISTRY_CACHE_SUFFIX GOOGLE_OAUTH_CLIENT_ID \
     GOOGLE_OAUTH_CLIENT_SECRET_FILE OAUTH2_COOKIE_SECRET_FILE GRAPHQL_INGRESS_SECRET_FILE
   setup_mock_bin
   cat > bin/docker << 'EOF'
@@ -368,6 +368,50 @@ assert_compose() {
       .key as $project
       | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $project + "-cache-arm64"]
       and (.value.build | has("cache_to") | not))
+  '
+}
+
+@test "main exports only test and fixture caches to GHCR" {
+  run env BUILD_CACHE_MODE=main REGISTRY_CACHE_SUFFIX=-arm64 \
+    sh .scripts/generate-docker-compose.sh
+
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  assert_compose '
+    all(.services | to_entries[] | select(.value | has("build"));
+      .key as $service
+      | .value.build.cache_from == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $service + "-cache-arm64"]
+      and (
+        if .value.profiles == ["test"]
+        then .value.build.cache_to == ["type=registry,mode=max,ignore-error=true,ref=ghcr.io/dhhyi/recipe-db-" + $service + "-cache-arm64"]
+        else (.value.build | has("cache_to") | not)
+        end
+      )
+    )
+  '
+}
+
+@test "pull requests import main and per-PR caches but export only test and fixture caches to Actions" {
+  run env BUILD_CACHE_MODE=pr PR_NUMBER=42 REGISTRY_CACHE_SUFFIX=-arm64 \
+    sh .scripts/generate-docker-compose.sh
+
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2016
+  assert_compose '
+    all(.services | to_entries[] | select(.value | has("build"));
+      .key as $service
+      | .value.build.cache_from == [
+          "type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $service + "-cache-arm64",
+          "type=gha,scope=pr-42-" + $service + "-arm64"
+        ]
+      and (
+        if .value.profiles == ["test"]
+        then .value.build.cache_to == ["type=gha,mode=max,ignore-error=true,scope=pr-42-" + $service + "-arm64"]
+        else (.value.build | has("cache_to") | not)
+        end
+      )
+      and all((.value.build.cache_to // [])[]; startswith("type=gha,"))
+    )
   '
 }
 

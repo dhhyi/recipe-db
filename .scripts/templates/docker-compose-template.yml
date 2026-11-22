@@ -21,6 +21,8 @@
 #@ )
 #@ options = struct.make(
 #@   registryCacheSuffix=data.values.registryCacheSuffix,
+#@   buildCacheMode=data.values.buildCacheMode,
+#@   pullRequestNumber=data.values.pullRequestNumber,
 #@   googleOAuthClientId=data.values.googleOAuthClientId,
 #@   developmentUser=data.values.developmentUser
 #@ )

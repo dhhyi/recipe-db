@@ -28,11 +28,14 @@ EOF
   jq -n '
     {services: {
       traefik: {ports: [{target: 3000, published: "3000"}]},
-      fixtures: {profiles: ["test"]}
+      fixtures: {profiles: ["test"], image: "ghcr.io/dhhyi/recipe-db-fixtures:latest"}
     }}
     | reduce ["recipes-test", "ratings-test", "graphql-test", "images-test",
         "inspirations-test", "link-extract-test", "image-inline-test", "mcp-test"][] as $project
-        (. ; .services[$project] = {profiles: ["test"]})
+        (. ; .services[$project] = {
+          profiles: ["test"],
+          image: "ghcr.io/dhhyi/recipe-db-" + $project + ":latest"
+        })
   ' > "$COMPOSE_CONFIG"
 }
 
@@ -194,6 +197,31 @@ EOF
   [ "$(cat "$INTEGRATION_LOG")" = "$(printf '%s\n' 'recipes-test: echo tested' 'ratings-test: echo tested')" ]
   for project in recipes-test ratings-test; do
     [ "$(cat "$project/target/integration-tests/run.log")" = "test stdout: $project"$'\n'"test stderr: $project" ]
+  done
+}
+
+@test "GitHub Actions reuses prebuilt fixture and suite images without rebuilding" {
+  run env GITHUB_ACTIONS=true bash .scripts/run-integration-tests.sh --development recipes-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker image inspect ghcr.io/dhhyi/recipe-db-fixtures:latest' "$MOCK_LOG"
+  grep -Fx 'docker image inspect ghcr.io/dhhyi/recipe-db-recipes-test:latest' "$MOCK_LOG"
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
+}
+
+@test "GitHub Actions reports missing prepared fixture or suite images before running tests" {
+  for service in fixtures recipes-test; do
+    image=$(jq -r --arg service "$service" '.services[$service].image' "$COMPOSE_CONFIG")
+    : > "$MOCK_LOG"
+
+    run --separate-stderr env GITHUB_ACTIONS=true MISSING_IMAGE="$image" \
+      bash .scripts/run-integration-tests.sh --development recipes-test
+
+    [ "$status" -eq 1 ]
+    [ "$stderr" = "Prepared image for service $service is missing locally: $image. Build the Compose images before running integration tests." ]
+    run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+    run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
   done
 }
 
@@ -387,10 +415,37 @@ EOF
   [ "$status" -eq 0 ]
   grep -Fx 'curl HEAD http://127.0.0.1:8080/graphql' "$MOCK_LOG"
   grep -Fx 'curl HEAD http://127.0.0.1:8080/' "$MOCK_LOG"
+  grep -Fx 'curl POST http://127.0.0.1:3000/search {"q":"*","per_page":1}' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/design/styles.css' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/edit/new' "$MOCK_LOG"
   grep -Fx 'curl http://127.0.0.1:8080/images-edit/' "$MOCK_LOG"
   grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh e2e-test -c echo tested' "$MOCK_LOG"
+}
+
+@test "browser tests wait for search queries to succeed before running" {
+  add_test_project e2e-test
+  jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run env SEARCH_NOT_READY_ONCE=503 bash .scripts/run-integration-tests.sh --development e2e-test
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -Fxc 'curl POST http://127.0.0.1:3000/search {"q":"*","per_page":1}' "$MOCK_LOG")" -eq 2 ]
+  grep -Fx 'docker compose --profile test run --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh e2e-test -c echo tested' "$MOCK_LOG"
+}
+
+@test "browser tests fail before running when search queries remain unavailable" {
+  add_test_project e2e-test
+  jq '.services["e2e-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  # shellcheck disable=SC2016
+  run env SEARCH_RESPONSE=503 bash -c \
+    'sleep() { SECONDS=$((SECONDS + 40)); }; source .scripts/run-integration-tests.sh --development e2e-test'
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Timed out waiting for search query readiness at http://127.0.0.1:3000/search (expected HTTP 200, last got 503)."* ]]
+  run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
 }
 
 @test "GraphQL tests receive configured auth principals" {

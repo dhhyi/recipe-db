@@ -10,6 +10,8 @@ revision=$1
 platform=$2
 output_file=$3
 write_cache=${4:-false}
+build_cache_mode=${BUILD_CACHE_MODE:-}
+pull_request_number=${PR_NUMBER:-}
 case "$revision" in
   *[!0-9a-f]* | "")
     echo "revision must be a full lowercase Git commit SHA" >&2
@@ -31,6 +33,22 @@ case "$write_cache" in
   true | false) ;;
   *)
     echo "write-cache must be true or false" >&2
+    exit 1
+    ;;
+esac
+case "$build_cache_mode" in
+  "" | main) ;;
+
+  pr)
+    case "$pull_request_number" in
+      '' | *[!0-9]*)
+        echo "PR_NUMBER must be numeric when BUILD_CACHE_MODE=pr" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  *)
+    echo "BUILD_CACHE_MODE must be empty, main, or pr" >&2
     exit 1
     ;;
 esac
@@ -67,6 +85,8 @@ jq -n \
   --arg platform "$platform" \
   --arg architecture "$architecture" \
   --arg cacheSuffix "$cache_suffix" \
+  --arg buildCacheMode "$build_cache_mode" \
+  --arg pullRequestNumber "$pull_request_number" \
   --arg sourceUrl "$source_url" \
   --arg projectRoot "$project_root" \
   --arg scriptRoot "$script_root" \
@@ -98,7 +118,13 @@ jq -n \
                 dockerfile: $project.buildInputs.dockerfile,
                 tags: ["ghcr.io/dhhyi/recipe-db-" + $project.name + ":sha-" + $revision + "-" + $architecture],
                 platforms: [$platform],
-                "cache-from": ["type=registry,ref=" + $project.buildInputs.cacheRepository + $cacheSuffix],
+                "cache-from": (
+                  ["type=registry,ref=" + $project.buildInputs.cacheRepository + $cacheSuffix]
+                  + (if $buildCacheMode == "pr"
+                     then ["type=gha,scope=pr-" + $pullRequestNumber + "-" + $project.name + "-" + $architecture]
+                     else []
+                     end)
+                ),
                 args: $project.buildInputs.args,
                 labels: (
                   {"org.opencontainers.image.revision": $revision}
@@ -109,7 +135,9 @@ jq -n \
                 )
               }
               + if $writeCache then {
-                  "cache-to": ["type=registry,mode=max,ref=" + $project.buildInputs.cacheRepository + $cacheSuffix]
+                  "cache-to": ["type=registry,mode=max,ignore-error=true,ref=" + $project.buildInputs.cacheRepository + $cacheSuffix]
+                } elif $buildCacheMode == "pr" then {
+                  "cache-to": ["type=gha,mode=max,ignore-error=true,scope=pr-" + $pullRequestNumber + "-" + $project.name + "-" + $architecture]
                 } else {} end
             )
           )
@@ -137,7 +165,7 @@ jq -n \
                 }
               }
               + if $writeCache then {
-                  "cache-to": ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-migrator-" + $migrator.directory + "-cache" + $cacheSuffix]
+                  "cache-to": ["type=registry,mode=max,ignore-error=true,ref=ghcr.io/dhhyi/recipe-db-migrator-" + $migrator.directory + "-cache" + $cacheSuffix]
                 } else {} end
             )
           )

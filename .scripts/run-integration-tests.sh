@@ -123,7 +123,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker compose --profile test build fixtures "${projects[@]}"
+if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+  for service in fixtures "${projects[@]}"; do
+    if ! image=$(jq -er --arg service "$service" \
+      '.services[$service].image | strings | select(length > 0)' <<< "$compose_config"); then
+      echo "The prepared Compose image for service $service is missing from the generated configuration." >&2
+      exit 2
+    fi
+    if ! docker image inspect "$image" > /dev/null 2>&1; then
+      echo "Prepared image for service $service is missing locally: $image. Build the Compose images before running integration tests." >&2
+      exit 1
+    fi
+  done
+else
+  docker compose --profile test build fixtures "${projects[@]}"
+fi
 
 if ! docker compose --profile test ps --services --status running | grep -Fxq fixtures; then
   fixture_started=true
@@ -155,6 +169,9 @@ for project in "${projects[@]}"; do
     e2e-test)
       wait_for_http "GraphQL API" http://127.0.0.1:8080/graphql 204 --head
       wait_for_http "browse frontend" http://127.0.0.1:8080/ 204 --head
+      # HEAD only proves the search service is running; E2E needs a usable search index.
+      wait_for_http "search query readiness" http://127.0.0.1:3000/search 200 \
+        --header 'Content-Type: application/json' --data '{"q":"*","per_page":1}'
       wait_for_http "shared design assets" http://127.0.0.1:8080/design/styles.css 302
       wait_for_http "recipe editor" http://127.0.0.1:8080/edit/new 200
       wait_for_http "image editor" http://127.0.0.1:8080/images-edit/ 200

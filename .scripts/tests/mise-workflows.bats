@@ -237,6 +237,22 @@ EOF
   [[ "$script" == *"docker compose --progress plain --profile development --profile test build"* ]]
 }
 
+@test "image cache credentials and PR identity are available before image setup" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+
+  for job in quality-checks arm64-validation; do
+    steps=$(yq -o=json ".jobs.$job.steps" "$workflow")
+    runtime_step=$(jq -r 'map(.name) | index("expose GitHub Actions cache credentials")' <<< "$steps")
+    setup_step=$(jq -r 'map(.name) | index("setup mise tools") // index("setup mise")' <<< "$steps")
+    [ "$runtime_step" -lt "$setup_step" ]
+    [ "$(yq -r ".jobs.$job.env.BUILD_CACHE_MODE" "$workflow")" = "\${{ github.event_name == 'pull_request' && 'pr' || 'main' }}" ]
+    [ "$(yq -r ".jobs.$job.env.PR_NUMBER" "$workflow")" = "\${{ github.event.pull_request.number || '' }}" ]
+  done
+
+  [ "$(yq -r '.jobs.arm64-validation.env.REGISTRY_CACHE_SUFFIX' "$workflow")" = "-arm64" ]
+  [ "$(yq -r '.jobs.arm64-validation.steps[] | select(.name == "expose GitHub Actions cache credentials") | .uses' "$workflow")" = "crazy-max/ghaction-github-runtime@v4.0.0" ]
+}
+
 @test "Publish validates ready PRs and main pushes without listening to title edits" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   run env WORKFLOW="$(yq -o=json "$workflow")" node << 'EOF'

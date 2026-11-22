@@ -16,6 +16,7 @@ setup() {
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$root"
   export MISE_STATE_DIR="$BATS_TEST_TMPDIR/mise-state"
   export MISE_TASK_RUN_AUTO_INSTALL=false
+  unset BUILD_CACHE_MODE PR_NUMBER REGISTRY_CACHE_SUFFIX
   export SCHEMA_TEXT='type Query { fixture: Boolean! }'
   printf '%s\n' '{"repository":"github:example/fixture"}' > package.json
 
@@ -97,7 +98,7 @@ EOF
   [[ "$output" == *"Rendering"* ]]
   [ -s docker-compose.yml ]
   [ -s oauth2-proxy-alpha.yml ]
-  jq -e 'keys == ["developmentUser","googleOAuthClientId","registryCacheSuffix"]' .generated/compose-inputs.json
+  jq -e 'keys == ["buildCacheMode","developmentUser","googleOAuthClientId","pullRequestNumber","registryCacheSuffix"]' .generated/compose-inputs.json
 
   compose_mtime=$(stat -c %y docker-compose.yml)
   oauth_mtime=$(stat -c %y oauth2-proxy-alpha.yml)
@@ -118,6 +119,28 @@ EOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"Rendering"* ]]
   mise -C "$FIXTURE_ROOT" exec -- yq -e '.services.graphql.build.cache_from[0] | contains("-cache-arm64")' docker-compose.yml
+
+  run env BUILD_CACHE_MODE=pr PR_NUMBER=42 REGISTRY_CACHE_SUFFIX=-arm64 \
+    mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rendering"* ]]
+  mise -C "$FIXTURE_ROOT" exec -- yq -e \
+    '.services.graphql.build.cache_from[1] == "type=gha,scope=pr-42-graphql-arm64"' \
+    docker-compose.yml
+
+  run env BUILD_CACHE_MODE=pr PR_NUMBER=43 REGISTRY_CACHE_SUFFIX=-arm64 \
+    mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Rendering"* ]]
+  mise -C "$FIXTURE_ROOT" exec -- yq -e \
+    '.services.graphql.build.cache_from[1] == "type=gha,scope=pr-43-graphql-arm64"' \
+    docker-compose.yml
+
+  cp docker-compose.yml original-compose
+  run env BUILD_CACHE_MODE=invalid mise -C "$FIXTURE_ROOT" run --raw generate-docker-compose
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"BUILD_CACHE_MODE must be empty, main, or pr"* ]]
+  cmp original-compose docker-compose.yml
 
   mkdir -p .secrets
   printf '%s' realistic-google-client-secret-for-tests > .secrets/google-oauth-client-secret

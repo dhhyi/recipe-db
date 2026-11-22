@@ -30,6 +30,8 @@ fragments="$work_directory/project-fragments.jsonl"
 jq -n \
   --slurpfile inputs "$generated_directory/compose-inputs.json" \
   '{registryCacheSuffix:$inputs[0].registryCacheSuffix,
+    buildCacheMode:$inputs[0].buildCacheMode,
+    pullRequestNumber:$inputs[0].pullRequestNumber,
     googleOAuthClientId:$inputs[0].googleOAuthClientId,
     developmentUser:$inputs[0].developmentUser,
     projects:[]}' > "$data_values"
