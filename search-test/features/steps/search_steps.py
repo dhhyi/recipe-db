@@ -46,6 +46,15 @@ def recipes_indexed(context):
     wait_for(lambda: set(context.client.search()["recipeIds"]) == set(context.client.ids))
 
 
+@then("the search index contains only the scoped recipes")
+def index_contains_only_scoped_recipes(context):
+    status, raw, _ = request(REST + "/search", "POST", {"q": "*"})
+    assert status == 200, (status, raw)
+    result = json.loads(raw)
+    assert result["found"] == len(context.client.ids), result
+    assert set(result["recipeIds"]) == set(context.client.ids), result
+
+
 @when('I search for "{query}"')
 def search_query(context, query):
     search(context, q=query)

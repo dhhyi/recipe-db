@@ -1,4 +1,4 @@
-"""Non-disruptive search integration tests against the deployed development stack."""
+"""Search integration tests against the deployed development stack."""
 import datetime
 import json
 import os
