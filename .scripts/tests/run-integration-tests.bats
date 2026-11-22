@@ -248,6 +248,7 @@ EOF
 
 @test "cached integration targets run sequentially and stop after the first failure" {
   mkdir -p .generated/integration-identities bin
+  export BAZEL_DISK_CACHE="$FIXTURE_ROOT/bazel-disk"
   for project in recipes-test ratings-test; do
     printf '{}\n' > ".generated/integration-identities/$project.json"
   done
@@ -258,7 +259,7 @@ exit "${BAZEL_STATUS:-0}"
 EOF
   chmod +x bin/mise
 
-  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
+  run env -u HOME GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
     bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
 
   [ "$status" -eq 0 ]
@@ -269,10 +270,11 @@ EOF
   grep -F -- '--action_env=HOST_UID' "$MOCK_LOG"
   grep -F -- '--action_env=HOST_GID' "$MOCK_LOG"
   grep -F -- '--action_env=VERBOSE' "$MOCK_LOG"
+  grep -F -- "--disk_cache=$BAZEL_DISK_CACHE" "$MOCK_LOG"
   run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
 
   : > "$MOCK_LOG"
-  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUNNING_FIXTURES=fixtures \
+  run env -u HOME GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUNNING_FIXTURES=fixtures \
     BAZEL_STATUS=19 bash .scripts/run-integration-tests.sh --development \
     recipes-test ratings-test
 
