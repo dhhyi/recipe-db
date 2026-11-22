@@ -3,6 +3,7 @@ import {
   graphqlMocks,
   identityHtml,
   imageMocks,
+  images,
   returnDocument,
   source,
 } from "./auth.mocks.js";
@@ -14,7 +15,7 @@ test.use({
   returnDocument,
 });
 
-test("an expired login rejects the save without replaying it on leaving", async ({
+test("an expired login rejects the save without replaying it after signing in again", async ({
   page,
 }) => {
   let uploads = 0;
@@ -39,5 +40,11 @@ test("an expired login rejects the save without replaying it on leaving", async 
     .click();
   await expect(page).toHaveURL("/recipe/test-recipe");
   await expect(page.getByRole("heading", { name: "Testrezept" })).toBeVisible();
+
+  await page.goto("/images-edit/test-recipe");
+  await expect(page.getByLabel("Bild hinzufügen")).toBeEnabled();
+  await expect(
+    page.getByRole("list", { name: "Rezeptbilder" }).getByRole("img"),
+  ).toHaveAttribute("src", images.existing.thumbUrl);
   expect(uploads).toBe(1);
 });
