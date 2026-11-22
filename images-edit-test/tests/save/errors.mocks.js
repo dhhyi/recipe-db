@@ -49,11 +49,14 @@ export const graphqlMocks = [
       {
         errors: [
           {
-            message: "Crop width must be positive",
+            // GraphQL could not reach the images service, e.g. during a restart.
+            message: "images service is unavailable",
             extensions: {
-              code: "invalid-crop",
-              status: 400,
-              field: "cropWidth",
+              code: "service-unavailable",
+              status: 503,
+              service: "images",
+              dispatched: false,
+              outcome: "not-dispatched",
             },
           },
         ],

@@ -33,7 +33,7 @@ const selectedCrop = (selection) =>
     };
   });
 
-test("a rejected save keeps the adjusted crop and retries with it", async ({
+test("a save that could not reach the server keeps the adjusted crop and retries with it", async ({
   page,
 }) => {
   let uploads = 0;
@@ -48,6 +48,7 @@ test("a rejected save keeps the adjusted crop and retries with it", async ({
   const selection = page.getByTestId("crop-selection");
   const save = page.getByRole("button", { name: "Speichern", exact: true });
   await expect(gallery).toHaveAttribute("src", images.existing.thumbUrl);
+  await expect(page.locator("#gallery-heading")).toBeVisible();
   await add.setInputFiles(source);
   await expect(selection).toBeVisible();
   expect(await selectedCrop(selection)).toEqual(defaultCrop);
@@ -63,7 +64,8 @@ test("a rejected save keeps the adjusted crop and retries with it", async ({
   expect(await selectedCrop(selection)).toEqual(crop);
   await expect(page.getByTestId("crop-source")).toBeVisible();
   await expect(add).toHaveCount(0);
-  await expect(gallery).toHaveCount(0);
+  await expect(page.locator("#gallery-heading")).toHaveCount(0);
+  await expect(page.getByRole("list", { name: "Rezeptbilder" })).toHaveCount(0);
   await expect(save).toHaveCount(0);
   const retry = page.getByRole("button", {
     name: "Erneut speichern",
