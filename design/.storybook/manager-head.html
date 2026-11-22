@@ -5,13 +5,17 @@
     let originalBanner;
 
     const isDark = () => {
-      if (document.documentElement.dataset.theme === "dark" ||
-          document.body?.dataset.theme === "dark") {
+      if (
+        document.documentElement.dataset.theme === "dark" ||
+        document.body?.dataset.theme === "dark"
+      ) {
         return true;
       }
 
       const background = getComputedStyle(document.body).backgroundColor;
-      const match = background.match(/(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/);
+      const match = background.match(
+        /(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/,
+      );
       if (match) {
         const [red, green, blue] = match.slice(1).map(Number);
         return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
