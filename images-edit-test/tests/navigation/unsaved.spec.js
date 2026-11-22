@@ -22,6 +22,10 @@ test("an unsaved upload still prompts on navigation after restoring the crop", a
   const initial = await crop();
   const handle = page.getByTestId("crop-handle-se");
   await mouseDrag(page, handle, -5000, -5000);
+  const minimum = await crop();
+  expect(Math.abs(minimum.width - 300)).toBeLessThanOrEqual(1);
+  expect(Math.abs(minimum.height - 225)).toBeLessThanOrEqual(1);
+  await expect(page.getByText(/wird vergrößert/)).toBeVisible();
   await mouseDrag(page, handle, 5000, 5000);
   expectSameCrop(await crop(), initial);
   await expect(save(page)).toBeEnabled();
@@ -56,8 +60,14 @@ test("header home navigation respects unsaved crop confirmation", async ({
   await expect(page).toHaveURL("/images-edit/test-recipe");
   await expect(selection).toBeVisible();
 
+  const navigation = page.waitForRequest(
+    (request) =>
+      request.isNavigationRequest() &&
+      request.url() === new URL("/", page.url()).href,
+  );
   page.once("dialog", (dialog) => dialog.accept());
   await home.click();
+  await navigation;
   await expect(page).toHaveURL("/");
   await expect(page.getByRole("heading", { name: "Ziel" })).toBeVisible();
 });
