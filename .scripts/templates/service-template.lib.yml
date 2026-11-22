@@ -29,12 +29,32 @@
 #@   return labels
 #@ end
 
+#@ def build_cache_options(project, options):
+#@   cache_ref = project.buildInputs.cacheRepository + options.registryCacheSuffix
+#@   cache_from = ["type=registry,ref=" + cache_ref]
+#@   cache_to = []
+#@   if options.buildCacheMode == "pr":
+#@     architecture = "arm64" if options.registryCacheSuffix == "-arm64" else "amd64"
+#@     cache_scope = "pr-" + options.pullRequestNumber + "-" + project.name + "-" + architecture
+#@     cache_from.append("type=gha,scope=" + cache_scope)
+#@     if project.category == "test" or project.category == "static":
+#@       cache_to = ["type=gha,mode=max,ignore-error=true,scope=" + cache_scope]
+#@     end
+#@   elif options.buildCacheMode == "main" and (project.category == "test" or project.category == "static"):
+#@     cache_to = ["type=registry,mode=max,ignore-error=true,ref=" + cache_ref]
+#@   end
+#@   cache_options = {"cache_from": cache_from}
+#@   if len(cache_to) > 0:
+#@     cache_options["cache_to"] = cache_to
+#@   end
+#@   return cache_options
+#@ end
+
 #@ def service(project, options, projects):
 #@   context = project.buildInputs.context
 #@   dockerfile = project.buildInputs.dockerfile
 #@   build = {"context": context}
-#@   cache_ref = project.buildInputs.cacheRepository + options.registryCacheSuffix
-#@   build["cache_from"] = ["type=registry,ref=" + cache_ref]
+#@   build.update(build_cache_options(project, options))
 #@   service = {
 #@     "build": build,
 #@     "image": "ghcr.io/dhhyi/recipe-db-" + project.name + ":latest",

@@ -2,6 +2,10 @@
 set -euo pipefail
 
 printf 'docker %s\n' "$*" >> "$MOCK_LOG"
+if [[ "$1 $2" == "image inspect" ]]; then
+  [[ ${MISSING_IMAGE:-} != "$3" ]]
+  exit
+fi
 [[ "$1 $2 $3" == "compose --profile test" ]] || exit 99
 shift 3
 case "$1" in

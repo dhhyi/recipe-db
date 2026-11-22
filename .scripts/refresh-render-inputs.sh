@@ -50,13 +50,35 @@ source_fingerprint() {
 
 case "${1:-compose}" in
   compose)
+    build_cache_mode=${BUILD_CACHE_MODE:-}
+    pull_request_number=${PR_NUMBER:-}
+    case "$build_cache_mode" in
+      "" | main)
+        ;;
+      pr)
+        if [[ ! $pull_request_number =~ ^[0-9]+$ ]]; then
+          printf 'PR_NUMBER must be numeric when BUILD_CACHE_MODE=pr\n' >&2
+          exit 1
+        fi
+        if [[ ${REGISTRY_CACHE_SUFFIX:-} != "" && ${REGISTRY_CACHE_SUFFIX:-} != "-arm64" ]]; then
+          printf 'REGISTRY_CACHE_SUFFIX must be empty or -arm64 when BUILD_CACHE_MODE=pr\n' >&2
+          exit 1
+        fi
+        ;;
+      *)
+        printf 'BUILD_CACHE_MODE must be empty, main, or pr\n' >&2
+        exit 1
+        ;;
+    esac
     # jq filter variables must remain literal for jq.
     # shellcheck disable=SC2016
     compose_inputs=$(mise exec -- jq -cn \
       --arg registryCacheSuffix "${REGISTRY_CACHE_SUFFIX:-}" \
+      --arg buildCacheMode "$build_cache_mode" \
+      --arg pullRequestNumber "$pull_request_number" \
       --arg googleOAuthClientId "${GOOGLE_OAUTH_CLIENT_ID:-}" \
       --arg developmentUser "$(id -u):$(id -g)" \
-      '{registryCacheSuffix:$registryCacheSuffix,googleOAuthClientId:$googleOAuthClientId,developmentUser:$developmentUser}')
+      '{registryCacheSuffix:$registryCacheSuffix,buildCacheMode:$buildCacheMode,pullRequestNumber:$pullRequestNumber,googleOAuthClientId:$googleOAuthClientId,developmentUser:$developmentUser}')
     if ! mise exec -- jq -e '
       .googleOAuthClientId == "" or
       (.googleOAuthClientId | test("^[a-zA-Z0-9._-]+[.]apps[.]googleusercontent[.]com$"))

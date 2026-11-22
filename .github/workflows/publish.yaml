@@ -34,6 +34,8 @@ jobs:
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       DEVCONTAINER_KEEP_RUNNING: "true"
+      BUILD_CACHE_MODE: ${{ github.event_name == 'pull_request' && 'pr' || 'main' }}
+      PR_NUMBER: ${{ github.event.pull_request.number || '' }}
     steps:
       - name: checkout
         uses: actions/checkout@v7
@@ -42,6 +44,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           lfs: true
+
+      - name: expose GitHub Actions cache credentials
+        uses: crazy-max/ghaction-github-runtime@v4.0.0
 
       - name: verify exact source revision
         id: source
@@ -391,6 +396,8 @@ jobs:
     env:
       COMPOSE_PARALLEL_LIMIT: 1
       REGISTRY_CACHE_SUFFIX: "-arm64"
+      BUILD_CACHE_MODE: ${{ github.event_name == 'pull_request' && 'pr' || 'main' }}
+      PR_NUMBER: ${{ github.event.pull_request.number || '' }}
       GOOGLE_OAUTH_REDIRECT_URL: https://recipes.example/oauth2/callback
       GOOGLE_OAUTH_REDIRECT_HOST: recipes.example
     steps:
@@ -400,6 +407,9 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           lfs: true
+
+      - name: expose GitHub Actions cache credentials
+        uses: crazy-max/ghaction-github-runtime@v4.0.0
 
       - name: verify exact source revision
         id: source

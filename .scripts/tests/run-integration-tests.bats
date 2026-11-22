@@ -28,11 +28,14 @@ EOF
   jq -n '
     {services: {
       traefik: {ports: [{target: 3000, published: "3000"}]},
-      fixtures: {profiles: ["test"]}
+      fixtures: {profiles: ["test"], image: "ghcr.io/dhhyi/recipe-db-fixtures:latest"}
     }}
     | reduce ["recipes-test", "ratings-test", "graphql-test", "images-test",
         "inspirations-test", "link-extract-test", "image-inline-test", "mcp-test"][] as $project
-        (. ; .services[$project] = {profiles: ["test"]})
+        (. ; .services[$project] = {
+          profiles: ["test"],
+          image: "ghcr.io/dhhyi/recipe-db-" + $project + ":latest"
+        })
   ' > "$COMPOSE_CONFIG"
 }
 
@@ -194,6 +197,31 @@ EOF
   [ "$(cat "$INTEGRATION_LOG")" = "$(printf '%s\n' 'recipes-test: echo tested' 'ratings-test: echo tested')" ]
   for project in recipes-test ratings-test; do
     [ "$(cat "$project/target/integration-tests/run.log")" = "test stdout: $project"$'\n'"test stderr: $project" ]
+  done
+}
+
+@test "GitHub Actions reuses prebuilt fixture and suite images without rebuilding" {
+  run env GITHUB_ACTIONS=true bash .scripts/run-integration-tests.sh --development recipes-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker image inspect ghcr.io/dhhyi/recipe-db-fixtures:latest' "$MOCK_LOG"
+  grep -Fx 'docker image inspect ghcr.io/dhhyi/recipe-db-recipes-test:latest' "$MOCK_LOG"
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
+}
+
+@test "GitHub Actions reports missing prepared fixture or suite images before running tests" {
+  for service in fixtures recipes-test; do
+    image=$(jq -r --arg service "$service" '.services[$service].image' "$COMPOSE_CONFIG")
+    : > "$MOCK_LOG"
+
+    run --separate-stderr env GITHUB_ACTIONS=true MISSING_IMAGE="$image" \
+      bash .scripts/run-integration-tests.sh --development recipes-test
+
+    [ "$status" -eq 1 ]
+    [ "$stderr" = "Prepared image for service $service is missing locally: $image. Build the Compose images before running integration tests." ]
+    run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+    run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
   done
 }
 

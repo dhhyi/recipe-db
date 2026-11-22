@@ -1,4 +1,4 @@
-#@ load("service-template.lib.yml", "project_labels")
+#@ load("service-template.lib.yml", "build_cache_options", "project_labels")
 
 #@ def fixtures_service(project, options):
 #@   service = {
@@ -10,7 +10,7 @@
 #@     "read_only": True,
 #@     "tmpfs": ["/var/cache/nginx", "/var/run"],
 #@   }
-#@   service["build"]["cache_from"] = ["type=registry,ref=ghcr.io/dhhyi/recipe-db-" + project.name + "-cache" + options.registryCacheSuffix]
+#@   service["build"].update(build_cache_options(project, options))
 #@   if "labels" in project.traefik:
 #@     service["labels"] = project_labels(project)
 #@   end

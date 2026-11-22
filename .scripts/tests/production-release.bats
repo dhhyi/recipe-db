@@ -16,6 +16,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../publish-production-github-release.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../smoke-production-image.sh" .scripts/
   use_mise_tools
+  unset BUILD_CACHE_MODE PR_NUMBER
   setup_mock_bin
   printf '%s\n' '[env]' '_.path = ["bin"]' > mise.local.toml
   export MISE_TRUSTED_CONFIG_PATHS="$FIXTURE_ROOT:$BATS_TEST_DIRNAME/../.."
@@ -152,7 +153,7 @@ EOF
     and .target.api.tags == ["ghcr.io/dhhyi/recipe-db-api:sha-" + $revision + "-arm64"]
     and .target.api.platforms == ["linux/arm64"]
     and .target.api["cache-from"] == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-api-cache-arm64"]
-    and .target.api["cache-to"] == ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-api-cache-arm64"]
+    and .target.api["cache-to"] == ["type=registry,mode=max,ignore-error=true,ref=ghcr.io/dhhyi/recipe-db-api-cache-arm64"]
     and .target.api.labels["org.opencontainers.image.revision"] == $revision
     and .target.api.labels["org.opencontainers.image.source"] == "https://github.com/dhhyi/recipe-db"
   ' metadata.json
@@ -166,6 +167,34 @@ EOF
     all(.target[]; has("cache-to") | not)
     and .target.backend.platforms == ["linux/amd64"]
     and .target.backend["cache-from"] == ["type=registry,ref=ghcr.io/dhhyi/recipe-db-backend-cache"]
+  ' metadata.json
+}
+
+@test "pull-request application builds use scoped Actions caches without GHCR writes" {
+  write_valid_migrator
+
+  run env BUILD_CACHE_MODE=pr PR_NUMBER=42 \
+    sh .scripts/generate-production-build-metadata.sh "$REVISION" linux/arm64 metadata.json false
+
+  [ "$status" -eq 0 ]
+  jq -e '
+    all(.target | to_entries[] | select(.key != "migrator-images-copy");
+      . as $target
+      | $target.value["cache-from"] == [
+          "type=registry,ref=ghcr.io/dhhyi/recipe-db-" + $target.key + "-cache-arm64",
+          "type=gha,scope=pr-42-" + $target.key + "-arm64"
+        ]
+      and $target.value["cache-to"] == [
+          "type=gha,mode=max,ignore-error=true,scope=pr-42-" + $target.key + "-arm64"
+        ]
+    )
+    and .target["migrator-images-copy"]["cache-from"] == [
+      "type=registry,ref=ghcr.io/dhhyi/recipe-db-migrator-images-copy-cache-arm64"
+    ]
+    and (.target["migrator-images-copy"] | has("cache-to") | not)
+    and all(.target | to_entries[] | select(.key != "migrator-images-copy") | .value["cache-to"][];
+      startswith("type=gha,") and (startswith("type=registry,") | not)
+    )
   ' metadata.json
 }
 
@@ -205,7 +234,7 @@ EOF
     and .target["migrator-images-copy"].labels["io.dhhyi.recipe-db.migration.service"] == "authoritative"
     and .target["migrator-images-copy"].labels["io.dhhyi.recipe-db.migration.from-version"] == "1"
     and .target["migrator-images-copy"].labels["io.dhhyi.recipe-db.migration.to-version"] == "2"
-    and .target["migrator-images-copy"]["cache-to"] == ["type=registry,mode=max,ref=ghcr.io/dhhyi/recipe-db-migrator-images-copy-cache-arm64"]
+    and .target["migrator-images-copy"]["cache-to"] == ["type=registry,mode=max,ignore-error=true,ref=ghcr.io/dhhyi/recipe-db-migrator-images-copy-cache-arm64"]
   ' metadata.json
 }
 
