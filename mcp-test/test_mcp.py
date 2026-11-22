@@ -13,6 +13,7 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 MCP_URL = os.environ.get("MCP_URL", "http://traefik/mcp")
+GRAPHQL_URL = MCP_URL.rstrip("/").rsplit("/", 1)[0] + "/graphql"
 FIXTURE_API = os.environ.get("FIXTURE_API", "http://fixtures/mcp-test-fixture")
 MCP_API_TOKEN = os.environ.get("MCP_API_TOKEN")
 AUTH_TOKENS = json.loads(os.environ.get("E2E_AUTH_TOKENS", "{}"))
@@ -621,32 +622,74 @@ async def test_recipe_image_stream_is_bounded_without_content_length():
         assert "10 MiB download limit" in result.content[0].text
 
 
-@pytest.mark.skipif(
-    os.environ.get("MCP_TEST_IMAGES_OUTAGE") != "1",
-    reason="Set MCP_TEST_IMAGES_OUTAGE=1 and select this test with images stopped in the isolated testing stack",
-)
+@asynccontextmanager
+async def ignored_images(http):
+    async def set_ignored(names):
+        response = await http.post(
+            GRAPHQL_URL,
+            json={
+                "query": "mutation($names: [String!]!) { setIgnoredServices(names: $names) }",
+                "variables": {"names": names},
+            },
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert "errors" not in result
+        assert result["data"]["setIgnoredServices"] == names
+
+    try:
+        await set_ignored(["images"])
+        yield
+    finally:
+        await set_ignored([])
+
+
+@pytest.mark.parametrize("failure", ["setup", "body"])
+async def test_ignored_images_cleans_up_after_failure(failure):
+    requests = []
+
+    def respond(request):
+        names = json.loads(request.content)["variables"]["names"]
+        requests.append(names)
+        if names and failure == "setup":
+            return httpx.Response(200, json={"errors": [{"message": "setup failed"}]})
+        return httpx.Response(200, json={"data": {"setIgnoredServices": names}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        with pytest.raises(AssertionError):
+            async with ignored_images(http):
+                assert failure != "body"
+    assert requests == [["images"], []]
+
+
 async def test_recipe_images_outage_preserves_recipe_and_reports_write_failure():
     async with mcp_session() as session:
         name = "Image service outage"
         recipe_id = await create_recipe(session, name)
-        result = await call_image_tool(session, "get_recipe", recipe_id)
-        assert result["recipe"]["name"] == name
-        assert result["recipe"]["images"] is None
-        assert "image" not in result["recipe"]
-        error = next(error for error in result["errors"] if error["path"] == ["recipe", "images"])
-        assert error["code"] == "service-unavailable"
-        assert error["service"] == "images"
-        assert error["status"] == 503
+        token = AUTH_TOKENS.get("owner") or MCP_API_TOKEN
+        async with httpx.AsyncClient(
+            headers={**TRAEFIK_HEADERS, "Authorization": "Bearer " + token},
+            timeout=30,
+        ) as http:
+            async with ignored_images(http):
+                result = await call_image_tool(session, "get_recipe", recipe_id)
+                assert result["recipe"]["name"] == name
+                assert result["recipe"]["images"] is None
+                assert "image" not in result["recipe"]
+                error = next(error for error in result["errors"] if error["path"] == ["recipe", "images"])
+                assert error["code"] == "service-unavailable"
+                assert error["service"] == "images"
+                assert error["status"] == 503
 
-        for tool, arguments in (
-            ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/test.jpg"}),
-            ("delete_recipe_image", {"imageId": "a" * 64}),
-            ("reorder_recipe_images", {"imageIds": []}),
-        ):
-            failure = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
-            assert failure.is_error is True
-            assert "service-unavailable" in failure.content[0].text
-            assert "(status: 503)" in failure.content[0].text
+                for tool, arguments in (
+                    ("add_recipe_image", {"imageUrl": f"{FIXTURE_API}/test.jpg"}),
+                    ("delete_recipe_image", {"imageId": "a" * 64}),
+                    ("reorder_recipe_images", {"imageIds": []}),
+                ):
+                    failure = await session.call_tool(tool, {"recipeId": recipe_id, **arguments})
+                    assert failure.is_error is True
+                    assert "service-unavailable" in failure.content[0].text
+                    assert "(status: 503)" in failure.content[0].text
 
 
 async def test_add_rating_updates_the_recipe_rating():
