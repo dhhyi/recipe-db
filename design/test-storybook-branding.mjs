@@ -20,6 +20,7 @@ const [publishedServer, standaloneServer] = await Promise.all([
 const origin = `http://127.0.0.1:${publishedServer.server.address().port}`;
 const standaloneOrigin = `http://127.0.0.1:${standaloneServer.server.address().port}`;
 const browser = await chromium.launch({ headless: true });
+const managerBackgrounds = {};
 
 try {
   for (const colorScheme of ["light", "dark"]) {
@@ -28,6 +29,12 @@ try {
 
     const brandLink = page.getByRole("link", { name: "RezeptDB" });
     await brandLink.waitFor();
+    const bodyBackground = await page.locator("body").evaluate((body) =>
+      getComputedStyle(body).backgroundColor.match(/\d+/g).slice(0, 3),
+    );
+    managerBackgrounds[colorScheme] = bodyBackground
+      .map(Number)
+      .reduce((sum, channel) => sum + channel, 0);
     assert.equal(await brandLink.getAttribute("href"), "/");
     assert.equal(await brandLink.getAttribute("target"), "_self");
     assert.equal(await brandLink.locator("img").getAttribute("alt"), "RezeptDB");
@@ -82,6 +89,10 @@ try {
 
     await page.close();
   }
+  assert.ok(
+    managerBackgrounds.light > managerBackgrounds.dark,
+    "Storybook manager should follow the selected light or dark color scheme",
+  );
 
   const standalonePage = await browser.newPage({ colorScheme: "light" });
   await standalonePage.goto(
