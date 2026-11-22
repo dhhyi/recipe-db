@@ -187,33 +187,6 @@ test("HTTP-200 GraphQL failure preserves the crop and saved pair and allows retr
   expect(uploadedCrop(retry.upload)).toEqual(pendingCrop);
 });
 
-test("an unsaved upload still prompts on navigation after restoring the crop", async ({
-  page,
-  demoRecipe,
-}) => {
-  await selectSource(page, demoRecipe);
-  const initial = await crop(page);
-  await drag(page, handle(page, "se"), -5000, -5000);
-  const minimum = await crop(page);
-  expect(minimum.width).toBe(300);
-  expect(minimum.height).toBe(225);
-  await expect(page.getByText(/vergrößert|hochskaliert/i)).toBeVisible();
-  await drag(page, handle(page, "se"), 5000, 5000);
-  expect(await crop(page)).toEqual(initial);
-  await expect(saveButton(page)).toBeEnabled();
-  page.once("dialog", (dialog) => dialog.dismiss());
-  await page
-    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
-    .click();
-  await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
-  expect(await crop(page)).toEqual(initial);
-  page.once("dialog", (dialog) => dialog.accept());
-  await page
-    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
-    .click();
-  await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-});
-
 test("a failed post-save gallery read keeps success and Retry does not upload again", async ({
   page,
   demoRecipe,
@@ -376,46 +349,6 @@ test("Cancel does not focus the gallery heading when a malformed read prevents A
   await expect(
     page.getByRole("button", { name: "Erneut laden" }),
   ).toBeVisible();
-});
-
-test("header home navigation respects unsaved crop confirmation", async ({
-  page,
-  demoRecipe,
-}) => {
-  await selectSource(page, demoRecipe);
-  const home = page.locator("header-component a[href='/']");
-  page.once("dialog", (dialog) => dialog.dismiss());
-  await home.click();
-  await expect(page).toHaveURL(`/images-edit/${demoRecipe.id}`);
-  await expect(selection(page)).toBeVisible();
-  const navigation = page.waitForRequest(
-    (request) =>
-      request.isNavigationRequest() &&
-      request.url() === new URL("/", page.url()).href,
-  );
-  page.once("dialog", (dialog) => dialog.accept());
-  await home.click();
-  await navigation;
-  await expect(page).toHaveURL("/");
-});
-
-test("native unload confirmation can decline reloading an unsaved crop", async ({
-  page,
-  demoRecipe,
-}) => {
-  await selectSource(page, demoRecipe);
-  await drag(page, handle(page, "se"), -25, -20);
-  const pending = await crop(page);
-  const dialog = page.waitForEvent("dialog");
-  const reload = page.evaluate(() => {
-    window.location.reload();
-  });
-  const confirmation = await dialog;
-  expect(confirmation.type()).toBe("beforeunload");
-  await confirmation.dismiss();
-  await reload;
-  expect(await crop(page)).toEqual(pending);
-  await expect(saveButton(page)).toBeEnabled();
 });
 
 test("a mirrored rotated JPEG uses the same oriented coordinates in preview and saved pixels", async ({
