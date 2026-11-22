@@ -1,5 +1,5 @@
 import { test, expect } from "../../fixtures.js";
-import { graphqlMocks, identityHtml } from "./mouse.mocks.js";
+import { graphqlMocks, identityHtml } from "./crop.mocks.js";
 
 test.use({ graphqlMocks: [graphqlMocks, { scope: "test" }], identityHtml });
 

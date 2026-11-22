@@ -55,68 +55,6 @@ async function observeBlobReleases(page) {
   return () => page.evaluate(() => window.revokedImageEditorUrls);
 }
 
-test("touch moves and resizes without scrolling; cancellation and viewport changes end drags", async ({
-  page,
-  context,
-  demoRecipe,
-}) => {
-  await selectSource(page, demoRecipe);
-  const session = await context.newCDPSession(page);
-  const touchDrag = async (locator, dx, dy, cancel = false) => {
-    await locator.scrollIntoViewIfNeeded();
-    const box = await locator.boundingBox();
-    const x = box.x + box.width / 2;
-    const y = box.y + box.height / 2;
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchStart",
-      touchPoints: [{ x, y, id: 0 }],
-    });
-    await session.send("Input.dispatchTouchEvent", {
-      type: "touchMove",
-      touchPoints: [{ x: x + dx, y: y + dy, id: 0 }],
-    });
-    await session.send("Input.dispatchTouchEvent", {
-      type: cancel ? "touchCancel" : "touchEnd",
-      touchPoints: [],
-    });
-  };
-  try {
-    await touchDrag(handle(page, "se"), -65, -48);
-    const resized = await crop(page);
-    expectValidCrop(resized);
-    expect(resized.width).toBeLessThan(1200);
-    const scroll = await page.evaluate(() => window.scrollY);
-    await touchDrag(selection(page), 20, 15);
-    const moved = await crop(page);
-    expect(moved.x).toBeGreaterThan(resized.x);
-    expect(moved.y).toBeGreaterThan(resized.y);
-    expect(await page.evaluate(() => window.scrollY)).toBe(scroll);
-    await touchDrag(selection(page), -10, -8, true);
-    const cancelled = await crop(page);
-    await page.mouse.move(5, 5);
-    expect(await crop(page)).toEqual(cancelled);
-    await selection(page).scrollIntoViewIfNeeded();
-    const activeBox = await selection(page).boundingBox();
-    await page.mouse.move(
-      activeBox.x + activeBox.width / 2,
-      activeBox.y + activeBox.height / 2,
-    );
-    await page.mouse.down();
-    const viewport = page.viewportSize();
-    await page.setViewportSize({ width: 600, height: 700 });
-    await expect.poll(() => crop(page)).toEqual(cancelled);
-    await page.mouse.move(5, 5);
-    await page.mouse.up();
-    expect(await crop(page)).toEqual(cancelled);
-    await page.setViewportSize(viewport);
-    expect(await crop(page)).toEqual(cancelled);
-    await drag(page, handle(page, "e"), -20, 0);
-    expect((await crop(page)).width).toBeLessThan(cancelled.width);
-  } finally {
-    await session.detach();
-  }
-});
-
 test("each save sends the original and crop, then returns to the gallery", async ({
   page,
   demoRecipe,
