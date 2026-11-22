@@ -235,28 +235,49 @@ for project in "${projects[@]}"; do
         "$project" "$identity_file" >&2
       exit 1
     fi
-    bazel_arguments=(
-      --action_env=PATH
-      --action_env=CI
-      --action_env=GITHUB_ACTIONS
-      --action_env=HOST_UID
-      --action_env=HOST_GID
-      --action_env=VERBOSE
-      --action_env=BUILDKIT_PROGRESS
-      --action_env=COMPOSE_PROGRESS
-      --action_env=COMPOSE_PARALLEL_LIMIT
-      "--disk_cache=${BAZEL_DISK_CACHE:-$HOME/.cache/bazel-disk}"
-    )
-    if [[ -n ${BAZEL_EXECUTION_LOG_DIR:-} ]]; then
-      mkdir -p "$BAZEL_EXECUTION_LOG_DIR"
-      bazel_arguments+=(
-        "--execution_log_json_file=$BAZEL_EXECUTION_LOG_DIR/integration-$project.json"
-      )
+    dependency_graph="${RUNNER_TEMP:-}/integration-images/integration-dependency-graph.json"
+    if [[ ! -s "$dependency_graph" ]] || ! jq -e --arg project "$project" '
+      (.resolved | type == "object")
+      and (.resolved[$project] | type == "object"
+        and (.projects | type == "array")
+        and (.synthetic | type == "array"))
+    ' "$dependency_graph" > /dev/null 2>&1; then
+      printf 'Prepared integration dependency graph is missing or invalid for suite %s: %s\n' \
+        "$project" "$dependency_graph" >&2
+      exit 1
     fi
-    set +e
-    mise run --raw bazel build "${bazel_arguments[@]}" "//:integration_suite_$project"
-    status=$?
-    set -e
+    if jq -e --arg project "$project" '
+      (.resolved[$project].projects | length) +
+      (.resolved[$project].synthetic | length) == 0
+    ' "$dependency_graph" > /dev/null; then
+      set +e
+      INTEGRATION_BAZEL_ACTION=true bash .scripts/run-integration-suite.sh "$project"
+      status=$?
+      set -e
+    else
+      bazel_arguments=(
+        --action_env=PATH
+        --action_env=CI
+        --action_env=GITHUB_ACTIONS
+        --action_env=HOST_UID
+        --action_env=HOST_GID
+        --action_env=VERBOSE
+        --action_env=BUILDKIT_PROGRESS
+        --action_env=COMPOSE_PROGRESS
+        --action_env=COMPOSE_PARALLEL_LIMIT
+        "--disk_cache=${BAZEL_DISK_CACHE:-$HOME/.cache/bazel-disk}"
+      )
+      if [[ -n ${BAZEL_EXECUTION_LOG_DIR:-} ]]; then
+        mkdir -p "$BAZEL_EXECUTION_LOG_DIR"
+        bazel_arguments+=(
+          "--execution_log_json_file=$BAZEL_EXECUTION_LOG_DIR/integration-$project.json"
+        )
+      fi
+      set +e
+      mise run --raw bazel build "${bazel_arguments[@]}" "//:integration_suite_$project"
+      status=$?
+      set -e
+    fi
   else
     set +e
     bash .scripts/run-integration-suite.sh "$project"
