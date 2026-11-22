@@ -1,32 +1,22 @@
-port module GeometryTests exposing (main)
+module GeometryTests exposing (suite)
 
 import Crop exposing (Crop, Handle(..), Point, Size)
 import Editor.Bridge as Bridge
 import Editor.Source as Source exposing (Problem(..))
 import Editor.State
 import Editor.Types as Editor exposing (Msg(..))
+import Expect
 import Json.Decode as D
 import Json.Encode as E
-import Platform
 import RecipeDB
 import RemoteData
+import Test exposing (Test, describe, test)
 
 
-port results : E.Value -> Cmd msg
-
-
-main : Program () () Never
-main =
-    Platform.worker
-        { init = \_ -> ( (), results (E.list encode tests) )
-        , update = \message _ -> never message
-        , subscriptions = \_ -> Sub.none
-        }
-
-
-encode : ( String, Bool ) -> E.Value
-encode ( name, passed ) =
-    E.object [ ( "name", E.string name ), ( "passed", E.bool passed ) ]
+suite : Test
+suite =
+    describe "Image editor"
+        (geometryTests ++ List.map (\( name, passed ) -> test name (\_ -> Expect.equal True passed)) tests)
 
 
 size : Size
@@ -94,33 +84,44 @@ samples =
     List.concatMap (\x -> List.map (\y -> { x = x, y = y }) [ -5000, -101.4, -1, 0, 1, 99.6, 5000 ]) [ -5000, -99.2, -1, 0, 1, 101.4, 5000 ]
 
 
+geometryTests : List Test
+geometryTests =
+    let
+        equal : String -> a -> a -> Test
+        equal name expected actual =
+            test name (\_ -> Expect.equal expected actual)
+    in
+    [ equal "1200×900 default" (Just { x = 0, y = 0, width = 1200, height = 900 }) (Crop.centered size)
+    , equal "portrait default" (Just { x = 0, y = 350, width = 1200, height = 900 }) (Crop.centered { width = 1200, height = 1600 })
+    , equal "landscape default" (Just { x = 200, y = 0, width = 1200, height = 900 }) (Crop.centered { width = 1600, height = 900 })
+    , equal "square default" (Just { x = 0, y = 112, width = 900, height = 675 }) (Crop.centered { width = 900, height = 900 })
+    , equal "minimum valid source" (Just { x = 0, y = 0, width = 300, height = 225 }) (Crop.centered { width = 300, height = 225 })
+    , equal "undersized width" Nothing (Crop.centered { width = 299, height = 10000 })
+    , equal "undersized height" Nothing (Crop.centered { width = 10000, height = 224 })
+    , equal "extreme wide" (Just { x = 4850, y = 0, width = 300, height = 225 }) (Crop.centered { width = 10000, height = 225 })
+    , equal "extreme tall" (Just { x = 0, y = 4887, width = 300, height = 225 }) (Crop.centered { width = 300, height = 10000 })
+    , equal "move clamps bottom right" { initial | x = 400, y = 300 } (Crop.move size { x = 5000, y = 5000 } initial)
+    , equal "move clamps top left" { initial | x = 0, y = 0 } (Crop.move size { x = -5000, y = -5000 } initial)
+    , equal "move quantization" { initial | x = 201, y = 152 } (Crop.move size { x = 1.4, y = 1.6 } initial)
+    , equal "corner follows 4:3 diagonal" { initial | width = 840, height = 630 } (Crop.resize size BottomRight { x = 40, y = 30 } initial)
+    , equal "right fixes vertical center" { initial | y = 135, width = 840, height = 630 } (Crop.resize size Right { x = 40, y = 999 } initial)
+    , equal "top fixes horizontal center" { x = 180, y = 120, width = 840, height = 630 } (Crop.resize size Top { x = 999, y = -30 } initial)
+    , equal "right boundary does not move anchor" { x = 200, y = 75, width = 1000, height = 750 } (Crop.resize size Right { x = 5000, y = 0 } initial)
+    , equal "top boundary does not move center" { x = 100, y = 0, width = 1000, height = 750 } (Crop.resize size Top { x = 0, y = -5000 } initial)
+    , equal "corner minimum" { initial | width = 300, height = 225 } (Crop.resize size BottomRight { x = -5000, y = -5000 } initial)
+    , test "display conversion independent of scale" <|
+        \_ ->
+            Expect.all
+                [ \_ -> Expect.equal { x = 200, y = 150 } (Crop.fromDisplay size { width = 600, height = 450 } { x = 100, y = 75 })
+                , \_ -> Expect.equal { x = 200, y = 150 } (Crop.fromDisplay size { width = 300, height = 225 } { x = 50, y = 37.5 })
+                ]
+                ()
+    ]
+
+
 tests : List ( String, Bool )
 tests =
-    [ ( "1200×900 default", Crop.centered size == Just { x = 0, y = 0, width = 1200, height = 900 } )
-    , ( "portrait default", Crop.centered { width = 1200, height = 1600 } == Just { x = 0, y = 350, width = 1200, height = 900 } )
-    , ( "landscape default", Crop.centered { width = 1600, height = 900 } == Just { x = 200, y = 0, width = 1200, height = 900 } )
-    , ( "square default", Crop.centered { width = 900, height = 900 } == Just { x = 0, y = 112, width = 900, height = 675 } )
-    , ( "minimum valid source", Crop.centered { width = 300, height = 225 } == Just { x = 0, y = 0, width = 300, height = 225 } )
-    , ( "undersized width", Crop.centered { width = 299, height = 10000 } == Nothing )
-    , ( "undersized height", Crop.centered { width = 10000, height = 224 } == Nothing )
-    , ( "extreme wide", Crop.centered { width = 10000, height = 225 } == Just { x = 4850, y = 0, width = 300, height = 225 } )
-    , ( "extreme tall", Crop.centered { width = 300, height = 10000 } == Just { x = 0, y = 4887, width = 300, height = 225 } )
-    , ( "move clamps bottom right", Crop.move size { x = 5000, y = 5000 } initial == { initial | x = 400, y = 300 } )
-    , ( "move clamps top left", Crop.move size { x = -5000, y = -5000 } initial == { initial | x = 0, y = 0 } )
-    , ( "move quantization", Crop.move size { x = 1.4, y = 1.6 } initial == { initial | x = 201, y = 152 } )
-    , ( "corner follows 4:3 diagonal", Crop.resize size BottomRight { x = 40, y = 30 } initial == { initial | width = 840, height = 630 } )
-    , ( "right fixes vertical center", Crop.resize size Right { x = 40, y = 999 } initial == { initial | y = 135, width = 840, height = 630 } )
-    , ( "top fixes horizontal center", Crop.resize size Top { x = 999, y = -30 } initial == { x = 180, y = 120, width = 840, height = 630 } )
-    , ( "right boundary does not move anchor", Crop.resize size Right { x = 5000, y = 0 } initial == { x = 200, y = 75, width = 1000, height = 750 } )
-    , ( "top boundary does not move center", Crop.resize size Top { x = 0, y = -5000 } initial == { x = 100, y = 0, width = 1000, height = 750 } )
-    , ( "corner minimum", Crop.resize size BottomRight { x = -5000, y = -5000 } initial == { initial | width = 300, height = 225 } )
-    , ( "display conversion independent of scale"
-      , Crop.fromDisplay size { width = 600, height = 450 } { x = 100, y = 75 }
-            == Crop.fromDisplay size { width = 300, height = 225 } { x = 50, y = 37.5 }
-            && Crop.fromDisplay size { width = 600, height = 450 } { x = 100, y = 75 }
-            == { x = 200, y = 150 }
-      )
-    , ( "upload metadata retains the returned immutable URL"
+    [ ( "upload metadata retains the returned immutable URL"
       , RecipeDB.decodeUpload """{"data":{"addImage":{"url":"/images/hash-new.png","thumbUrl":"/images/hash-new-thumb.png","size":123,"width":648,"height":486}}}"""
             == Ok { url = "/images/hash-new.png", thumbUrl = "/images/hash-new-thumb.png", size = 123, width = 648, height = 486 }
       )

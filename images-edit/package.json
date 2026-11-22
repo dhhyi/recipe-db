@@ -4,12 +4,13 @@
   "scripts": {
     "codegen": "elm-graphql --schema-file recipe-db.graphqls",
     "build": "elm make src/Main.elm --output elm.js",
-    "test": "elm make tests/GeometryTests.elm --output elm-stuff/geometry-tests.js && node tests/geometry.cjs && node --test tests/bridge.cjs",
+    "test": "elm-test --workers 1 && node --test tests/bridge.cjs",
     "lint": "elm-review --ignore-dirs src/Api"
   },
   "devDependencies": {
     "@dillonkearns/elm-graphql": "^4.3.1",
     "elm": "0.19.2-0",
+    "elm-test": "0.19.2-1",
     "elm-format": "^0.8.7",
     "elm-review": "^2.10.3"
   },

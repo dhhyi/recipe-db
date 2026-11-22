@@ -185,6 +185,9 @@ importers:
       elm-review:
         specifier: ^2.10.3
         version: 2.13.5(supports-color@7.2.0)
+      elm-test:
+        specifier: 0.19.2-1
+        version: 0.19.2-1
 
 packages:
 
@@ -352,6 +355,10 @@ packages:
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
 
+  commander@9.5.0:
+    resolution: {integrity: sha512-KRs7WVDKg86PWiuAqhDrAQnTXZKraVcCc6vFdL14qrZ/DcWwuRo7VoiYXalXO7S5GKpqYiVEwCbgFDfxNHKJBQ==}
+    engines: {node: ^12.20.0 || >=14}
+
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
@@ -387,6 +394,11 @@ packages:
 
   elm-solve-deps-wasm@2.0.0:
     resolution: {integrity: sha512-11OV8FgB9qsth/F94q2SJjb1MoEgbworSyNM1L+YlxVoaxp7wtWPyA8cNcPEkSoIKG1B8Tqg68ED1P6dVamHSg==}
+
+  elm-test@0.19.2-1:
+    resolution: {integrity: sha512-uJSBUgRpOtDkRDpHm1CZHmv+LTR3FiAILUZcWwSWwZc51lLxlLatUpl8IVr2vscMkvk8DZ0ecvsuvlbzi5iK2Q==}
+    engines: {node: '>=12.20.0'}
+    hasBin: true
 
   elm@0.19.2-0:
     resolution: {integrity: sha512-a2N4WJ6ge+cXOemAgo6tu8gN17cIzzitYoPcJRpvbiPbay1+BfQAv9wyWtgTyR3YkrduN5oQwzLgSIaUBZwjYQ==}
@@ -875,6 +887,8 @@ snapshots:
 
   color-name@1.1.4: {}
 
+  commander@9.5.0: {}
+
   cross-spawn@7.0.6:
     dependencies:
       path-key: 3.1.1
@@ -929,6 +943,14 @@ snapshots:
       - supports-color
 
   elm-solve-deps-wasm@2.0.0: {}
+
+  elm-test@0.19.2-1:
+    dependencies:
+      chokidar: 3.6.0
+      commander: 9.5.0
+      elm-solve-deps-wasm: 2.0.0
+      tinyglobby: 0.2.17
+      which: 2.0.2
 
   elm@0.19.2-0:
     optionalDependencies:
