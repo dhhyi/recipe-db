@@ -342,10 +342,10 @@ async def test_recipe_tools_report_malformed_json_as_tool_errors():
 
 async def test_recipe_tools_preserve_ingredient_amounts():
     ingredients_json = (
-        '[{"name":"integer","amount":2},'
-        '{"name":"fraction","amount":0.5},'
-        '{"name":"precise","amount":12345678901234567890.12300},'
-        '{"name":"exponent","amount":1.20e-3},'
+        '[{"name":"integer","amount":"2"},'
+        '{"name":"fraction","amount":"0.5"},'
+        '{"name":"precise","amount":"12345678901234567890.12300"},'
+        '{"name":"exponent","amount":"1.20e-3"},'
         '{"name":"text","amount":"a pinch"},'
         '{"name":"omitted"},'
         '{"name":"cleared","amount":"previous"}]'
@@ -360,10 +360,10 @@ async def test_recipe_tools_preserve_ingredient_amounts():
         "cleared": "previous",
     }
     updated_ingredients_json = (
-        '[{"name":"integer","amount":3},'
-        '{"name":"fraction","amount":0.75},'
-        '{"name":"precise","amount":98765432109876543210.98700},'
-        '{"name":"exponent","amount":2.30e-4},'
+        '[{"name":"integer","amount":"3"},'
+        '{"name":"fraction","amount":"0.75"},'
+        '{"name":"precise","amount":"98765432109876543210.98700"},'
+        '{"name":"exponent","amount":"2.30e-4"},'
         '{"name":"text","amount":"to taste"},'
         '{"name":"omitted"},'
         '{"name":"cleared"}]'
@@ -402,7 +402,7 @@ async def test_recipe_tools_preserve_ingredient_amounts():
             assert {ingredient["name"]: ingredient["amount"] for ingredient in ingredients} == expected
 
 
-@pytest.mark.parametrize("amount", [None, True, [], {}])
+@pytest.mark.parametrize("amount", [None, 2, 0.5, True, [], {}])
 async def test_recipe_tools_reject_invalid_ingredient_amounts(amount):
     async with mcp_session() as session:
         recipe_id = await create_recipe(session, "Invalid amount sentinel")
@@ -418,7 +418,7 @@ async def test_recipe_tools_reject_invalid_ingredient_amounts(amount):
             assert result.is_error is True
             message = result.content[0].text.lower()
             assert "amount" in message
-            assert "string or number" in message
+            assert "string" in message
 
 
 async def test_list_recipes_includes_a_created_recipe():

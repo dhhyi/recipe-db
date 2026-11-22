@@ -1,0 +1,6 @@
+{
+  "service": "recipes",
+  "fromVersion": 1,
+  "toVersion": 2,
+  "timeoutSeconds": 300
+}

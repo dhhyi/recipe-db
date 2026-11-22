@@ -9,7 +9,7 @@ static class RecipeSchema
         .Type(SchemaValueType.Object)
         .Properties(
             ("name", new JsonSchemaBuilder().Type(SchemaValueType.String).MinLength(1)),
-            ("amount", new JsonSchemaBuilder().Type(SchemaValueType.String | SchemaValueType.Number)),
+            ("amount", new JsonSchemaBuilder().Type(SchemaValueType.String)),
             ("unit", new JsonSchemaBuilder().Type(SchemaValueType.String)),
             ("optional", new JsonSchemaBuilder().Type(SchemaValueType.Boolean)))
         .Required("name")

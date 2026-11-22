@@ -3,17 +3,17 @@
   "ingredients": [
     {
       "name": "weiße Bohnen",
-      "amount": 1,
+      "amount": "1",
       "unit": "Glas"
     },
     {
       "name": "Kichererbsen",
-      "amount": 2,
+      "amount": "2",
       "unit": "Dosen"
     },
     {
       "name": "Lauch",
-      "amount": 1,
+      "amount": "1",
       "unit": "Stange"
     },
     {

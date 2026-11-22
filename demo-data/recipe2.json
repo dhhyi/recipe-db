@@ -3,12 +3,12 @@
   "ingredients": [
     {
       "name": "Rote Beete",
-      "amount": 500,
+      "amount": "500",
       "unit": "g"
     },
     {
       "name": "Kokosmilch",
-      "amount": 1,
+      "amount": "1",
       "unit": "Dose"
     },
     {

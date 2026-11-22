@@ -17,7 +17,6 @@
 (defn- schema [schema-source]
   (let [registry (.parse (SchemaParser.) schema-source)
         wiring (-> (RuntimeWiring/newRuntimeWiring)
-                   (.scalar (scalar "StringOrInt"))
                    (.scalar (scalar "Upload"))
                    (.scalar (scalar "JSON"))
                    (.build))]

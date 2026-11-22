@@ -60,7 +60,7 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: backend
 backupRole: authoritative-read-only
-storageVersion: 1
+storageVersion: 2
 format:
   - check: mix format --check-formatted $argv
     apply: mix format $argv

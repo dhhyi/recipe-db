@@ -12,9 +12,24 @@ impl Query {
             "name": " Äpfel Straße ",
             "nameSortKey": "apfel strasse",
             "createdAt": "2026-10-23T13:00:00.123456Z",
-            "updatedAt": "2026-10-23T13:00:00.123456Z"
+            "updatedAt": "2026-10-23T13:00:00.123456Z",
+            "ingredients": [
+                {"name": "legacy integer", "amount": 2},
+                {"name": "legacy decimal", "amount": 0.5},
+                {"name": "invalid", "amount": true},
+                {"name": "omitted"}
+            ]
         }))
         .unwrap()
+    }
+}
+
+struct Mutation;
+
+#[Object]
+impl Mutation {
+    async fn amount(&self, value: IngredientInput) -> Option<String> {
+        value.amount
     }
 }
 
@@ -34,6 +49,52 @@ async fn exposes_backend_name_sort_key_without_changing_name_or_timestamps() {
             "updatedAt": "2026-10-23T13:00:00.123456Z"
         }})
     );
+}
+
+#[tokio::test]
+async fn serializes_legacy_numeric_and_invalid_backend_amounts() {
+    let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+    let response = schema
+        .execute("{ recipe { ingredients { name amount } } }")
+        .await;
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.into_json().unwrap(),
+        json!({"recipe": {"ingredients": [
+            {"name": "legacy integer", "amount": "2"},
+            {"name": "legacy decimal", "amount": "0.5"},
+            {"name": "invalid", "amount": null},
+            {"name": "omitted", "amount": null}
+        ]}})
+    );
+}
+
+#[tokio::test]
+async fn ingredient_input_accepts_string_null_and_omitted_amounts_only() {
+    let schema = Schema::build(Query, Mutation, EmptySubscription).finish();
+    for (input, expected) in [
+        (r#"{name: "Salt", amount: "2"}"#, json!("2")),
+        (r#"{name: "Salt", amount: null}"#, json!(null)),
+        (r#"{name: "Salt"}"#, json!(null)),
+    ] {
+        let response = schema
+            .execute(format!("mutation {{ amount(value: {input}) }}"))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        assert_eq!(
+            response.data.into_json().unwrap(),
+            json!({"amount": expected})
+        );
+    }
+
+    for amount in ["2", "0.5"] {
+        let response = schema
+            .execute(format!(
+                "mutation {{ amount(value: {{name: \"Salt\", amount: {amount}}}) }}"
+            ))
+            .await;
+        assert_eq!(response.errors.len(), 1);
+    }
 }
 
 #[tokio::test]

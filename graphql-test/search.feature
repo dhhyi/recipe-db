@@ -9,7 +9,7 @@ Feature: search recipes
     * configure headers = { Authorization: '#(ownerAuthorization)' }
     * configure retry = { count: 30, interval: 1000 }
 
-    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: '#(searchToken + " Kartoffelsuppe")', method: 'Kartoffeln mit Zwiebeln kochen.', ingredients: [{ name: 'Kartoffeln', amount: 500, unit: 'g' }] } } }
+    * request { query: '#(read("graphql/create-recipe.graphql"))', variables: { value: { name: '#(searchToken + " Kartoffelsuppe")', method: 'Kartoffeln mit Zwiebeln kochen.', ingredients: [{ name: 'Kartoffeln', amount: '500', unit: 'g' }] } } }
     * method post
     * status 200
     * def soupId = response.data.createRecipe.id
