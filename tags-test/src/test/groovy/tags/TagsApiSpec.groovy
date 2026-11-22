@@ -30,7 +30,7 @@ abstract class TagsApiSpec extends Specification {
 
 	protected static String requiredEnvironment(String name) {
 		String value = System.getenv(name)
-		assert value != null && !value.isBlank(): "${name} must explicitly target an isolated test stack"
+		assert value != null && !value.isBlank(): "${name} must explicitly target the development tags service"
 		value
 	}
 
