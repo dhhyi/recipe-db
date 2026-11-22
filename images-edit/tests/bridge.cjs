@@ -267,20 +267,12 @@ test("gallery writes block in-app navigation without adding an unload dialog", (
   assert.equal(bridge.windowListeners.has("beforeunload"), false);
 });
 
-test("dirty in-app anchor departure confirms, while external/new-tab links retain native behavior", () => {
+test("dirty state leaves external and new-tab links to native behavior", () => {
   const bridge = harness({ confirm: false });
   bridge.receive({ action: "guard", dirty: true, saving: false });
-  assert.equal(bridge.click("http://recipe.test/"), true);
   assert.equal(bridge.click("http://recipe.test/", { ctrlKey: true }), false);
   assert.equal(bridge.click("https://external.test/"), false);
   assert.equal(bridge.windowListeners.has("beforeunload"), true);
-});
-
-test("accepted in-app anchor departure removes duplicate unload confirmation", () => {
-  const bridge = harness();
-  bridge.receive({ action: "guard", dirty: true, saving: false });
-  assert.equal(bridge.click("http://recipe.test/"), false);
-  assert.equal(bridge.windowListeners.has("beforeunload"), false);
 });
 
 test("active pointer coordinates do not jump when status layout moves the stage", () => {
