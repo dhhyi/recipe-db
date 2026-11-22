@@ -184,6 +184,10 @@ for project in "${projects[@]}"; do
       wait_for_http "shared design assets" http://127.0.0.1:8080/design/styles.css 302
       wait_for_http "recipe editor" http://127.0.0.1:8080/edit/new 200
       ;;
+    images-edit-test)
+      wait_for_http "shared design assets" http://127.0.0.1:8080/design/styles.css 302
+      wait_for_http "image editor" http://127.0.0.1:8080/images-edit/ 200
+      ;;
     recipes-test)
       wait_for_http "recipes API" http://127.0.0.1:3000/recipes 204 --head
       ;;

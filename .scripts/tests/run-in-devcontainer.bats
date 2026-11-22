@@ -19,6 +19,7 @@ test: |
   echo first
 
   echo second
+integration: echo integrated
 generate:
   - command: echo generated
   - command: echo finished
@@ -444,6 +445,13 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -Fx "devcontainer exec --container-id running-container --workspace-folder $FIXTURE_ROOT/example fish -c echo generated && echo finished" "$MOCK_LOG"
+}
+
+@test "runs the integration script from the second YAML document" {
+  run env RUNNING_CONTAINER=running-container sh .scripts/run-in-devcontainer.sh example integration
+
+  [ "$status" -eq 0 ]
+  grep -Fx "devcontainer exec --container-id running-container --workspace-folder $FIXTURE_ROOT/example fish -c echo integrated" "$MOCK_LOG"
 }
 
 @test "rejects missing commands, unknown projects and undefined targets before Docker calls" {

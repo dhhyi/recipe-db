@@ -143,6 +143,18 @@ outputs = [
   "images-edit/.update_devcontainer.sh",
 ]
 
+["sync-devcontainer:images-edit-test"]
+description = "Synchronize the images-edit-test devcontainer"
+shell = "bash -o pipefail -c"
+run = "curl -fsSL https://raw.githubusercontent.com/dhhyi/devcontainer-creator/dist/bundle.js | node - images-edit-test/.project.yaml images-edit-test"
+sources = ["images-edit-test/.project.yaml"]
+outputs = [
+  "images-edit-test/.devcontainer/devcontainer.json",
+  "images-edit-test/.devcontainer/Dockerfile",
+  "images-edit-test/.vscode/tasks.json",
+  "images-edit-test/.update_devcontainer.sh",
+]
+
 ["sync-devcontainer:images-test"]
 description = "Synchronize the images-test devcontainer"
 shell = "bash -o pipefail -c"

@@ -47,11 +47,6 @@ for (const role of ["anonymous", "member", "owner"]) {
           await expect(
             page.locator("main .editor-actions, main .editor-buttons"),
           ).toHaveCount(0);
-          await expect(
-            page
-              .locator("main p > a")
-              .filter({ hasText: /^Zurück (?:zum|zur)/ }),
-          ).toHaveCount(1);
         } else {
           await expect(page.getByRole("heading", { level: 1 })).toHaveText(
             role === "anonymous"
@@ -63,6 +58,13 @@ for (const role of ["anonymous", "member", "owner"]) {
           ).toHaveCount(0);
           await expect(page.locator("main a[href^='/oauth2/']")).toHaveCount(0);
         }
+        const [backName, backHref] =
+          pageKind === "edit"
+            ? ["Zurück zum Rezept", "/recipe/recipe-1"]
+            : ["Zurück zur Übersicht", "/"];
+        await expect(
+          page.getByRole("link", { name: backName, exact: true }),
+        ).toHaveAttribute("href", backHref);
         await expect
           .poll(() =>
             page.evaluate(
