@@ -90,9 +90,17 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
-tailwindSources:
-  - index.html
-  - src
+docker:
+  ignore:
+    - tests/
+    - review/
+    - prettier.config.cjs
+tailwind:
+  sources:
+    - index.html
+    - src
+  ignore:
+    - src/Api
 prettier:
   ignore:
     - "*.elm"
@@ -111,3 +119,4 @@ check: |
   pnpm exec elm --version
   pnpm build
   pnpm lint
+test: pnpm test

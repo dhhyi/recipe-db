@@ -26,13 +26,11 @@ ENV PATH="/opt/zig:${PATH}"
 COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 COPY build.zig .
-COPY generate_operations.py test_generate_operations.py recipe-db.graphqls ./
+COPY generate_operations.py recipe-db.graphqls ./
 COPY src src
 ENV PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
 RUN --mount=type=cache,id=search-zig-${TARGETARCH},target=/root/.cache/zig,sharing=locked \
   python3 generate_operations.py \
-  && python3 -m unittest -v \
-  && zig build test -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe \
   && zig build -Dcpu="$ZIG_CPU" -Doptimize=ReleaseSafe
 
 FROM debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4

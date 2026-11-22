@@ -9,6 +9,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME"/../*.sh .scripts/
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/ignore-rules.sh" .scripts/lib/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
   mkdir -p .mise/tasks
   cp "$BATS_TEST_DIRNAME/../../.mise/tasks/"*.toml .mise/tasks/
@@ -22,6 +23,7 @@ setup() {
   git init -q
   printf '%s\n' '*.tmp' > .gitignore
   printf '%s\n' 'name: example' '---' 'category: backend' > example/.project.yaml
+  printf '%s\n' 'name: design' '---' 'category: frontend' > design/.project.yaml
   cat > design/Dockerfile << 'EOF'
 # BEGIN generated Tailwind Docker inputs
 # END generated Tailwind Docker inputs
@@ -520,7 +522,7 @@ EOF
 
 @test "Tailwind generation skips source content edits but tracks metadata and generated outputs" {
   mkdir example/templates
-  printf '%s\n' 'tailwindSources: [templates]' >> example/.project.yaml
+  printf '%s\n' 'tailwind: {sources: [templates]}' >> example/.project.yaml
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   [[ $output == *"Writing "* ]]
@@ -534,7 +536,7 @@ EOF
   [ "$(stat -c %y design/src/tailwind-sources.css)" = "$css_mtime" ]
   [ "$(stat -c %y design/Dockerfile)" = "$docker_mtime" ]
 
-  for file in design/src/tailwind-sources.css design/Dockerfile; do
+  for file in design/src/tailwind-sources.css design/Dockerfile design/Dockerfile.dockerignore; do
     printf '\n# changed\n' >> "$file"
     run mise run --raw sync-tailwind
     [ "$status" -eq 0 ]
@@ -547,12 +549,23 @@ EOF
   [ "$status" -eq 0 ]
   [ -s design/src/tailwind-sources.css ]
 
+  rm design/Dockerfile.dockerignore
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  [ -s design/Dockerfile.dockerignore ]
+
   mkdir second
   touch second/page.html
-  printf '%s\n' 'name: second' '---' 'tailwindSources: [page.html]' > second/.project.yaml
+  printf '%s\n' 'name: second' '---' 'tailwind: {sources: [page.html]}' > second/.project.yaml
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   grep -Fx '@source "../../second/page.html";' design/src/tailwind-sources.css
+
+  printf '%s\n' 'name: second' '---' 'tailwind: {sources: [page.html], ignore: [ignored.html]}' > second/.project.yaml
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  grep -Fx '@source not "../../second/ignored.html";' design/src/tailwind-sources.css
+  grep -Fx '/second/ignored.html' design/Dockerfile.dockerignore
 
   rm second/.project.yaml
   run mise run --raw sync-tailwind
@@ -563,7 +576,7 @@ EOF
 @test "Tailwind cache hits still reject missing files and directories without changing outputs" {
   mkdir example/templates
   touch example/page.html
-  printf '%s\n' 'tailwindSources: [templates, page.html]' >> example/.project.yaml
+  printf '%s\n' 'tailwind: {sources: [templates, page.html]}' >> example/.project.yaml
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   cp design/src/tailwind-sources.css expected.css

@@ -24,8 +24,6 @@ RUN cd /tmp/io && mkdir build && cd build \
 ENV PATH=${PATH}:${HOME}/.local/bin:${HOME}/.eerie/base/bin
 ENV LD_LIBRARY_PATH=${HOME}/.local/lib
 ENV EERIEDIR=${HOME}/.eerie
-COPY tests/coroutines.io /tmp/coroutines.io
-RUN timeout 10 io /tmp/coroutines.io
 
 RUN cd /tmp/io/build && io setup.io
 WORKDIR ${HOME}

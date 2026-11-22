@@ -96,8 +96,9 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 dockerContext: "."
-tailwindSources:
-  - src/components
+tailwind:
+  sources:
+    - src/components
 format:
   - check: format-check-copy 'for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end' $argv
     apply: for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end
@@ -117,8 +118,17 @@ format:
 check: |
   pnpm --version
   pnpm exec storybook --version
+  pnpm exec tsc
   pnpm build
 test: pnpm test
+docker:
+  ignore:
+    - src/tests
+    - eslint.config.js
+    - vitest.config.ts
+    - vitest.storybook.config.ts
+    - vitest.storybook.setup.ts
+    - vitest.visual-touch.config.ts
 prettier:
   ignore:
     - nginx.conf

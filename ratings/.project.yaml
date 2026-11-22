@@ -74,6 +74,9 @@ traefik:
 category: backend
 backupRole: cleanup-participant
 storageVersion: 1
+docker:
+  ignore:
+    - tests/
 prettier:
   ignore:
     - "*.io"

@@ -8,6 +8,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../"*.sh .scripts/
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/ignore-rules.sh" .scripts/lib/
   cp -R "$BATS_TEST_DIRNAME/../templates" .scripts/
   yq -p toml -o toml 'del(.hooks)' "$root/mise.toml" > mise.toml
   mkdir -p .mise/tasks
@@ -23,6 +24,7 @@ setup() {
   git init -q
   printf '%s\n' '*.tmp' > .gitignore
   mkdir -p fixtures graphql/src mcp design/src
+  printf '%s\n' 'devcontainer: {}' 'traefik: {}' '---' 'category: frontend' > design/.project.yaml
   cat > design/Dockerfile << 'EOF'
 # BEGIN generated Tailwind Docker inputs
 # END generated Tailwind Docker inputs

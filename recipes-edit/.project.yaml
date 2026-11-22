@@ -101,9 +101,13 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
-tailwindSources:
-  - index.html
-  - src
+docker:
+  ignore:
+    - src/test/
+tailwind:
+  sources:
+    - index.html
+    - src/main
 format:
   - check: format-check-copy 'for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end' $argv
     apply: for file in $argv; nginx-formatter -indent=4 -input "$file"; or exit $status; end
