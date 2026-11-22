@@ -37,6 +37,12 @@ project_prettier_ignores() {
     "$1/.project.yaml"
 }
 
+project_docker_ignores() {
+  mise exec -- yq -r \
+    'select(documentIndex == 1) | .docker.ignore // [] | .[]' \
+    "$1/.project.yaml"
+}
+
 echo "Writing .dockerignore ..."
 {
   echo "$warning"
@@ -102,6 +108,7 @@ for project in $projects; do
   [ -f "$project/Dockerfile" ] || continue
 
   echo "Writing $project/.dockerignore ..."
+  extra_ignores=$(project_docker_ignores "$project")
   {
     echo "$warning"
     echo
@@ -110,6 +117,9 @@ for project in $projects; do
     if [ -f "$project/.gitignore" ]; then
       cat "$project/.gitignore"
       echo
+    fi
+    if [ -n "$extra_ignores" ]; then
+      printf '%s\n\n' "$extra_ignores"
     fi
     echo .project.yaml
     cat << 'EOF'

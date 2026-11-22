@@ -5,7 +5,7 @@ load test_helper
 setup() {
   setup_fixture sync-ignore-files.sh
   use_mise_tools
-  mkdir -p example config-only
+  mkdir -p example no-extra config-only
   printf '%s\n' node_modules recipe-db.graphqls > .gitignore
   cat > example/.project.yaml << 'EOF'
 name: example
@@ -14,9 +14,14 @@ storageVersion: 1
 prettier:
   ignore:
     - generated/
+docker:
+  ignore:
+    - "**/*_test.go"
+    - "!src/keep_test.go"
 EOF
+  printf '%s\n' 'name: no-extra' '---' '{}' > no-extra/.project.yaml
   printf '%s\n' 'name: config-only' '---' '{}' > config-only/.project.yaml
-  touch example/Dockerfile
+  touch example/Dockerfile no-extra/Dockerfile
   cat > example/.gitignore << 'EOF'
 # project ignores
 /target
@@ -48,6 +53,9 @@ EOF
   grep -Fx node_modules example/.dockerignore
   grep -Fx /target example/.dockerignore
   grep -Fx .project.yaml example/.dockerignore
+  [ "$(grep -A 1 -Fx '**/*_test.go' example/.dockerignore)" = "$(printf '%s\n' '**/*_test.go' '!src/keep_test.go')" ]
+  run -1 grep -Fx '**/*_test.go' no-extra/.dockerignore
+  run -1 grep -Fx '**/*_test.go' .dockerignore
   [ ! -e config-only/.dockerignore ]
 }
 

@@ -65,6 +65,8 @@ Run `mise run test-scripts .scripts/tests/mise-tasks.bats` to verify project cov
 
 `mise run sync-ignore-files` skips unchanged inputs. It tracks root ignore rules, project metadata, project ignore rules, and Dockerfiles; missing generated ignore files trigger regeneration. Creating an obsolete project `.prettierignore` triggers its removal.
 
+Declare additional Docker ignore patterns in the second document of a project's `.project.yaml` under `docker.ignore`. The generator adds them to that project's `.dockerignore` for project-local build contexts; repository-root contexts use the root `.dockerignore` instead. Use Docker ignore syntax and preserve files required by the build.
+
 ## Generated source synchronization
 
 `mise run merge-graphql-schemas` tracks the canonical cached SDL and project metadata, deriving consumer output paths from `graphqlSchema`. Distribution skips unchanged copies and repairs edited or missing copies. The schema-export prerequisite still checks whether the canonical SDL needs rebuilding before distribution can skip.
