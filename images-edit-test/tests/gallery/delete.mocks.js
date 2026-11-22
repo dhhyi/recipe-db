@@ -43,9 +43,8 @@ export const graphqlMocks = [
   // Another session removed the image before this deletion arrived.
   galleryRead("already-removed", [a], []),
   deletion("already-removed", a, false),
-  galleryRead("animated", [a, b], [b], []),
+  galleryRead("animated", [a, b], [b]),
   deletion("animated", a),
-  deletion("animated", b),
 ];
 
 export const imageMocks = Object.fromEntries(

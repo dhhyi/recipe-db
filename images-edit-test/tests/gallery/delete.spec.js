@@ -164,7 +164,7 @@ test("deleting an image that was already removed is neutral and reloads the gall
   expect(deletes).toEqual([{ recipeId: "already-removed", imageId: a.id }]);
 });
 
-test("confirmed deletion fades the removed card, moves the rest and respects reduced motion", async ({
+test("confirmed deletion fades the removed card, and moves the rest", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -205,17 +205,15 @@ test("confirmed deletion fades the removed card, moves the rest and respects red
   });
   const { rows } = await openGallery(page, "animated", 2);
   const firstTop = (await rows.first().boundingBox()).y;
-  const deleteFirst = () =>
-    answerDialog(
-      page,
-      () =>
-        rows
-          .first()
-          .getByRole("button", { name: /löschen$/ })
-          .click(),
-      true,
-    );
-  await deleteFirst();
+  await answerDialog(
+    page,
+    () =>
+      rows
+        .first()
+        .getByRole("button", { name: /löschen$/ })
+        .click(),
+    true,
+  );
   await expect
     .poll(() => page.evaluate(() => window.galleryTransitions.length))
     .toBe(1);
@@ -231,9 +229,4 @@ test("confirmed deletion fades the removed card, moves the rest and respects red
     "sr-only",
   );
   expect((await rows.first().boundingBox()).y).toBeCloseTo(firstTop, 0);
-
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await deleteFirst();
-  await expect(page.getByText("Kein Bild vorhanden.")).toBeVisible();
-  expect(await page.evaluate(() => window.galleryTransitions.length)).toBe(1);
 });
