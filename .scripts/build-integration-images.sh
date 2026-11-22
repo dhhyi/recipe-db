@@ -15,8 +15,11 @@ build_metadata="$output_directory/integration-build-metadata.json"
 
 docker compose "${compose_arguments[@]}" config --format json > "$compose_config"
 mapfile -t external_services < <(
-  jq -r '.services | to_entries[]
-    | select((.value.image | type) == "string" and .value.build == null)
+  jq -r '.services | to_entries as $services
+    | [$services[] | select(.value.build != null) | .value.image] as $built_images
+    | $services[]
+    | select((.value.image | type) == "string" and .value.build == null
+      and (.value.image as $image | $built_images | index($image) == null))
     | .key' "$compose_config" | LC_ALL=C sort
 )
 if ((${#external_services[@]})); then

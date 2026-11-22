@@ -138,7 +138,7 @@ EOF
 printf '%s\n' "$*" >> "$DOCKER_CALLS"
 case "$*" in
   'compose --profile development --profile test config --format json')
-    printf '%s\n' '{"services":{"app":{"build":{"context":"app"},"image":"app:latest"},"nats":{"image":"nats:latest"}}}'
+    printf '%s\n' '{"services":{"app":{"build":{"context":"app"},"image":"app:latest"},"app-init":{"image":"app:latest"},"nats":{"image":"nats:latest"}}}'
     ;;
 'compose --profile development --profile test pull nats') ;;
 'compose --progress plain --profile development --profile test build --print')
