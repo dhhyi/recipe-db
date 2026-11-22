@@ -623,7 +623,7 @@ async def test_recipe_image_stream_is_bounded_without_content_length():
 
 
 @asynccontextmanager
-async def ignored_images(http):
+async def ignored_services(http):
     async def set_ignored(names):
         response = await http.post(
             GRAPHQL_URL,
@@ -638,40 +638,53 @@ async def ignored_images(http):
         assert result["data"]["setIgnoredServices"] == names
 
     try:
-        await set_ignored(["images"])
-        yield
-    finally:
         await set_ignored([])
+        yield set_ignored
+    finally:
+        with anyio.fail_after(10, shield=True):
+            await set_ignored([])
 
 
-@pytest.mark.parametrize("failure", ["setup", "body"])
+@pytest.mark.parametrize("failure", ["initial", "setup", "body", "cancel"])
 async def test_ignored_images_cleans_up_after_failure(failure):
     requests = []
 
-    def respond(request):
+    async def respond(request):
+        await anyio.sleep(0)
         names = json.loads(request.content)["variables"]["names"]
         requests.append(names)
-        if names and failure == "setup":
+        if (failure == "initial" and len(requests) == 1) or (
+            names and failure == "setup"
+        ):
             return httpx.Response(200, json={"errors": [{"message": "setup failed"}]})
         return httpx.Response(200, json={"data": {"setIgnoredServices": names}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
-        with pytest.raises(AssertionError):
-            async with ignored_images(http):
-                assert failure != "body"
-    assert requests == [["images"], []]
+        if failure == "cancel":
+            with anyio.CancelScope() as scope:
+                async with ignored_services(http) as set_ignored:
+                    await set_ignored(["images"])
+                    scope.cancel()
+                    await anyio.sleep(0)
+        else:
+            with pytest.raises(AssertionError):
+                async with ignored_services(http) as set_ignored:
+                    await set_ignored(["images"])
+                    assert failure != "body"
+    assert requests == ([[], []] if failure == "initial" else [[], ["images"], []])
 
 
 async def test_recipe_images_outage_preserves_recipe_and_reports_write_failure():
     async with mcp_session() as session:
         name = "Image service outage"
-        recipe_id = await create_recipe(session, name)
         token = AUTH_TOKENS.get("owner") or MCP_API_TOKEN
         async with httpx.AsyncClient(
             headers={**TRAEFIK_HEADERS, "Authorization": "Bearer " + token},
             timeout=30,
         ) as http:
-            async with ignored_images(http):
+            async with ignored_services(http) as set_ignored:
+                recipe_id = await create_recipe(session, name)
+                await set_ignored(["images"])
                 result = await call_image_tool(session, "get_recipe", recipe_id)
                 assert result["recipe"]["name"] == name
                 assert result["recipe"]["images"] is None
@@ -690,6 +703,7 @@ async def test_recipe_images_outage_preserves_recipe_and_reports_write_failure()
                     assert failure.is_error is True
                     assert "service-unavailable" in failure.content[0].text
                     assert "(status: 503)" in failure.content[0].text
+            assert (await call_image_tool(session, "get_recipe", recipe_id))["images"] == []
 
 
 async def test_add_rating_updates_the_recipe_rating():
