@@ -6,7 +6,7 @@ ARG JAVA_VERSION
 FROM maven:${MAVEN_VERSION}-eclipse-temurin-${JAVA_VERSION}@sha256:c665c1041e0c6e28bc7d1b41254622c79cf0b3ac63b519be8b789b05b6f69661
 
 WORKDIR /app
-COPY pom.xml eclipse-formatter.xml ./
+COPY pom.xml ./
 COPY src ./src
 RUN mkdir -p /opt/maven-repo \
   && mvn -Dmaven.repo.local=/opt/maven-repo \
