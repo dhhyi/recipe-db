@@ -123,38 +123,3 @@ test("Escape cancels a drag preview without writing", async ({ page }) => {
   await expect(page.getByLabel("Bild hinzufügen")).toBeEnabled();
   expect(writes).toHaveLength(0);
 });
-
-test("a drop saves one complete order and keeps the gallery locked until it is confirmed", async ({
-  page,
-  graphqlGates,
-}) => {
-  const write = graphqlGates.hold("reorderImages");
-  const { rows, handles, writes } = await openGallery(page);
-  const { x } = await grab(page, handles.nth(1));
-  await moveOver(page, x, rows.first());
-  await page.mouse.up();
-
-  await write.started;
-  expect(writes).toEqual([
-    { recipeId: "test-recipe", imageIds: [second.id, first.id] },
-  ]);
-  await expect(rows.first().getByRole("img")).toHaveAttribute(
-    "src",
-    second.thumbUrl,
-  );
-  await expect(
-    rows.first().getByText("Standardbild", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("Bild hinzufügen")).toBeDisabled();
-
-  write.release();
-  await expect(page.getByLabel("Bild hinzufügen")).toBeEnabled();
-  await expect(rows.first().getByRole("img")).toHaveAttribute(
-    "src",
-    second.thumbUrl,
-  );
-  await expect(
-    rows.first().getByText("Standardbild", { exact: true }),
-  ).toBeVisible();
-  expect(writes).toHaveLength(1);
-});

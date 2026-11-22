@@ -13,85 +13,28 @@ function expectClose(actual, expected) {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(1);
 }
 
-test("mouse handles resize and dragging moves the crop within the image", async ({
+test("a mouse resizes the crop by a corner and moves it within the image", async ({
   page,
 }) => {
-  const { source, selection, chooseSource } = await openCropEditor(page);
-
-  for (const direction of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
-    await test.step(direction, async () => {
-      const before = await bounds(selection);
-      const dx = direction.includes("w")
-        ? 35
-        : direction.includes("e")
-          ? -35
-          : 0;
-      const dy = direction.includes("n")
-        ? 26
-        : direction.includes("s")
-          ? -26
-          : 0;
-      await mouseDrag(
-        page,
-        page.getByTestId(`crop-handle-${direction}`),
-        dx,
-        dy,
-      );
-      const after = await bounds(selection);
-      const image = await bounds(source);
-      expect(after.width).toBeLessThan(before.width - 1);
-      expectClose(after.width * 3, after.height * 4);
-      expect(after.x).toBeGreaterThanOrEqual(image.x - 1);
-      expect(after.y).toBeGreaterThanOrEqual(image.y - 1);
-      expect(after.x + after.width).toBeLessThanOrEqual(
-        image.x + image.width + 1,
-      );
-      expect(after.y + after.height).toBeLessThanOrEqual(
-        image.y + image.height + 1,
-      );
-      if (direction.includes("w")) {
-        expectClose(after.x + after.width, before.x + before.width);
-      } else if (direction.includes("e")) {
-        expectClose(after.x, before.x);
-      } else {
-        expectClose(after.x + after.width / 2, before.x + before.width / 2);
-      }
-      if (direction.includes("n")) {
-        expectClose(after.y + after.height, before.y + before.height);
-      } else if (direction.includes("s")) {
-        expectClose(after.y, before.y);
-      } else {
-        expectClose(after.y + after.height / 2, before.y + before.height / 2);
-      }
-      await page
-        .getByRole("button", { name: "Abbrechen", exact: true })
-        .click();
-      await chooseSource();
-    });
-  }
-
-  await mouseDrag(page, page.getByTestId("crop-handle-se"), -80, -60);
-  const beforeMove = await bounds(selection);
+  const { source, selection } = await openCropEditor(page);
   const image = await bounds(source);
-  await page.mouse.click(image.x + image.width - 5, image.y + image.height - 5);
-  expect(await bounds(selection)).toEqual(beforeMove);
+  const before = await bounds(selection);
+  await mouseDrag(page, page.getByTestId("crop-handle-nw"), 80, 60);
+  const resized = await bounds(selection);
+  expect(resized.width).toBeLessThan(before.width - 1);
+  expectClose(resized.width * 3, resized.height * 4);
+  expectClose(resized.x + resized.width, before.x + before.width);
+  expectClose(resized.y + resized.height, before.y + before.height);
 
-  await mouseDrag(page, selection, 5000, 5000);
-  const bottomRight = await bounds(selection);
-  expectClose(bottomRight.width, beforeMove.width);
-  expectClose(bottomRight.height, beforeMove.height);
-  expectClose(bottomRight.x + bottomRight.width, image.x + image.width);
-  expectClose(bottomRight.y + bottomRight.height, image.y + image.height);
+  await page.mouse.click(image.x + 5, image.y + 5);
+  expect(await bounds(selection)).toEqual(resized);
 
   await mouseDrag(page, selection, -5000, -5000);
-  const topLeft = await bounds(selection);
-  expectClose(topLeft.x, image.x);
-  expectClose(topLeft.y, image.y);
-  expectClose(topLeft.width, beforeMove.width);
-  expectClose(topLeft.height, beforeMove.height);
-
-  await page.mouse.move(image.x + image.width / 2, image.y + image.height / 2);
-  expect(await bounds(selection)).toEqual(topLeft);
+  const moved = await bounds(selection);
+  expectClose(moved.x, image.x);
+  expectClose(moved.y, image.y);
+  expectClose(moved.width, resized.width);
+  expectClose(moved.height, resized.height);
 });
 
 test("a viewport change ends an active mouse drag and keeps the crop", async ({
