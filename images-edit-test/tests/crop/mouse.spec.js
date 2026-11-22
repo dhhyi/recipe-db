@@ -99,7 +99,11 @@ test("a viewport change ends an active mouse drag and keeps the crop", async ({
 }) => {
   const { selection, crop } = await openCropEditor(page);
   await mouseDrag(page, page.getByTestId("crop-handle-se"), -65, -48);
+  // Leave room towards the top-left so a still-active drag would move it.
+  await mouseDrag(page, selection, 30, 22);
   const before = await crop();
+  expect(before.x).toBeGreaterThan(20);
+  expect(before.y).toBeGreaterThan(20);
 
   await selection.scrollIntoViewIfNeeded();
   const active = await bounds(selection);
