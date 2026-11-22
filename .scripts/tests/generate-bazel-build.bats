@@ -292,7 +292,7 @@ EOF
 }
 
 @test "manual integration suites are excluded from wildcard Bazel builds" {
-  command -v bazel
+  bazel_bin=$(command -v bazel || command -v bazelisk)
   printf '%s\n' '8.5.0' > .bazelversion
   : > MODULE.bazel
   mkdir -p manual-suite
@@ -306,7 +306,7 @@ genrule(
 )
 EOF
 
-  run bazel \
+  run "$bazel_bin" --batch \
     --output_user_root="$BATS_TEST_TMPDIR/bazel-user-root" \
     --output_base="$BATS_TEST_TMPDIR/bazel-default-build" \
     build //manual-suite:all
@@ -314,7 +314,7 @@ EOF
 }
 
 @test "real Bazel suite actions reuse identity-matched results and retry failures" {
-  command -v bazel
+  bazel_bin=$(command -v bazel || command -v bazelisk)
   printf '%s\n' '8.5.0' > .bazelversion
   : > MODULE.bazel
   mkdir -p app app-other suite-test suite-other .generated/integration-identities
@@ -370,7 +370,7 @@ EOF
 
   run_suite_build() {
     local base=$1 target=$2
-    bazel \
+    "$bazel_bin" --batch \
       --output_user_root="$BATS_TEST_TMPDIR/bazel-user-root" \
       --output_base="$BATS_TEST_TMPDIR/$base" \
       build --disk_cache="$cache" \
