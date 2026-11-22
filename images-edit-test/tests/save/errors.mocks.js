@@ -49,14 +49,12 @@ export const graphqlMocks = [
       {
         errors: [
           {
-            // GraphQL could not reach the images service, e.g. during a restart.
+            // GraphQL could not connect to the images service, e.g. during a restart.
             message: "images service is unavailable",
             extensions: {
               code: "service-unavailable",
               status: 503,
               service: "images",
-              dispatched: false,
-              outcome: "not-dispatched",
             },
           },
         ],
