@@ -37,8 +37,8 @@ case "$write_cache" in
     ;;
 esac
 case "$build_cache_mode" in
-  "" | main)
-    ;;
+  "" | main) ;;
+
   pr)
     case "$pull_request_number" in
       '' | *[!0-9]*)

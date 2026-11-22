@@ -53,8 +53,8 @@ case "${1:-compose}" in
     build_cache_mode=${BUILD_CACHE_MODE:-}
     pull_request_number=${PR_NUMBER:-}
     case "$build_cache_mode" in
-      "" | main)
-        ;;
+      "" | main) ;;
+
       pr)
         if [[ ! $pull_request_number =~ ^[0-9]+$ ]]; then
           printf 'PR_NUMBER must be numeric when BUILD_CACHE_MODE=pr\n' >&2
