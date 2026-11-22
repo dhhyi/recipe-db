@@ -112,11 +112,25 @@
         }
       }
     },
-    "tailwindSources": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
+    "tailwind": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_.*?/-]+$",
+            "description": "Project-relative path or glob using *, ** or ?; excluded from Tailwind scanning and the Design Docker context."
+          }
+        }
       }
     },
     "generate": {

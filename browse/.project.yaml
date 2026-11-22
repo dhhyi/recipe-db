@@ -89,8 +89,13 @@ docker:
     - "**/*_test.go"
     - "**/*_templ.go"
     - src/generated/
-tailwindSources:
-  - src
+tailwind:
+  sources:
+    - src
+  ignore:
+    - src/**/*_test.go
+    - src/**/*_templ.go
+    - src/generated
 generate:
   - command: go run github.com/Khan/genqlient@main
     output: src/generated/graphql.go

@@ -14,17 +14,22 @@ setup() {
   cat > design/.project.yaml << 'EOF'
 name: design
 ---
-tailwindSources:
-  - src/component.html
-  - outside.html
+tailwind:
+  sources:
+    - src/component.html
+    - outside.html
 docker:
   ignore: [src/tests, "!src/tests/keep.ts"]
 EOF
   cat > example/.project.yaml << 'EOF'
 name: example
 ---
-tailwindSources:
-  - templates
+tailwind:
+  sources:
+    - templates
+  ignore:
+    - templates/**/*_test.go
+    - templates/generated/
 EOF
   cat > design/Dockerfile << 'EOF'
 FROM scratch
@@ -45,6 +50,8 @@ EOF
 @source "../../example/templates";
 @source "../outside.html";
 @source "component.html";
+@source not "../../example/templates/**/*_test.go";
+@source not "../../example/templates/generated";
 EOF
   cmp expected.css design/src/tailwind-sources.css
   grep -Fx 'COPY ["example/templates","/example/templates"]' design/Dockerfile
@@ -54,6 +61,8 @@ EOF
   grep -Fx 'RUN echo preserved' design/Dockerfile
   grep -Fx '/example/*' design/Dockerfile.dockerignore
   grep -Fx '!/example/templates/**' design/Dockerfile.dockerignore
+  grep -Fx '/example/templates/**/*_test.go' design/Dockerfile.dockerignore
+  grep -Fx '/example/templates/generated' design/Dockerfile.dockerignore
   grep -Fx 'root-secret' design/Dockerfile.dockerignore
   grep -Fx '/design/root-secret' design/Dockerfile.dockerignore
   grep -Fx '/design/.dockerignore' design/Dockerfile.dockerignore
@@ -73,7 +82,7 @@ EOF
   printf '%s\n' sentinel > design/src/tailwind-sources.css
   printf '%s\n' sentinel > design/Dockerfile.dockerignore
   for source in /tmp ../outside templates/../outside templates/.. ..; do
-    printf 'name: example\n---\ntailwindSources:\n  - %s\n' "$source" > example/.project.yaml
+    printf 'name: example\n---\ntailwind:\n  sources:\n    - %s\n' "$source" > example/.project.yaml
 
     run --separate-stderr sh .scripts/sync-tailwind.sh
 
@@ -86,13 +95,30 @@ EOF
 }
 
 @test "rejects missing sources" {
-  printf '%s\n' 'name: example' '---' 'tailwindSources: [missing]' > example/.project.yaml
+  printf '%s\n' 'name: example' '---' 'tailwind: {sources: [missing]}' > example/.project.yaml
 
   run --separate-stderr sh .scripts/sync-tailwind.sh
 
   [ "$status" -eq 1 ]
   [ "$stderr" = "Tailwind source example/missing must be an existing file or directory" ]
   [ ! -e design/src/tailwind-sources.css ]
+}
+
+@test "rejects invalid ignore patterns without changing outputs" {
+  cp design/Dockerfile expected.Dockerfile
+  printf '%s\n' sentinel > design/src/tailwind-sources.css
+  printf '%s\n' sentinel > design/Dockerfile.dockerignore
+  for pattern in '' /outside ../outside templates/../outside '!templates/keep' 'templates/[abc]'; do
+    printf 'name: example\n---\ntailwind:\n  ignore:\n    - "%s"\n' "$pattern" > example/.project.yaml
+
+    run sh .scripts/sync-tailwind.sh
+
+    [ "$status" -eq 1 ]
+    [[ $output == *"Tailwind "* ]]
+    cmp expected.Dockerfile design/Dockerfile
+    [ "$(cat design/src/tailwind-sources.css)" = sentinel ]
+    [ "$(cat design/Dockerfile.dockerignore)" = sentinel ]
+  done
 }
 
 @test "source validation does not write generated files and reports malformed metadata" {

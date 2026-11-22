@@ -13,7 +13,7 @@ COPY ["browse/src","/browse/src"]
 COPY ["images-edit/index.html","/images-edit/index.html"]
 COPY ["images-edit/src","/images-edit/src"]
 COPY ["recipes-edit/index.html","/recipes-edit/index.html"]
-COPY ["recipes-edit/src","/recipes-edit/src"]
+COPY ["recipes-edit/src/main","/recipes-edit/src/main"]
 # END generated Tailwind Docker inputs
 RUN pnpm build
 

@@ -95,9 +95,12 @@ docker:
     - tests/
     - review/
     - prettier.config.cjs
-tailwindSources:
-  - index.html
-  - src
+tailwind:
+  sources:
+    - index.html
+    - src
+  ignore:
+    - src/Api
 prettier:
   ignore:
     - "*.elm"

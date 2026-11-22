@@ -119,7 +119,7 @@ for project_file in */.project.yaml; do
           files+=("$file")
           included_files["$file"]=1
         done < <(git ls-files --cached --others --exclude-standard -z -- "$source_path" | sort -z)
-      done < <(yq eval-all -r 'select(documentIndex == 1) | .tailwindSources // [] | .[]' "$source_project_file")
+      done < <(yq eval-all -r 'select(documentIndex == 1) | .tailwind.sources // [] | .[]' "$source_project_file")
     done
   fi
 

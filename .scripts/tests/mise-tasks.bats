@@ -522,7 +522,7 @@ EOF
 
 @test "Tailwind generation skips source content edits but tracks metadata and generated outputs" {
   mkdir example/templates
-  printf '%s\n' 'tailwindSources: [templates]' >> example/.project.yaml
+  printf '%s\n' 'tailwind: {sources: [templates]}' >> example/.project.yaml
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   [[ $output == *"Writing "* ]]
@@ -556,10 +556,16 @@ EOF
 
   mkdir second
   touch second/page.html
-  printf '%s\n' 'name: second' '---' 'tailwindSources: [page.html]' > second/.project.yaml
+  printf '%s\n' 'name: second' '---' 'tailwind: {sources: [page.html]}' > second/.project.yaml
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   grep -Fx '@source "../../second/page.html";' design/src/tailwind-sources.css
+
+  printf '%s\n' 'name: second' '---' 'tailwind: {sources: [page.html], ignore: [ignored.html]}' > second/.project.yaml
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  grep -Fx '@source not "../../second/ignored.html";' design/src/tailwind-sources.css
+  grep -Fx '/second/ignored.html' design/Dockerfile.dockerignore
 
   rm second/.project.yaml
   run mise run --raw sync-tailwind
@@ -570,7 +576,7 @@ EOF
 @test "Tailwind cache hits still reject missing files and directories without changing outputs" {
   mkdir example/templates
   touch example/page.html
-  printf '%s\n' 'tailwindSources: [templates, page.html]' >> example/.project.yaml
+  printf '%s\n' 'tailwind: {sources: [templates, page.html]}' >> example/.project.yaml
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   cp design/src/tailwind-sources.css expected.css
