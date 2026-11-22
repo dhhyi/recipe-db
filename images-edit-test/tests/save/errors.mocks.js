@@ -4,7 +4,11 @@ export const identityHtml =
   '<header-component auth-role="owner"></header-component>';
 
 export const source = pngFile(800, 450);
-export const crop = { x: 100, y: 0, width: 600, height: 450 };
+export const defaultCrop = { x: 100, y: 0, width: 600, height: 450 };
+// Minimum size moved to the bottom-right corner; both drags clamp, so it is viewport-independent.
+export const crop = { x: 500, y: 225, width: 300, height: 225 };
+const existing = { id: "existing", thumbUrl: "/images/existing-thumb.png" };
+const saved = { id: "saved", thumbUrl: "/images/saved-thumb.png" };
 
 export const graphqlMocks = [
   {
@@ -22,15 +26,8 @@ export const graphqlMocks = [
     }`,
     variables: {},
     responses: [
-      { data: { recipe: { name: "Testrezept", images: [] } } },
-      {
-        data: {
-          recipe: {
-            name: "Testrezept",
-            images: [{ id: "saved", thumbUrl: "/images/saved-thumb.png" }],
-          },
-        },
-      },
+      { data: { recipe: { name: "Testrezept", images: [existing] } } },
+      { data: { recipe: { name: "Testrezept", images: [saved, existing] } } },
     ],
   },
   {
@@ -52,8 +49,12 @@ export const graphqlMocks = [
       {
         errors: [
           {
-            message: "Invalid crop rectangle",
-            extensions: { code: "invalid-crop", status: 400, field: "crop" },
+            message: "Crop width must be positive",
+            extensions: {
+              code: "invalid-crop",
+              status: 400,
+              field: "cropWidth",
+            },
           },
         ],
       },
@@ -72,7 +73,13 @@ export const graphqlMocks = [
   },
 ];
 
+export const images = { existing, saved };
+
 export const imageMocks = {
+  "/images/existing-thumb.png": {
+    contentType: "image/png",
+    body: pngFile(8, 6).buffer,
+  },
   "/images/saved-thumb.png": {
     contentType: "image/png",
     body: pngFile(4, 3).buffer,

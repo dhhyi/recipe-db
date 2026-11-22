@@ -1,9 +1,12 @@
 import { test, expect } from "../../fixtures.js";
+import { mouseDrag } from "../crop/crop.helpers.js";
 import {
   crop,
+  defaultCrop,
   graphqlMocks,
   identityHtml,
   imageMocks,
+  images,
   source,
 } from "./errors.mocks.js";
 
@@ -30,7 +33,7 @@ const selectedCrop = (selection) =>
     };
   });
 
-test("a rejected save keeps the crop editor and retries with the same crop", async ({
+test("a rejected save keeps the adjusted crop and retries with it", async ({
   page,
 }) => {
   let uploads = 0;
@@ -39,23 +42,28 @@ test("a rejected save keeps the crop editor and retries with the same crop", asy
   });
   await page.goto("/images-edit/test-recipe");
   const add = page.getByLabel("Bild hinzufügen");
+  const gallery = page
+    .getByRole("list", { name: "Rezeptbilder" })
+    .getByRole("img");
   const selection = page.getByTestId("crop-selection");
   const save = page.getByRole("button", { name: "Speichern", exact: true });
-  await expect(add).toBeEnabled();
+  await expect(gallery).toHaveAttribute("src", images.existing.thumbUrl);
   await add.setInputFiles(source);
   await expect(selection).toBeVisible();
+  expect(await selectedCrop(selection)).toEqual(defaultCrop);
+  await mouseDrag(page, page.getByTestId("crop-handle-se"), -2000, -2000);
+  await mouseDrag(page, selection, 2000, 2000);
   expect(await selectedCrop(selection)).toEqual(crop);
 
   await save.click();
-  await expect(page.getByRole("alert")).toHaveText(
-    "Der Zuschnitt wurde ungültig übertragen. Bitte den Zuschnitt anpassen und erneut speichern. Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten.",
+  await expect(page.getByRole("alert")).toContainText(
+    "Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten.",
   );
+  await expect(selection).toBeVisible();
   expect(await selectedCrop(selection)).toEqual(crop);
   await expect(page.getByTestId("crop-source")).toBeVisible();
   await expect(add).toHaveCount(0);
-  await expect(
-    page.getByRole("list", { name: "Rezeptbilder" }).getByRole("img"),
-  ).toHaveCount(0);
+  await expect(gallery).toHaveCount(0);
   await expect(save).toHaveCount(0);
   const retry = page.getByRole("button", {
     name: "Erneut speichern",
@@ -67,9 +75,9 @@ test("a rejected save keeps the crop editor and retries with the same crop", asy
   // The fixture only answers an upload matching the exact file and crop.
   await retry.click();
   await expect(selection).toHaveCount(0);
-  await expect(
-    page.getByRole("list", { name: "Rezeptbilder" }).getByRole("img"),
-  ).toHaveAttribute("src", "/images/saved-thumb.png");
+  await expect(gallery).toHaveCount(2);
+  await expect(gallery.first()).toHaveAttribute("src", images.saved.thumbUrl);
+  await expect(gallery.nth(1)).toHaveAttribute("src", images.existing.thumbUrl);
   await expect(
     page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
   ).toBeVisible();

@@ -160,6 +160,7 @@ tests =
             [ ( "crop-out-of-bounds", "Der Zuschnitt liegt außerhalb des Bildes. Bitte den Zuschnitt anpassen und erneut speichern." )
             , ( "crop-too-small", "Der Zuschnitt ist zu klein. Mindestens 300 × 225 Pixel sind erforderlich." )
             , ( "invalid-crop-aspect-ratio", "Der Zuschnitt muss das Seitenverhältnis 4:3 haben. Bitte den Zuschnitt anpassen." )
+            , ( "invalid-crop", "Der Zuschnitt wurde ungültig übertragen. Bitte den Zuschnitt anpassen und erneut speichern." )
             , ( "invalid-image", "Das Bild konnte nicht verarbeitet werden. Bitte eine unbeschädigte JPEG- oder PNG-Datei auswählen." )
             , ( "image-limit-reached", "Das Rezept hat bereits die maximal erlaubten zehn Bilder. Das Bild wurde nicht gespeichert." )
             ]
