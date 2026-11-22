@@ -94,6 +94,7 @@ docker:
   ignore:
     - tests/
     - review/
+    - prettier.config.cjs
 tailwindSources:
   - index.html
   - src
