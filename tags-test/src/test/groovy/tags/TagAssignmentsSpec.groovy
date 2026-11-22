@@ -3,13 +3,6 @@ package tags
 import spock.lang.Unroll
 
 class TagAssignmentsSpec extends TagsApiSpec {
-	static String recipesApi
-
-	def setupSpec() {
-		recipesApi = requiredEnvironment('TAGS_RECIPES_API')
-		waitForHealth(recipesApi)
-	}
-
 	@Unroll
 	def 'invalid bulk payload #payload preserves confirmed assignments'() {
 		given:
@@ -130,33 +123,4 @@ class TagAssignmentsSpec extends TagsApiSpec {
 		removed.jsonPath().getList('').isEmpty()
 	}
 
-	def 'ordinary recipe create and edit leave independent tag assignments unchanged'() {
-		given:
-		def created = http('POST', "${recipesApi}/recipes", [name: 'Tagged recipe', servings: 2])
-		assert created.statusCode() == 201
-		def recipe = created.jsonPath().getMap('')
-		def tag = create('course', 'Main').jsonPath().getMap('')
-		String assignments = "${api}/tags/recipes/${recipe.id}"
-		assert http('PUT', "${assignments}/assignments/${tag.id}").statusCode() == 204
-
-		when:
-		def edited = http('PATCH', "${recipesApi}/recipes/${recipe.id}",
-				[name: 'Edited recipe', servings: 4], 'application/merge-patch+json')
-		def untagged = http('POST', "${recipesApi}/recipes", [name: 'Untagged recipe', servings: 1])
-		def untaggedId = untagged.jsonPath().getString('id')
-
-		then:
-		edited.statusCode() == 200
-		untagged.statusCode() == 201
-		http('GET', assignments).jsonPath().getList('id') == [tag.id]
-		http('GET', "${api}/tags/recipes/${untaggedId}").jsonPath().getList('').isEmpty()
-
-		cleanup:
-		if (recipe?.id) {
-			assert http('DELETE', "${recipesApi}/recipes/${recipe.id}").statusCode() == 204
-		}
-		if (untaggedId) {
-			assert http('DELETE', "${recipesApi}/recipes/${untaggedId}").statusCode() == 204
-		}
-	}
 }

@@ -15,9 +15,7 @@ devcontainer:
       - RUN mise use -g java@$JAVA_VERSION
   environment:
     MISE_IGNORED_CONFIG_PATHS: "/workspaces/*/mise.toml"
-    TAGS_API: http://tags-test-api:8900
-    TAGS_PRODUCTION_API: http://tags-production-test-api:8900
-    TAGS_RECIPES_API: http://tags-recipes-test-api:5000
+    TAGS_API: http://tags:8900
     FIXTURE_API: http://fixtures:80/tags-test-fixture
 vscode:
   settings:

@@ -7,14 +7,14 @@ Integration tests for the tags service, implemented in [Groovy](https://groovy-l
 | Spec | Coverage |
 | --- | --- |
 | [`TagInventorySpec`](src/test/groovy/tags/TagInventorySpec.groovy) | Inventory shape and ordering, categories, normalization, collisions, display-name validation, deletion |
-| [`TagAssignmentsSpec`](src/test/groovy/tags/TagAssignmentsSpec.groovy) | Assignment lifecycle, encoded recipe IDs, atomic bulk changes, recipe-edit independence |
+| [`TagAssignmentsSpec`](src/test/groovy/tags/TagAssignmentsSpec.groovy) | Assignment lifecycle, encoded recipe IDs, atomic bulk changes |
 | [`TagHttpContractSpec`](src/test/groovy/tags/TagHttpContractSpec.groovy) | Malformed payloads, media types, unknown routes, unsupported methods |
-| [`TagRuntimeSpec`](src/test/groovy/tags/TagRuntimeSpec.groovy) | Health, testing resets, production reset protection |
+| [`TagRuntimeSpec`](src/test/groovy/tags/TagRuntimeSpec.groovy) | Health and testing-mode resets |
 | [`TagConcurrencySpec`](src/test/groovy/tags/TagConcurrencySpec.groovy) | Concurrent creation and assignment/deletion races |
 
-The abstract [`TagsApiSpec`](src/test/groovy/tags/TagsApiSpec.groovy) shares endpoint setup, health polling, the per-test reset, and small HTTP, tag-creation, and URL-encoding helpers. Topic-specific fixtures and assertions stay in their own specs.
+The runner targets the existing development tags service over the internal network; it does not start dedicated tags or recipes API containers. The abstract [`TagsApiSpec`](src/test/groovy/tags/TagsApiSpec.groovy) shares endpoint setup, health polling, the per-test reset, and small HTTP, tag-creation, and URL-encoding helpers. Production reset protection is covered by the tags service tests.
 
-The specs share one isolated tags database and reset it before each test. [`SpockConfig.groovy`](src/test/resources/SpockConfig.groovy) disables parallel execution; keep Gradle's single-test-worker default as well. Concurrency tests create their own concurrent requests within a single test.
+The specs share the disposable development tags database and reset it before each test. [`SpockConfig.groovy`](src/test/resources/SpockConfig.groovy) disables parallel execution; keep Gradle's single-test-worker default as well. Concurrency tests create their own concurrent requests within a single test.
 
 ## Test style
 
