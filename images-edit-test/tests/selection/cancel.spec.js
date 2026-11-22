@@ -72,10 +72,15 @@ test("selecting and canceling a local image restores the saved gallery", async (
   const revokedUrls = () => page.evaluate(() => window.revokedImageEditorUrls);
   expect(await revokedUrls()).not.toContain(blobUrl);
   await expect(selection).toBeVisible();
-  await expect(selection).toHaveAttribute("data-x", "0");
-  await expect(selection).toHaveAttribute("data-y", "0");
-  await expect(selection).toHaveAttribute("data-width", "1200");
-  await expect(selection).toHaveAttribute("data-height", "900");
+  const sourceBounds = await source.boundingBox();
+  const selectionBounds = await selection.boundingBox();
+  expect(sourceBounds).not.toBeNull();
+  expect(selectionBounds).not.toBeNull();
+  for (const dimension of ["x", "y", "width", "height"]) {
+    expect(
+      Math.abs(selectionBounds[dimension] - sourceBounds[dimension]),
+    ).toBeLessThanOrEqual(1);
+  }
   await expect(page.getByTestId(/^crop-handle-/)).toHaveCount(8);
   await expect(add).toHaveCount(0);
   await expect(page.locator("#gallery-heading")).toHaveCount(0);
