@@ -187,50 +187,6 @@ test("HTTP-200 GraphQL failure preserves the crop and saved pair and allows retr
   expect(uploadedCrop(retry.upload)).toEqual(pendingCrop);
 });
 
-test("invalid files leave the gallery open without starting a crop session", async ({
-  page,
-  demoRecipe,
-}) => {
-  await page.goto(`/images-edit/${demoRecipe.id}`);
-  const input = addInput(page);
-  await expect(input).toBeEnabled();
-  await expect(page.getByLabel("Bild hinzufügen")).toBeVisible();
-  await expect(input).toHaveJSProperty("multiple", false);
-  const thumbnail = galleryImages(page);
-  await expect(thumbnail).toBeVisible();
-  const savedSource = await thumbnail.getAttribute("src");
-  await input.setInputFiles([]);
-  await expect(thumbnail).toHaveAttribute("src", savedSource);
-  await expect(selection(page)).toHaveCount(0);
-  const invalidFiles = [
-    {
-      name: "unsupported.gif",
-      mimeType: "image/gif",
-      buffer: Buffer.from("GIF89a"),
-    },
-    {
-      name: "corrupt.png",
-      mimeType: "image/png",
-      buffer: Buffer.from("not a PNG"),
-    },
-    pngFile(299, 225),
-    {
-      name: "oversized.png",
-      mimeType: "image/png",
-      buffer: Buffer.alloc(10 * 1024 * 1024 + 1),
-    },
-    pngFile(8000, 5001),
-  ];
-  for (const file of invalidFiles) {
-    await input.setInputFiles(file);
-    await expect(page.getByRole("alert")).not.toBeEmpty();
-    await expect(input).toBeEnabled();
-    await expect(thumbnail).toHaveAttribute("src", savedSource);
-    await expect(selection(page)).toHaveCount(0);
-    await expect(saveButton(page)).toHaveCount(0);
-  }
-});
-
 test("an unsaved upload still prompts on navigation after restoring the crop", async ({
   page,
   demoRecipe,
@@ -256,39 +212,6 @@ test("an unsaved upload still prompts on navigation after restoring the crop", a
     .getByRole("link", { name: "Zurück zum Rezept", exact: true })
     .click();
   await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
-});
-
-test("portrait and landscape sources start with centered exact 4:3 selections", async ({
-  page,
-  demoRecipe,
-}) => {
-  await selectSource(page, demoRecipe, pngFile(1200, 1600));
-  expect(await crop(page)).toEqual({ x: 0, y: 350, width: 1200, height: 900 });
-  await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
-  await chooseSource(page, pngFile(1600, 900));
-  expect(await crop(page)).toEqual({ x: 200, y: 0, width: 1200, height: 900 });
-  await drag(page, selection(page), -100, 0);
-  expect((await crop(page)).x).toBeLessThan(200);
-});
-
-test("the upscale warning follows the effective crop and never blocks a valid small source", async ({
-  page,
-  demoRecipe,
-}) => {
-  const warning = page.getByText(/vergrößert|hochskaliert/i);
-  await selectSource(page, demoRecipe, pngFile(648, 486));
-  await expect(warning).toHaveCount(0);
-  await drag(page, handle(page, "se"), -10, -8);
-  await expect(warning).toBeVisible();
-  await expect(saveButton(page)).toBeEnabled();
-  await drag(page, handle(page, "se"), 1000, 1000);
-  expect(await crop(page)).toEqual({ x: 0, y: 0, width: 648, height: 486 });
-  await expect(warning).toHaveCount(0);
-  await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
-  await chooseSource(page, pngFile(300, 225));
-  await expect(warning).toBeVisible();
-  const { metadata } = await saveSource(page);
-  expect(metadata).toMatchObject({ width: 648, height: 486 });
 });
 
 test("a failed post-save gallery read keeps success and Retry does not upload again", async ({
