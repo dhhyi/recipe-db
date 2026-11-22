@@ -123,3 +123,4 @@ prettier:
   ignore:
     - nginx.conf
     - "*.png"
+integrationDependencies: []

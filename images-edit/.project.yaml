@@ -111,3 +111,5 @@ check: |
   pnpm exec elm --version
   pnpm build
   pnpm lint
+integrationDependencies:
+  - design

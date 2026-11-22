@@ -55,3 +55,7 @@ check: |
   pnpm check
   pnpm exec playwright test --list --reporter=list
 integration: pnpm test
+integrationDependencies:
+  - browse
+  - recipes-edit
+  - images-edit

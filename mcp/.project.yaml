@@ -63,3 +63,5 @@ prettier:
   ignore:
     - "*.cs"
     - "*.csproj"
+integrationDependencies:
+  - graphql

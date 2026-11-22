@@ -110,3 +110,6 @@ prettier:
     - go.sum
     - "*.go"
     - "*.templ"
+integrationDependencies:
+  - graphql
+  - design

@@ -20,9 +20,23 @@ EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../bazel-project-action.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../integration-dependencies.py" .scripts/
+  cp "$BATS_TEST_DIRNAME/../project-schema.json" .scripts/
+  cp "$BATS_TEST_DIRNAME/../bazel.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../run-integration-tests.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../run-integration-suite.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../build-integration-images.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../prepare-integration-identities.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../integration-identities.py" .scripts/
+  cp "$BATS_TEST_DIRNAME/../generate-docker-compose.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../refresh-render-inputs.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
+    package.json \
     .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml \
+    .mise/tasks/bazel.toml .mise/tasks/compose.toml .mise/tasks/development.toml \
+    .mise/tasks/repository-sync.toml \
     .mise/tasks/validation.toml .mise/tasks/development.toml .mise/tasks/compose.toml \
     .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
     .scripts/test-message-bus.sh .scripts/test-migrator-packaging.sh \
@@ -32,6 +46,13 @@ EOF
     .scripts/create-production-release-inventory.sh .scripts/validate-production-release.sh \
     .scripts/lib/project-metadata.sh .scripts/migrator-manifest.schema.json \
     .scripts/templates/kubernetes.lib.yml .scripts/templates/kubernetes-migration-job-test.yml \
+    .scripts/templates/docker-compose-template.yml \
+    .scripts/templates/oauth2-proxy-alpha-template.yml \
+    .scripts/templates/service-template.lib.yml \
+    .scripts/templates/fixtures-service-template.lib.yml \
+    .scripts/templates/traefik-service-template.lib.yml \
+    .scripts/templates/nats-service-template.lib.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml \
     .scripts/tests/fixtures/migrator-packaging/fixture.json
   touch .scripts/run-migrator-tests.sh migrators/tags-1-to-2/test-migrator.sh
   cat > .scripts/tests/groups.yaml << 'EOF'
@@ -40,7 +61,9 @@ compose:
     - .scripts/tests/example.bats
   suite_inputs:
     .scripts/tests/example.bats:
-      - .scripts/templates/**
+      - .scripts/templates/example.yml
+      - .scripts/templates/kubernetes-migration-job-test.yml
+      - .scripts/templates/kubernetes.lib.yml
 tooling:
   tests:
     - .scripts/tests/other.bats
@@ -174,6 +197,89 @@ EOF
   grep -Fx "    cmd = \"sh \$(location .scripts/bazel-project-action.sh) test-only test \$@ \$(location :test-only_generate) 2>&1\"," test-rule
   run -1 grep -F 'name = "test-only_check"' BUILD.bazel
   run -1 grep -F 'name = "test-only_precommit"' BUILD.bazel
+}
+
+@test "integration targets track transitive metadata, identities and selective NATS configuration" {
+  mkdir -p suite-test frontend-app backend-service suite-empty suite-nats unrelated message-bus
+  cat > suite-test/.project.yaml << 'EOF'
+name: suite-test
+---
+category: test
+integration: echo suite
+integrationDependencies:
+  - frontend-app
+EOF
+  cat > frontend-app/.project.yaml << 'EOF'
+name: frontend-app
+---
+category: frontend
+integrationDependencies:
+  - backend
+EOF
+  cat > backend-service/.project.yaml << 'EOF'
+name: backend-service
+---
+category: backend
+EOF
+  cat > suite-empty/.project.yaml << 'EOF'
+name: suite-empty
+---
+category: test
+integration: echo empty
+integrationDependencies: []
+EOF
+  cat > suite-nats/.project.yaml << 'EOF'
+name: suite-nats
+---
+category: test
+integration: echo nats
+integrationDependencies:
+  - nats
+EOF
+  cat > unrelated/.project.yaml << 'EOF'
+name: unrelated
+---
+category: api
+EOF
+  touch message-bus/nats.conf
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  sed -n '/name = "integration_suite_suite-test"/,/^)/p' BUILD.bazel > suite-rule
+  grep -Fx '        ".generated/integration-identities/suite-test.json",' suite-rule
+  grep -Fx '        "suite-test/.project.yaml",' suite-rule
+  grep -Fx '        "frontend-app/.project.yaml",' suite-rule
+  grep -Fx '        "backend-service/.project.yaml",' suite-rule
+  for file in .scripts/templates/docker-compose-template.yml \
+    .scripts/templates/oauth2-proxy-alpha-template.yml \
+    .scripts/templates/service-template.lib.yml \
+    .scripts/templates/fixtures-service-template.lib.yml \
+    .scripts/templates/traefik-service-template.lib.yml \
+    .scripts/templates/nats-service-template.lib.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml; do
+    grep -Fx "        \"$file\"," suite-rule
+  done
+  run -1 grep -F '.scripts/templates/kubernetes.lib.yml' suite-rule
+  grep -Fx '        ".mise/tasks/repository-sync.toml",' suite-rule
+  grep -Fx '    tags = ["no-sandbox", "no-remote"],' suite-rule
+  grep -Fx '    cmd = "INTEGRATION_BAZEL_ACTION=true bash .scripts/run-integration-suite.sh suite-test && touch $@",' suite-rule
+  run -1 grep -F 'unrelated/.project.yaml' suite-rule
+  run -1 grep -F 'message-bus/nats.conf' suite-rule
+
+  sed -n '/name = "integration_suite_suite-empty"/,/^)/p' BUILD.bazel > empty-rule
+  grep -Fx '    tags = ["no-sandbox", "no-remote", "no-cache"],' empty-rule
+  grep -Fx '        ".generated/integration-identities/suite-empty.json",' empty-rule
+
+  sed -n '/name = "integration_suite_suite-nats"/,/^)/p' BUILD.bazel > nats-rule
+  grep -Fx '        "message-bus/nats.conf",' nats-rule
+
+  cp BUILD.bazel generated-build
+  rm message-bus/nats.conf
+  run --separate-stderr bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"Validation target message_bus_validation input pattern matches no files: message-bus/nats.conf"* ]]
+  cmp generated-build BUILD.bazel
 }
 
 @test "project check targets depend on devcontainer build inputs" {

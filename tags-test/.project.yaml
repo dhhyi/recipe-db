@@ -43,3 +43,6 @@ prettier:
   ignore:
     - "*.gradle"
     - "*.groovy"
+integrationDependencies:
+  - tags
+  - fixtures

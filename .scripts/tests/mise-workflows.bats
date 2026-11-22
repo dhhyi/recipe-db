@@ -234,7 +234,11 @@ EOF
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   script=$(yq '.jobs.arm64-validation.steps[] | select(.name == "build development and standalone test images") | .run' "$workflow")
 
-  [[ "$script" == *"docker compose --progress plain --profile development --profile test build"* ]]
+  [[ "$script" == *"bash .scripts/build-integration-images.sh"* ]]
+  grep -F 'docker compose --progress plain "${compose_arguments[@]}" build --print' \
+    "$BATS_TEST_DIRNAME/../build-integration-images.sh"
+  grep -F 'docker buildx bake --file "$bake_file" --metadata-file "$build_metadata" --load --progress plain' \
+    "$BATS_TEST_DIRNAME/../build-integration-images.sh"
 }
 
 @test "image cache credentials and PR identity are available before image setup" {
@@ -410,7 +414,7 @@ EOF
 #!/bin/sh
 printf '%s\n' "docker $*" >> "$MOCK_LOG"
 case "$*" in
-  "compose up -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
+  "compose up --pull never -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
   "compose ps") exit 0 ;;
   *) exit 99 ;;
 esac

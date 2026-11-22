@@ -162,6 +162,15 @@
       "description": "Optional stack integration test command for test projects. Empty values are allowed and skipped by the integration runner.",
       "type": "string"
     },
+    "integrationDependencies": {
+      "description": "Projects, categories, or synthetic stack components whose images and runtime inputs this integration suite requires.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "prettier": {
       "type": "object",
       "additionalProperties": false,

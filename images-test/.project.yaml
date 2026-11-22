@@ -42,3 +42,5 @@ prettier:
   ignore:
     - "*.hurl"
     - fixtures
+integrationDependencies:
+  - images

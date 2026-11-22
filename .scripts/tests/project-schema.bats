@@ -35,6 +35,12 @@ def valid(project):
         project.get("category") != "test" or not isinstance(project["integration"], str)
     ):
         return False
+    if "integrationDependencies" in project:
+        dependencies = project["integrationDependencies"]
+        if not isinstance(dependencies, list) or any(
+            not isinstance(name, str) or not name for name in dependencies
+        ) or len(set(dependencies)) != len(dependencies):
+            return False
     owns_data = project.get("backupRole") in data_roles
     if owns_data and not required <= project.keys():
         return False
@@ -65,8 +71,18 @@ assert schema["properties"]["check"]["type"] == "string"
 assert schema["properties"]["test"]["type"] == "string"
 assert schema["properties"]["integration"]["type"] == "string"
 assert "minLength" not in schema["properties"]["integration"]
+dependencies = schema["properties"]["integrationDependencies"]
+assert dependencies["type"] == "array"
+assert dependencies["uniqueItems"] is True
+assert dependencies["items"] == {"type": "string", "minLength": 1}
 assert valid({"category": "test"})
 assert valid({"category": "test", "integration": ""})
+assert valid({"integrationDependencies": []})
+assert valid({"integrationDependencies": ["backend", "nats"]})
+assert not valid({"integrationDependencies": None})
+assert not valid({"integrationDependencies": "backend"})
+assert not valid({"integrationDependencies": [""]})
+assert not valid({"integrationDependencies": ["backend", "backend"]})
 for category in integration_categories:
     project = {"category": category, "integration": "echo tests"}
     assert valid(project) == (category == "test")

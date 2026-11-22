@@ -39,3 +39,6 @@ prettier:
     - "*.rb"
     - "*.jpg"
     - "*.png"
+integrationDependencies:
+  - image-inline
+  - fixtures

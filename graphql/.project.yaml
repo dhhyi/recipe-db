@@ -106,3 +106,7 @@ prettier:
   ignore:
     - "*.rs"
     - Cargo.lock
+integrationDependencies:
+  - backend
+  - search
+  - nats

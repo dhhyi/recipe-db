@@ -390,6 +390,7 @@ jobs:
   arm64-validation:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     permissions:
+      actions: read
       contents: read
       packages: write
     runs-on: ubuntu-24.04-arm
@@ -432,7 +433,27 @@ jobs:
           cache: true
 
       - name: install Compose generation tools
-        run: mise --no-hooks install jq yq ytt oras
+        run: mise --no-hooks install jq yq ytt oras aqua:bazelbuild/bazelisk
+
+      - name: restore ARM64 Bazel disk cache artifacts
+        id: restore-bazel-cache
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py restore \
+            --cache "$RUNNER_TEMP/bazel-disk" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-number "$GITHUB_RUN_NUMBER" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --commit "${{ steps.source.outputs.sha }}" \
+            --pr-number "$PR_NUMBER" \
+            --job "$GITHUB_JOB" \
+            --output "$GITHUB_OUTPUT"
 
       - name: login to ghcr.io for ARM64 build cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -460,11 +481,12 @@ jobs:
           docker buildx inspect --bootstrap
           mise run --raw sync-files
           mise run --raw generate-docker-compose
+          mise run --raw generate-bazel-build
           mise run create-intranet
           echo "::endgroup::"
 
       - name: build development and standalone test images
-        run: docker compose --progress plain --profile development --profile test build
+        run: bash .scripts/build-integration-images.sh "$RUNNER_TEMP/integration-images"
 
       - name: test migrators
         run: bash .scripts/run-migrator-tests.sh
@@ -472,13 +494,25 @@ jobs:
       - name: verify production ingress trust
         run: mise run test-auth-ingress
 
+      - name: prepare selected-platform integration identities
+        run: |
+          bash .scripts/prepare-integration-identities.sh \
+            "$RUNNER_TEMP/integration-images" .generated/integration-identities
+
+      - name: record ARM64 Bazel cache build start
+        id: bazel-cache-build-start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: start development stack and run standalone integration tests
         id: integration-tests
         env:
           VERBOSE: "true"
+          INTEGRATION_BAZEL_CACHE: "true"
+          BAZEL_DISK_CACHE: ${{ runner.temp }}/bazel-disk
+          BAZEL_EXECUTION_LOG_DIR: ${{ runner.temp }}/bazel-integration-executions
         run: |
           echo "::group::start development stack"
-          docker compose up -d --wait --wait-timeout 120
+          docker compose up --pull never -d --wait --wait-timeout 120
           docker compose ps
           echo "::endgroup::"
           mise run integration-tests -- --development
@@ -522,6 +556,78 @@ jobs:
       - name: clean up development and test stack
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+      - name: inspect ARM64 Bazel cache
+        id: inspect-bazel-cache
+        if: always() && steps.source.outcome == 'success'
+        continue-on-error: true
+        env:
+          CACHE_PRUNE_ELIGIBLE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.integration-tests.outcome == 'success' }}
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py inspect \
+            --cache "$RUNNER_TEMP/bazel-disk" \
+            --build-start "${{ steps.bazel-cache-build-start.outputs.epoch }}" \
+            --eligible "$CACHE_PRUNE_ELIGIBLE" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: prune ARM64 Bazel cache
+        id: prune-bazel-cache
+        if: always() && steps.inspect-bazel-cache.outcome == 'success' && steps.inspect-bazel-cache.outputs.prune == 'true'
+        continue-on-error: true
+        run: |
+          python3 .scripts/bazel-cache-artifacts.py prune \
+            --cache "$RUNNER_TEMP/bazel-disk" \
+            --build-start "${{ steps.bazel-cache-build-start.outputs.epoch }}" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: prepare ARM64 Bazel cache snapshot
+        id: prepare-arm64-bazel-cache
+        if: always() && steps.source.outcome == 'success' && steps.inspect-bazel-cache.outcome == 'success'
+        continue-on-error: true
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          CACHE_PRUNE_ELIGIBLE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.integration-tests.outcome == 'success' }}
+          CACHE_PRUNE_REQUIRED: ${{ steps.inspect-bazel-cache.outputs.prune }}
+          CACHE_PRUNE_SUCCEEDED: ${{ steps.prune-bazel-cache.outcome == 'success' }}
+        run: |
+          execution_log_args=()
+          for execution_log in "$RUNNER_TEMP"/bazel-integration-executions/integration-*.json; do
+            [[ -f "$execution_log" ]] || continue
+            label=${execution_log##*/}
+            label=${label%.json}
+            execution_log_args+=(--execution-log "$label=$execution_log")
+          done
+          python3 .scripts/bazel-cache-artifacts.py prepare-upload \
+            --cache "$RUNNER_TEMP/bazel-disk" \
+            --archive "$RUNNER_TEMP/bazel-cache/snapshot.tar" \
+            --manifest "$RUNNER_TEMP/bazel-cache/manifest.json" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --commit "${{ steps.source.outputs.sha }}" \
+            --build-start "${{ steps.bazel-cache-build-start.outputs.epoch }}" \
+            --job "$GITHUB_JOB" \
+            --prune-eligible "$CACHE_PRUNE_ELIGIBLE" \
+            --prune-required "${CACHE_PRUNE_REQUIRED:-false}" \
+            --prune-succeeded "$CACHE_PRUNE_SUCCEEDED" \
+            --pr-number "$PR_NUMBER" \
+            "${execution_log_args[@]}" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: upload ARM64 Bazel cache snapshot
+        id: upload-arm64-bazel-cache
+        if: always() && steps.prepare-arm64-bazel-cache.outcome == 'success' && steps.prepare-arm64-bazel-cache.outputs.name != ''
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: ${{ steps.prepare-arm64-bazel-cache.outputs.name }}
+          path: |
+            ${{ runner.temp }}/bazel-cache/snapshot.tar
+            ${{ runner.temp }}/bazel-cache/manifest.json
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 90 || 7 }}
 
       - name: check for an existing complete release
         id: check-existing-release

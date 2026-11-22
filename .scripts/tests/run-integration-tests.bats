@@ -4,6 +4,7 @@ load test_helper
 
 setup() {
   setup_fixture run-integration-tests.sh
+  cp "$BATS_TEST_DIRNAME/../run-integration-suite.sh" .scripts/
   unset GITHUB_ACTIONS
   git init -q
   for project in recipes-test ratings-test graphql-test images-test \
@@ -223,6 +224,53 @@ EOF
     run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
     run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
   done
+}
+
+@test "cached integration targets run sequentially and stop after the first failure" {
+  mkdir -p .generated/integration-identities bin
+  for project in recipes-test ratings-test; do
+    printf '{}\n' > ".generated/integration-identities/$project.json"
+  done
+  cat > bin/mise <<'EOF'
+#!/usr/bin/env bash
+printf 'mise %s\n' "$*" >> "$MOCK_LOG"
+exit "${BAZEL_STATUS:-0}"
+EOF
+  chmod +x bin/mise
+
+  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUNNING_FIXTURES=fixtures \
+    bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
+
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^mise run --raw bazel build ' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -n '^mise run --raw bazel build ' "$MOCK_LOG" | sed -E 's/^[0-9]+:.*integration_suite_([^ ]+).*/\1/' | paste -sd ' ')" = "recipes-test ratings-test" ]
+  grep -F -- '--action_env=HOST_UID' "$MOCK_LOG"
+  grep -F -- '--action_env=HOST_GID' "$MOCK_LOG"
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+
+  : > "$MOCK_LOG"
+  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUNNING_FIXTURES=fixtures \
+    BAZEL_STATUS=19 bash .scripts/run-integration-tests.sh --development \
+    recipes-test ratings-test
+
+  [ "$status" -eq 19 ]
+  [ "$(grep -c '^mise run --raw bazel build ' "$MOCK_LOG")" -eq 1 ]
+  grep -F 'integration_suite_recipes-test' "$MOCK_LOG"
+  run -1 grep -F 'integration_suite_ratings-test' "$MOCK_LOG"
+}
+
+@test "cached integration fails before Bazel when a prepared suite identity is missing" {
+  mkdir -p .generated/integration-identities
+
+  run --separate-stderr env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
+    RUNNING_FIXTURES=fixtures bash .scripts/run-integration-tests.sh \
+    --development recipes-test
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"::group::integration tests: recipes-test"* ]]
+  [[ "$stderr" == *"Prepared integration identity is missing for suite recipes-test: .generated/integration-identities/recipes-test.json"* ]]
+  [[ "$stderr" == *"::endgroup::"* ]]
+  run -1 grep -F 'mise run --raw bazel build' "$MOCK_LOG"
 }
 
 @test "runs test services with the host uid and gid for writable target mounts" {
