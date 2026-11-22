@@ -132,16 +132,6 @@ export function isGalleryRead(request) {
   );
 }
 
-export function isImageDelete(request) {
-  if (
-    new URL(request.url()).pathname !== "/graphql" ||
-    request.headers()["content-type"]?.includes("multipart/form-data")
-  )
-    return false;
-  const body = request.postDataJSON();
-  return /\bdeleteImage\s*\(/.test(body?.query ?? "");
-}
-
 export async function observeUploads(page) {
   await page.addInitScript(() => {
     window.imageEditorUploads = [];
