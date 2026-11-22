@@ -253,6 +253,85 @@ class IntegrationIdentitiesTest(unittest.TestCase):
             )
             self.assertNotEqual((third / "suite.json").read_text(), original)
 
+    def test_collection_includes_transitive_project_and_nats_images_once(self):
+        nats_docker = self.nats_fixture()
+        suite_projects = ["suite", "app", "transitive"]
+        services = {
+            project: {"image": f"example.invalid/{project}:test"}
+            for project in suite_projects
+        }
+        services["nats"] = {"image": self.nats_image}
+        build_metadata = {}
+        expected_digests = {}
+        for index, project in enumerate(suite_projects):
+            manifest_digest = digest(chr(ord("1") + index))
+            expected_digests[project] = manifest_digest
+            build_metadata[project] = {
+                "containerimage.digest": manifest_digest,
+                "containerimage.config.digest": self.config_digest,
+                "containerimage.descriptor": {
+                    "digest": manifest_digest,
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                },
+            }
+
+        def docker(arguments):
+            if arguments[:2] == ["image", "inspect"] and arguments[2] != self.nats_image:
+                return json.dumps([image_details(self.config_digest)])
+            return nats_docker(arguments)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "projects.jsonl"
+            metadata.write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "name": project,
+                            "category": "test" if project == "suite" else "backend",
+                            "integration": "run" if project == "suite" else None,
+                        }
+                    )
+                    for project in suite_projects
+                )
+                + "\n"
+            )
+            graph = root / "graph.json"
+            graph.write_text(
+                json.dumps(
+                    {
+                        "resolved": {
+                            "suite": {
+                                "projects": ["app", "transitive", "app"],
+                                "synthetic": ["nats"],
+                            }
+                        }
+                    }
+                )
+            )
+            compose = root / "compose.json"
+            compose.write_text(json.dumps({"services": services}))
+            build = root / "build.json"
+            build.write_text(json.dumps(build_metadata))
+            output = root / "identities"
+
+            identities.collect(
+                metadata, graph, compose, build, self.platform, output, docker
+            )
+
+            self.assertEqual(
+                json.loads((output / "suite.json").read_text()),
+                {
+                    "platform": self.platform,
+                    "images": [
+                        {"name": "app", "digest": expected_digests["app"]},
+                        {"name": "nats", "digest": self.arm_manifest_digest},
+                        {"name": "suite", "digest": expected_digests["suite"]},
+                        {"name": "transitive", "digest": expected_digests["transitive"]},
+                    ],
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

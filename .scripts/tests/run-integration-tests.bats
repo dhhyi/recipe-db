@@ -238,14 +238,17 @@ exit "${BAZEL_STATUS:-0}"
 EOF
   chmod +x bin/mise
 
-  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUNNING_FIXTURES=fixtures \
+  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
     bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
 
   [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test up --pull never --no-build -d fixtures' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test stop fixtures' "$MOCK_LOG"
   [ "$(grep -c '^mise run --raw bazel build ' "$MOCK_LOG")" -eq 2 ]
   [ "$(grep -n '^mise run --raw bazel build ' "$MOCK_LOG" | sed -E 's/^[0-9]+:.*integration_suite_([^ ]+).*/\1/' | paste -sd ' ')" = "recipes-test ratings-test" ]
   grep -F -- '--action_env=HOST_UID' "$MOCK_LOG"
   grep -F -- '--action_env=HOST_GID' "$MOCK_LOG"
+  grep -F -- '--action_env=VERBOSE' "$MOCK_LOG"
   run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
 
   : > "$MOCK_LOG"
@@ -271,6 +274,17 @@ EOF
   [[ "$stderr" == *"Prepared integration identity is missing for suite recipes-test: .generated/integration-identities/recipes-test.json"* ]]
   [[ "$stderr" == *"::endgroup::"* ]]
   run -1 grep -F 'mise run --raw bazel build' "$MOCK_LOG"
+}
+
+@test "cached suite execution never pulls images and retains failure logs" {
+  run env INTEGRATION_BAZEL_ACTION=true RUN_STATUS=19 \
+    bash .scripts/run-integration-suite.sh recipes-test
+
+  [ "$status" -eq 19 ]
+  grep -Fx 'docker compose --profile test run --pull never --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
+  [ "$(cat recipes-test/target/integration-tests/run.log)" = \
+    "$(printf '%s\n' 'test stdout: recipes-test' 'test stderr: recipes-test')" ]
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
 }
 
 @test "runs test services with the host uid and gid for writable target mounts" {

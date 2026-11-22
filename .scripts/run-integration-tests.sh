@@ -142,7 +142,7 @@ fi
 if ! docker compose --profile test ps --services --status running | grep -Fxq fixtures; then
   fixture_started=true
   if [[ ${GITHUB_ACTIONS:-} == true && ${INTEGRATION_BAZEL_CACHE:-} == true ]]; then
-    docker compose --profile test up --pull never -d fixtures
+    docker compose --profile test up --pull never --no-build -d fixtures
   else
     docker compose --profile test up -d fixtures
   fi
@@ -241,6 +241,7 @@ for project in "${projects[@]}"; do
       --action_env=GITHUB_ACTIONS
       --action_env=HOST_UID
       --action_env=HOST_GID
+      --action_env=VERBOSE
       --action_env=BUILDKIT_PROGRESS
       --action_env=COMPOSE_PROGRESS
       --action_env=COMPOSE_PARALLEL_LIMIT

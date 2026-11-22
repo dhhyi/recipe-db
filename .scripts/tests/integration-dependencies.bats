@@ -27,6 +27,35 @@ metadata_file() {
   run python3 "$RESOLVER" --metadata "$metadata" --schema "$SCHEMA"
 
   [ "$status" -eq 0 ]
+  expected_declarations=$(cat <<'EOF'
+{
+  "e2e-test": ["browse", "recipes-edit", "images-edit"],
+  "graphql-test": ["graphql", "fixtures"],
+  "image-inline-test": ["image-inline", "fixtures"],
+  "images-test": ["images"],
+  "inspirations-test": ["inspirations"],
+  "link-extract-test": ["link-extract", "fixtures"],
+  "mcp-test": ["mcp", "fixtures"],
+  "ratings-test": ["ratings"],
+  "recipe-edit-test": ["recipes-edit"],
+  "recipes-test": ["recipes"],
+  "search-test": ["search", "fixtures"],
+  "tags-test": ["tags", "fixtures"],
+  "browse": ["graphql", "design"],
+  "recipes-edit": ["design"],
+  "images-edit": ["design"],
+  "mcp": ["graphql"],
+  "search": ["graphql", "nats"],
+  "graphql": ["backend", "search", "nats"],
+  "design": []
+}
+EOF
+)
+  jq -e --argjson expected "$expected_declarations" '
+    .projects as $projects
+    | all($expected | to_entries[];
+        $projects[.key].integrationDependencies == .value)
+  ' <<< "$output"
   graph="$output"
   jq -e '.projects.graphql.integrationDependencies == ["backend", "search", "nats"]' \
     <<< "$graph"
@@ -130,14 +159,14 @@ EOF
   export PATH="$PWD/bin:$PATH"
   export DOCKER_CALLS="$PWD/docker-calls"
 
-  run bash "$ROOT/.scripts/build-integration-images.sh" "$PWD/output"
+  run env COMPOSE_PARALLEL_LIMIT=1 bash "$ROOT/.scripts/build-integration-images.sh" "$PWD/output"
 
   [ "$status" -eq 0 ]
   expected_calls=$(printf '%s\n' \
     'compose --profile development --profile test config --format json' \
     'compose --profile development --profile test pull nats' \
     'compose --progress plain --profile development --profile test build --print' \
-    "buildx bake --file $PWD/output/compose-bake.json --metadata-file $PWD/output/integration-build-metadata.json --load --progress plain")
+    "buildx bake --file $PWD/output/compose-bake.json --metadata-file $PWD/output/integration-build-metadata.json --load --progress plain --jobs 1")
   [ "$(cat "$DOCKER_CALLS")" = "$expected_calls" ]
   [ -s output/compose-config.json ]
   [ -s output/compose-bake.json ]

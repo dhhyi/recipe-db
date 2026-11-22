@@ -24,5 +24,6 @@ if ((${#external_services[@]})); then
 fi
 
 docker compose --progress plain "${compose_arguments[@]}" build --print > "$bake_file"
-docker buildx bake --file "$bake_file" --metadata-file "$build_metadata" --load --progress plain
+docker buildx bake --file "$bake_file" --metadata-file "$build_metadata" --load \
+  --progress plain --jobs "${COMPOSE_PARALLEL_LIMIT:-1}"
 jq -e 'type == "object"' "$build_metadata" > /dev/null

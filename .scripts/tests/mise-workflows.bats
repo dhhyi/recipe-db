@@ -230,14 +230,14 @@ EOF
   done
 }
 
-@test "ARM64 image builds retain package installation diagnostics" {
+@test "ARM64 image builds record metadata with bounded concurrency" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   script=$(yq '.jobs.arm64-validation.steps[] | select(.name == "build development and standalone test images") | .run' "$workflow")
 
   [[ "$script" == *"bash .scripts/build-integration-images.sh"* ]]
   grep -F 'docker compose --progress plain "${compose_arguments[@]}" build --print' \
     "$BATS_TEST_DIRNAME/../build-integration-images.sh"
-  grep -F 'docker buildx bake --file "$bake_file" --metadata-file "$build_metadata" --load --progress plain' \
+  grep -F -- '--jobs "${COMPOSE_PARALLEL_LIMIT:-1}"' \
     "$BATS_TEST_DIRNAME/../build-integration-images.sh"
 }
 
@@ -414,7 +414,7 @@ EOF
 #!/bin/sh
 printf '%s\n' "docker $*" >> "$MOCK_LOG"
 case "$*" in
-  "compose up --pull never -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
+  "compose up --pull never --no-build -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
   "compose ps") exit 0 ;;
   *) exit 99 ;;
 esac

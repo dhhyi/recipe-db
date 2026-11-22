@@ -512,7 +512,7 @@ jobs:
           BAZEL_EXECUTION_LOG_DIR: ${{ runner.temp }}/bazel-integration-executions
         run: |
           echo "::group::start development stack"
-          docker compose up --pull never -d --wait --wait-timeout 120
+          docker compose up --pull never --no-build -d --wait --wait-timeout 120
           docker compose ps
           echo "::endgroup::"
           mise run integration-tests -- --development
