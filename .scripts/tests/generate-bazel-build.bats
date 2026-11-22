@@ -282,6 +282,28 @@ EOF
   cmp generated-build BUILD.bazel
 }
 
+@test "manual integration suites are excluded from wildcard Bazel builds" {
+  command -v bazel
+  printf '%s\n' '8.5.0' > .bazelversion
+  : > MODULE.bazel
+  mkdir -p manual-suite
+  cat > manual-suite/BUILD.bazel << 'EOF'
+genrule(
+    name = "integration_suite_missing_identity",
+    srcs = ["missing-integration-identity.json"],
+    outs = ["integration-suite.ok"],
+    cmd = "touch $@",
+    tags = ["manual", "no-sandbox", "no-remote"],
+)
+EOF
+
+  run bazel \
+    --output_user_root="$BATS_TEST_TMPDIR/bazel-user-root" \
+    --output_base="$BATS_TEST_TMPDIR/bazel-default-build" \
+    build //manual-suite:all
+  [ "$status" -eq 0 ]
+}
+
 @test "real Bazel suite actions reuse identity-matched results and retry failures" {
   command -v bazel
   printf '%s\n' '8.5.0' > .bazelversion
