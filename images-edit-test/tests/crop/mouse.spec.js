@@ -1,54 +1,22 @@
 import { test, expect } from "../../fixtures.js";
 import { graphqlMocks, identityHtml } from "./crop.mocks.js";
+import {
+  bounds,
+  expectSameCrop,
+  mouseDrag,
+  openCropEditor,
+} from "./crop.helpers.js";
 
 test.use({ graphqlMocks: [graphqlMocks, { scope: "test" }], identityHtml });
-
-async function bounds(locator) {
-  const box = await locator.boundingBox();
-  expect(box).not.toBeNull();
-  return box;
-}
 
 function expectClose(actual, expected) {
   expect(Math.abs(actual - expected)).toBeLessThanOrEqual(1);
 }
 
-async function drag(page, locator, dx, dy) {
-  const box = await bounds(locator);
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.move(x + dx, y + dy, { steps: 8 });
-  await page.mouse.up();
-}
-
 test("mouse handles resize and dragging moves the crop within the image", async ({
   page,
 }) => {
-  const png = await page.evaluate(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 1200;
-    canvas.height = 900;
-    canvas.getContext("2d").fillRect(0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/png").split(",")[1];
-  });
-  const file = {
-    name: "local.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(png, "base64"),
-  };
-  await page.goto("/images-edit/test-recipe");
-  const add = page.getByLabel("Bild hinzufügen");
-  const source = page.getByTestId("crop-source");
-  const selection = page.getByTestId("crop-selection");
-  const chooseSource = async () => {
-    await expect(add).toBeEnabled();
-    await add.setInputFiles(file);
-    await expect(source).toHaveJSProperty("complete", true);
-    await expect(selection).toBeVisible();
-  };
-  await chooseSource();
+  const { source, selection, chooseSource } = await openCropEditor(page);
 
   for (const direction of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
     await test.step(direction, async () => {
@@ -63,7 +31,12 @@ test("mouse handles resize and dragging moves the crop within the image", async 
         : direction.includes("s")
           ? -26
           : 0;
-      await drag(page, page.getByTestId(`crop-handle-${direction}`), dx, dy);
+      await mouseDrag(
+        page,
+        page.getByTestId(`crop-handle-${direction}`),
+        dx,
+        dy,
+      );
       const after = await bounds(selection);
       const image = await bounds(source);
       expect(after.width).toBeLessThan(before.width - 1);
@@ -97,20 +70,20 @@ test("mouse handles resize and dragging moves the crop within the image", async 
     });
   }
 
-  await drag(page, page.getByTestId("crop-handle-se"), -80, -60);
+  await mouseDrag(page, page.getByTestId("crop-handle-se"), -80, -60);
   const beforeMove = await bounds(selection);
   const image = await bounds(source);
   await page.mouse.click(image.x + image.width - 5, image.y + image.height - 5);
   expect(await bounds(selection)).toEqual(beforeMove);
 
-  await drag(page, selection, 5000, 5000);
+  await mouseDrag(page, selection, 5000, 5000);
   const bottomRight = await bounds(selection);
   expectClose(bottomRight.width, beforeMove.width);
   expectClose(bottomRight.height, beforeMove.height);
   expectClose(bottomRight.x + bottomRight.width, image.x + image.width);
   expectClose(bottomRight.y + bottomRight.height, image.y + image.height);
 
-  await drag(page, selection, -5000, -5000);
+  await mouseDrag(page, selection, -5000, -5000);
   const topLeft = await bounds(selection);
   expectClose(topLeft.x, image.x);
   expectClose(topLeft.y, image.y);
@@ -119,4 +92,40 @@ test("mouse handles resize and dragging moves the crop within the image", async 
 
   await page.mouse.move(image.x + image.width / 2, image.y + image.height / 2);
   expect(await bounds(selection)).toEqual(topLeft);
+});
+
+test("a viewport change ends an active mouse drag and keeps the crop", async ({
+  page,
+}) => {
+  const { selection, crop } = await openCropEditor(page);
+  await mouseDrag(page, page.getByTestId("crop-handle-se"), -65, -48);
+  const before = await crop();
+
+  await selection.scrollIntoViewIfNeeded();
+  const active = await bounds(selection);
+  await page.mouse.move(
+    active.x + active.width / 2,
+    active.y + active.height / 2,
+  );
+  await page.mouse.down();
+  const viewport = page.viewportSize();
+  await page.setViewportSize({ width: 600, height: 700 });
+  await expect
+    .poll(async () => {
+      const actual = await crop();
+      return Math.max(
+        ...Object.keys(before).map((key) =>
+          Math.abs(actual[key] - before[key]),
+        ),
+      );
+    })
+    .toBeLessThanOrEqual(1);
+  await page.mouse.move(5, 5);
+  await page.mouse.up();
+  expectSameCrop(await crop(), before);
+  await page.setViewportSize(viewport);
+  expectSameCrop(await crop(), before);
+
+  await mouseDrag(page, page.getByTestId("crop-handle-e"), -20, 0);
+  expect((await crop()).width).toBeLessThan(before.width - 1);
 });
