@@ -101,6 +101,9 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
+docker:
+  ignore:
+    - src/test/
 tailwindSources:
   - index.html
   - src
