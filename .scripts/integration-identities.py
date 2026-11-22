@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 import argparse
+import http.client
 import json
 import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 
 DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 MANIFEST_TYPES = {
     "application/vnd.docker.distribution.manifest.v2+json",
     "application/vnd.oci.image.manifest.v1+json",
+}
+INDEX_TYPES = {
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.index.v1+json",
 }
 
 
@@ -82,7 +89,85 @@ def inspect_image(image, platform, docker=run_docker):
     return details
 
 
-def project_image_identity(project, services, build_metadata, platform, docker=run_docker):
+def inspect_local_index(image):
+    client, daemon = socket.socketpair()
+    try:
+        # Use the Docker CLI's active context rather than assuming a local socket.
+        with subprocess.Popen(
+            ["docker", "system", "dial-stdio"],
+            stdin=daemon,
+            stdout=daemon,
+            stderr=subprocess.PIPE,
+        ) as process:
+            daemon.close()
+            try:
+                client.settimeout(30)
+                path = quote(image, safe="")
+                client.sendall(
+                    f"GET /v1.48/images/{path}/json?manifests=true HTTP/1.1\r\n"
+                    "Host: localhost\r\nConnection: close\r\n\r\n".encode()
+                )
+                response = http.client.HTTPResponse(client)
+                response.begin()
+                body = response.read()
+                if response.status != 200:
+                    raise PreparationError(
+                        f"Docker image manifest inspection failed for {image}: "
+                        f"HTTP {response.status}: {body.decode(errors='replace')}"
+                    )
+                try:
+                    return json.loads(body)
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise PreparationError(
+                        f"invalid Docker image manifest inspection for {image}: {error}"
+                    ) from error
+            finally:
+                client.close()
+    except (OSError, http.client.HTTPException) as error:
+        raise PreparationError(f"cannot inspect local image manifests for {image}: {error}") from error
+    finally:
+        client.close()
+        daemon.close()
+
+
+def selected_local_manifest(image, index_digest, platform, local_index):
+    local = local_index(image)
+    descriptor = local.get("Descriptor") if isinstance(local, dict) else None
+    if not isinstance(descriptor, dict) or descriptor.get("digest") != index_digest:
+        raise PreparationError(f"prepared image {image} no longer matches its image index")
+    os_name, architecture, variant = platform_parts(platform)
+    manifests = local.get("Manifests")
+    if not isinstance(manifests, list):
+        raise PreparationError(f"local image manifests are missing for {image}")
+    candidates = []
+    for manifest in manifests:
+        if not isinstance(manifest, dict) or manifest.get("Kind") != "image":
+            continue
+        entry = manifest.get("Descriptor")
+        image_data = manifest.get("ImageData")
+        entry_platform = image_data.get("Platform") if isinstance(image_data, dict) else None
+        if not isinstance(entry, dict) or not isinstance(entry_platform, dict):
+            continue
+        if (
+            entry_platform.get("os") == os_name
+            and normalized_architecture(entry_platform.get("architecture", "")) == architecture
+            and (variant is None or entry_platform.get("variant") == variant)
+        ):
+            candidates.append(manifest)
+    if len(candidates) != 1:
+        reason = "missing" if not candidates else "ambiguous"
+        raise PreparationError(f"{reason} runnable image manifest for {image} on {platform}")
+    selected = candidates[0]
+    descriptor = selected["Descriptor"]
+    if not selected.get("Available") or descriptor.get("mediaType") not in MANIFEST_TYPES:
+        raise PreparationError(f"selected image manifest is not available for {image}")
+    return checked_digest(descriptor.get("digest"), f"selected manifest digest for {image}")
+
+
+def project_image_identity(
+    project, services, build_metadata, platform, docker=run_docker,
+    local_index=inspect_local_index,
+):
     service = services.get(project)
     image = service.get("image") if isinstance(service, dict) else None
     if not isinstance(image, str) or not image:
@@ -96,7 +181,7 @@ def project_image_identity(project, services, build_metadata, platform, docker=r
     if not isinstance(descriptor, dict):
         raise PreparationError(f"runnable manifest descriptor is missing for required image: {project}")
     media_type = descriptor.get("mediaType")
-    if media_type not in MANIFEST_TYPES:
+    if media_type not in MANIFEST_TYPES | INDEX_TYPES:
         raise PreparationError(
             f"build metadata for {project} is not a runnable image manifest: {media_type!r}"
         )
@@ -106,10 +191,28 @@ def project_image_identity(project, services, build_metadata, platform, docker=r
     if digest != descriptor_digest:
         raise PreparationError(f"ambiguous manifest digest in build metadata for {project}")
 
+    details = inspect_image(image, platform, docker)
+    if media_type in INDEX_TYPES:
+        local_descriptor = details.get("Descriptor")
+        if isinstance(local_descriptor, dict) and local_descriptor.get("digest") != digest:
+            raise PreparationError(
+                f"prepared image {project} no longer matches the image used for its identity"
+            )
+        return selected_local_manifest(image, digest, platform, local_index)
+
+    local_descriptor = details.get("Descriptor")
+    if isinstance(local_descriptor, dict):
+        if (
+            local_descriptor.get("mediaType") in MANIFEST_TYPES
+            and local_descriptor.get("digest") == digest
+        ):
+            return digest
+        raise PreparationError(
+            f"prepared image {project} no longer matches the image used for its identity"
+        )
     config_digest = checked_digest(
         result.get("containerimage.config.digest"), f"config digest for {project}"
     )
-    details = inspect_image(image, platform, docker)
     if details.get("Id") != config_digest:
         raise PreparationError(
             f"prepared image {project} no longer matches the image used for its identity"
@@ -128,7 +231,7 @@ def raw_registry_manifest(image, docker):
     return manifest
 
 
-def nats_image_identity(image, platform, docker=run_docker):
+def nats_image_identity(image, platform, docker=run_docker, local_index=inspect_local_index):
     if "@" not in image:
         raise PreparationError(f"NATS image must be pinned by digest: {image}")
     pinned_digest = checked_digest(image.rsplit("@", 1)[1], "pinned NATS image digest")
@@ -186,7 +289,24 @@ def nats_image_identity(image, platform, docker=run_docker):
     config_digest = checked_digest(
         selected_manifest.get("config", {}).get("digest"), "selected NATS config digest"
     )
-    if details.get("Id") != config_digest:
+    local_descriptor = details.get("Descriptor")
+    if isinstance(local_descriptor, dict):
+        matches = (
+            local_descriptor.get("mediaType") in MANIFEST_TYPES
+            and local_descriptor.get("digest") == selected_digest
+        )
+        if (
+            not matches
+            and local_descriptor.get("mediaType") in INDEX_TYPES
+            and local_descriptor.get("digest") == pinned_digest
+        ):
+            matches = (
+                selected_local_manifest(image, pinned_digest, platform, local_index)
+                == selected_digest
+            )
+    else:
+        matches = details.get("Id") == config_digest
+    if not matches:
         raise PreparationError(
             f"prepared NATS image no longer matches the selected platform manifest: {image}"
         )

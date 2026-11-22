@@ -60,6 +60,38 @@ class IntegrationIdentitiesTest(unittest.TestCase):
         )
         self.assertEqual(result, self.manifest_digest)
 
+    def test_project_identity_accepts_loaded_manifest_descriptor(self):
+        del self.metadata["suite"]["containerimage.config.digest"]
+
+        def docker(arguments):
+            details = image_details(self.manifest_digest)
+            details["Descriptor"] = {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": self.manifest_digest,
+            }
+            return json.dumps([details])
+
+        self.assertEqual(
+            identities.project_image_identity(
+                "suite", self.project_services(), self.metadata, self.platform, docker
+            ),
+            self.manifest_digest,
+        )
+
+        def mismatched_docker(arguments):
+            details = image_details(self.config_digest)
+            details["Descriptor"] = {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": digest("9"),
+            }
+            return json.dumps([details])
+
+        with self.assertRaisesRegex(identities.PreparationError, "no longer matches"):
+            identities.project_image_identity(
+                "suite", self.project_services(), self.metadata, self.platform,
+                mismatched_docker,
+            )
+
     def test_project_identity_rejects_missing_ambiguous_or_wrong_platform_metadata(self):
         with self.assertRaisesRegex(identities.PreparationError, "build metadata is missing"):
             identities.project_image_identity(
@@ -72,7 +104,7 @@ class IntegrationIdentitiesTest(unittest.TestCase):
             )
 
         self.metadata["suite"]["containerimage.descriptor"]["mediaType"] = \
-            "application/vnd.oci.image.index.v1+json"
+            "application/example.invalid"
         with self.assertRaisesRegex(identities.PreparationError, "not a runnable image manifest"):
             identities.project_image_identity(
                 "suite", self.project_services(), self.metadata, self.platform,
@@ -86,6 +118,62 @@ class IntegrationIdentitiesTest(unittest.TestCase):
                 "suite", self.project_services(), self.metadata, self.platform,
                 self.docker_for_project("amd64"),
             )
+
+    def test_project_index_selects_the_loaded_runnable_manifest(self):
+        index_digest = digest("c")
+        self.metadata["suite"]["containerimage.digest"] = index_digest
+        self.metadata["suite"]["containerimage.descriptor"] = {
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "digest": index_digest,
+        }
+        selected = {
+            "Kind": "image",
+            "Available": True,
+            "Descriptor": {
+                "digest": self.manifest_digest,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            },
+            "ImageData": {"Platform": {"os": "linux", "architecture": "arm64"}},
+        }
+        attestation = {
+            "Kind": "attestation",
+            "Descriptor": {"digest": digest("d")},
+        }
+        local = {"Descriptor": {"digest": index_digest}, "Manifests": [selected, attestation]}
+
+        def identity():
+            return identities.project_image_identity(
+                "suite", self.project_services(), self.metadata, self.platform,
+                self.docker_for_project(), lambda image: local,
+            )
+
+        self.assertEqual(identity(), self.manifest_digest)
+        local["Manifests"][1]["Descriptor"]["digest"] = digest("e")
+        local["Descriptor"]["digest"] = digest("8")
+        self.metadata["suite"]["containerimage.digest"] = digest("8")
+        self.metadata["suite"]["containerimage.descriptor"]["digest"] = digest("8")
+        self.assertEqual(identity(), self.manifest_digest)
+        selected["Descriptor"]["digest"] = digest("f")
+        self.assertEqual(identity(), digest("f"))
+
+        local["Manifests"].append(selected.copy())
+        with self.assertRaisesRegex(identities.PreparationError, "ambiguous runnable"):
+            identity()
+        local["Manifests"].pop()
+        selected["ImageData"]["Platform"]["architecture"] = "amd64"
+        with self.assertRaisesRegex(identities.PreparationError, "missing runnable"):
+            identity()
+        selected["ImageData"]["Platform"]["architecture"] = "arm64"
+        selected["Available"] = False
+        with self.assertRaisesRegex(identities.PreparationError, "not available"):
+            identity()
+        selected["Available"] = True
+        local["Descriptor"]["digest"] = digest("9")
+        with self.assertRaisesRegex(identities.PreparationError, "no longer matches"):
+            identity()
+        local["Descriptor"] = "invalid"
+        with self.assertRaisesRegex(identities.PreparationError, "no longer matches"):
+            identity()
 
     def nats_fixture(self, manifests=None):
         self.index_digest = digest("c")
@@ -142,6 +230,45 @@ class IntegrationIdentitiesTest(unittest.TestCase):
             self.nats_image, self.platform, docker
         )
         self.assertEqual(result, self.arm_manifest_digest)
+
+    def test_nats_index_matches_the_locally_loaded_platform_manifest(self):
+        original = self.nats_fixture()
+
+        def docker(arguments):
+            if arguments == ["image", "inspect", self.nats_image]:
+                details = image_details(
+                    self.index_digest, repo_digests=[f"nats@{self.index_digest}"]
+                )
+                details["Descriptor"] = {
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "digest": self.index_digest,
+                }
+                return json.dumps([details])
+            return original(arguments)
+
+        local = {
+            "Descriptor": {"digest": self.index_digest},
+            "Manifests": [{
+                "Kind": "image",
+                "Available": True,
+                "Descriptor": {
+                    "digest": self.arm_manifest_digest,
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                },
+                "ImageData": {"Platform": {"os": "linux", "architecture": "arm64"}},
+            }],
+        }
+        self.assertEqual(
+            identities.nats_image_identity(
+                self.nats_image, self.platform, docker, lambda image: local
+            ),
+            self.arm_manifest_digest,
+        )
+        local["Manifests"][0]["Descriptor"]["digest"] = digest("9")
+        with self.assertRaisesRegex(identities.PreparationError, "no longer matches"):
+            identities.nats_image_identity(
+                self.nats_image, self.platform, docker, lambda image: local
+            )
 
     def test_nats_index_changes_preserve_selected_manifest_identity(self):
         docker = self.nats_fixture()
