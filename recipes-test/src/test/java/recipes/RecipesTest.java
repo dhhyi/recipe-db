@@ -137,6 +137,50 @@ class RecipesTest {
   }
 
   @Test
+  void preservesNonStringIngredientAmountsForDirectCallers() {
+    String recipeId = given().header("Connection", "close")
+        .contentType(ContentType.JSON)
+        .body("""
+            {
+              "name": "Schemaless amounts",
+              "ingredients": [
+                {"name": "numeric", "amount": 2},
+                {"name": "object", "amount": {"quantity": 1}},
+                {"name": "boolean", "amount": true}
+              ]
+            }
+            """)
+        .post("/recipes")
+        .then()
+        .statusCode(201)
+        .body("ingredients[0].amount", equalTo(2))
+        .body("ingredients[1].amount.quantity", equalTo(1))
+        .body("ingredients[2].amount", equalTo(true))
+        .extract()
+        .path("id");
+
+    given().header("Connection", "close")
+        .contentType(MERGE_PATCH)
+        .body("""
+            {
+              "ingredients": [
+                {"name": "fraction", "amount": 0.5}
+              ]
+            }
+            """)
+        .patch("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("ingredients[0].amount", equalTo(0.5f));
+
+    given().header("Connection", "close")
+        .get("/recipes/{id}", recipeId)
+        .then()
+        .statusCode(200)
+        .body("ingredients[0].amount", equalTo(0.5f));
+  }
+
+  @Test
   void rejectsClientSuppliedServerOwnedFieldsIncludingNull() {
     for (String field : new String[]{"createdAt", "updatedAt", "nameSortKey"}) {
       given().header("Connection", "close")
