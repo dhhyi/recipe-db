@@ -27,7 +27,8 @@ metadata_file() {
   run python3 "$RESOLVER" --metadata "$metadata" --schema "$SCHEMA"
 
   [ "$status" -eq 0 ]
-  expected_declarations=$(cat <<'EOF'
+  expected_declarations=$(
+    cat << 'EOF'
 {
   "e2e-test": ["browse", "recipes-edit", "images-edit"],
   "graphql-test": ["graphql", "fixtures"],
@@ -50,7 +51,7 @@ metadata_file() {
   "design": []
 }
 EOF
-)
+  )
   jq -e --argjson expected "$expected_declarations" '
     .projects as $projects
     | all($expected | to_entries[];
@@ -132,7 +133,7 @@ EOF
 @test "image preparation pulls external services and builds Compose targets with metadata" {
   cd "$BATS_TEST_TMPDIR"
   mkdir -p bin output
-  cat > bin/docker <<'EOF'
+  cat > bin/docker << 'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$DOCKER_CALLS"
 case "$*" in

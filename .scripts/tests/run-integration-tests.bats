@@ -235,7 +235,7 @@ EOF
   for project in recipes-test ratings-test; do
     printf '{}\n' > ".generated/integration-identities/$project.json"
   done
-  cat > bin/mise <<'EOF'
+  cat > bin/mise << 'EOF'
 #!/usr/bin/env bash
 printf 'mise %s\n' "$*" >> "$MOCK_LOG"
 exit "${BAZEL_STATUS:-0}"
