@@ -30,6 +30,7 @@ pwa/icons/
 docker-compose.yml
 recipe-db.graphqls
 .dockerignore
+/design/Dockerfile.dockerignore
 *.log*
 traefik.yml
 oauth2-proxy-alpha.yml

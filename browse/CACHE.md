@@ -20,6 +20,6 @@ Invalidation marks active renders obsolete before removing files. Their complete
 
 Detail responses use `Cache-Control: private, no-store` and retain a content-derived ETag for validators supplied by clients. Conditional requests check the current server entry first, rather than returning 304 for expired or invalidated HTML. Browser image caching is separate.
 
-Logs expose `cache hit`, `cache miss`, `cache eviction`, `cache invalidation`, `cache failure`, and consumer connection/retry events. Monitor these alongside JetStream pending, redelivered, and outstanding-acknowledgement counts. Invalid events require operator correction or quarantine as described in the [message-bus contract](../message-bus/CONTRACT.md).
+Logs expose `cache hit`, `cache miss`, `cache eviction`, `cache invalidation`, `cache failure`, and consumer connection/retry events. Monitor these alongside JetStream pending, redelivered, and outstanding-acknowledgement counts. Invalid events require operator correction or quarantine as described in the [message-bus contract](../message-bus/README.md).
 
 Run `mise run --raw in-devcontainer browse test` for race-enabled cache, HTTP, event-contract, and embedded real-JetStream tests, including broker restart/outage recovery. Tests use isolated temporary disk stores and do not mutate the application's broker or recipe data.

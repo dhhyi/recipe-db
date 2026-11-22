@@ -412,6 +412,20 @@ EOF
   grep -Fx '        "example/.devcontainer/Dockerfile",' check-rule
 }
 
+@test "Design check tracks declared Tailwind sources and their metadata" {
+  mkdir -p design example/templates
+  printf '%s\n' 'name: design' '---' 'check: echo checked' > design/.project.yaml
+  printf '%s\n' 'tailwind: {sources: [templates]}' >> example/.project.yaml
+  touch example/templates/page.html
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  sed -n '/name = "design_check"/,/^)/p' BUILD.bazel > check-rule
+  grep -Fx '        "example/.project.yaml",' check-rule
+  grep -Fx '        "example/templates/page.html",' check-rule
+}
+
 @test "cached validations discover independent source and fixture inputs" {
   run bash .scripts/generate-bazel-build.sh
   [ "$status" -eq 0 ]

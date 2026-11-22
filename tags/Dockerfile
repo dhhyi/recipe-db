@@ -17,7 +17,6 @@ RUN --mount=type=cache,id=tags-opam-downloads,target=/root/.opam/download-cache,
 
 COPY src ./src
 COPY bin ./bin
-COPY test ./test
 RUN opam exec --switch=5.3.0 -- dune build --profile release ./bin/main.exe \
   && cp _build/default/bin/main.exe /app/tags
 

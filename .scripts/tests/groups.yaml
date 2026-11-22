@@ -231,6 +231,7 @@ tasks:
       - .mise/tasks/**
       - .mise/config.toml
       - .scripts/lib/project-metadata.sh
+      - .scripts/lib/ignore-rules.sh
       - .scripts/docker-base-images.awk
       - .scripts/external-image-references.awk
       - .scripts/update-image-references.awk
@@ -325,6 +326,7 @@ freshness:
       - ":(glob).scripts/*.sh"
       - .scripts/templates/**
       - .scripts/lib/project-metadata.sh
+      - .scripts/lib/ignore-rules.sh
       - .scripts/refresh-render-inputs.sh
       - .scripts/generate-docker-compose.sh
       - .mise/tasks/compose.toml
@@ -431,6 +433,7 @@ tooling:
       - ":(glob)*/.project.yaml"
     .scripts/tests/sync-ignore-files.bats:
       - .scripts/sync-ignore-files.sh
+      - .scripts/lib/ignore-rules.sh
       - .scripts/format-files.sh
       - .scripts/tests/mocks/devcontainer-*
       - ":(glob)*/.project.yaml"
@@ -438,4 +441,5 @@ tooling:
       - ":(glob)*/.project.yaml"
     .scripts/tests/sync-tailwind.bats:
       - .scripts/sync-tailwind.sh
+      - .scripts/lib/ignore-rules.sh
       - ":(glob)*/.project.yaml"

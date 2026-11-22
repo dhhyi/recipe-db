@@ -32,6 +32,7 @@ description = "Regenerate Docker and Prettier ignore files"
 file = ".scripts/sync-ignore-files.sh"
 sources = [
   ".gitignore",
+  ".scripts/lib/ignore-rules.sh",
   "*/{.project.yaml,.gitignore,Dockerfile,.prettierignore}"
 ]
 outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
@@ -40,8 +41,17 @@ outputs = [".dockerignore", ".prettierignore", "*/.dockerignore"]
 description = "Generate shared Tailwind sources and Docker build inputs"
 depends = ["check-tailwind-sources"]
 file = ".scripts/sync-tailwind.sh"
-sources = ["*/.project.yaml", "design/Dockerfile"]
-outputs = ["design/src/tailwind-sources.css", "design/Dockerfile"]
+sources = [
+  ".gitignore",
+  ".scripts/lib/ignore-rules.sh",
+  "*/.project.yaml",
+  "design/Dockerfile"
+]
+outputs = [
+  "design/src/tailwind-sources.css",
+  "design/Dockerfile",
+  "design/Dockerfile.dockerignore"
+]
 
 [sync-vscode-settings]
 description = "Generate repository VS Code settings"

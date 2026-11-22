@@ -9,6 +9,7 @@ devcontainer:
   build:
     packages:
       - build-essential
+      - git-lfs
     args:
       TEMPL_VERSION: "v0.3.1020" # Keep in sync with the templ runtime in go.mod.
     user:
@@ -84,8 +85,18 @@ traefik:
 # yaml-language-server: $schema=../.scripts/project-schema.json
 category: frontend
 graphqlSchema: "."
-tailwindSources:
-  - src
+docker:
+  ignore:
+    - "**/*_test.go"
+    - "**/*_templ.go"
+    - src/generated/
+tailwind:
+  sources:
+    - src
+  ignore:
+    - src/**/*_test.go
+    - src/**/*_templ.go
+    - src/generated
 generate:
   - command: go run github.com/Khan/genqlient@main
     output: src/generated/graphql.go
