@@ -1,4 +1,11 @@
-from search_support import SearchSession
+from search_support import REST, SearchSession, request
+
+
+def before_all(context):
+    status, raw, _ = request(REST + "/recipes", "DELETE")
+    assert status == 204, (status, raw)
+    client = SearchSession()
+    client.finish_rebuild(client.start_rebuild())
 
 
 def before_scenario(context, scenario):

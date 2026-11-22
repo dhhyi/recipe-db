@@ -12,6 +12,7 @@ Feature: Search recipes on the deployed stack
     And all scoped recipes have been indexed
 
   Scenario: German text, typo tolerance and relevance ordering
+    Then the search index contains only the scoped recipes
     When I search for "Kartofelsuppe"
     Then the results are exactly "soup"
     When I search for "Äpfel"
