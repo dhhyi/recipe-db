@@ -391,6 +391,8 @@ tooling:
       - .scripts/check-forbidden-files.sh
     .scripts/tests/generate-bazel-build.bats:
       - .scripts/generate-bazel-build.sh
+      - .scripts/create-auth-accounts.sh
+      - .scripts/create-auth-test-fixture.sh
       - .bazelversion
       - .scripts/integration-dependencies.py
       - .scripts/project-schema.json

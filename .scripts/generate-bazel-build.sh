@@ -418,6 +418,15 @@ for project_file in */.project.yaml; do
     integration_rule_files+=("$dependency/.project.yaml")
   done <<< "$dependency_projects"
   integration_rule_files+=("${integration_shared_inputs[@]}")
+  if grep -Fxq graphql <<< "$dependency_projects"; then
+    for file in .scripts/create-auth-accounts.sh .scripts/create-auth-test-fixture.sh; do
+      if [[ ! -f "$file" ]]; then
+        printf 'Missing integration-cache input: %s\n' "$file" >&2
+        exit 1
+      fi
+      integration_rule_files+=("$file")
+    done
+  fi
   if [[ "$reaches_nats" == true ]]; then
     integration_rule_files+=(message-bus/nats.conf)
   fi

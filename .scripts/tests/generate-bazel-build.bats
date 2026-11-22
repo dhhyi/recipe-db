@@ -30,6 +30,8 @@ EOF
   cp "$BATS_TEST_DIRNAME/../integration-identities.py" .scripts/
   cp "$BATS_TEST_DIRNAME/../generate-docker-compose.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../refresh-render-inputs.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../create-auth-accounts.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../create-auth-test-fixture.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
@@ -215,6 +217,7 @@ name: frontend-app
 category: frontend
 integrationDependencies:
   - backend
+  - graphql
 EOF
   cat > backend-service/.project.yaml << 'EOF'
 name: backend-service
@@ -251,6 +254,9 @@ EOF
   grep -Fx '        "suite-test/.project.yaml",' suite-rule
   grep -Fx '        "frontend-app/.project.yaml",' suite-rule
   grep -Fx '        "backend-service/.project.yaml",' suite-rule
+  grep -Fx '        "graphql/.project.yaml",' suite-rule
+  grep -Fx '        ".scripts/create-auth-accounts.sh",' suite-rule
+  grep -Fx '        ".scripts/create-auth-test-fixture.sh",' suite-rule
   for file in .scripts/templates/docker-compose-template.yml \
     .scripts/templates/oauth2-proxy-alpha-template.yml \
     .scripts/templates/service-template.lib.yml \
@@ -273,6 +279,8 @@ EOF
 
   sed -n '/name = "integration_suite_suite-nats"/,/^)/p' BUILD.bazel > nats-rule
   grep -Fx '        "message-bus/nats.conf",' nats-rule
+  run -1 grep -F '.scripts/create-auth-' nats-rule
+  run -1 grep -F '.secrets/' suite-rule
 
   cp BUILD.bazel generated-build
   rm message-bus/nats.conf
@@ -326,6 +334,7 @@ category: test
 integration: echo suite
 integrationDependencies:
   - app
+  - graphql
 EOF
   cat > suite-other/.project.yaml << 'EOF'
 name: suite-other
@@ -389,20 +398,34 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$invocations")" -eq 3 ]
 
+  printf '%s\n' '# auth configuration changed' >> .scripts/create-auth-accounts.sh
+  run run_suite_build auth-changed //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 4 ]
+
+  run run_suite_build auth-unrelated //:integration_suite_suite-other
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 4 ]
+
+  printf '%s\n' '# auth fixture changed' >> .scripts/create-auth-test-fixture.sh
+  run run_suite_build auth-fixture-changed //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 5 ]
+
   rm -rf "$cache/ac"
   run run_suite_build missing-cache-actions //:integration_suite_suite-test
   [ "$status" -eq 0 ]
-  [ "$(wc -l < "$invocations")" -eq 4 ]
+  [ "$(wc -l < "$invocations")" -eq 6 ]
 
   printf '%s\n' '{"images":["sha256:three"]}' > .generated/integration-identities/suite-test.json
   touch "$fail_marker"
   run run_suite_build failure //:integration_suite_suite-test
   [ "$status" -eq 1 ]
-  [ "$(wc -l < "$invocations")" -eq 5 ]
+  [ "$(wc -l < "$invocations")" -eq 7 ]
 
   run run_suite_build retry //:integration_suite_suite-test
   [ "$status" -eq 0 ]
-  [ "$(wc -l < "$invocations")" -eq 6 ]
+  [ "$(wc -l < "$invocations")" -eq 8 ]
 }
 
 @test "project check targets depend on devcontainer build inputs" {
