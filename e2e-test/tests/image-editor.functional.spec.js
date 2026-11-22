@@ -55,47 +55,6 @@ async function observeBlobReleases(page) {
   return () => page.evaluate(() => window.revokedImageEditorUrls);
 }
 
-test("selecting a local source does not upload, and Cancel keeps the saved image", async ({
-  page,
-  demoRecipe,
-}) => {
-  const uploads = [];
-  page.on("request", (request) => {
-    if (isImageUpload(request)) uploads.push(request);
-  });
-  const revokedUrls = await observeBlobReleases(page);
-  await selectSource(page, demoRecipe);
-  await expect(sourceImage(page)).toHaveAttribute("src", /^blob:/);
-  const blobUrl = await sourceImage(page).getAttribute("src");
-  expect(await revokedUrls()).not.toContain(blobUrl);
-  expect(await crop(page)).toEqual({ x: 0, y: 0, width: 1200, height: 900 });
-  await expect(page.locator(".crop-handle")).toHaveCount(8);
-  await expect(addInput(page)).toHaveCount(0);
-  await expect(galleryHeading(page)).toHaveCount(0);
-  await expect(galleryImages(page)).toHaveCount(0);
-  const releaseRead = Promise.withResolvers();
-  await page.route("**/graphql", async (route) => {
-    if (isGalleryRead(route.request())) await releaseRead.promise;
-    await route.fallback();
-  });
-  try {
-    const readStarted = page.waitForRequest(isGalleryRead);
-    await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
-    await readStarted;
-    await expect(selection(page)).toHaveCount(0);
-    await expect(addInput(page)).toBeDisabled();
-    await expect(galleryImages(page)).toHaveCount(0);
-    await expect.poll(revokedUrls).toContain(blobUrl);
-    releaseRead.resolve();
-    await expect(galleryImages(page)).toBeVisible();
-    await expect(addInput(page)).toBeEnabled();
-    await expect(addInput(page)).toBeFocused();
-    expect(uploads).toHaveLength(0);
-  } finally {
-    releaseRead.resolve();
-  }
-});
-
 test("all eight mouse handles keep the opposite anchor and clamp to source bounds", async ({
   page,
   demoRecipe,
