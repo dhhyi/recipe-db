@@ -10,6 +10,20 @@ export const crop = { x: 500, y: 225, width: 300, height: 225 };
 const existing = { id: "existing", thumbUrl: "/images/existing-thumb.png" };
 const saved = { id: "saved", thumbUrl: "/images/saved-thumb.png" };
 
+export const outage = {
+  errors: [
+    {
+      // GraphQL could not connect to the images service, e.g. during a restart.
+      message: "images service is unavailable",
+      extensions: {
+        code: "service-unavailable",
+        status: 503,
+        service: "images",
+      },
+    },
+  ],
+};
+
 export const graphqlMocks = [
   {
     query: `query {
@@ -46,19 +60,7 @@ export const graphqlMocks = [
       crop,
     },
     responses: [
-      {
-        errors: [
-          {
-            // GraphQL could not connect to the images service, e.g. during a restart.
-            message: "images service is unavailable",
-            extensions: {
-              code: "service-unavailable",
-              status: 503,
-              service: "images",
-            },
-          },
-        ],
-      },
+      outage,
       {
         data: {
           addImage: {

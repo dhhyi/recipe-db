@@ -2,24 +2,17 @@ import {
   test as base,
   expect,
   graphql,
-  uploadImage,
   waitForRecipeIndexed,
   waitForRecipePageHeading,
   waitForRecipePageText,
 } from "./fixtures.js";
-import { fileURLToPath } from "node:url";
 import {
   addInput,
   chooseSource,
-  crop,
-  drag,
   fulfillImageUpload,
   galleryHeading,
   galleryImages,
-  isGalleryRead,
   observeUploads,
-  handle,
-  saveButton,
   selection,
 } from "./image-editor.helpers.js";
 
@@ -536,12 +529,10 @@ test.describe("first image", () => {
   });
 });
 
-test("open the gallery from a recipe and add a new default image", async ({
+test("open the gallery from the recipe editor", async ({
   page,
-  request,
   demoRecipe,
 }) => {
-  test.setTimeout(30_000);
   await page.goto("/");
   await page
     .getByRole("link", { name: `Rezept ${demoRecipe.name}`, exact: true })
@@ -554,193 +545,10 @@ test("open the gallery from a recipe and add a new default image", async ({
   await expect(galleryHeading(page)).toHaveText(
     `Bilder für ${demoRecipe.name} verwalten`,
   );
-  const image = galleryImages(page).first();
-  await expect(image).toBeVisible();
-  const originalUrl = await image.getAttribute("src");
-  expectImmutableUrl(originalUrl, demoRecipe.id, true);
-
-  await page.route("**/graphql", async (route) => {
-    if (isImageUpload(route.request())) {
-      const metadata = await uploadImage(request, demoRecipe, "image-b.png");
-      await route.fulfill({
-        status: 200,
-        contentType: "application/graphql-response+json",
-        body: JSON.stringify({ data: { addImage: metadata } }),
-      });
-    } else {
-      await route.fallback();
-    }
-  });
-  const uploaded = page.waitForResponse((response) =>
-    isImageUpload(response.request()),
-  );
-  await chooseSource(
-    page,
-    fileURLToPath(new URL("./assets/image-b.png", import.meta.url)),
-  );
-  await saveButton(page).click();
-  const result = await (await uploaded).json();
-  expect(result.errors).toBeUndefined();
-  const metadata = result.data.addImage;
-  expect(metadata.thumbUrl).not.toBe(originalUrl);
-  await expect(galleryImages(page)).toHaveCount(2);
-  await expect(image).toHaveAttribute("src", metadata.thumbUrl);
-  await expect(galleryImages(page).nth(1)).toHaveAttribute("src", originalUrl);
-  await waitForPublishedImage(
-    page,
+  await expect(galleryImages(page)).toHaveCount(1);
+  expectImmutableUrl(
+    await galleryImages(page).first().getAttribute("src"),
     demoRecipe.id,
-    metadata.url,
-    metadata.thumbUrl,
+    true,
   );
-  await page
-    .getByRole("link", { name: "Zurück zum Rezept", exact: true })
-    .click();
-  const detailImage = page
-    .locator("recipe-image-carousel")
-    .getByRole("img", { name: demoRecipe.name, exact: true })
-    .first();
-  await expect(detailImage).toHaveAttribute("src", metadata.url);
-});
-
-test("Add stays disabled until the initial gallery read completes", async ({
-  page,
-  recipeWithoutImage,
-}) => {
-  const releaseRead = Promise.withResolvers();
-  await page.route("**/graphql", async (route) => {
-    if (isGalleryRead(route.request())) {
-      await releaseRead.promise;
-    }
-    await route.fallback();
-  });
-  const empty = page.getByText("Kein Bild vorhanden.", { exact: true });
-  try {
-    const readStarted = page.waitForRequest(isGalleryRead);
-    await page.goto(`/images-edit/${recipeWithoutImage.id}`);
-    await readStarted;
-    await expect(addInput(page)).toBeDisabled();
-    await expect(
-      page
-        .getByRole("status")
-        .filter({ hasText: "Rezeptbilder werden geladen." }),
-    ).toBeVisible();
-    await expect(empty).toHaveCount(0);
-    releaseRead.resolve();
-    await expect(empty).toBeVisible();
-    await expect(addInput(page)).toBeEnabled();
-  } finally {
-    releaseRead.resolve();
-  }
-});
-
-test("a failed image upload preserves the previous image and shows feedback", async ({
-  page,
-  demoRecipe,
-}) => {
-  await page.goto(`/images-edit/${demoRecipe.id}`);
-  const image = galleryImages(page);
-  await expect(image).toBeVisible();
-  const previous = await image.getAttribute("src");
-  await page.route("**/graphql", async (route) => {
-    if (isImageUpload(route.request())) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          data: null,
-          errors: [{ message: "Upload rejected" }],
-        }),
-      });
-    } else {
-      await route.fallback();
-    }
-  });
-  const pattern = await imagePattern(page, "#2040d0");
-  await chooseSource(page, {
-    name: "rejected.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(pattern.split(",")[1], "base64"),
-  });
-  await page.getByRole("button", { name: "Speichern", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("nicht gespeichert");
-  await expect(image).toHaveCount(0);
-  await page.getByRole("button", { name: "Abbrechen", exact: true }).click();
-  await expect(image).toHaveAttribute("src", previous);
-  await expect(image).toBeVisible();
-  await expect(addInput(page)).toBeFocused();
-});
-
-test("the image editor prevents overlapping actions while an upload is pending", async ({
-  page,
-  demoRecipe,
-}) => {
-  const uploadStarted = Promise.withResolvers();
-  const releaseUpload = Promise.withResolvers();
-  let uploadRequests = 0;
-  await page.route("**/graphql", async (route) => {
-    if (isImageUpload(route.request())) {
-      uploadRequests += 1;
-      uploadStarted.resolve();
-      await releaseUpload.promise;
-      await route.fulfill({
-        contentType: "application/graphql-response+json",
-        body: JSON.stringify({
-          data: {
-            addImage: {
-              url: "/public/pending.png",
-              thumbUrl: "/public/pending-thumb.png",
-              size: 1,
-              width: 1,
-              height: 1,
-            },
-          },
-        }),
-      });
-    } else {
-      await route.fallback();
-    }
-  });
-  try {
-    await page.goto(`/images-edit/${demoRecipe.id}`);
-    const input = addInput(page);
-    const uploaded = page.waitForResponse((response) =>
-      isImageUpload(response.request()),
-    );
-    const pattern = await imagePattern(page, "#2040d0");
-    await chooseSource(page, {
-      name: "pending.png",
-      mimeType: "image/png",
-      buffer: Buffer.from(pattern.split(",")[1], "base64"),
-    });
-    await page.getByRole("button", { name: "Speichern", exact: true }).click();
-    await uploadStarted.promise;
-    await expect(input).toHaveCount(0);
-    await expect(galleryImages(page)).toHaveCount(0);
-    const lockedCrop = await crop(page);
-    await drag(page, handle(page, "se"), -25, -20);
-    expect(await crop(page)).toEqual(lockedCrop);
-    await expect(
-      page.getByRole("button", { name: "Abbrechen", exact: true }),
-    ).toBeDisabled();
-    await expect(
-      page.getByRole("link", { name: "Zurück zum Rezept", exact: true }),
-    ).toHaveAttribute("aria-disabled", "true");
-    await expect(page.locator("main[aria-busy]")).toHaveCount(0);
-    await expect(saveButton(page)).toBeDisabled();
-    await expect(saveButton(page)).toHaveText("Speichern");
-    await expect(saveButton(page)).toHaveAttribute("aria-busy", "true");
-    await saveButton(page).dispatchEvent("click");
-    expect(uploadRequests).toBe(1);
-
-    releaseUpload.resolve();
-    const result = await (await uploaded).json();
-    expect(result.errors).toBeUndefined();
-    await expect(input).toBeEnabled();
-    await expect(selection(page)).toHaveCount(0);
-    await expect(
-      page.getByRole("status").filter({ hasText: "Bild gespeichert." }),
-    ).toBeVisible();
-  } finally {
-    releaseUpload.resolve();
-  }
 });

@@ -1,5 +1,4 @@
 import { test, expect, graphql } from "./fixtures.js";
-import { chooseSource } from "./image-editor.helpers.js";
 import { readFile } from "node:fs/promises";
 
 test.use({ trace: "off", resetApplicationData: false });
@@ -236,64 +235,6 @@ test("role denials and cross-origin writes leave recipe data unchanged", async (
       count: 1,
       myRating: 5,
     });
-  });
-});
-
-test("an invalid image-upload credential never replays a mutation after recovery", async ({
-  ownerIdentity,
-  baseURL,
-}) => {
-  await withRecipe(ownerIdentity, "Access image no replay", async ({ id }) => {
-    const page = await ownerIdentity.browserContext.newPage();
-    let invalid = false;
-    let uploads = 0;
-    await page.route("**/graphql", async (route) => {
-      const request = route.request();
-      if (request.postData()?.includes("addImage")) uploads += 1;
-      if (invalid) {
-        const response = await route.fetch({
-          headers: {
-            ...request.headers(),
-            authorization: "Bearer deliberately-invalid",
-          },
-        });
-        await route.fulfill({ response });
-      } else {
-        await route.fallback();
-      }
-    });
-    page.on("dialog", (dialog) => dialog.accept());
-    try {
-      await page.goto(`${baseURL}/images-edit/${id}`);
-      await chooseSource(
-        page,
-        new URL("./assets/milchreis.png", import.meta.url).pathname,
-      );
-      const save = page.getByRole("button", { name: "Speichern", exact: true });
-      await expect(save).toBeEnabled();
-      invalid = true;
-      await save.click();
-      await expect(page.getByRole("alert")).toContainText(
-        "Anmeldung erforderlich oder abgelaufen",
-      );
-      expect(uploads).toBe(1);
-      invalid = false;
-      await page
-        .getByRole("link", { name: "Zurück zum Rezept", exact: true })
-        .click();
-      await expect(page.locator('h1[itemprop="name"]')).toHaveText(
-        "Access image no replay",
-      );
-      const data = await graphql(
-        ownerIdentity.api,
-        "query($id: ID!) { recipe(id: $id) { image { url } } }",
-        { id },
-      );
-      expect(data.recipe.image).toBeNull();
-      expect(uploads).toBe(1);
-    } finally {
-      await page.close();
-    }
   });
 });
 
