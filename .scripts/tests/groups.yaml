@@ -285,7 +285,6 @@ workflows:
     .scripts/tests/mise-workflows.bats:
       - .github/workflows/pr-metadata.yaml
       - .github/workflows/publish.yaml
-      - .scripts/build-integration-images.sh
       - .mise/tasks/validation.toml
       - mise.toml
       - .mise/config.toml

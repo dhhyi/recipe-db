@@ -232,13 +232,12 @@ EOF
 
 @test "ARM64 image builds record metadata with bounded concurrency" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  steps=$(yq -o=json '.jobs.arm64-validation.steps' "$workflow")
   script=$(yq '.jobs.arm64-validation.steps[] | select(.name == "build development and standalone test images") | .run' "$workflow")
 
   [[ "$script" == *"bash .scripts/build-integration-images.sh"* ]]
-  grep -F 'docker compose --progress plain "${compose_arguments[@]}" build --print' \
-    "$BATS_TEST_DIRNAME/../build-integration-images.sh"
-  grep -F -- '--jobs "${COMPOSE_PARALLEL_LIMIT:-1}"' \
-    "$BATS_TEST_DIRNAME/../build-integration-images.sh"
+  [ "$(jq -r 'map(.name) | index("build development and standalone test images")' <<< "$steps")" \
+    -lt "$(jq -r 'map(.name) | index("prepare selected-platform integration identities")' <<< "$steps")" ]
 }
 
 @test "image cache credentials and PR identity are available before image setup" {

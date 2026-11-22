@@ -287,6 +287,17 @@ EOF
   run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
 }
 
+@test "cached auth-required suite execution also avoids pulls and retains failure logs" {
+  run env INTEGRATION_BAZEL_ACTION=true RUN_STATUS=19 \
+    bash .scripts/run-integration-suite.sh graphql-test
+
+  [ "$status" -eq 19 ]
+  grep -Fx 'docker compose --profile test run --pull never --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh graphql-test -c echo tested' "$MOCK_LOG"
+  [ "$(cat graphql-test/target/integration-tests/run.log)" = \
+    "$(printf '%s\n' 'test stdout: graphql-test' 'test stderr: graphql-test')" ]
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+}
+
 @test "runs test services with the host uid and gid for writable target mounts" {
   run env ASSERT_HOST_IDENTITY=true \
     bash .scripts/run-integration-tests.sh --development recipes-test
