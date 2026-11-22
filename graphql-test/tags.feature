@@ -58,6 +58,17 @@ Feature: tags
     * request
       """
       {
+        query: 'mutation($recipeId: ID!, $value: RecipeInput!) { updateRecipe(id: $recipeId, value: $value) { id name } }',
+        variables: { recipeId: '#(recipeId)', value: { name: 'Edited OTHER category recipe' } }
+      }
+      """
+    * method post
+    * status 200
+    * match response.data.updateRecipe == { id: '#(recipeId)', name: 'Edited OTHER category recipe' }
+
+    * request
+      """
+      {
         query: 'query($id: ID!) { recipe(id: $id) { tags { id category name } } }',
         variables: { id: '#(recipeId)' }
       }
@@ -65,3 +76,26 @@ Feature: tags
     * method post
     * status 200
     * match response.data.recipe.tags == [{ id: '#(otherTag.id)', category: 'OTHER', name: '#(tagName)' }]
+
+    * def untaggedRecipeName = 'Untagged recipe ' + java.lang.System.nanoTime()
+    * request
+      """
+      {
+        query: 'mutation($value: RecipeInput!) { createRecipe(value: $value) { id } }',
+        variables: { value: { name: '#(untaggedRecipeName)' } }
+      }
+      """
+    * method post
+    * status 200
+    * def untaggedRecipeId = response.data.createRecipe.id
+
+    * request
+      """
+      {
+        query: 'query($id: ID!) { recipe(id: $id) { tags { id category name } } }',
+        variables: { id: '#(untaggedRecipeId)' }
+      }
+      """
+    * method post
+    * status 200
+    * match response.data.recipe.tags == []

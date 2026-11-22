@@ -346,12 +346,10 @@ EOF
   run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
 }
 
-@test "tags integration tests use isolated disposable instances and categorized fixtures" {
+@test "tags integration tests use the development service and categorized fixtures" {
   add_test_project tags-test
   jq '.services["tags-test"] = {profiles: ["test"]}
-    | .services["tags-test-api"] = {profiles: ["test"]}
-    | .services["tags-production-test-api"] = {profiles: ["test"]}
-    | .services["tags-recipes-test-api"] = {profiles: ["test"]}' \
+    | .services.tags = {}' \
     "$COMPOSE_CONFIG" > next.json
   mv next.json "$COMPOSE_CONFIG"
 
@@ -359,12 +357,22 @@ EOF
 
   [ "$status" -eq 0 ]
   grep -Fx 'docker compose --profile test build fixtures tags-test' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test build tags-test-api tags-production-test-api tags-recipes-test-api' "$MOCK_LOG"
-  grep -Fx 'docker compose --profile test up -d --force-recreate tags-test-api tags-production-test-api tags-recipes-test-api' "$MOCK_LOG"
   grep -Fx 'docker compose --profile test run --rm --entrypoint /bin/sh tags-test -c echo tested' "$MOCK_LOG"
   mapfile -t commands < "$MOCK_LOG"
-  [ "${commands[-2]}" = "docker compose --profile test stop tags-test-api tags-production-test-api tags-recipes-test-api" ]
   [ "${commands[-1]}" = "docker compose --profile test stop fixtures" ]
+  run -1 grep -E 'docker compose --profile test (build|up|stop) (tags-test-api|tags-production-test-api|tags-recipes-test-api)' "$MOCK_LOG"
+}
+
+@test "tags integration requires the development tags service" {
+  add_test_project tags-test
+  jq '.services["tags-test"] = {profiles: ["test"]}' "$COMPOSE_CONFIG" > next.json
+  mv next.json "$COMPOSE_CONFIG"
+
+  run bash .scripts/run-integration-tests.sh --development tags-test
+
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"The development tags service is missing from the generated Compose configuration."* ]]
+  [ "$(wc -l < "$MOCK_LOG")" -eq 1 ]
 }
 
 @test "browser tests wait for the full frontend stack before running" {
