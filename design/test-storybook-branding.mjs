@@ -53,13 +53,13 @@ try {
         context.drawImage(img, 0, 0);
         return Array.from(context.getImageData(0, 0, 1, 1).data);
       }),
-      colorScheme === "dark" ? [255, 255, 255, 255] : [0, 0, 0, 0],
+      [255, 255, 255, 255],
     );
     const imageURL = await image.evaluate((img) => img.src);
     const wrapperResponse = await page.request.get(imageURL);
     assert.equal(wrapperResponse.status(), 200);
     const wrapper = await wrapperResponse.text();
-    assert.match(wrapper, /prefers-color-scheme:\s*dark/);
+    assert.match(wrapper, /<rect[^>]+fill="#fff"/);
     assert.equal(
       (
         await page.request.get(
