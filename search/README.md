@@ -66,7 +66,7 @@ Events queue during rebuilds. Active rebuild requests queue another pass; pendin
 
 Tag assignment mutations publish the existing per-recipe `tags.changed` event through GraphQL; search reloads the affected recipe. The private testing-only `DELETE /tags` reset is a direct backend operation and publishes no event. The established #58/message-bus contract explicitly does not define `tags.reset` or a GraphQL reset mutation. After a private test reset, request `POST /search/reindex` and wait for its successful completion (or restart search for the startup rebuild) before relying on tag projections. Successful empty tag reads then clear prior assignments across the full projection.
 
-Source outages never authorize deletion. Optional fields retain their previous indexed values; without a previous document, an optional-source outage blocks indexing. Restore the dependency and retry/rebuild. Malformed events remain unfinished and require recovery under the [message-bus contract](../message-bus/CONTRACT.md). Inspect status and service logs. For a corrupt/unreadable checkpoint, repair permissions or remove the checkpoint from the search data volume and restart for a full baseline; never advance it manually.
+Source outages never authorize deletion. Optional fields retain their previous indexed values; without a previous document, an optional-source outage blocks indexing. Restore the dependency and retry/rebuild. Malformed events remain unfinished and require recovery under the [message-bus contract](../message-bus/README.md). Inspect status and service logs. For a corrupt/unreadable checkpoint, repair permissions or remove the checkpoint from the search data volume and restart for a full baseline; never advance it manually.
 
 ## Sort contract
 

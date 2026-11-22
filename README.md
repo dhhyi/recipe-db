@@ -97,7 +97,7 @@ A GraphQL gateway is used to combine all backend REST services into a single API
 
 ### Inspiration — see [`inspirations`](./inspirations/README.md) ([`inspirations-test`](./inspirations-test/README.md))
 
-### Search — see [`search`](./search/OPERATIONS.md) ([`search-test`](./search-test/))
+### Search — see [`search`](./search/README.md) ([`search-test`](./search-test/))
 
 ### Utility Services
 
