@@ -18,7 +18,7 @@ export default defineConfig({
   },
   outputDir: "target/test-results",
   reporter: [
-    ["list"],
+    ["dot"],
     ["html", { outputFolder: "target/playwright-report", open: "never" }],
     ["junit", { outputFile: "target/junit.xml" }],
   ],
