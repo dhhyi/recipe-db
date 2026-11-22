@@ -1,33 +1,11 @@
 import { test, expect } from "../../fixtures.js";
-import { graphqlMocks, identityHtml } from "./smoke.mocks.js";
+import { graphqlMocks as startupMocks, identityHtml } from "./smoke.mocks.js";
+import { graphqlMocks } from "./mock-backend.mocks.js";
 
-const query = `mutation ($recipeId: ID!, $file: Upload!, $crop: ImageCropInput!) {
-  addImage(recipeId: $recipeId, file: $file, crop: $crop) {
-    url thumbUrl size width height
-  }
-}`;
-const variables = {
-  recipeId: "test-recipe",
-  file: { name: "test.png", type: "image/png", size: 3 },
-  crop: { x: 0, y: 0, width: 1, height: 1 },
-};
-const response = {
-  data: {
-    addImage: {
-      url: "/images/test.png",
-      thumbUrl: "/images/test-thumb.png",
-      size: 3,
-      width: 1,
-      height: 1,
-    },
-  },
-};
+const [{ query, variables, response }] = graphqlMocks;
 
 test.use({
-  graphqlMocks: [
-    [...graphqlMocks, { query, variables, response }],
-    { scope: "test" },
-  ],
+  graphqlMocks: [[...startupMocks, ...graphqlMocks], { scope: "test" }],
   identityHtml,
   imageMocks: {
     "/images/test-thumb.png": { contentType: "image/png", body: "thumbnail" },
