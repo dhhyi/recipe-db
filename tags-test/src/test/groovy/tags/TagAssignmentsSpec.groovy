@@ -122,5 +122,4 @@ class TagAssignmentsSpec extends TagsApiSpec {
 		removed.statusCode() == 200
 		removed.jsonPath().getList('').isEmpty()
 	}
-
 }
