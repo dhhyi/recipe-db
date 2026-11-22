@@ -407,6 +407,7 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
           lfs: true
 
       - name: expose GitHub Actions cache credentials
@@ -481,6 +482,7 @@ jobs:
           docker buildx inspect --bootstrap
           mise run --raw sync-files
           mise run --raw generate-docker-compose
+          mise run --raw merge-graphql-schemas
           mise run --raw generate-bazel-build
           mise run create-intranet
           echo "::endgroup::"
@@ -616,7 +618,7 @@ jobs:
             "${execution_log_args[@]}" \
             --output "$GITHUB_OUTPUT"
 
-      - name: upload ARM64 Bazel cache snapshot
+      - name: upload Bazel cache snapshot
         id: upload-arm64-bazel-cache
         if: always() && steps.prepare-arm64-bazel-cache.outcome == 'success' && steps.prepare-arm64-bazel-cache.outputs.name != ''
         uses: actions/upload-artifact@v7

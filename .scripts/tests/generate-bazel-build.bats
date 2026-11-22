@@ -262,13 +262,13 @@ EOF
   done
   run -1 grep -F '.scripts/templates/kubernetes.lib.yml' suite-rule
   grep -Fx '        ".mise/tasks/repository-sync.toml",' suite-rule
-  grep -Fx '    tags = ["no-sandbox", "no-remote"],' suite-rule
+  grep -Fx '    tags = ["manual", "no-sandbox", "no-remote"],' suite-rule
   grep -Fx '    cmd = "INTEGRATION_BAZEL_ACTION=true bash .scripts/run-integration-suite.sh suite-test && touch $@",' suite-rule
   run -1 grep -F 'unrelated/.project.yaml' suite-rule
   run -1 grep -F 'message-bus/nats.conf' suite-rule
 
   sed -n '/name = "integration_suite_suite-empty"/,/^)/p' BUILD.bazel > empty-rule
-  grep -Fx '    tags = ["no-sandbox", "no-remote", "no-cache"],' empty-rule
+  grep -Fx '    tags = ["manual", "no-sandbox", "no-remote", "no-cache"],' empty-rule
   grep -Fx '        ".generated/integration-identities/suite-empty.json",' empty-rule
 
   sed -n '/name = "integration_suite_suite-nats"/,/^)/p' BUILD.bazel > nats-rule
@@ -280,6 +280,102 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$stderr" == *"Validation target message_bus_validation input pattern matches no files: message-bus/nats.conf"* ]]
   cmp generated-build BUILD.bazel
+}
+
+@test "real Bazel suite actions reuse identity-matched results and retry failures" {
+  command -v bazel
+  printf '%s\n' '8.5.0' > .bazelversion
+  : > MODULE.bazel
+  mkdir -p app app-other suite-test suite-other .generated/integration-identities
+  cat > app/.project.yaml << 'EOF'
+name: app
+---
+category: frontend
+EOF
+  cat > app-other/.project.yaml << 'EOF'
+name: app-other
+---
+category: frontend
+EOF
+  cat > suite-test/.project.yaml << 'EOF'
+name: suite-test
+---
+category: test
+integration: echo suite
+integrationDependencies:
+  - app
+EOF
+  cat > suite-other/.project.yaml << 'EOF'
+name: suite-other
+---
+category: test
+integration: echo suite
+integrationDependencies:
+  - app-other
+EOF
+  printf '%s\n' '{"images":["sha256:one"]}' > .generated/integration-identities/suite-test.json
+  printf '%s\n' '{"images":["sha256:other"]}' > .generated/integration-identities/suite-other.json
+  cat > .scripts/run-integration-suite.sh << 'EOF'
+#!/bin/sh
+set -eu
+printf '%s\n' "$1" >> "$INTEGRATION_INVOCATIONS"
+if [ -f "$INTEGRATION_FAIL_MARKER" ]; then
+  rm "$INTEGRATION_FAIL_MARKER"
+  exit 37
+fi
+EOF
+
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+
+  invocations="$BATS_TEST_TMPDIR/invocations"
+  cache="$BATS_TEST_TMPDIR/disk-cache"
+  fail_marker="$BATS_TEST_TMPDIR/fail-once"
+  mkdir -p "$cache"
+  export INTEGRATION_INVOCATIONS="$invocations"
+  export INTEGRATION_FAIL_MARKER="$fail_marker"
+
+  run_suite_build() {
+    local base=$1 target=$2
+    bazel \
+      --output_user_root="$BATS_TEST_TMPDIR/bazel-user-root" \
+      --output_base="$BATS_TEST_TMPDIR/$base" \
+      build --disk_cache="$cache" \
+      --action_env="INTEGRATION_INVOCATIONS=$invocations" \
+      --action_env="INTEGRATION_FAIL_MARKER=$fail_marker" \
+      "$target"
+  }
+
+  run run_suite_build first //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 1 ]
+
+  run run_suite_build other //:integration_suite_suite-other
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 2 ]
+
+  run run_suite_build unchanged //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 2 ]
+
+  printf '%s\n' '{"images":["sha256:two"]}' > .generated/integration-identities/suite-test.json
+  run run_suite_build changed //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 3 ]
+
+  run run_suite_build unrelated //:integration_suite_suite-other
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 3 ]
+
+  printf '%s\n' '{"images":["sha256:three"]}' > .generated/integration-identities/suite-test.json
+  touch "$fail_marker"
+  run run_suite_build failure //:integration_suite_suite-test
+  [ "$status" -eq 1 ]
+  [ "$(wc -l < "$invocations")" -eq 4 ]
+
+  run run_suite_build retry //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 5 ]
 }
 
 @test "project check targets depend on devcontainer build inputs" {

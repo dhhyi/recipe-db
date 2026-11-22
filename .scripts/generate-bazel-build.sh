@@ -392,9 +392,9 @@ emit_integration_rule() {
     printf '    outs = ["integration-suite-%s.ok"],\n' "$project"
     printf '    cmd = %s,\n' "$(quote "$command")"
     if [[ "$cacheable" == true ]]; then
-      printf '    tags = ["no-sandbox", "no-remote"],\n'
+      printf '    tags = ["manual", "no-sandbox", "no-remote"],\n'
     else
-      printf '    tags = ["no-sandbox", "no-remote", "no-cache"],\n'
+      printf '    tags = ["manual", "no-sandbox", "no-remote", "no-cache"],\n'
     fi
     printf ')\n'
   } >> "$output"

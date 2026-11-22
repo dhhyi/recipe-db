@@ -48,6 +48,22 @@ setup() {
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
+@test "ARM64 preparation distributes schemas before generating Bazel rules and fetches full history" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  # shellcheck disable=SC2016
+  run yq -r '.jobs.arm64-validation.steps[] | select(.name == "checkout") | .with.fetch-depth' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+
+  run yq -r '.jobs.arm64-validation.steps[] | select(.name == "prepare ARM64 build context without devcontainers") | .run' "$workflow"
+  [ "$status" -eq 0 ]
+  compose=$(grep -nF 'mise run --raw generate-docker-compose' <<< "$output" | cut -d: -f1)
+  schemas=$(grep -nF 'mise run --raw merge-graphql-schemas' <<< "$output" | cut -d: -f1)
+  bazel=$(grep -nF 'mise run --raw generate-bazel-build' <<< "$output" | cut -d: -f1)
+  [ "$compose" -lt "$schemas" ]
+  [ "$schemas" -lt "$bazel" ]
+}
+
 @test "production and devcontainer publishing have independent retry boundaries after validation" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   jobs=$(yq -o=json '.jobs' "$workflow")
