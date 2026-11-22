@@ -389,15 +389,20 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(wc -l < "$invocations")" -eq 3 ]
 
+  rm -rf "$cache/ac"
+  run run_suite_build missing-cache-actions //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 4 ]
+
   printf '%s\n' '{"images":["sha256:three"]}' > .generated/integration-identities/suite-test.json
   touch "$fail_marker"
   run run_suite_build failure //:integration_suite_suite-test
   [ "$status" -eq 1 ]
-  [ "$(wc -l < "$invocations")" -eq 4 ]
+  [ "$(wc -l < "$invocations")" -eq 5 ]
 
   run run_suite_build retry //:integration_suite_suite-test
   [ "$status" -eq 0 ]
-  [ "$(wc -l < "$invocations")" -eq 5 ]
+  [ "$(wc -l < "$invocations")" -eq 6 ]
 }
 
 @test "project check targets depend on devcontainer build inputs" {
