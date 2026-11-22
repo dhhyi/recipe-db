@@ -4,8 +4,12 @@ load test_helper
 
 setup() {
   setup_fixture sync-tailwind.sh
+  mkdir -p .scripts/lib
+  cp "$BATS_TEST_DIRNAME/../lib/ignore-rules.sh" .scripts/lib/
   use_mise_tools
   mkdir -p design/src example/templates
+  printf '%s\n' 'root-secret' '.dockerignore' '.update_devcontainer.sh' '*.log' > .gitignore
+  printf '%s\n' 'src/tailwind-sources.css' > design/.gitignore
   touch design/src/component.html design/outside.html
   cat > design/.project.yaml << 'EOF'
 name: design
@@ -13,6 +17,8 @@ name: design
 tailwindSources:
   - src/component.html
   - outside.html
+docker:
+  ignore: [src/tests, "!src/tests/keep.ts"]
 EOF
   cat > example/.project.yaml << 'EOF'
 name: example
@@ -46,11 +52,26 @@ EOF
   run -1 grep -F 'COPY ["design/' design/Dockerfile
   grep -Fx 'FROM scratch' design/Dockerfile
   grep -Fx 'RUN echo preserved' design/Dockerfile
+  grep -Fx '/example/*' design/Dockerfile.dockerignore
+  grep -Fx '!/example/templates/**' design/Dockerfile.dockerignore
+  grep -Fx 'root-secret' design/Dockerfile.dockerignore
+  grep -Fx '/design/root-secret' design/Dockerfile.dockerignore
+  grep -Fx '/design/.dockerignore' design/Dockerfile.dockerignore
+  grep -Fx '/design/.update_devcontainer.sh' design/Dockerfile.dockerignore
+  grep -Fx '/design/*.log' design/Dockerfile.dockerignore
+  grep -Fx '/design/src/tests' design/Dockerfile.dockerignore
+  grep -Fx '!/design/src/tests/keep.ts' design/Dockerfile.dockerignore
+  grep -Fx '/design/.project.yaml' design/Dockerfile.dockerignore
+  grep -Fx '/design/.gitignore' design/Dockerfile.dockerignore
+  grep -Fx '/design/README.md' design/Dockerfile.dockerignore
+  grep -Fx '/design/Dockerfile' design/Dockerfile.dockerignore
+  run -1 grep -Fx '/design/src/tailwind-sources.css' design/Dockerfile.dockerignore
 }
 
 @test "rejects source paths escaping the project without changing outputs" {
   cp design/Dockerfile expected.Dockerfile
   printf '%s\n' sentinel > design/src/tailwind-sources.css
+  printf '%s\n' sentinel > design/Dockerfile.dockerignore
   for source in /tmp ../outside templates/../outside templates/.. ..; do
     printf 'name: example\n---\ntailwindSources:\n  - %s\n' "$source" > example/.project.yaml
 
@@ -60,6 +81,7 @@ EOF
     [ "$stderr" = "Tailwind source $source must be inside project example" ]
     cmp expected.Dockerfile design/Dockerfile
     [ "$(cat design/src/tailwind-sources.css)" = sentinel ]
+    [ "$(cat design/Dockerfile.dockerignore)" = sentinel ]
   done
 }
 

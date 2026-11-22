@@ -4,6 +4,8 @@ load test_helper
 
 setup() {
   setup_fixture sync-ignore-files.sh
+  mkdir -p .scripts/lib
+  cp "$BATS_TEST_DIRNAME/../lib/ignore-rules.sh" .scripts/lib/
   use_mise_tools
   mkdir -p example no-extra config-only
   printf '%s\n' node_modules recipe-db.graphqls > .gitignore
@@ -53,6 +55,10 @@ EOF
   grep -Fx node_modules example/.dockerignore
   grep -Fx /target example/.dockerignore
   grep -Fx .project.yaml example/.dockerignore
+  grep -Fx .gitignore example/.dockerignore
+  grep -Fx README.md example/.dockerignore
+  grep -Fx Dockerfile example/.dockerignore
+  grep -Fx Dockerfile no-extra/.dockerignore
   [ "$(grep -A 1 -Fx '**/*_test.go' example/.dockerignore)" = "$(printf '%s\n' '**/*_test.go' '!src/keep_test.go')" ]
   run -1 grep -Fx '**/*_test.go' no-extra/.dockerignore
   run -1 grep -Fx '**/*_test.go' .dockerignore

@@ -9,6 +9,7 @@ setup() {
   cp "$BATS_TEST_DIRNAME"/../*.sh .scripts/
   mkdir -p .scripts/lib
   cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/ignore-rules.sh" .scripts/lib/
   yq -p toml -o toml 'del(.tools, .hooks)' "$BATS_TEST_DIRNAME/../../mise.toml" > mise.toml
   mkdir -p .mise/tasks
   cp "$BATS_TEST_DIRNAME/../../.mise/tasks/"*.toml .mise/tasks/
@@ -22,6 +23,7 @@ setup() {
   git init -q
   printf '%s\n' '*.tmp' > .gitignore
   printf '%s\n' 'name: example' '---' 'category: backend' > example/.project.yaml
+  printf '%s\n' 'name: design' '---' 'category: frontend' > design/.project.yaml
   cat > design/Dockerfile << 'EOF'
 # BEGIN generated Tailwind Docker inputs
 # END generated Tailwind Docker inputs
@@ -534,7 +536,7 @@ EOF
   [ "$(stat -c %y design/src/tailwind-sources.css)" = "$css_mtime" ]
   [ "$(stat -c %y design/Dockerfile)" = "$docker_mtime" ]
 
-  for file in design/src/tailwind-sources.css design/Dockerfile; do
+  for file in design/src/tailwind-sources.css design/Dockerfile design/Dockerfile.dockerignore; do
     printf '\n# changed\n' >> "$file"
     run mise run --raw sync-tailwind
     [ "$status" -eq 0 ]
@@ -546,6 +548,11 @@ EOF
   run mise run --raw sync-tailwind
   [ "$status" -eq 0 ]
   [ -s design/src/tailwind-sources.css ]
+
+  rm design/Dockerfile.dockerignore
+  run mise run --raw sync-tailwind
+  [ "$status" -eq 0 ]
+  [ -s design/Dockerfile.dockerignore ]
 
   mkdir second
   touch second/page.html
