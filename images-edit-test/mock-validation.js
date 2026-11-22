@@ -347,6 +347,19 @@ function validateErrors(errors) {
 
 function validateMock(schema, mock) {
   if (!isRecord(mock)) fail("mock must be an object");
+  if (Object.hasOwn(mock, "responses")) {
+    if (Object.hasOwn(mock, "response")) {
+      fail("mock must specify either response or responses, not both");
+    }
+    if (!Array.isArray(mock.responses) || mock.responses.length === 0) {
+      fail("responses must be a non-empty array");
+    }
+    const { responses, ...request } = mock;
+    for (const response of responses) {
+      validateMock(schema, { ...request, response });
+    }
+    return true;
+  }
   if (typeof mock.query !== "string") fail("query must be a string");
   if (!isRecord(mock.variables)) fail("variables must be an object");
   if (!isRecord(mock.response)) fail("response must be an object");
@@ -431,4 +444,12 @@ function validateMock(schema, mock) {
   return true;
 }
 
-export { validateMock };
+function takeMockResponse(mock) {
+  if (!Object.hasOwn(mock, "responses")) return mock.response;
+  if (mock.responses.length === 0) {
+    throw new Error(`GraphQL mock responses exhausted: ${mock.query}`);
+  }
+  return mock.responses.shift();
+}
+
+export { takeMockResponse, validateMock };

@@ -2,7 +2,8 @@ import { test as base, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { buildSchema, getOperationAST, parse, print } from "graphql";
-import { validateMock } from "./mock-validation.js";
+import { createMockGates } from "./mock-gates.js";
+import { takeMockResponse, validateMock } from "./mock-validation.js";
 
 const schema = buildSchema(
   readFileSync(new URL("./recipe-db.graphqls", import.meta.url), "utf8"),
@@ -14,12 +15,17 @@ export const test = base.extend({
   imageMocks: [{}, { option: true }],
   identityHtml: [undefined, { option: true }],
   returnDocument: [undefined, { option: true }],
+  // Gates are keyed by the operation's first root field, e.g. "reorderImages".
+  graphqlGates: async ({}, use) => {
+    await use(createMockGates());
+  },
   mockBackend: [
     async (
       {
         context,
         baseURL,
         graphqlMocks,
+        graphqlGates,
         imageMocks,
         identityHtml,
         returnDocument,
@@ -102,10 +108,20 @@ export const test = base.extend({
                 `Unexpected GraphQL operation or variables: ${JSON.stringify(body)}`,
               );
             }
-            await route.fulfill({
-              contentType: "application/json",
-              body: JSON.stringify(mock.response),
-            });
+            const response = takeMockResponse(mock);
+            await graphqlGates.run(
+              operation.selectionSet.selections[0].name.value,
+              async () => {
+                try {
+                  await route.fulfill({
+                    contentType: "application/json",
+                    body: JSON.stringify(response),
+                  });
+                } catch (error) {
+                  await reject(`GraphQL mock failed: ${error.message}`);
+                }
+              },
+            );
           } catch (error) {
             await reject(`GraphQL mock failed: ${error.message}`);
           }
@@ -157,7 +173,11 @@ export const test = base.extend({
       try {
         await use();
       } finally {
-        await context.close();
+        try {
+          await graphqlGates.releaseAll();
+        } finally {
+          await context.close();
+        }
         expect(failures, "All backend requests must be mocked").toEqual([]);
       }
     },
