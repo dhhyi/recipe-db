@@ -142,16 +142,6 @@ export function isImageDelete(request) {
   return /\bdeleteImage\s*\(/.test(body?.query ?? "");
 }
 
-export function isImageReorder(request) {
-  if (
-    new URL(request.url()).pathname !== "/graphql" ||
-    request.headers()["content-type"]?.includes("multipart/form-data")
-  )
-    return false;
-  const body = request.postDataJSON();
-  return /\breorderImages\s*\(/.test(body?.query ?? "");
-}
-
 export async function observeUploads(page) {
   await page.addInitScript(() => {
     window.imageEditorUploads = [];
