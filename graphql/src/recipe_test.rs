@@ -7,19 +7,22 @@ struct Query;
 #[Object]
 impl Query {
     async fn recipe(&self) -> Recipe {
-        serde_json::from_value(json!({
-            "id": "42",
-            "name": " Äpfel Straße ",
-            "nameSortKey": "apfel strasse",
-            "createdAt": "2026-10-23T13:00:00.123456Z",
-            "updatedAt": "2026-10-23T13:00:00.123456Z",
-            "ingredients": [
-                {"name": "legacy integer", "amount": 2},
-                {"name": "legacy decimal", "amount": 0.5},
-                {"name": "invalid", "amount": true},
-                {"name": "omitted"}
-            ]
-        }))
+        serde_json::from_str(
+            r#"{
+                "id": "42",
+                "name": " Äpfel Straße ",
+                "nameSortKey": "apfel strasse",
+                "createdAt": "2026-10-23T13:00:00.123456Z",
+                "updatedAt": "2026-10-23T13:00:00.123456Z",
+                "ingredients": [
+                    {"name": "legacy integer", "amount": 2},
+                    {"name": "legacy decimal", "amount": 0.5},
+                    {"name": "legacy high precision", "amount": 0.12345678901234567890123456789},
+                    {"name": "invalid", "amount": true},
+                    {"name": "omitted"}
+                ]
+            }"#,
+        )
         .unwrap()
     }
 }
@@ -63,6 +66,7 @@ async fn serializes_legacy_numeric_and_invalid_backend_amounts() {
         json!({"recipe": {"ingredients": [
             {"name": "legacy integer", "amount": "2"},
             {"name": "legacy decimal", "amount": "0.5"},
+            {"name": "legacy high precision", "amount": "0.12345678901234567890123456789"},
             {"name": "invalid", "amount": null},
             {"name": "omitted", "amount": null}
         ]}})

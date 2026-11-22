@@ -287,6 +287,9 @@ async def test_get_recipe_schema_describes_name_as_required_for_add_recipe():
         assert "required" not in schema["changeRecipe"]
         for recipe_schema in schema.values():
             assert "imageUrl" not in recipe_schema["properties"]
+            ingredient_schema = recipe_schema["properties"]["ingredients"]["items"]
+            assert ingredient_schema["properties"]["amount"]["type"] == "string"
+            assert "amount" not in ingredient_schema.get("required", [])
 
 
 async def test_add_recipe_without_an_api_token_is_rejected():

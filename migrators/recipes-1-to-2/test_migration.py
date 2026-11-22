@@ -26,6 +26,7 @@ def create_v1_data(data_directory):
             '"ingredients":['
             '{"name":"integer","amount":2},'
             '{"name":"decimal","amount":1.20e-3},'
+            '{"name":"positive exponent","amount":1.25e+3},'
             '{"name":"negative","amount":-4.50},'
             '{"name":"string","amount":"1-2"},'
             '{"name":"null","amount":null},'
@@ -76,6 +77,7 @@ def verify_v2_data(data_directory):
     if amounts != {
         "integer": "2",
         "decimal": "0.00120",
+        "positive exponent": "1250",
         "negative": "-4.50",
         "string": "1-2",
         "null": None,
@@ -201,7 +203,18 @@ def verify_migrated_data_without_version(data_directory):
     rows = read_recipes(data_directory)
     first = rows[0][1]
     amounts = [ingredient.get("amount") for ingredient in first["ingredients"]]
-    if amounts != ["2", "0.00120", "-4.50", "1-2", None, None, None, None, None]:
+    if amounts != [
+        "2",
+        "0.00120",
+        "1250",
+        "-4.50",
+        "1-2",
+        None,
+        None,
+        None,
+        None,
+        None,
+    ]:
         raise AssertionError(f"migration did not commit normalized data: {amounts}")
 
 
