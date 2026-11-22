@@ -60,7 +60,7 @@ if [ ! -f "$project_file" ]; then
 fi
 
 format_arguments=
-if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = format ] || [ "$1" = format-check ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
+if [ "$#" -eq 1 ] && { [ "$1" = test ] || [ "$1" = integration ] || [ "$1" = format ] || [ "$1" = format-check ] || [ "$1" = check ] || [ "$1" = generate ]; }; then
   if [ "$1" = generate ]; then
     script=$(yq eval-all -r 'select(documentIndex == 1) | .generate // [] | .[].command' "$project_file")
   elif [ "$1" = format ] || [ "$1" = format-check ]; then

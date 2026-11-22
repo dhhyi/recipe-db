@@ -59,6 +59,7 @@ The command is executed with `fish` inside the project's devcontainer. An existi
 These command names are resolved from the second YAML document of the project's `.project.yaml`:
 
 - `test` — runs the project's `test:` script
+- `integration` — runs a test project's `integration:` script against the running stack
 - `format` — runs the project's `format:` script
 - `check` — runs the project's `check:` script
 
