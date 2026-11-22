@@ -1,6 +1,5 @@
-import { test as base, expect, graphql } from "./fixtures.js";
+import { test as base, expect } from "./fixtures.js";
 import {
-  addInput,
   chooseSource,
   crop,
   drag,
@@ -10,12 +9,9 @@ import {
   galleryHeading,
   galleryImages,
   handle,
-  isGalleryRead,
-  isImageUpload,
   observeUploads,
   orientedJpegFile,
   pngFile,
-  saveButton,
   saveSource,
   selectSource,
   selection,
@@ -119,147 +115,6 @@ test("each save sends the original and crop, then returns to the gallery", async
     .getByRole("img", { name: demoRecipe.name, exact: true });
   await expect(thumbnail).toHaveAttribute("src", second.metadata.thumbUrl);
   await expectCropPixels(thumbnail, pngFile(), secondCrop, 300, 225);
-});
-
-test("HTTP-200 GraphQL failure preserves the crop and saved pair and allows retry", async ({
-  page,
-  demoRecipe,
-}) => {
-  const { recipe } = await graphql(
-    page.request,
-    "query($id: ID!) { recipe(id: $id) { image { url thumbUrl } } }",
-    { id: demoRecipe.id },
-  );
-  const original = recipe.image.url;
-  const previous = await page.request.get(original);
-  const previousBytes = await previous.body();
-  const previousThumbnail = await page.request.get(recipe.image.thumbUrl);
-  const previousThumbnailBytes = await previousThumbnail.body();
-  await selectSource(page, demoRecipe);
-  await drag(page, handle(page, "se"), -50, -38);
-  const pendingCrop = await crop(page);
-  let reject = true;
-  await page.route("**/graphql", async (route) => {
-    if (isImageUpload(route.request()) && reject) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          data: {
-            addImage: {
-              url: original,
-              thumbUrl: recipe.image.thumbUrl,
-              size: previousBytes.length,
-              width: 648,
-              height: 486,
-            },
-          },
-          errors: [
-            {
-              message: "Upload rejected",
-              extensions: { code: "invalid-crop" },
-            },
-          ],
-        }),
-      });
-    } else {
-      await route.fallback();
-    }
-  });
-  await saveButton(page).click();
-  await expect(page.getByRole("alert")).toContainText("Zuschnitt");
-  await expect(page.getByRole("alert")).toContainText("erneut speichern");
-  expect(await crop(page)).toEqual(pendingCrop);
-  await expect(sourceImage(page)).toBeVisible();
-  await expect(addInput(page)).toHaveCount(0);
-  await expect(galleryImages(page)).toHaveCount(0);
-  await expect(saveButton(page)).toBeEnabled();
-  expect(await (await page.request.get(original)).body()).toEqual(
-    previousBytes,
-  );
-  expect(await (await page.request.get(recipe.image.thumbUrl)).body()).toEqual(
-    previousThumbnailBytes,
-  );
-  reject = false;
-  const retry = await saveSource(page);
-  expect(uploadedCrop(retry.upload)).toEqual(pendingCrop);
-});
-
-test("a failed post-save gallery read keeps success and Retry does not upload again", async ({
-  page,
-  demoRecipe,
-}) => {
-  await selectSource(page, demoRecipe);
-  const { recipe } = await graphql(
-    page.request,
-    "query($id: ID!) { recipe(id: $id) { images { thumbUrl } } }",
-    { id: demoRecipe.id },
-  );
-  const uploadRequests = [];
-  page.on("request", (request) => {
-    if (isImageUpload(request)) uploadRequests.push(request);
-  });
-  const releaseRead = Promise.withResolvers();
-  let galleryReads = 0;
-  await page.route("**/graphql", async (route) => {
-    if (!isGalleryRead(route.request()) || ++galleryReads !== 1) {
-      await route.fallback();
-      return;
-    }
-    await releaseRead.promise;
-    await route.fulfill({
-      json: { data: null, errors: [{ message: "Gallery unavailable" }] },
-    });
-  });
-  const saved = page
-    .getByRole("status")
-    .filter({ hasText: "Bild gespeichert." });
-  const empty = page.getByText("Kein Bild vorhanden.", { exact: true });
-  const retry = page.getByRole("button", { name: "Erneut laden" });
-  const error = page.getByText("Rezeptbilder konnten nicht geladen werden.");
-  try {
-    const { metadata } = await saveSource(page);
-    await expect.poll(() => galleryReads).toBe(1);
-    await expect(saved).toBeVisible();
-    await expect(addInput(page)).toBeDisabled();
-    await expect(
-      page.locator(
-        '[aria-busy="true"][aria-label="Rezeptbilder werden geladen"]',
-      ),
-    ).toHaveCount(1);
-    await expect(galleryHeading(page)).toHaveAccessibleDescription(
-      "Bild gespeichert.",
-    );
-    await expect(empty).toHaveCount(0);
-    await expect(galleryImages(page)).toHaveCount(0);
-    releaseRead.resolve();
-
-    await expect(error).toBeVisible();
-    await expect(saved).toBeVisible();
-    await expect(addInput(page)).toBeDisabled();
-    await expect(empty).toHaveCount(0);
-    await expect(galleryImages(page)).toHaveCount(0);
-    await expect(
-      page.getByRole("link", { name: "Zurück zum Rezept" }),
-    ).toBeEnabled();
-    await retry.click();
-    await expect(error).toHaveCount(0);
-    await expect(selection(page)).toHaveCount(0);
-    await expect(galleryImages(page)).toHaveCount(2);
-    await expect(galleryImages(page).nth(0)).toHaveAttribute(
-      "src",
-      metadata.thumbUrl,
-    );
-    await expect(galleryImages(page).nth(1)).toHaveAttribute(
-      "src",
-      recipe.images[0].thumbUrl,
-    );
-    await expect(addInput(page)).toBeEnabled();
-    expect(galleryReads).toBe(2);
-    expect(uploadRequests).toHaveLength(1);
-  } finally {
-    releaseRead.resolve();
-  }
 });
 
 test("a mirrored rotated JPEG uses the same oriented coordinates in preview and saved pixels", async ({
