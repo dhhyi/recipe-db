@@ -153,6 +153,7 @@ defmodule Recipes.RepositoryTest do
     assert created["ingredients"] == ingredients
 
     patched_ingredients = [%{"name" => "fraction", "amount" => 0.5}]
+
     assert {:ok, patched} =
              Repository.patch(
                created["id"],

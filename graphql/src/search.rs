@@ -1,5 +1,6 @@
 use async_graphql::{
-    ComplexObject, Context, Error, ErrorExtensions, Json, Object, SimpleObject, ID,
+    ComplexObject, Context, Error, ErrorExtensions, InputValueError, InputValueResult, Json,
+    Object, Scalar, ScalarType, SimpleObject, ID,
 };
 use futures::future::join_all;
 use serde::Deserialize;
@@ -36,6 +37,37 @@ struct SimilarSearchResponse {
     search_cutoff: bool,
     #[serde(default)]
     error: Option<Value>,
+}
+
+struct FacetJson(Value);
+
+#[Scalar(name = "JSON")]
+impl ScalarType for FacetJson {
+    fn parse(value: async_graphql::Value) -> InputValueResult<Self> {
+        value.into_json().map(Self).map_err(InputValueError::custom)
+    }
+
+    fn to_value(&self) -> async_graphql::Value {
+        // The generic JSON scalar serializes arbitrary-precision numbers as private serde objects.
+        fn convert(value: &Value) -> async_graphql::Value {
+            match value {
+                Value::Null => async_graphql::Value::Null,
+                Value::Bool(value) => async_graphql::Value::Boolean(*value),
+                Value::Number(value) => async_graphql::Value::Number(value.clone()),
+                Value::String(value) => async_graphql::Value::String(value.clone()),
+                Value::Array(values) => {
+                    async_graphql::Value::List(values.iter().map(convert).collect())
+                }
+                Value::Object(values) => async_graphql::Value::Object(
+                    values
+                        .iter()
+                        .map(|(key, value)| (async_graphql::Name::new(key), convert(value)))
+                        .collect(),
+                ),
+            }
+        }
+        convert(&self.0)
+    }
 }
 
 fn filter_literal(id: &str) -> Result<String, Error> {
@@ -170,7 +202,7 @@ pub struct RecipeSearchResult {
     found: i32,
     page: i32,
     per_page: i32,
-    facets: Json<Value>,
+    facets: FacetJson,
 }
 
 #[ComplexObject]
@@ -269,7 +301,7 @@ impl SearchQuery {
                     found: result.found,
                     page: result.page,
                     per_page: result.per_page,
-                    facets: Json(result.facet_counts),
+                    facets: FacetJson(result.facet_counts),
                 })
             }
             .await,
