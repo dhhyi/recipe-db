@@ -28,7 +28,7 @@ mise run --raw in-devcontainer search generate
 mise run --raw in-devcontainer search check
 ```
 
-The devcontainer installs Python and `graphql-core` and generates constants on initialization. Both `zig build` and `zig build test` reject invalid operations or stale constants; the project generation pipeline and Docker build regenerate them. Python validation tests run as part of the project checks and Docker build. Neither Python nor `graphql-core` is included in the production runtime image.
+The devcontainer installs Python and `graphql-core` and generates constants on initialization. Both `zig build` and `zig build test` reject invalid operations or stale constants; the project generation pipeline and Docker build regenerate them. Python validation tests run as part of the project test goal. Neither Python nor `graphql-core` is included in the production runtime image.
 
 ## API and recovery
 
