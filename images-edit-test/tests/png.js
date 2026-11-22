@@ -20,23 +20,19 @@ function chunk(type, bytes) {
   return Buffer.concat([length, name, bytes, checksum]);
 }
 
-// Without pixels, only the header is valid: enough for pre-decode checks.
-export function pngFile(width, height, { pixels = true } = {}) {
+export function pngFile(width, height) {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
   header.writeUInt32BE(height, 4);
   header[8] = 8;
   header[9] = 2;
-  const data = pixels
-    ? [chunk("IDAT", deflateSync(Buffer.alloc((width * 3 + 1) * height)))]
-    : [];
   return {
     name: `${width}x${height}.png`,
     mimeType: "image/png",
     buffer: Buffer.concat([
       Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
       chunk("IHDR", header),
-      ...data,
+      chunk("IDAT", deflateSync(Buffer.alloc((width * 3 + 1) * height))),
       chunk("IEND", Buffer.alloc(0)),
     ]),
   };
