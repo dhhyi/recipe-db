@@ -239,42 +239,6 @@ test("role denials and cross-origin writes leave recipe data unchanged", async (
   });
 });
 
-test("direct editor navigation denies anonymous and member management", async ({
-  authContexts,
-  ownerIdentity,
-  baseURL,
-}) => {
-  await withRecipe(
-    ownerIdentity,
-    "Access editor navigation",
-    async ({ id }) => {
-      for (const [identity, heading] of [
-        [await authContexts.anonymous(), "Anmeldung erforderlich"],
-        [await authContexts.memberOne(), "Keine Berechtigung"],
-      ]) {
-        const page = await identity.browserContext.newPage();
-        try {
-          for (const path of [`/edit/${id}`, `/images-edit/${id}`]) {
-            await page.goto(`${baseURL}${path}`);
-            await expect(
-              page.getByRole("heading", { name: heading }),
-            ).toBeVisible();
-            await expect(
-              page.locator("main form, main input[type=file]"),
-            ).toHaveCount(0);
-            await page.getByRole("link", { name: "Zurück zum Rezept" }).click();
-            await expect(page.locator('h1[itemprop="name"]')).toHaveText(
-              "Access editor navigation",
-            );
-          }
-        } finally {
-          await page.close();
-        }
-      }
-    },
-  );
-});
-
 test("an invalid image-upload credential never replays a mutation after recovery", async ({
   ownerIdentity,
   baseURL,

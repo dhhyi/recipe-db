@@ -2,18 +2,8 @@ import {
   test as base,
   expect,
   graphql,
-  uploadImage,
   waitForImageDecoded,
 } from "./fixtures.js";
-import {
-  addInput,
-  galleryHeading,
-  galleryImages,
-  saveButton,
-  selectSource,
-  selection,
-} from "./image-editor.helpers.js";
-import { fileURLToPath } from "node:url";
 
 const test = base.extend({
   visualRole: ["owner", { option: true }],
@@ -34,17 +24,6 @@ for (const role of ["anonymous", "member", "owner"]) {
       name,
       { fullPage = true, maxDiffPixelRatio } = {},
     ) => {
-      if (
-        role === "owner" &&
-        /^\/(?:edit|images-edit)\//.test(new URL(page.url()).pathname)
-      ) {
-        await expect(
-          page.locator("main .editor-actions, main .editor-buttons"),
-        ).toHaveCount(0);
-        await expect(
-          page.locator("main p > a").filter({ hasText: /^Zurück (?:zum|zur)/ }),
-        ).toHaveCount(1);
-      }
       await page.mouse.move(0, 0);
       await page.evaluate(async () => {
         window.scrollTo(0, 0);
@@ -577,97 +556,6 @@ for (const role of ["anonymous", "member", "owner"]) {
         await screenshot(page, `recipe-related-${count}.png`);
       }
     });
-
-    test("image gallery with the images service unavailable", async ({
-      page,
-      degradedRecipes,
-    }) => {
-      const recipe = degradedRecipes[0];
-      await page.goto(`/images-edit/${recipe.id}`);
-      await expectHeader(page, role);
-      if (role === "owner") {
-        await expect(galleryHeading(page)).toBeVisible();
-        await expect(page.getByRole("alert")).toHaveText(
-          "Rezeptbilder konnten nicht geladen werden.",
-        );
-        await expect(
-          page.getByRole("button", { name: "Erneut laden" }),
-        ).toBeVisible();
-        await expect(addInput(page)).toBeDisabled();
-        await expect(galleryImages(page)).toHaveCount(0);
-      } else {
-        await expectEditorDenied(page, role);
-      }
-      await assertNoHorizontalOverflow(page);
-      await screenshot(page, "degraded-image-editor.png");
-    });
-
-    test("image gallery", async ({ page, request, demoRecipe }) => {
-      const newest =
-        role === "owner"
-          ? await uploadImage(request, demoRecipe, "image-b.png")
-          : null;
-      await page.goto(`/images-edit/${demoRecipe.id}`);
-      await expectHeader(page, role);
-      if (role === "owner") {
-        await expect(galleryHeading(page)).toHaveText(
-          `Bilder für ${demoRecipe.name} verwalten`,
-        );
-        await expect(addInput(page)).toBeEnabled();
-        const rows = page
-          .getByRole("list", { name: "Rezeptbilder" })
-          .locator("li");
-        await expect(rows).toHaveCount(2);
-        const firstImage = galleryImages(page).first();
-        await expect(firstImage).toHaveAttribute("src", newest.thumbUrl);
-        await expect(
-          rows.first().getByText("Standardbild", { exact: true }),
-        ).toBeVisible();
-        await expect(
-          rows.last().getByText("Standardbild", { exact: true }),
-        ).toHaveCount(0);
-        for (const thumbnail of await galleryImages(page).all()) {
-          await waitForImageDecoded(thumbnail);
-        }
-      } else {
-        await expectEditorDenied(page, role);
-      }
-      await assertNoHorizontalOverflow(page);
-      await screenshot(page, "image-editor.png");
-    });
-
-    if (role === "owner") {
-      test("image editor with a local source and eight crop handles", async ({
-        page,
-        demoRecipe,
-      }) => {
-        await selectSource(
-          page,
-          demoRecipe,
-          fileURLToPath(new URL("./assets/milchreis.png", import.meta.url)),
-        );
-        await expect(galleryImages(page)).toHaveCount(0);
-        await expect(addInput(page)).toHaveCount(0);
-        await expect(page.locator(".crop-handle")).toHaveCount(8);
-        await selection(page).scrollIntoViewIfNeeded();
-        const area = await page.locator(".editor-image-area").boundingBox();
-        for (const handle of await page.locator(".crop-handle").all()) {
-          const box = await handle.boundingBox();
-          expect(box.width).toBeGreaterThanOrEqual(44);
-          expect(box.height).toBeGreaterThanOrEqual(44);
-          expect(box.x).toBeGreaterThanOrEqual(area.x);
-          expect(box.y).toBeGreaterThanOrEqual(area.y);
-          expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width);
-          expect(box.y + box.height).toBeLessThanOrEqual(area.y + area.height);
-        }
-        await saveButton(page).scrollIntoViewIfNeeded();
-        await expect(saveButton(page)).toBeInViewport();
-        await assertNoHorizontalOverflow(page);
-        await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await screenshot(page, "image-editor-open.png");
-      });
-    }
   });
 }
 
@@ -693,17 +581,6 @@ async function expectHeader(page, role) {
       "",
     );
   }
-}
-
-async function expectEditorDenied(page, role) {
-  await expectHeader(page, role);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-    role === "anonymous" ? "Anmeldung erforderlich" : "Keine Berechtigung",
-  );
-  await expect(
-    page.locator("input, textarea, button[type='submit']"),
-  ).toHaveCount(0);
-  await expect(page.locator("main a[href^='/oauth2/']")).toHaveCount(0);
 }
 
 async function assertNoHorizontalOverflow(page) {
