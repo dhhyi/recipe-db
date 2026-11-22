@@ -6,7 +6,7 @@ addons.setConfig({
     ...themes.normal,
     brandTitle: "RezeptDB",
     brandUrl: "/",
-    brandImage: "./design/storybook-banner.svg",
+    brandImage: "./assets/banner.svg",
     brandTarget: "_self",
   },
 });
