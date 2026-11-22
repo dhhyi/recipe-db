@@ -309,11 +309,6 @@ precommit:
       - .scripts/format-check.sh
       - .scripts/format-files.sh
       - .scripts/generate-bazel-build.sh
-      - .scripts/integration-dependencies.py
-      - .scripts/project-schema.json
-      - .scripts/run-in-devcontainer.sh
-      - .scripts/bazel.sh
-      - .bazelversion
       - .scripts/tests/groups.yaml
       - .scripts/tests/mocks/precommit-*
       - .scripts/templates/**
@@ -370,9 +365,13 @@ formatting:
     .scripts/tests/format-check.bats:
       - .scripts/format-bazel.sh
       - .scripts/format-check.sh
-      - .scripts/format-check.sh
       - .scripts/format-files.sh
       - .scripts/generate-bazel-build.sh
+      - .scripts/integration-dependencies.py
+      - .scripts/project-schema.json
+      - .scripts/run-in-devcontainer.sh
+      - .scripts/bazel.sh
+      - .bazelversion
       - .scripts/tests/groups.yaml
       - .mise/tasks/project-actions.toml
       - .mise/config.toml
