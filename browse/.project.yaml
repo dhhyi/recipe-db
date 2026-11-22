@@ -9,6 +9,7 @@ devcontainer:
   build:
     packages:
       - build-essential
+      - git-lfs
     args:
       TEMPL_VERSION: "v0.3.1020" # Keep in sync with the templ runtime in go.mod.
     user:
