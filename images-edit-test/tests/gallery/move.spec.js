@@ -47,8 +47,10 @@ test("moving up saves without optimistic movement, locks the gallery and focuses
   await expect(page.locator(`[id="move-up-${first.id}"]`)).toBeDisabled();
   await expect(page.locator(`[id="move-down-${second.id}"]`)).toBeDisabled();
   await expect(page.locator(`[id="move-down-${first.id}"]`)).toBeEnabled();
+  const moveButtons = rows.locator(".gallery-move-controls button");
+  await expect(moveButtons).toHaveCount(4);
   expect(
-    await rows.locator(".gallery-move-controls button").evaluateAll((buttons) =>
+    await moveButtons.evaluateAll((buttons) =>
       buttons.every((button) => {
         const { width, height } = button.getBoundingClientRect();
         return width >= 44 && height >= 44;
@@ -80,10 +82,9 @@ test("moving up saves without optimistic movement, locks the gallery and focuses
   expect(writes).toHaveLength(1);
 
   write.release();
-  await expect(rows.first().getByRole("img")).toHaveAttribute(
-    "src",
-    second.thumbUrl,
-  );
+  await expect
+    .poll(() => thumbnails(rows))
+    .toEqual([second.thumbUrl, first.thumbUrl]);
   await expect(
     rows.locator("span").filter({ hasText: "Standardbild" }),
   ).toHaveCount(1);
@@ -112,10 +113,9 @@ test("moving down saves the complete order and focuses the moved image", async (
   expect(await thumbnails(rows)).toEqual([first.thumbUrl, second.thumbUrl]);
 
   write.release();
-  await expect(rows.first().getByRole("img")).toHaveAttribute(
-    "src",
-    second.thumbUrl,
-  );
+  await expect
+    .poll(() => thumbnails(rows))
+    .toEqual([second.thumbUrl, first.thumbUrl]);
   await expect(
     page.getByText("Bild an Position 2 verschoben.", { exact: true }),
   ).toHaveClass("sr-only");
