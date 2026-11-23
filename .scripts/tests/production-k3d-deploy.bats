@@ -168,8 +168,8 @@ google_https_values() {
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
     [[ $output == *"httpsStaging.hostname"* ||
-       $output == *"invalid or incomplete production values"* ||
-       $output == *"runtime.ingressMode is obsolete"* ]]
+      $output == *"invalid or incomplete production values"* ||
+      $output == *"runtime.ingressMode is obsolete"* ]]
   done
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"

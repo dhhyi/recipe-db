@@ -109,8 +109,8 @@ render() {
 @test "local loopback uses ServiceLB without exposing internal entrypoints or allocating NodePorts" {
   cp values.json local-values.json
   render local-values.json
-    jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
-    yq -o=json '.' helm-values.yaml | jq -e '
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+  yq -o=json '.' helm-values.yaml | jq -e '
       .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
       and .ports.websecure.expose.default == false and .ports["rest-internal"].expose.default == false'
 }
