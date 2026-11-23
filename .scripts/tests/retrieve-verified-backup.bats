@@ -419,6 +419,57 @@ PY
   [ "$(python3 -c 'import json; print(json.load(open("remote/state/status.json"))["status"])')" = upload-failure ]
 }
 
+@test "maintenance retrieval selects the verified snapshot from the retained operation" {
+  add_selected_backup maintenance-id
+  python3 - << 'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+root = Path(os.environ["REMOTE_ROOT"])
+drive = root / "drive"
+manifest_path = next(drive.glob("*maintenance-id.manifest.json"))
+package = json.loads(manifest_path.read_text())
+source = {
+    "target": "pi", "cluster": "recipe-db-pi", "context": "recipe-db-pi",
+    "namespace": "recipe-db",
+    "artifact": "ghcr.io/dhhyi/recipe-db-releases@sha256:" + "a" * 64,
+    "revision": "b" * 40,
+}
+package["source"] = source
+package["snapshotManifest"]["source"] = source
+manifest = (json.dumps(package, sort_keys=True, separators=(",", ":")) + "\n").encode()
+manifest_path.write_bytes(manifest)
+status_path = root / "state/status.json"
+status = json.loads(status_path.read_text())
+status.update(status="verified-upload", backupId="maintenance-id")
+status_path.write_text(json.dumps(status))
+maintenance = root / "state/maintenance"
+maintenance.mkdir(mode=0o700)
+operation = {
+    "stateVersion": 2, "backupId": "maintenance-id", "status": "captured",
+    "phase": "captured", "capturedAt": package["capturedAt"], "source": source,
+}
+(maintenance / "backup-state.json").write_text(json.dumps(operation))
+(maintenance / "manifest.json").write_text(json.dumps({
+    "backupId": "maintenance-id", "capturedAt": package["capturedAt"], "source": source,
+}))
+PY
+  run python3 .scripts/retrieve-verified-backup.py --maintenance "$DESTINATION"
+  [ "$status" -eq 0 ]
+  RESULT="$output" python3 - << 'PY'
+import json
+import os
+
+result = json.loads(os.environ["RESULT"])
+assert result["backupId"] == "maintenance-id"
+assert result["maintenanceOperation"]["status"] == "captured"
+assert result["maintenanceOperation"]["phase"] == "captured"
+assert result["maintenanceOperation"]["uploadStatus"] == "verified-upload"
+PY
+}
+
 @test "missing ambiguous and incomplete backup IDs fail without a download" {
   run python3 .scripts/retrieve-verified-backup.py --backup-id missing-id "$DESTINATION"
   [ "$status" -ne 0 ]

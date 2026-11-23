@@ -19,13 +19,12 @@ die() {
   exit 1
 }
 
-[[ $# == 6 ]] || die 'usage: mise run production-upgrade-rehearsal-k3d <backup-manifest> <backup-archive> <verified-upload|verified-unchanged> <VERIFIED-backup-id-status> <candidate-release@sha256:digest> <new-absolute-result-directory>'
+[[ $# == 5 ]] || die 'usage: mise run production-upgrade-rehearsal-k3d <backup-manifest> <backup-archive> <maintenance-retrieval.json> <candidate-release@sha256:digest> <new-absolute-result-directory>'
 input_manifest=$1
 input_archive=$2
-backup_status=$3
-backup_confirmation=$4
-candidate=$5
-result_directory=$6
+retrieval_receipt=$3
+candidate=$4
+result_directory=$5
 [[ $candidate =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[a-f0-9]{64}$ ]] \
   || die 'candidate must be an immutable recipe-db release artifact'
 [[ $input_manifest == /* && $input_archive == /* ]] \
@@ -47,6 +46,7 @@ check_private_file() {
 
 check_private_file "$input_manifest"
 check_private_file "$input_archive"
+check_private_file "$retrieval_receipt"
 [[ $(dirname "$input_manifest") == "$(dirname "$input_archive")" ]] \
   || die 'backup manifest and archive must be in the same private directory'
 [[ $(basename "$input_manifest") == "$(basename "${input_archive%.tar.gz}").manifest.json" ]] \
@@ -87,10 +87,24 @@ jq -e '.source.target == "pi" and .source.cluster == "recipe-db-pi"
   and .source.context == "recipe-db-pi" and .source.namespace == "recipe-db"' \
   "$input_manifest" > /dev/null || die 'backup package is not from the documented Pi production target'
 [[ $candidate != "$source_release" ]] || die 'candidate must differ from the backup source release'
-[[ $backup_status == verified-upload || $backup_status == verified-unchanged ]] \
-  || die 'backup status must be the current Pi uploader result: verified-upload or verified-unchanged'
-[[ $backup_confirmation == "VERIFIED-$backup_id-$backup_status" ]] \
-  || die 'backup status requires the exact VERIFIED-<backup-id>-<status> confirmation after checking the Pi baseline'
+jq -e --arg id "$backup_id" --arg manifest "$input_manifest" \
+  --arg archive "$input_archive" --arg artifact "$source_release" \
+  --arg revision "$source_revision" --arg capturedAt "$(jq -r .capturedAt "$input_manifest")" '
+  .backupId == $id and .manifest == $manifest and .archive == $archive
+  and .maintenanceOperation.backupId == $id
+  and .maintenanceOperation.status == "captured"
+  and .maintenanceOperation.phase == "captured"
+  and (.maintenanceOperation.uploadStatus == "verified-upload"
+    or .maintenanceOperation.uploadStatus == "verified-unchanged")
+  and .maintenanceOperation.capturedAt == $capturedAt
+  and .maintenanceOperation.source.artifact == $artifact
+  and .maintenanceOperation.source.revision == $revision
+' "$retrieval_receipt" > /dev/null \
+  || die 'retrieval receipt does not identify this exact backup and retained maintenance operation'
+maintenance_operation_status=$(jq -r '.maintenanceOperation.status' "$retrieval_receipt")
+maintenance_operation_phase=$(jq -r '.maintenanceOperation.phase' "$retrieval_receipt")
+backup_status=$(jq -r '.maintenanceOperation.uploadStatus' "$retrieval_receipt")
+remote_status_independently_verified=true
 backup_archive_sha=$(jq -er '.archive.sha256 | select(test("^[a-f0-9]{64}$"))' "$input_manifest") \
   || die 'backup manifest has no valid archive digest'
 backup_captured_at=$(jq -er '.capturedAt | select(type == "string" and length > 0)' "$input_manifest") \
@@ -112,7 +126,7 @@ started_epoch=$(date +%s)
 phase=preflight
 failure_reason=''
 rehearsal_status=failed
-remote_status_independently_verified=false
+remote_status_independently_verified=true
 cleanup_status=not-run
 private_data_removed=false
 input_copies_removed=false
@@ -170,8 +184,8 @@ printf '[]\n' > "$phases_file"
 
 # shellcheck disable=SC2329
 remove_input_copies() {
-  rm -- "$input_manifest" "$input_archive" \
-    && [[ ! -e $input_manifest && ! -e $input_archive ]]
+  rm -- "$input_manifest" "$input_archive" "$retrieval_receipt" \
+    && [[ ! -e $input_manifest && ! -e $input_archive && ! -e $retrieval_receipt ]]
 }
 
 # These functions are reached indirectly through the EXIT trap.
@@ -194,6 +208,8 @@ write_result() {
     --arg backupId "$backup_id" --arg backupRelease "$source_release" \
     --arg backupRevision "$source_revision" --arg backupArchiveSha256 "$backup_archive_sha" \
     --arg backupCapturedAt "$backup_captured_at" \
+    --arg maintenanceStatus "$maintenance_operation_status" \
+    --arg maintenancePhase "$maintenance_operation_phase" \
     --arg backupStatus "$backup_status" \
     --arg inputPackageStatus "$input_package_validation_status" \
     --arg candidate "$candidate" --arg candidateRevision "$candidate_revision" \
@@ -227,8 +243,10 @@ write_result() {
         sourceRelease:$backupRelease,sourceRevision:$backupRevision,
         archiveSha256:$backupArchiveSha256,operatorProvided:true,
         remoteUploadStatusIndependentlyVerified:$remoteStatusVerified,
-        operatorReportedUploadStatus:$backupStatus,
-        operatorAttestedBaselineBackupId:$backupId,
+        maintenanceOperation:{status:$maintenanceStatus,phase:$maintenancePhase,
+          uploadStatus:$backupStatus},
+        verifiedUploadStatus:$backupStatus,
+        retrievedFromMaintenanceOperation:true,
         packageValidation:$inputPackageStatus,
         rehearsalCaptureStatus:$sourcePackageStatus},
       deployedIdentity:{release:$deployedRelease,revision:$deployedRevision,

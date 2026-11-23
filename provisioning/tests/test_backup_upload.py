@@ -331,7 +331,7 @@ state_path = path / "backup-state.json"
 if action == "maintenance-enter":
     path.mkdir(mode=0o700)
     state_path.write_text(json.dumps({{
-        "stateVersion": 2, "backupId": backup_id, "status": "backup-mode",
+        "stateVersion": 2, "backupId": backup_id, "status": "maintenance-mode",
         "phase": "maintenance-entered",
         "source": {{"artifact": artifact, "revision": revision}},
     }}))
@@ -794,7 +794,7 @@ state_path.write_text(json.dumps(state))
         with patch.dict(os.environ, {"FAKE_BACKUP_SERVICE_ACTIVE": "inactive"}):
             backup.enter_maintenance(self.config)
         state = backup.lifecycle_state(backup.maintenance_state_path(self.config))
-        self.assertEqual(state["status"], "backup-mode")
+        self.assertEqual(state["status"], "maintenance-mode")
         self.assertEqual(state["phase"], "maintenance-entered")
         status = backup.report_status(self.config)
         self.assertTrue(status["maintenanceActive"])

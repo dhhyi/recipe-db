@@ -28,6 +28,7 @@ LIMIT = 256 * 1024**2
 ACTIONS = {
     "release-stage", "release-migration-plan", "release-migration-next", "release-migration-status",
     "release-migration-recover-claim", "release-start", "release-reopen",
+    "release-readonly-result",
     "release-website-result", "release-disposition", "release-backup-verify",
     "release-accept", "release-finalize", "release-closeout",
 }

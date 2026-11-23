@@ -33,6 +33,7 @@ setup() {
   export PACKAGE_DIRECTORY="$BATS_TEST_TMPDIR"
   export ARCHIVE="$PACKAGE_DIRECTORY/backup-123-456.tar.gz"
   export MANIFEST="$PACKAGE_DIRECTORY/backup-123-456.manifest.json"
+  export RETRIEVAL_RECEIPT="$PACKAGE_DIRECTORY/maintenance-retrieval.json"
   export SOURCE_RELEASE="ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   export CANDIDATE_RELEASE="ghcr.io/dhhyi/recipe-db-releases@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   export SOURCE_REVISION
@@ -48,7 +49,15 @@ setup() {
         namespace:"recipe-db",artifact:$release,revision:$revision},
       archive:{sha256:$sha}
     }' > "$MANIFEST"
-  chmod 600 "$ARCHIVE" "$MANIFEST"
+    jq -n --arg id backup-123-456 --arg manifest "$MANIFEST" --arg archive "$ARCHIVE" \
+      --arg release "$SOURCE_RELEASE" --arg revision "$SOURCE_REVISION" '
+      {backupId:$id,manifest:$manifest,archive:$archive,
+        maintenanceOperation:{backupId:$id,status:"captured",phase:"captured",
+          uploadStatus:"verified-upload",
+          capturedAt:"2026-11-12T18:26:10Z",
+          source:{artifact:$release,revision:$revision}}}
+    ' > "$RETRIEVAL_RECEIPT"
+    chmod 600 "$ARCHIVE" "$MANIFEST" "$RETRIEVAL_RECEIPT"
   printf '%s\n' "$SOURCE_RELEASE" > "$HOME/.config/recipe-db/backup/backup-release-ref"
   chmod 600 "$HOME/.config/recipe-db/backup/backup-release-ref"
   chmod 600 "$HOME/.config/recipe-db/deployment/pi-values.yaml"
@@ -435,8 +444,7 @@ YAML
 
 @test "rejects a Pi identity that does not match the backup before any rehearsal cluster is created" {
   run bash .scripts/production-upgrade-rehearsal-k3d.sh "$MANIFEST" "$ARCHIVE" \
-    verified-upload VERIFIED-backup-123-456-verified-upload \
-    "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   [ "$status" -ne 0 ]
   [[ $output == *"latest backup release/revision does not match the currently deployed release"* ]]
   [ -f "$RESULT_DIRECTORY/result.json" ]
@@ -444,7 +452,9 @@ YAML
   jq -e '.status == "failed"
     and .deployedIdentity.matchesBackupSource == false
     and .backup.remoteUploadStatusIndependentlyVerified == false
-    and .backup.operatorAttestedBaselineBackupId == "backup-123-456"
+    and .backup.maintenanceOperation == {status:"captured",phase:"captured",
+      uploadStatus:"verified-upload"}
+    and .backup.verifiedUploadStatus == "verified-upload"
     and .cleanup.inputCopiesRemoved == false
     and .successfulUpgrade.migrationOutcome == "not-started"
     and .cleanup.activeCluster == ""' "$RESULT_DIRECTORY/result.json"
@@ -457,28 +467,27 @@ YAML
 @test "rejects a kubeconfig outside the documented loopback API tunnel" {
   export MOCK_API_SERVER="https://example.invalid:6445"
   run bash .scripts/production-upgrade-rehearsal-k3d.sh "$MANIFEST" "$ARCHIVE" \
-    verified-upload VERIFIED-backup-123-456-verified-upload \
-    "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   [ "$status" -ne 0 ]
   [[ $output == *"does not use the documented loopback-only API tunnel endpoint"* ]]
   run grep -F 'get configmap recipe-db-release' "$MOCK_KUBECTL_LOG"
   [ "$status" -ne 0 ]
 }
 
-@test "requires an explicit matching uploader-status attestation before creating results" {
+@test "rejects a retrieval receipt for a different maintenance operation before creating results" {
+  jq '.maintenanceOperation.backupId="backup-999-999"' "$RETRIEVAL_RECEIPT" > "$RETRIEVAL_RECEIPT.next"
+  mv "$RETRIEVAL_RECEIPT.next" "$RETRIEVAL_RECEIPT"
   run bash .scripts/production-upgrade-rehearsal-k3d.sh "$MANIFEST" "$ARCHIVE" \
-    verified-unchanged VERIFIED-backup-123-456-verified-upload \
-    "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   [ "$status" -ne 0 ]
-  [[ $output == *"exact VERIFIED-<backup-id>-<status> confirmation"* ]]
+  [[ $output == *"exact backup and retained maintenance operation"* ]]
   [ ! -e "$RESULT_DIRECTORY" ]
 }
 
 @test "rejects backup copies accessible by group or others" {
   chmod 644 "$ARCHIVE"
   run bash .scripts/production-upgrade-rehearsal-k3d.sh "$MANIFEST" "$ARCHIVE" \
-    verified-upload VERIFIED-backup-123-456-verified-upload \
-    "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+    "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   [ "$status" -ne 0 ]
   [[ $output == *"private input must not be accessible by group or others"* ]]
   [ ! -e "$RESULT_DIRECTORY" ]
@@ -488,13 +497,14 @@ YAML
   local manifest_copy archive_copy
   manifest_copy="$FIXTURE_ROOT/$(basename "$MANIFEST")"
   archive_copy="$FIXTURE_ROOT/$(basename "$ARCHIVE")"
+  local receipt_copy="$FIXTURE_ROOT/$(basename "$RETRIEVAL_RECEIPT")"
   cp -- "$MANIFEST" "$manifest_copy"
   cp -- "$ARCHIVE" "$archive_copy"
-  chmod 600 "$manifest_copy" "$archive_copy"
+  cp -- "$RETRIEVAL_RECEIPT" "$receipt_copy"
+  chmod 600 "$manifest_copy" "$archive_copy" "$receipt_copy"
   RESULT_DIRECTORY="$FIXTURE_ROOT/.rehearsal-result"
   run bash .scripts/production-upgrade-rehearsal-k3d.sh "$manifest_copy" "$archive_copy" \
-    verified-upload VERIFIED-backup-123-456-verified-upload \
-    "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
+    "$receipt_copy" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
   [ "$status" -ne 0 ]
   [[ $output == *"results must be outside the checkout"* ]]
   [ ! -e "$RESULT_DIRECTORY" ]
@@ -503,9 +513,11 @@ YAML
 @test "successful cleanup removes only the supplied backup copies" {
   local input_manifest="$BATS_TEST_TMPDIR/cleanup.manifest.json"
   local input_archive="$BATS_TEST_TMPDIR/cleanup.tar.gz"
+  local retrieval_receipt="$BATS_TEST_TMPDIR/cleanup-retrieval.json"
   local unrelated="$BATS_TEST_TMPDIR/unrelated"
   printf 'manifest\n' > "$input_manifest"
   printf 'archive\n' > "$input_archive"
+  printf 'retrieval\n' > "$retrieval_receipt"
   printf 'keep\n' > "$unrelated"
   sed -n '/^remove_input_copies() {/,/^}/p' \
     .scripts/production-upgrade-rehearsal-k3d.sh > cleanup-function.sh
@@ -514,6 +526,7 @@ YAML
   remove_input_copies
   [ ! -e "$input_manifest" ]
   [ ! -e "$input_archive" ]
+  [ ! -e "$retrieval_receipt" ]
   [ -f "$unrelated" ]
 }
 
@@ -578,7 +591,9 @@ YAML
   local started_at=2026-11-12T18:00:00Z started_epoch
   local backup_id=backup-123-456 source_release="$SOURCE_RELEASE"
   local source_revision="$SOURCE_REVISION" backup_archive_sha="$ARCHIVE_SHA"
-  local backup_captured_at=2026-11-12T18:26:10Z backup_status=verified-upload
+  local backup_captured_at=2026-11-12T18:26:10Z
+  local maintenance_operation_status=captured maintenance_operation_phase=captured
+  local backup_status=verified-upload
   local input_package_validation_status=passed candidate="$CANDIDATE_RELEASE"
   local candidate_revision="$SOURCE_REVISION" deployed_release="$SOURCE_RELEASE"
   local deployed_revision="$SOURCE_REVISION" deployed_image_inventory_verified=true
@@ -593,7 +608,7 @@ YAML
   local source_worktree_created=false candidate_worktree_created=false
   local candidate_images='{}' candidate_migrations='[]' actual_versions='[{"service":"recipes","currentVersion":1,"requiredVersion":1}]'
   local sample_relations_verified=true
-  local remote_status_independently_verified=false deployed_identity_verified=true
+  local remote_status_independently_verified=true deployed_identity_verified=true
   local host_cpu_count=8 docker_memory_bytes=17179869184
   local available_disk_bytes_before=1000000000 available_disk_bytes_after=900000000
   local cleanup_status=passed private_data_removed=true input_copies_removed=true

@@ -41,6 +41,39 @@ try:
         except tool["BackupError"] as error:
             raise ValueError("remote catalog verification failed") from error
         sys.exit(0)
+    maintenance_operation = None
+    if sys.argv[1] in ("maintenance", "maintenance-package"):
+        state_path = tool["maintenance_state_path"](config)
+        state = tool["lifecycle_state"](state_path)
+        upload_status = tool["report_status"](config)
+        if not isinstance(state, dict) or state.get("status") != "captured" \
+                or state.get("phase") != "captured" \
+                or not tool["BACKUP_ID_PATTERN"].fullmatch(str(state.get("backupId", ""))) \
+                or not upload_status.get("maintenanceActive") \
+                or upload_status.get("status") not in ("verified-upload", "verified-unchanged") \
+                or upload_status.get("backupId") != state.get("backupId"):
+            raise ValueError("no verified backup belongs to the retained maintenance operation")
+        manifest_path = state_path / "manifest.json"
+        if state_path.is_symlink() or manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("retained maintenance snapshot is unavailable")
+        local_manifest = tool["read_json"](manifest_path)
+        if not isinstance(local_manifest, dict) or not isinstance(state.get("source"), dict) \
+                or local_manifest.get("backupId") != state["backupId"] \
+                or local_manifest.get("source") != state.get("source") \
+                or local_manifest.get("capturedAt") != state.get("capturedAt"):
+            raise ValueError("retained maintenance snapshot identity changed")
+        backup_id = state["backupId"]
+        maintenance_operation = {
+            "backupId": backup_id, "status": state["status"], "phase": state["phase"],
+            "source": state["source"], "capturedAt": state["capturedAt"],
+            "uploadStatus": upload_status["status"],
+        }
+        if sys.argv[1] == "maintenance":
+            sys.argv = [sys.argv[0], "backup-id", backup_id]
+        else:
+            if len(sys.argv) != 5 or sys.argv[2] != backup_id:
+                raise ValueError("requested backup does not match the retained maintenance operation")
+            sys.argv = [sys.argv[0], "package", backup_id, *sys.argv[3:]]
     if sys.argv[1] in ("backup-id", "package"):
         backup_id = sys.argv[2]
         if not tool["BACKUP_ID_PATTERN"].fullmatch(backup_id):
@@ -73,7 +106,10 @@ try:
             "capturedAt": package["capturedAt"],
         }
         if sys.argv[1] == "backup-id":
-            print(json.dumps({"deploymentId": config["deploymentId"], "baseline": baseline}))
+            result = {"deploymentId": config["deploymentId"], "baseline": baseline}
+            if maintenance_operation is not None:
+                result["maintenanceOperation"] = maintenance_operation
+            print(json.dumps(result))
         else:
             if len(sys.argv) != 5:
                 raise ValueError("invalid package request")
@@ -199,8 +235,9 @@ def receive(args, remote_args, limit, destination=None):
 
 
 def metadata(args):
-    selected = args.backup_id is not None
-    remote_args = ("backup-id", args.backup_id) if selected else ("metadata",)
+    selected = args.backup_id is not None or args.maintenance
+    remote_args = ("maintenance",) if args.maintenance else (
+        ("backup-id", args.backup_id) if selected else ("metadata",))
     document = parse_json(receive(args, remote_args, MAX_METADATA))
     if not isinstance(document, dict):
         raise ValueError("invalid Pi metadata")
@@ -221,8 +258,20 @@ def metadata(args):
     backup_id = baseline.get("backupId")
     if not isinstance(backup_id, str) or not upload["BACKUP_ID_PATTERN"].fullmatch(backup_id):
         raise ValueError("invalid baseline backup identity")
-    if selected and backup_id != args.backup_id:
+    if args.backup_id is not None and backup_id != args.backup_id:
         raise ValueError("Pi returned a different backup ID")
+    if args.maintenance:
+        operation = document.get("maintenanceOperation")
+        if not isinstance(operation, dict) \
+                or operation.get("backupId") != backup_id \
+                or operation.get("status") != "captured" \
+                or operation.get("phase") != "captured" \
+                or operation.get("uploadStatus") not in ("verified-upload", "verified-unchanged") \
+                or operation.get("capturedAt") != baseline.get("capturedAt") \
+                or not isinstance(operation.get("source"), dict) \
+                or not re.fullmatch(r"ghcr[.]io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}",
+                                    str(operation["source"].get("artifact", ""))):
+            raise ValueError("remote package is not tied to the retained maintenance operation")
     if not selected and status["status"] == "verified-upload" and status.get("backupId") != backup_id:
         raise ValueError("status and baseline backup identities differ")
     captured = upload["validate_timestamp"](baseline.get("capturedAt"))
@@ -257,6 +306,9 @@ def verify_manifest(content, document):
                 "sha256": baseline["archiveSha256"],
             }:
         raise ValueError("package manifest does not match the verified baseline")
+    if "maintenanceOperation" in document \
+            and package.get("source") != document["maintenanceOperation"].get("source"):
+        raise ValueError("package source does not match the retained maintenance operation")
 
 
 def create_destination(destination):
@@ -280,6 +332,9 @@ def retrieve(args):
     destination = Path(os.path.abspath(os.path.expanduser(args.destination)))
     document = metadata(args)
     baseline = document["baseline"]
+    selected_backup_id = args.backup_id
+    if args.maintenance:
+        selected_backup_id = baseline["backupId"]
     directory = create_destination(destination)
     created = []
     complete = False
@@ -289,8 +344,13 @@ def retrieve(args):
                                  os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  0o600, dir_fd=directory)
             with os.fdopen(descriptor, "w+b") as stream:
-                remote_args = ("package", args.backup_id, field, baseline[field]) \
-                    if args.backup_id is not None else (field, baseline[field])
+                if args.maintenance:
+                    remote_args = ("maintenance-package", baseline["backupId"],
+                                   field, baseline[field])
+                elif selected_backup_id is not None:
+                    remote_args = ("package", selected_backup_id, field, baseline[field])
+                else:
+                    remote_args = (field, baseline[field])
                 size, digest = receive(args, remote_args,
                                        baseline[field + "SizeBytes"], stream)
                 if size != baseline[field + "SizeBytes"] or digest != baseline[field + "Sha256"]:
@@ -325,6 +385,8 @@ def retrieve(args):
         "backupId": baseline["backupId"],
         "manifest": str(destination / baseline["manifest"]),
         "archive": str(destination / baseline["archive"]),
+        **({"maintenanceOperation": document["maintenanceOperation"]}
+           if args.maintenance else {}),
     }
 
 
@@ -390,6 +452,8 @@ def main():
     parser.add_argument("destination", nargs="?", help="new directory under an existing symlink-free parent")
     parser.add_argument("--pi", default="piadmin@recipe-pi.home", help="SSH user@host for the Pi")
     parser.add_argument("--backup-id", help="retrieve this exact complete backup, independent of latest status")
+    parser.add_argument("--maintenance", action="store_true",
+                        help="retrieve the verified backup for the retained maintenance operation")
     parser.add_argument("--catalog", action="store_true",
                         help="verify off-device backup points and print metadata without saving packages")
     args = parser.parse_args()
@@ -397,6 +461,8 @@ def main():
         parser.error("choose either DESTINATION or --catalog")
     if args.catalog and args.backup_id is not None:
         parser.error("--backup-id cannot be combined with --catalog")
+    if args.maintenance and (args.catalog or args.backup_id is not None):
+        parser.error("--maintenance cannot be combined with --catalog or --backup-id")
     if args.backup_id is not None \
             and not upload["BACKUP_ID_PATTERN"].fullmatch(args.backup_id):
         parser.error("--backup-id must be a valid backup ID")

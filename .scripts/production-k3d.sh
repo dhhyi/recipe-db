@@ -27,7 +27,7 @@ command=$1
 values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
-  [[ $command == release-* || $command == render || $command == backup-enter ||
+  [[ $command == release-* || $command == render || $command == maintenance-enter || $command == backup-enter ||
     $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
@@ -37,7 +37,7 @@ fi
 case "$command" in
   create | create-new | status | verify | lock-status) [[ $# = 0 ]] || production_fail "unexpected arguments" ;;
   render | deploy | release-preflight) [[ $# = 1 ]] || production_fail "render/deploy/preflight require an immutable release artifact" ;;
-  backup-run | backup-enter) [[ $# = 2 ]] || production_fail "backup-run and backup-enter require an immutable release artifact and new absolute snapshot directory" ;;
+  backup-run | backup-enter | maintenance-enter) [[ $# = 2 ]] || production_fail "$command requires an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
   release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
@@ -57,6 +57,7 @@ case "$command" in
     [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and confirmation"
     ;;
   release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
+  release-readonly-result) [[ $# = 5 ]] || production_fail "release-readonly-result requires the maintenance state directory, ready candidate artifact, passed|failed result, operator notes and READONLY-<holder>-<result> confirmation" ;;
   release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
   release-disposition) [[ $# = 4 ]] || production_fail "release-disposition requires the maintenance state directory, candidate artifact, disposition and DISPOSITION-<holder>-<choice> confirmation" ;;
   release-website-result) [[ $# = 5 ]] || production_fail "release-website-result requires the maintenance state directory, candidate artifact, passed|failed result, operator notes and WEBSITE-<holder>-<result> confirmation" ;;
@@ -1056,7 +1057,7 @@ backup_refresh_projections() {
 }
 
 backup_verify_recovered_workloads() {
-  local names=$1 name
+  local names=$1 graphql_mode=${2:-production} name expected_mode
   kube get deployments -o json > "$work/recovered-deployments.json" || return 1
   backup_validate_workload_images "$work/recovered-deployments.json" "$names" || return 1
   jq -e --slurpfile prior "$work/prior-workloads.json" --argjson names "$names" '
@@ -1068,15 +1069,17 @@ backup_verify_recovered_workloads() {
       and $found[0].spec.template.metadata.annotations["recipe-db/release"] == $wanted.release)
   ' "$work/recovered-deployments.json" > /dev/null || return 1
   while IFS= read -r name; do
-    jq -e --arg name "$name" '
+    expected_mode=production
+    [[ $name != graphql ]] || expected_mode=$graphql_mode
+    jq -e --arg name "$name" --arg expectedMode "$expected_mode" '
       any(.items[]; .metadata.name == $name and
         any(.spec.template.spec.containers[];
-          .name == $name and any(.env[]?; .name == "MODE" and .value == "production")) and
+          .name == $name and any(.env[]?; .name == "MODE" and .value == $expectedMode)) and
         all(.spec.template.spec.initContainers[]? | select(.name == "storage-version" or .name == "storage-version-gate");
           [.env[]? | select(.name == "MODE") | .value] == ["production"]) and
         all(.spec.template.spec.containers[] | select(.name == "storage-version");
           [.env[]? | select(.name == "MODE") | .value] == ["production"]))
-    ' "$work/recovered-deployments.json" > /dev/null || return 1
+      ' "$work/recovered-deployments.json" > /dev/null || return 1
   done < <(jq --argjson names "$names" -r '
     (. + ["graphql"])[] | select(. != "browse" and (. as $name | $names | index($name)))
   ' "$work/maintenance-workloads.json")
@@ -1180,6 +1183,47 @@ backup_restore_production() {
   }
 }
 
+backup_restore_maintenance() {
+  local name replicas failed=false
+  backup_remove_copy_pods || return 1
+  backup_remove_cleanup_job || return 1
+  backup_scale_zero || failed=true
+  if ! $failed; then
+    kube get deployments -o json > "$work/mode-deployments.json" || failed=true
+  fi
+  if ! $failed; then
+    while IFS= read -r name; do
+      backup_set_backend_mode "$name" production "$work/mode-deployments.json" || failed=true
+      replicas=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .replicas' \
+        "$work/prior-workloads.json") || {
+        failed=true
+        continue
+      }
+      kube scale "deployment/$name" "--replicas=$replicas" > /dev/null || failed=true
+      if ((replicas > 0)); then
+        kube rollout status "deployment/$name" --timeout="${timeout}s" || failed=true
+      else
+        backup_wait_pods_gone "$name" || failed=true
+      fi
+    done < <(jq -r '.[] | select(. != "search" and . != "browse")' "$work/maintenance-workloads.json")
+  fi
+  if $failed; then
+    printf 'production: backend recovery failed; GraphQL remains blocked in backup mode\n' >&2
+    return 1
+  fi
+  if ! backup_refresh_projections || ! backup_projection_route 4000; then
+    printf 'production: projection recovery failed; GraphQL remains blocked in backup mode\n' >&2
+    return 1
+  fi
+  kube get deployments -o json > "$work/maintenance-deployments.json" || return 1
+  replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' \
+    "$work/prior-workloads.json") || return 1
+  kube set env deployment/graphql MODE=maintenance --containers=graphql > /dev/null || return 1
+  kube scale deployment/graphql "--replicas=$replicas" > /dev/null || return 1
+  kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
+  backup_verify_recovered_workloads "$(jq -c '[.[] | .name]' "$work/prior-workloads.json")" maintenance
+}
+
 backup_run() {
   local artifact=$1
   snapshot=$2
@@ -1268,6 +1312,69 @@ backup_run() {
   printf 'production: complete PVC snapshot written to %s/manifest.json\n' "$snapshot"
 }
 
+maintenance_enter() {
+  local artifact=$1 snapshot=$2 parent canonical_parent basename replicas
+  [[ $snapshot = /* && ! -e $snapshot && ! -L $snapshot ]] \
+    || production_fail "maintenance state path must be a new absolute directory"
+  parent=$(dirname "$snapshot")
+  basename=$(basename "$snapshot")
+  [[ -d $parent && $basename == maintenance ]] \
+    || production_fail "maintenance state must use the dedicated maintenance directory"
+  canonical_parent=$(realpath -e "$parent") || production_fail "maintenance state parent is not accessible"
+  [[ $canonical_parent = "$parent" ]] || production_fail "maintenance state parent must not traverse symlinks"
+  pull_release "$artifact"
+  render
+  connect
+  backup_id="backup-$(date -u +%Y%m%d%H%M%S)-$$"
+  lock_holder=$backup_id
+  cluster_operation_lock_acquire "$lock_holder" backup "$artifact"
+  locked=true
+  if [[ $target = pi ]]; then production_storage_preflight; fi
+  application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
+  backup_role_inventory
+  backup_capture_workloads "$artifact"
+  mkdir -m 700 -- "$snapshot" || production_fail "could not create private maintenance state directory"
+  jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
+    --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
+    --arg revision "$revision" --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --slurpfile workloads "$work/prior-workloads.json" \
+    --slurpfile pvcs "$work/backup-pvcs.jsonl" \
+    --slurpfile maintenance "$work/maintenance-workloads.json" \
+    --arg configSha256 "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" \
+    '{stateVersion:2,backupId:$id,status:"maintenance-mode",phase:"entering",
+      startedAt:$startedAt,
+      source:{target:$target,cluster:$cluster,context:$context,namespace:$namespace,
+        artifact:$artifact,revision:$revision},
+      configSha256:$configSha256,priorWorkloads:$workloads[0],
+      maintenanceWorkloads:$maintenance[0],selectedPVCs:$pvcs}' > "$snapshot/backup-state.json" \
+    || production_fail "could not persist maintenance recovery state"
+  retain_lock=true
+  cluster_operation_lock_update maintenance-entering || return 1
+  backup_stop '["graphql"]' || return 1
+  kube set env deployment/graphql MODE=maintenance --containers=graphql > /dev/null || return 1
+  replicas=$(jq -er '.[] | select(.name == "graphql") | .replicas' "$work/prior-workloads.json") || return 1
+  kube scale deployment/graphql "--replicas=$replicas" > /dev/null || return 1
+  kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
+  kube get deployments -o json > "$work/maintenance-entry-deployments.json" || return 1
+  backup_validate_workload_images "$work/maintenance-entry-deployments.json" || return 1
+  jq -e --arg artifact "$artifact" --argjson prior "$(cat "$work/prior-workloads.json")" '
+    . as $actual |
+    all($prior[]; . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $artifact
+        and (.spec.replicas // 0) == $wanted.replicas
+        and (.status.readyReplicas // 0) == $wanted.replicas))
+    and any($actual.items[]; .metadata.name == "graphql" and
+      any(.spec.template.spec.containers[]; .name == "graphql"
+        and any(.env[]?; .name == "MODE" and .value == "maintenance")))
+  ' "$work/maintenance-entry-deployments.json" > /dev/null \
+    || production_fail "read-only maintenance mode is not ready"
+  backup_state_write maintenance-mode maintenance-entered || return 1
+  cluster_operation_lock_update maintenance-entered || return 1
+  printf 'production: read-only maintenance entered; holder=%s; recovery state=%s/backup-state.json\n' \
+    "$backup_id" "$snapshot"
+}
+
 backup_write_manifest() {
   jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
@@ -1335,7 +1442,7 @@ backup_validate_legacy_receipt() {
 }
 
 backup_capture_maintenance() {
-  local current release artifact legacy_state=false legacy_receipt=${2:-}
+  local current release artifact legacy_state=false legacy_receipt=${2:-} readonly_maintenance=false
   snapshot=$1
   [[ $snapshot = /* && -d $snapshot && $(realpath -e "$snapshot") = "$snapshot" &&
   -f $snapshot/backup-state.json && ! -L $snapshot/backup-state.json ]] \
@@ -1356,9 +1463,12 @@ backup_capture_maintenance() {
   fi
   jq -e --argjson legacy "$legacy_state" '
     (.stateVersion == 2 or ($legacy and (has("stateVersion") | not)))
-    and .status == "backup-mode" and .phase == "maintenance-entered"' \
+    and ((.status == "backup-mode" and .phase == "maintenance-entered")
+      or (.status == "maintenance-mode" and .phase == "maintenance-entered"))' \
     "$snapshot/backup-state.json" > /dev/null \
     || production_fail "maintenance state is not ready for its first capture"
+  [[ $(jq -r '.status' "$snapshot/backup-state.json") != maintenance-mode ]] \
+    || readonly_maintenance=true
   if $legacy_state; then
     [[ -n $legacy_receipt ]] || production_fail "legacy capture requires a pre-maintenance identity receipt"
   else
@@ -1381,10 +1491,21 @@ backup_capture_maintenance() {
   if [[ $target = pi ]]; then production_storage_preflight; fi
   kube get deployments -o json > "$work/maintenance-current-workloads.json" || return 1
   backup_validate_workload_images "$work/maintenance-current-workloads.json" || return 1
-  jq -e --slurpfile prior "$work/prior-workloads.json" '
-    . as $actual | all($prior[0][]; . as $wanted |
+  jq -e --argjson prior "$(cat "$work/prior-workloads.json")" \
+    --argjson readonly "$readonly_maintenance" '
+    . as $actual |
+    all($prior[]; . as $wanted |
       any($actual.items[]; .metadata.name == $wanted.name and
-        .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release))
+        .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release
+        and (if $readonly then
+          (.spec.replicas // 0) == $wanted.replicas
+          and (.status.readyReplicas // 0) == $wanted.replicas
+        else true end)))
+    and (if $readonly then
+      any($actual.items[]; .metadata.name == "graphql"
+        and any(.spec.template.spec.containers[]; .name == "graphql"
+          and any(.env[]?; .name == "MODE" and .value == "maintenance")))
+      else true end)
   ' "$work/maintenance-current-workloads.json" > /dev/null || {
     printf 'production: maintenance workloads changed releases; retain the barrier and investigate\n' >&2
     return 1
@@ -1406,10 +1527,26 @@ backup_capture_maintenance() {
   fi
   barrier_touched=true
   backup_establish_barrier || return 1
+  if $readonly_maintenance; then
+    cluster_operation_lock_update backend-transition || return 1
+    backup_start_modes || return 1
+    backup_state_write backup-mode backend-backup-mode || return 1
+    backup_cleanup_job || return 1
+    backup_state_write cleanup-complete cleanup-complete || return 1
+  fi
   backup_scale_zero || return 1
   backup_state_write backup-mode writers-stopped || return 1
   backup_capture || return 1
   backup_write_manifest || return 1
+  if $readonly_maintenance && ! backup_restore_maintenance; then
+    backup_state_write recovery-required maintenance-restart-failed || true
+    cluster_operation_lock_update recovery-required || true
+    printf 'production: snapshot was captured but read-only maintenance could not be restored; backup barrier and Lease remain\n' >&2
+    return 1
+  fi
+  if $readonly_maintenance; then
+    backup_state_write captured captured || return 1
+  fi
   cluster_operation_lock_update captured || return 1
   printf 'production: maintenance snapshot captured at %s/manifest.json; holder=%s\n' \
     "$snapshot" "$backup_id"
@@ -1442,7 +1579,8 @@ backup_load_state() {
 backup_exit() {
   local expected=$2 confirmation=$3 current release
   backup_load_state "$1"
-  jq -e '(.status == "backup-mode" and .phase == "maintenance-entered")
+  jq -e '((.status == "backup-mode" or .status == "maintenance-mode")
+      and .phase == "maintenance-entered")
     or (.status == "captured" and .phase == "captured")' \
     "$snapshot/backup-state.json" > /dev/null \
     || production_fail "backup-exit only recovers the original release; candidate lifecycle state must not use it"
@@ -1715,32 +1853,37 @@ release_assert_maintenance_barrier() {
       ' "$deployments" >&2
       production_fail "workloads no longer match the expected release"
     }
-  jq -e --slurpfile state "$snapshot/backup-state.json" '
-    . as $actual | all($state[0].maintenanceWorkloads[];
-      . as $name |
-      any($actual.items[];
-        .metadata.name == $name
-        and (.spec.replicas // 0) == 0
-        and (.status.readyReplicas // 0) == 0))
-  ' "$deployments" > /dev/null \
-    || production_fail "storage workloads restarted after maintenance capture"
-  jq -e --slurpfile state "$snapshot/backup-state.json" '
-    . as $actual |
-    ($state[0] | if .candidate then .candidate.workloads
-      else .priorWorkloads end) as $expected |
-    ([ $actual.items[] | select(.metadata.name == "graphql") ] | length) == 1
-    and any($actual.items[];
-      .metadata.name == "graphql"
-      and .spec.replicas == ($expected[] | select(.name == "graphql") | .replicas)
-      and (.status.readyReplicas // 0) == .spec.replicas
+  if [[ $all_stopped == true ]]; then
+    jq -e --slurpfile state "$snapshot/backup-state.json" '
+      . as $actual | all($state[0].maintenanceWorkloads[];
+        . as $name |
+        any($actual.items[];
+          .metadata.name == $name
+          and (.spec.replicas // 0) == 0
+          and (.status.readyReplicas // 0) == 0))
+    ' "$deployments" > /dev/null \
+      || production_fail "storage workloads restarted after the temporary-fix handoff"
+    jq -e 'any(.items[]; .metadata.name == "graphql"
       and any(.spec.template.spec.containers[]; .name == "graphql"
         and any(.env[]?; .name == "MODE" and .value == "backup")))
-  ' "$deployments" > /dev/null \
-    || production_fail "GraphQL maintenance access barrier is not active"
-  if [[ $all_stopped == true ]]; then
-    jq -e 'all(.items[]; .metadata.name == "graphql" or (.spec.replicas // 0) == 0)' \
+      and all(.items[]; .metadata.name == "graphql" or (.spec.replicas // 0) == 0)' \
       "$deployments" > /dev/null \
       || production_fail "application workloads restarted during temporary-fix handoff"
+  else
+    jq -e --slurpfile state "$snapshot/backup-state.json" '
+      . as $actual |
+      all($state[0].priorWorkloads[];
+        . as $wanted |
+        any($actual.items[];
+          .metadata.name == $wanted.name
+          and .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release
+          and (.spec.replicas // 0) == $wanted.replicas
+          and (.status.readyReplicas // 0) == $wanted.replicas))
+      and any($actual.items[]; .metadata.name == "graphql"
+        and any(.spec.template.spec.containers[]; .name == "graphql"
+          and any(.env[]?; .name == "MODE" and .value == "maintenance")))
+    ' "$deployments" > /dev/null \
+      || production_fail "previous release is not serving reads behind the GraphQL maintenance barrier"
   fi
 }
 
@@ -1963,6 +2106,8 @@ release_stage() {
     <<< "$candidate_workloads" > /dev/null \
     || production_fail "candidate lacks a ready GraphQL barrier workload"
   release_mutation_started=true
+  backup_establish_barrier \
+    || production_fail "GraphQL could not enter backup mode before candidate staging"
   jq -c '[.items[].metadata.name]' "$work/original-deployments.json" \
     > "$work/release-stop-names.json" || return 1
   backup_stop "$(< "$work/release-stop-names.json")" || return 1
@@ -3745,7 +3890,7 @@ release_start() {
     || return 1
   kube apply -f "$work/nats-init-job.json" > /dev/null || return 1
   kube wait --for=condition=complete job/nats-init --timeout="${timeout}s" || return 1
-  kube set env deployment/graphql MODE=backup --containers=graphql > /dev/null || return 1
+  kube set env deployment/graphql MODE=maintenance --containers=graphql > /dev/null || return 1
   kube scale deployment/graphql "--replicas=$graphql_replicas" > /dev/null || return 1
   kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
   backup_projection_route 4001 || return 1
@@ -3775,7 +3920,7 @@ release_start() {
         and (.status.readyReplicas // 0) == $wanted.replicas))
     and any($actual.items[]; .metadata.name == "graphql"
       and any(.spec.template.spec.containers[]; .name == "graphql"
-        and any(.env[]; .name == "MODE" and .value == "backup")))
+        and any(.env[]; .name == "MODE" and .value == "maintenance")))
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate readiness or GraphQL access barrier could not be verified"
   backup_projection_route 4000 || return 1
@@ -3783,15 +3928,77 @@ release_start() {
     "$(jq -cn --arg readyAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{candidateReadyAt:$readyAt}')" \
     || return 1
   cluster_operation_lock_update ready || return 1
-  printf 'production: candidate ready with application access blocked; operator-directed reopen is required\n'
+  printf 'production: candidate ready in read-only maintenance; operator-directed reopen is required\n'
+}
+
+release_readonly_result() {
+  local candidate=$2 result=$3 notes=$4 confirmation=$5
+  release_load_operation "$1" "$candidate"
+  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "release-ready/ready" ]] \
+    || production_fail "read-only checks require a ready candidate"
+  release_require_lease_phase ready
+  jq -e '.readOnlyCheck == null' "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "a read-only check result is already recorded"
+  [[ $result == passed || $result == failed ]] \
+    || production_fail "read-only result must be passed or failed"
+  [[ -n $notes && ${#notes} -le 1000 && $notes != *$'\n'* ]] \
+    || production_fail "read-only notes must be a non-empty single line of at most 1000 characters"
+  [[ $confirmation == "READONLY-$backup_id-$result" ]] \
+    || production_fail "read-only checks require READONLY-<holder>-<result> confirmation"
+  release_assert_candidate "$candidate"
+  kube get deployments -o json > "$work/read-only-deployments.json" \
+    || production_fail "cannot inspect candidate readiness before recording read-only checks"
+  backup_validate_workload_images "$work/read-only-deployments.json" \
+    || production_fail "candidate changed before read-only checks"
+  jq -e --slurpfile state "$snapshot/backup-state.json" '
+    . as $actual |
+    all($state[0].candidate.workloads[];
+      . as $wanted |
+      any($actual.items[];
+        .metadata.name == $wanted.name
+        and .spec.template.metadata.annotations["recipe-db/release"] == $state[0].candidate.artifact
+        and (.spec.replicas // 0) == $wanted.replicas
+        and (.status.readyReplicas // 0) == $wanted.replicas
+        and (if .metadata.name == "graphql" then
+          any(.spec.template.spec.containers[]; .name == "graphql"
+            and any(.env[]; .name == "MODE" and .value == "maintenance"))
+        else true end)))
+  ' "$work/read-only-deployments.json" > /dev/null \
+    || production_fail "candidate is not ready in read-only maintenance"
+  local phase=ready lease_phase=read-only-passed
+  if [[ $result == failed ]]; then
+    phase=read-only-failed
+    lease_phase=read-only-failed
+  fi
+  release_state_write release-ready "$phase" \
+    "$(jq -cn --arg outcome "$result" --arg notes "$notes" \
+      --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{readOnlyCheck:{outcome:$outcome,notes:$notes,checkedAt:$checkedAt}}')" \
+    || return 1
+  cluster_operation_lock_update "$lease_phase" || return 1
+  if [[ $result == failed ]]; then
+    printf 'production: read-only checks failed; access remains in maintenance and reopening is refused\n'
+  else
+    printf 'production: read-only checks passed; guarded reopening remains a separate operator action\n'
+  fi
+}
+
+release_reblock_graphql_maintenance() {
+  if kube set env deployment/graphql MODE=maintenance --containers=graphql > /dev/null \
+    && kube rollout status deployment/graphql --timeout="${timeout}s"; then
+    return 0
+  fi
+  printf 'production: GraphQL maintenance rollout failed; stopping GraphQL to preserve the client barrier\n' >&2
+  kube scale deployment/graphql --replicas=0 > /dev/null
 }
 
 release_reopen() {
   local candidate=$2 confirmation=$3
   release_load_operation "$1" "$candidate"
   [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "release-ready/ready" ]] \
-    || production_fail "reopening requires a ready candidate"
-  release_require_lease_phase ready
+    && [[ $(jq -r '.readOnlyCheck.outcome' "$snapshot/backup-state.json") == passed ]] \
+    || production_fail "reopening requires a ready candidate and passed read-only checks"
+  release_require_lease_phase read-only-passed
   [[ $confirmation == "OPEN-$backup_id" ]] \
     || production_fail "reopening requires the operator's OPEN-<holder> confirmation"
   release_assert_candidate "$candidate"
@@ -3810,7 +4017,7 @@ release_reopen() {
         and (.status.readyReplicas // 0) == $wanted.replicas
         and (if .metadata.name == "graphql" then
           any(.spec.template.spec.containers[]; .name == "graphql"
-            and any(.env[]; .name == "MODE" and .value == "backup"))
+            and any(.env[]; .name == "MODE" and .value == "maintenance"))
         else true end)))
   ' "$work/release-deployments.json" > /dev/null \
     || production_fail "candidate GraphQL barrier is not ready"
@@ -3821,7 +4028,7 @@ release_reopen() {
   cluster_operation_lock_update reopening || return 1
   kube set env deployment/graphql MODE=production --containers=graphql > /dev/null || return 1
   if ! kube rollout status deployment/graphql --timeout="${timeout}s"; then
-    backup_reblock_graphql || true
+    release_reblock_graphql_maintenance || true
     release_state_write recovery-required reopen-failed '{}' || true
     cluster_operation_lock_update recovery-required || true
     production_fail "candidate reopen failed; access was reblocked where possible and recovery state and Lease remain"
@@ -3830,7 +4037,7 @@ release_reopen() {
     "$(jq -cn --arg openedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{accessOpenedAt:$openedAt}')" \
     || return 1
   cluster_operation_lock_update operator-reopened || return 1
-  printf 'production: application access reopened by operator instruction; check the website and record a disposition\n'
+  printf 'production: application access reopened by operator instruction; run write checks and record their result\n'
 }
 
 release_disposition() {
@@ -4483,6 +4690,9 @@ case "$command" in
   backup-run | backup-enter)
     backup_run "$1" "$2"
     ;;
+  maintenance-enter)
+    maintenance_enter "$1" "$2"
+    ;;
   backup-capture)
     backup_capture_maintenance "$@"
     ;;
@@ -4546,6 +4756,9 @@ case "$command" in
     ;;
   release-reopen)
     release_reopen "$1" "$2" "$3"
+    ;;
+  release-readonly-result)
+    release_readonly_result "$1" "$2" "$3" "$4" "$5"
     ;;
   release-disposition)
     release_disposition "$1" "$2" "$3" "$4"

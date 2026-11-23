@@ -613,7 +613,8 @@ def run_maintenance_capture(config):
         raise BackupError("restart-failure", "maintenance-state-invalid")
     backup_id = state.get("backupId")
     manifest_path = snapshot / "manifest.json"
-    if state.get("status") == "backup-mode" and state.get("phase") == "maintenance-entered":
+    if state.get("status") in ("backup-mode", "maintenance-mode") \
+            and state.get("phase") == "maintenance-entered":
         if manifest_path.exists() or manifest_path.is_symlink():
             raise BackupError("restart-failure", "unexpected-maintenance-manifest")
         run_capture_command(config, "maintenance-capture", snapshot)
@@ -675,7 +676,7 @@ def enter_maintenance(config):
             raise BackupError("restart-failure", "maintenance-already-active")
         run_capture_command(config, "maintenance-enter", path)
         saved = lifecycle_state(path)
-        if not isinstance(saved, dict) or saved.get("status") != "backup-mode" \
+        if not isinstance(saved, dict) or saved.get("status") != "maintenance-mode" \
                 or saved.get("phase") != "maintenance-entered":
             raise BackupError("restart-failure", "maintenance-state-invalid")
         write_status(config, "maintenance-entered", "maintenance-entered", saved.get("backupId"))
