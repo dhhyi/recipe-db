@@ -1,7 +1,7 @@
 use async_graphql::http::GraphiQLSource;
 use async_graphql::ErrorExtensions;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
@@ -10,6 +10,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
+use futures::{Stream, StreamExt};
 use subtle::ConstantTimeEq;
 
 pub mod auth;
@@ -113,6 +114,142 @@ async fn backup_mode_barrier(
             .expect("valid maintenance response");
     }
     next.run(request).await
+}
+
+async fn maintenance_multipart_barrier(
+    State(mode): State<mode::RuntimeMode>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    if mode != mode::RuntimeMode::Maintenance {
+        return next.run(request).await;
+    }
+
+    let Some(boundary) = request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(multipart_boundary)
+    else {
+        return next.run(request).await;
+    };
+
+    let body = std::mem::replace(request.body_mut(), Body::empty());
+    let mut stream = body.into_data_stream();
+    let mut prefix = Vec::new();
+    if multipart_operation_is_mutation(&mut stream, &mut prefix, &boundary).await {
+        let response: GraphQLResponse =
+            async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
+        return axum::response::IntoResponse::into_response(response);
+    }
+
+    *request.body_mut() =
+        Body::from_stream(futures::stream::iter([Ok::<_, axum::Error>(prefix)]).chain(stream));
+    next.run(request).await
+}
+
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    let media_type = content_type.split(';').next()?.trim();
+    if !media_type
+        .split('/')
+        .next()?
+        .eq_ignore_ascii_case("multipart")
+    {
+        return None;
+    }
+    content_type.split(';').skip(1).find_map(|parameter| {
+        let (name, value) = parameter.trim().split_once('=')?;
+        name.trim()
+            .eq_ignore_ascii_case("boundary")
+            .then(|| value.trim().trim_matches('"').to_owned())
+    })
+}
+
+async fn multipart_operation_is_mutation(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+    boundary: &str,
+) -> bool {
+    let first_boundary = format!("--{boundary}\r\n");
+    while prefix.len() < first_boundary.len() {
+        if !read_multipart_chunk(stream, prefix).await {
+            return true;
+        }
+    }
+    if !prefix.starts_with(first_boundary.as_bytes()) {
+        return true;
+    }
+
+    let header_start = first_boundary.len();
+    let header_end = loop {
+        if let Some(position) = find_subslice(&prefix[header_start..], b"\r\n\r\n") {
+            break header_start + position;
+        }
+        if prefix.len() > 16 * 1024 || !read_multipart_chunk(stream, prefix).await {
+            return true;
+        }
+    };
+    let headers = String::from_utf8_lossy(&prefix[header_start..header_end]).to_ascii_lowercase();
+    if !headers.contains("content-disposition: form-data; name=\"operations\"") {
+        return true;
+    }
+
+    let operations_start = header_end + 4;
+    let delimiter = format!("\r\n--{boundary}");
+    let operations_end = loop {
+        if let Some(position) = find_subslice(&prefix[operations_start..], delimiter.as_bytes()) {
+            let end = operations_start + position;
+            let suffix_start = end + delimiter.len();
+            if prefix
+                .get(suffix_start..suffix_start + 2)
+                .is_some_and(|suffix| suffix == b"\r\n" || suffix == b"--")
+            {
+                break end;
+            }
+        }
+        if !read_multipart_chunk(stream, prefix).await {
+            return true;
+        }
+    };
+
+    serde_json::from_slice::<serde_json::Value>(&prefix[operations_start..operations_end])
+        .is_ok_and(|operations| json_operations_contain_mutation(&operations))
+}
+
+async fn read_multipart_chunk(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+) -> bool {
+    match stream.next().await {
+        Some(Ok(chunk)) => {
+            prefix.extend_from_slice(&chunk);
+            true
+        }
+        Some(Err(_)) | None => false,
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn json_operations_contain_mutation(operations: &serde_json::Value) -> bool {
+    match operations {
+        serde_json::Value::Array(requests) => requests.iter().any(json_request_is_mutation),
+        request => json_request_is_mutation(request),
+    }
+}
+
+fn json_request_is_mutation(request: &serde_json::Value) -> bool {
+    let Some(query) = request.get("query").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let operation_name = request
+        .get("operationName")
+        .and_then(serde_json::Value::as_str);
+    selected_operation_is_mutation(query, operation_name)
 }
 
 async fn graphql(
@@ -234,12 +371,16 @@ fn request_contains_mutation(request: &async_graphql::Request) -> bool {
 }
 
 fn request_selects_mutation(request: &async_graphql::Request) -> bool {
-    let Ok(document) = async_graphql::parser::parse_query(&request.query) else {
+    selected_operation_is_mutation(&request.query, request.operation_name.as_deref())
+}
+
+fn selected_operation_is_mutation(query: &str, operation_name: Option<&str>) -> bool {
+    let Ok(document) = async_graphql::parser::parse_query(query) else {
         return false;
     };
     let mut operations = document.operations.iter();
     let first_operation = operations.next();
-    let operation = match request.operation_name.as_deref() {
+    let operation = match operation_name {
         Some(name) => document
             .operations
             .iter()
@@ -578,6 +719,35 @@ mod ingress_tests {
     }
 
     #[tokio::test]
+    async fn multipart_mutation_inspection_stops_before_file_parts() {
+        let chunks = [
+            Bytes::from_static(
+                concat!(
+                    "--boundary\r\n",
+                    "Content-Disposition: form-data; name=\"operations\"\r\n",
+                    "Content-Type: application/json\r\n\r\n",
+                    "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+                    "--boundary\r\n"
+                )
+                .as_bytes(),
+            ),
+            Bytes::from_static(
+                b"Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n\r\n<svg/>",
+            ),
+        ];
+        let chunks_read = Arc::new(AtomicUsize::new(0));
+        let chunks_read_by_stream = chunks_read.clone();
+        let mut stream = futures::stream::iter(chunks.into_iter().map(Ok::<_, axum::Error>))
+            .inspect(move |_| {
+                chunks_read_by_stream.fetch_add(1, Ordering::SeqCst);
+            });
+        let mut prefix = Vec::new();
+
+        assert!(super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await);
+        assert_eq!(chunks_read.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn maintenance_rejects_mutations_before_backend_upload_or_event_side_effects() {
         let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
         let calls = Arc::new(AtomicUsize::new(0));
@@ -705,6 +875,10 @@ mod ingress_tests {
 
         let graphql_app = Router::new()
             .route("/graphql", axum::routing::post(super::graphql))
+            .route_layer(middleware::from_fn_with_state(
+                crate::mode::RuntimeMode::Maintenance,
+                super::maintenance_multipart_barrier,
+            ))
             .with_state(state);
         let graphql_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let graphql_address = graphql_listener.local_addr().unwrap();
@@ -741,6 +915,31 @@ mod ingress_tests {
             "maintenance-mode"
         );
         assert_eq!(result["errors"][0]["extensions"]["status"], 503);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let multipart_query_body = concat!(
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"operations\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"query\":\"{ maintenance }\"}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"map\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{}\r\n",
+            "--maintenance-boundary--\r\n"
+        );
+        let response = reqwest::Client::new()
+            .post(format!("http://{graphql_address}/graphql"))
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=maintenance-boundary",
+            )
+            .body(multipart_query_body)
+            .send()
+            .await
+            .unwrap();
+        let result: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(result["data"]["maintenance"], true);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         let publisher_status = serde_json::to_value(publisher.status()).unwrap();
