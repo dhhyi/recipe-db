@@ -17,7 +17,11 @@ load test_helper
   inspect=$(grep -n '^      - name: inspect Bazel cache$' "$workflow" | cut -d: -f1)
   prune=$(grep -n '^      - name: prune Bazel cache$' "$workflow" | cut -d: -f1)
   prepare=$(grep -n '^      - name: prepare Bazel cache snapshot$' "$workflow" | cut -d: -f1)
-  upload=$(grep -n '^      - name: upload Bazel cache snapshot$' "$workflow" | cut -d: -f1)
+  upload=$(awk '
+    $0 == "  quality-checks:" { quality = 1 }
+    quality && $0 == "  cache-health:" { quality = 0 }
+    quality && $0 == "      - name: upload Bazel cache snapshot" { print NR }
+  ' "$workflow")
 
   [ "$restore" -lt "$format" ]
   [ "$format" -lt "$checks" ]

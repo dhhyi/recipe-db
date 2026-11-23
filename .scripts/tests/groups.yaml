@@ -356,6 +356,7 @@ devcontainer:
       - .scripts/tests/mocks/devcontainer-*
     .scripts/tests/run-integration-tests.bats:
       - .scripts/run-integration-tests.sh
+      - .scripts/run-integration-suite.sh
       - .scripts/tests/mocks/integration-*
 formatting:
   tests:
@@ -364,9 +365,13 @@ formatting:
     .scripts/tests/format-check.bats:
       - .scripts/format-bazel.sh
       - .scripts/format-check.sh
-      - .scripts/format-check.sh
       - .scripts/format-files.sh
       - .scripts/generate-bazel-build.sh
+      - .scripts/integration-dependencies.py
+      - .scripts/project-schema.json
+      - .scripts/run-in-devcontainer.sh
+      - .scripts/bazel.sh
+      - .bazelversion
       - .scripts/tests/groups.yaml
       - .mise/tasks/project-actions.toml
       - .mise/config.toml
@@ -378,6 +383,7 @@ tooling:
     - .scripts/tests/generate-bazel-build.bats
     - .scripts/tests/merge-graphql-schemas.bats
     - .scripts/tests/project-schema.bats
+    - .scripts/tests/integration-dependencies.bats
     - .scripts/tests/sync-ignore-files.bats
     - .scripts/tests/sync-tailwind.bats
   suite_inputs:
@@ -385,11 +391,26 @@ tooling:
       - .scripts/check-forbidden-files.sh
     .scripts/tests/generate-bazel-build.bats:
       - .scripts/generate-bazel-build.sh
+      - .scripts/create-auth-accounts.sh
+      - .scripts/create-auth-test-fixture.sh
+      - .bazelversion
+      - .scripts/integration-dependencies.py
+      - .scripts/project-schema.json
       - .scripts/format-bazel.sh
       - .scripts/format-files.sh
       - .scripts/format-check.sh
       - .scripts/bazel-project-action.sh
       - .scripts/generate-bazel.sh
+      - .scripts/bazel.sh
+      - .scripts/run-integration-tests.sh
+      - .scripts/run-integration-suite.sh
+      - .scripts/build-integration-images.sh
+      - .mise/tasks/repository-sync.toml
+      - .scripts/prepare-integration-identities.sh
+      - .scripts/integration-identities.py
+      - .scripts/generate-docker-compose.sh
+      - .scripts/refresh-render-inputs.sh
+      - .scripts/lib/project-metadata.sh
       - .scripts/tests/groups.yaml
       - .scripts/tests/mocks/precommit-*
       - .scripts/templates/**
@@ -400,12 +421,22 @@ tooling:
       - .mise/config.toml
       - .mise/tasks/project-actions.toml
       - .mise/tasks/script-tests.toml
+      - .mise/tasks/bazel.toml
+      - .mise/tasks/compose.toml
+      - .mise/tasks/development.toml
     .scripts/tests/merge-graphql-schemas.bats:
       - .scripts/merge-graphql-schemas.sh
       - .scripts/lib/project-metadata.sh
       - ":(glob)*/.project.yaml"
     .scripts/tests/project-schema.bats:
       - .scripts/project-schema.json
+    .scripts/tests/integration-dependencies.bats:
+      - .scripts/integration-dependencies.py
+      - .scripts/integration-identities.py
+      - .scripts/build-integration-images.sh
+      - .scripts/project-schema.json
+      - .scripts/tests/integration-identities.py
+      - ":(glob)*/.project.yaml"
     .scripts/tests/sync-ignore-files.bats:
       - .scripts/sync-ignore-files.sh
       - .scripts/lib/ignore-rules.sh

@@ -135,3 +135,5 @@ prettier:
     - "*.cljs"
     - "*.edn"
     - nginx.conf
+integrationDependencies:
+  - design

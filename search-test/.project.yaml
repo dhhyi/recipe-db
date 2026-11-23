@@ -39,3 +39,6 @@ prettier:
   ignore:
     - "*.py"
     - "*.feature"
+integrationDependencies:
+  - search
+  - fixtures

@@ -72,3 +72,6 @@ prettier:
     - .zig-cache
     - zig-out
     - "*.py"
+integrationDependencies:
+  - graphql
+  - nats

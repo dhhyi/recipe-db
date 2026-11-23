@@ -4,6 +4,7 @@ load test_helper
 
 setup() {
   setup_fixture run-integration-tests.sh
+  cp "$BATS_TEST_DIRNAME/../run-integration-suite.sh" .scripts/
   unset GITHUB_ACTIONS
   git init -q
   for project in recipes-test ratings-test graphql-test images-test \
@@ -24,6 +25,10 @@ EOF
   install_mock integration-curl.sh curl
   export INTEGRATION_LOG="$FIXTURE_ROOT/integration.log"
   : > "$INTEGRATION_LOG"
+  export RUNNER_TEMP="$FIXTURE_ROOT"
+  mkdir -p "$RUNNER_TEMP/integration-images"
+  printf '%s\n' '{"resolved":{"recipes-test":{"projects":["recipes"],"synthetic":[]},"ratings-test":{"projects":["ratings"],"synthetic":[]}}}' \
+    > "$RUNNER_TEMP/integration-images/integration-dependency-graph.json"
   export COMPOSE_CONFIG="$FIXTURE_ROOT/compose.json"
   jq -n '
     {services: {
@@ -239,6 +244,120 @@ EOF
     run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
     run -1 grep -F 'docker compose --profile test run' "$MOCK_LOG"
   done
+}
+
+@test "cached integration targets run sequentially and stop after the first failure" {
+  mkdir -p .generated/integration-identities bin
+  export BAZEL_DISK_CACHE="$FIXTURE_ROOT/bazel-disk"
+  for project in recipes-test ratings-test; do
+    printf '{}\n' > ".generated/integration-identities/$project.json"
+  done
+  cat > bin/mise << 'EOF'
+#!/usr/bin/env bash
+printf 'mise %s\n' "$*" >> "$MOCK_LOG"
+exit "${BAZEL_STATUS:-0}"
+EOF
+  chmod +x bin/mise
+
+  run env -u HOME GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
+    bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
+
+  [ "$status" -eq 0 ]
+  grep -Fx 'docker compose --profile test up --pull never --no-build -d fixtures' "$MOCK_LOG"
+  grep -Fx 'docker compose --profile test stop fixtures' "$MOCK_LOG"
+  [ "$(grep -c '^mise run --raw bazel build ' "$MOCK_LOG")" -eq 2 ]
+  [ "$(grep -n '^mise run --raw bazel build ' "$MOCK_LOG" | sed -E 's/^[0-9]+:.*integration_suite_([^ ]+).*/\1/' | paste -sd ' ')" = "recipes-test ratings-test" ]
+  grep -F -- '--action_env=HOST_UID' "$MOCK_LOG"
+  grep -F -- '--action_env=HOST_GID' "$MOCK_LOG"
+  grep -F -- '--action_env=VERBOSE' "$MOCK_LOG"
+  grep -F -- "--disk_cache=$BAZEL_DISK_CACHE" "$MOCK_LOG"
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+
+  : > "$MOCK_LOG"
+  run env -u HOME GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUNNING_FIXTURES=fixtures \
+    BAZEL_STATUS=19 bash .scripts/run-integration-tests.sh --development \
+    recipes-test ratings-test
+
+  [ "$status" -eq 19 ]
+  [ "$(grep -c '^mise run --raw bazel build ' "$MOCK_LOG")" -eq 1 ]
+  grep -F 'integration_suite_recipes-test' "$MOCK_LOG"
+  run -1 grep -F 'integration_suite_ratings-test' "$MOCK_LOG"
+}
+
+@test "cached integration suites with empty dependencies always execute without Bazel" {
+  mkdir -p .generated/integration-identities
+  for project in recipes-test ratings-test; do
+    printf '{}\n' > ".generated/integration-identities/$project.json"
+  done
+  printf '%s\n' '{"resolved":{"recipes-test":{"projects":[],"synthetic":[]},"ratings-test":{"projects":["ratings"],"synthetic":[]}}}' \
+    > "$RUNNER_TEMP/integration-images/integration-dependency-graph.json"
+
+  run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true RUN_STATUS=19 \
+    bash .scripts/run-integration-tests.sh --development recipes-test ratings-test
+
+  [ "$status" -eq 19 ]
+  grep -Fx 'docker compose --profile test run --pull never --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
+  run -1 grep -F 'mise run --raw bazel build' "$MOCK_LOG"
+  run -1 grep -F 'docker compose --profile test run --pull never --rm --entrypoint /bin/sh ratings-test' "$MOCK_LOG"
+
+  : > "$MOCK_LOG"
+  for _ in 1 2; do
+    run env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
+      bash .scripts/run-integration-tests.sh --development recipes-test
+
+    [ "$status" -eq 0 ]
+  done
+  [ "$(grep -c '^docker compose --profile test run --pull never ' "$MOCK_LOG")" -eq 2 ]
+  run -1 grep -F 'mise run --raw bazel build' "$MOCK_LOG"
+}
+
+@test "cached integration fails before Bazel when a prepared suite identity is missing" {
+  mkdir -p .generated/integration-identities
+
+  run --separate-stderr env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
+    RUNNING_FIXTURES=fixtures bash .scripts/run-integration-tests.sh \
+    --development recipes-test
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"::group::integration tests: recipes-test"* ]]
+  [[ "$stderr" == *"Prepared integration identity is missing for suite recipes-test: .generated/integration-identities/recipes-test.json"* ]]
+  [[ "$stderr" == *"::endgroup::"* ]]
+  run -1 grep -F 'mise run --raw bazel build' "$MOCK_LOG"
+}
+
+@test "cached integration fails clearly when the prepared dependency graph is missing" {
+  mkdir -p .generated/integration-identities
+  printf '{}\n' > .generated/integration-identities/recipes-test.json
+  rm "$RUNNER_TEMP/integration-images/integration-dependency-graph.json"
+
+  run --separate-stderr env GITHUB_ACTIONS=true INTEGRATION_BAZEL_CACHE=true \
+    bash .scripts/run-integration-tests.sh --development recipes-test
+
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"Prepared integration dependency graph is missing or invalid for suite recipes-test:"* ]]
+  run -1 grep -F 'mise run --raw bazel build' "$MOCK_LOG"
+}
+
+@test "cached suite execution never pulls images and retains failure logs" {
+  run env INTEGRATION_BAZEL_ACTION=true RUN_STATUS=19 \
+    bash .scripts/run-integration-suite.sh recipes-test
+
+  [ "$status" -eq 19 ]
+  grep -Fx 'docker compose --profile test run --pull never --rm --entrypoint /bin/sh recipes-test -c echo tested' "$MOCK_LOG"
+  [ "$(cat recipes-test/target/integration-tests/run.log)" = \
+    "$(printf '%s\n' 'test stdout: recipes-test' 'test stderr: recipes-test')" ]
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
+}
+
+@test "cached auth-required suite execution also avoids pulls and retains failure logs" {
+  run env INTEGRATION_BAZEL_ACTION=true RUN_STATUS=19 \
+    bash .scripts/run-integration-suite.sh graphql-test
+
+  [ "$status" -eq 19 ]
+  grep -Fx 'docker compose --profile test run --pull never --rm -e E2E_AUTH_TOKENS --entrypoint /bin/sh graphql-test -c echo tested' "$MOCK_LOG"
+  [ "$(cat graphql-test/target/integration-tests/run.log)" = \
+    "$(printf '%s\n' 'test stdout: graphql-test' 'test stderr: graphql-test')" ]
+  run -1 grep -F 'docker compose --profile test build' "$MOCK_LOG"
 }
 
 @test "runs test services with the host uid and gid for writable target mounts" {

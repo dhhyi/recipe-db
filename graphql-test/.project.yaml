@@ -60,3 +60,6 @@ prettier:
     - "*.feature"
     - "*.jpg"
 integration: sh karate -T 1 .
+integrationDependencies:
+  - graphql
+  - fixtures

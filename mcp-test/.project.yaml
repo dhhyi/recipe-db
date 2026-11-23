@@ -36,3 +36,6 @@ check: python3 --version
 prettier:
   ignore:
     - "*.py"
+integrationDependencies:
+  - mcp
+  - fixtures

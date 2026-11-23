@@ -40,4 +40,7 @@ prettier:
   ignore:
     - "*.robot"
     - target
+integrationDependencies:
+  - link-extract
+  - fixtures
 integration: robot --outputdir target .

@@ -48,6 +48,22 @@ setup() {
   [ "$(yq '[.jobs[].steps[] | select(.run // "" | contains("generate-production-build-metadata.sh"))] | length' "$workflow")" -eq 3 ]
 }
 
+@test "ARM64 preparation distributes schemas before generating Bazel rules and fetches full history" {
+  workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  # shellcheck disable=SC2016
+  run yq -r '.jobs.arm64-validation.steps[] | select(.name == "checkout") | .with.fetch-depth' "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+
+  run yq -r '.jobs.arm64-validation.steps[] | select(.name == "prepare ARM64 build context without devcontainers") | .run' "$workflow"
+  [ "$status" -eq 0 ]
+  compose=$(grep -nF 'mise run --raw generate-docker-compose' <<< "$output" | cut -d: -f1)
+  schemas=$(grep -nF 'mise run --raw merge-graphql-schemas' <<< "$output" | cut -d: -f1)
+  bazel=$(grep -nF 'mise run --raw generate-bazel-build' <<< "$output" | cut -d: -f1)
+  [ "$compose" -lt "$schemas" ]
+  [ "$schemas" -lt "$bazel" ]
+}
+
 @test "production and devcontainer publishing have independent retry boundaries after validation" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
   jobs=$(yq -o=json '.jobs' "$workflow")
@@ -230,11 +246,14 @@ EOF
   done
 }
 
-@test "ARM64 image builds retain package installation diagnostics" {
+@test "ARM64 image builds record metadata with bounded concurrency" {
   workflow="$BATS_TEST_DIRNAME/../../.github/workflows/publish.yaml"
+  steps=$(yq -o=json '.jobs.arm64-validation.steps' "$workflow")
   script=$(yq '.jobs.arm64-validation.steps[] | select(.name == "build development and standalone test images") | .run' "$workflow")
 
-  [[ "$script" == *"docker compose --progress plain --profile development --profile test build"* ]]
+  [[ "$script" == *"bash .scripts/build-integration-images.sh"* ]]
+  [ "$(jq -r 'map(.name) | index("build development and standalone test images")' <<< "$steps")" \
+    -lt "$(jq -r 'map(.name) | index("prepare selected-platform integration identities")' <<< "$steps")" ]
 }
 
 @test "image cache credentials and PR identity are available before image setup" {
@@ -410,7 +429,7 @@ EOF
 #!/bin/sh
 printf '%s\n' "docker $*" >> "$MOCK_LOG"
 case "$*" in
-  "compose up -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
+  "compose up --pull never --no-build -d --wait --wait-timeout 120") exit "${UP_STATUS:-0}" ;;
   "compose ps") exit 0 ;;
   *) exit 99 ;;
 esac

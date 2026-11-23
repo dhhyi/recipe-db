@@ -20,9 +20,25 @@ EOF
   cp "$BATS_TEST_DIRNAME/../test-scripts.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../format-files.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../bazel-project-action.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../integration-dependencies.py" .scripts/
+  cp "$BATS_TEST_DIRNAME/../project-schema.json" .scripts/
+  cp "$BATS_TEST_DIRNAME/../bazel.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../run-integration-tests.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../run-integration-suite.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../build-integration-images.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../prepare-integration-identities.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../integration-identities.py" .scripts/
+  cp "$BATS_TEST_DIRNAME/../generate-docker-compose.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../refresh-render-inputs.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../create-auth-accounts.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../create-auth-test-fixture.sh" .scripts/
+  cp "$BATS_TEST_DIRNAME/../lib/project-metadata.sh" .scripts/
   touch example/main.txt .scripts/tests/example.bats .scripts/tests/other.bats .scripts/tests/test_helper.bash
   touch .scripts/templates/example.yml deploy/local.yaml deploy/pi.yaml .bazelversion mise.toml \
+    package.json \
     .mise/config.toml .mise/tasks/project-actions.toml .mise/tasks/script-tests.toml \
+    .mise/tasks/bazel.toml .mise/tasks/compose.toml .mise/tasks/development.toml \
+    .mise/tasks/repository-sync.toml \
     .mise/tasks/validation.toml .mise/tasks/development.toml .mise/tasks/compose.toml \
     .scripts/run-bazel-validation.sh .scripts/run-in-devcontainer.sh \
     .scripts/test-message-bus.sh .scripts/test-migrator-packaging.sh \
@@ -32,6 +48,13 @@ EOF
     .scripts/create-production-release-inventory.sh .scripts/validate-production-release.sh \
     .scripts/lib/project-metadata.sh .scripts/migrator-manifest.schema.json \
     .scripts/templates/kubernetes.lib.yml .scripts/templates/kubernetes-migration-job-test.yml \
+    .scripts/templates/docker-compose-template.yml \
+    .scripts/templates/oauth2-proxy-alpha-template.yml \
+    .scripts/templates/service-template.lib.yml \
+    .scripts/templates/fixtures-service-template.lib.yml \
+    .scripts/templates/traefik-service-template.lib.yml \
+    .scripts/templates/nats-service-template.lib.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml \
     .scripts/tests/fixtures/migrator-packaging/fixture.json
   touch .scripts/run-migrator-tests.sh migrators/tags-1-to-2/test-migrator.sh
   cat > .scripts/tests/groups.yaml << 'EOF'
@@ -40,7 +63,9 @@ compose:
     - .scripts/tests/example.bats
   suite_inputs:
     .scripts/tests/example.bats:
-      - .scripts/templates/**
+      - .scripts/templates/example.yml
+      - .scripts/templates/kubernetes-migration-job-test.yml
+      - .scripts/templates/kubernetes.lib.yml
 tooling:
   tests:
     - .scripts/tests/other.bats
@@ -174,6 +199,235 @@ EOF
   grep -Fx "    cmd = \"sh \$(location .scripts/bazel-project-action.sh) test-only test \$@ \$(location :test-only_generate) 2>&1\"," test-rule
   run -1 grep -F 'name = "test-only_check"' BUILD.bazel
   run -1 grep -F 'name = "test-only_precommit"' BUILD.bazel
+}
+
+@test "integration targets track transitive metadata, identities and selective NATS configuration" {
+  mkdir -p suite-test frontend-app backend-service suite-empty suite-nats unrelated message-bus
+  printf '%s\n' 'name: graphql' '---' 'category: api' > graphql/.project.yaml
+  cat > suite-test/.project.yaml << 'EOF'
+name: suite-test
+---
+category: test
+integration: echo suite
+integrationDependencies:
+  - frontend-app
+EOF
+  cat > frontend-app/.project.yaml << 'EOF'
+name: frontend-app
+---
+category: frontend
+integrationDependencies:
+  - backend
+  - graphql
+EOF
+  cat > backend-service/.project.yaml << 'EOF'
+name: backend-service
+---
+category: backend
+EOF
+  cat > suite-empty/.project.yaml << 'EOF'
+name: suite-empty
+---
+category: test
+integration: echo empty
+integrationDependencies: []
+EOF
+  cat > suite-nats/.project.yaml << 'EOF'
+name: suite-nats
+---
+category: test
+integration: echo nats
+integrationDependencies:
+  - nats
+EOF
+  cat > unrelated/.project.yaml << 'EOF'
+name: unrelated
+---
+category: api
+EOF
+  touch message-bus/nats.conf
+
+  run bash .scripts/generate-bazel-build.sh
+
+  [ "$status" -eq 0 ]
+  sed -n '/name = "integration_suite_suite-test"/,/^)/p' BUILD.bazel > suite-rule
+  grep -Fx '        ".generated/integration-identities/suite-test.json",' suite-rule
+  grep -Fx '        "suite-test/.project.yaml",' suite-rule
+  grep -Fx '        "frontend-app/.project.yaml",' suite-rule
+  grep -Fx '        "backend-service/.project.yaml",' suite-rule
+  grep -Fx '        "graphql/.project.yaml",' suite-rule
+  grep -Fx '        ".scripts/create-auth-accounts.sh",' suite-rule
+  grep -Fx '        ".scripts/create-auth-test-fixture.sh",' suite-rule
+  for file in .scripts/templates/docker-compose-template.yml \
+    .scripts/templates/oauth2-proxy-alpha-template.yml \
+    .scripts/templates/service-template.lib.yml \
+    .scripts/templates/fixtures-service-template.lib.yml \
+    .scripts/templates/traefik-service-template.lib.yml \
+    .scripts/templates/nats-service-template.lib.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml; do
+    grep -Fx "        \"$file\"," suite-rule
+  done
+  run -1 grep -F '.scripts/templates/kubernetes.lib.yml' suite-rule
+  grep -Fx '        ".mise/tasks/repository-sync.toml",' suite-rule
+  grep -Fx '    tags = ["manual", "no-sandbox", "no-remote"],' suite-rule
+  grep -Fx '    cmd = "INTEGRATION_BAZEL_ACTION=true bash .scripts/run-integration-suite.sh suite-test && touch $@",' suite-rule
+  run -1 grep -F 'unrelated/.project.yaml' suite-rule
+  run -1 grep -F 'message-bus/nats.conf' suite-rule
+
+  sed -n '/name = "integration_suite_suite-empty"/,/^)/p' BUILD.bazel > empty-rule
+  grep -Fx '    tags = ["manual", "no-sandbox", "no-remote", "no-cache"],' empty-rule
+  grep -Fx '        ".generated/integration-identities/suite-empty.json",' empty-rule
+
+  sed -n '/name = "integration_suite_suite-nats"/,/^)/p' BUILD.bazel > nats-rule
+  grep -Fx '        "message-bus/nats.conf",' nats-rule
+  run -1 grep -F '.scripts/create-auth-' nats-rule
+  run -1 grep -F '.secrets/' suite-rule
+
+  cp BUILD.bazel generated-build
+  rm message-bus/nats.conf
+  run --separate-stderr bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"Validation target message_bus_validation input pattern matches no files: message-bus/nats.conf"* ]]
+  cmp generated-build BUILD.bazel
+}
+
+@test "manual integration suites are excluded from wildcard Bazel builds" {
+  bazel_bin=$(command -v bazel || command -v bazelisk)
+  printf '%s\n' '8.5.0' > .bazelversion
+  : > MODULE.bazel
+  mkdir -p manual-suite
+  cat > manual-suite/BUILD.bazel << 'EOF'
+genrule(
+    name = "integration_suite_missing_identity",
+    srcs = ["missing-integration-identity.json"],
+    outs = ["integration-suite.ok"],
+    cmd = "touch $@",
+    tags = ["manual", "no-sandbox", "no-remote"],
+)
+EOF
+
+  run "$bazel_bin" --batch \
+    --output_user_root="$BATS_TEST_TMPDIR/bazel-user-root" \
+    --output_base="$BATS_TEST_TMPDIR/bazel-default-build" \
+    build //manual-suite:all
+  [ "$status" -eq 0 ]
+}
+
+@test "real Bazel suite actions reuse identity-matched results and retry failures" {
+  bazel_bin=$(command -v bazel || command -v bazelisk)
+  printf '%s\n' '8.5.0' > .bazelversion
+  : > MODULE.bazel
+  mkdir -p app app-other suite-test suite-other .generated/integration-identities
+  printf '%s\n' 'name: graphql' '---' 'category: api' > graphql/.project.yaml
+  cat > app/.project.yaml << 'EOF'
+name: app
+---
+category: frontend
+EOF
+  cat > app-other/.project.yaml << 'EOF'
+name: app-other
+---
+category: frontend
+EOF
+  cat > suite-test/.project.yaml << 'EOF'
+name: suite-test
+---
+category: test
+integration: echo suite
+integrationDependencies:
+  - app
+  - graphql
+EOF
+  cat > suite-other/.project.yaml << 'EOF'
+name: suite-other
+---
+category: test
+integration: echo suite
+integrationDependencies:
+  - app-other
+EOF
+  printf '%s\n' '{"images":["sha256:one"]}' > .generated/integration-identities/suite-test.json
+  printf '%s\n' '{"images":["sha256:other"]}' > .generated/integration-identities/suite-other.json
+  cat > .scripts/run-integration-suite.sh << 'EOF'
+#!/bin/sh
+set -eu
+printf '%s\n' "$1" >> "$INTEGRATION_INVOCATIONS"
+if [ -f "$INTEGRATION_FAIL_MARKER" ]; then
+  rm "$INTEGRATION_FAIL_MARKER"
+  exit 37
+fi
+EOF
+
+  run bash .scripts/generate-bazel-build.sh
+  [ "$status" -eq 0 ]
+
+  invocations="$BATS_TEST_TMPDIR/invocations"
+  cache="$BATS_TEST_TMPDIR/disk-cache"
+  fail_marker="$BATS_TEST_TMPDIR/fail-once"
+  mkdir -p "$cache"
+  export INTEGRATION_INVOCATIONS="$invocations"
+  export INTEGRATION_FAIL_MARKER="$fail_marker"
+
+  run_suite_build() {
+    local base=$1 target=$2
+    "$bazel_bin" --batch \
+      --output_user_root="$BATS_TEST_TMPDIR/bazel-user-root" \
+      --output_base="$BATS_TEST_TMPDIR/$base" \
+      build --disk_cache="$cache" \
+      --action_env="INTEGRATION_INVOCATIONS=$invocations" \
+      --action_env="INTEGRATION_FAIL_MARKER=$fail_marker" \
+      "$target"
+  }
+
+  run run_suite_build first //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 1 ]
+
+  run run_suite_build other //:integration_suite_suite-other
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 2 ]
+
+  run run_suite_build unchanged //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 2 ]
+
+  printf '%s\n' '{"images":["sha256:two"]}' > .generated/integration-identities/suite-test.json
+  run run_suite_build changed //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 3 ]
+
+  run run_suite_build unrelated //:integration_suite_suite-other
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 3 ]
+
+  printf '%s\n' '# auth configuration changed' >> .scripts/create-auth-accounts.sh
+  run run_suite_build auth-changed //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 4 ]
+
+  run run_suite_build auth-unrelated //:integration_suite_suite-other
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 4 ]
+
+  printf '%s\n' '# auth fixture changed' >> .scripts/create-auth-test-fixture.sh
+  run run_suite_build auth-fixture-changed //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 5 ]
+
+  rm -rf "$cache/ac"
+  run run_suite_build missing-cache-actions //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 6 ]
+
+  printf '%s\n' '{"images":["sha256:three"]}' > .generated/integration-identities/suite-test.json
+  touch "$fail_marker"
+  run run_suite_build failure //:integration_suite_suite-test
+  [ "$status" -eq 1 ]
+  [ "$(wc -l < "$invocations")" -eq 7 ]
+
+  run run_suite_build retry //:integration_suite_suite-test
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$invocations")" -eq 8 ]
 }
 
 @test "project check targets depend on devcontainer build inputs" {

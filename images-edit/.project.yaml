@@ -120,3 +120,5 @@ check: |
   pnpm build
   pnpm lint
 test: pnpm test
+integrationDependencies:
+  - design

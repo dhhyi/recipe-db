@@ -25,6 +25,7 @@ case "$1" in
     while (($#)); do
       case "$1" in
         --rm) shift ;;
+        --pull) shift 2 ;;
         -e | --entrypoint) shift 2 ;;
         *)
           project=$1

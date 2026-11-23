@@ -113,12 +113,22 @@ setup_bazel_fixture() {
   cd "$FIXTURE_ROOT" || return
   git init -q
   cp "$BATS_TEST_DIRNAME/../"{generate-bazel-build,format-files,format-bazel,run-in-devcontainer,bazel}.sh .scripts/
+  cp "$BATS_TEST_DIRNAME/../"{integration-dependencies.py,project-schema.json} .scripts/
   cp "$BATS_TEST_DIRNAME/../../.bazelversion" .
   printf '%s\n' 'module(name = "format_fixture")' > MODULE.bazel
   mkdir -p .scripts/tests .mise/tasks example other deploy message-bus graphql/.devcontainer \
     graphql/src graphql/testdata .scripts/lib .scripts/templates \
     .scripts/tests/fixtures/migrator-packaging
   touch .scripts/tests/example.bats .scripts/tests/test_helper.bash .scripts/test-scripts.sh
+  touch package.json .mise/tasks/bazel.toml .mise/tasks/repository-sync.toml \
+    .scripts/run-integration-tests.sh .scripts/run-integration-suite.sh \
+    .scripts/build-integration-images.sh .scripts/prepare-integration-identities.sh \
+    .scripts/integration-identities.py .scripts/generate-docker-compose.sh \
+    .scripts/refresh-render-inputs.sh .scripts/templates/docker-compose-template.yml \
+    .scripts/templates/oauth2-proxy-alpha-template.yml \
+    .scripts/templates/service-template.lib.yml .scripts/templates/fixtures-service-template.lib.yml \
+    .scripts/templates/traefik-service-template.lib.yml .scripts/templates/nats-service-template.lib.yml \
+    .scripts/templates/browse-maintenance-template.lib.yml
   touch .mise/tasks/validation.toml .mise/tasks/development.toml .mise/tasks/compose.toml
   touch .scripts/run-bazel-validation.sh .scripts/test-message-bus.sh \
     .scripts/test-migrator-packaging.sh .scripts/generate-production-build-metadata.sh \

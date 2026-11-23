@@ -141,7 +141,11 @@ fi
 
 if ! docker compose --profile test ps --services --status running | grep -Fxq fixtures; then
   fixture_started=true
-  docker compose --profile test up -d fixtures
+  if [[ ${GITHUB_ACTIONS:-} == true && ${INTEGRATION_BAZEL_CACHE:-} == true ]]; then
+    docker compose --profile test up --pull never --no-build -d fixtures
+  else
+    docker compose --profile test up -d fixtures
+  fi
 fi
 
 wait_for_http() {
@@ -223,36 +227,68 @@ for project in "${projects[@]}"; do
 done
 
 for project in "${projects[@]}"; do
-  integration=${integration_scripts[$project]}
-  mkdir -p "$project/target/integration-tests"
   if [[ ${GITHUB_ACTIONS:-} == true ]]; then
     echo "::group::integration tests: $project" >&2
     group_open=true
   fi
-  echo "Running $project; report log: $project/target/integration-tests/run.log"
   started=$SECONDS
-  set +e
-  if [[ $project == e2e-test || $project == graphql-test || $project == search-test || $project == mcp-test ]]; then
-    tokens_file=e2e-test/.secrets/auth-tokens.json
-    if [[ ! -s $tokens_file ]]; then
-      echo "Auth test tokens are missing; run mise run create-auth-test-fixture." >&2
+  if [[ ${GITHUB_ACTIONS:-} == true && ${INTEGRATION_BAZEL_CACHE:-} == true ]]; then
+    identity_file=".generated/integration-identities/$project.json"
+    if [[ ! -s "$identity_file" ]]; then
+      printf 'Prepared integration identity is missing for suite %s: %s\n' \
+        "$project" "$identity_file" >&2
       exit 1
     fi
-    E2E_AUTH_TOKENS=$(cat "$tokens_file")
-    export E2E_AUTH_TOKENS
-    docker compose --profile test run --rm -e E2E_AUTH_TOKENS \
-      --entrypoint /bin/sh "$project" -c "$integration" 2>&1 \
-      | tee "$project/target/integration-tests/run.log"
-    status=${PIPESTATUS[0]}
-    unset E2E_AUTH_TOKENS
+    dependency_graph="${RUNNER_TEMP:-}/integration-images/integration-dependency-graph.json"
+    if [[ ! -s "$dependency_graph" ]] || ! jq -e --arg project "$project" '
+      (.resolved | type == "object")
+      and (.resolved[$project] | type == "object"
+        and (.projects | type == "array")
+        and (.synthetic | type == "array"))
+    ' "$dependency_graph" > /dev/null 2>&1; then
+      printf 'Prepared integration dependency graph is missing or invalid for suite %s: %s\n' \
+        "$project" "$dependency_graph" >&2
+      exit 1
+    fi
+    if jq -e --arg project "$project" '
+      (.resolved[$project].projects | length) +
+      (.resolved[$project].synthetic | length) == 0
+    ' "$dependency_graph" > /dev/null; then
+      set +e
+      INTEGRATION_BAZEL_ACTION=true bash .scripts/run-integration-suite.sh "$project"
+      status=$?
+      set -e
+    else
+      bazel_arguments=(
+        --action_env=PATH
+        --action_env=CI
+        --action_env=GITHUB_ACTIONS
+        --action_env=HOST_UID
+        --action_env=HOST_GID
+        --action_env=VERBOSE
+        --action_env=BUILDKIT_PROGRESS
+        --action_env=COMPOSE_PROGRESS
+        --action_env=COMPOSE_PARALLEL_LIMIT
+        "--disk_cache=${BAZEL_DISK_CACHE:-$HOME/.cache/bazel-disk}"
+      )
+      if [[ -n ${BAZEL_EXECUTION_LOG_DIR:-} ]]; then
+        mkdir -p "$BAZEL_EXECUTION_LOG_DIR"
+        bazel_arguments+=(
+          "--execution_log_json_file=$BAZEL_EXECUTION_LOG_DIR/integration-$project.json"
+        )
+      fi
+      set +e
+      mise run --raw bazel build "${bazel_arguments[@]}" "//:integration_suite_$project"
+      status=$?
+      set -e
+    fi
   else
-    docker compose --profile test run --rm --entrypoint /bin/sh \
-      "$project" -c "$integration" 2>&1 \
-      | tee "$project/target/integration-tests/run.log"
-    status=${PIPESTATUS[0]}
+    set +e
+    bash .scripts/run-integration-suite.sh "$project"
+    status=$?
+    set -e
   fi
-  set -e
-  if [[ $group_open == true ]]; then
+  if [[ "$group_open" == true ]]; then
     echo "::endgroup::" >&2
     group_open=false
   fi
