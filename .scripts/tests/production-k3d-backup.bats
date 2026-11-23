@@ -415,6 +415,17 @@ EOF
   jq -e '.items[] | select(.metadata.name == "tags") | .spec.replicas == 2' "$MOCK_LOG.deployments"
 }
 
+@test "failed maintenance entry records interrupted recovery state and retains the lease" {
+  export MOCK_BACKUP=true MOCK_RELEASE_ROLLOUT_FAIL=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance"
+  run bash .scripts/production-k3d.sh maintenance-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "recovery-required" and .phase == "interrupted"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e '.metadata.annotations["recipe-db/phase"] == "recovery-required"' \
+    "$MOCK_LOG.lease" > /dev/null
+}
+
 @test "maintenance capture preserves the retained operation and restores read-only service" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/maintenance" holder

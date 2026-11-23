@@ -1313,7 +1313,8 @@ backup_run() {
 }
 
 maintenance_enter() {
-  local artifact=$1 snapshot=$2 parent canonical_parent basename replicas
+  local artifact=$1 parent canonical_parent basename replicas
+  snapshot=$2
   [[ $snapshot = /* && ! -e $snapshot && ! -L $snapshot ]] \
     || production_fail "maintenance state path must be a new absolute directory"
   parent=$(dirname "$snapshot")
