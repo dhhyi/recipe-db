@@ -520,6 +520,8 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-readonly-r
 
 Use `failed` if the repeated checks still fail. The prior failures remain recorded; the candidate, migrated data, maintenance barrier and Lease are retained. A passed retry permits the separately approved reopening in step 9; it does not reopen access itself.
 
+If saving a result succeeds but updating the Lease fails, repeat the same result command with the same notes and confirmation to reconcile the Lease. This does not reopen access.
+
 ## 9. Explicitly reopen application access
 
 Only after the read-only result is recorded as passed and the operator explicitly instructs reopening, run the separate guarded command on the **workstation**:

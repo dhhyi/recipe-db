@@ -1047,7 +1047,12 @@ EOF
     "$CANDIDATE" passed "Retry" "READONLY-RETRY-$HOLDER-passed"
   [ "$status" -ne 0 ]
   cmp before-retry.json "$STATE/backup-state.json"
-  cp lease-before.json "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "First failure" "READONLY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Lease handoff reconciled"* ]]
+  cmp before-retry.json "$STATE/backup-state.json"
+  cmp lease-before.json "$MOCK_LOG.lease"
 
   jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[0].env[]
     | select(.name == "MODE").value)="production"' "$MOCK_LOG.deployments" > deployments.next
@@ -1075,6 +1080,19 @@ EOF
   cmp migration-before.json migration-after.json
   jq -e --arg holder "$HOLDER" '.spec.holderIdentity == $holder
     and .metadata.annotations["recipe-db/phase"] == "read-only-passed"' "$MOCK_LOG.lease" > /dev/null
+  cp "$STATE/backup-state.json" passed-before-reconcile.json
+  jq '.metadata.annotations["recipe-db/phase"]="read-only-failed"' "$MOCK_LOG.lease" > lease.next
+  mv lease.next "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Lease handoff reconciled"* ]]
+  cmp passed-before-reconcile.json "$STATE/backup-state.json"
   jq -e '.items[] | select(.metadata.name == "graphql")
     | .spec.template.spec.containers[0].env[0].value == "maintenance"' "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
@@ -2378,8 +2396,8 @@ PY
 
 @test "candidate staging rejects a backend left in backup mode" {
   prepare_captured_release
-  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env[]
-    | select(.name == "MODE").value)="backup"' \
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    ((. // [] | map(select(.name != "MODE"))) + [{name:"MODE",value:"backup"}])' \
     "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
   mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
 

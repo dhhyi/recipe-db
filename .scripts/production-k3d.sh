@@ -1880,6 +1880,11 @@ release_assert_maintenance_barrier() {
           and .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release
           and (.spec.replicas // 0) == $wanted.replicas
           and (.status.readyReplicas // 0) == $wanted.replicas))
+      and all($state[0].selectedPVCs[];
+        .name as $name |
+        any($actual.items[]; .metadata.name == $name
+          and any(.spec.template.spec.containers[]; .name == $name
+            and ([.env[]? | select(.name == "MODE") | .value] == ["production"]))))
       and any($actual.items[]; .metadata.name == "graphql"
         and any(.spec.template.spec.containers[]; .name == "graphql"
           and any(.env[]?; .name == "MODE" and .value == "maintenance")))
@@ -3935,19 +3940,35 @@ release_start() {
 }
 
 release_readonly_result() {
-  local candidate=$2 result=$3 notes=$4 confirmation=$5 retry=false
+  local candidate=$2 result=$3 notes=$4 confirmation=$5 retry=false reconcile=false
   release_load_operation "$1" "$candidate"
   case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
     release-ready/ready)
-      release_require_lease_phase ready
-      jq -e '.readOnlyCheck == null' "$snapshot/backup-state.json" > /dev/null \
-        || production_fail "a read-only check result is already recorded"
+      if jq -e '.readOnlyCheck.outcome == "passed"' "$snapshot/backup-state.json" > /dev/null; then
+        release_require_lease_phase ready read-only-failed
+        jq -e --arg lease "$release_lease_phase" '
+          if $lease == "ready" then (.readOnlyCheckHistory // [] | length) == 0
+          else .readOnlyCheckHistory[-1].outcome == "failed" end
+        ' "$snapshot/backup-state.json" > /dev/null \
+          || production_fail "read-only result does not match the previous Lease phase"
+        reconcile=true
+      else
+        release_require_lease_phase ready
+        jq -e '.readOnlyCheck == null' "$snapshot/backup-state.json" > /dev/null \
+          || production_fail "a read-only check result is already recorded"
+      fi
       ;;
     release-ready/read-only-failed)
-      release_require_lease_phase read-only-failed
       jq -e '.readOnlyCheck.outcome == "failed"' "$snapshot/backup-state.json" > /dev/null \
         || production_fail "read-only retry requires a recorded failed check"
-      retry=true
+      if [[ $release_lease_phase == ready ]]; then
+        jq -e '(.readOnlyCheckHistory // [] | length) == 0' "$snapshot/backup-state.json" > /dev/null \
+          || production_fail "read-only result does not match the previous Lease phase"
+        reconcile=true
+      else
+        release_require_lease_phase read-only-failed
+        retry=true
+      fi
       ;;
     *) production_fail "read-only checks require a ready candidate" ;;
   esac
@@ -3955,6 +3976,13 @@ release_readonly_result() {
     || production_fail "read-only result must be passed or failed"
   [[ -n $notes && ${#notes} -le 1000 && $notes != *$'\n'* ]] \
     || production_fail "read-only notes must be a non-empty single line of at most 1000 characters"
+  if $reconcile; then
+    jq -e --arg result "$result" --arg notes "$notes" \
+      '.readOnlyCheck.outcome == $result and .readOnlyCheck.notes == $notes' \
+      "$snapshot/backup-state.json" > /dev/null \
+      || production_fail "reconciling a read-only result requires the recorded outcome and notes"
+    retry=$(jq -r '(.readOnlyCheckHistory // [] | length) > 0' "$snapshot/backup-state.json")
+  fi
   if $retry; then
     [[ $confirmation == "READONLY-RETRY-$backup_id-$result" ]] \
       || production_fail "read-only retry requires READONLY-RETRY-<holder>-<result> confirmation"
@@ -3986,6 +4014,12 @@ release_readonly_result() {
   if [[ $result == failed ]]; then
     phase=read-only-failed
     lease_phase=read-only-failed
+  fi
+  if $reconcile; then
+    cluster_operation_lock_update "$lease_phase" \
+      || production_fail "saved read-only result could not update the Lease; repeat this command to reconcile it"
+    printf 'production: saved read-only result Lease handoff reconciled; access remains in maintenance\n'
+    return 0
   fi
   release_state_write release-ready "$phase" \
     "$(jq -cn --arg outcome "$result" --arg notes "$notes" \
