@@ -14,7 +14,7 @@ rehearsal_write_values() {
       .cluster=$cluster | .context=$context | .origin=$origin | .httpPort=$httpPort | .apiPort=$apiPort |
       .storageClass="local-path" |
       .infrastructure=$local.infrastructure |
-      .runtime=(.runtime | del(.googleOAuthClientId) | .ingressMode="loopback") |
+      .runtime=(.runtime | del(.googleOAuthClientId)) |
       del(.piStorage, .httpsStaging, .volumes.redis) |
       .secrets={"auth-accounts.json":$accounts}
     ' > "$json_output"

@@ -665,7 +665,7 @@ kube delete pod recovery-incompatible-release --wait=true --timeout=60s \
 assert_no_storage_pods
 perform_complete_recovery() {
   local work="$restore_runtime" root="$repository_root"
-  local target=local ingress_mode=loopback timeout=60
+  local target=local timeout=60
   local storage_class=recipe-db-retained lock_holder=recovery-fixture-holder
   local restore_mode=migration-recovery restore_current_phase=
   local copy_image

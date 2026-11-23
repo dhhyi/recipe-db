@@ -106,7 +106,7 @@ Detailed findings and delivery ownership are tracked in [#143: Define a release 
 
 The default local identity is target `local`, cluster `recipe-db-rehearsal`, context `k3d-recipe-db-rehearsal`, namespace `recipe-db`, origin `http://127.0.0.1:8080`, and a default 600-second wait timeout. Additional isolated local clusters may use names prefixed `recipe-db-rehearsal-` and matching `k3d-<cluster>` contexts, which allows source and fresh-target recovery rehearsals to remain distinct. A different configured `httpPort` is supported only with its matching loopback origin; set `apiPort` independently when its default is occupied. The driver checks managed container labels, node identity, k3s image, loopback-only port bindings and its freshly obtained explicit kubeconfig. It does not switch the user's default context. A URL responding on port 8080 is not sufficient.
 
-Local Traefik uses a LoadBalancer Service so k3s ServiceLB forwards the k3d load balancer's port 80 to Traefik. It allocates no NodePorts or external IPs; the managed k3d host bindings remain loopback-only. Pi loopback ingress remains ClusterIP, while explicit Pi private-LAN ingress uses a LoadBalancer. Deploy and restore verify the live Service matches the selected target before reporting success or reopening ingress.
+Local Traefik uses a LoadBalancer Service so k3s ServiceLB forwards the k3d load balancer's port 80 to Traefik. It allocates no NodePorts or external IPs; the managed k3d host bindings remain loopback-only. Pi uses the same Traefik LoadBalancer shape. Deploy and restore verify the live Service is a safe LoadBalancer before reporting success or reopening ingress.
 
 ### End-to-end backup and recovery rehearsal
 
@@ -287,7 +287,7 @@ All file arguments are absolute. The values file explicitly selects target, cont
 
 The recorded release artifact and every application image must remain available. The corresponding release commit and unchanged render inputs must be present locally, and all configured secret inputs must be supplied independently; secrets are not recovered from backup. The accounts file must include an explicit owner bearer token for the private create/update/delete propagation probe. The probe uses only its own new recipe, verifies search and browse changes, and removes that recipe before completion; an interrupted probe's identity is retained in recovery state. No mutable image tag, replacement release, application build or implicit upgrade substitutes for a missing prerequisite. Pi restore retains the provisioning/storage-identity safeguards above; this command does not provision or reimage a device.
 
-After rendering the recorded release, restore applies the current target's Traefik Service exposure policy without changing application images or historical render inputs. For local and Pi private-LAN LoadBalancers it disables NodePort allocation and removes any already allocated NodePorts before importing data; Pi loopback remains ClusterIP. It checks the resulting Service again before reopening ingress.
+After rendering the recorded release, restore applies the Traefik LoadBalancer exposure policy without changing application images or historical render inputs. It disables NodePort allocation and removes any already allocated NodePorts before importing data. It checks the resulting Service again before reopening ingress.
 
 The shared cluster-scoped Lease excludes deployment and capture. Fresh-target inspection refuses populated authoritative, derived and external-cache storage. Application writers remain stopped during data import. Public GraphQL remains blocked while the private trusted-ingress query route permits full search rebuilding. Browse's recorded image hardcodes `http://traefik/graphql`; restore must route that internal service alias to the private entrypoint without opening the public Traefik service, rather than relying on a `GRAPHQL_URL` environment override. NATS, Typesense, search/checkpoint, browse and external caches start fresh; upstream websites are not recovery prerequisites. Completion requires successful service startup, search readiness, representative black-box reads and observable change propagation before application access reopens. The read check inspects images for up to ten recipes in ID order and requires HTTP 200 and nonempty bodies for both image URLs; if none in that sample has an image, image delivery is not checked. Relative image URLs and absolute URLs on the configured origin are checked through private ingress; off-origin URLs are rejected rather than contacted.
 
@@ -324,12 +324,11 @@ The local protocol smoke requires a private owner bearer-token file whose token 
 
 ### Production HTTPS on the Pi
 
-Every Pi values file requires an HTTPS origin matching the configured hostname. Keep the existing `httpsStaging` key until #397; its only supported setting is `hostname`. The name is retained for that follow-up, not to select a test CA. Keep `runtime.ingressMode: private-lan` until #316 removes the selector:
+Every Pi values file requires an HTTPS origin matching the configured hostname. Keep the existing `httpsStaging` key until #397; its only supported setting is `hostname`. The name is retained for that follow-up, not to select a test CA:
 
 ```yaml
 origin: https://your-hostname.example.org
 runtime:
-  ingressMode: private-lan
   trustedIssuer: https://accounts.google.com
 httpsStaging:
   hostname: your-hostname.example.org
@@ -360,7 +359,6 @@ With Google settings absent, anonymous reads and configured bearer tokens contin
 ```yaml
 origin: https://your-hostname.example.org
 runtime:
-  ingressMode: private-lan
   googleOAuthClientId: YOUR-CLIENT-ID.apps.googleusercontent.com
   trustedIssuer: https://accounts.google.com
 infrastructure:

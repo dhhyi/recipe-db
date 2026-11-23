@@ -98,7 +98,7 @@ no_google_values() {
   export MOCK_PI=true
   export MOCK_LAN=true MOCK_HTTPS=true
   set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
-    .origin="https://recipes.example.org" | .runtime.ingressMode="private-lan" |
+    .origin="https://recipes.example.org" |
     .storageClass="recipe-db-retained" |
     .httpsStaging={hostname:"recipes.example.org"} |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
@@ -111,7 +111,6 @@ no_google_values() {
 google_https_values() {
   no_google_values
   set_value '.origin="https://recipes.example.org" |
-    .runtime.ingressMode="private-lan" |
     .runtime.googleOAuthClientId="explicit.apps.googleusercontent.com" |
     .volumes.redis="1Gi" |
     .infrastructure.oauth2Proxy="quay.io/oauth2-proxy/oauth2-proxy:v7.9.0" |
@@ -168,7 +167,9 @@ google_https_values() {
     set_value "$change"
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
-    [[ $output == *"httpsStaging.hostname"* || $output == *"invalid or incomplete production values"* ]]
+    [[ $output == *"httpsStaging.hostname"* ||
+       $output == *"invalid or incomplete production values"* ||
+       $output == *"runtime.ingressMode is obsolete"* ]]
   done
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"
@@ -415,12 +416,19 @@ legacy_pi_claims() {
   run ! grep -q 'apply -f' "$MOCK_LOG"
 }
 
-@test "Pi HTTPS configuration still requires the current private-LAN ingress selector" {
+@test "Pi HTTPS configuration works without an ingress selector" {
+  no_google_values
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+}
+
+@test "removed ingressMode is rejected before mutation" {
   no_google_values
   set_value '.runtime.ingressMode="loopback"'
+  : > "$MOCK_LOG"
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  [[ $output == *"invalid or incomplete production values"* ]]
+  [[ $output == *"runtime.ingressMode is obsolete"* ]]
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"
 }
