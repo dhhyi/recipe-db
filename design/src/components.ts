@@ -9,9 +9,7 @@ document.addEventListener("htmx:beforeTransition", (event) => {
   if (!(event.target instanceof Element)) {
     return;
   }
-  if (
-    event.target.closest("form[data-tag-mutation], #recipe-tag-search")
-  ) {
+  if (event.target.closest("form[data-tag-mutation], #recipe-tag-search")) {
     const type = event.target.closest("#recipe-tag-search")
       ? "tag-search"
       : "tag-edit";

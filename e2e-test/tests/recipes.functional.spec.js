@@ -119,16 +119,18 @@ transitionTest(
               : null,
           }),
         ),
-        detail: [...document.querySelectorAll(".recipe-image, .recipe-rating")].map(
-          (element) => getComputedStyle(element).viewTransitionName,
-        ),
+        detail: [
+          ...document.querySelectorAll(".recipe-image, .recipe-rating"),
+        ].map((element) => getComputedStyle(element).viewTransitionName),
       });
       document.startViewTransition = (update) => {
         const record = {};
         window.recipeTransitions.push(record);
         const transition = start(async () => {
           record.old = names();
-          record.selected = document.querySelector("[data-transition-selected]");
+          record.selected = document.querySelector(
+            "[data-transition-selected]",
+          );
           await update();
         });
         transition.ready.then(async () => {
@@ -136,14 +138,16 @@ transitionTest(
           record.new = names();
           if (record.types.includes("recipe-open")) {
             const selected = record.old.tiles.find((tile) => tile.selected);
-            const animations = document.getAnimations().filter((animation) =>
-              [selected.image, selected.rating].some(
-                (name) =>
-                  name &&
-                  animation.effect?.pseudoElement ===
-                    `::view-transition-group(${name})`,
-              ),
-            );
+            const animations = document
+              .getAnimations()
+              .filter((animation) =>
+                [selected.image, selected.rating].some(
+                  (name) =>
+                    name &&
+                    animation.effect?.pseudoElement ===
+                      `::view-transition-group(${name})`,
+                ),
+              );
             for (const animation of animations) {
               animation.pause();
               animation.currentTime = 100;
@@ -176,7 +180,9 @@ transitionTest(
     await page.goto("/");
     const recipe = overviewRecipes[0];
     for (const home of ["detail", "header"]) {
-      const tile = page.locator(`recipe-tile-component[data-recipe-id="${recipe.id}"]`);
+      const tile = page.locator(
+        `recipe-tile-component[data-recipe-id="${recipe.id}"]`,
+      );
       await expect(tile.locator('a[slot="image"] img')).toBeVisible();
       await expect(tile.locator('a[slot="rating"]')).toBeVisible();
       await page.evaluate(() => (window.recipeTransitions = []));
@@ -187,7 +193,10 @@ transitionTest(
         .toBe(true);
       const opening = await page.evaluate(() => {
         const { selected, ...record } = window.recipeTransitions[0];
-        return { ...record, selectedCleaned: !selected.hasAttribute("data-transition-selected") };
+        return {
+          ...record,
+          selectedCleaned: !selected.hasAttribute("data-transition-selected"),
+        };
       });
       expect(opening.types).toEqual(["recipe-open"]);
       expect(opening.selectedCleaned).toBe(true);
@@ -208,8 +217,16 @@ transitionTest(
       expect(opening.refresh.replaced).toBe(true);
       expect(opening.refresh.frames).toEqual(
         expect.arrayContaining([
-          { pseudo: `::view-transition-group(${selected.image})`, time: 100, state: "paused" },
-          { pseudo: `::view-transition-group(${selected.rating})`, time: 100, state: "paused" },
+          {
+            pseudo: `::view-transition-group(${selected.image})`,
+            time: 100,
+            state: "paused",
+          },
+          {
+            pseudo: `::view-transition-group(${selected.rating})`,
+            time: 100,
+            state: "paused",
+          },
         ]),
       );
 
@@ -248,24 +265,34 @@ transitionTest(
         const transition = start(...args);
         transition.ready.then(() => {
           window.motionAnimations.push(
-            document.getAnimations().filter((animation) =>
-              animation.effect?.pseudoElement?.startsWith("::view-transition"),
-            ).length,
+            document
+              .getAnimations()
+              .filter((animation) =>
+                animation.effect?.pseudoElement?.startsWith(
+                  "::view-transition",
+                ),
+              ).length,
           );
         });
         return transition;
       };
     });
     await page.goto("/");
-    const tile = page.locator(`recipe-tile-component[data-recipe-id="${recipeWithoutImage.id}"]`);
-    await tile.locator('a[slot="rating"]').evaluate((rating) => rating.remove());
+    const tile = page.locator(
+      `recipe-tile-component[data-recipe-id="${recipeWithoutImage.id}"]`,
+    );
+    await tile
+      .locator('a[slot="rating"]')
+      .evaluate((rating) => rating.remove());
     await expect(tile.locator('a[slot="image"] img')).toHaveCount(0);
     await tile.locator('a[slot="title"]').click();
     await expect(page).toHaveURL(`/recipe/${recipeWithoutImage.id}`);
     await page.getByRole("link", { name: "Zur Startseite" }).click();
     await expect(page).toHaveURL("/");
     await expect(tile).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.motionAnimations)).toEqual([0, 0]);
+    await expect
+      .poll(() => page.evaluate(() => window.motionAnimations))
+      .toEqual([0, 0]);
   },
 );
 
