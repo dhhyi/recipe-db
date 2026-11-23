@@ -122,6 +122,18 @@ load production-k3d-restore-setup
   run ! grep -Eq 'restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
 }
 
+@test "Pi HTTPS restore rejects a non-TCP Service port" {
+  restore_fixture
+  pi_https_restore_values
+  export MOCK_PROTOCOL_DRIFT=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  run ! grep -Eq 'restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
+}
+
 @test "restore fully imports only after ALL volumes are empty and verifies propagation before public reopening" {
   restore_fixture
   set_value '.timeoutSeconds=8'
