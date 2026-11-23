@@ -409,21 +409,21 @@ for (const role of ["anonymous", "member", "owner"]) {
           maxDiffPixelRatio: 0.02,
         });
 
-        let assignments = 0;
+        const assignments = [];
         page.on("request", (request) => {
           if (
             request.method() === "POST" &&
             new URL(request.url()).pathname ===
               `/recipe/${taggedDemoRecipe.id}/tags`
           ) {
-            assignments += 1;
+            assignments.push(request);
           }
         });
         await search.fill("de");
         await expect(optionList).toHaveAttribute("data-query", "de");
         await expect(options).toHaveCount(2);
         await search.press("Enter");
-        expect(assignments).toBe(0);
+        expect(assignments).toHaveLength(0);
         await expect(dialog.locator("[data-tag-remove]")).toHaveCount(3);
 
         await search.fill(" Deutsch ");
@@ -435,7 +435,7 @@ for (const role of ["anonymous", "member", "owner"]) {
           isComposing: true,
         });
         await search.dispatchEvent("keydown", { key: "Enter", repeat: true });
-        expect(assignments).toBe(0);
+        expect(assignments).toHaveLength(0);
         await search.evaluate((input) => {
           input.value = "no-matching-tag";
           input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -445,17 +445,21 @@ for (const role of ["anonymous", "member", "owner"]) {
         });
         await expect(options).toHaveCount(0);
         await search.press("Enter");
-        expect(assignments).toBe(0);
+        expect(assignments).toHaveLength(0);
 
         await search.fill(" Deutsch ");
         await expect(optionList).toHaveAttribute("data-query", " Deutsch ");
         await expect(options).toHaveCount(1);
+        await expect(
+          dialog.locator("#recipe-tag-options.htmx-settling"),
+        ).toHaveCount(0);
         await search.press("Enter");
         await expect(
           page.getByRole("button", { name: "Deutsch entfernen", exact: true }),
         ).toBeVisible();
         await expect(dialog.locator("[data-tag-remove]")).toHaveCount(4);
-        expect(assignments).toBe(1);
+        expect(assignments).toHaveLength(1);
+        expect(assignments[0].headers()["hx-request"]).toBe("true");
         await expect(search).toHaveValue("");
         await expect(search).toBeFocused();
       });
