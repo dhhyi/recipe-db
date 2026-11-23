@@ -202,6 +202,11 @@ pub struct AuthQuery;
 
 #[Object]
 impl AuthQuery {
+    async fn maintenance(&self, ctx: &Context<'_>) -> bool {
+        ctx.data_opt::<crate::mode::RuntimeMode>()
+            .is_some_and(|mode| *mode == crate::mode::RuntimeMode::Maintenance)
+    }
+
     async fn my_email(&self, ctx: &Context<'_>) -> Result<Option<String>, Error> {
         Ok(ctx
             .data::<RequestContext>()?

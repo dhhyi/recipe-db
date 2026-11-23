@@ -53,6 +53,7 @@ fn test_context(role: &str) -> auth::RequestContext {
 struct GraphQLState {
     schema: schema::ApiSchema,
     auth_policy: auth::AuthPolicy,
+    mode: mode::RuntimeMode,
 }
 
 const INGRESS_HEADER: &str = "x-internal-ingress-token";
@@ -129,6 +130,9 @@ async fn execute_graphql(
     method: Method,
     request: async_graphql::Request,
 ) -> GraphQLResponse {
+    if state.mode == mode::RuntimeMode::Maintenance && request_contains_mutation(&request) {
+        return async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
+    }
     let context = match state.auth_policy.request_context(&headers) {
         Ok(context) => context,
         Err(error) => {
@@ -146,7 +150,11 @@ async fn execute_graphql(
     if let Some(error) = mutation_request_error(&headers, method, &request) {
         return async_graphql::Response::from_errors(vec![error]).into();
     }
-    state.schema.execute(request.data(context)).await.into()
+    state
+        .schema
+        .execute(request.data(context).data(state.mode))
+        .await
+        .into()
 }
 
 async fn projection_graphql(
@@ -192,11 +200,7 @@ fn mutation_request_error(
     method: Method,
     request: &async_graphql::Request,
 ) -> Option<async_graphql::ServerError> {
-    let document = async_graphql::parser::parse_query(&request.query).ok()?;
-    let has_mutation = document.operations.iter().any(|(_, operation)| {
-        operation.node.ty == async_graphql::parser::types::OperationType::Mutation
-    });
-    if !has_mutation {
+    if !request_contains_mutation(request) {
         return None;
     }
     if method == Method::GET {
@@ -217,6 +221,31 @@ fn mutation_request_error(
         return Some(csrf_error(403, "csrf-forbidden"));
     }
     None
+}
+
+fn request_contains_mutation(request: &async_graphql::Request) -> bool {
+    async_graphql::parser::parse_query(&request.query)
+        .ok()
+        .is_some_and(|document| {
+            document.operations.iter().any(|(_, operation)| {
+                operation.node.ty == async_graphql::parser::types::OperationType::Mutation
+            })
+        })
+}
+
+fn maintenance_mode_error() -> async_graphql::ServerError {
+    let error = async_graphql::Error::new("Writes are unavailable during maintenance")
+        .extend_with(|_, extensions| {
+            extensions.set("status", 503);
+            extensions.set("code", "maintenance-mode");
+        });
+    async_graphql::ServerError {
+        message: error.message,
+        source: error.source,
+        locations: Vec::new(),
+        path: Vec::new(),
+        extensions: error.extensions,
+    }
 }
 
 fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
@@ -321,6 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let graphql_state = GraphQLState {
         schema,
         auth_policy,
+        mode: runtime_mode,
     };
 
     let app = Router::new().route("/health", get(|| async { "" })).route(
@@ -440,11 +470,17 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod ingress_tests {
     use super::{
-        backup_mode_barrier, mutation_request_error, serve_until_shutdown, trusted_graphql_ingress,
-        IngressSecret, INGRESS_HEADER,
+        backup_mode_barrier, execute_graphql, maintenance_mode_error, mutation_request_error,
+        serve_until_shutdown, trusted_graphql_ingress, GraphQLState, IngressSecret, INGRESS_HEADER,
     };
+    use async_graphql::{UploadValue, Variables};
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
+    use serde_json::json;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     const TOKEN: &str = "abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE";
 
@@ -518,6 +554,92 @@ mod ingress_tests {
     }
 
     #[tokio::test]
+    async fn maintenance_rejects_mutations_before_backend_upload_or_event_side_effects() {
+        let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend_calls = calls.clone();
+        let app = Router::new().fallback(move || {
+            backend_calls.fetch_add(1, Ordering::SeqCst);
+            async { axum::Json(json!({"rating": 5.0, "count": 1})) }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let previous_endpoint = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var(
+            "REST_ENDPOINT",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let backend = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let previous_nats = std::env::var_os("NATS_URL");
+        std::env::set_var("NATS_URL", "nats://127.0.0.1:1");
+        let publisher = crate::events::EventPublisher::from_env().unwrap();
+        match previous_nats {
+            Some(value) => std::env::set_var("NATS_URL", value),
+            None => std::env::remove_var("NATS_URL"),
+        }
+        let state = GraphQLState {
+            schema: crate::schema::build_schema(
+                crate::mode::RuntimeMode::Maintenance,
+                Some(publisher.clone()),
+            ),
+            auth_policy: crate::auth::AuthPolicy::from_json(
+                r#"{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}"#,
+                "https://accounts.example.test",
+            )
+            .unwrap(),
+            mode: crate::mode::RuntimeMode::Maintenance,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("recipes.example"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert("origin", HeaderValue::from_static("https://recipes.example"));
+
+        let mut upload = async_graphql::Request::new(
+            "mutation($file: Upload!) { addImage(recipeId: \"42\", file: $file) { url } }",
+        )
+        .variables(Variables::from_json(json!({"file": null})));
+        upload.set_upload(
+            "variables.file",
+            UploadValue {
+                filename: "image.svg".into(),
+                content_type: Some("image/svg+xml".into()),
+                content: std::fs::File::open("testdata/image.svg").unwrap(),
+            },
+        );
+        let requests = [
+            async_graphql::Request::new(
+                r#"mutation { aliased: updateRecipe(id: "42", value: {name: "Updated", inspirations: ["https://example.com"]}) { id } }"#,
+            ),
+            async_graphql::Request::new(
+                r#"mutation { rate(id: "42", rating: 5) { recipeId count } }"#,
+            ),
+            upload,
+        ];
+        for request in requests {
+            let response = execute_graphql(state.clone(), headers.clone(), Method::POST, request)
+                .await;
+            let response = axum::response::IntoResponse::into_response(response);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(result["errors"][0]["extensions"]["code"], "maintenance-mode");
+            assert_eq!(result["errors"][0]["extensions"]["status"], 503);
+        }
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        let publisher_status = serde_json::to_value(publisher.status()).unwrap();
+        assert_eq!(publisher_status["published"], 0);
+        assert_eq!(publisher_status["failed"], 0);
+
+        backend.abort();
+        match previous_endpoint {
+            Some(value) => std::env::set_var("REST_ENDPOINT", value),
+            None => std::env::remove_var("REST_ENDPOINT"),
+        }
+    }
+
+    #[tokio::test]
     async fn privileged_credential_free_writes_still_require_same_origin() {
         use serde_json::json;
         use std::sync::{
@@ -560,6 +682,7 @@ mod ingress_tests {
                 "https://accounts.example.test",
             )
             .unwrap(),
+            mode: crate::mode::RuntimeMode::Testing,
         };
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("recipes.example"));
@@ -771,6 +894,7 @@ mod ingress_tests {
                 "https://accounts.google.com",
             )
             .unwrap(),
+            mode: crate::mode::RuntimeMode::Backup,
         };
         let token = "a".repeat(43);
         let client = reqwest::Client::new();

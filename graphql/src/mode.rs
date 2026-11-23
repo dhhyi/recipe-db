@@ -3,6 +3,7 @@ pub enum RuntimeMode {
     Production,
     Testing,
     Backup,
+    Maintenance,
 }
 
 impl RuntimeMode {
@@ -24,8 +25,9 @@ impl RuntimeMode {
             None | Some("production") => Ok(Self::Production),
             Some("testing") => Ok(Self::Testing),
             Some("backup") => Ok(Self::Backup),
+            Some("maintenance") => Ok(Self::Maintenance),
             Some(value) => Err(format!(
-                "Invalid MODE={value:?}; expected 'production', 'testing' or 'backup'"
+                "Invalid MODE={value:?}; expected 'production', 'testing', 'backup' or 'maintenance'"
             )),
         }
     }
@@ -64,6 +66,10 @@ mod tests {
             Ok(RuntimeMode::Testing)
         );
         assert_eq!(RuntimeMode::parse(Some("backup")), Ok(RuntimeMode::Backup));
+        assert_eq!(
+            RuntimeMode::parse(Some("maintenance")),
+            Ok(RuntimeMode::Maintenance)
+        );
     }
 
     #[test]
@@ -83,5 +89,7 @@ mod tests {
         assert_eq!(RuntimeMode::from_env().unwrap(), RuntimeMode::Production);
         std::env::set_var("MODE", "testing");
         assert_eq!(RuntimeMode::from_env().unwrap(), RuntimeMode::Testing);
+        std::env::set_var("MODE", "maintenance");
+        assert_eq!(RuntimeMode::from_env().unwrap(), RuntimeMode::Maintenance);
     }
 }

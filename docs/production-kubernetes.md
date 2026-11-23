@@ -128,7 +128,7 @@ The [release cookbook](production-release-cookbook.md#rehearse-the-deployed-back
 
 ### Runtime mode
 
-Production workloads set `MODE=production`. An absent `MODE` defaults to production; empty or unsupported values fail startup. `testing` enables isolated test resets. `backup` keeps production ingress protections, blocks application requests and writes, and enables private maintenance APIs.
+Production workloads set `MODE=production`. An absent `MODE` defaults to production; empty or unsupported values fail startup. `testing` enables isolated test resets. `backup` keeps production ingress protections, blocks application requests and writes, and enables private maintenance APIs. GraphQL also supports `maintenance`, which preserves reads while rejecting every mutation with a service-unavailable error; other services do not use this mode.
 
 ### Backup cleanup Job
 

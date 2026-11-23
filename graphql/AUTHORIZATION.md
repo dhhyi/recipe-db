@@ -45,13 +45,14 @@ The `anonymous` role permits public reads and aggregate ratings. `member` additi
 | `createRecipe`, `updateRecipe`, `deleteRecipe` | `ManageRecipes` | Deny | Deny | Allow |
 | Inspiration changes in create/update | `ManageInspirations` | Deny | Deny | Allow |
 | `addImage`, `deleteImage`, `reorderImages` | `ManageImages` | Deny | Deny | Allow |
+| `maintenance` | Public maintenance status | Allow | Allow | Allow |
 | `myCapabilities`, `onlineServices`, `isServiceOnline`, `allServicesOnline` | Effective current principal / public availability | Allow | Allow | Allow |
 
 These are field resolver checks, so GraphQL aliases and nested/composed calls use the same authorization path. `myRating` is nullable and only reads the current principal's vote; no argument accepts another user ID. A missing vote is `null`, while insufficient capability is a structured `authentication-required` or `forbidden` error. Public aggregate fields remain independently nullable only when their existing backend availability contract says so.
 
 Mutations check capabilities before any REST write, event publication, or upload processing. Recipe updates that also change inspirations check both recipe-management and inspiration-management capabilities before either backend is touched. Service reset APIs are private REST routes enabled only by explicit `MODE=testing`; they are not exposed through GraphQL or MCP.
 
-`MODE` accepts `production` (the default when unset) or `testing`; empty and unsupported values fail startup. Production mode requires trusted ingress and disables GraphiQL and schema introspection.
+`MODE` accepts `production` (the default when unset), `testing`, `backup`, or `maintenance`; empty and unsupported values fail startup. In `maintenance`, reads and the public `maintenance` query remain available, while every mutation is rejected with `maintenance-mode` and status 503 before resolver execution. Production mode requires trusted ingress and disables GraphiQL and schema introspection.
 
 Rating attribution is the namespaced stable principal ID from the request context, never a caller-provided login, display name, email, or token secret. The ratings backend stores only that ID and enforces `(recipeId, userId)` uniqueness. Existing disposable development ratings created with the former login key are discarded when the old table schema is encountered; there is no production ratings migration or account-guessing step.
 
