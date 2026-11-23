@@ -624,7 +624,7 @@ def run_maintenance_capture(config):
         manifest = validate_snapshot(snapshot)
         if manifest.get("backupId") != backup_id:
             raise ValueError("maintenance backup identity mismatch")
-        result = upload_snapshot(snapshot, config)
+        result = upload_snapshot(snapshot, config, force_upload=True)
         status = read_json(status_path(config))
         if status.get("status") != result or status.get("backupId") != backup_id \
                 or result not in ("verified-upload", "verified-unchanged"):

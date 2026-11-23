@@ -829,10 +829,30 @@ state_path.write_text(json.dumps(state))
         self.write_maintenance_capture()
         backup.enter_maintenance(self.config)
         self.assertEqual(backup.run_nightly(self.config), "verified-upload")
-        self.assertEqual(backup.run_nightly(self.config), "verified-unchanged")
+        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
         self.assertEqual((self.root / "capture-actions.log").read_text().splitlines(),
                          ["maintenance-enter", "maintenance-capture"])
         self.assertTrue((backup.maintenance_state_path(self.config) / "manifest.json").is_file())
+
+    def test_unchanged_maintenance_capture_is_published_under_its_own_id(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        maintenance = backup.maintenance_state_path(self.config)
+        backup.run_capture_command(self.config, "maintenance-capture", maintenance)
+        previous = self.root / "previous"
+        shutil.copytree(maintenance, previous)
+        manifest_path = previous / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["backupId"] = "backup-20261109T100000-1"
+        manifest_path.write_bytes(backup.json_bytes(manifest))
+        self.assertEqual(backup.upload_snapshot(previous, self.config), "verified-upload")
+
+        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        baseline = backup.read_json(backup.baseline_path(self.config))
+        self.assertEqual(baseline["backupId"], backup.lifecycle_state(maintenance)["backupId"])
+        remote = self.remote / "backups" / self.config["deploymentId"]
+        self.assertTrue((remote / baseline["manifest"]).is_file())
+        self.assertTrue((remote / baseline["archive"]).is_file())
 
 
 if __name__ == "__main__":
