@@ -471,8 +471,8 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod ingress_tests {
     use super::{
-        backup_mode_barrier, execute_graphql, maintenance_mode_error, mutation_request_error,
-        serve_until_shutdown, trusted_graphql_ingress, GraphQLState, IngressSecret, INGRESS_HEADER,
+        backup_mode_barrier, execute_graphql, mutation_request_error, serve_until_shutdown,
+        trusted_graphql_ingress, GraphQLState, IngressSecret, INGRESS_HEADER,
     };
     use async_graphql::{UploadValue, Variables};
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
