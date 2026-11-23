@@ -49,15 +49,15 @@ setup() {
         namespace:"recipe-db",artifact:$release,revision:$revision},
       archive:{sha256:$sha}
     }' > "$MANIFEST"
-    jq -n --arg id backup-123-456 --arg manifest "$MANIFEST" --arg archive "$ARCHIVE" \
-      --arg release "$SOURCE_RELEASE" --arg revision "$SOURCE_REVISION" '
+  jq -n --arg id backup-123-456 --arg manifest "$MANIFEST" --arg archive "$ARCHIVE" \
+    --arg release "$SOURCE_RELEASE" --arg revision "$SOURCE_REVISION" '
       {backupId:$id,manifest:$manifest,archive:$archive,
         maintenanceOperation:{backupId:$id,status:"captured",phase:"captured",
           uploadStatus:"verified-upload",
           capturedAt:"2026-11-12T18:26:10Z",
           source:{artifact:$release,revision:$revision}}}
     ' > "$RETRIEVAL_RECEIPT"
-    chmod 600 "$ARCHIVE" "$MANIFEST" "$RETRIEVAL_RECEIPT"
+  chmod 600 "$ARCHIVE" "$MANIFEST" "$RETRIEVAL_RECEIPT"
   printf '%s\n' "$SOURCE_RELEASE" > "$HOME/.config/recipe-db/backup/backup-release-ref"
   chmod 600 "$HOME/.config/recipe-db/backup/backup-release-ref"
   chmod 600 "$HOME/.config/recipe-db/deployment/pi-values.yaml"
@@ -872,7 +872,11 @@ YAML
       rating:{average:5,count:1},inspirations:[{url:"source"}],tags:[{id:"tag"}]}' \
       > "$work/source-sample.json"
   }
-  verify_sample() { printf 'verified %s\n' "$2" >> "$work/sample-checks.log"; }
+  verify_sample() {
+    printf 'verified %s\n' "$2" >> "$work/sample-checks.log"
+    printf 'check %s\n' "$2" >> "$scenario_lifecycle_log"
+    [[ ${fail_readonly_check:-false} != true || $2 != successful-upgrade-read-only ]]
+  }
   capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
     local label=$1 snapshot=$2
@@ -907,24 +911,29 @@ YAML
         [ ! -e "$5" ] || return 96
         mkdir -m 700 -- "$5"
         ;;
-      backup-enter)
+      maintenance-enter)
+        [[ ${3##*/} == maintenance ]] || return 96
         [ ! -e "$3" ] || return 96
         mkdir -m 700 -- "$3"
+        printf '{"status":"maintenance-mode","phase":"maintenance-entered"}\n' > "$3/backup-state.json"
         ;;
       release-migration-plan | delete)
         return 0
         ;;
       release-reopen)
+        jq -e '.readOnlyCheck.outcome == "passed"' "$2/backup-state.json" > /dev/null || return 96
         jq '.status="access-open" | .phase="operator-reopened"' "$2/backup-state.json" \
           > "$2/backup-state.next"
         mv "$2/backup-state.next" "$2/backup-state.json"
         return 0
         ;;
       backup-capture)
-        [ -d "$2" ] || return 96
+        jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' "$2/backup-state.json" > /dev/null || return 96
+        printf '{"status":"captured","phase":"captured"}\n' > "$2/backup-state.json"
         printf '{"fixture":true}\n' > "$2/manifest.json"
         ;;
       release-stage)
+        jq -e '.status == "captured" and .phase == "captured"' "$2/backup-state.json" > /dev/null || return 96
         jq -n --arg candidate "$3" '
           {status:"candidate-staged",phase:"candidate-staged",candidate:{artifact:$candidate}}
         ' > "$2/backup-state.json"
@@ -950,6 +959,13 @@ YAML
       release-start)
         jq '.status="release-ready" | .phase="ready"' "$2/backup-state.json" \
           > "$2/backup-state.next"
+        mv "$2/backup-state.next" "$2/backup-state.json"
+        ;;
+      release-readonly-result)
+        [[ $4 == passed && $6 == "READONLY-$package_id-passed" ]] || return 96
+        jq -e '.status == "release-ready" and .phase == "ready"' "$2/backup-state.json" > /dev/null || return 96
+        grep -Fq 'check successful-upgrade-read-only' "$scenario_lifecycle_log" || return 96
+        jq '.readOnlyCheck.outcome="passed"' "$2/backup-state.json" > "$2/backup-state.next"
         mv "$2/backup-state.next" "$2/backup-state.json"
         ;;
       release-migration-recover)
@@ -991,7 +1007,17 @@ YAML
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
+  grep -Fq 'false maintenance-enter' "$scenario_lifecycle_log"
+  grep -Fq 'true release-readonly-result' "$scenario_lifecycle_log"
   grep -Fq 'post-release successful-upgrade' "$scenario_lifecycle_log"
+
+  rm -rf "$work/uploader/successful-upgrade/maintenance"
+  : > "$scenario_lifecycle_log"
+  fail_readonly_check=true
+  run run_scenario successful-upgrade "$source_values" "$candidate_values"
+  [ "$status" -ne 0 ]
+  ! grep -Eq 'release-readonly-result|release-reopen' "$scenario_lifecycle_log"
+  fail_readonly_check=false
 
   : > "$scenario_lifecycle_log"
   scenario_label=failure-recovery
@@ -999,6 +1025,7 @@ YAML
   [ "$failure_recovery_status" = passed ]
   [ "$cluster" = '' ]
   [ "$cluster_created" = false ]
+  grep -Fq "false maintenance-enter $source_values $source_release $work/state/failure-recovery/maintenance" "$scenario_lifecycle_log"
   grep -Fq 'release-migration-recover' "$scenario_lifecycle_log"
   run grep -F 'release-reopen' "$scenario_lifecycle_log"
   [ "$status" -ne 0 ]
@@ -1061,7 +1088,7 @@ YAML
     cluster_created=true
   }
   take_sample() { sample_id=recipe-with-links; }
-  verify_sample() { :; }
+  verify_sample() { printf 'check %s\n' "$2" >> "$scenario_lifecycle_log"; }
   capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
     local label=$1
@@ -1096,24 +1123,29 @@ YAML
         [ ! -e "$5" ] || return 96
         mkdir -m 700 -- "$5"
         ;;
-      backup-enter)
+      maintenance-enter)
+        [[ ${3##*/} == maintenance ]] || return 96
         [ ! -e "$3" ] || return 96
         mkdir -m 700 -- "$3"
+        printf '{"status":"maintenance-mode","phase":"maintenance-entered"}\n' > "$3/backup-state.json"
         ;;
       release-migration-plan | delete)
         return 0
         ;;
       release-reopen)
+        jq -e '.readOnlyCheck.outcome == "passed"' "$2/backup-state.json" > /dev/null || return 96
         jq '.status="access-open" | .phase="operator-reopened"' "$2/backup-state.json" \
           > "$2/backup-state.next"
         mv "$2/backup-state.next" "$2/backup-state.json"
         return 0
         ;;
       backup-capture)
-        [ -d "$2" ] || return 96
+        jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' "$2/backup-state.json" > /dev/null || return 96
+        printf '{"status":"captured","phase":"captured"}\n' > "$2/backup-state.json"
         printf '{"fixture":true}\n' > "$2/manifest.json"
         ;;
       release-stage)
+        jq -e '.status == "captured" and .phase == "captured"' "$2/backup-state.json" > /dev/null || return 96
         jq -n --arg candidate "$3" '
           {status:"candidate-staged",phase:"candidate-staged",candidate:{artifact:$candidate}}
         ' > "$2/backup-state.json"
@@ -1127,6 +1159,13 @@ YAML
       release-start)
         jq '.status="release-ready" | .phase="ready"' "$2/backup-state.json" \
           > "$2/backup-state.next"
+        mv "$2/backup-state.next" "$2/backup-state.json"
+        ;;
+      release-readonly-result)
+        [[ $4 == passed && $6 == "READONLY-$package_id-passed" ]] || return 96
+        jq -e '.status == "release-ready" and .phase == "ready"' "$2/backup-state.json" > /dev/null || return 96
+        grep -Fq 'check successful-upgrade-read-only' "$scenario_lifecycle_log" || return 96
+        jq '.readOnlyCheck.outcome="passed"' "$2/backup-state.json" > "$2/backup-state.next"
         mv "$2/backup-state.next" "$2/backup-state.json"
         ;;
       kubectl)
@@ -1151,6 +1190,8 @@ YAML
   grep -Fq 'release-migration-next' "$scenario_lifecycle_log"
   grep -Fq 'release-reopen' "$scenario_lifecycle_log"
   grep -Fq 'false backup-capture' "$scenario_lifecycle_log"
+  grep -Fq 'false maintenance-enter' "$scenario_lifecycle_log"
+  grep -Fq 'true release-readonly-result' "$scenario_lifecycle_log"
   grep -Fq 'post-release successful-upgrade' "$scenario_lifecycle_log"
 }
 
@@ -1191,12 +1232,12 @@ YAML
   die() { return 1; }
 
   lifecycle /nonexistent/old-source false restore source.yaml
-  lifecycle /nonexistent/old-source false backup-enter source.yaml
+  lifecycle /nonexistent/old-source false maintenance-enter source.yaml
   lifecycle /nonexistent/old-source false backup-capture source.yaml
   lifecycle /nonexistent/old-candidate true release-stage candidate.yaml
   [ "$cluster_check_count" -eq 4 ]
   [ "$(grep -c 'production-k3d verify cluster.yaml' "$work/calls")" -eq 4 ]
-  for operation in restore backup-enter backup-capture release-stage; do
+  for operation in restore maintenance-enter backup-capture release-stage; do
     grep -Fq "$root run --raw production-k3d --release-sources-from-git $operation" "$work/calls"
   done
   mise() { return 1; }
@@ -1210,8 +1251,8 @@ YAML
   local source_release="$SOURCE_RELEASE" candidate="$CANDIDATE_RELEASE"
   local manifest=manifest.json archive=archive.tar.gz phase=''
   local fake_remote="$work/remote" run_id=123 post_backup_restore_status=not-run
-  mkdir -p "$work/logs" "$work/state/failure-recovery" "$work/uploader/successful-upgrade"
-  printf '{"backupId":"backup-789-123"}\n' > "$work/state/failure-recovery/backup-state.json"
+  mkdir -p "$work/logs" "$work/state/failure-recovery/maintenance" "$work/uploader/successful-upgrade"
+  printf '{"backupId":"backup-789-123"}\n' > "$work/state/failure-recovery/maintenance/backup-state.json"
   printf '{"backupId":"backup-999-888","manifest":"post.json","archive":"post.tar.gz"}\n' \
     > "$work/uploader/successful-upgrade/baseline.json"
   load_scenario_functions
@@ -1233,7 +1274,7 @@ YAML
   [ "$(sed -n '1p' "$work/steps")" = 'create r cluster.yaml' ]
   grep -Fq "restore source.yaml manifest.json archive.tar.gz $backup_id $work/state/restore RESTORE-$backup_id" "$work/steps"
   [ "$(sed -n '3p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
-  grep -Fq "release-recovery-reopen source.yaml $work/state/failure-recovery $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
+  grep -Fq "release-recovery-reopen source.yaml $work/state/failure-recovery/maintenance $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
   [ "$(sed -n '5p' "$work/steps")" = 'verify source.yaml recovered-source' ]
   [ "$(sed -n '6p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
   [ "$(sed -n '7p' "$work/steps")" = 'delete complete' ]

@@ -18,9 +18,9 @@ setup() {
 @test "immutable-source lifecycle dispatch preserves arguments for renders backups releases and restores" {
   local driver="$FIXTURE_ROOT/driver with spaces.sh" operation
   bash() { printf '%s\n' "$@"; }
-  for operation in render backup-run backup-enter backup-capture backup-exit \
+  for operation in render backup-run maintenance-enter backup-enter backup-capture backup-exit \
     release-stage release-migration-plan release-migration-next release-start release-reopen \
-    release-website-result release-backup-capture release-closeout \
+    release-readonly-result release-website-result release-backup-capture release-closeout \
     restore recovery-plan recovery-reset recovery-restore; do
     run release_lifecycle "$operation" "values with spaces.yaml" "immutable artifact"
     [ "$status" -eq 0 ]
@@ -479,6 +479,71 @@ SH
   # shellcheck source=/dev/null
   source ./retry-steps.sh
   [ "$(cat "$result_directory/retry-operations")" = $'recovery-plan\nrecovery-reset\nrecovery-plan\nrecovery-reset\nrecovery-plan\nrecovery-reset' ]
+}
+
+@test "retained release captures maintenance and checks read-only data before reopening" {
+  use_mise_tools
+  mkdir -p "$result_directory/logs" "$result_directory/state"
+  sed -n '/^phase=retained-release-preparation$/,/^phase=retained-failed-release$/p' \
+    .scripts/backup-recovery-k3d.sh | sed '$d' > retained-release-steps.sh
+  cat > retained-release-test.sh << 'SH'
+set -e
+target_values=target.yaml release=source candidate_release=candidate recipe_name=fixture
+upload=upload.py
+run_logged() { shift; "$@"; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+mark() { :; }
+sleep() { :; }
+release_lifecycle() {
+  local operation=$1
+  shift
+  printf '%s\n' "$operation" >> "$result_directory/operations"
+  case "$operation" in
+    maintenance-enter)
+      [[ $3 == "$result_directory/state/maintenance" && ! -e $3 ]]
+      mkdir "$3"
+      printf '{"backupId":"backup-1-2","status":"maintenance-mode","phase":"maintenance-entered"}\n' > "$3/backup-state.json" ;;
+    backup-capture)
+      jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' "$2/backup-state.json" > /dev/null
+      printf '{"backupId":"backup-1-2","status":"captured","phase":"captured"}\n' > "$2/backup-state.json" ;;
+    release-stage)
+      jq -e '.status == "captured"' "$2/backup-state.json" > /dev/null
+      [[ $4 == verified-upload && $5 == VERIFIED-backup-1-2-verified-upload ]] ;;
+    release-migration-plan)
+      printf '{"migrationResult":{"outcome":"no-migration-required"}}\n' > "$2/backup-state.json" ;;
+    release-start)
+      printf '{"status":"release-ready","phase":"ready"}\n' > "$2/backup-state.json" ;;
+    release-readonly-result)
+      [[ $4 == passed && $6 == READONLY-backup-1-2-passed ]]
+      jq -e '.status == "release-ready" and .phase == "ready"' "$2/backup-state.json" > /dev/null
+      grep -Fxq 'fixture-read' "$result_directory/operations"
+      printf '{"readOnlyCheck":{"outcome":"passed"}}\n' > "$2/backup-state.json" ;;
+    release-reopen)
+      jq -e '.readOnlyCheck.outcome == "passed"' "$2/backup-state.json" > /dev/null ;;
+    release-website-result) : ;;
+    *) return 1 ;;
+  esac
+}
+python3() {
+  jq -e '.status == "captured" and .phase == "captured"' \
+    "$result_directory/state/maintenance/backup-state.json" > /dev/null
+  printf '{"backupId":"backup-1-2","status":"verified-upload"}\n' > "$result_directory/state/status.json"
+}
+verify_fixture_recipe() {
+  printf 'fixture-read\n' >> "$result_directory/operations"
+  [[ ${FAIL_READ:-false} != true ]]
+}
+source ./retained-release-steps.sh
+SH
+  run bash retained-release-test.sh
+  [ "$status" -eq 0 ]
+  [ "$(cat "$result_directory/operations")" = $'maintenance-enter\nbackup-capture\nrelease-stage\nrelease-migration-plan\nrelease-start\nfixture-read\nrelease-readonly-result\nrelease-reopen\nfixture-read\nrelease-website-result' ]
+
+  rm -rf "$result_directory/state/maintenance"
+  : > "$result_directory/operations"
+  FAIL_READ=true run bash retained-release-test.sh
+  [ "$status" -ne 0 ]
+  ! grep -Eq 'release-readonly-result|release-reopen' "$result_directory/operations"
 }
 
 @test "closeout recovery ownership checks require the exact retained UID holder operation and phase" {

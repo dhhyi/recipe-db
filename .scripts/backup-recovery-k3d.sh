@@ -240,7 +240,7 @@ verify_fixture_recipe() {
   local values=$1 expected_name=$2
   graphql_at "$values" \
     'query($id: ID!) { recipe(id: $id) { id name method image { url thumbUrl } inspirations { url } rating { average count } tags { id category name } } }' \
-    "$(jq -nc --arg id "$recipe_id" '{id:$id}')"
+    "$(jq -nc --arg id "$recipe_id" '{id:$id}')" || return 1
   jq -e --arg id "$recipe_id" --arg name "$expected_name" --arg tag "$tag_id" \
     '.data.recipe.id == $id and .data.recipe.name == $name
       and .data.recipe.method == "synthetic backup rehearsal"
@@ -250,14 +250,14 @@ verify_fixture_recipe() {
       and any(.data.recipe.tags[]; .id == $tag and .category == "CUISINE")
       and (.data.recipe.image.url | test("^/public/[^/]+-[a-f0-9]{64}[.]png$"))
       and (.data.recipe.image.thumbUrl | test("^/public/[^/]+-[a-f0-9]{64}-thumb[.]png$"))' \
-    "$response" > /dev/null
+    "$response" > /dev/null || return 1
   image_url=$(jq -er '.data.recipe.image.url' "$response")
   thumb_url=$(jq -er '.data.recipe.image.thumbUrl' "$response")
   local origin path digest
   origin=$(yq -r '.origin' "$values")
   for path in "$image_url" "$thumb_url"; do
     curl --silent --show-error --fail --connect-timeout 5 --max-time 30 \
-      --config "$curl_config" --output "$result_directory/image.png" "$origin$path"
+      --config "$curl_config" --output "$result_directory/image.png" "$origin$path" || return 1
     digest=$(sha256sum "$result_directory/image.png" | cut -d ' ' -f1)
     case "$path" in
       *-"$digest"-thumb.png | *-"$digest".png) ;;
@@ -637,17 +637,14 @@ verify_preserved_storage reset-again-restored
 mark
 
 phase=retained-release-preparation
-release_state="$result_directory/state/failed-release"
+release_state="$result_directory/state/maintenance"
 run_logged "$result_directory/logs/release-enter.log" \
-  release_lifecycle backup-enter "$target_values" "$release" "$release_state"
+  release_lifecycle maintenance-enter "$target_values" "$release" "$release_state"
 release_holder=$(jq -er .backupId "$release_state/backup-state.json")
 run_logged "$result_directory/logs/release-capture.log" \
   release_lifecycle backup-capture "$target_values" "$release_state"
 # Reuse the isolated uploader and fake remote to actually verify this release's
 # pre-upgrade backup, rather than asserting a remote status that never happened.
-snapshot_quoted=$(printf '%s' "$release_state" | jq -Rr '@sh')
-printf '#!/bin/sh\nset -eu\n[ "$#" -eq 1 ] || exit 2\nmkdir -m 700 "$1"\ncp -a -- %s/. "$1/"\n' \
-  "$snapshot_quoted" > "$capture_command"
 run_logged "$result_directory/logs/release-upload.log" \
   python3 "$upload" nightly --config "$result_directory/secrets/backup.json"
 release_backup_status=$(jq -er --arg holder "$release_holder" \
@@ -672,6 +669,10 @@ while ! jq -e '.migrationResult.outcome == "migration-succeeded"
 done
 run_logged "$result_directory/logs/release-start.log" \
   release_lifecycle release-start "$target_values" "$release_state" "$candidate_release"
+verify_fixture_recipe "$target_values" "$recipe_name" || die 'candidate read-only fixture verification failed'
+run_logged "$result_directory/logs/release-read-only-result.log" \
+  release_lifecycle release-readonly-result "$target_values" "$release_state" "$candidate_release" \
+  passed 'Disposable rehearsal verified synthetic recipe, image, tags and rating.' "READONLY-$release_holder-passed"
 run_logged "$result_directory/logs/release-reopen.log" \
   release_lifecycle release-reopen "$target_values" "$release_state" "$candidate_release" "OPEN-$release_holder"
 verify_fixture_recipe "$target_values" "$recipe_name"

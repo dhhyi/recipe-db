@@ -104,7 +104,6 @@ jq -e --arg id "$backup_id" --arg manifest "$input_manifest" \
 maintenance_operation_status=$(jq -r '.maintenanceOperation.status' "$retrieval_receipt")
 maintenance_operation_phase=$(jq -r '.maintenanceOperation.phase' "$retrieval_receipt")
 backup_status=$(jq -r '.maintenanceOperation.uploadStatus' "$retrieval_receipt")
-remote_status_independently_verified=true
 backup_archive_sha=$(jq -er '.archive.sha256 | select(test("^[a-f0-9]{64}$"))' "$input_manifest") \
   || die 'backup manifest has no valid archive digest'
 backup_captured_at=$(jq -er '.capturedAt | select(type == "string" and length > 0)' "$input_manifest") \
@@ -126,7 +125,7 @@ started_epoch=$(date +%s)
 phase=preflight
 failure_reason=''
 rehearsal_status=failed
-remote_status_independently_verified=true
+remote_status_independently_verified=false
 cleanup_status=not-run
 private_data_removed=false
 input_copies_removed=false
@@ -450,7 +449,7 @@ lifecycle() {
     fi
     checkout=$root
     case "$1" in
-      restore | backup-enter | backup-capture) from_git=true ;;
+      restore | maintenance-enter | backup-enter | backup-capture) from_git=true ;;
     esac
   fi
   if [[ $from_git == true ]]; then
@@ -853,16 +852,18 @@ run_scenario() {
   local label=$1 source_values=$2 candidate_values=$3
   local state package_id smoke_script_backup
   local package_manifest package_archive migration_digest migration_image job lease transition
-  state="$work/state/$label"
+  state="$work/state/$label/maintenance"
   if [[ $label == successful-upgrade ]]; then
     mkdir -p -- "$work/uploader/$label"
     state="$work/uploader/$label/maintenance"
+  else
+    mkdir -p -- "$work/state/$label"
   fi
   take_sample "$source_values"
 
   phase="$label-capture-maintenance-snapshot"
   run_logged "$work/logs/$label-maintenance-enter.log" lifecycle "$source_worktree" false \
-    backup-enter "$source_values" "$source_release" "$state"
+    maintenance-enter "$source_values" "$source_release" "$state"
   run_logged "$work/logs/$label-maintenance-capture.log" lifecycle "$source_worktree" false \
     backup-capture "$source_values" "$state"
   [[ -s $state/manifest.json ]] || die "$label maintenance snapshot has no complete manifest"
@@ -896,11 +897,16 @@ run_scenario() {
     migration_outcome=$(jq -er '.migrationResult.outcome' "$state/backup-state.json")
     actual_versions=$(jq -c '.migrationExecution.versions' "$state/backup-state.json")
     mark
-    phase=successful-upgrade-start-and-reopen-local-route
+    phase=successful-upgrade-start-and-read-only-check
     run_logged "$work/logs/success-start.log" lifecycle "$candidate_worktree" true \
       release-start "$candidate_values" "$state" "$candidate"
     jq -e '.status == "release-ready" and .phase == "ready"' "$state/backup-state.json" \
       > /dev/null || die 'candidate did not reach guarded release-ready state'
+    verify_sample "$candidate_values" successful-upgrade-read-only || return 1
+    run_logged "$work/logs/success-read-only-result.log" lifecycle "$candidate_worktree" true \
+      release-readonly-result "$candidate_values" "$state" "$candidate" passed \
+      'Representative restored recipe and linked data match the source.' "READONLY-$package_id-passed"
+    phase=successful-upgrade-reopen-local-route
     run_logged "$work/logs/success-reopen.log" lifecycle "$candidate_worktree" true \
       release-reopen "$candidate_values" "$state" "$candidate" "OPEN-$package_id"
     verify_sample "$candidate_values" successful-upgrade
@@ -1034,9 +1040,9 @@ run_rehearsal_scenarios() {
 
   run_scenario failure-recovery "$source_values" "$candidate_values"
   phase=reopen-recovered-source
-  package_id=$(jq -er .backupId "$work/state/failure-recovery/backup-state.json")
+  package_id=$(jq -er .backupId "$work/state/failure-recovery/maintenance/backup-state.json")
   run_logged "$work/logs/recovery-reopen.log" lifecycle "$root" true \
-    release-recovery-reopen "$source_values" "$work/state/failure-recovery" "$source_release" \
+    release-recovery-reopen "$source_values" "$work/state/failure-recovery/maintenance" "$source_release" \
     "OPEN-RECOVERY-$package_id-$source_revision"
   verify_sample "$source_values" recovered-source
   mark
