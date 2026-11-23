@@ -883,7 +883,9 @@ YAML
   prepare_fake_upload() {
     local label=$1 snapshot=$2
     mkdir -p "$work/uploader/$label" "$work/packages/$label"
+    jq -e '.status == "backup-mode" and .phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
     printf '{"status":"verified-upload"}\n' > "$work/uploader/$label/status.json"
+    printf '{"status":"captured","phase":"captured"}\n' > "$snapshot/backup-state.json"
     jq -n --arg id "$package_id" '{backupId:$id,manifest:"backup.manifest.json",archive:"backup.tar.gz"}' \
       > "$work/uploader/$label/baseline.json"
     printf 'manifest\n' > "$work/packages/$label/backup.manifest.json"
@@ -931,7 +933,7 @@ YAML
         ;;
       backup-capture)
         jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' "$2/backup-state.json" > /dev/null || return 96
-        printf '{"status":"captured","phase":"captured"}\n' > "$2/backup-state.json"
+        printf '{"status":"backup-mode","phase":"upload-pending"}\n' > "$2/backup-state.json"
         printf '{"fixture":true}\n' > "$2/manifest.json"
         ;;
       release-stage)
@@ -1027,7 +1029,7 @@ YAML
   [ "$failure_recovery_status" = passed ]
   [ "$cluster" = '' ]
   [ "$cluster_created" = false ]
-  grep -Fq "false maintenance-enter $source_values $source_release $work/state/failure-recovery/maintenance" "$scenario_lifecycle_log"
+  grep -Fq "false maintenance-enter $source_values $source_release $work/uploader/failure-recovery/maintenance" "$scenario_lifecycle_log"
   grep -Fq 'release-migration-recover' "$scenario_lifecycle_log"
   run grep -F 'release-reopen' "$scenario_lifecycle_log"
   [ "$status" -ne 0 ]
@@ -1093,9 +1095,11 @@ YAML
   verify_sample() { printf 'check %s\n' "$2" >> "$scenario_lifecycle_log"; }
   capture_post_release_backup() { printf 'post-release %s\n' "$*" >> "$scenario_lifecycle_log"; }
   prepare_fake_upload() {
-    local label=$1
+    local label=$1 snapshot=$2
     mkdir -p "$work/uploader/$label" "$work/packages/$label"
+    jq -e '.status == "backup-mode" and .phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
     printf '{"status":"verified-upload"}\n' > "$work/uploader/$label/status.json"
+    printf '{"status":"captured","phase":"captured"}\n' > "$snapshot/backup-state.json"
     jq -n --arg id "$package_id" '{backupId:$id,manifest:"backup.manifest.json",archive:"backup.tar.gz"}' \
       > "$work/uploader/$label/baseline.json"
     printf 'manifest\n' > "$work/packages/$label/backup.manifest.json"
@@ -1143,7 +1147,7 @@ YAML
         ;;
       backup-capture)
         jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' "$2/backup-state.json" > /dev/null || return 96
-        printf '{"status":"captured","phase":"captured"}\n' > "$2/backup-state.json"
+        printf '{"status":"backup-mode","phase":"upload-pending"}\n' > "$2/backup-state.json"
         printf '{"fixture":true}\n' > "$2/manifest.json"
         ;;
       release-stage)
@@ -1253,8 +1257,8 @@ YAML
   local source_release="$SOURCE_RELEASE" candidate="$CANDIDATE_RELEASE"
   local manifest=manifest.json archive=archive.tar.gz phase=''
   local fake_remote="$work/remote" run_id=123 post_backup_restore_status=not-run
-  mkdir -p "$work/logs" "$work/state/failure-recovery/maintenance" "$work/uploader/successful-upgrade"
-  printf '{"backupId":"backup-789-123"}\n' > "$work/state/failure-recovery/maintenance/backup-state.json"
+  mkdir -p "$work/logs" "$work/uploader/failure-recovery/maintenance" "$work/uploader/successful-upgrade"
+  printf '{"backupId":"backup-789-123"}\n' > "$work/uploader/failure-recovery/maintenance/backup-state.json"
   printf '{"backupId":"backup-999-888","manifest":"post.json","archive":"post.tar.gz"}\n' \
     > "$work/uploader/successful-upgrade/baseline.json"
   load_scenario_functions
@@ -1276,7 +1280,7 @@ YAML
   [ "$(sed -n '1p' "$work/steps")" = 'create r cluster.yaml' ]
   grep -Fq "restore source.yaml manifest.json archive.tar.gz $backup_id $work/state/restore RESTORE-$backup_id" "$work/steps"
   [ "$(sed -n '3p' "$work/steps")" = 'scenario failure-recovery source.yaml candidate.yaml' ]
-  grep -Fq "release-recovery-reopen source.yaml $work/state/failure-recovery/maintenance $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
+  grep -Fq "release-recovery-reopen source.yaml $work/uploader/failure-recovery/maintenance $source_release OPEN-RECOVERY-backup-789-123-$source_revision" "$work/steps"
   [ "$(sed -n '5p' "$work/steps")" = 'verify source.yaml recovered-source' ]
   [ "$(sed -n '6p' "$work/steps")" = 'scenario successful-upgrade source.yaml candidate.yaml' ]
   [ "$(sed -n '7p' "$work/steps")" = 'delete complete' ]

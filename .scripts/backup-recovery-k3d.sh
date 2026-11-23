@@ -643,6 +643,8 @@ run_logged "$result_directory/logs/release-enter.log" \
 release_holder=$(jq -er .backupId "$release_state/backup-state.json")
 run_logged "$result_directory/logs/release-capture.log" \
   release_lifecycle backup-capture "$target_values" "$release_state"
+printf '#!/bin/bash\nset -eu\n[[ $# == 2 && $1 == maintenance-restore ]] || exit 2\ncd %q\nexec %q exec -- bash %q --release-sources-from-git maintenance-restore %q "$2"\n' \
+  "$root" "$(command -v mise)" "$driver" "$target_values" > "$capture_command"
 # Reuse the isolated uploader and fake remote to actually verify this release's
 # pre-upgrade backup, rather than asserting a remote status that never happened.
 run_logged "$result_directory/logs/release-upload.log" \

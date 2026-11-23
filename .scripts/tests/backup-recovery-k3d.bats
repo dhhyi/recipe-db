@@ -490,6 +490,7 @@ SH
 set -e
 target_values=target.yaml release=source candidate_release=candidate recipe_name=fixture
 upload=upload.py
+root=$PWD driver=driver.sh capture_command="$result_directory/capture-command"
 run_logged() { shift; "$@"; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
 mark() { :; }
@@ -505,7 +506,7 @@ release_lifecycle() {
       printf '{"backupId":"backup-1-2","status":"maintenance-mode","phase":"maintenance-entered"}\n' > "$3/backup-state.json" ;;
     backup-capture)
       jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' "$2/backup-state.json" > /dev/null
-      printf '{"backupId":"backup-1-2","status":"captured","phase":"captured"}\n' > "$2/backup-state.json" ;;
+      printf '{"backupId":"backup-1-2","status":"backup-mode","phase":"upload-pending"}\n' > "$2/backup-state.json" ;;
     release-stage)
       jq -e '.status == "captured"' "$2/backup-state.json" > /dev/null
       [[ $4 == verified-upload && $5 == VERIFIED-backup-1-2-verified-upload ]] ;;
@@ -525,9 +526,11 @@ release_lifecycle() {
   esac
 }
 python3() {
-  jq -e '.status == "captured" and .phase == "captured"' \
+  jq -e '.status == "backup-mode" and .phase == "upload-pending"' \
     "$result_directory/state/maintenance/backup-state.json" > /dev/null
   printf '{"backupId":"backup-1-2","status":"verified-upload"}\n' > "$result_directory/state/status.json"
+  printf '{"backupId":"backup-1-2","status":"captured","phase":"captured"}\n' \
+    > "$result_directory/state/maintenance/backup-state.json"
 }
 verify_fixture_recipe() {
   printf 'fixture-read\n' >> "$result_directory/operations"

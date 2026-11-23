@@ -1053,7 +1053,7 @@ backup_refresh_projections() {
   done
   if [[ ${restore_mode:-standalone} == migration-recovery ]]; then
     restore_phase projections-ready || return 1
-  else
+  elif [[ $command != maintenance-restore ]]; then
     backup_state_write recovering projections-ready || return 1
   fi
 }
@@ -4668,7 +4668,7 @@ backup_establish_barrier() {
   kube scale deployment/graphql "--replicas=$replicas" > /dev/null || return 1
   kube rollout status deployment/graphql --timeout="${timeout}s" || return 1
   barrier_established=true
-  backup_state_write barrier graphql-barrier || return 1
+  [[ $command == maintenance-restore ]] || backup_state_write barrier graphql-barrier || return 1
 }
 
 backup_run_locked() {

@@ -731,6 +731,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('backup-run /etc/recipe-db/backup-values.yaml "$release" "$path"', command)
         self.assertIn('maintenance-enter /etc/recipe-db/backup-values.yaml "$release" "$path"', command)
         self.assertIn('backup-capture /etc/recipe-db/backup-values.yaml "$path"', command)
+        self.assertIn('maintenance-restore /etc/recipe-db/backup-values.yaml "$path"', command)
         self.assertIn("release=$(cat /etc/recipe-db/backup-release-ref)", command)
         self.assertNotIn("mise run", command)
 

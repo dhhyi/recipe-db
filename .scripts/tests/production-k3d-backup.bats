@@ -13,6 +13,9 @@ prepare_captured_release() {
   HOLDER=$(jq -er .backupId "$STATE/backup-state.json")
   run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$STATE"
   [ "$status" -eq 0 ]
+  jq -n --arg id "$HOLDER" '{backupId:$id,status:"verified-upload"}' > "$FIXTURE_ROOT/backups/status.json"
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$STATE"
+  [ "$status" -eq 0 ]
   export MOCK_RELEASE_LIFECYCLE=true
 }
 
@@ -426,7 +429,7 @@ EOF
     "$MOCK_LOG.lease" > /dev/null
 }
 
-@test "maintenance capture preserves the retained operation and restores read-only service" {
+@test "maintenance capture stays blocked until verified restoration and retries failed restoration" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/maintenance" holder
   run bash .scripts/production-k3d.sh maintenance-enter "$VALUES" "$ARTIFACT" "$snapshot"
@@ -441,6 +444,25 @@ EOF
       and .spec.template.spec.containers[0].env[0].value == "maintenance"' \
     "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "backup-mode" and .phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
+  jq -e 'all(.items[] | select(.metadata.name == "recipes" or .metadata.name == "images");
+    .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  jq -e '.phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
+  jq -n --arg id "$holder" '{backupId:$id,status:"verified-upload"}' > "$FIXTURE_ROOT/backups/status.json"
+  export MOCK_PROJECTION_FAIL=true
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "backup-mode" and .phase == "restoration-pending"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
+  export MOCK_PROJECTION_FAIL=false
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
   [ "$status" -eq 0 ]
   jq -e '.status == "captured" and .phase == "captured"' "$snapshot/backup-state.json" > /dev/null
   jq -e --arg holder "$holder" '.spec.holderIdentity == $holder

@@ -615,6 +615,8 @@ def run_maintenance_capture(config):
     if not isinstance(state, dict):
         raise BackupError("restart-failure", "maintenance-state-invalid")
     backup_id = state.get("backupId")
+    if not isinstance(backup_id, str) or not BACKUP_ID_PATTERN.fullmatch(backup_id):
+        raise BackupError("restart-failure", "maintenance-state-invalid")
     manifest_path = snapshot / "manifest.json"
     if state.get("status") in ("backup-mode", "maintenance-mode") \
             and state.get("phase") == "maintenance-entered":
@@ -622,7 +624,7 @@ def run_maintenance_capture(config):
             raise BackupError("restart-failure", "unexpected-maintenance-manifest")
         run_capture_command(config, "maintenance-capture", snapshot)
         state = lifecycle_state(snapshot)
-    if not isinstance(state, dict) or state.get("backupId") != backup_id:
+    if not isinstance(state, dict) or state.get("stateVersion") != 2 or state.get("backupId") != backup_id:
         raise BackupError("restart-failure", "maintenance-state-invalid")
     current = (state.get("status"), state.get("phase"))
     if current not in (("captured", "captured"), ("backup-mode", "upload-pending"),
@@ -641,7 +643,15 @@ def run_maintenance_capture(config):
             raise BackupError("upload-failure", "remote-verification-mismatch")
         if current != ("captured", "captured"):
             run_capture_command(config, "maintenance-restore", snapshot)
-            manifest = validate_snapshot(snapshot)
+            restored = lifecycle_state(snapshot)
+            if not isinstance(restored, dict) or restored.get("stateVersion") != 2 \
+                    or (restored.get("status"), restored.get("phase")) != ("captured", "captured") \
+                    or restored.get("backupId") != backup_id:
+                raise BackupError("restart-failure", "maintenance-restore-incomplete")
+            try:
+                manifest = validate_snapshot(snapshot)
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+                raise BackupError("restart-failure", "invalid-restored-maintenance-snapshot") from error
             if manifest.get("backupId") != backup_id or not verified_upload_status(config, backup_id):
                 raise BackupError("restart-failure", "maintenance-restore-verification-mismatch")
         return result
@@ -655,7 +665,8 @@ def run_maintenance_capture(config):
 def verified_upload_status(config, backup_id):
     try:
         status = read_json(status_path(config))
-        return isinstance(status, dict) and status.get("format") == STATUS_FORMAT \
+        return isinstance(backup_id, str) and bool(BACKUP_ID_PATTERN.fullmatch(backup_id)) \
+            and isinstance(status, dict) and status.get("format") == STATUS_FORMAT \
             and status.get("status") == "verified-upload" and status.get("backupId") == backup_id
     except (OSError, ValueError, json.JSONDecodeError):
         return False

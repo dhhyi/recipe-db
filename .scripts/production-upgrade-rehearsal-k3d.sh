@@ -449,7 +449,7 @@ lifecycle() {
     fi
     checkout=$root
     case "$1" in
-      restore | maintenance-enter | backup-enter | backup-capture) from_git=true ;;
+      restore | maintenance-enter | maintenance-restore | backup-enter | backup-capture) from_git=true ;;
     esac
   fi
   if [[ $from_git == true ]]; then
@@ -655,12 +655,11 @@ new_cluster() {
 }
 
 prepare_fake_upload() {
-  local label=$1 source_snapshot=$2 deployment_id capture quoted
+  local label=$1 source_snapshot=$2 source_values=$3 deployment_id capture
   deployment_id="issue-251-$run_id-$label"
   capture="$work/$label-capture-existing-snapshot"
-  quoted=$(printf '%s' "$source_snapshot" | jq -Rr '@sh')
-  printf '#!/bin/sh\nset -eu\n[ "$#" -eq 1 ] || exit 2\nmkdir -m 700 -- "$1"\ncp -a -- %s/. "$1/"\n' \
-    "$quoted" > "$capture"
+  printf '#!/bin/bash\nset -eu\n[[ $# == 2 && $1 == maintenance-restore ]] || exit 2\ncd %q\nexec %q exec -- bash %q --release-sources-from-git maintenance-restore %q "$2"\n' \
+    "$root" "$(command -v mise)" "$root/.scripts/production-k3d.sh" "$source_values" > "$capture"
   chmod 700 "$capture"
   printf '{}\n' > "$work/$label-rclone.conf"
   jq -n --arg config "$work/$label-rclone.conf" --arg state "$work/uploader/$label" \
@@ -852,13 +851,8 @@ run_scenario() {
   local label=$1 source_values=$2 candidate_values=$3
   local state package_id smoke_script_backup
   local package_manifest package_archive migration_digest migration_image job lease transition
-  state="$work/state/$label/maintenance"
-  if [[ $label == successful-upgrade ]]; then
-    mkdir -p -- "$work/uploader/$label"
-    state="$work/uploader/$label/maintenance"
-  else
-    mkdir -p -- "$work/state/$label"
-  fi
+  mkdir -p -- "$work/uploader/$label"
+  state="$work/uploader/$label/maintenance"
   take_sample "$source_values"
 
   phase="$label-capture-maintenance-snapshot"
@@ -867,7 +861,7 @@ run_scenario() {
   run_logged "$work/logs/$label-maintenance-capture.log" lifecycle "$source_worktree" false \
     backup-capture "$source_values" "$state"
   [[ -s $state/manifest.json ]] || die "$label maintenance snapshot has no complete manifest"
-  prepare_fake_upload "$label" "$state"
+  prepare_fake_upload "$label" "$state" "$source_values"
   source_package_status=$(jq -r '.status' "$work/uploader/$label/status.json")
   mark
 
@@ -1040,9 +1034,9 @@ run_rehearsal_scenarios() {
 
   run_scenario failure-recovery "$source_values" "$candidate_values"
   phase=reopen-recovered-source
-  package_id=$(jq -er .backupId "$work/state/failure-recovery/maintenance/backup-state.json")
+  package_id=$(jq -er .backupId "$work/uploader/failure-recovery/maintenance/backup-state.json")
   run_logged "$work/logs/recovery-reopen.log" lifecycle "$root" true \
-    release-recovery-reopen "$source_values" "$work/state/failure-recovery/maintenance" "$source_release" \
+    release-recovery-reopen "$source_values" "$work/uploader/failure-recovery/maintenance" "$source_release" \
     "OPEN-RECOVERY-$package_id-$source_revision"
   verify_sample "$source_values" recovered-source
   mark
