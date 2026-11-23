@@ -637,7 +637,7 @@ legacy_pi_claims() {
   [ "$status" -eq 0 ]
   [[ $output == "apiVersion: v1"* ]]
   [[ $output != *private-* ]]
-  grep -q 'oras pull ghcr.io/dhhyi/recipe-db-releases@sha256:' "$MOCK_LOG"
+  grep -q 'oras blob fetch --output .* ghcr.io/dhhyi/recipe-db-releases@sha256:' "$MOCK_LOG"
   run ! grep -Eq '^(k3d|docker|kubectl)' "$MOCK_LOG"
 }
 
@@ -655,7 +655,7 @@ legacy_pi_claims() {
   [[ $output != *"kind: Secret"* ]]
 }
 
-@test "artifact traversal is refused before oras pull" {
+@test "artifact traversal is refused before inventory fetch" {
   export MOCK_SHAPE=true
   run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
@@ -667,6 +667,186 @@ legacy_pi_claims() {
   [ "$status" -eq 0 ]
   [ "$(grep -c '^oras manifest fetch ghcr.io/dhhyi/recipe-db-\(recipes\|graphql\)@sha256:' "$MOCK_LOG")" -eq 2 ]
   run ! grep -Eq '^docker (pull|build)' "$MOCK_LOG"
+}
+
+prepare_verified_release_cache_registry() {
+  jq -n --arg incomplete "${MOCK_CACHE_INCOMPLETE_INDEX:-false}" '{
+    schemaVersion:2,
+    manifests:(
+      [{platform:{os:"linux",architecture:"amd64"},digest:("sha256:"+("c"*64))}] +
+      (if $incomplete == "true" then [] else
+        [{platform:{os:"linux",architecture:"arm64"},digest:("sha256:"+("e"*64))}] end))
+  }' > "$FIXTURE_ROOT/cache-index.json"
+  local index_digest inventory_digest artifact_digest inventory_size
+  index_digest="sha256:$(sha256sum "$FIXTURE_ROOT/cache-index.json" | cut -d ' ' -f1)"
+  jq -n --arg revision "$MOCK_REVISION" --arg digest "$index_digest" '{
+    schemaVersion:2,
+    revision:(if env.MOCK_CACHE_INVALID_INVENTORY == "true" then "invalid" else $revision end),
+    images:{
+      recipes:("ghcr.io/dhhyi/recipe-db-recipes@"+$digest),
+      images:("ghcr.io/dhhyi/recipe-db-images@"+$digest)
+    },
+    migrations:[]
+  }' > "$FIXTURE_ROOT/cache-release.json"
+  inventory_digest="sha256:$(sha256sum "$FIXTURE_ROOT/cache-release.json" | cut -d ' ' -f1)"
+  inventory_size=$(wc -c < "$FIXTURE_ROOT/cache-release.json")
+  jq -n --arg revision "$MOCK_REVISION" --arg digest "$inventory_digest" \
+    --argjson size "$inventory_size" '{
+      schemaVersion:2,
+      artifactType:"application/vnd.dhhyi.recipe-db.release.v1+json",
+      annotations:{
+        "org.opencontainers.image.source":"https://github.com/dhhyi/recipe-db",
+        "org.opencontainers.image.revision":$revision
+      },
+      layers:[{
+        mediaType:"application/json",digest:$digest,size:$size,
+        annotations:{"org.opencontainers.image.title":"release.json"}
+      }]
+    }' > "$FIXTURE_ROOT/cache-artifact-manifest.json"
+  artifact_digest="sha256:$(sha256sum "$FIXTURE_ROOT/cache-artifact-manifest.json" | cut -d ' ' -f1)"
+  ARTIFACT="ghcr.io/dhhyi/recipe-db-releases@$artifact_digest"
+  export ARTIFACT MOCK_CACHE_INVENTORY_DIGEST="$inventory_digest"
+  export MOCK_CACHE_INDEX_DIGEST="$index_digest"
+  export MOCK_CACHE_ARTIFACT_MANIFEST="$FIXTURE_ROOT/cache-artifact-manifest.json"
+  export MOCK_CACHE_RELEASE="$FIXTURE_ROOT/cache-release.json"
+  export MOCK_CACHE_INDEX="$FIXTURE_ROOT/cache-index.json"
+  cat > bin/oras << 'EOF'
+#!/usr/bin/env bash
+printf 'oras %s\n' "$*" >> "$MOCK_LOG"
+if [[ $1 == manifest && $2 == fetch ]]; then
+  if [[ $3 == "$ARTIFACT" ]]; then
+    cat "$MOCK_CACHE_ARTIFACT_MANIFEST"
+  else
+    cat "$MOCK_CACHE_INDEX"
+  fi
+elif [[ $1 == blob && $2 == fetch ]]; then
+  [[ ${MOCK_BLOB_FAIL:-false} != true ]] || exit 42
+  [[ $3 == --output && $5 == "ghcr.io/dhhyi/recipe-db-releases@$MOCK_CACHE_INVENTORY_DIGEST" ]] || exit 1
+  cp "$MOCK_CACHE_RELEASE" "$4"
+  if [[ ${MOCK_BLOB_CORRUPT:-false} == true ]]; then
+    printf X | dd of="$4" bs=1 count=1 conv=notrunc status=none
+  fi
+else
+  exit 1
+fi
+EOF
+  chmod +x bin/oras
+}
+
+seed_verified_release_cache() {
+  local cache="$XDG_CACHE_HOME/recipe-db/releases"
+  mkdir -p "$cache/artifact-manifests" "$cache/inventories" "$cache/image-indexes"
+  cp "$MOCK_CACHE_ARTIFACT_MANIFEST" \
+    "$cache/artifact-manifests/${ARTIFACT##*@sha256:}"
+  cp "$MOCK_CACHE_RELEASE" \
+    "$cache/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}"
+  cp "$MOCK_CACHE_INDEX" \
+    "$cache/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}"
+}
+
+@test "release commands reuse digest-verified release data across invocations" {
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 3 ]
+  [ "$(grep -c '^ytt ' "$MOCK_LOG")" -eq 1 ]
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 3 ]
+  [ "$(grep -c '^ytt ' "$MOCK_LOG")" -eq 2 ]
+
+  run bash .scripts/production-k3d.sh release-preflight "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 3 ]
+
+  [ -f "$XDG_CACHE_HOME/recipe-db/releases/artifact-manifests/${ARTIFACT##*@sha256:}" ]
+  [ -f "$XDG_CACHE_HOME/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}" ]
+  [ -f "$XDG_CACHE_HOME/recipe-db/releases/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}" ]
+}
+
+@test "corrupt cached inventory is refetched and unavailable replacement fails safely" {
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+  local cached_inventory="$XDG_CACHE_HOME/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}"
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  printf 'corrupt\n' > "$cached_inventory"
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^oras blob fetch ' "$MOCK_LOG")" -eq 2 ]
+
+  printf 'corrupt\n' > "$cached_inventory"
+  export MOCK_BLOB_FAIL=true
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [ "$(grep -c '^oras blob fetch ' "$MOCK_LOG")" -eq 3 ]
+}
+
+@test "fresh inventory with a mismatched digest is rejected" {
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+  export MOCK_BLOB_CORRUPT=true
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"release artifact inventory digest mismatch"* ]]
+  [ ! -e "$XDG_CACHE_HOME/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}" ]
+}
+
+@test "a digest-valid cached image index still receives semantic validation" {
+  export MOCK_CACHE_INCOMPLETE_INDEX=true
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+  seed_verified_release_cache
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"image index must contain runnable linux/amd64 and linux/arm64 manifests"* ]]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 0 ]
+}
+
+@test "a digest-valid cached inventory still receives artifact revision validation" {
+  export MOCK_CACHE_INVALID_INVENTORY=true
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+  seed_verified_release_cache
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"artifact and inventory revision mismatch"* ]]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 0 ]
+}
+
+@test "release data cache defaults under the user's cache directory" {
+  prepare_verified_release_cache_registry
+  local home="$FIXTURE_ROOT/home"
+  mkdir -p "$home"
+
+  run env -u XDG_CACHE_HOME HOME="$home" bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -eq 0 ]
+  [ -f "$home/.cache/recipe-db/releases/artifact-manifests/${ARTIFACT##*@sha256:}" ]
+  [ -f "$home/.cache/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}" ]
+  [ -f "$home/.cache/recipe-db/releases/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}" ]
+}
+
+@test "an unwritable cache warns and rendering continues with fetched data" {
+  prepare_verified_release_cache_registry
+  touch "$FIXTURE_ROOT/not-a-cache-directory"
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/not-a-cache-directory"
+
+  run --separate-stderr bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"cannot write release data cache"* ]]
+  [[ "$output" == "apiVersion: v1"* ]]
 }
 
 @test "incomplete application image index fails before rendering or cluster mutation" {

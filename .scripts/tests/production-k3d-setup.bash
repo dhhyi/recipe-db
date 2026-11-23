@@ -16,10 +16,12 @@ setup() {
   cp "$BATS_TEST_DIRNAME/../lib/production-storage.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-restore.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../lib/production-recovery.sh" .scripts/lib/
+  cp "$BATS_TEST_DIRNAME/../lib/release-data-cache.sh" .scripts/lib/
   cp "$BATS_TEST_DIRNAME/../validate-production-image-index.sh" .scripts/
   cp "$BATS_TEST_DIRNAME/../validate-backup-snapshot.py" .scripts/
   use_mise_tools
   setup_mock_bin
+  export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
   export VALUES="$FIXTURE_ROOT/values.yaml"
   export ARTIFACT="ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   export MOCK_FOREIGN=false MOCK_BAD_NODES=false MOCK_LOCK=false MOCK_ROLLOUT=false MOCK_SHAPE=false MOCK_SECRET_ERROR=false
@@ -1325,8 +1327,8 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
 esac
 EOF
   cat > bin/oras << 'EOF'
-#!/usr/bin/env bash
-printf 'oras %s\n' "$*" >> "$MOCK_LOG"
+  #!/usr/bin/env bash
+  printf 'oras %s\n' "$*" >> "$MOCK_LOG"
   artifact_revision() {
     case "$1" in
       *"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1334,27 +1336,7 @@ printf 'oras %s\n' "$*" >> "$MOCK_LOG"
       *) printf '%s' "$MOCK_REVISION" ;;
     esac
   }
-  if [[ $1 = manifest ]]; then
-    [[ ${MOCK_IMAGE_INDEX_FAIL:-false} != true ||
-      $3 == ghcr.io/dhhyi/recipe-db-releases@* ]] || exit 1
-    if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
-      jq -n --arg shape "$MOCK_SHAPE" --arg revision "$(artifact_revision "$3")" '{
-      schemaVersion:2,artifactType:"application/vnd.dhhyi.recipe-db.release.v1+json",
-      annotations:{"org.opencontainers.image.source":"https://github.com/dhhyi/recipe-db",
-        "org.opencontainers.image.revision":$revision},
-      layers:[{mediaType:"application/json",digest:("sha256:"+("b"*64)),size:100,
-        annotations:{"org.opencontainers.image.title":(if $shape == "true" then "../escape" else "release.json" end)}}]}'
-  else
-    jq -n --arg incomplete "$MOCK_INCOMPLETE_INDEX" '{schemaVersion:2,manifests:(
-      [{platform:{os:"linux",architecture:"amd64"},digest:("sha256:"+("c"*64))},
-       {platform:{os:"unknown",architecture:"unknown"},digest:("sha256:"+("d"*64))}] +
-      (if $incomplete == "true" then [] else
-        [{platform:{os:"linux",architecture:"arm64"},digest:("sha256:"+("e"*64))}] end))}'
-  fi
-else
-  [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]] || exit 1
-  release=$2
-  output=$4
+  mock_release() {
     if [[ $MOCK_MULTI_MIGRATIONS = true ]]; then
       jq -n --arg revision "$(artifact_revision "$release")" \
         --arg missing "$MOCK_MISSING_MIGRATION" '{schemaVersion:2,revision:$revision,images:{
@@ -1375,7 +1357,7 @@ else
             image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))},
           {service:"tags",fromVersion:1,toVersion:2,timeoutSeconds:300,
             image:("ghcr.io/dhhyi/recipe-db-migrator-tags-1-to-2@sha256:"+("f"*64))}
-        ]}' > "$output/release.json"
+        ]}' > "$output"
     elif [[ $MOCK_MIGRATIONS = true ]]; then
       jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:2,revision:$revision,images:{
         recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
@@ -1386,7 +1368,7 @@ else
         browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))},
         migrations:[{service:"images",fromVersion:1,toVersion:2,timeoutSeconds:300,
           image:("ghcr.io/dhhyi/recipe-db-migrator-images-1-to-2@sha256:"+("c"*64))}]}' \
-        > "$output/release.json"
+        > "$output"
     else
       jq -n --arg revision "$(artifact_revision "$release")" '{schemaVersion:2,revision:$revision,images:{
     recipes:("ghcr.io/dhhyi/recipe-db-recipes@sha256:"+("b"*64)),
@@ -1394,8 +1376,64 @@ else
     graphql:("ghcr.io/dhhyi/recipe-db-graphql@sha256:"+("b"*64)),
     tags:("ghcr.io/dhhyi/recipe-db-tags@sha256:"+("b"*64)),
     search:("ghcr.io/dhhyi/recipe-db-search@sha256:"+("b"*64)),
-    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))},migrations:[]}' > "$output/release.json"
+    browse:("ghcr.io/dhhyi/recipe-db-browse@sha256:"+("b"*64))},migrations:[]}' > "$output"
+  fi
+}
+if [[ $1 == manifest && $2 == fetch ]]; then
+  [[ ${MOCK_IMAGE_INDEX_FAIL:-false} != true ||
+    $3 == ghcr.io/dhhyi/recipe-db-releases@* ]] || exit 1
+  if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
+    release=$3
+    payload=$(mktemp)
+    output=$payload
+    mock_release
+    layer_digest=$(sha256sum "$payload" | cut -d ' ' -f1)
+    size=$(wc -c < "$payload")
+    rm -f "$payload"
+    jq -n --arg shape "$MOCK_SHAPE" --arg revision "$(artifact_revision "$3")" \
+      --arg digest "sha256:$layer_digest" --argjson size "$size" '{
+      schemaVersion:2,artifactType:"application/vnd.dhhyi.recipe-db.release.v1+json",
+      annotations:{"org.opencontainers.image.source":"https://github.com/dhhyi/recipe-db",
+        "org.opencontainers.image.revision":$revision},
+      layers:[{mediaType:"application/json",digest:$digest,size:$size,
+        annotations:{"org.opencontainers.image.title":(if $shape == "true" then "../escape" else "release.json" end)}}]}'
+  else
+    jq -n --arg incomplete "$MOCK_INCOMPLETE_INDEX" '{schemaVersion:2,manifests:(
+      [{platform:{os:"linux",architecture:"amd64"},digest:("sha256:"+("c"*64))},
+       {platform:{os:"unknown",architecture:"unknown"},digest:("sha256:"+("d"*64))}] +
+      (if $incomplete == "true" then [] else
+        [{platform:{os:"linux",architecture:"arm64"},digest:("sha256:"+("e"*64))}] end))}'
+  fi
+elif [[ $# == 5 && $1 == blob && $2 == fetch && $3 == --output &&
+  $5 == ghcr.io/dhhyi/recipe-db-releases@sha256:* ]]; then
+  expected_digest=${5##*@}
+  fetched=false
+  for candidate in a c d e; do
+    case "$candidate" in
+      a) release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+      c) release=ghcr.io/dhhyi/recipe-db-releases@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc ;;
+      d) release=ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ;;
+      e) release=ghcr.io/dhhyi/recipe-db-releases@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
+    esac
+    payload=$(mktemp)
+    output=$payload
+    mock_release
+    actual_digest="sha256:$(sha256sum "$payload" | cut -d ' ' -f1)"
+    if [[ $actual_digest == "$expected_digest" ]]; then
+      cp "$payload" "$4"
+      fetched=true
+      rm -f "$payload"
+      break
     fi
+    rm -f "$payload"
+  done
+  [[ $fetched == true ]] || exit 1
+elif [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]]; then
+  release=$2
+  output=$4/release.json
+  mock_release
+else
+  exit 1
 fi
 EOF
   cat > bin/ytt << 'EOF'

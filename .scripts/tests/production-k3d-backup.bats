@@ -986,11 +986,13 @@ EOF
 @test "migration planning deterministically reports complete adjacent paths without writing state" {
   export MOCK_MIGRATIONS=true MOCK_MULTI_MIGRATIONS=true
   prepare_candidate_release
-  local before order
+  local before order inventory_fetches
   before=$(sha256sum "$STATE/backup-state.json" | cut -d ' ' -f 1)
+  inventory_fetches=$(grep -c '^oras blob fetch ' "$MOCK_LOG")
 
   run bash .scripts/production-k3d.sh release-migration-plan "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
+  [ "$(grep -c '^oras blob fetch ' "$MOCK_LOG")" -eq "$inventory_fetches" ]
   [[ $output == *"Service images: current=1 required=2"* ]]
   [[ $output == *"Service recipes: current=1 required=3"* ]]
   [[ $output == *"Service tags: current=1 required=2"* ]]
@@ -2574,7 +2576,7 @@ EOF
   [ "$(migration_job_count)" -eq 0 ]
   [ -e "$MOCK_LOG.foreign-migration-job.json" ]
   [ "$(grep -c ' delete job migration-' "$MOCK_LOG")" -eq 5 ]
-  grep -q "oras pull $CANDIDATE" "$MOCK_LOG"
+  grep -q '^oras blob fetch --output .* ghcr.io/dhhyi/recipe-db-releases@sha256:' "$MOCK_LOG"
   run grep -Eq '^oras (delete|manifest delete|blob delete) ' "$MOCK_LOG"
   [ "$status" -ne 0 ]
 }

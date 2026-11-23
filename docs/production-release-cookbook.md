@@ -152,6 +152,8 @@ and mise install
 
 Confirm `git rev-parse HEAD` equals `TOOLING_REVISION`. On a new workstation, restore the operator files described in the [production configuration guide](production-configuration.md), including decrypting encrypted files with the age identity. Relative secret-file references in `deployment/pi-values.yaml` resolve from `~/.config/recipe-db/`; existing absolute references work only when those exact files exist and are not rebased automatically. Migrate active private files and encrypted chezmoi sources separately when their paths need updating. Do not copy the generated Pi kubeconfig from another workstation or cluster.
 
+Release and migration commands reuse verified immutable artifact manifests, inventories and image indexes under `$XDG_CACHE_HOME/recipe-db/releases`, defaulting to `~/.cache/recipe-db/releases`. Entries do not expire and may be deleted at any time. Only digest-addressed public release data is cached; source metadata and private inputs are prepared for each command.
+
 The workstation also needs OpenSSH, OpenSSL, curl, Git, GitHub CLI, chezmoi, Python 3, Bash, GNU core utilities, findutils, grep, sed, awk and tar installed by its system package manager. Mise supplies the repository-pinned rendering and Kubernetes tools; it does not install every system prerequisite. The release preflight checks required executables, prepared alignment files and mapped application inputs before downtime.
 
 From the repository root, set the exact published artifact and private file paths:
