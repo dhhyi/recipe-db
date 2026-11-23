@@ -234,11 +234,12 @@ fn request_contains_mutation(request: &async_graphql::Request) -> bool {
 }
 
 fn maintenance_mode_error() -> async_graphql::ServerError {
-    let error = async_graphql::Error::new("Writes are unavailable during maintenance")
-        .extend_with(|_, extensions| {
+    let error = async_graphql::Error::new("Writes are unavailable during maintenance").extend_with(
+        |_, extensions| {
             extensions.set("status", 503);
             extensions.set("code", "maintenance-mode");
-        });
+        },
+    );
     async_graphql::ServerError {
         message: error.message,
         source: error.source,
@@ -598,7 +599,10 @@ mod ingress_tests {
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("recipes.example"));
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
-        headers.insert("origin", HeaderValue::from_static("https://recipes.example"));
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://recipes.example"),
+        );
 
         let response = execute_graphql(
             state.clone(),
@@ -640,14 +644,17 @@ mod ingress_tests {
             upload,
         ];
         for request in requests {
-            let response = execute_graphql(state.clone(), headers.clone(), Method::POST, request)
-                .await;
+            let response =
+                execute_graphql(state.clone(), headers.clone(), Method::POST, request).await;
             let response = axum::response::IntoResponse::into_response(response);
             let body = axum::body::to_bytes(response.into_body(), 4096)
                 .await
                 .unwrap();
             let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(result["errors"][0]["extensions"]["code"], "maintenance-mode");
+            assert_eq!(
+                result["errors"][0]["extensions"]["code"],
+                "maintenance-mode"
+            );
             assert_eq!(result["errors"][0]["extensions"]["status"], 503);
         }
 
@@ -675,13 +682,19 @@ mod ingress_tests {
         );
         let response = reqwest::Client::new()
             .post(format!("http://{graphql_address}/graphql"))
-            .header("content-type", "multipart/form-data; boundary=maintenance-boundary")
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=maintenance-boundary",
+            )
             .body(multipart_body)
             .send()
             .await
             .unwrap();
         let result: serde_json::Value = response.json().await.unwrap();
-        assert_eq!(result["errors"][0]["extensions"]["code"], "maintenance-mode");
+        assert_eq!(
+            result["errors"][0]["extensions"]["code"],
+            "maintenance-mode"
+        );
         assert_eq!(result["errors"][0]["extensions"]["status"], 503);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 

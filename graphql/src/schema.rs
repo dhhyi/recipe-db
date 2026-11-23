@@ -180,10 +180,7 @@ mod tests {
                 .execute(async_graphql::Request::new("{ maintenance }").data(mode))
                 .await;
             assert!(response.errors.is_empty(), "{response:?}");
-            assert_eq!(
-                response.data.into_json().unwrap()["maintenance"],
-                expected
-            );
+            assert_eq!(response.data.into_json().unwrap()["maintenance"], expected);
         }
     }
 
