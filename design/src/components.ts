@@ -5,51 +5,11 @@ import "./components/recipe-tile.ts";
 import "./components/recipe-image-carousel.ts";
 import "./components/recipe-chevron.ts";
 
-let historyTransition:
-  "browse-return" | "browse-results" | "history-page" | undefined;
-
-// HTMX exposes the history swap spec immediately before performing the swap.
-for (const name of ["htmx:historyCacheHit", "htmx:historyCacheMissLoad"]) {
-  document.addEventListener(name, (event) => {
-    if (
-      !(event instanceof CustomEvent) ||
-      typeof event.detail?.path !== "string" ||
-      typeof event.detail?.swapSpec !== "object" ||
-      event.detail.swapSpec === null
-    ) {
-      return;
-    }
-    const destination = new URL(event.detail.path, location.href);
-    historyTransition =
-      destination.pathname === "/" && document.querySelector(".recipe-image")
-        ? "browse-return"
-        : destination.pathname === "/" &&
-            document.querySelector("#browse-content")
-          ? "browse-results"
-          : "history-page";
-    event.detail.swapSpec.transition = true;
-    queueMicrotask(() => {
-      historyTransition = undefined;
-    });
-  });
-}
-
 document.addEventListener("htmx:beforeTransition", (event) => {
-  if (historyTransition) {
-    const type = historyTransition;
-    historyTransition = undefined;
-    if (
-      !("activeViewTransition" in document) ||
-      !CSS.supports(`selector(:active-view-transition-type(${type}))`)
-    ) {
-      event.preventDefault();
-    } else {
-      queueMicrotask(() => document.activeViewTransition?.types.add(type));
-    }
+  if (!(event.target instanceof Element)) {
     return;
   }
   if (
-    event.target instanceof Element &&
     event.target.closest("form[data-tag-mutation], #recipe-tag-search")
   ) {
     const type = event.target.closest("#recipe-tag-search")
@@ -65,25 +25,42 @@ document.addEventListener("htmx:beforeTransition", (event) => {
     queueMicrotask(() => document.activeViewTransition?.types.add(type));
     return;
   }
-  if (
-    !(event.target instanceof Element) ||
-    !event.target.closest("a[data-browse-home]")
-  ) {
+  const tile = event.target.closest("recipe-tile-component");
+  if (tile && event.target.closest("a[hx-boost]")) {
+    if (
+      !("activeViewTransition" in document) ||
+      !CSS.supports("selector(:active-view-transition-type(recipe-open))")
+    ) {
+      event.preventDefault();
+      return;
+    }
+    tile.setAttribute("data-transition-selected", "");
+    queueMicrotask(() => {
+      const transition = document.activeViewTransition;
+      if (!transition) {
+        tile.removeAttribute("data-transition-selected");
+        return;
+      }
+      transition.types.add("recipe-open");
+      void transition.finished.finally(() =>
+        tile.removeAttribute("data-transition-selected"),
+      );
+    });
+    return;
+  }
+  if (!event.target.closest("a[data-browse-home]")) {
     return;
   }
   const fromBrowse = document.querySelector("#browse-content") !== null;
+  const type = fromBrowse ? "browse-results" : "browse-home";
   if (
     (fromBrowse && !location.search) ||
     !("activeViewTransition" in document) ||
-    !CSS.supports("selector(:active-view-transition-type(browse-return))")
+    !CSS.supports(`selector(:active-view-transition-type(${type}))`)
   ) {
     event.preventDefault();
     return;
   }
   // HTMX starts the transition after this event, before the queued microtask.
-  queueMicrotask(() =>
-    document.activeViewTransition?.types.add(
-      fromBrowse ? "browse-results" : "browse-return",
-    ),
-  );
+  queueMicrotask(() => document.activeViewTransition?.types.add(type));
 });

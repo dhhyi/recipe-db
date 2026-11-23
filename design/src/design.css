@@ -169,9 +169,25 @@ header-component > header:focus-within {
   animation-duration: 200ms;
 }
 
-:root:active-view-transition-type(browse-results, browse-return) {
+:root:active-view-transition-type(browse-results) {
   recipe-tile-component {
     view-transition-name: var(--recipe-tile-transition-name, none);
+  }
+
+  :root:active-view-transition-type(recipe-open) {
+    recipe-tile-component:not([data-transition-selected]) img,
+    recipe-tile-component:not([data-transition-selected]) a[slot="rating"] {
+      view-transition-name: none !important;
+    }
+  }
+
+  :root:active-view-transition-type(browse-home) {
+    .recipe-image,
+    .recipe-rating,
+    recipe-tile-component img,
+    recipe-tile-component a[slot="rating"] {
+      view-transition-name: none !important;
+    }
   }
 
   recipe-tile-component img,
@@ -233,35 +249,6 @@ header-component > header:focus-within {
   .recipe-tags-detail
   form[data-tag-mutation] {
   view-transition-name: var(--tag-transition-name, none);
-}
-
-:root:active-view-transition-type(browse-return) {
-  recipe-tile-component,
-  .recipe-image {
-    view-transition-class: recipe-return-card;
-  }
-
-  .recipe-image {
-    view-transition-name: var(--recipe-tile-transition-name, none) !important;
-  }
-
-  .recipe-rating {
-    view-transition-name: none !important;
-  }
-
-  &::view-transition-image-pair(.recipe-return-card) {
-    overflow: clip;
-    animation: recipe-return-corners 200ms ease both;
-  }
-}
-
-@keyframes recipe-return-corners {
-  from {
-    border-radius: 0;
-  }
-  to {
-    border-radius: 1rem;
-  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
