@@ -219,6 +219,11 @@
        [:h1 "Anmeldung erforderlich"]
        [:p.feedback.error {:role "alert"} "Zum Bearbeiten von Rezepten ist eine Anmeldung erforderlich."]
        [return-action state]]
+      :maintenance
+      [:<>
+       [:h1 "Wartungsarbeiten"]
+       [:p.feedback.warning {:role "status"} "Während der Wartungsarbeiten ist das Bearbeiten vorübergehend deaktiviert. Lesen bleibt verfügbar; es kann zu Unterbrechungen kommen."]
+       [return-action state]]
       :forbidden
       [:<>
        [:h1 "Keine Berechtigung"]

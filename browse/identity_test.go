@@ -22,6 +22,7 @@ func TestIdentityLookup(t *testing.T) {
 		{"anonymous", 200, `{"data":{"myCapabilities":{"role":"anonymous"}}}`, true, false, `<header-component auth-role="anonymous" auth-enabled></header-component>`, false},
 		{"owner", 200, `{"data":{"myCapabilities":{"role":"owner"}}}`, true, false, `<header-component auth-role="owner" auth-enabled></header-component>`, false},
 		{"owner with verified email", 200, `{"data":{"myCapabilities":{"role":"owner"},"myEmail":"owner@example.com"}}`, true, false, `<header-component auth-role="owner" auth-email="owner@example.com" auth-enabled></header-component>`, false},
+		{"maintenance", 200, `{"data":{"maintenance":true,"myCapabilities":{"role":"anonymous"}}}`, true, false, `<header-component auth-role="anonymous" auth-enabled maintenance></header-component>`, false},
 		{"anonymous with OAuth disabled", 200, `{"data":{"myCapabilities":{"role":"anonymous"}}}`, false, false, `<header-component auth-role="anonymous"></header-component>`, false},
 		{"member with OAuth disabled", 200, `{"data":{"myCapabilities":{"role":"member"}}}`, false, false, `<header-component auth-role="member"></header-component>`, false},
 		{"owner with OAuth disabled", 200, `{"data":{"myCapabilities":{"role":"owner"}}}`, false, false, `<header-component auth-role="owner"></header-component>`, false},

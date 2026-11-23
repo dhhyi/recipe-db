@@ -4,6 +4,9 @@ import { unsafeSVG } from "lit/directives/unsafe-svg.js";
 import bannerSvg from "../assets/banner.svg?raw";
 import profileIconSvg from "../assets/Sample_User_Icon.svg?raw";
 
+const maintenanceDescription =
+  "Wartungsarbeiten: Lesen bleibt verfügbar; Bearbeiten ist vorübergehend deaktiviert. Es kann zu Unterbrechungen kommen.";
+
 @customElement("header-component")
 export class HeaderComponent extends LitElement {
   @property({ attribute: "auth-role" })
@@ -14,6 +17,9 @@ export class HeaderComponent extends LitElement {
 
   @property({ type: Boolean, attribute: "auth-enabled" })
   authEnabled = false;
+
+  @property({ type: Boolean })
+  maintenance = false;
 
   @state()
   private scrollHidden = false;
@@ -192,6 +198,23 @@ export class HeaderComponent extends LitElement {
                   >${unsafeSVG(bannerSvg)}</span
                 >
               </a>
+              ${
+                this.maintenance
+                  ? html`<span
+                      class="maintenance-indicator"
+                      data-tooltip=${maintenanceDescription}
+                      aria-label=${maintenanceDescription}
+                      role="img"
+                      tabindex="0"
+                    >
+                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                        <path d="M12 2.5 1.6 21h20.8L12 2.5Z" fill="#f2cc60" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
+                        <path d="M12 8v6" stroke="#24292f" stroke-width="2" stroke-linecap="round"></path>
+                        <circle cx="12" cy="17.5" r="1.1" fill="#24292f"></circle>
+                      </svg>
+                    </span>`
+                  : null
+              }
             </li>
           </ul>
           ${this.renderAuth()}

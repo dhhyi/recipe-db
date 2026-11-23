@@ -17,7 +17,10 @@ view : Model -> Html Msg
 view model =
     case model.capabilities of
         RemoteData.Success capabilities ->
-            if capabilities.canManageImages then
+            if capabilities.maintenance then
+                accessPage model "Wartungsarbeiten" "Während der Wartungsarbeiten ist das Bearbeiten vorübergehend deaktiviert. Lesen bleibt verfügbar; es kann zu Unterbrechungen kommen."
+
+            else if capabilities.canManageImages then
                 if model.phase == Viewing then
                     galleryView model
 
@@ -115,6 +118,10 @@ editorView model =
 errorMessage : String -> Html Msg
 errorMessage error =
     case error of
+        "maintenance-mode" ->
+            div [ attribute "role" "alert", class "feedback warning" ]
+                [ p [] [ text "Wartungsarbeiten: Änderungen sind vorübergehend nicht möglich. Lesen bleibt verfügbar." ] ]
+
         "authentication-required" ->
             div [ attribute "role" "alert", class "feedback error" ]
                 [ p [] [ text "Anmeldung erforderlich oder abgelaufen." ] ]

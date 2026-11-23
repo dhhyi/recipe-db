@@ -28,6 +28,8 @@ const graphqlEndpoint = "http://traefik/graphql"
 var errTagsUnavailable = errors.New("recipe tags unavailable")
 var errOptionalServicesUnavailable = errors.New("optional recipe services unavailable")
 
+const maintenanceMessage = "Wartungsarbeiten: Lesen bleibt verfügbar; Bearbeiten ist vorübergehend deaktiviert. Es kann zu Unterbrechungen kommen."
+
 func renderRecipe(ctx context.Context, client graphql.Client, id string) ([]byte, error) {
 	resp, err := gql.RecipeById(ctx, client, id)
 	optionalOnly := optionalServiceErrors(err)
@@ -212,7 +214,9 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 		resp, err := gql.RateRecipe(r.Context(), client, id, ratingInt)
 		if err != nil {
 			log.Printf("failed to rate recipe: %v", err)
-			if status := ratingAuthorizationStatus(err, *upstreamStatus); status != 0 {
+			if maintenanceModeError(err) {
+				writeErrorPage(w, r, http.StatusServiceUnavailable, "Wartungsarbeiten | RezeptDB", maintenanceMessage)
+			} else if status := ratingAuthorizationStatus(err, *upstreamStatus); status != 0 {
 				writeRatingDeniedPage(w, r, status)
 			} else {
 				writeErrorPage(w, r, http.StatusBadGateway, "Bewertung nicht möglich | RezeptDB", "Die Bewertung konnte derzeit nicht gespeichert werden.")
@@ -248,6 +252,10 @@ func newHandlerWithEndpoint(client graphql.Client, cache *pageCache, endpoint st
 			return
 		}
 		if !capabilities.MyCapabilities.CanRate {
+			templ.Handler(components.RecipeRatingWidget(id, capabilities.Rating, false, nil, false)).ServeHTTP(w, r)
+			return
+		}
+		if capabilities.Maintenance {
 			templ.Handler(components.RecipeRatingWidget(id, capabilities.Rating, false, nil, false)).ServeHTTP(w, r)
 			return
 		}

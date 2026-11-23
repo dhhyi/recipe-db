@@ -32,9 +32,9 @@ function restoreVisualViewportHeight() {
   }
 }
 
-async function mountHeader() {
+async function mountHeader(maintenance = false) {
   document.body.innerHTML = `
-    <header-component auth-role="anonymous" auth-enabled></header-component>
+    <header-component auth-role="anonymous" auth-enabled ${maintenance ? "maintenance" : ""}></header-component>
     <main style="height: 3000px"><button>Page control</button></main>
   `;
   const component = document.querySelector(
@@ -222,5 +222,39 @@ describe("shared header login", () => {
       history.replaceState(originalState, "", originalURL);
       document.body.replaceChildren();
     }
+  });
+
+  describe("maintenance indicator", () => {
+    beforeEach(async () => {
+      await page.viewport(800, 600);
+      await mountHeader(true);
+    });
+
+    afterEach(() => {
+      document.body.replaceChildren();
+    });
+
+    it("announces the explanation and reveals the Blades tooltip on hover and keyboard focus", async () => {
+      const indicator = document.querySelector<HTMLElement>(
+        ".maintenance-indicator",
+      )!;
+      const description = indicator.getAttribute("data-tooltip")!;
+      expect(indicator.getAttribute("aria-label")).toBe(description);
+      expect(indicator.tabIndex).toBe(0);
+      expect(indicator.querySelector("svg")).toBeTruthy();
+
+      await userEvent.hover(indicator);
+      await expect
+        .poll(() => getComputedStyle(indicator, "::before").content)
+        .toContain(description);
+
+      await userEvent.unhover(indicator);
+      await userEvent.tab();
+      await userEvent.tab();
+      expect(document.activeElement).toBe(indicator);
+      await expect
+        .poll(() => getComputedStyle(indicator, "::before").content)
+        .toContain(description);
+    });
   });
 });
