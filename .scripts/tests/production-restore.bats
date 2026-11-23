@@ -44,14 +44,14 @@ EOF
   [[ $output == *"exactly one Traefik HelmChartConfig"* ]]
 }
 
-@test "recovery barrier removes public HTTPS previews while preserving internal routes" {
+@test "recovery barrier removes public HTTPS routes while preserving internal routes" {
   cat > work/config.json << 'EOF'
-{"httpsStaging":{"hostname":"restore.example.org"}}
+{"https":{"hostname":"restore.example.org"}}
 EOF
   jq -n '{
     http:{routers:{
       graphql:{entrypoints:["web"],service:"graphql"},
-      "preview-graphql":{entrypoints:["websecure"],service:"graphql",
+      "public-graphql":{entrypoints:["websecure"],service:"graphql",
         tls:{certResolver:"letsencrypt",domains:[{main:"restore.example.org"}]}},
       "graphql-internal":{entrypoints:["rest-internal"],service:"graphql"}
     }}
@@ -72,7 +72,7 @@ EOF
     and .http.routers["restore-public-barrier"].tls ==
       {certResolver:"letsencrypt",domains:[{main:"restore.example.org"}]}
     and .http.routers.graphql == null
-    and .http.routers["preview-graphql"] == null
+    and .http.routers["public-graphql"] == null
     and .http.routers["graphql-internal"].entrypoints == ["rest-internal"]
     and .http.routers["restore-internal-images"].entrypoints == ["rest-internal"]
   ' work/barrier.json

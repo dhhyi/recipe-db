@@ -20,18 +20,21 @@ production_config() {
   if jq -e '(.runtime | type == "object" and has("ingressMode"))' "$work/config.json" > /dev/null 2>&1; then
     production_fail "runtime.ingressMode is obsolete; omit it; both local and Pi use Traefik LoadBalancer"
   fi
+  if jq -e 'has("httpsStaging")' "$work/config.json" > /dev/null 2>&1; then
+    production_fail "httpsStaging is obsolete; use https"
+  fi
   local google_fields removed_https_option
   for removed_https_option in acmeEnvironment exposeApplication renewalRehearsal; do
     if jq -e --arg key "$removed_https_option" \
-      '.httpsStaging | type == "object" and has($key)' "$work/config.json" > /dev/null 2>&1; then
-      production_fail "httpsStaging.$removed_https_option is obsolete"
+      '.https | type == "object" and has($key)' "$work/config.json" > /dev/null 2>&1; then
+      production_fail "https.$removed_https_option is obsolete"
     fi
   done
-  if jq -e '.target == "pi" and (has("httpsStaging") | not)' "$work/config.json" > /dev/null; then
-    production_fail "Pi values require httpsStaging.hostname"
+  if jq -e '.target == "pi" and (has("https") | not)' "$work/config.json" > /dev/null; then
+    production_fail "Pi values require https.hostname"
   fi
-  if jq -e '.target == "local" and has("httpsStaging")' "$work/config.json" > /dev/null; then
-    production_fail "httpsStaging is not supported for local targets"
+  if jq -e '.target == "local" and has("https")' "$work/config.json" > /dev/null; then
+    production_fail "https is not supported for local targets"
   fi
   google_fields=$(jq -r '
     ((.runtime | type == "object" and has("googleOAuthClientId")) or
@@ -62,7 +65,7 @@ production_config() {
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"] +
       (if has("rehearsalId") then ["rehearsalId"] else [] end) +
       (if has("piStorage") then ["piStorage"] else [] end) +
-      (if has("httpsStaging") then ["httpsStaging"] else [] end))
+      (if has("https") then ["https"] else [] end))
     and ([.. | strings] | all(.[]; test("[[:cntrl:]]") | not))
     and (.target == "local" or .target == "pi")
     and (.cluster | name) and (.namespace == "recipe-db")
@@ -119,20 +122,20 @@ production_config() {
       (if $googleEnabled then ["googleOAuthClientId"] else [] end))
       and .trustedIssuer == "https://accounts.google.com")
     and (if $googleEnabled and .target == "pi" then
-      has("httpsStaging")
-      and .origin == ("https://" + .httpsStaging.hostname)
+      has("https")
+      and .origin == ("https://" + .https.hostname)
       else true end)
-    and (if has("httpsStaging") then
+    and (if has("https") then
       .target == "pi"
       and has("piStorage")
-      and .origin == ("https://" + .httpsStaging.hostname)
-      and (.httpsStaging | objectkeys(["hostname"])
+      and .origin == ("https://" + .https.hostname)
+      and (.https | objectkeys(["hostname"])
         and (.hostname | type == "string" and length <= 253
           and test("^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
           and (split(".") | all(.[]; length <= 63))
           and (test("^[0-9.]+$") | not)))
       else true end)
-    and (if has("httpsStaging") then .secrets | has("acme-account-email") else true end)
+    and (if has("https") then .secrets | has("acme-account-email") else true end)
     and (.secrets |
       objectkeys(["auth-accounts.json"] +
         (if $googleEnabled then ["google-oauth-client-secret","oauth2-cookie-secret"] else [] end) +
@@ -196,7 +199,7 @@ production_secrets() {
     # Copy once: secret validation, route rendering and Secret creation use the same bytes.
     cp -- "$path" "$work/$key"
   done
-  if jq -e 'has("httpsStaging")' "$work/config.json" > /dev/null; then
+  if jq -e 'has("https")' "$work/config.json" > /dev/null; then
     path=$(production_input_path "$acme_email_path") || return 1
     [[ -f $path && -r $path && -s $path ]] \
       || production_fail "missing or unreadable secret file: acme-account-email"

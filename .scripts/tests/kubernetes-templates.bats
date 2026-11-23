@@ -87,7 +87,7 @@ render() {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |
     .config.origin="https://recipes.example.org" |
-    .config.httpsStaging={hostname:"recipes.example.org"}' values.json > no-google-values.json
+    .config.https={hostname:"recipes.example.org"}' values.json > no-google-values.json
   render no-google-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '.ports["rest-internal"].observability == {}'
@@ -119,14 +119,15 @@ render() {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |
     .config.origin="https://recipes.example.org" |
-    .config.httpsStaging={hostname:"recipes.example.org"}' values.json > https-values.json
+    .config.https={hostname:"recipes.example.org"}' values.json > https-values.json
   render https-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '
     .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
     and .ports.web.port == 8000 and .ports.web.expose.default == false
-    and .ports["staging-http"].exposedPort == 8081
-    and .ports["staging-http"].port == 8001
+    and .ports["public-http"].exposedPort == 8081
+    and .ports["public-http"].port == 8001
+    and .ports["staging-http"] == null
     and .ports.websecure.exposedPort == 8443 and .ports.websecure.expose.default == true
     and .ports["rest-internal"].expose.default == false
     and .persistence.existingClaim == "recipe-db-acme" and .persistence.path == "/data"
@@ -134,10 +135,12 @@ render() {
     and .env == [{name:"ACME_ACCOUNT_EMAIL",valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
     and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)") != null)
     and (.deployment.initContainers[0].command[2] | contains("chmod 600 /data/acme-production.json"))
-    and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http") != null)
-    and (.additionalArguments | index("--entrypoints.staging-http.http.redirections.entrypoint.to=:443") != null)
+    and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=public-http") != null)
+    and (.additionalArguments | index("--entrypoints.public-http.http.redirections.entrypoint.to=:443") != null)
+    and (.additionalArguments | index("--entrypoints.public-http.http.redirections.entrypoint.scheme=https") != null)
     and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme-production.json") != null)
     and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.caserver=https://acme-v02.api.letsencrypt.org/directory") != null)
+    and all(.additionalArguments[]; contains("staging-http") | not)
     and all(.additionalArguments[]; contains("acme-staging") | not)
     and all(.additionalArguments[]; contains("certificatesduration") | not)'
   jq -e '
@@ -161,7 +164,7 @@ render() {
     .config.infrastructure.redis="redis:8-alpine" |
     .config.secrets["google-oauth-client-secret"]="/private/google-client-secret" |
     .config.secrets["oauth2-cookie-secret"]="/private/oauth-cookie-secret" |
-    .config.httpsStaging={hostname:"recipes.example.org"}
+    .config.https={hostname:"recipes.example.org"}
   ' values.json > google-https-values.json
   render google-https-values.json
   jq -e '
@@ -188,7 +191,7 @@ render() {
     | yq -o=json '.' | jq -e '
       .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
       and .ports["rest-internal"].expose.default == false
-      and .ports["staging-http"].exposedPort == 8081
+      and .ports["public-http"].exposedPort == 8081
       and .ports.websecure.exposedPort == 8443
       and .persistence.existingClaim == "recipe-db-acme"
       and (.additionalArguments | index("--entrypoints.websecure.http.middlewares=identity-strip@file") != null)

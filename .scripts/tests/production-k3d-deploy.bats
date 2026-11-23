@@ -28,34 +28,39 @@ load production-k3d-setup
   no_google_values
   cp "$VALUES" valid-pi-values.json
   for change in \
-    'del(.httpsStaging)' \
-    '.httpsStaging={}' \
-    '.httpsStaging.hostname="127.0.0.1"' \
-    '.httpsStaging.hostname="bad`host.example.org"' \
-    '.httpsStaging.hostname="-bad.example.org"' \
+    'del(.https)' \
+    '.https={}' \
+    '.https.hostname="127.0.0.1"' \
+    '.https.hostname="bad`host.example.org"' \
+    '.https.hostname="-bad.example.org"' \
     '.origin="https://different.example.org"'; do
     cp valid-pi-values.json "$VALUES"
     set_value "$change"
     run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
-    [[ $output == *"httpsStaging.hostname"* || $output == *"invalid or incomplete production values"* ]]
+    [[ $output == *"https.hostname"* || $output == *"invalid or incomplete production values"* ]]
   done
+  cp valid-pi-values.json "$VALUES"
+  set_value '.httpsStaging=.https | del(.https)'
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+  [ "$status" -ne 0 ]
+  [[ $output == *"httpsStaging is obsolete; use https"* ]]
   for option in acmeEnvironment exposeApplication renewalRehearsal; do
     cp valid-pi-values.json "$VALUES"
-    set_value ".httpsStaging += {\"$option\":\"removed\"}"
+    set_value ".https += {\"$option\":\"removed\"}"
     run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
-    [[ $output == *"httpsStaging.$option is obsolete"* ]]
+    [[ $output == *"https.$option is obsolete"* ]]
   done
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"
 }
 
 @test "local rehearsals reject Pi HTTPS settings before connection" {
-  set_value '.httpsStaging={hostname:"recipes.example.org"}'
+  set_value '.https={hostname:"recipes.example.org"}'
   run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
-  [[ $output == *"httpsStaging is not supported for local targets"* ]]
+  [[ $output == *"https is not supported for local targets"* ]]
   run ! grep -q 'kubectl' "$MOCK_LOG"
   run ! grep -q 'oras' "$MOCK_LOG"
 }
@@ -78,12 +83,12 @@ load production-k3d-setup
   [ "$status" -eq 0 ]
   jq -e '
     [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
-    ($secure | map(.key) | sort) == ["preview-browse","preview-design","preview-graphql",
-      "preview-graphql-bearer","preview-images-edit","preview-images-public",
-      "preview-mcp","preview-pwa","preview-recipes-edit"]
+    ($secure | map(.key) | sort) == ["public-browse","public-design","public-graphql",
+      "public-graphql-bearer","public-images-edit","public-images-public",
+      "public-mcp","public-pwa","public-recipes-edit"]
     and all($secure[]; .value.tls == {certResolver:"letsencrypt",
       domains:[{main:"recipes.example.org"}]})
-    and all(.[]; (.entrypoints | index("staging-http")) == null)
+    and all(.[]; (.entrypoints | index("public-http")) == null)
     and .graphql.entrypoints == ["web"]
     and .["graphql-internal"].entrypoints == ["rest-internal"]
   ' "$MOCK_LOG.routers"
@@ -109,7 +114,7 @@ no_google_values() {
   set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
     .origin="https://recipes.example.org" |
     .storageClass="recipe-db-retained" |
-    .httpsStaging={hostname:"recipes.example.org"} |
+    .https={hostname:"recipes.example.org"} |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email")) |
     del(.runtime.googleOAuthClientId, .volumes.redis, .infrastructure.oauth2Proxy,
@@ -126,7 +131,7 @@ google_https_values() {
     .infrastructure.redis="redis:8.0" |
     .secrets."google-oauth-client-secret"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "google-oauth-client-secret")) |
     .secrets."oauth2-cookie-secret"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "oauth2-cookie-secret")) |
-    .httpsStaging={hostname:"recipes.example.org"}'
+    .https={hostname:"recipes.example.org"}'
   printf '{"anonymous":{"role":"anonymous"},"tokens":[],"googleAccounts":{}}\n' > auth-accounts.json
 }
 
@@ -139,25 +144,25 @@ google_https_values() {
   jq -e '
       . as $routers |
       [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
-      ($secure | map(.key) | sort) == ["preview-browse","preview-design","preview-graphql",
-        "preview-graphql-bearer","preview-graphql-cookie","preview-images-edit",
-        "preview-images-public","preview-mcp","preview-oauth2-public","preview-pwa","preview-recipes-edit"]
+      ($secure | map(.key) | sort) == ["public-browse","public-design","public-graphql",
+        "public-graphql-bearer","public-graphql-cookie","public-images-edit",
+        "public-images-public","public-mcp","public-oauth2-public","public-pwa","public-recipes-edit"]
       and all($secure[]; .value.middlewares[0] == "identity-strip"
         and .value.tls.certResolver == "letsencrypt")
       and all($secure[]; .key as $name |
-        .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
-      and .["preview-graphql"].priority == 100
-      and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
-      and .["preview-graphql-cookie"].priority == 200
-      and .["preview-graphql-cookie"].middlewares == ["identity-strip","oauth2-forward-auth","graphql-ingress"]
-      and .["preview-graphql-bearer"].priority == 300
-      and .["preview-graphql-bearer"].middlewares == ["identity-strip","graphql-ingress"]
-      and .["preview-oauth2-public"].priority == 400
-      and .["preview-oauth2-public"].middlewares == ["identity-strip"]
-      and .["preview-oauth2-public"].rule ==
+        .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("public-"))].rule + ")"))
+      and .["public-graphql"].priority == 100
+      and .["public-graphql"].middlewares == ["identity-strip","graphql-ingress"]
+      and .["public-graphql-cookie"].priority == 200
+      and .["public-graphql-cookie"].middlewares == ["identity-strip","oauth2-forward-auth","graphql-ingress"]
+      and .["public-graphql-bearer"].priority == 300
+      and .["public-graphql-bearer"].middlewares == ["identity-strip","graphql-ingress"]
+      and .["public-oauth2-public"].priority == 400
+      and .["public-oauth2-public"].middlewares == ["identity-strip"]
+      and .["public-oauth2-public"].rule ==
         "Host(`recipes.example.org`) && (PathRegexp(`^/oauth2/(start|callback|sign_in|sign_out)$`))"
       and .["graphql-internal"].entrypoints == ["rest-internal"]
-      and all(.[]; (.entrypoints | index("staging-http")) == null)
+      and all(.[]; (.entrypoints | index("public-http")) == null)
   ' "$MOCK_LOG.routers"
   [[ $output != *"private-oauth-client-value-for-tests"* ]]
   [[ $output != *"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="* ]]
@@ -170,13 +175,13 @@ google_https_values() {
     '.origin="http://recipe-pi.home"' \
     '.origin="https://different.example.org"' \
     '.origin="https://recipes.example.org:8443"' \
-    'del(.httpsStaging)' \
+    'del(.https)' \
     '.runtime.ingressMode="loopback"'; do
     cp valid-google-values.json "$VALUES"
     set_value "$change"
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
-    [[ $output == *"httpsStaging.hostname"* ||
+    [[ $output == *"https.hostname"* ||
       $output == *"invalid or incomplete production values"* ||
       $output == *"runtime.ingressMode is obsolete"* ]]
   done
@@ -248,7 +253,7 @@ google_https_values() {
     printf '%s\n' "$policy" > auth-accounts.json
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -eq 0 ]
-    jq -e '.["preview-mcp"].entrypoints == ["websecure"]' "$MOCK_LOG.routers"
+    jq -e '.["public-mcp"].entrypoints == ["websecure"]' "$MOCK_LOG.routers"
   done
 }
 
@@ -295,32 +300,32 @@ google_https_values() {
   jq -e '
     . as $routers |
     [to_entries[] | select(.value.entrypoints | index("websecure"))] as $secure |
-    ($secure | map(.key) | sort) == ["preview-browse","preview-design","preview-graphql","preview-graphql-bearer","preview-images-edit","preview-images-public","preview-mcp","preview-pwa","preview-recipes-edit"]
+    ($secure | map(.key) | sort) == ["public-browse","public-design","public-graphql","public-graphql-bearer","public-images-edit","public-images-public","public-mcp","public-pwa","public-recipes-edit"]
     and all($secure[]; .value.rule | startswith("Host(`recipes.example.org`) && "))
     and all($secure[]; .value.middlewares[0] == "identity-strip")
     and all($secure[]; .value.tls.certResolver == "letsencrypt")
-    and .["preview-graphql"].middlewares == ["identity-strip","graphql-ingress"]
-    and .["preview-browse"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
-    and .["preview-pwa"].rule == "Host(`recipes.example.org`) && (PathPrefix(`/pwa`))"
+    and .["public-graphql"].middlewares == ["identity-strip","graphql-ingress"]
+    and .["public-browse"].middlewares == ["identity-strip","frontend-compress","browse-unavailable"]
+    and .["public-pwa"].rule == "Host(`recipes.example.org`) && (PathPrefix(`/pwa`))"
     and .["images-public"].entrypoints == ["web"]
     and .["images"].entrypoints == ["rest-internal"]
-    and .["preview-images-public"].service == .["images-public"].service
-    and .["preview-images"] == null
+    and .["public-images-public"].service == .["images-public"].service
+    and .["public-images"] == null
     and .["pwa-internal"].entrypoints == ["rest-internal"]
-    and .["preview-pwa-internal"] == null
+    and .["public-pwa-internal"] == null
     and .["browse-maintenance"].entrypoints == ["web"]
-    and .["preview-browse-maintenance"] == null
+    and .["public-browse-maintenance"] == null
     and all($secure[]; .key as $name |
-      .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("preview-"))].rule + ")"))
-    and .["preview-recipes-edit"].middlewares == ["identity-strip","recipes-edit-strip"]
-    and .["preview-mcp"].service == .mcp.service
-    and .["preview-graphql-bearer"].priority == 300
-    and .["preview-graphql-bearer"].middlewares == ["identity-strip","graphql-ingress"]
+      .value.rule == ("Host(`recipes.example.org`) && (" + $routers[($name | ltrimstr("public-"))].rule + ")"))
+    and .["public-recipes-edit"].middlewares == ["identity-strip","recipes-edit-strip"]
+    and .["public-mcp"].service == .mcp.service
+    and .["public-graphql-bearer"].priority == 300
+    and .["public-graphql-bearer"].middlewares == ["identity-strip","graphql-ingress"]
     and .["graphql-cookie"] == null
     and .["oauth2-public"] == null
     and .graphql.entrypoints == ["web"]
     and .["graphql-internal"].entrypoints == ["rest-internal"]
-    and all(.[]; (.entrypoints | index("staging-http")) == null)
+    and all(.[]; (.entrypoints | index("public-http")) == null)
   ' "$MOCK_LOG.routers"
 }
 
@@ -331,8 +336,8 @@ google_https_values() {
   export MOCK_LAN=true MOCK_HTTPS=true
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
-  jq -e '.["preview-browse"].entrypoints == ["websecure"]
-    and .["preview-mcp"].entrypoints == ["websecure"]' "$MOCK_LOG.routers"
+  jq -e '.["public-browse"].entrypoints == ["websecure"]
+    and .["public-mcp"].entrypoints == ["websecure"]' "$MOCK_LOG.routers"
   set_value '.runtime.readOnly="true"'
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]

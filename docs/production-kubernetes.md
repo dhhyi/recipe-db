@@ -324,13 +324,13 @@ The local protocol smoke requires a private owner bearer-token file whose token 
 
 ### Production HTTPS on the Pi
 
-Every Pi values file requires an HTTPS origin matching the configured hostname. Keep the existing `httpsStaging` key until #397; its only supported setting is `hostname`. The name is retained for that follow-up, not to select a test CA:
+Every Pi values file requires an HTTPS origin matching the configured hostname. The `https` object contains only the hostname:
 
 ```yaml
 origin: https://your-hostname.example.org
 runtime:
   trustedIssuer: https://accounts.google.com
-httpsStaging:
+https:
   hostname: your-hostname.example.org
 secrets:
   acme-account-email: deployment/acme-account-email
@@ -369,7 +369,7 @@ volumes:
 secrets:
   google-oauth-client-secret: deployment/google-oauth-client-secret
   oauth2-cookie-secret: deployment/oauth2-cookie-secret
-httpsStaging:
+https:
   hostname: your-hostname.example.org
 ```
 
@@ -389,7 +389,7 @@ For private ACME recovery, copy `/data/acme-production.json` from the owned PVC 
 
 ### Local HTTP rehearsal
 
-Local rehearsals remain HTTP-only and use target `local` with `deploy/local.yaml`; do not add `httpsStaging` or Pi HTTPS settings to local values. The production configuration validator rejects those settings on local targets. Continue to use the managed local k3d workflows for isolated rehearsals and interactive inspection; Pi application access uses its configured public HTTPS hostname.
+Local rehearsals remain HTTP-only and use target `local` with `deploy/local.yaml`; do not add `https` or Pi HTTPS settings to local values. The production configuration validator rejects those settings on local targets. Continue to use the managed local k3d workflows for isolated rehearsals and interactive inspection; Pi application access uses its configured public HTTPS hostname.
 
 ### Bundled Traefik configuration
 

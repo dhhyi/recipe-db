@@ -721,7 +721,7 @@ YAML
     and .resources == $source[0].resources
     and .timeoutSeconds == $source[0].timeoutSeconds
     and .volumes.redis == null
-    and .piStorage == null and .httpsStaging == null
+    and .piStorage == null and .https == null
     and .runtime.googleOAuthClientId == null
     and .runtime.trustedIssuer == $source[0].runtime.trustedIssuer
     and .infrastructure == $local[0].infrastructure

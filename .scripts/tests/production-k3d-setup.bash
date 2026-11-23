@@ -333,7 +333,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         fi
         jq -n --arg checksum "$(cat "$MOCK_LOG.route-checksum")" \
           --arg image "$(jq -r '.infrastructure.traefik' "$VALUES")" \
-          --argjson https "$(jq 'has("httpsStaging")' "$VALUES")" '{
+          --argjson https "$(jq 'has("https")' "$VALUES")" '{
           spec:{template:{metadata:{annotations:{"recipe-db/routes-checksum":$checksum}},
             spec:{containers:[{name:"traefik",image:$image,
               args:["--providers.file.filename=/etc/recipe-db/routes.yml"],
@@ -1139,7 +1139,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
         allocateLoadBalancerNodePorts:($allocate == "true"),
         externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),
         ports:(if $https == "true" then
-          [{name:"staging-http",port:8081,targetPort:"staging-http",protocol:"TCP"},
+          [{name:"public-http",port:8081,targetPort:"public-http",protocol:"TCP"},
            {name:"websecure",port:8443,targetPort:"websecure",protocol:"TCP"}] +
           (if $private_http == "true" then
             [{name:"web",port:80,targetPort:"web",protocol:"TCP"}] else [] end)
@@ -1207,7 +1207,7 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
       "args":["--providers.file.filename=/etc/recipe-db/routes.yml"],
       "ports":[{"containerPort":3000}],"volumeMounts":[{"mountPath":"/etc/recipe-db"}]}],
       "volumes":[{"name":"recipe-db-routes","secret":{"secretName":"recipe-db-routes"}}]}}}}' |
-      jq --arg checksum "$checksum" --argjson https "$(jq 'has("httpsStaging")' "$VALUES")" '
+      jq --arg checksum "$checksum" --argjson https "$(jq 'has("https")' "$VALUES")" '
         .spec.template.metadata.annotations["recipe-db/routes-checksum"] = $checksum |
         if $https then
           .spec.template.spec.containers[0].args += ["--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)"] |

@@ -15,7 +15,7 @@ rehearsal_write_values() {
       .storageClass="local-path" |
       .infrastructure=$local.infrastructure |
       .runtime=(.runtime | del(.googleOAuthClientId)) |
-      del(.piStorage, .httpsStaging, .volumes.redis) |
+      del(.piStorage, .https, .volumes.redis) |
       .secrets={"auth-accounts.json":$accounts}
     ' > "$json_output"
   yq -P '.' "$json_output" > "$output"

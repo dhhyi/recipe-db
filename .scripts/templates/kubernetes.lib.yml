@@ -6,7 +6,7 @@
 #@ inventory = struct.decode(data.values.release)
 #@ files = struct.decode(data.values.files)
 #@ ns = cfg["namespace"]
-#@ https_staging = cfg.get("httpsStaging")
+#@ https_config = cfg.get("https")
 #@ google_enabled = "googleOAuthClientId" in cfg["runtime"]
 
 #@ def metadata(name, namespace=ns):
@@ -251,17 +251,17 @@
 #@   values = {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
 #@   values["ports"]["rest-internal"]["observability"] = {}
 #@   values["service"] = {"type": "LoadBalancer", "spec": {"allocateLoadBalancerNodePorts": False}}
-#@   if https_staging != None:
+#@   if https_config != None:
 #@     ca = "https://acme-v02.api.letsencrypt.org/directory"
 #@     values["ports"]["web"] = {"port": 8000, "expose": {"default": False}}
-#@     values["ports"]["staging-http"] = {"port": 8001, "expose": {"default": True}, "exposedPort": 8081, "protocol": "TCP", "observability": {}}
+#@     values["ports"]["public-http"] = {"port": 8001, "expose": {"default": True}, "exposedPort": 8081, "protocol": "TCP", "observability": {}}
 #@     values["ports"]["websecure"] = {"port": 8443, "expose": {"default": True}, "exposedPort": 8443, "protocol": "TCP"}
 #@     values["persistence"] = {"enabled": True, "existingClaim": "recipe-db-acme", "path": "/data"}
 #@     values["podSecurityContext"] = {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True, "fsGroup": 65532}
 #@     values["updateStrategy"] = {"type": "Recreate"}
 #@     values["env"] = [{"name": "ACME_ACCOUNT_EMAIL", "valueFrom": {"secretKeyRef": {"name": "recipe-db-acme-contact", "key": "email"}}}]
 #@     values["deployment"]["initContainers"] = [{"name": "acme-permissions", "image": cfg["infrastructure"]["traefik"], "command": ["sh", "-ec", "umask 077; touch /data/acme-production.json; chmod 600 /data/acme-production.json"], "volumeMounts": [{"name": "data", "mountPath": "/data"}], "securityContext": {"runAsUser": 65532, "runAsGroup": 65532, "runAsNonRoot": True}}]
-#@     values["additionalArguments"].extend(["--entrypoints.staging-http.http.redirections.entrypoint.to=:443", "--entrypoints.staging-http.http.redirections.entrypoint.scheme=https", "--entrypoints.websecure.http.middlewares=identity-strip@file", "--entrypoints.websecure.http.aliasHeadersStrategy=delete", "--certificatesresolvers.letsencrypt.acme.caserver=" + ca, "--certificatesresolvers.letsencrypt.acme.storage=/data/acme-production.json", "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http"])
+#@     values["additionalArguments"].extend(["--entrypoints.public-http.http.redirections.entrypoint.to=:443", "--entrypoints.public-http.http.redirections.entrypoint.scheme=https", "--entrypoints.websecure.http.middlewares=identity-strip@file", "--entrypoints.websecure.http.aliasHeadersStrategy=delete", "--certificatesresolvers.letsencrypt.acme.caserver=" + ca, "--certificatesresolvers.letsencrypt.acme.storage=/data/acme-production.json", "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=public-http"])
 #@     values["additionalArguments"].append("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)")
 #@   end
 #@   return values
