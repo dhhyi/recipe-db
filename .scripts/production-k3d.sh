@@ -395,29 +395,21 @@ routes() {
       end
     | if $config[0].httpsStaging then
         if all(.http.routers[]; all(.entrypoints[]; . == "web" or . == "rest-internal")) then .
-        else error("existing routes must not use certificate-only staging entrypoints") end
+        else error("existing routes must use supported application or internal entrypoints") end
         | ("Host(`" + $config[0].httpsStaging.hostname + "`)") as $host
         | {certResolver:"letsencrypt",domains:[{main:$config[0].httpsStaging.hostname}]} as $tls
-        | if $config[0].httpsStaging.exposeApplication == true then
-            def preview($name):
-              .http.routers[$name] as $router |
-              if $router == null or $router.service == null then
-                error("missing required preview router: " + $name)
-              else
-                .http.routers["preview-" + $name] = ($router + {
-                  rule:($host + " && (" + $router.rule + ")"),
-                  entrypoints:["websecure"], tls:$tls,
-                  middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
-              end;
-            reduce $webRouters[] as $name (. ; preview($name))
-            | if $googleEnabled then preview("oauth2-public") else . end
-          else
-            .http.routers["https-staging"] = {
-              rule:($host + " && Path(`/`)"), entrypoints:["websecure"],
-              service:"https-staging", middlewares:["identity-strip"], tls:$tls}
-            | .http.services["https-staging"] = {
-              loadBalancer:{servers:[{url:("http://https-staging." + $ns + ".svc.cluster.local:80")}]}}
-          end
+        | def preview($name):
+            .http.routers[$name] as $router |
+            if $router == null or $router.service == null then
+              error("missing required application router: " + $name)
+            else
+              .http.routers["preview-" + $name] = ($router + {
+                rule:($host + " && (" + $router.rule + ")"),
+                entrypoints:["websecure"], tls:$tls,
+                middlewares:(["identity-strip"] + [($router.middlewares // [])[] | select(. != "identity-strip")])})
+            end;
+          reduce $webRouters[] as $name (. ; preview($name))
+          | if $googleEnabled then preview("oauth2-public") else . end
       else . end
   ' "$work/routes-base.json" > "$work/routes.yml"
 }

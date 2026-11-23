@@ -17,7 +17,19 @@ production_config() {
   if jq -e '(.runtime | type == "object" and has("authMode"))' "$work/config.json" > /dev/null 2>&1; then
     production_fail "runtime.authMode is obsolete; omit it and configure Google OAuth with a client ID and both OAuth secret paths"
   fi
-  local google_fields
+  local google_fields removed_https_option
+  for removed_https_option in acmeEnvironment exposeApplication renewalRehearsal; do
+    if jq -e --arg key "$removed_https_option" \
+      '.httpsStaging | type == "object" and has($key)' "$work/config.json" > /dev/null 2>&1; then
+      production_fail "httpsStaging.$removed_https_option is obsolete"
+    fi
+  done
+  if jq -e '.target == "pi" and (has("httpsStaging") | not)' "$work/config.json" > /dev/null; then
+    production_fail "Pi values require httpsStaging.hostname"
+  fi
+  if jq -e '.target == "local" and has("httpsStaging")' "$work/config.json" > /dev/null; then
+    production_fail "httpsStaging is not supported for local targets"
+  fi
   google_fields=$(jq -r '
     ((.runtime | type == "object" and has("googleOAuthClientId")) or
      (.secrets | type == "object" and
@@ -121,28 +133,16 @@ production_config() {
     and (if $googleEnabled and .target == "pi" then
       has("httpsStaging") and .runtime.ingressMode == "private-lan"
       and .origin == ("https://" + .httpsStaging.hostname)
-      and .httpsStaging.acmeEnvironment == "production"
-      and .httpsStaging.exposeApplication == true
       else true end)
     and (if has("httpsStaging") then
       .target == "pi"
       and .runtime.ingressMode == "private-lan" and has("piStorage")
-      and (.httpsStaging | objectkeys(["hostname","acmeEnvironment"] +
-        (if has("exposeApplication") then ["exposeApplication"] else [] end) +
-        (if has("renewalRehearsal") then ["renewalRehearsal"] else [] end))
+      and .origin == ("https://" + .httpsStaging.hostname)
+      and (.httpsStaging | objectkeys(["hostname"])
         and (.hostname | type == "string" and length <= 253
           and test("^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)+$")
           and (split(".") | all(.[]; length <= 63))
-          and (test("^[0-9.]+$") | not))
-        and (.acmeEnvironment == "staging" or .acmeEnvironment == "production")
-        and (if has("exposeApplication") then
-          (.exposeApplication | type == "boolean") and
-          (if .exposeApplication then .acmeEnvironment == "production" else true end)
-          else true end)
-        and (if has("renewalRehearsal") then
-          (.renewalRehearsal | type == "boolean") and
-          (if .renewalRehearsal then .acmeEnvironment == "staging" else true end)
-          else true end))
+          and (test("^[0-9.]+$") | not)))
       else true end)
     and (if has("httpsStaging") then .secrets | has("acme-account-email") else true end)
     and (.secrets |

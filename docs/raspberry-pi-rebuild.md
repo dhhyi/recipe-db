@@ -101,7 +101,7 @@ Update `pi-values.yaml`:
 
 - Set `piStorage.expectedRootUuid` to the UUID recorded above.
 - Update the same UUID in `backup/backup-values.yaml`.
-- Set `origin` to the deployment's URL.
+- Set `origin` to the deployment's `https://` URL and set `httpsStaging.hostname` to the same hostname without the scheme.
 - Set private input references as listed in the [configuration inventory](production-configuration.md), preferably relative to `~/.config/recipe-db/`. Backup provisioning copies those source files into `/etc/recipe-db/application-inputs/` and writes those absolute Pi paths into installed values.
 - Keep the template's data path, images and resource defaults unless intentionally changing them.
 
@@ -170,7 +170,7 @@ Set the paths below to your backup manifest and archive. Use a new directory for
 
 Restore blocks application ingress until data and consumer verification succeeds. Do not bypass this barrier or use ordinary deployment to reopen an incomplete restore. HTTPS certificate-challenge access is separate from application access; router forwarding need not be disabled solely to run the guarded restore.
 
-Traefik's Let's Encrypt HTTPS certificates and ACME account keys are stored separately from application backups. Preserve that state separately or allow certificate reissuance; see [HTTPS certificate operations and recovery](production-kubernetes.md#certificate-only-https-staging-on-the-pi).
+Traefik's Let's Encrypt HTTPS certificate and ACME account key are stored separately from application backups. Preserve that state separately or allow certificate reissuance; see [HTTPS certificate operations and recovery](production-kubernetes.md#https-certificate-operations-and-recovery).
 
 Replace `MANIFEST` and `ARCHIVE` with the matching files obtained through the [recovery guide](production-kubernetes.md#fresh-deployment-restore). Leave the remaining lines unchanged.
 

@@ -90,7 +90,6 @@ deploy:
     - .scripts/tests/production-k3d-deploy.bats
     - .scripts/tests/production-smoke.bats
     - .scripts/tests/production-storage.bats
-    - .scripts/tests/public-https.bats
   suite_inputs:
     .scripts/tests/kubernetes-templates.bats:
       - .scripts/templates/kubernetes*.yml
@@ -147,10 +146,6 @@ deploy:
       - .scripts/lib/production-config.sh
       - .scripts/lib/production-storage.sh
       - deploy/pi.yaml
-    .scripts/tests/public-https.bats:
-      - .scripts/check-public-https.sh
-      - deploy/pi.yaml
-      - deploy/local.yaml
 backup:
   tests:
     - .scripts/tests/retrieve-verified-backup.bats

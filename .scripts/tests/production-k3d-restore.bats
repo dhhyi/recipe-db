@@ -75,7 +75,7 @@ load production-k3d-restore-setup
     .timeoutSeconds=8 |
     .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
     .origin="https://recipes.example.org" | .runtime.ingressMode="private-lan" |
-    .httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true} |
+    .httpsStaging={hostname:"recipes.example.org"} |
     .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email"))'
   run_restore
   printf '%s\n' "$output"
