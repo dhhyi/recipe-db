@@ -508,6 +508,22 @@ EOF
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
+@test "uploader continues backup-mode entry through verified read-only restoration" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance" holder
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -er .backupId "$snapshot/backup-state.json")
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot" --upload-pending
+  [ "$status" -eq 0 ]
+  jq -e '.status == "backup-mode" and .phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
+  jq -n --arg id "$holder" '{backupId:$id,status:"verified-upload"}' > "$FIXTURE_ROOT/backups/status.json"
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "captured" and .phase == "captured" and .maintenanceRestored == true' \
+    "$snapshot/backup-state.json" > /dev/null
+}
+
 @test "pinned tooling captures maintenance using the original release sources and existing guards" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/pinned-capture" old_revision holder

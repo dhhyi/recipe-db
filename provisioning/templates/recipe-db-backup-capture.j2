@@ -75,7 +75,7 @@ case "$action" in
       exit 1
     }
     exec /usr/local/bin/mise exec -- bash /opt/recipe-db/.scripts/production-k3d.sh \
-      --release-sources-from-git backup-capture /etc/recipe-db/backup-values.yaml "$path"
+      --release-sources-from-git backup-capture /etc/recipe-db/backup-values.yaml "$path" --upload-pending
     ;;
   maintenance-restore)
     [[ $path == /var/lib/recipe-db-backup/maintenance && -d $path && ! -L $path ]] || {

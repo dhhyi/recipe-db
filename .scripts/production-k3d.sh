@@ -1449,7 +1449,12 @@ backup_validate_legacy_receipt() {
 }
 
 backup_capture_maintenance() {
-  local current release artifact legacy_state=false legacy_receipt=${2:-} readonly_maintenance=false
+  local current release artifact legacy_state=false legacy_receipt=${2:-}
+  local readonly_maintenance=false pending_upload=false
+  if [[ $legacy_receipt == --upload-pending ]]; then
+    pending_upload=true
+    legacy_receipt=
+  fi
   snapshot=$1
   [[ $snapshot = /* && -d $snapshot && $(realpath -e "$snapshot") = "$snapshot" &&
   -f $snapshot/backup-state.json && ! -L $snapshot/backup-state.json ]] \
@@ -1476,6 +1481,7 @@ backup_capture_maintenance() {
     || production_fail "maintenance state is not ready for its first capture"
   [[ $(jq -r '.status' "$snapshot/backup-state.json") != maintenance-mode ]] \
     || readonly_maintenance=true
+  if $readonly_maintenance; then pending_upload=true; fi
   if $legacy_state; then
     [[ -n $legacy_receipt ]] || production_fail "legacy capture requires a pre-maintenance identity receipt"
   else
@@ -1543,13 +1549,13 @@ backup_capture_maintenance() {
   fi
   backup_scale_zero || return 1
   backup_state_write backup-mode writers-stopped || return 1
-  if $readonly_maintenance; then
+  if $pending_upload; then
     backup_capture pending || return 1
   else
     backup_capture || return 1
   fi
   backup_write_manifest || return 1
-  if $readonly_maintenance; then
+  if $pending_upload; then
     backup_state_write backup-mode upload-pending || return 1
     cluster_operation_lock_update upload-pending || return 1
   else
