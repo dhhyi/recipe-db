@@ -476,6 +476,7 @@ YAML
 
 @test "rejects a retrieval receipt for a different maintenance operation before creating results" {
   jq '.maintenanceOperation.backupId="backup-999-999"' "$RETRIEVAL_RECEIPT" > "$RETRIEVAL_RECEIPT.next"
+  chmod 600 "$RETRIEVAL_RECEIPT.next"
   mv "$RETRIEVAL_RECEIPT.next" "$RETRIEVAL_RECEIPT"
   run bash .scripts/production-upgrade-rehearsal-k3d.sh "$MANIFEST" "$ARCHIVE" \
     "$RETRIEVAL_RECEIPT" "$CANDIDATE_RELEASE" "$RESULT_DIRECTORY"
