@@ -16,20 +16,37 @@ restore_ingress_values() {
         .service.spec.allocateLoadBalancerNodePorts = false | to_yaml)' "$work/rendered-base.yml"
 }
 
+wait_ingress_service_convergence() {
+  local require_no_nodeports=$1 deadline=$((SECONDS + timeout))
+  while ((SECONDS < deadline)); do
+    if kube --namespace kube-system get service traefik -o json \
+      > "$work/traefik-service.json" 2> /dev/null \
+      && jq -e --slurpfile config "$work/config.json" \
+        --argjson requireNoNodePorts "$require_no_nodeports" '
+        .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
+        ((.spec.externalIPs // []) | length == 0) and
+        ([.spec.ports[] | {name,port,targetPort,protocol}] | sort_by(.port)) ==
+          (if $config[0].httpsStaging then
+            [{name:"staging-http",port:8081,targetPort:"staging-http",protocol:"TCP"},
+             {name:"websecure",port:8443,targetPort:"websecure",protocol:"TCP"}]
+          else [{name:"web",port:80,targetPort:"web",protocol:"TCP"}] end) and
+        (.metadata.resourceVersion | type == "string" and length > 0) and
+        (if $requireNoNodePorts then all(.spec.ports[]; .nodePort == null) else true end)
+      ' "$work/traefik-service.json" > /dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 restore_remove_ingress_nodeports() {
-  kube --namespace kube-system get service traefik -o json > "$work/restore-ingress-service.json"
-  jq -e --slurpfile config "$work/config.json" '
-    .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
-    ((.spec.externalIPs // []) | length == 0) and
-    ([.spec.ports[].port] | sort) ==
-      (if $config[0].httpsStaging then [80,8081,8443] else [80] end) and
-    (.metadata.resourceVersion | type == "string" and length > 0)' \
-    "$work/restore-ingress-service.json" > /dev/null \
+  wait_ingress_service_convergence false \
     || production_fail "restore ingress is not a safe LoadBalancer"
-  if jq -e 'any(.spec.ports[]; .nodePort != null)' "$work/restore-ingress-service.json" > /dev/null; then
+  if jq -e 'any(.spec.ports[]; .nodePort != null)' "$work/traefik-service.json" > /dev/null; then
     jq '{metadata:{resourceVersion:.metadata.resourceVersion},
       spec:{ports:[.spec.ports[] | select(.nodePort != null) | {port, nodePort:null}]}}' \
-      "$work/restore-ingress-service.json" > "$work/restore-ingress-patch.json"
+      "$work/traefik-service.json" > "$work/restore-ingress-patch.json"
     kube --namespace kube-system patch service traefik --type=strategic \
       --patch-file "$work/restore-ingress-patch.json" > /dev/null \
       || production_fail "restore could not remove allocated ingress NodePorts"

@@ -89,9 +89,18 @@ load production-k3d-setup
   ' "$MOCK_LOG.routers"
   # A stale private-only Service must not be reported as a successful HTTPS rollout.
   export MOCK_HTTPS=false
+  set_value '.timeoutSeconds=1'
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
   [[ $output == *"requested exposure without NodePorts"* ]]
+}
+
+@test "deployment waits for Traefik Service convergence before rejecting ingress" {
+  no_google_values
+  export MOCK_SERVICE_TRANSIENT=true
+  run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$MOCK_LOG.service-check-count")" -ge 3 ]
 }
 
 no_google_values() {
@@ -200,14 +209,26 @@ google_https_values() {
   run ! grep -q 'oras' "$MOCK_LOG"
 }
 
-@test "Google HTTPS rejects NodePorts and missing HTTPS ports on the actual LoadBalancer" {
+@test "Google HTTPS requires only challenge and secure ports on the actual LoadBalancer" {
   google_https_values
+  set_value '.timeoutSeconds=1'
   export MOCK_LAN=true
-  for combination in nodeport missing-https; do
+  for combination in nodeport missing-https private-http wrong-target wrong-protocol; do
     if [[ $combination = nodeport ]]; then
-      export MOCK_HTTPS=true MOCK_NODEPORT=true
+      export MOCK_HTTPS=true MOCK_NODEPORT=true MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
+    elif [[ $combination = private-http ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=true
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
+    elif [[ $combination = wrong-target ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=true MOCK_PROTOCOL_DRIFT=false
+    elif [[ $combination = wrong-protocol ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=true
     else
-      export MOCK_HTTPS=false MOCK_NODEPORT=false
+      export MOCK_HTTPS=false MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
     fi
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
@@ -396,6 +417,7 @@ legacy_pi_claims() {
 @test "local loopback deploy requires a safe LoadBalancer and managed loopback bindings" {
   run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
   [ "$status" -eq 0 ]
+  set_value '.timeoutSeconds=1'
   for fault in type nodeport allocate external; do
     export MOCK_SERVICE_TYPE=auto MOCK_NODEPORT=false MOCK_ALLOCATE_NODEPORT=false MOCK_EXTERNAL_IP=false
     case "$fault" in

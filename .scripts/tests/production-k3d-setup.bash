@@ -29,7 +29,7 @@ setup() {
   export MOCK_INCOMPLETE_INDEX=false
   export MOCK_STALE_ROUTES=false
   export MOCK_LAN=false MOCK_NODEPORT=false MOCK_EXTERNAL_IP=false MOCK_SERVICE_TYPE=auto MOCK_ALLOCATE_NODEPORT=false
-  export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false
+  export MOCK_HTTPS=false MOCK_FOREIGN_ACME=false MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
   export MOCK_FOREIGN_ACME_CONTACT=false
   export MOCK_BACKUP=false MOCK_RELEASE_LIFECYCLE=false MOCK_CLEANUP_FAIL=false MOCK_RECOVERY_FAIL=false MOCK_COPY_FAIL=false
   export MOCK_MIGRATIONS=false
@@ -1118,28 +1118,40 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   fi
   case "$*" in
   *"get service traefik -o json"*)
-    if [[ ${MOCK_SERVICE_DRIFT:-false} == true ]]; then
+    if [[ ${MOCK_SERVICE_DRIFT:-false} == true || ${MOCK_SERVICE_TRANSIENT:-false} == true ]]; then
       count=$(cat "$MOCK_LOG.service-check-count" 2> /dev/null || echo 0)
       count=$((count + 1))
       echo "$count" > "$MOCK_LOG.service-check-count"
-      if ((count >= 3)); then
+      if [[ ${MOCK_SERVICE_DRIFT:-false} == true ]] && ((count >= 3)); then
         MOCK_EXTERNAL_IP=true
+      elif [[ ${MOCK_SERVICE_TRANSIENT:-false} == true ]]; then
+        if ((count < 3)); then MOCK_EXTERNAL_IP=true; else MOCK_EXTERNAL_IP=false; fi
       fi
     fi
     [[ ! -e $MOCK_LOG.ingress-nodeports-removed ]] || MOCK_NODEPORT=false
     jq -n --arg lan "$MOCK_LAN" --arg pi "${MOCK_PI:-false}" --arg type "$MOCK_SERVICE_TYPE" \
       --arg nodeport "$MOCK_NODEPORT" --arg allocate "$MOCK_ALLOCATE_NODEPORT" \
-      --arg external "$MOCK_EXTERNAL_IP" --arg https "$MOCK_HTTPS" '
+      --arg external "$MOCK_EXTERNAL_IP" --arg https "$MOCK_HTTPS" \
+      --arg private_http "${MOCK_PRIVATE_HTTP:-false}" \
+      --arg target_drift "$MOCK_TARGET_DRIFT" --arg protocol_drift "$MOCK_PROTOCOL_DRIFT" '
       {metadata:{resourceVersion:"42"},spec:{type:(if $type != "auto" then $type
           elif $lan == "true" or $pi != "true" then "LoadBalancer" else "ClusterIP" end),
         allocateLoadBalancerNodePorts:($allocate == "true"),
-        externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),ports:[{port:80} +
-          (if $nodeport == "true" then {nodePort:30080} else {} end)] +
-          (if $https == "true" then [{port:8081},{port:8443}] else [] end)}}' ;;
+        externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),
+        ports:(if $https == "true" then
+          [{name:"staging-http",port:8081,targetPort:"staging-http",protocol:"TCP"},
+           {name:"websecure",port:8443,targetPort:"websecure",protocol:"TCP"}] +
+          (if $private_http == "true" then
+            [{name:"web",port:80,targetPort:"web",protocol:"TCP"}] else [] end)
+          else [{name:"web",port:80,targetPort:"web",protocol:"TCP"}] end)}} |
+      if $target_drift == "true" then .spec.ports[0].targetPort = "rest-internal" else . end |
+      if $protocol_drift == "true" then .spec.ports[0].protocol = "UDP" else . end |
+      if $nodeport == "true" then .spec.ports |= map(. + {nodePort:30080}) else . end' ;;
   *"patch service traefik --type=strategic --patch-file "*)
     [[ ${MOCK_INGRESS_PATCH_FAIL:-false} != true ]] || exit 1
-    jq -e '.metadata.resourceVersion == "42" and
-      .spec.ports == [{port:80,nodePort:null}]' "${*: -1}" > /dev/null || exit 1
+    jq -e --arg https "$MOCK_HTTPS" '.metadata.resourceVersion == "42" and
+      ([.spec.ports[].port] | sort) == (if $https == "true" then [8081,8443] else [80] end)
+      and all(.spec.ports[]; .nodePort == null)' "${*: -1}" > /dev/null || exit 1
     touch "$MOCK_LOG.ingress-nodeports-removed" ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)

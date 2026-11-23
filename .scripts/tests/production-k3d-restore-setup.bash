@@ -116,6 +116,17 @@ EOF
   chmod +x bin/curl
 }
 
+pi_https_restore_values() {
+  export MOCK_PI=true MOCK_LAN=true MOCK_HTTPS=true
+  set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
+    .storageClass="recipe-db-retained" |
+    .timeoutSeconds=8 |
+    .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
+    .origin="https://recipes.example.org" |
+    .httpsStaging={hostname:"recipes.example.org"} |
+    .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email"))'
+}
+
 run_restore() {
   run bash .scripts/production-k3d.sh restore "$VALUES" "$RESTORE_MANIFEST" \
     "$RESTORE_ARCHIVE" "$RESTORE_ID" "$RESTORE_STATE" "RESTORE-$RESTORE_ID"
