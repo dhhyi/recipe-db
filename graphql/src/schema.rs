@@ -158,11 +158,29 @@ mod tests {
     fn availability_fields_are_non_null() {
         let sdl = build_schema(RuntimeMode::Testing, None).sdl();
         for field in [
+            "maintenance: Boolean!",
             "onlineServices: [String!]!",
             "isServiceOnline(name: String!): Boolean!",
             "allServicesOnline(names: [String!]!): Boolean!",
         ] {
             assert!(sdl.contains(field), "schema is missing {field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn maintenance_query_is_public_and_uses_each_requests_mode() {
+        let schema = build_schema(RuntimeMode::Production, None);
+        for (mode, expected) in [
+            (RuntimeMode::Production, false),
+            (RuntimeMode::Testing, false),
+            (RuntimeMode::Backup, false),
+            (RuntimeMode::Maintenance, true),
+        ] {
+            let response = schema
+                .execute(async_graphql::Request::new("{ maintenance }").data(mode))
+                .await;
+            assert!(response.errors.is_empty(), "{response:?}");
+            assert_eq!(response.data.into_json().unwrap()["maintenance"], expected);
         }
     }
 

@@ -1,15 +1,16 @@
 use async_graphql::http::GraphiQLSource;
 use async_graphql::ErrorExtensions;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Html;
 use axum::response::Response;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
+use futures::{Stream, StreamExt};
 use subtle::ConstantTimeEq;
 
 pub mod auth;
@@ -53,9 +54,11 @@ fn test_context(role: &str) -> auth::RequestContext {
 struct GraphQLState {
     schema: schema::ApiSchema,
     auth_policy: auth::AuthPolicy,
+    mode: mode::RuntimeMode,
 }
 
 const INGRESS_HEADER: &str = "x-internal-ingress-token";
+const MAX_MULTIPART_OPERATIONS_SIZE: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct IngressSecret(String);
@@ -114,6 +117,243 @@ async fn backup_mode_barrier(
     next.run(request).await
 }
 
+async fn maintenance_multipart_barrier(
+    State(mode): State<mode::RuntimeMode>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    if mode != mode::RuntimeMode::Maintenance {
+        return next.run(request).await;
+    }
+
+    let Some(boundary) = request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .and_then(multipart_boundary)
+    else {
+        return next.run(request).await;
+    };
+
+    let body = std::mem::replace(request.body_mut(), Body::empty());
+    let mut stream = body.into_data_stream();
+    let mut prefix = Vec::new();
+    match multipart_operation_is_mutation(&mut stream, &mut prefix, &boundary).await {
+        Some(true) => {
+            let response: GraphQLResponse =
+                async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
+            return axum::response::IntoResponse::into_response(response);
+        }
+        None => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Some(false) => {}
+    }
+
+    *request.body_mut() = Body::from_stream(
+        futures::stream::iter([Ok::<_, axum::Error>(Bytes::from(prefix))]).chain(stream),
+    );
+    next.run(request).await
+}
+
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    let media_type = content_type.split(';').next()?.trim();
+    if !media_type
+        .split('/')
+        .next()?
+        .eq_ignore_ascii_case("multipart")
+    {
+        return None;
+    }
+    content_type.split(';').skip(1).find_map(|parameter| {
+        let (name, value) = parameter.trim().split_once('=')?;
+        name.trim()
+            .eq_ignore_ascii_case("boundary")
+            .then(|| value.trim().trim_matches('"').to_owned())
+    })
+}
+
+async fn multipart_operation_is_mutation(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+    boundary: &str,
+) -> Option<bool> {
+    let first_boundary = format!("--{boundary}\r\n");
+    let Some(first_boundary_offset) =
+        read_multipart_until(stream, prefix, first_boundary.as_bytes(), 0)
+            .await
+            .ok()?
+    else {
+        return Some(true);
+    };
+    if first_boundary_offset != 0 {
+        return Some(true);
+    }
+
+    let delimiter = format!("\r\n--{boundary}");
+    let mut header_start = first_boundary.len();
+    let mut is_operations_part = true;
+    loop {
+        let Some(header_end) = read_multipart_until(stream, prefix, b"\r\n\r\n", header_start)
+            .await
+            .ok()?
+        else {
+            return Some(true);
+        };
+        let Some((name, has_filename)) =
+            multipart_part_disposition(&prefix[header_start..header_end])
+        else {
+            return Some(true);
+        };
+        if (is_operations_part && name != "operations")
+            || (!is_operations_part && name == "operations")
+        {
+            return Some(true);
+        }
+        if !is_operations_part && name != "map" && has_filename {
+            return Some(false);
+        }
+
+        let body_start = header_end + 4;
+        let Some(body_end) =
+            read_multipart_part_end(stream, prefix, body_start, delimiter.as_bytes())
+                .await
+                .ok()?
+        else {
+            return Some(true);
+        };
+        if is_operations_part
+            && serde_json::from_slice::<serde_json::Value>(&prefix[body_start..body_end])
+                .is_ok_and(|operations| json_operations_contain_mutation(&operations))
+        {
+            return Some(true);
+        }
+
+        let suffix_start = body_end + delimiter.len();
+        match prefix.get(suffix_start..suffix_start + 2) {
+            Some(b"--") => return Some(false),
+            Some(b"\r\n") => {
+                header_start = suffix_start + 2;
+                is_operations_part = false;
+            }
+            _ => return Some(true),
+        }
+    }
+}
+
+fn multipart_part_disposition(headers: &[u8]) -> Option<(String, bool)> {
+    let headers = std::str::from_utf8(headers).ok()?;
+    let disposition = headers.split("\r\n").find_map(|header| {
+        let (name, value) = header.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("content-disposition")
+            .then_some(value.trim())
+    })?;
+    let mut parameters = disposition.split(';');
+    if !parameters.next()?.trim().eq_ignore_ascii_case("form-data") {
+        return None;
+    }
+
+    let mut name = None;
+    let mut has_filename = false;
+    for parameter in parameters {
+        let (key, value) = parameter.trim().split_once('=')?;
+        let key = key.trim();
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(value);
+        if key.eq_ignore_ascii_case("name") {
+            if name.replace(value.to_owned()).is_some() {
+                return None;
+            }
+        } else if key.eq_ignore_ascii_case("filename") {
+            has_filename = true;
+        }
+    }
+    Some((name?, has_filename))
+}
+
+async fn read_multipart_until(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+    delimiter: &[u8],
+    start: usize,
+) -> Result<Option<usize>, ()> {
+    loop {
+        if let Some(position) = find_subslice(&prefix[start..], delimiter) {
+            return Ok(Some(start + position));
+        }
+        if prefix.len().saturating_sub(start) > 16 * 1024 {
+            return Ok(None);
+        }
+        if !read_multipart_chunk(stream, prefix).await? {
+            return Ok(None);
+        }
+    }
+}
+
+async fn read_multipart_part_end(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+    body_start: usize,
+    delimiter: &[u8],
+) -> Result<Option<usize>, ()> {
+    loop {
+        if let Some(position) = find_subslice(&prefix[body_start..], delimiter) {
+            let body_end = body_start + position;
+            let suffix_start = body_end + delimiter.len();
+            if prefix
+                .get(suffix_start..suffix_start + 2)
+                .is_some_and(|suffix| suffix == b"\r\n" || suffix == b"--")
+            {
+                return Ok(Some(body_end));
+            }
+        }
+        if !read_multipart_chunk(stream, prefix).await? {
+            return Ok(None);
+        }
+    }
+}
+
+async fn read_multipart_chunk(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+) -> Result<bool, ()> {
+    match stream.next().await {
+        Some(Ok(chunk)) => {
+            if prefix.len().saturating_add(chunk.len()) > MAX_MULTIPART_OPERATIONS_SIZE {
+                return Err(());
+            }
+            prefix.extend_from_slice(&chunk);
+            Ok(true)
+        }
+        Some(Err(_)) | None => Ok(false),
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn json_operations_contain_mutation(operations: &serde_json::Value) -> bool {
+    match operations {
+        serde_json::Value::Array(requests) => requests.iter().any(json_request_is_mutation),
+        request => json_request_is_mutation(request),
+    }
+}
+
+fn json_request_is_mutation(request: &serde_json::Value) -> bool {
+    let Some(query) = request.get("query").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let operation_name = request
+        .get("operationName")
+        .and_then(serde_json::Value::as_str);
+    selected_operation_is_mutation(query, operation_name)
+}
+
 async fn graphql(
     State(state): State<GraphQLState>,
     headers: HeaderMap,
@@ -123,12 +363,43 @@ async fn graphql(
     execute_graphql(state, headers, method, request.into_inner()).await
 }
 
+fn graphql_router(
+    route: axum::routing::MethodRouter<GraphQLState>,
+    runtime_mode: mode::RuntimeMode,
+    graphql_state: GraphQLState,
+    ingress_secret: Option<IngressSecret>,
+) -> Router {
+    let graphql_app = Router::new()
+        .route("/graphql", route)
+        .route_layer(middleware::from_fn_with_state(
+            runtime_mode,
+            maintenance_multipart_barrier,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            runtime_mode,
+            backup_mode_barrier,
+        ));
+    if let Some(secret) = ingress_secret {
+        graphql_app
+            .route_layer(middleware::from_fn_with_state(
+                secret,
+                trusted_graphql_ingress,
+            ))
+            .with_state(graphql_state)
+    } else {
+        graphql_app.with_state(graphql_state)
+    }
+}
+
 async fn execute_graphql(
     state: GraphQLState,
     headers: HeaderMap,
     method: Method,
     request: async_graphql::Request,
 ) -> GraphQLResponse {
+    if state.mode == mode::RuntimeMode::Maintenance && request_selects_mutation(&request) {
+        return async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
+    }
     let context = match state.auth_policy.request_context(&headers) {
         Ok(context) => context,
         Err(error) => {
@@ -146,7 +417,11 @@ async fn execute_graphql(
     if let Some(error) = mutation_request_error(&headers, method, &request) {
         return async_graphql::Response::from_errors(vec![error]).into();
     }
-    state.schema.execute(request.data(context)).await.into()
+    state
+        .schema
+        .execute(request.data(context).data(state.mode))
+        .await
+        .into()
 }
 
 async fn projection_graphql(
@@ -192,11 +467,7 @@ fn mutation_request_error(
     method: Method,
     request: &async_graphql::Request,
 ) -> Option<async_graphql::ServerError> {
-    let document = async_graphql::parser::parse_query(&request.query).ok()?;
-    let has_mutation = document.operations.iter().any(|(_, operation)| {
-        operation.node.ty == async_graphql::parser::types::OperationType::Mutation
-    });
-    if !has_mutation {
+    if !request_contains_mutation(request) {
         return None;
     }
     if method == Method::GET {
@@ -217,6 +488,59 @@ fn mutation_request_error(
         return Some(csrf_error(403, "csrf-forbidden"));
     }
     None
+}
+
+fn request_contains_mutation(request: &async_graphql::Request) -> bool {
+    async_graphql::parser::parse_query(&request.query)
+        .ok()
+        .is_some_and(|document| {
+            document.operations.iter().any(|(_, operation)| {
+                operation.node.ty == async_graphql::parser::types::OperationType::Mutation
+            })
+        })
+}
+
+fn request_selects_mutation(request: &async_graphql::Request) -> bool {
+    selected_operation_is_mutation(&request.query, request.operation_name.as_deref())
+}
+
+fn selected_operation_is_mutation(query: &str, operation_name: Option<&str>) -> bool {
+    let Ok(document) = async_graphql::parser::parse_query(query) else {
+        return false;
+    };
+    let mut operations = document.operations.iter();
+    let first_operation = operations.next();
+    let operation = match operation_name {
+        Some(name) => document
+            .operations
+            .iter()
+            .find_map(|(operation_name, operation)| {
+                operation_name
+                    .is_some_and(|operation_name| operation_name.as_str() == name)
+                    .then_some(operation)
+            }),
+        None if operations.next().is_none() => first_operation.map(|(_, operation)| operation),
+        None => None,
+    };
+    operation.is_some_and(|operation| {
+        operation.node.ty == async_graphql::parser::types::OperationType::Mutation
+    })
+}
+
+fn maintenance_mode_error() -> async_graphql::ServerError {
+    let error = async_graphql::Error::new("Writes are unavailable during maintenance").extend_with(
+        |_, extensions| {
+            extensions.set("status", 503);
+            extensions.set("code", "maintenance-mode");
+        },
+    );
+    async_graphql::ServerError {
+        message: error.message,
+        source: error.source,
+        locations: Vec::new(),
+        path: Vec::new(),
+        extensions: error.extensions,
+    }
 }
 
 fn same_origin(headers: &HeaderMap, origin: &str) -> bool {
@@ -321,6 +645,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let graphql_state = GraphQLState {
         schema,
         auth_policy,
+        mode: runtime_mode,
     };
 
     let app = Router::new().route("/health", get(|| async { "" })).route(
@@ -348,23 +673,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .post(graphql)
             .head(|| async { StatusCode::NO_CONTENT })
     };
-    let graphql_app =
-        Router::new()
-            .route("/graphql", graphql_route)
-            .route_layer(middleware::from_fn_with_state(
-                runtime_mode,
-                backup_mode_barrier,
-            ));
-    let graphql_app = if let Some(secret) = ingress_secret {
-        graphql_app
-            .route_layer(middleware::from_fn_with_state(
-                secret,
-                trusted_graphql_ingress,
-            ))
-            .with_state(graphql_state)
-    } else {
-        graphql_app.with_state(graphql_state)
-    };
+    let graphql_app = graphql_router(graphql_route, runtime_mode, graphql_state, ingress_secret);
     let app = app.merge(graphql_app);
 
     println!("async-graphql started");
@@ -440,11 +749,18 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod ingress_tests {
     use super::{
-        backup_mode_barrier, mutation_request_error, serve_until_shutdown, trusted_graphql_ingress,
-        IngressSecret, INGRESS_HEADER,
+        backup_mode_barrier, execute_graphql, mutation_request_error, serve_until_shutdown,
+        trusted_graphql_ingress, Bytes, GraphQLState, IngressSecret, INGRESS_HEADER,
     };
+    use async_graphql::{UploadValue, Variables};
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
     use axum::{middleware, routing::get, Router};
+    use futures::StreamExt;
+    use serde_json::json;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     const TOKEN: &str = "abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE";
 
@@ -518,6 +834,382 @@ mod ingress_tests {
     }
 
     #[tokio::test]
+    async fn multipart_mutation_inspection_stops_before_file_parts() {
+        let chunks = [
+            Bytes::from_static(
+                concat!(
+                    "--boundary\r\n",
+                    "Content-Disposition: form-data; name=\"operations\"\r\n",
+                    "Content-Type: application/json\r\n\r\n",
+                    "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+                    "--boundary\r\n"
+                )
+                .as_bytes(),
+            ),
+            Bytes::from_static(
+                b"Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n\r\n<svg/>",
+            ),
+        ];
+        let chunks_read = Arc::new(AtomicUsize::new(0));
+        let chunks_read_by_stream = chunks_read.clone();
+        let mut stream = futures::stream::iter(chunks.into_iter().map(Ok::<_, axum::Error>))
+            .inspect(move |_| {
+                chunks_read_by_stream.fetch_add(1, Ordering::SeqCst);
+            });
+        let mut prefix = Vec::new();
+
+        assert_eq!(
+            super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await,
+            Some(true)
+        );
+        assert_eq!(chunks_read.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn multipart_mutation_inspection_checks_filename_tagged_control_parts() {
+        let bodies = [
+            concat!(
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"; filename=\"operations.json\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"map\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+                "Content-Type: image/svg+xml\r\n\r\n",
+                "<svg/>\r\n",
+                "--boundary--\r\n"
+            ),
+            concat!(
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"query\":\"{ maintenance }\"}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"map\"; filename=\"map.json\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"0\":[\"variables.file\"]}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+                "Content-Type: image/svg+xml\r\n\r\n",
+                "<svg/>\r\n",
+                "--boundary--\r\n"
+            ),
+        ];
+
+        for body in bodies {
+            let mut stream =
+                futures::stream::iter([Ok::<_, axum::Error>(Bytes::from_static(body.as_bytes()))]);
+            let mut prefix = Vec::new();
+            assert_eq!(
+                super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await,
+                Some(true)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn multipart_mutation_inspection_caps_buffered_operations() {
+        let chunks = [
+            Bytes::from(vec![b'x'; super::MAX_MULTIPART_OPERATIONS_SIZE + 1]),
+            Bytes::from_static(b"later chunk"),
+        ];
+        let chunks_read = Arc::new(AtomicUsize::new(0));
+        let chunks_read_by_stream = chunks_read.clone();
+        let mut stream = futures::stream::iter(chunks.into_iter().map(Ok::<_, axum::Error>))
+            .inspect(move |_| {
+                chunks_read_by_stream.fetch_add(1, Ordering::SeqCst);
+            });
+        let mut prefix = Vec::new();
+
+        assert_eq!(
+            super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await,
+            None
+        );
+        assert!(prefix.is_empty());
+        assert_eq!(chunks_read.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn maintenance_rejects_mutations_before_backend_upload_or_event_side_effects() {
+        let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend_calls = calls.clone();
+        let app = Router::new().fallback(move |request: axum::http::Request<axum::body::Body>| {
+            backend_calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if request.uri().query().is_some() {
+                    axum::Json(json!({"rating": 4}))
+                } else {
+                    axum::Json(json!({"rating": 5.0, "count": 1}))
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let previous_endpoint = std::env::var_os("REST_ENDPOINT");
+        std::env::set_var(
+            "REST_ENDPOINT",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let backend = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let previous_nats = std::env::var_os("NATS_URL");
+        std::env::set_var("NATS_URL", "nats://127.0.0.1:1");
+        let publisher = crate::events::EventPublisher::from_env().unwrap();
+        match previous_nats {
+            Some(value) => std::env::set_var("NATS_URL", value),
+            None => std::env::remove_var("NATS_URL"),
+        }
+        let state = GraphQLState {
+            schema: crate::schema::build_schema(
+                crate::mode::RuntimeMode::Maintenance,
+                Some(publisher.clone()),
+            ),
+            auth_policy: crate::auth::AuthPolicy::from_json(
+                r#"{"anonymous":{"role":"owner"},"tokens":[],"googleAccounts":{}}"#,
+                "https://accounts.example.test",
+            )
+            .unwrap(),
+            mode: crate::mode::RuntimeMode::Maintenance,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("recipes.example"));
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(
+            "origin",
+            HeaderValue::from_static("https://recipes.example"),
+        );
+
+        let response = execute_graphql(
+            state.clone(),
+            headers.clone(),
+            Method::POST,
+            async_graphql::Request::new(r#"{ maintenance rating(id: "42") { myRating } }"#),
+        )
+        .await;
+        let response = axum::response::IntoResponse::into_response(response);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(result.get("errors").is_none(), "{result}");
+        assert_eq!(result["data"]["maintenance"], true);
+        assert_eq!(result["data"]["rating"]["myRating"], 4);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        calls.store(0, Ordering::SeqCst);
+
+        let response = execute_graphql(
+            state.clone(),
+            headers.clone(),
+            Method::POST,
+            async_graphql::Request::new(
+                r#"query ReadOnly { maintenance } mutation Write { rate(id: "42", rating: 5) { count } }"#,
+            )
+            .operation_name("ReadOnly"),
+        )
+        .await;
+        let response = axum::response::IntoResponse::into_response(response);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(result.get("errors").is_none(), "{result}");
+        assert_eq!(result["data"]["maintenance"], true);
+
+        let mut upload = async_graphql::Request::new(
+            "mutation($file: Upload!) { addImage(recipeId: \"42\", file: $file) { url } }",
+        )
+        .variables(Variables::from_json(json!({"file": null})));
+        upload.set_upload(
+            "variables.file",
+            UploadValue {
+                filename: "image.svg".into(),
+                content_type: Some("image/svg+xml".into()),
+                content: std::fs::File::open("testdata/image.svg").unwrap(),
+            },
+        );
+        let requests = [
+            async_graphql::Request::new(
+                r#"mutation { aliased: updateRecipe(id: "42", value: {name: "Updated", inspirations: ["https://example.com"]}) { id } }"#,
+            ),
+            async_graphql::Request::new(
+                r#"mutation { rate(id: "42", rating: 5) { recipeId count } }"#,
+            ),
+            async_graphql::Request::new(
+                r#"query ReadOnly { maintenance } mutation Write { rate(id: "42", rating: 5) { count } }"#,
+            )
+            .operation_name("Write"),
+            upload,
+        ];
+        for request in requests {
+            let response =
+                execute_graphql(state.clone(), headers.clone(), Method::POST, request).await;
+            let response = axum::response::IntoResponse::into_response(response);
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                result["errors"][0]["extensions"]["code"],
+                "maintenance-mode"
+            );
+            assert_eq!(result["errors"][0]["extensions"]["status"], 503);
+        }
+
+        let graphql_app = super::graphql_router(
+            axum::routing::post(super::graphql),
+            crate::mode::RuntimeMode::Maintenance,
+            state,
+            None,
+        );
+        let graphql_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let graphql_address = graphql_listener.local_addr().unwrap();
+        let graphql_server =
+            tokio::spawn(async move { axum::serve(graphql_listener, graphql_app).await.unwrap() });
+        let multipart_body = concat!(
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"operations\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"query\":\"mutation($file: Upload!) { addImage(recipeId: \\\"42\\\", file: $file) { url } }\",\"variables\":{\"file\":null}}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"map\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"0\":[\"variables.file\"]}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+            "Content-Type: image/svg+xml\r\n\r\n",
+            "<svg/>\r\n",
+            "--maintenance-boundary--\r\n"
+        );
+        let response = reqwest::Client::new()
+            .post(format!("http://{graphql_address}/graphql"))
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=maintenance-boundary",
+            )
+            .body(multipart_body)
+            .send()
+            .await
+            .unwrap();
+        let result: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(
+            result["errors"][0]["extensions"]["code"],
+            "maintenance-mode"
+        );
+        assert_eq!(result["errors"][0]["extensions"]["status"], 503);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        for disposition in [
+            "Content-Disposition: form-data; name=operations\r\n",
+            "Content-Disposition: form-data;name=\"operations\"\r\n",
+        ] {
+            let multipart_query_body = format!(
+                concat!(
+                    "--maintenance-boundary\r\n",
+                    "{disposition}",
+                    "Content-Type: application/json\r\n\r\n",
+                    "{{\"query\":\"{{ maintenance }}\"}}\r\n",
+                    "--maintenance-boundary\r\n",
+                    "Content-Disposition: form-data; name=\"map\"\r\n",
+                    "Content-Type: application/json\r\n\r\n",
+                    "{{}}\r\n",
+                    "--maintenance-boundary--\r\n"
+                ),
+                disposition = disposition
+            );
+            let response = reqwest::Client::new()
+                .post(format!("http://{graphql_address}/graphql"))
+                .header(
+                    "content-type",
+                    "multipart/form-data; boundary=maintenance-boundary",
+                )
+                .body(multipart_query_body)
+                .send()
+                .await
+                .unwrap();
+            let result: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(result["data"]["maintenance"], true);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+
+        let duplicate_operations_body = concat!(
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=operations\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"query\":\"{ maintenance }\"}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data;name=\"operations\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"map\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"0\":[\"variables.file\"]}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+            "Content-Type: image/svg+xml\r\n\r\n",
+            "<svg/>\r\n",
+            "--maintenance-boundary--\r\n"
+        );
+        let response = reqwest::Client::new()
+            .post(format!("http://{graphql_address}/graphql"))
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=maintenance-boundary",
+            )
+            .body(duplicate_operations_body)
+            .send()
+            .await
+            .unwrap();
+        let result: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(
+            result["errors"][0]["extensions"]["code"],
+            "maintenance-mode"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let oversized_multipart_body = format!(
+            concat!(
+                "--maintenance-boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{}"
+            ),
+            "x".repeat(super::MAX_MULTIPART_OPERATIONS_SIZE + 1)
+        );
+        let response = reqwest::Client::new()
+            .post(format!("http://{graphql_address}/graphql"))
+            .header(
+                "content-type",
+                "multipart/form-data; boundary=maintenance-boundary",
+            )
+            .body(oversized_multipart_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let publisher_status = serde_json::to_value(publisher.status()).unwrap();
+        assert_eq!(publisher_status["published"], 0);
+        assert_eq!(publisher_status["failed"], 0);
+
+        graphql_server.abort();
+        backend.abort();
+        match previous_endpoint {
+            Some(value) => std::env::set_var("REST_ENDPOINT", value),
+            None => std::env::remove_var("REST_ENDPOINT"),
+        }
+    }
+
+    #[tokio::test]
     async fn privileged_credential_free_writes_still_require_same_origin() {
         use serde_json::json;
         use std::sync::{
@@ -560,6 +1252,7 @@ mod ingress_tests {
                 "https://accounts.example.test",
             )
             .unwrap(),
+            mode: crate::mode::RuntimeMode::Testing,
         };
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("recipes.example"));
@@ -771,6 +1464,7 @@ mod ingress_tests {
                 "https://accounts.google.com",
             )
             .unwrap(),
+            mode: crate::mode::RuntimeMode::Backup,
         };
         let token = "a".repeat(43);
         let client = reqwest::Client::new();
