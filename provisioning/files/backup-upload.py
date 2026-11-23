@@ -539,6 +539,11 @@ def archive_recovered_maintenance(config):
 def write_status(config, status, code, backup_id=None, last_upload=None):
     path = status_path(config)
     if status != "verified-upload" and protected_verified_maintenance(config):
+        state = lifecycle_state(maintenance_state_path(config))
+        atomic_json(path.with_name("maintenance-attempt.json"), {
+            "backupId": state["backupId"], "status": status, "code": code,
+            "lastCheck": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
         return read_json(path)
     prior = {}
     if path.is_file() and not path.is_symlink():
@@ -664,6 +669,16 @@ def run_maintenance_capture(config):
                 raise BackupError("restart-failure", "invalid-restored-maintenance-snapshot") from error
             if manifest.get("backupId") != backup_id or not verified_upload_status(config, backup_id):
                 raise BackupError("restart-failure", "maintenance-restore-verification-mismatch")
+        else:
+            saved_status = read_json(status_path(config))
+            if datetime.now(timezone.utc) - validate_timestamp(saved_status["lastCheck"]) > timedelta(hours=26):
+                baseline = read_json(baseline_path(config))
+                if not isinstance(baseline, dict) or baseline.get("backupId") != backup_id \
+                        or baseline.get("fingerprint") != content_fingerprint(manifest) \
+                        or not verify_baseline(config, baseline, remote_names(config)):
+                    raise BackupError("upload-failure", "remote-verification-mismatch")
+                write_status(config, "verified-upload", "remote-readback", backup_id, baseline.get("lastUpload"))
+        status_path(config).with_name("maintenance-attempt.json").unlink(missing_ok=True)
         return result
     except BackupError:
         raise
@@ -1316,6 +1331,13 @@ def report_status(config):
     if pending_verified_maintenance(config):
         value["status"] = "restart-failure"
         value["code"] = "maintenance-restore-pending"
+    elif protected_verified_maintenance(config):
+        try:
+            attempt = read_json(path.with_name("maintenance-attempt.json"))
+            if isinstance(attempt, dict) and attempt.get("backupId") == value.get("backupId"):
+                value.update({key: attempt[key] for key in ("status", "code", "lastCheck")})
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            pass
     value["migrationRecoveryCloseoutVersion"] = 1
     return value
 

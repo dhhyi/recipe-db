@@ -956,9 +956,28 @@ state_path.write_text(json.dumps(state))
         with self.assertRaises(backup.BackupError):
             backup.run_nightly(self.config)
         self.assertEqual(backup.read_json(backup.status_path(self.config)), saved)
+        self.assertEqual(backup.report_status(self.config)["status"], "capture-failure")
         capture.chmod(0o755)
         with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
             self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        self.assertEqual(backup.report_status(self.config)["status"], "verified-upload")
+
+    def test_completed_maintenance_refreshes_overdue_verification_without_upload(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        saved = backup.read_json(backup.status_path(self.config))
+        saved["lastCheck"] = "2026-01-01T00:00:00+00:00"
+        backup.atomic_json(backup.status_path(self.config), saved)
+        self.assertEqual(backup.report_status(self.config)["status"], "overdue")
+        with patch.object(backup, "remote_names",
+                          side_effect=backup.BackupError("upload-failure", "remote-unavailable")):
+            with self.assertRaises(backup.BackupError):
+                backup.run_nightly(self.config)
+        self.assertEqual(backup.report_status(self.config)["status"], "upload-failure")
+        with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
+            self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        self.assertEqual(backup.report_status(self.config)["status"], "verified-upload")
 
     def test_backup_only_capture_uploads_without_read_only_restoration(self):
         self.write_maintenance_capture()
