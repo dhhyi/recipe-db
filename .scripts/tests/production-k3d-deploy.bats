@@ -653,7 +653,8 @@ prepare_verified_release_cache_registry() {
   local index_digest inventory_digest artifact_digest inventory_size
   index_digest="sha256:$(sha256sum "$FIXTURE_ROOT/cache-index.json" | cut -d ' ' -f1)"
   jq -n --arg revision "$MOCK_REVISION" --arg digest "$index_digest" '{
-    schemaVersion:2,revision:$revision,
+    schemaVersion:2,
+    revision:(if env.MOCK_CACHE_INVALID_INVENTORY == "true" then "invalid" else $revision end),
     images:{
       recipes:("ghcr.io/dhhyi/recipe-db-recipes@"+$digest),
       images:("ghcr.io/dhhyi/recipe-db-images@"+$digest)
@@ -703,6 +704,17 @@ else
 fi
 EOF
   chmod +x bin/oras
+}
+
+seed_verified_release_cache() {
+  local cache="$XDG_CACHE_HOME/recipe-db/releases"
+  mkdir -p "$cache/artifact-manifests" "$cache/inventories" "$cache/image-indexes"
+  cp "$MOCK_CACHE_ARTIFACT_MANIFEST" \
+    "$cache/artifact-manifests/${ARTIFACT##*@sha256:}"
+  cp "$MOCK_CACHE_RELEASE" \
+    "$cache/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}"
+  cp "$MOCK_CACHE_INDEX" \
+    "$cache/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}"
 }
 
 @test "release commands reuse digest-verified release data across invocations" {
@@ -763,21 +775,39 @@ EOF
   export MOCK_CACHE_INCOMPLETE_INDEX=true
   prepare_verified_release_cache_registry
   export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
-  mkdir -p "$XDG_CACHE_HOME/recipe-db/releases/artifact-manifests" \
-    "$XDG_CACHE_HOME/recipe-db/releases/inventories" \
-    "$XDG_CACHE_HOME/recipe-db/releases/image-indexes"
-  cp "$MOCK_CACHE_ARTIFACT_MANIFEST" \
-    "$XDG_CACHE_HOME/recipe-db/releases/artifact-manifests/${ARTIFACT##*@sha256:}"
-  cp "$MOCK_CACHE_RELEASE" \
-    "$XDG_CACHE_HOME/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}"
-  cp "$MOCK_CACHE_INDEX" \
-    "$XDG_CACHE_HOME/recipe-db/releases/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}"
+  seed_verified_release_cache
 
   run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
 
   [ "$status" -ne 0 ]
   [[ "$output" == *"image index must contain runnable linux/amd64 and linux/arm64 manifests"* ]]
   [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 0 ]
+}
+
+@test "a digest-valid cached inventory still receives artifact revision validation" {
+  export MOCK_CACHE_INVALID_INVENTORY=true
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+  seed_verified_release_cache
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"artifact and inventory revision mismatch"* ]]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 0 ]
+}
+
+@test "release data cache defaults under the user's cache directory" {
+  prepare_verified_release_cache_registry
+  local home="$FIXTURE_ROOT/home"
+  mkdir -p "$home"
+
+  run env -u XDG_CACHE_HOME HOME="$home" bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -eq 0 ]
+  [ -f "$home/.cache/recipe-db/releases/artifact-manifests/${ARTIFACT##*@sha256:}" ]
+  [ -f "$home/.cache/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}" ]
+  [ -f "$home/.cache/recipe-db/releases/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}" ]
 }
 
 @test "an unwritable cache warns and rendering continues with fetched data" {
