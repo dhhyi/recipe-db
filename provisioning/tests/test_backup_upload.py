@@ -841,6 +841,7 @@ state_path.write_text(json.dumps(state))
         backup.run_capture_command(self.config, "maintenance-capture", maintenance)
         previous = self.root / "previous"
         shutil.copytree(maintenance, previous)
+        (previous / "backup-state.json").unlink()
         manifest_path = previous / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
         manifest["backupId"] = "backup-20261109T100000-1"
