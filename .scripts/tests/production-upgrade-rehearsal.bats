@@ -723,7 +723,6 @@ YAML
     and .volumes.redis == null
     and .piStorage == null and .httpsStaging == null
     and .runtime.googleOAuthClientId == null
-    and .runtime.ingressMode == "loopback"
     and .runtime.trustedIssuer == $source[0].runtime.trustedIssuer
     and .infrastructure == $local[0].infrastructure
     and .secrets == {"auth-accounts.json":$accounts}

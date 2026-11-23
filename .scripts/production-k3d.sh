@@ -446,12 +446,10 @@ guard_helm_config() {
 
 guard_ingress_service() {
   kube --namespace kube-system get service traefik -o json > "$work/traefik-service.json"
-  jq -e --arg target "$target" --arg ingress "$ingress_mode" --slurpfile config "$work/config.json" '
-    (if $target == "local" or $ingress == "private-lan" then
-      .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
-      ([.spec.ports[].port] | sort) ==
-        (if $config[0].httpsStaging then [80,8081,8443] else [80] end)
-     else .spec.type == "ClusterIP" end) and
+  jq -e --slurpfile config "$work/config.json" '
+    .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
+    ([.spec.ports[].port] | sort) ==
+      (if $config[0].httpsStaging then [80,8081,8443] else [80] end) and
     ((.spec.externalIPs // []) | length == 0) and
     all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
     || production_fail "ingress does not match the requested exposure without NodePorts"

@@ -4,29 +4,19 @@
 # shellcheck disable=SC2034,SC2154,SC2016
 
 restore_ingress_values() {
-  local service_type=ClusterIP
-  [[ $target != local && $ingress_mode != private-lan ]] || service_type=LoadBalancer
+  local service_type=LoadBalancer
   yq -o=json -I=0 'select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
     .metadata.namespace == "kube-system")' "$work/rendered-base.yml" | jq -se '
       length == 1 and (.[0].spec.valuesContent | type == "string")' > /dev/null \
     || production_fail "restore requires exactly one Traefik HelmChartConfig"
-  if [[ $service_type == LoadBalancer ]]; then
-    SERVICE_TYPE="$service_type" yq -i '
-      (select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
-        .metadata.namespace == "kube-system").spec.valuesContent) |=
-        (from_yaml | .service.type = strenv(SERVICE_TYPE) |
-          .service.spec.allocateLoadBalancerNodePorts = false | to_yaml)' "$work/rendered-base.yml"
-  else
-    SERVICE_TYPE="$service_type" yq -i '
-      (select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
-        .metadata.namespace == "kube-system").spec.valuesContent) |=
-        (from_yaml | .service.type = strenv(SERVICE_TYPE) |
-          del(.service.spec.allocateLoadBalancerNodePorts) | to_yaml)' "$work/rendered-base.yml"
-  fi
+  SERVICE_TYPE="$service_type" yq -i '
+    (select(.kind == "HelmChartConfig" and .metadata.name == "traefik" and
+      .metadata.namespace == "kube-system").spec.valuesContent) |=
+      (from_yaml | .service.type = strenv(SERVICE_TYPE) |
+        .service.spec.allocateLoadBalancerNodePorts = false | to_yaml)' "$work/rendered-base.yml"
 }
 
 restore_remove_ingress_nodeports() {
-  [[ $target == local || $ingress_mode == private-lan ]] || return 0
   kube --namespace kube-system get service traefik -o json > "$work/restore-ingress-service.json"
   jq -e --slurpfile config "$work/config.json" '
     .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and

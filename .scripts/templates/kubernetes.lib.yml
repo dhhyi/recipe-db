@@ -250,11 +250,7 @@
 #@   image = cfg["infrastructure"]["traefik"].split(":", 1)
 #@   values = {"image": {"registry": "docker.io", "repository": image[0], "tag": image[1]}, "deployment": {"replicas": 1}, "api": {"dashboard": True}, "providers": {"kubernetesCRD": {"enabled": False}, "kubernetesIngress": {"enabled": False}}, "volumes": [{"name": "recipe-db-routes", "mountPath": "/etc/recipe-db", "type": "secret"}], "ports": {"websecure": {"expose": {"default": False}}, "rest-internal": {"port": 3000, "expose": {"default": False}, "exposedPort": 3000, "protocol": "TCP"}}, "additionalArguments": ["--providers.file.filename=/etc/recipe-db/routes.yml", "--providers.file.watch=true", "--entrypoints.web.http.middlewares=identity-strip@file", "--entrypoints.rest-internal.http.middlewares=identity-strip@file", "--entrypoints.web.http.aliasHeadersStrategy=delete", "--entrypoints.rest-internal.http.aliasHeadersStrategy=delete"]}
 #@   values["ports"]["rest-internal"]["observability"] = {}
-#@   if cfg["target"] == "local" or cfg["runtime"].get("ingressMode", "loopback") == "private-lan":
-#@     values["service"] = {"type": "LoadBalancer", "spec": {"allocateLoadBalancerNodePorts": False}}
-#@   else:
-#@     values["service"] = {"type": "ClusterIP"}
-#@   end
+#@   values["service"] = {"type": "LoadBalancer", "spec": {"allocateLoadBalancerNodePorts": False}}
 #@   if https_staging != None:
 #@     ca = "https://acme-v02.api.letsencrypt.org/directory"
 #@     values["ports"]["staging-http"] = {"port": 8001, "expose": {"default": True}, "exposedPort": 8081, "protocol": "TCP", "observability": {}}

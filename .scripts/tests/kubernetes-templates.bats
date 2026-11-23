@@ -83,11 +83,10 @@ render() {
   ' manifests.json
 }
 
-@test "Google-disabled Pi deployment omits OAuth and uses ClusterIP by default" {
+@test "Google-disabled Pi deployment omits OAuth and uses Traefik LoadBalancer" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |
     .config.origin="https://recipes.example.org" |
-    .config.runtime.ingressMode="private-lan" |
     .config.httpsStaging={hostname:"recipes.example.org"}' values.json > no-google-values.json
   render no-google-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
@@ -108,25 +107,18 @@ render() {
 }
 
 @test "local loopback uses ServiceLB without exposing internal entrypoints or allocating NodePorts" {
-  for mode in default explicit; do
-    if [ "$mode" = explicit ]; then
-      jq '.config.runtime.ingressMode="loopback"' values.json > local-values.json
-    else
-      jq 'del(.config.runtime.ingressMode)' values.json > local-values.json
-    fi
-    render local-values.json
-    jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
-    yq -o=json '.' helm-values.yaml | jq -e '
+  cp values.json local-values.json
+  render local-values.json
+  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
+  yq -o=json '.' helm-values.yaml | jq -e '
       .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
       and .ports.websecure.expose.default == false and .ports["rest-internal"].expose.default == false'
-  done
 }
 
 @test "Pi HTTPS uses production ACME state and omits the certificate-only placeholder" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |
     .config.origin="https://recipes.example.org" |
-    .config.runtime.ingressMode="private-lan" |
     .config.httpsStaging={hostname:"recipes.example.org"}' values.json > https-values.json
   render https-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
@@ -162,7 +154,6 @@ render() {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |
     .config.origin="https://recipes.example.org" |
-    .config.runtime.ingressMode="private-lan" |
     .config.runtime.googleOAuthClientId="explicit.apps.googleusercontent.com" |
     .config.volumes.redis="256Mi" |
     .config.infrastructure.oauth2Proxy="quay.io/oauth2-proxy/oauth2-proxy:v7.15.5" |

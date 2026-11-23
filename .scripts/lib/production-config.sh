@@ -17,6 +17,9 @@ production_config() {
   if jq -e '(.runtime | type == "object" and has("authMode"))' "$work/config.json" > /dev/null 2>&1; then
     production_fail "runtime.authMode is obsolete; omit it and configure Google OAuth with a client ID and both OAuth secret paths"
   fi
+  if jq -e '(.runtime | type == "object" and has("ingressMode"))' "$work/config.json" > /dev/null 2>&1; then
+    production_fail "runtime.ingressMode is obsolete; omit it; both local and Pi use Traefik LoadBalancer"
+  fi
   local google_fields removed_https_option
   for removed_https_option in acmeEnvironment exposeApplication renewalRehearsal; do
     if jq -e --arg key "$removed_https_option" \
@@ -55,13 +58,6 @@ production_config() {
     def image: type == "string" and
       test("^[a-zA-Z0-9./_-]+(:[a-zA-Z0-9_.-]+)?@sha256:[0-9a-f]{64}$|^[a-zA-Z0-9./_-]+:[a-zA-Z0-9_.-]+$") and
       (endswith(":latest") | not);
-    def private_lan_origin:
-      sub("^http://"; "") as $host |
-      test("^http://[a-zA-Z0-9][a-zA-Z0-9.-]*[.](home|lan|local)$") or
-      (try ($host | split(".") | map(tonumber) |
-        length == 4 and all(.[]; floor == . and . >= 0 and . <= 255) and
-        (.[0] == 10 or (.[0] == 192 and .[1] == 168) or
-          (.[0] == 172 and .[1] >= 16 and .[1] <= 31))) catch false);
     objectkeys(["target","cluster","context","namespace","origin","httpPort","apiPort",
       "timeoutSeconds","storageClass","volumes","resources","infrastructure","runtime","secrets"] +
       (if has("rehearsalId") then ["rehearsalId"] else [] end) +
@@ -120,23 +116,15 @@ production_config() {
       and all(.[]; image)
       and (.traefik | test("^traefik:v3([.]([7-9]|[1-9][0-9])([.][0-9]+)?)?@sha256:[0-9a-f]{64}$")))
     and (.runtime | objectkeys(["trustedIssuer"] +
-      (if has("ingressMode") then ["ingressMode"] else [] end) +
       (if $googleEnabled then ["googleOAuthClientId"] else [] end))
-      and ((.ingressMode // "loopback") == "loopback" or .ingressMode == "private-lan")
       and .trustedIssuer == "https://accounts.google.com")
-    and (if .runtime.ingressMode == "private-lan" then
-      .target == "pi" and
-      (if has("httpsStaging") then
-        ((.origin | private_lan_origin) or .origin == ("https://" + .httpsStaging.hostname))
-       else (.origin | private_lan_origin) end)
-      else true end)
     and (if $googleEnabled and .target == "pi" then
-      has("httpsStaging") and .runtime.ingressMode == "private-lan"
+      has("httpsStaging")
       and .origin == ("https://" + .httpsStaging.hostname)
       else true end)
     and (if has("httpsStaging") then
       .target == "pi"
-      and .runtime.ingressMode == "private-lan" and has("piStorage")
+      and has("piStorage")
       and .origin == ("https://" + .httpsStaging.hostname)
       and (.httpsStaging | objectkeys(["hostname"])
         and (.hostname | type == "string" and length <= 253
@@ -172,7 +160,6 @@ production_config() {
   storage_root_uuid=$(jq -r '.piStorage.expectedRootUuid // empty' "$work/config.json" | tr '[:upper:]' '[:lower:]')
   storage_data_root=$(jq -r '.piStorage.dataRoot // empty' "$work/config.json")
   rehearsal_id=$(jq -r '.rehearsalId // ""' "$work/config.json")
-  ingress_mode=$(jq -r '.runtime.ingressMode // "loopback"' "$work/config.json")
   acme_email_path=$(jq -r '.secrets["acme-account-email"] // empty' "$work/config.json")
   secret_keys=(auth-accounts.json graphql-ingress-secret typesense-api-key)
   operator_secret_keys=(auth-accounts.json)

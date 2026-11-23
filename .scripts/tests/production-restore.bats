@@ -20,20 +20,17 @@ set -euo pipefail
 source "$FIXTURE_ROOT/.scripts/production-restore.sh"
 work="$FIXTURE_ROOT/work"
 target=$1
-ingress_mode=$2
 production_fail() { printf '%s\n' "$*" >&2; exit 1; }
 restore_ingress_values
 EOF
-  for case in 'local loopback LoadBalancer' 'pi loopback ClusterIP' 'pi private-lan LoadBalancer'; do
-    read -r target mode expected <<< "$case"
+  for target in local pi; do
     cp original.yml work/rendered-base.yml
-    run bash ingress-harness.sh "$target" "$mode"
+    run bash ingress-harness.sh "$target"
     [ "$status" -eq 0 ]
     yq -o=json '.spec.valuesContent | from_yaml' work/rendered-base.yml \
-      | jq -e --arg expected "$expected" '
-        .service.type == $expected and
-        (if $expected == "LoadBalancer" then .service.spec.allocateLoadBalancerNodePorts == false
-         else .service.spec.allocateLoadBalancerNodePorts == null end) and
+      | jq -e '
+        .service.type == "LoadBalancer" and
+        .service.spec.allocateLoadBalancerNodePorts == false and
         .deployment == {replicas:1} and .ports.websecure.expose.default == false and
         .ports["rest-internal"].expose.default == false'
   done
