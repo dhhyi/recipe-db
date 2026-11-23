@@ -543,7 +543,7 @@ SH
   : > "$result_directory/operations"
   FAIL_READ=true run bash retained-release-test.sh
   [ "$status" -ne 0 ]
-  ! grep -Eq 'release-readonly-result|release-reopen' "$result_directory/operations"
+  run ! grep -Eq 'release-readonly-result|release-reopen' "$result_directory/operations"
 }
 
 @test "closeout recovery ownership checks require the exact retained UID holder operation and phase" {

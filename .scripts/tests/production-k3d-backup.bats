@@ -1053,6 +1053,10 @@ EOF
   [[ $output == *"Lease handoff reconciled"* ]]
   cmp before-retry.json "$STATE/backup-state.json"
   cmp lease-before.json "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "First failure" "READONLY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  cmp before-retry.json "$STATE/backup-state.json"
 
   jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[0].env[]
     | select(.name == "MODE").value)="production"' "$MOCK_LOG.deployments" > deployments.next
@@ -1088,11 +1092,36 @@ EOF
   run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
     "$CANDIDATE" passed "Retry passed" "READONLY-$HOLDER-passed"
   [ "$status" -ne 0 ]
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    ((. // [] | map(select(.name != "MODE"))) + [{name:"MODE",value:"backup"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    (map(select(.name != "MODE")) + [{name:"MODE",value:"production"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
   run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
     "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
   [ "$status" -eq 0 ]
   [[ $output == *"Lease handoff reconciled"* ]]
   cmp passed-before-reconcile.json "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  cmp passed-before-reconcile.json "$STATE/backup-state.json"
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    (map(select(.name != "MODE")) + [{name:"MODE",value:"backup"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    (map(select(.name != "MODE")) + [{name:"MODE",value:"production"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
   jq -e '.items[] | select(.metadata.name == "graphql")
     | .spec.template.spec.containers[0].env[0].value == "maintenance"' "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \

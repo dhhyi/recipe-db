@@ -498,7 +498,8 @@ YAML
   local manifest_copy archive_copy
   manifest_copy="$FIXTURE_ROOT/$(basename "$MANIFEST")"
   archive_copy="$FIXTURE_ROOT/$(basename "$ARCHIVE")"
-  local receipt_copy="$FIXTURE_ROOT/$(basename "$RETRIEVAL_RECEIPT")"
+  local receipt_copy
+  receipt_copy="$FIXTURE_ROOT/$(basename "$RETRIEVAL_RECEIPT")"
   cp -- "$MANIFEST" "$manifest_copy"
   cp -- "$ARCHIVE" "$archive_copy"
   cp -- "$RETRIEVAL_RECEIPT" "$receipt_copy"
@@ -1017,7 +1018,7 @@ YAML
   fail_readonly_check=true
   run run_scenario successful-upgrade "$source_values" "$candidate_values"
   [ "$status" -ne 0 ]
-  ! grep -Eq 'release-readonly-result|release-reopen' "$scenario_lifecycle_log"
+  run ! grep -Eq 'release-readonly-result|release-reopen' "$scenario_lifecycle_log"
   fail_readonly_check=false
 
   : > "$scenario_lifecycle_log"

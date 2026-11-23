@@ -3945,10 +3945,11 @@ release_readonly_result() {
   case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
     release-ready/ready)
       if jq -e '.readOnlyCheck.outcome == "passed"' "$snapshot/backup-state.json" > /dev/null; then
-        release_require_lease_phase ready read-only-failed
+        release_require_lease_phase ready read-only-failed read-only-passed
         jq -e --arg lease "$release_lease_phase" '
           if $lease == "ready" then (.readOnlyCheckHistory // [] | length) == 0
-          else .readOnlyCheckHistory[-1].outcome == "failed" end
+          elif $lease == "read-only-failed" then .readOnlyCheckHistory[-1].outcome == "failed"
+          else true end
         ' "$snapshot/backup-state.json" > /dev/null \
           || production_fail "read-only result does not match the previous Lease phase"
         reconcile=true
@@ -3967,7 +3968,15 @@ release_readonly_result() {
         reconcile=true
       else
         release_require_lease_phase read-only-failed
-        retry=true
+        if jq -e --arg result "$result" --arg notes "$notes" \
+          '.readOnlyCheck.outcome == $result and .readOnlyCheck.notes == $notes' \
+          "$snapshot/backup-state.json" > /dev/null \
+          && [[ $confirmation == "READONLY-$backup_id-$result" ||
+            $confirmation == "READONLY-RETRY-$backup_id-$result" ]]; then
+          reconcile=true
+        else
+          retry=true
+        fi
       fi
       ;;
     *) production_fail "read-only checks require a ready candidate" ;;
@@ -3995,6 +4004,8 @@ release_readonly_result() {
     || production_fail "cannot inspect candidate readiness before recording read-only checks"
   backup_validate_workload_images "$work/read-only-deployments.json" \
     || production_fail "candidate changed before read-only checks"
+  release_validate_backend_modes "$work/read-only-deployments.json" \
+    || production_fail "candidate backends are not in production mode"
   jq -e --slurpfile state "$snapshot/backup-state.json" '
     . as $actual |
     all($state[0].candidate.workloads[];
@@ -4037,6 +4048,19 @@ release_readonly_result() {
   fi
 }
 
+release_validate_backend_modes() {
+  local deployments=$1
+  application_project_metadata_to_jsonl "$release_root" "$work/candidate-projects.jsonl"
+  jq -e --slurpfile projects "$work/candidate-projects.jsonl" '
+    . as $actual |
+    all($projects[] | select((.category == "api" or .category == "backend") and .name != "graphql");
+      .name as $name |
+      any($actual.items[]; .metadata.name == $name
+        and any(.spec.template.spec.containers[]; .name == $name
+          and ([.env[]? | select(.name == "MODE") | .value] == ["production"]))))
+  ' "$deployments" > /dev/null
+}
+
 release_reblock_graphql_maintenance() {
   if kube set env deployment/graphql MODE=maintenance --containers=graphql > /dev/null \
     && kube rollout status deployment/graphql --timeout="${timeout}s"; then
@@ -4060,6 +4084,8 @@ release_reopen() {
     || production_fail "cannot inspect candidate readiness before reopening"
   backup_validate_workload_images "$work/release-deployments.json" \
     || production_fail "candidate changed before reopening"
+  release_validate_backend_modes "$work/release-deployments.json" \
+    || production_fail "candidate backends are not in production mode"
   jq -e --slurpfile state "$snapshot/backup-state.json" '
     . as $actual |
     all($state[0].candidate.workloads[];
