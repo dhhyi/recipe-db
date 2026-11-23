@@ -275,6 +275,8 @@ pull_release() {
       || production_fail "release artifact inventory is incomplete"
     cache_inventory=true
   fi
+  release_data_cache_verify_digest "$inventory_digest" "$work/pulled/release.json" \
+    || production_fail "release artifact inventory digest mismatch"
   [[ -f $work/pulled/release.json && ! -L $work/pulled/release.json ]] \
     || production_fail "release artifact did not contain a regular release.json"
   revision=$(jq -er .revision "$work/pulled/release.json")

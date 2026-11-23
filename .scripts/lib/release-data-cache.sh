@@ -13,15 +13,20 @@ release_data_cache_path() {
   printf '%s/recipe-db/releases/%s/%s' "$cache_home" "$kind" "${digest#sha256:}"
 }
 
+release_data_cache_verify_digest() {
+  local digest=$1 path=$2 actual
+  [[ $digest =~ ^sha256:[0-9a-f]{64}$ && -f $path && ! -L $path ]] || return 1
+  actual=$(sha256sum -- "$path") || return 1
+  [[ ${actual%% *} == "${digest#sha256:}" ]]
+}
+
 release_data_cache_get() {
-  local kind=$1 digest=$2 destination=$3 path actual
+  local kind=$1 digest=$2 destination=$3 path
   path=$(release_data_cache_path "$kind" "$digest") || return 1
   [[ -f $path && ! -L $path ]] || return 1
-  actual=$(sha256sum -- "$path") || return 1
-  [[ ${actual%% *} == "${digest#sha256:}" ]] || return 1
+  release_data_cache_verify_digest "$digest" "$path" || return 1
   cp -- "$path" "$destination" || return 1
-  actual=$(sha256sum -- "$destination") || return 1
-  [[ ${actual%% *} == "${digest#sha256:}" ]]
+  release_data_cache_verify_digest "$digest" "$destination"
 }
 
 release_data_cache_put() {

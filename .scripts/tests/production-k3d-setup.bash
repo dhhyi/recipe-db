@@ -1372,15 +1372,10 @@ if [[ $1 == manifest && $2 == fetch ]]; then
     $3 == ghcr.io/dhhyi/recipe-db-releases@* ]] || exit 1
   if [[ $3 == ghcr.io/dhhyi/recipe-db-releases@* ]]; then
     release=$3
-    case "$3" in
-      *sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) layer_digest=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;;
-      *sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc) layer_digest=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc ;;
-      *sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd) layer_digest=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ;;
-      *) layer_digest=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
-    esac
     payload=$(mktemp)
     output=$payload
     mock_release
+    layer_digest=$(sha256sum "$payload" | cut -d ' ' -f1)
     size=$(wc -c < "$payload")
     rm -f "$payload"
     jq -n --arg shape "$MOCK_SHAPE" --arg revision "$(artifact_revision "$3")" \
@@ -1399,14 +1394,28 @@ if [[ $1 == manifest && $2 == fetch ]]; then
   fi
 elif [[ $# == 5 && $1 == blob && $2 == fetch && $3 == --output &&
   $5 == ghcr.io/dhhyi/recipe-db-releases@sha256:* ]]; then
-  case "$5" in
-    *sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
-    *sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc) release=ghcr.io/dhhyi/recipe-db-releases@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc ;;
-    *sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd) release=ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ;;
-    *) release=ghcr.io/dhhyi/recipe-db-releases@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
-  esac
-  output=$4
-  mock_release
+  expected_digest=${5##*@}
+  fetched=false
+  for candidate in a c d e; do
+    case "$candidate" in
+      a) release=ghcr.io/dhhyi/recipe-db-releases@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ;;
+      c) release=ghcr.io/dhhyi/recipe-db-releases@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc ;;
+      d) release=ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ;;
+      e) release=ghcr.io/dhhyi/recipe-db-releases@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee ;;
+    esac
+    payload=$(mktemp)
+    output=$payload
+    mock_release
+    actual_digest="sha256:$(sha256sum "$payload" | cut -d ' ' -f1)"
+    if [[ $actual_digest == "$expected_digest" ]]; then
+      cp "$payload" "$4"
+      fetched=true
+      rm -f "$payload"
+      break
+    fi
+    rm -f "$payload"
+  done
+  [[ $fetched == true ]] || exit 1
 elif [[ $# == 4 && $1 == pull && $2 == ghcr.io/dhhyi/recipe-db-releases@sha256:* && $3 == --output ]]; then
   release=$2
   output=$4/release.json

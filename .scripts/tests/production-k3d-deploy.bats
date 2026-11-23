@@ -695,6 +695,9 @@ elif [[ $1 == blob && $2 == fetch ]]; then
   [[ ${MOCK_BLOB_FAIL:-false} != true ]] || exit 42
   [[ $3 == --output && $5 == "ghcr.io/dhhyi/recipe-db-releases@$MOCK_CACHE_INVENTORY_DIGEST" ]] || exit 1
   cp "$MOCK_CACHE_RELEASE" "$4"
+  if [[ ${MOCK_BLOB_CORRUPT:-false} == true ]]; then
+    printf X | dd of="$4" bs=1 count=1 conv=notrunc status=none
+  fi
 else
   exit 1
 fi
@@ -702,7 +705,7 @@ EOF
   chmod +x bin/oras
 }
 
-@test "render reuses digest-verified release data across invocations" {
+@test "release commands reuse digest-verified release data across invocations" {
   prepare_verified_release_cache_registry
   export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
 
@@ -715,6 +718,11 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 3 ]
   [ "$(grep -c '^ytt ' "$MOCK_LOG")" -eq 2 ]
+
+  run bash .scripts/production-k3d.sh release-preflight "$VALUES" "$ARTIFACT"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^oras ' "$MOCK_LOG")" -eq 3 ]
+
   [ -f "$XDG_CACHE_HOME/recipe-db/releases/artifact-manifests/${ARTIFACT##*@sha256:}" ]
   [ -f "$XDG_CACHE_HOME/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}" ]
   [ -f "$XDG_CACHE_HOME/recipe-db/releases/image-indexes/${MOCK_CACHE_INDEX_DIGEST#sha256:}" ]
@@ -737,6 +745,18 @@ EOF
   run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
   [ "$status" -ne 0 ]
   [ "$(grep -c '^oras blob fetch ' "$MOCK_LOG")" -eq 3 ]
+}
+
+@test "fresh inventory with a mismatched digest is rejected" {
+  prepare_verified_release_cache_registry
+  export XDG_CACHE_HOME="$FIXTURE_ROOT/cache"
+  export MOCK_BLOB_CORRUPT=true
+
+  run bash .scripts/production-k3d.sh render "$VALUES" "$ARTIFACT"
+
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"release artifact inventory digest mismatch"* ]]
+  [ ! -e "$XDG_CACHE_HOME/recipe-db/releases/inventories/${MOCK_CACHE_INVENTORY_DIGEST#sha256:}" ]
 }
 
 @test "a digest-valid cached image index still receives semantic validation" {

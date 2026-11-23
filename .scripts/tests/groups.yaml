@@ -188,6 +188,7 @@ restore:
     .scripts/tests/production-k3d-restore.bats:
       - .scripts/tests/production-k3d-restore-setup.bash
       - .scripts/production-k3d.sh
+      - .scripts/lib/release-data-cache.sh
       - .scripts/tests/production-k3d-setup.bash
       - .scripts/lib/production-config.sh
       - .scripts/lib/cluster-operation-lock.sh
