@@ -6,12 +6,15 @@ load production-k3d-setup
 
 prepare_captured_release() {
   export MOCK_BACKUP=true MOCK_RELEASE_LIFECYCLE=false
-  STATE="$FIXTURE_ROOT/backups/release"
+  STATE="$FIXTURE_ROOT/backups/maintenance"
   CANDIDATE=ghcr.io/dhhyi/recipe-db-releases@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$STATE"
+  run bash .scripts/production-k3d.sh maintenance-enter "$VALUES" "$ARTIFACT" "$STATE"
   [ "$status" -eq 0 ]
   HOLDER=$(jq -er .backupId "$STATE/backup-state.json")
   run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$STATE"
+  [ "$status" -eq 0 ]
+  jq -n --arg id "$HOLDER" '{backupId:$id,status:"verified-upload"}' > "$FIXTURE_ROOT/backups/status.json"
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$STATE"
   [ "$status" -eq 0 ]
   export MOCK_RELEASE_LIFECYCLE=true
 }
@@ -105,6 +108,10 @@ prepare_published_migration_release() {
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
   [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Read-only migration candidate checks passed" \
+    "READONLY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -eq 0 ]
 
@@ -154,6 +161,10 @@ complete_candidate_release_with_start() {
   complete_candidate_release no-migration-required "$use_git_sources"
   run bash .scripts/production-k3d.sh "${source_args[@]}" release-start \
     "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh "${source_args[@]}" release-readonly-result \
+    "$VALUES" "$STATE" "$CANDIDATE" passed "Synthetic read-only checks passed" \
+    "READONLY-$HOLDER-passed"
   [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh "${source_args[@]}" release-reopen \
     "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
@@ -407,6 +418,70 @@ EOF
   jq -e '.items[] | select(.metadata.name == "tags") | .spec.replicas == 2' "$MOCK_LOG.deployments"
 }
 
+@test "failed maintenance entry records interrupted recovery state and retains the lease" {
+  export MOCK_BACKUP=true MOCK_RELEASE_ROLLOUT_FAIL=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance"
+  run bash .scripts/production-k3d.sh maintenance-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "recovery-required" and .phase == "interrupted"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e '.metadata.annotations["recipe-db/phase"] == "recovery-required"' \
+    "$MOCK_LOG.lease" > /dev/null
+}
+
+@test "maintenance capture stays blocked until verified restoration and retries failed restoration" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance" holder
+  run bash .scripts/production-k3d.sh maintenance-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -er .backupId "$snapshot/backup-state.json")
+  jq -e '.status == "maintenance-mode" and .phase == "maintenance-entered"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "maintenance-entered"' "$MOCK_LOG.lease" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .status.readyReplicas == .spec.replicas
+      and .spec.template.spec.containers[0].env[0].value == "maintenance"' \
+    "$MOCK_LOG.deployments" > /dev/null
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "backup-mode" and .phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
+  jq -e 'all(.items[] | select(.metadata.name == "recipes" or .metadata.name == "images");
+    .spec.replicas == 0)' "$MOCK_LOG.deployments" > /dev/null
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  jq -e '.phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
+  jq -n --arg id "$holder" '{backupId:$id,status:"verified-upload"}' > "$FIXTURE_ROOT/backups/status.json"
+  export MOCK_PROJECTION_FAIL=true
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
+  [ "$status" -ne 0 ]
+  jq -e '.status == "backup-mode" and .phase == "restoration-pending"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
+  export MOCK_PROJECTION_FAIL=false
+  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "captured" and .phase == "captured" and .maintenanceRestored == true' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "captured"' "$MOCK_LOG.lease" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .status.readyReplicas == .spec.replicas
+      and .spec.template.spec.containers[0].env[0].value == "maintenance"' \
+    "$MOCK_LOG.deployments" > /dev/null
+  jq -e 'all(.items[] | select(.metadata.name == "recipes" or .metadata.name == "images");
+    .status.readyReplicas == .spec.replicas
+      and .spec.template.spec.containers[0].env[0].value == "production")' \
+    "$MOCK_LOG.deployments" > /dev/null
+  run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
+  [ "$status" -eq 0 ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovered"' "$snapshot/backup-state.json" > /dev/null
+}
+
 @test "maintenance capture continues the saved operation and retains its lock and recovery state" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/maintenance-capture" holder
@@ -431,6 +506,21 @@ EOF
   run bash .scripts/production-k3d.sh backup-exit "$VALUES" "$snapshot" "$holder" "EXIT-$holder"
   [ "$status" -eq 0 ]
   [ ! -e "$MOCK_LOG.lease" ]
+}
+
+@test "backup-mode capture retains its distinct blocked handoff" {
+  export MOCK_BACKUP=true
+  local snapshot="$FIXTURE_ROOT/backups/maintenance" holder
+  run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -eq 0 ]
+  holder=$(jq -er .backupId "$snapshot/backup-state.json")
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
+  [ "$status" -eq 0 ]
+  jq -e '.status == "captured" and .phase == "captured" and .maintenanceKind == "backup-only"' \
+    "$snapshot/backup-state.json" > /dev/null
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
 }
 
 @test "pinned tooling captures maintenance using the original release sources and existing guards" {
@@ -625,6 +715,18 @@ EOF
   [ ! -e "$snapshot/manifest.json" ]
   [ ! -e "$MOCK_LOG.lease" ]
   run ! grep -q 'exec backup-copy-.*-- tar -C' "$MOCK_LOG"
+}
+
+@test "maintenance entry refuses insufficient capacity before blocking writes" {
+  export MOCK_BACKUP=true
+  yq -i '.volumes.recipes = "99999999Gi"' "$VALUES"
+  local snapshot="$FIXTURE_ROOT/backups/maintenance"
+  run bash .scripts/production-k3d.sh maintenance-enter "$VALUES" "$ARTIFACT" "$snapshot"
+  [ "$status" -ne 0 ]
+  [[ $output == *"snapshot filesystem needs selected PVC capacity"* ]]
+  [ ! -e "$snapshot" ]
+  [ ! -e "$MOCK_LOG.lease" ]
+  run ! grep -Eq ' (scale|set env) deployment/' "$MOCK_LOG"
 }
 
 @test "capture respects the publisher staging bound before copying a PVC archive" {
@@ -910,19 +1012,26 @@ EOF
   [ "$status" -eq 0 ]
   nats_ready=$(awk -v start="$start_log" 'NR > start && /rollout status deployment\/nats / {print NR; exit}' "$MOCK_LOG")
   init_done=$(awk -v start="$start_log" 'NR > start && /wait --for=condition=complete job\/nats-init/ {print NR; exit}' "$MOCK_LOG")
-  graph_barrier=$(awk -v start="$start_log" 'NR > start && /set env deployment\/graphql MODE=backup/ {print NR; exit}' "$MOCK_LOG")
+  graph_barrier=$(awk -v start="$start_log" 'NR > start && /set env deployment\/graphql MODE=maintenance/ {print NR; exit}' "$MOCK_LOG")
   [ -n "$nats_ready" ] && [ -n "$init_done" ] && [ -n "$graph_barrier" ]
   [ "$nats_ready" -lt "$init_done" ] && [ "$init_done" -lt "$graph_barrier" ]
   jq -e '.status == "release-ready" and .phase == "ready"' "$STATE/backup-state.json" > /dev/null
   jq -e 'any(.items[]; .metadata.name == "graphql"
-    and .spec.template.spec.containers[0].env[0].value == "backup")
+    and .spec.template.spec.containers[0].env[0].value == "maintenance")
     and all(.items[]; (.status.readyReplicas // 0) == (.spec.replicas // 0))' \
     "$MOCK_LOG.deployments" > /dev/null
 
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "maintenance"' "$MOCK_LOG.deployments" > /dev/null
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Read-only release checks passed" "READONLY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" OPEN-wrong
   [ "$status" -ne 0 ]
   jq -e '.items[] | select(.metadata.name == "graphql")
-    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
+    | .spec.template.spec.containers[0].env[0].value == "maintenance"' "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -eq 0 ]
   jq -e '.status == "access-open" and .phase == "operator-reopened"' "$STATE/backup-state.json" > /dev/null
@@ -934,6 +1043,141 @@ EOF
   jq -e '.items[] | select(.metadata.name == "graphql")
     | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
   [ -e "$MOCK_LOG.lease" ]
+}
+
+@test "failed candidate read-only checks keep GraphQL in maintenance and refuse reopening" {
+  prepare_candidate_release
+  complete_candidate_release no-migration-required
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "Synthetic read-only check failed" "READONLY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" \
+    "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  [[ $output == *"ready candidate and passed read-only checks"* ]]
+  jq -e '.readOnlyCheck.outcome == "failed"
+    and .status == "release-ready" and .phase == "read-only-failed"' \
+    "$STATE/backup-state.json" > /dev/null
+  jq -e --arg holder "$HOLDER" '.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "read-only-failed"' \
+    "$MOCK_LOG.lease" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "maintenance"' \
+    "$MOCK_LOG.deployments" > /dev/null
+}
+
+@test "failed read-only checks permit only an explicit guarded retry without losing migration state" {
+  complete_candidate_migration
+  run bash .scripts/production-k3d.sh release-start "$VALUES" "$STATE" "$CANDIDATE"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "First failure" "READONLY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  jq '{migrationResult,migrationExecution}' "$STATE/backup-state.json" > migration-before.json
+  cp "$STATE/backup-state.json" before-retry.json
+
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry" "READONLY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  [[ $output == *"READONLY-RETRY-<holder>-<result>"* ]]
+  cmp before-retry.json "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "ghcr.io/dhhyi/recipe-db-releases@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" \
+    passed "Retry" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  cmp before-retry.json "$STATE/backup-state.json"
+
+  cp "$MOCK_LOG.lease" lease-before.json
+  jq '.metadata.annotations["recipe-db/phase"]="ready"' "$MOCK_LOG.lease" > lease.next
+  mv lease.next "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  cmp before-retry.json "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "First failure" "READONLY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Lease handoff reconciled"* ]]
+  cmp before-retry.json "$STATE/backup-state.json"
+  cmp lease-before.json "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "First failure" "READONLY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  cmp before-retry.json "$STATE/backup-state.json"
+
+  jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[0].env[]
+    | select(.name == "MODE").value)="production"' "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  cmp before-retry.json "$STATE/backup-state.json"
+  jq '(.items[] | select(.metadata.name == "graphql").spec.template.spec.containers[0].env[]
+    | select(.name == "MODE").value)="maintenance"' "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "Second failure" "READONLY-RETRY-$HOLDER-failed"
+  [ "$status" -eq 0 ]
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  jq -e '.readOnlyCheck.outcome == "passed"
+    and [.readOnlyCheckHistory[].notes] == ["First failure", "Second failure"]
+    and .status == "release-ready" and .phase == "ready"' "$STATE/backup-state.json" > /dev/null
+  jq '{migrationResult,migrationExecution}' "$STATE/backup-state.json" > migration-after.json
+  cmp migration-before.json migration-after.json
+  jq -e --arg holder "$HOLDER" '.spec.holderIdentity == $holder
+    and .metadata.annotations["recipe-db/phase"] == "read-only-passed"' "$MOCK_LOG.lease" > /dev/null
+  cp "$STATE/backup-state.json" passed-before-reconcile.json
+  jq '.metadata.annotations["recipe-db/phase"]="read-only-failed"' "$MOCK_LOG.lease" > lease.next
+  mv lease.next "$MOCK_LOG.lease"
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    ((. // [] | map(select(.name != "MODE"))) + [{name:"MODE",value:"backup"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -ne 0 ]
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    (map(select(.name != "MODE")) + [{name:"MODE",value:"production"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  [[ $output == *"Lease handoff reconciled"* ]]
+  cmp passed-before-reconcile.json "$STATE/backup-state.json"
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" passed "Retry passed" "READONLY-RETRY-$HOLDER-passed"
+  [ "$status" -eq 0 ]
+  cmp passed-before-reconcile.json "$STATE/backup-state.json"
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    (map(select(.name != "MODE")) + [{name:"MODE",value:"backup"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -ne 0 ]
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    (map(select(.name != "MODE")) + [{name:"MODE",value:"production"}])' \
+    "$MOCK_LOG.deployments" > deployments.next
+  mv deployments.next "$MOCK_LOG.deployments"
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "maintenance"' "$MOCK_LOG.deployments" > /dev/null
+  run bash .scripts/production-k3d.sh release-readonly-result "$VALUES" "$STATE" \
+    "$CANDIDATE" failed "Overwrite" "READONLY-RETRY-$HOLDER-failed"
+  [ "$status" -ne 0 ]
+  run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
+  [ "$status" -eq 0 ]
 }
 
 @test "candidate startup makes dependencies and the private projection route available before search readiness" {
@@ -951,7 +1195,7 @@ EOF
   [ "$search_ready" -lt "$projection_reset" ]
   jq -e '.status == "release-ready" and .phase == "ready"' "$STATE/backup-state.json" > /dev/null
   jq -e '.items[] | select(.metadata.name == "graphql") |
-    any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "backup")' \
+    any(.spec.template.spec.containers[].env[]; .name == "MODE" and .value == "maintenance")' \
     "$MOCK_LOG.deployments" > /dev/null
   [ -f "$MOCK_LOG.lease" ]
 }
@@ -970,7 +1214,7 @@ EOF
     and .metadata.annotations["recipe-db/phase"] == "recovery-required"
   ' "$MOCK_LOG.lease" > /dev/null
   jq -e '.items[] | select(.metadata.name == "graphql")
-    | .spec.replicas == 1 and .spec.template.spec.containers[0].env[0].value == "backup"' \
+    | .spec.replicas == 1 and .spec.template.spec.containers[0].env[0].value == "maintenance"' \
     "$MOCK_LOG.deployments" > /dev/null
   run bash .scripts/production-k3d.sh release-reopen "$VALUES" "$STATE" "$CANDIDATE" "OPEN-$HOLDER"
   [ "$status" -ne 0 ]
@@ -2225,22 +2469,22 @@ PY
   run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
     verified-upload "VERIFIED-$HOLDER-verified-upload"
   [ "$status" -ne 0 ]
-  [[ $output == *"GraphQL maintenance access barrier is not active"* ]]
+  [[ $output == *"previous release is not serving reads behind the GraphQL maintenance barrier"* ]]
   [ "$(jq -r '.status + "/" + .phase' "$STATE/backup-state.json")" = "captured/captured" ]
   run ! grep -q 'apply -f .*staged-application.yml' "$MOCK_LOG"
 }
 
-@test "candidate staging rejects restarted storage workloads" {
+@test "candidate staging rejects a backend left in backup mode" {
   prepare_captured_release
-  jq '(.items[] | select(.metadata.name == "recipes")) |=
-    (.spec.replicas=1 | .status.readyReplicas=1)' \
+  jq '(.items[] | select(.metadata.name == "recipes").spec.template.spec.containers[0].env) |=
+    ((. // [] | map(select(.name != "MODE"))) + [{name:"MODE",value:"backup"}])' \
     "$MOCK_LOG.deployments" > "$MOCK_LOG.deployments.next"
   mv "$MOCK_LOG.deployments.next" "$MOCK_LOG.deployments"
 
   run bash .scripts/production-k3d.sh release-stage "$VALUES" "$STATE" "$CANDIDATE" \
     verified-upload "VERIFIED-$HOLDER-verified-upload"
   [ "$status" -ne 0 ]
-  [[ $output == *"storage workloads restarted after maintenance capture"* ]]
+  [[ $output == *"previous release is not serving reads behind the GraphQL maintenance barrier"* ]]
   [ "$(jq -r '.status + "/" + .phase' "$STATE/backup-state.json")" = "captured/captured" ]
   run ! grep -q 'apply -f .*staged-application.yml' "$MOCK_LOG"
 }
@@ -2269,6 +2513,8 @@ PY
     .candidate.artifact == $candidate
     and .candidateHistory[-1].candidate.artifact == $previous
     and .candidateHistory[-1].postCheckDisposition.choice == "temporary-fix"
+    and .candidateHistory[-1].readOnlyCheck.outcome == "passed"
+    and .readOnlyCheck == null and .readOnlyCheckHistory == []
     and .migrationResult == null and .postCheckDisposition == null
   ' "$STATE/backup-state.json" > /dev/null
   CANDIDATE=$next_candidate
@@ -2672,6 +2918,8 @@ assert json.loads((state_path/"backup-state.json").read_text())["phase"] == "can
 assert state_path.with_name(state_path.name+".previous-runtime-secret.json").is_file()
 command("release-migration-next",candidate)
 command("release-start",candidate)
+command("release-readonly-result",candidate,"passed","Read-only checks passed",
+        f"READONLY-{holder}-passed")
 command("release-reopen",candidate,f"OPEN-{holder}")
 command("release-website-result",candidate,"passed","Checked website",f"WEBSITE-{holder}-passed")
 reference = state_path.parent/"backup-release-ref"

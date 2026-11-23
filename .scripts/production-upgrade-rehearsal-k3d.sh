@@ -19,13 +19,12 @@ die() {
   exit 1
 }
 
-[[ $# == 6 ]] || die 'usage: mise run production-upgrade-rehearsal-k3d <backup-manifest> <backup-archive> <verified-upload|verified-unchanged> <VERIFIED-backup-id-status> <candidate-release@sha256:digest> <new-absolute-result-directory>'
+[[ $# == 5 ]] || die 'usage: mise run production-upgrade-rehearsal-k3d <backup-manifest> <backup-archive> <maintenance-retrieval.json> <candidate-release@sha256:digest> <new-absolute-result-directory>'
 input_manifest=$1
 input_archive=$2
-backup_status=$3
-backup_confirmation=$4
-candidate=$5
-result_directory=$6
+retrieval_receipt=$3
+candidate=$4
+result_directory=$5
 [[ $candidate =~ ^ghcr\.io/dhhyi/recipe-db-releases@sha256:[a-f0-9]{64}$ ]] \
   || die 'candidate must be an immutable recipe-db release artifact'
 [[ $input_manifest == /* && $input_archive == /* ]] \
@@ -47,6 +46,7 @@ check_private_file() {
 
 check_private_file "$input_manifest"
 check_private_file "$input_archive"
+check_private_file "$retrieval_receipt"
 [[ $(dirname "$input_manifest") == "$(dirname "$input_archive")" ]] \
   || die 'backup manifest and archive must be in the same private directory'
 [[ $(basename "$input_manifest") == "$(basename "${input_archive%.tar.gz}").manifest.json" ]] \
@@ -87,10 +87,23 @@ jq -e '.source.target == "pi" and .source.cluster == "recipe-db-pi"
   and .source.context == "recipe-db-pi" and .source.namespace == "recipe-db"' \
   "$input_manifest" > /dev/null || die 'backup package is not from the documented Pi production target'
 [[ $candidate != "$source_release" ]] || die 'candidate must differ from the backup source release'
-[[ $backup_status == verified-upload || $backup_status == verified-unchanged ]] \
-  || die 'backup status must be the current Pi uploader result: verified-upload or verified-unchanged'
-[[ $backup_confirmation == "VERIFIED-$backup_id-$backup_status" ]] \
-  || die 'backup status requires the exact VERIFIED-<backup-id>-<status> confirmation after checking the Pi baseline'
+jq -e --arg id "$backup_id" --arg manifest "$input_manifest" \
+  --arg archive "$input_archive" --arg artifact "$source_release" \
+  --arg revision "$source_revision" --arg capturedAt "$(jq -r .capturedAt "$input_manifest")" '
+  .backupId == $id and .manifest == $manifest and .archive == $archive
+  and .maintenanceOperation.backupId == $id
+  and .maintenanceOperation.status == "captured"
+  and .maintenanceOperation.phase == "captured"
+  and (.maintenanceOperation.uploadStatus == "verified-upload"
+    or .maintenanceOperation.uploadStatus == "verified-unchanged")
+  and .maintenanceOperation.capturedAt == $capturedAt
+  and .maintenanceOperation.source.artifact == $artifact
+  and .maintenanceOperation.source.revision == $revision
+' "$retrieval_receipt" > /dev/null \
+  || die 'retrieval receipt does not identify this exact backup and retained maintenance operation'
+maintenance_operation_status=$(jq -r '.maintenanceOperation.status' "$retrieval_receipt")
+maintenance_operation_phase=$(jq -r '.maintenanceOperation.phase' "$retrieval_receipt")
+backup_status=$(jq -r '.maintenanceOperation.uploadStatus' "$retrieval_receipt")
 backup_archive_sha=$(jq -er '.archive.sha256 | select(test("^[a-f0-9]{64}$"))' "$input_manifest") \
   || die 'backup manifest has no valid archive digest'
 backup_captured_at=$(jq -er '.capturedAt | select(type == "string" and length > 0)' "$input_manifest") \
@@ -170,8 +183,8 @@ printf '[]\n' > "$phases_file"
 
 # shellcheck disable=SC2329
 remove_input_copies() {
-  rm -- "$input_manifest" "$input_archive" \
-    && [[ ! -e $input_manifest && ! -e $input_archive ]]
+  rm -- "$input_manifest" "$input_archive" "$retrieval_receipt" \
+    && [[ ! -e $input_manifest && ! -e $input_archive && ! -e $retrieval_receipt ]]
 }
 
 # These functions are reached indirectly through the EXIT trap.
@@ -194,6 +207,8 @@ write_result() {
     --arg backupId "$backup_id" --arg backupRelease "$source_release" \
     --arg backupRevision "$source_revision" --arg backupArchiveSha256 "$backup_archive_sha" \
     --arg backupCapturedAt "$backup_captured_at" \
+    --arg maintenanceStatus "$maintenance_operation_status" \
+    --arg maintenancePhase "$maintenance_operation_phase" \
     --arg backupStatus "$backup_status" \
     --arg inputPackageStatus "$input_package_validation_status" \
     --arg candidate "$candidate" --arg candidateRevision "$candidate_revision" \
@@ -227,8 +242,10 @@ write_result() {
         sourceRelease:$backupRelease,sourceRevision:$backupRevision,
         archiveSha256:$backupArchiveSha256,operatorProvided:true,
         remoteUploadStatusIndependentlyVerified:$remoteStatusVerified,
-        operatorReportedUploadStatus:$backupStatus,
-        operatorAttestedBaselineBackupId:$backupId,
+        maintenanceOperation:{status:$maintenanceStatus,phase:$maintenancePhase,
+          uploadStatus:$backupStatus},
+        verifiedUploadStatus:$backupStatus,
+        retrievedFromMaintenanceOperation:true,
         packageValidation:$inputPackageStatus,
         rehearsalCaptureStatus:$sourcePackageStatus},
       deployedIdentity:{release:$deployedRelease,revision:$deployedRevision,
@@ -432,7 +449,7 @@ lifecycle() {
     fi
     checkout=$root
     case "$1" in
-      restore | backup-enter | backup-capture) from_git=true ;;
+      restore | maintenance-enter | maintenance-restore | backup-enter | backup-capture) from_git=true ;;
     esac
   fi
   if [[ $from_git == true ]]; then
@@ -638,12 +655,13 @@ new_cluster() {
 }
 
 prepare_fake_upload() {
-  local label=$1 source_snapshot=$2 deployment_id capture quoted
+  local label=$1 source_snapshot=$2 source_values=$3 deployment_id capture
+  [[ $source_snapshot == "$work/uploader/$label/maintenance" ]] \
+    || die "$label rehearsal snapshot does not match the retained uploader operation"
   deployment_id="issue-251-$run_id-$label"
   capture="$work/$label-capture-existing-snapshot"
-  quoted=$(printf '%s' "$source_snapshot" | jq -Rr '@sh')
-  printf '#!/bin/sh\nset -eu\n[ "$#" -eq 1 ] || exit 2\nmkdir -m 700 -- "$1"\ncp -a -- %s/. "$1/"\n' \
-    "$quoted" > "$capture"
+  printf '#!/bin/bash\nset -eu\n[[ $# == 2 && $1 == maintenance-restore ]] || exit 2\ncd %q\nexec %q exec -- bash %q --release-sources-from-git maintenance-restore %q "$2"\n' \
+    "$root" "$(command -v mise)" "$root/.scripts/production-k3d.sh" "$source_values" > "$capture"
   chmod 700 "$capture"
   printf '{}\n' > "$work/$label-rclone.conf"
   jq -n --arg config "$work/$label-rclone.conf" --arg state "$work/uploader/$label" \
@@ -835,20 +853,17 @@ run_scenario() {
   local label=$1 source_values=$2 candidate_values=$3
   local state package_id smoke_script_backup
   local package_manifest package_archive migration_digest migration_image job lease transition
-  state="$work/state/$label"
-  if [[ $label == successful-upgrade ]]; then
-    mkdir -p -- "$work/uploader/$label"
-    state="$work/uploader/$label/maintenance"
-  fi
+  mkdir -p -- "$work/uploader/$label"
+  state="$work/uploader/$label/maintenance"
   take_sample "$source_values"
 
   phase="$label-capture-maintenance-snapshot"
   run_logged "$work/logs/$label-maintenance-enter.log" lifecycle "$source_worktree" false \
-    backup-enter "$source_values" "$source_release" "$state"
+    maintenance-enter "$source_values" "$source_release" "$state"
   run_logged "$work/logs/$label-maintenance-capture.log" lifecycle "$source_worktree" false \
     backup-capture "$source_values" "$state"
   [[ -s $state/manifest.json ]] || die "$label maintenance snapshot has no complete manifest"
-  prepare_fake_upload "$label" "$state"
+  prepare_fake_upload "$label" "$state" "$source_values"
   source_package_status=$(jq -r '.status' "$work/uploader/$label/status.json")
   mark
 
@@ -878,11 +893,16 @@ run_scenario() {
     migration_outcome=$(jq -er '.migrationResult.outcome' "$state/backup-state.json")
     actual_versions=$(jq -c '.migrationExecution.versions' "$state/backup-state.json")
     mark
-    phase=successful-upgrade-start-and-reopen-local-route
+    phase=successful-upgrade-start-and-read-only-check
     run_logged "$work/logs/success-start.log" lifecycle "$candidate_worktree" true \
       release-start "$candidate_values" "$state" "$candidate"
     jq -e '.status == "release-ready" and .phase == "ready"' "$state/backup-state.json" \
       > /dev/null || die 'candidate did not reach guarded release-ready state'
+    verify_sample "$candidate_values" successful-upgrade-read-only || return 1
+    run_logged "$work/logs/success-read-only-result.log" lifecycle "$candidate_worktree" true \
+      release-readonly-result "$candidate_values" "$state" "$candidate" passed \
+      'Representative restored recipe and linked data match the source.' "READONLY-$package_id-passed"
+    phase=successful-upgrade-reopen-local-route
     run_logged "$work/logs/success-reopen.log" lifecycle "$candidate_worktree" true \
       release-reopen "$candidate_values" "$state" "$candidate" "OPEN-$package_id"
     verify_sample "$candidate_values" successful-upgrade
@@ -1016,9 +1036,9 @@ run_rehearsal_scenarios() {
 
   run_scenario failure-recovery "$source_values" "$candidate_values"
   phase=reopen-recovered-source
-  package_id=$(jq -er .backupId "$work/state/failure-recovery/backup-state.json")
+  package_id=$(jq -er .backupId "$work/uploader/failure-recovery/maintenance/backup-state.json")
   run_logged "$work/logs/recovery-reopen.log" lifecycle "$root" true \
-    release-recovery-reopen "$source_values" "$work/state/failure-recovery" "$source_release" \
+    release-recovery-reopen "$source_values" "$work/uploader/failure-recovery/maintenance" "$source_release" \
     "OPEN-RECOVERY-$package_id-$source_revision"
   verify_sample "$source_values" recovered-source
   mark
