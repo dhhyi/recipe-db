@@ -174,7 +174,7 @@ prepare_reattach_state() {
   [ "$status" -ne 0 ]
 }
 
-@test "Pi lifecycle config requires a verified UUID while render and status can omit it" {
+@test "Pi lifecycle requires a verified UUID while read-only actions permit placeholders but require storage" {
   local valid="$work/valid-pi.yaml" placeholder="$work/placeholder-pi.yaml" no_storage="$work/no-storage.yaml"
   mise exec -- yq '
     .context = "explicit-pi" |
@@ -198,9 +198,9 @@ prepare_reattach_state() {
 
   mise exec -- yq 'del(.piStorage)' "$valid" > "$no_storage"
   run production_config "$no_storage" render
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
   run production_config "$no_storage" status
-  [ "$status" -eq 0 ]
+  [ "$status" -ne 0 ]
 }
 
 @test "deployment secrets resolve from either home and reject missing or escaping relative inputs" {
