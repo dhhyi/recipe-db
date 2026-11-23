@@ -237,9 +237,18 @@ fn request_selects_mutation(request: &async_graphql::Request) -> bool {
     let Ok(document) = async_graphql::parser::parse_query(&request.query) else {
         return false;
     };
+    let mut operations = document.operations.iter();
+    let first_operation = operations.next();
     let operation = match request.operation_name.as_deref() {
-        Some(name) => document.operations.get(&Some(name.to_owned())),
-        None if document.operations.len() == 1 => document.operations.values().next(),
+        Some(name) => document
+            .operations
+            .iter()
+            .find_map(|(operation_name, operation)| {
+                operation_name
+                    .is_some_and(|operation_name| operation_name.as_str() == name)
+                    .then_some(operation)
+            }),
+        None if operations.next().is_none() => first_operation.map(|(_, operation)| operation),
         None => None,
     };
     operation.is_some_and(|operation| {
