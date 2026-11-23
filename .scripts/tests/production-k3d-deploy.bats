@@ -203,13 +203,22 @@ google_https_values() {
 @test "Google HTTPS requires only challenge and secure ports on the actual LoadBalancer" {
   google_https_values
   export MOCK_LAN=true
-  for combination in nodeport missing-https private-http; do
+  for combination in nodeport missing-https private-http wrong-target wrong-protocol; do
     if [[ $combination = nodeport ]]; then
       export MOCK_HTTPS=true MOCK_NODEPORT=true MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
     elif [[ $combination = private-http ]]; then
       export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=true
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
+    elif [[ $combination = wrong-target ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=true MOCK_PROTOCOL_DRIFT=false
+    elif [[ $combination = wrong-protocol ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=true
     else
       export MOCK_HTTPS=false MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
+      export MOCK_TARGET_DRIFT=false MOCK_PROTOCOL_DRIFT=false
     fi
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]
