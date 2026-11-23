@@ -42,8 +42,9 @@ document.addEventListener("htmx:beforeTransition", (event) => {
         return;
       }
       transition.types.add("recipe-open");
-      void transition.finished.finally(() =>
-        tile.removeAttribute("data-transition-selected"),
+      void transition.finished.then(
+        () => tile.removeAttribute("data-transition-selected"),
+        () => tile.removeAttribute("data-transition-selected"),
       );
     });
     return;

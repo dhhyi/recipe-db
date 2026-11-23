@@ -174,22 +174,29 @@ header-component > header:focus-within {
     view-transition-name: var(--recipe-tile-transition-name, none);
   }
 
-  :root:active-view-transition-type(recipe-open) {
-    recipe-tile-component:not([data-transition-selected]) img,
-    recipe-tile-component:not([data-transition-selected]) a[slot="rating"] {
-      view-transition-name: none !important;
-    }
+  recipe-tile-component img,
+  recipe-tile-component a[slot="rating"] {
+    view-transition-name: none !important;
+  }
+}
+
+:root:active-view-transition-type(recipe-open) {
+  recipe-tile-component:not([data-transition-selected]) img,
+  recipe-tile-component:not([data-transition-selected]) a[slot="rating"] {
+    view-transition-name: none !important;
   }
 
-  :root:active-view-transition-type(browse-home) {
+  &:has(recipe-tile-component[data-transition-selected]) {
     .recipe-image,
-    .recipe-rating,
-    recipe-tile-component img,
-    recipe-tile-component a[slot="rating"] {
+    .recipe-rating {
       view-transition-name: none !important;
     }
   }
+}
 
+:root:active-view-transition-type(browse-home) {
+  .recipe-image,
+  .recipe-rating,
   recipe-tile-component img,
   recipe-tile-component a[slot="rating"] {
     view-transition-name: none !important;

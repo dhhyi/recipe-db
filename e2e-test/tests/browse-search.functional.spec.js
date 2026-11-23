@@ -886,27 +886,15 @@ for (const cacheSize of [10, 0]) {
       // scroll positioning is left to HTMX/browser navigation, not a controller.
       await expect(search).toBeVisible();
       await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
-      await expect
-        .poll(() => page.evaluate(() => window.historyTransitions[0]?.finished))
-        .toBe(true);
-      expect(
-        await page.evaluate(() => window.historyTransitions[0].types),
-      ).toEqual(["browse-return"]);
+      expect(await page.evaluate(() => window.historyTransitions)).toEqual([]);
       await page.goForward();
       await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
       await expect(page.locator(".recipe-image")).toBeVisible();
-      await expect
-        .poll(() => page.evaluate(() => window.historyTransitions[1]?.finished))
-        .toBe(true);
-      expect(
-        await page.evaluate(() => window.historyTransitions[1].types),
-      ).toEqual(["history-page"]);
+      expect(await page.evaluate(() => window.historyTransitions)).toEqual([]);
       await page.goBack();
       await expect(search).toHaveValue("boundary");
       await expect(page.locator("[data-recipe-id]")).toHaveCount(72);
-      await expect
-        .poll(() => page.evaluate(() => window.historyTransitions[2]?.finished))
-        .toBe(true);
+      expect(await page.evaluate(() => window.historyTransitions)).toEqual([]);
       await page.reload();
       await expect(page.locator("#browse-metadata")).toHaveAttribute(
         "data-page",
