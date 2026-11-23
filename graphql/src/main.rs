@@ -177,60 +177,142 @@ async fn multipart_operation_is_mutation(
     boundary: &str,
 ) -> Option<bool> {
     let first_boundary = format!("--{boundary}\r\n");
-    while prefix.len() < first_boundary.len() {
-        match read_multipart_chunk(stream, prefix).await {
-            Ok(true) => {}
-            Ok(false) => return Some(true),
-            Err(()) => return None,
-        }
-    }
-    if !prefix.starts_with(first_boundary.as_bytes()) {
+    let Some(first_boundary_offset) =
+        read_multipart_until(stream, prefix, first_boundary.as_bytes(), 0)
+            .await
+            .ok()?
+    else {
+        return Some(true);
+    };
+    if first_boundary_offset != 0 {
         return Some(true);
     }
 
-    let header_start = first_boundary.len();
-    let header_end = loop {
-        if let Some(position) = find_subslice(&prefix[header_start..], b"\r\n\r\n") {
-            break header_start + position;
-        }
-        if prefix.len() > 16 * 1024 {
+    let delimiter = format!("\r\n--{boundary}");
+    let mut header_start = first_boundary.len();
+    let mut is_operations_part = true;
+    loop {
+        let Some(header_end) = read_multipart_until(stream, prefix, b"\r\n\r\n", header_start)
+            .await
+            .ok()?
+        else {
+            return Some(true);
+        };
+        let Some((name, has_filename)) =
+            multipart_part_disposition(&prefix[header_start..header_end])
+        else {
+            return Some(true);
+        };
+        if (is_operations_part && name != "operations")
+            || (!is_operations_part && name == "operations")
+        {
             return Some(true);
         }
-        match read_multipart_chunk(stream, prefix).await {
-            Ok(true) => {}
-            Ok(false) => return Some(true),
-            Err(()) => return None,
+        if has_filename {
+            return Some(false);
         }
-    };
-    let headers = String::from_utf8_lossy(&prefix[header_start..header_end]).to_ascii_lowercase();
-    if !headers.contains("content-disposition: form-data; name=\"operations\"") {
-        return Some(true);
+
+        let body_start = header_end + 4;
+        let Some(body_end) =
+            read_multipart_part_end(stream, prefix, body_start, delimiter.as_bytes())
+                .await
+                .ok()?
+        else {
+            return Some(true);
+        };
+        if is_operations_part
+            && serde_json::from_slice::<serde_json::Value>(&prefix[body_start..body_end])
+                .is_ok_and(|operations| json_operations_contain_mutation(&operations))
+        {
+            return Some(true);
+        }
+
+        let suffix_start = body_end + delimiter.len();
+        match prefix.get(suffix_start..suffix_start + 2) {
+            Some(b"--") => return Some(false),
+            Some(b"\r\n") => {
+                header_start = suffix_start + 2;
+                is_operations_part = false;
+            }
+            _ => return Some(true),
+        }
+    }
+}
+
+fn multipart_part_disposition(headers: &[u8]) -> Option<(String, bool)> {
+    let headers = std::str::from_utf8(headers).ok()?;
+    let disposition = headers.split("\r\n").find_map(|header| {
+        let (name, value) = header.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("content-disposition")
+            .then_some(value.trim())
+    })?;
+    let mut parameters = disposition.split(';');
+    if !parameters.next()?.trim().eq_ignore_ascii_case("form-data") {
+        return None;
     }
 
-    let operations_start = header_end + 4;
-    let delimiter = format!("\r\n--{boundary}");
-    let operations_end = loop {
-        if let Some(position) = find_subslice(&prefix[operations_start..], delimiter.as_bytes()) {
-            let end = operations_start + position;
-            let suffix_start = end + delimiter.len();
+    let mut name = None;
+    let mut has_filename = false;
+    for parameter in parameters {
+        let (key, value) = parameter.trim().split_once('=')?;
+        let key = key.trim();
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(value);
+        if key.eq_ignore_ascii_case("name") {
+            if name.replace(value.to_owned()).is_some() {
+                return None;
+            }
+        } else if key.eq_ignore_ascii_case("filename") {
+            has_filename = true;
+        }
+    }
+    Some((name?, has_filename))
+}
+
+async fn read_multipart_until(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+    delimiter: &[u8],
+    start: usize,
+) -> Result<Option<usize>, ()> {
+    loop {
+        if let Some(position) = find_subslice(&prefix[start..], delimiter) {
+            return Ok(Some(start + position));
+        }
+        if prefix.len().saturating_sub(start) > 16 * 1024 {
+            return Ok(None);
+        }
+        if !read_multipart_chunk(stream, prefix).await? {
+            return Ok(None);
+        }
+    }
+}
+
+async fn read_multipart_part_end(
+    stream: &mut (impl Stream<Item = Result<Bytes, axum::Error>> + Unpin),
+    prefix: &mut Vec<u8>,
+    body_start: usize,
+    delimiter: &[u8],
+) -> Result<Option<usize>, ()> {
+    loop {
+        if let Some(position) = find_subslice(&prefix[body_start..], delimiter) {
+            let body_end = body_start + position;
+            let suffix_start = body_end + delimiter.len();
             if prefix
                 .get(suffix_start..suffix_start + 2)
                 .is_some_and(|suffix| suffix == b"\r\n" || suffix == b"--")
             {
-                break end;
+                return Ok(Some(body_end));
             }
         }
-        match read_multipart_chunk(stream, prefix).await {
-            Ok(true) => {}
-            Ok(false) => return Some(true),
-            Err(()) => return None,
+        if !read_multipart_chunk(stream, prefix).await? {
+            return Ok(None);
         }
-    };
-
-    Some(
-        serde_json::from_slice::<serde_json::Value>(&prefix[operations_start..operations_end])
-            .is_ok_and(|operations| json_operations_contain_mutation(&operations)),
-    )
+    }
 }
 
 async fn read_multipart_chunk(
@@ -974,15 +1056,56 @@ mod ingress_tests {
         assert_eq!(result["errors"][0]["extensions"]["status"], 503);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-        let multipart_query_body = concat!(
+        for disposition in [
+            "Content-Disposition: form-data; name=operations\r\n",
+            "Content-Disposition: form-data;name=\"operations\"\r\n",
+        ] {
+            let multipart_query_body = format!(
+                concat!(
+                    "--maintenance-boundary\r\n",
+                    "{disposition}",
+                    "Content-Type: application/json\r\n\r\n",
+                    "{{\"query\":\"{{ maintenance }}\"}}\r\n",
+                    "--maintenance-boundary\r\n",
+                    "Content-Disposition: form-data; name=\"map\"\r\n",
+                    "Content-Type: application/json\r\n\r\n",
+                    "{{}}\r\n",
+                    "--maintenance-boundary--\r\n"
+                ),
+                disposition = disposition
+            );
+            let response = reqwest::Client::new()
+                .post(format!("http://{graphql_address}/graphql"))
+                .header(
+                    "content-type",
+                    "multipart/form-data; boundary=maintenance-boundary",
+                )
+                .body(multipart_query_body)
+                .send()
+                .await
+                .unwrap();
+            let result: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(result["data"]["maintenance"], true);
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+
+        let duplicate_operations_body = concat!(
             "--maintenance-boundary\r\n",
-            "Content-Disposition: form-data; name=\"operations\"\r\n",
+            "Content-Disposition: form-data; name=operations\r\n",
             "Content-Type: application/json\r\n\r\n",
             "{\"query\":\"{ maintenance }\"}\r\n",
             "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data;name=\"operations\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+            "--maintenance-boundary\r\n",
             "Content-Disposition: form-data; name=\"map\"\r\n",
             "Content-Type: application/json\r\n\r\n",
-            "{}\r\n",
+            "{\"0\":[\"variables.file\"]}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+            "Content-Type: image/svg+xml\r\n\r\n",
+            "<svg/>\r\n",
             "--maintenance-boundary--\r\n"
         );
         let response = reqwest::Client::new()
@@ -991,12 +1114,15 @@ mod ingress_tests {
                 "content-type",
                 "multipart/form-data; boundary=maintenance-boundary",
             )
-            .body(multipart_query_body)
+            .body(duplicate_operations_body)
             .send()
             .await
             .unwrap();
         let result: serde_json::Value = response.json().await.unwrap();
-        assert_eq!(result["data"]["maintenance"], true);
+        assert_eq!(
+            result["errors"][0]["extensions"]["code"],
+            "maintenance-mode"
+        );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
         let oversized_multipart_body = format!(
