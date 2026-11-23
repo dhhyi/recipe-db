@@ -131,9 +131,41 @@ transitionTest(
           record.selected = document.querySelector("[data-transition-selected]");
           await update();
         });
-        transition.ready.then(() => {
+        transition.ready.then(async () => {
           record.types = [...transition.types];
           record.new = names();
+          if (record.types.includes("recipe-open")) {
+            const selected = record.old.tiles.find((tile) => tile.selected);
+            const animations = document.getAnimations().filter((animation) =>
+              [selected.image, selected.rating].some(
+                (name) =>
+                  name &&
+                  animation.effect?.pseudoElement ===
+                    `::view-transition-group(${name})`,
+              ),
+            );
+            for (const animation of animations) {
+              animation.pause();
+              animation.currentTime = 100;
+            }
+            const wrapper = document.querySelector(".recipe-rating");
+            const widget = wrapper?.firstElementChild;
+            if (widget) {
+              await window.htmx.ajax("GET", `/recipe/${selected.id}/rating`, {
+                target: widget,
+                swap: "outerHTML",
+              });
+            }
+            record.refresh = {
+              replaced: !!widget && !widget.isConnected && wrapper.isConnected,
+              frames: animations.map((animation) => ({
+                pseudo: animation.effect.pseudoElement,
+                time: animation.currentTime,
+                state: animation.playState,
+              })),
+            };
+            for (const animation of animations) animation.play();
+          }
         });
         transition.finished.then(() => {
           record.finished = true;
@@ -173,6 +205,13 @@ transitionTest(
       }
       expect(opening.new.detail).toContain(selected.image);
       expect(opening.new.detail).toContain(selected.rating);
+      expect(opening.refresh.replaced).toBe(true);
+      expect(opening.refresh.frames).toEqual(
+        expect.arrayContaining([
+          { pseudo: `::view-transition-group(${selected.image})`, time: 100, state: "paused" },
+          { pseudo: `::view-transition-group(${selected.rating})`, time: 100, state: "paused" },
+        ]),
+      );
 
       await page.evaluate(() => (window.recipeTransitions = []));
       if (home === "detail") {

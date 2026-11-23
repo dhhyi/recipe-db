@@ -904,6 +904,51 @@ for (const cacheSize of [10, 0]) {
   );
 }
 
+transitionTest("cacheable HTMX history restores back and forward without transitions", async ({
+  page,
+  demoRecipe,
+  request,
+}) => {
+  await waitForRecipeIndexed(request, demoRecipe.id);
+  await page.addInitScript(() => {
+    window.historyEvents = [];
+    window.transitionCount = 0;
+    for (const name of ["htmx:historyCacheHit", "htmx:historyCacheMissLoad"]) {
+      document.addEventListener(name, () => window.historyEvents.push(name));
+    }
+    const start = document.startViewTransition.bind(document);
+    document.startViewTransition = (...args) => {
+      window.transitionCount++;
+      return start(...args);
+    };
+  });
+  await page.goto("/");
+  // Production browse/detail pages opt out of caching; remove the opt-outs
+  // only in this test to exercise HTMX's cache-hit restoration path.
+  await page.evaluate(() =>
+    document.querySelectorAll('[hx-history="false"]').forEach((el) => el.removeAttribute("hx-history")),
+  );
+  await page.locator(`recipe-tile-component[data-recipe-id="${demoRecipe.id}"] a[slot="title"]`).click();
+  await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
+  await expect(page.locator(".recipe-image")).toBeVisible();
+  await page.evaluate(() => {
+    document.querySelectorAll('[hx-history="false"]').forEach((el) => el.removeAttribute("hx-history"));
+    window.historyEvents = [];
+    window.transitionCount = 0;
+  });
+  await page.goBack();
+  await expect(page.locator(`recipe-tile-component[data-recipe-id="${demoRecipe.id}"]`)).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.historyEvents)).toEqual(["htmx:historyCacheHit"]);
+  expect(await page.evaluate(() => window.transitionCount)).toBe(0);
+  await page.goForward();
+  await expect(page.locator(".recipe-image")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.historyEvents)).toEqual([
+    "htmx:historyCacheHit",
+    "htmx:historyCacheHit",
+  ]);
+  expect(await page.evaluate(() => window.transitionCount)).toBe(0);
+});
+
 for (const action of ["sort", "query"]) {
   test(`a ${action} change cancels an older append generation`, async ({
     page,
