@@ -57,7 +57,7 @@ case "$command" in
     [[ $# = 4 ]] || production_fail "release-migration-result requires the maintenance state directory, candidate artifact, outcome and confirmation"
     ;;
   release-start) [[ $# = 2 ]] || production_fail "release-start requires the maintenance state directory and staged candidate artifact" ;;
-  release-readonly-result) [[ $# = 5 ]] || production_fail "release-readonly-result requires the maintenance state directory, ready candidate artifact, passed|failed result, operator notes and READONLY-<holder>-<result> confirmation" ;;
+  release-readonly-result) [[ $# = 5 ]] || production_fail "release-readonly-result requires the maintenance state directory, ready candidate artifact, passed|failed result, operator notes and READONLY-<holder>-<result> confirmation (READONLY-RETRY-<holder>-<result> after failure)" ;;
   release-reopen) [[ $# = 3 ]] || production_fail "release-reopen requires the maintenance state directory, ready candidate artifact and OPEN-<holder> confirmation" ;;
   release-disposition) [[ $# = 4 ]] || production_fail "release-disposition requires the maintenance state directory, candidate artifact, disposition and DISPOSITION-<holder>-<choice> confirmation" ;;
   release-website-result) [[ $# = 5 ]] || production_fail "release-website-result requires the maintenance state directory, candidate artifact, passed|failed result, operator notes and WEBSITE-<holder>-<result> confirmation" ;;
@@ -1333,6 +1333,7 @@ maintenance_enter() {
   application_project_metadata_to_jsonl "$release_root" "$work/projects.jsonl"
   backup_role_inventory
   backup_capture_workloads "$artifact"
+  backup_check_capacity "$parent"
   mkdir -m 700 -- "$snapshot" || production_fail "could not create private maintenance state directory"
   jq -n --arg id "$backup_id" --arg target "$target" --arg cluster "$cluster" \
     --arg context "$context" --arg namespace "$namespace" --arg artifact "$artifact" \
@@ -2145,9 +2146,11 @@ release_stage() {
       '{candidateHistory:(($prior[0].candidateHistory // []) +
           (if $prior[0].candidate then [{candidate:$prior[0].candidate,
             migrationResult:($prior[0].migrationResult // null),
+            readOnlyCheck:($prior[0].readOnlyCheck // null),
+            readOnlyCheckHistory:($prior[0].readOnlyCheckHistory // []),
             postCheckDisposition:($prior[0].postCheckDisposition // null)}] else [] end)),
         candidate:{artifact:$artifact,revision:$revision,configSha256:$configSha256,workloads:$workloads},
-        migrationResult:null,migrationExecution:null,postCheckDisposition:null,
+        migrationResult:null,migrationExecution:null,readOnlyCheck:null,readOnlyCheckHistory:[],postCheckDisposition:null,
         backupVerification:{backupId:$backupId,status:$backupStatus,acknowledgedAt:$verifiedAt}}
       | .candidate.natsInitJob=$natsInitJob
       | if $toolingRevision != "" then .toolingRevision=$toolingRevision else . end')" \
@@ -3932,19 +3935,33 @@ release_start() {
 }
 
 release_readonly_result() {
-  local candidate=$2 result=$3 notes=$4 confirmation=$5
+  local candidate=$2 result=$3 notes=$4 confirmation=$5 retry=false
   release_load_operation "$1" "$candidate"
-  [[ $(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json") == "release-ready/ready" ]] \
-    || production_fail "read-only checks require a ready candidate"
-  release_require_lease_phase ready
-  jq -e '.readOnlyCheck == null' "$snapshot/backup-state.json" > /dev/null \
-    || production_fail "a read-only check result is already recorded"
+  case "$(jq -r '.status + "/" + .phase' "$snapshot/backup-state.json")" in
+    release-ready/ready)
+      release_require_lease_phase ready
+      jq -e '.readOnlyCheck == null' "$snapshot/backup-state.json" > /dev/null \
+        || production_fail "a read-only check result is already recorded"
+      ;;
+    release-ready/read-only-failed)
+      release_require_lease_phase read-only-failed
+      jq -e '.readOnlyCheck.outcome == "failed"' "$snapshot/backup-state.json" > /dev/null \
+        || production_fail "read-only retry requires a recorded failed check"
+      retry=true
+      ;;
+    *) production_fail "read-only checks require a ready candidate" ;;
+  esac
   [[ $result == passed || $result == failed ]] \
     || production_fail "read-only result must be passed or failed"
   [[ -n $notes && ${#notes} -le 1000 && $notes != *$'\n'* ]] \
     || production_fail "read-only notes must be a non-empty single line of at most 1000 characters"
-  [[ $confirmation == "READONLY-$backup_id-$result" ]] \
-    || production_fail "read-only checks require READONLY-<holder>-<result> confirmation"
+  if $retry; then
+    [[ $confirmation == "READONLY-RETRY-$backup_id-$result" ]] \
+      || production_fail "read-only retry requires READONLY-RETRY-<holder>-<result> confirmation"
+  else
+    [[ $confirmation == "READONLY-$backup_id-$result" ]] \
+      || production_fail "read-only checks require READONLY-<holder>-<result> confirmation"
+  fi
   release_assert_candidate "$candidate"
   kube get deployments -o json > "$work/read-only-deployments.json" \
     || production_fail "cannot inspect candidate readiness before recording read-only checks"
@@ -3973,7 +3990,10 @@ release_readonly_result() {
   release_state_write release-ready "$phase" \
     "$(jq -cn --arg outcome "$result" --arg notes "$notes" \
       --arg checkedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{readOnlyCheck:{outcome:$outcome,notes:$notes,checkedAt:$checkedAt}}')" \
+      --argjson retry "$retry" --slurpfile prior "$snapshot/backup-state.json" \
+      '{readOnlyCheckHistory:(($prior[0].readOnlyCheckHistory // []) +
+          (if $retry then [$prior[0].readOnlyCheck] else [] end)),
+        readOnlyCheck:{outcome:$outcome,notes:$notes,checkedAt:$checkedAt}}')" \
     || return 1
   cluster_operation_lock_update "$lease_phase" || return 1
   if [[ $result == failed ]]; then

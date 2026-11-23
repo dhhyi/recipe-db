@@ -283,12 +283,12 @@ and set -g BACKUP_STATUS (mise exec -- jq -er .maintenanceOperation.uploadStatus
 
 Keep `--raw` so authentication prompts work. The command succeeds only when the retained operation is still captured, its uploader reports `verified-upload` or `verified-unchanged` for the same backup ID, and the remote package matches the operation. It verifies both files' identities and hashes over one SSH connection without Pi-side backup staging or copied Drive credentials. Do not retrieve a different or historical backup for this rehearsal.
 
-The downloaded backup is production data; keep the package, receipt, rehearsal directory and result private. The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It checks the live source release and images, compares the backup's storage markers with the source release's declared versions, and uses isolated local clusters only. It never writes to the Pi. The `maintenance-retrieval.json` receipt must remain beside the package inputs until the runner consumes it.
+The downloaded backup is production data; keep the package, receipt, rehearsal directory and result private. The runner also requires `backup-release-ref` and the private `$HOME/.config/recipe-db/deployment/pi-values.yaml` to match the package source and documented Pi configuration, a candidate published by this repository, and the loopback-only Pi API tunnel from step 1. It checks the live source release and images, compares the backup's storage markers with the source release's declared versions, and uses isolated local clusters only. It never writes to the Pi. Keep the `maintenance-retrieval.json` receipt until the runner consumes it.
 
 Run the rehearsal from the reviewed tooling checkout, using the candidate digest prepared in step 1:
 
 ```fish
-set -g RESULT "$RUN_DIRECTORY/result"
+set -g RESULT "$BACKUP_DIRECTORY/result"
 set -g REHEARSAL_LOG (mktemp /tmp/(date -u +%Y-%m-%d-%H%M%S)-release-rehearsal.XXXXXX.log)
 and mise run production-upgrade-rehearsal-k3d \
   "$SOURCE_MANIFEST" "$SOURCE_ARCHIVE" "$RETRIEVAL_RECEIPT" "$RELEASE" "$RESULT" \
@@ -507,6 +507,18 @@ mise run --raw production-release --pi piadmin@recipe-pi.home release-readonly-r
 ```
 
 Use `READONLY_RESULT=failed` and concise, non-sensitive notes on failure. A successful result records the check against the retained backup holder and candidate; it does not change GraphQL mode or open access.
+
+If checks failed, resolve the cause and repeat the read-only checks without writes. Then record the new result on the **workstation** with an explicit retry confirmation:
+
+```fish
+set -g READONLY_RESULT passed
+set -g READONLY_NOTES 'Read-only candidate checks passed on retry'
+mise run --raw production-release --pi piadmin@recipe-pi.home release-readonly-result \
+  "$VALUES" "$RELEASE" "$READONLY_RESULT" "$READONLY_NOTES" \
+  "READONLY-RETRY-$HOLDER-$READONLY_RESULT"
+```
+
+Use `failed` if the repeated checks still fail. The prior failures remain recorded; the candidate, migrated data, maintenance barrier and Lease are retained. A passed retry permits the separately approved reopening in step 9; it does not reopen access itself.
 
 ## 9. Explicitly reopen application access
 
