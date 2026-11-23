@@ -538,7 +538,7 @@ def archive_recovered_maintenance(config):
 
 def write_status(config, status, code, backup_id=None, last_upload=None):
     path = status_path(config)
-    if status != "verified-upload" and pending_verified_maintenance(config):
+    if status != "verified-upload" and protected_verified_maintenance(config):
         return read_json(path)
     prior = {}
     if path.is_file() and not path.is_symlink():
@@ -631,7 +631,9 @@ def run_maintenance_capture(config):
     if current not in (("captured", "captured"), ("backup-mode", "upload-pending"),
                        ("backup-mode", "restoration-pending")):
         raise BackupError("restart-failure", "maintenance-recovery-required")
-    if current == ("captured", "captured") and state.get("maintenanceRestored") is not True:
+    backup_only = state.get("maintenanceKind") == "backup-only"
+    if current == ("captured", "captured") \
+            and state.get("maintenanceRestored") is not True and not backup_only:
         raise BackupError("restart-failure", "maintenance-restoration-unverified")
     try:
         if current != ("backup-mode", "restoration-pending"):
@@ -640,7 +642,7 @@ def run_maintenance_capture(config):
                 raise ValueError("maintenance backup identity mismatch")
             if verified_upload_status(config, backup_id):
                 result = "verified-upload"
-            elif current == ("captured", "captured"):
+            elif current == ("captured", "captured") and not backup_only:
                 raise BackupError("restart-failure", "maintenance-upload-verification-missing")
             else:
                 result = upload_snapshot(snapshot, config, force_upload=True,
@@ -685,6 +687,15 @@ def pending_verified_maintenance(config):
     return isinstance(state, dict) \
         and (state.get("status"), state.get("phase")) in (
             ("backup-mode", "upload-pending"), ("backup-mode", "restoration-pending")) \
+        and verified_upload_status(config, state.get("backupId"))
+
+
+def protected_verified_maintenance(config):
+    if pending_verified_maintenance(config):
+        return True
+    state = lifecycle_state(maintenance_state_path(config))
+    return isinstance(state, dict) and (state.get("status"), state.get("phase")) == ("captured", "captured") \
+        and (state.get("maintenanceRestored") is True or state.get("maintenanceKind") == "backup-only") \
         and verified_upload_status(config, state.get("backupId"))
 
 

@@ -508,20 +508,19 @@ EOF
   [ ! -e "$MOCK_LOG.lease" ]
 }
 
-@test "uploader continues backup-mode entry through verified read-only restoration" {
+@test "backup-mode capture retains its distinct blocked handoff" {
   export MOCK_BACKUP=true
   local snapshot="$FIXTURE_ROOT/backups/maintenance" holder
   run bash .scripts/production-k3d.sh backup-enter "$VALUES" "$ARTIFACT" "$snapshot"
   [ "$status" -eq 0 ]
   holder=$(jq -er .backupId "$snapshot/backup-state.json")
-  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot" --upload-pending
+  run bash .scripts/production-k3d.sh backup-capture "$VALUES" "$snapshot"
   [ "$status" -eq 0 ]
-  jq -e '.status == "backup-mode" and .phase == "upload-pending"' "$snapshot/backup-state.json" > /dev/null
-  jq -n --arg id "$holder" '{backupId:$id,status:"verified-upload"}' > "$FIXTURE_ROOT/backups/status.json"
-  run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
-  [ "$status" -eq 0 ]
-  jq -e '.status == "captured" and .phase == "captured" and .maintenanceRestored == true' \
+  jq -e '.status == "captured" and .phase == "captured" and .maintenanceKind == "backup-only"' \
     "$snapshot/backup-state.json" > /dev/null
+  jq -e --arg holder "$holder" '.spec.holderIdentity == $holder' "$MOCK_LOG.lease" > /dev/null
+  jq -e '.items[] | select(.metadata.name == "graphql")
+    | .spec.template.spec.containers[0].env[0].value == "backup"' "$MOCK_LOG.deployments" > /dev/null
 }
 
 @test "pinned tooling captures maintenance using the original release sources and existing guards" {
