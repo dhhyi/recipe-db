@@ -203,14 +203,35 @@ export class HeaderComponent extends LitElement {
                   ? html`<span
                       class="maintenance-indicator"
                       data-tooltip=${maintenanceDescription}
+                      data-placement="bottom"
                       aria-label=${maintenanceDescription}
                       role="img"
                       tabindex="0"
                     >
-                      <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                        <path d="M12 2.5 1.6 21h20.8L12 2.5Z" fill="#f2cc60" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
-                        <path d="M12 8v6" stroke="#24292f" stroke-width="2" stroke-linecap="round"></path>
-                        <circle cx="12" cy="17.5" r="1.1" fill="#24292f"></circle>
+                      <svg
+                        aria-hidden="true"
+                        focusable="false"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          d="M12 2.5 1.6 21h20.8L12 2.5Z"
+                          fill="#f2cc60"
+                          stroke="currentColor"
+                          stroke-width="1.5"
+                          stroke-linejoin="round"
+                        ></path>
+                        <path
+                          d="M12 8v6"
+                          stroke="#24292f"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                        ></path>
+                        <circle
+                          cx="12"
+                          cy="17.5"
+                          r="1.1"
+                          fill="#24292f"
+                        ></circle>
                       </svg>
                     </span>`
                   : null

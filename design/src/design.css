@@ -166,6 +166,22 @@ header-component > header:focus-within {
   width: 1.25rem;
 }
 
+.maintenance-indicator[data-tooltip][data-placement="bottom"]::before {
+  left: 0;
+  max-width: calc(100vw - 12.5rem);
+  overflow-wrap: anywhere;
+  right: auto;
+  white-space: normal;
+  width: min(24rem, calc(100vw - 12.5rem));
+}
+
+.maintenance-indicator[data-tooltip][data-placement="bottom"]:is(
+    :focus,
+    :hover
+  )::before {
+  transform: translateY(0.25rem);
+}
+
 .maintenance-indicator:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;

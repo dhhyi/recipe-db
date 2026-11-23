@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log"
 	"mime"
@@ -162,6 +163,19 @@ func writeTagMaintenance(w http.ResponseWriter, r *http.Request, id string, tags
 		true, false, false)
 }
 
+func writeTagMaintenanceUnavailable(w http.ResponseWriter) {
+	trigger, _ := json.Marshal(map[string]any{
+		"tags-unavailable": map[string]string{
+			"target":  "#recipe-tags",
+			"message": maintenanceMessage,
+		},
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("HX-Trigger", string(trigger))
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 func parseTagEditMode(r *http.Request) (bool, error) {
 	values, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil || len(values) > 1 || len(values["edit"]) > 1 {
@@ -197,6 +211,10 @@ func recipeTagsHandler(endpoint string) http.HandlerFunc {
 		tags, owner, maintenance, err := loadRecipeTags(r, client, id)
 		if maintenance {
 			if edit || err != nil {
+				if !edit && errors.Is(err, errTagsUnavailable) {
+					writeTagMaintenanceUnavailable(w)
+					return
+				}
 				writeTagMaintenance(w, r, id, tags)
 			} else {
 				writeTagComponent(w, r, http.StatusOK, tagsWidget(id, tags, false, false, "", false), true, false, false)
@@ -476,7 +494,7 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 		}
 		confirmedTags, confirmedOwner, maintenance, err := loadRecipeTags(r, client, id)
 		if err != nil {
-			if maintenanceModeError(err) {
+			if maintenance || maintenanceModeError(err) {
 				writeTagMaintenance(w, r, id, tags)
 				return
 			}

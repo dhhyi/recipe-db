@@ -139,6 +139,39 @@ func TestRecipeTagsWidgetPermissionAndKeyboardMarkup(t *testing.T) {
 	}
 }
 
+func TestMaintenanceTagOutagePreservesSnapshotAndShowsSeparateFeedback(t *testing.T) {
+	tags := []gql.RecipeTag{{Id: "cuisine", Category: gql.TagCategoryCuisine, Name: "Apfelkuchen"}}
+	initial := renderTagComponent(t, recipeDetailTags("42", tags))
+	for _, text := range []string{
+		"Apfelkuchen",
+		"data-tag-feedback",
+		"hx-on:tags-unavailable",
+		"event.detail.message",
+	} {
+		if !strings.Contains(initial, text) {
+			t.Errorf("initial tag fragment is missing %q: %s", text, initial)
+		}
+	}
+	if strings.Contains(initial, "maintenance") || strings.Contains(initial, "Wartungsarbeiten") {
+		t.Errorf("cached tag fragment must not contain maintenance state: %s", initial)
+	}
+
+	widget := renderTagComponent(t, RecipeTagsWidget("42", tags, true, false, "", false))
+	for _, text := range []string{
+		"data-detail-tag-feedback",
+		"hx-on:tags-unavailable",
+		"this.querySelector('[command=show-modal]')?.remove()",
+		"event.detail.message",
+	} {
+		if !strings.Contains(widget, text) {
+			t.Errorf("owner tag widget cannot safely enter maintenance mode; missing %q: %s", text, widget)
+		}
+	}
+	if strings.Contains(widget, "maintenance") || strings.Contains(widget, "Wartungsarbeiten") {
+		t.Errorf("cached tag widget must not contain maintenance state: %s", widget)
+	}
+}
+
 func TestRecipeTagFeedbackUsesSemanticFeedbackClasses(t *testing.T) {
 	success := renderTagComponent(t, RecipeTagsWidget("42", nil, false, false, "Tags gespeichert.", false))
 	if !strings.Contains(success, `class="feedback success"`) {

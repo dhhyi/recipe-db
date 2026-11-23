@@ -1,9 +1,6 @@
 import { test, expect } from "../../fixtures.js";
 import { defaultCrop, source } from "../save/errors.mocks.js";
-import {
-  graphqlMocks,
-  identityHtml,
-} from "./maintenance.mocks.js";
+import { graphqlMocks, identityHtml } from "./maintenance.mocks.js";
 import {
   graphqlMocks as writeGraphqlMocks,
   identityHtml as writeIdentityHtml,
@@ -48,9 +45,10 @@ test.describe("writes interrupted by maintenance", () => {
     await page.goto("/images-edit/test-recipe");
     await page.getByLabel("Bild hinzufügen").setInputFiles(source);
     await expect(page.getByTestId("crop-selection")).toBeVisible();
-    await expect(
-      page.getByTestId("crop-selection"),
-    ).toHaveAttribute("data-width", String(defaultCrop.width));
+    await expect(page.getByTestId("crop-selection")).toHaveAttribute(
+      "data-width",
+      String(defaultCrop.width),
+    );
     await page.getByRole("button", { name: "Speichern", exact: true }).click();
 
     const error = page.getByRole("alert");
@@ -61,6 +59,8 @@ test.describe("writes interrupted by maintenance", () => {
     await expect(error).not.toContainText(
       "Der Zuschnitt bleibt für einen erneuten Speicherversuch erhalten.",
     );
-    await expect(page.getByRole("button", { name: "Erneut speichern" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Erneut speichern" }),
+    ).toBeVisible();
   });
 });

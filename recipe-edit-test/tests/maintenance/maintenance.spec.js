@@ -1,8 +1,5 @@
 import { test, expect } from "../../fixtures.js";
-import {
-  graphqlMocks,
-  identityHtml,
-} from "./maintenance.mocks.js";
+import { graphqlMocks, identityHtml } from "./maintenance.mocks.js";
 import {
   graphqlMocks as writeGraphqlMocks,
   identityHtml as writeIdentityHtml,
@@ -23,10 +20,9 @@ test.describe("direct visits during maintenance", () => {
     await expect(page.getByRole("status")).toContainText(
       "Bearbeiten vorübergehend deaktiviert",
     );
-    await expect(page.getByRole("link", { name: "Zurück zur Übersicht" })).toHaveAttribute(
-      "href",
-      "/",
-    );
+    await expect(
+      page.getByRole("link", { name: "Zurück zur Übersicht" }),
+    ).toHaveAttribute("href", "/");
     await expect(page.locator("form")).toHaveCount(0);
     await expect(
       page.getByLabel(

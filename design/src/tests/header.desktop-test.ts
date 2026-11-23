@@ -226,7 +226,7 @@ describe("shared header login", () => {
 
   describe("maintenance indicator", () => {
     beforeEach(async () => {
-      await page.viewport(800, 600);
+      await page.viewport(320, 600);
       await mountHeader(true);
     });
 
@@ -235,6 +235,8 @@ describe("shared header login", () => {
     });
 
     it("announces the explanation and reveals the Blades tooltip on hover and keyboard focus", async () => {
+      window.scrollTo(0, 0);
+      await settle();
       const indicator = document.querySelector<HTMLElement>(
         ".maintenance-indicator",
       )!;
@@ -247,6 +249,22 @@ describe("shared header login", () => {
       await expect
         .poll(() => getComputedStyle(indicator, "::before").content)
         .toContain(description);
+      await expect
+        .poll(() => getComputedStyle(indicator, "::before").opacity)
+        .toBe("1");
+      const tooltip = getComputedStyle(indicator, "::before");
+      const indicatorBounds = indicator.getBoundingClientRect();
+      const tooltipWidth = Number.parseFloat(tooltip.width);
+      expect(Number.parseFloat(tooltip.top)).toBeGreaterThanOrEqual(
+        indicatorBounds.height - 1,
+      );
+      expect(tooltip.left).toBe("0px");
+      expect(tooltip.whiteSpace).toBe("normal");
+      expect(tooltip.overflowWrap).toBe("anywhere");
+      expect(indicatorBounds.left).toBeGreaterThanOrEqual(0);
+      expect(indicatorBounds.left + tooltipWidth).toBeLessThanOrEqual(
+        window.innerWidth,
+      );
 
       await userEvent.unhover(indicator);
       await userEvent.tab();
