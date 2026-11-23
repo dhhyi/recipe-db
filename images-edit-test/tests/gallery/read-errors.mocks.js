@@ -6,11 +6,15 @@ export const identityHtml =
 export const graphqlMocks = [
   {
     query: `query {
+      maintenance
       myCapabilities { role canManageImages }
     }`,
     variables: {},
     response: {
-      data: { myCapabilities: { role: "owner", canManageImages: true } },
+      data: {
+        maintenance: false,
+        myCapabilities: { role: "owner", canManageImages: true },
+      },
     },
   },
   {

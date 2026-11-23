@@ -21,16 +21,19 @@ type testTag struct {
 }
 
 type tagHandlerState struct {
-	mu              sync.Mutex
-	assigned        []testTag
-	inventory       []testTag
-	operations      []string
-	inventoryFailed bool
-	inventoryDenied bool
-	mutationFailed  bool
-	failNextTags    bool
-	failConfirm     bool
-	tagsHTTPStatus  int
+	mu                   sync.Mutex
+	assigned             []testTag
+	inventory            []testTag
+	operations           []string
+	inventoryFailed      bool
+	inventoryDenied      bool
+	mutationFailed       bool
+	failNextTags         bool
+	failConfirm          bool
+	tagsHTTPStatus       int
+	maintenance          bool
+	maintenanceWrite     bool
+	maintenanceOnConfirm bool
 }
 
 func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +66,7 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 			state.failNextTags = false
 			response = map[string]any{
 				"data": map[string]any{
+					"maintenance":    state.maintenance,
 					"myCapabilities": capabilities,
 					"recipe":         map[string]any{"id": "42", "tags": nil},
 				},
@@ -73,6 +77,7 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 			}
 		} else {
 			data = map[string]any{
+				"maintenance":    state.maintenance,
 				"myCapabilities": capabilities,
 				"recipe":         map[string]any{"id": "42", "tags": testTagsJSON(state.assigned)},
 			}
@@ -92,6 +97,16 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 			data = map[string]any{"tags": testTagsJSON(state.inventory)}
 		}
 	case "AddRecipeTag":
+		if state.maintenanceWrite {
+			response = map[string]any{
+				"data": map[string]any{"addRecipeTag": nil},
+				"errors": []any{map[string]any{
+					"message":    "maintenance active",
+					"extensions": map[string]any{"code": "maintenance-mode", "status": 503},
+				}},
+			}
+			break
+		}
 		if state.mutationFailed {
 			response = map[string]any{
 				"data":   map[string]any{"addRecipeTag": nil},
@@ -113,9 +128,22 @@ func (state *tagHandlerState) graphqlHandler(w http.ResponseWriter, r *http.Requ
 		if state.failConfirm {
 			state.failConfirm = false
 			state.failNextTags = true
+			if state.maintenanceOnConfirm {
+				state.maintenance = true
+			}
 		}
 		data = map[string]any{"addRecipeTag": true}
 	case "RemoveRecipeTag":
+		if state.maintenanceWrite {
+			response = map[string]any{
+				"data": map[string]any{"removeRecipeTag": nil},
+				"errors": []any{map[string]any{
+					"message":    "maintenance active",
+					"extensions": map[string]any{"code": "maintenance-mode", "status": 503},
+				}},
+			}
+			break
+		}
 		var tagID string
 		if err := json.Unmarshal(request.Variables["tagId"], &tagID); err != nil {
 			http.Error(w, "invalid tag id", http.StatusBadRequest)
@@ -422,6 +450,110 @@ func TestRecipeTagMutationCredentialFailurePreservesAssignments(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMaintenanceHidesTagEditorAndReportsInterruptedWrites(t *testing.T) {
+	maintenance := &tagHandlerState{
+		assigned:    []testTag{{id: "assigned", category: "CUISINE", name: "Apfelkuchen"}},
+		inventory:   []testTag{{id: "new", category: "COURSE", name: "Dessert"}},
+		maintenance: true,
+	}
+	handler, _ := newTagHandlerTest(t, maintenance, nil)
+
+	read := tagRequest(handler, http.MethodGet, "/recipe/42/tags", "", true)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), "Apfelkuchen") ||
+		strings.Contains(read.Body.String(), "Tags bearbeiten") || strings.Contains(read.Body.String(), "hx-post") {
+		t.Fatalf("maintenance must preserve public tag reading without edit controls: %d %s", read.Code, read.Body.String())
+	}
+	for _, path := range []string{
+		"/recipe/42/tags?edit=1",
+		"/recipe/42/tags/options?q=veg",
+	} {
+		response := tagRequest(handler, http.MethodGet, path, "", true)
+		if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-Tag-Replace") != "true" ||
+			!strings.Contains(response.Body.String(), maintenanceMessage) ||
+			strings.Contains(response.Body.String(), "Tag hinzufügen") ||
+			strings.Contains(response.Body.String(), "Tags bearbeiten") ||
+			strings.Contains(response.Body.String(), "hx-post") {
+			t.Fatalf("maintenance tag fragment must remove edit controls: %d %v %s", response.Code, response.Header(), response.Body.String())
+		}
+	}
+	for _, request := range []struct{ path, body string }{
+		{"/recipe/42/tags", "tagId=new"},
+		{"/recipe/42/tags/assigned/remove", ""},
+	} {
+		response := tagRequest(handler, http.MethodPost, request.path, request.body, true)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), maintenanceMessage) ||
+			strings.Contains(response.Body.String(), "Tag hinzufügen") ||
+			strings.Contains(response.Body.String(), "Apfelkuchen entfernen") {
+			t.Fatalf("maintenance must reject tag writes without leaving controls active: %d %s", response.Code, response.Body.String())
+		}
+	}
+	maintenance.mu.Lock()
+	defer maintenance.mu.Unlock()
+	for _, operation := range maintenance.operations {
+		if operation == "AddRecipeTag" || operation == "RemoveRecipeTag" || operation == "TagInventory" {
+			t.Fatalf("maintenance must stop before an inventory or mutation call: %v", maintenance.operations)
+		}
+	}
+}
+
+func TestMaintenanceTagsOutagePreservesCachedSnapshot(t *testing.T) {
+	state := &tagHandlerState{
+		assigned:     []testTag{{id: "assigned", category: "CUISINE", name: "Apfelkuchen"}},
+		maintenance:  true,
+		failNextTags: true,
+	}
+	handler, _ := newTagHandlerTest(t, state, nil)
+	response := tagRequest(handler, http.MethodGet, "/recipe/42/tags", "", true)
+	trigger := response.Header().Get("HX-Trigger")
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("X-Tag-Replace") != "" ||
+		!strings.Contains(trigger, `"tags-unavailable"`) ||
+		!strings.Contains(trigger, `"target":"#recipe-tags"`) ||
+		!strings.Contains(trigger, maintenanceMessage) ||
+		strings.Contains(response.Body.String(), "recipe-tags") {
+		t.Fatalf("maintenance tags outage must preserve the rendered snapshot and signal read-only state: %d %v %s", response.Code, response.Header(), response.Body.String())
+	}
+}
+
+func TestMaintenanceDuringTagConfirmationKeepsLastSnapshotReadOnly(t *testing.T) {
+	state := &tagHandlerState{
+		assigned:             []testTag{{id: "assigned", category: "CUISINE", name: "Apfelkuchen"}},
+		inventory:            []testTag{{id: "new", category: "COURSE", name: "Dessert"}},
+		failConfirm:          true,
+		maintenanceOnConfirm: true,
+	}
+	handler, _ := newTagHandlerTest(t, state, nil)
+	response := tagRequest(handler, http.MethodPost, "/recipe/42/tags", url.Values{"tagId": {"new"}}.Encode(), true)
+	body := response.Body.String()
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(body, maintenanceMessage) ||
+		!strings.Contains(body, "Apfelkuchen") ||
+		strings.Contains(body, "Tags bearbeiten") || strings.Contains(body, "Apfelkuchen entfernen") ||
+		strings.Contains(body, "hx-post") {
+		t.Fatalf("maintenance during confirmation must preserve the last tags without restoring controls: %d %v %s", response.Code, response.Header(), body)
+	}
+}
+
+func TestMaintenanceModeMutationErrorReplacesTagControls(t *testing.T) {
+	state := &tagHandlerState{
+		assigned:         []testTag{{id: "assigned", category: "CUISINE", name: "Apfelkuchen"}},
+		inventory:        []testTag{{id: "new", category: "COURSE", name: "Dessert"}},
+		maintenanceWrite: true,
+	}
+	handler, _ := newTagHandlerTest(t, state, nil)
+	response := tagRequest(handler, http.MethodPost, "/recipe/42/tags", "tagId=new", true)
+	body := response.Body.String()
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("HX-Retarget") != "#recipe-tags" ||
+		!strings.Contains(body, maintenanceMessage) || !strings.Contains(body, "Apfelkuchen") ||
+		strings.Contains(body, "Tags bearbeiten") || strings.Contains(body, "Apfelkuchen entfernen") ||
+		strings.Contains(body, "hx-post") {
+		t.Fatalf("maintenance-mode write error did not replace editor with read-only state: %d %v %s", response.Code, response.Header(), body)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.assigned) != 1 {
+		t.Fatal("maintenance-mode must leave assignments unchanged")
 	}
 }
 

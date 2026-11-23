@@ -165,6 +165,14 @@ tests =
             , ( "image-limit-reached", "Das Rezept hat bereits die maximal erlaubten zehn Bilder. Das Bild wurde nicht gespeichert." )
             ]
       )
+    , ( "maintenance errors explain why image changes failed"
+      , RecipeDB.decodeUpload """{"errors":[{"extensions":{"code":"maintenance-mode"}}]}"""
+            == Err "maintenance-mode"
+            && RecipeDB.decodeDeleteImage """{"errors":[{"extensions":{"code":"maintenance-mode"}}]}"""
+            == Err "Wartungsarbeiten: Änderungen sind vorübergehend nicht möglich. Lesen bleibt verfügbar."
+            && RecipeDB.decodeReorderImages [ "opaque/id" ] """{"errors":[{"extensions":{"code":"maintenance-mode"}}]}"""
+            == Ok (RecipeDB.ReorderRejected "Wartungsarbeiten: Änderungen sind vorübergehend nicht möglich. Lesen bleibt verfügbar.")
+      )
     ]
         ++ sourceTests
         ++ reorderResponseTests
@@ -215,7 +223,12 @@ galleryTests =
 
         authorized : Editor.Model
         authorized =
-            apply (GotCapabilities (RemoteData.Success { role = "owner", canManageImages = True })) init
+            apply (GotCapabilities (RemoteData.Success { role = "owner", canManageImages = True, maintenance = False })) init
+
+        maintenance : Editor.Model
+        maintenance =
+            apply (GotCapabilities (RemoteData.Success { role = "owner", canManageImages = True, maintenance = True }))
+                (apply (GotRecipe 0 (RemoteData.Success (Just { name = "Testrezept", images = Just (entries 2) }))) authorized)
 
         loaded : Maybe (List RecipeDB.GalleryImage) -> Editor.Model
         loaded images =
@@ -487,10 +500,15 @@ galleryTests =
       , not (Editor.canAdd authorized)
             && not (Editor.canAdd unavailable)
             && not (Editor.canAdd (apply (GotRecipe 0 (RemoteData.Success Nothing)) authorized))
-            && not (Editor.canAdd (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) (loaded (Just []))))
+            && not (Editor.canAdd (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False, maintenance = False })) (loaded (Just []))))
       )
     , ( "only loaded collections below capacity enable Add"
       , Editor.canAdd (loaded (Just [])) && Editor.canAdd (loaded (Just (entries 9))) && not (Editor.canAdd (loaded (Just (entries 10))))
+      )
+    , ( "maintenance disables image upload, delete, and reorder controls"
+      , not (Editor.canAdd maintenance)
+            && not (Editor.canDelete maintenance "opaque/1")
+            && not (Editor.canMove maintenance "opaque/1" Editor.MoveDown)
       )
     , ( "Add is restored after authoritative deletion reduces a full gallery"
       , not (Editor.canAdd atLimit)
@@ -515,7 +533,7 @@ galleryTests =
     , ( "delete is gated by loaded opaque identity and image-management capability"
       , Editor.canDelete first "opaque/1"
             && not (Editor.canDelete first "/thumb")
-            && not (Editor.canDelete (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) first) "opaque/1")
+            && not (Editor.canDelete (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False, maintenance = False })) first) "opaque/1")
       )
     , ( "movement controls respect boundaries, collection size and capability"
       , not (Editor.canMove threeImages "opaque/1" Editor.MoveUp)
@@ -525,7 +543,7 @@ galleryTests =
             && not (Editor.canMove threeImages "opaque/3" Editor.MoveDown)
             && not (Editor.canMove (loaded (Just (entries 1))) "opaque/1" Editor.MoveUp)
             && not (Editor.canMove (loaded (Just [])) "opaque/1" Editor.MoveDown)
-            && not (Editor.canMove (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False })) threeImages) "opaque/2" Editor.MoveUp)
+            && not (Editor.canMove (apply (GotCapabilities (RemoteData.Success { role = "member", canManageImages = False, maintenance = False })) threeImages) "opaque/2" Editor.MoveUp)
       )
     , ( "pending move keeps the confirmed order and gates all gallery mutations"
       , currentIds pendingMove

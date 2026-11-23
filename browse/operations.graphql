@@ -38,6 +38,7 @@ query BrowseServices {
 }
 
 query BrowseControls {
+  maintenance
   myCapabilities {
     role
     canManageRecipes
@@ -47,6 +48,7 @@ query BrowseControls {
 }
 
 query BrowseIdentity {
+  maintenance
   myCapabilities {
     role
   }
@@ -54,6 +56,7 @@ query BrowseIdentity {
 }
 
 query RatingCapabilities($id: ID!) {
+  maintenance
   myCapabilities {
     role
     canRate
@@ -108,6 +111,7 @@ query RecipeById($id: ID!) {
 }
 
 query RecipeTags($id: ID!) {
+  maintenance
   myCapabilities {
     role
     canManageRecipes
@@ -145,6 +149,7 @@ query SimilarRecipeCard($id: ID!) {
 }
 
 query RecipeControls {
+  maintenance
   myCapabilities {
     role
     canManageRecipes

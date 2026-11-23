@@ -176,6 +176,7 @@ canAdd model =
         case ( model.capabilities, model.recipe ) of
             ( RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
                 capabilities.canManageImages
+                    && not capabilities.maintenance
                     && (recipe.images |> Maybe.map (\entries -> List.length entries < imageLimit) |> Maybe.withDefault False)
 
             _ ->
@@ -191,6 +192,7 @@ canDelete model imageId =
         case ( model.capabilities, model.recipe ) of
             ( RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
                 capabilities.canManageImages
+                    && not capabilities.maintenance
                     && (recipe.images
                             |> Maybe.map (List.any (.id >> (==) imageId))
                             |> Maybe.withDefault False
@@ -208,7 +210,7 @@ canMove model imageId direction =
     else
         case ( model.capabilities, model.recipe ) of
             ( RemoteData.Success capabilities, RemoteData.Success (Just recipe) ) ->
-                if not capabilities.canManageImages then
+                if not capabilities.canManageImages || capabilities.maintenance then
                     False
 
                 else

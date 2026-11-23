@@ -36,6 +36,7 @@ type alias RecipeModel =
 type alias Capabilities =
     { role : String
     , canManageImages : Bool
+    , maintenance : Bool
     }
 
 
@@ -48,13 +49,16 @@ makeCapabilitiesRequest targetMsg =
     let
         selection : SelectionSet Capabilities Api.Object.MyCapabilities
         selection =
-            SelectionSet.map2 Capabilities
+            SelectionSet.map2 (\role canManageImages -> { role = role, canManageImages = canManageImages, maintenance = False })
                 MyCapabilities.role
                 MyCapabilities.canManageImages
 
         query : SelectionSet Capabilities RootQuery
         query =
-            Query.myCapabilities selection
+            SelectionSet.map2
+                (\maintenance capabilities -> { capabilities | maintenance = maintenance })
+                Query.maintenance
+                (Query.myCapabilities selection)
     in
     query
         |> Graphql.Http.queryRequest "/graphql"
@@ -361,6 +365,9 @@ reorderMetadata =
 reorderGraphQLError : Decode.Value -> ReorderResult
 reorderGraphQLError value =
     case Decode.decodeValue (Decode.at [ "extensions", "code" ] string) value of
+        Ok "maintenance-mode" ->
+            ReorderRejected "Wartungsarbeiten: Änderungen sind vorübergehend nicht möglich. Lesen bleibt verfügbar."
+
         Ok "image-order-conflict" ->
             ReorderRejected "Die Bildreihenfolge wurde zwischenzeitlich geändert. Der aktuelle Stand wird neu geladen."
 
@@ -411,6 +418,9 @@ decodeDeletedValue value =
 deleteGraphQLError : Decode.Value -> String
 deleteGraphQLError value =
     case Decode.decodeValue (Decode.at [ "extensions", "code" ] string) value of
+        Ok "maintenance-mode" ->
+            "Wartungsarbeiten: Änderungen sind vorübergehend nicht möglich. Lesen bleibt verfügbar."
+
         Ok "authentication-required" ->
             "Anmeldung erforderlich oder abgelaufen. Die Löschung konnte nicht bestätigt werden."
 
@@ -483,6 +493,9 @@ decodeMetadata value =
 graphQLError : Decode.Value -> String
 graphQLError value =
     case Decode.decodeValue (Decode.at [ "extensions", "code" ] string) value of
+        Ok "maintenance-mode" ->
+            "maintenance-mode"
+
         Ok "authentication-required" ->
             "authentication-required"
 

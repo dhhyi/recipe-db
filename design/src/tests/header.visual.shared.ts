@@ -2,7 +2,7 @@ import { render } from "lit";
 import { expect } from "vitest";
 import { page } from "vitest/browser";
 
-import { LoggedIn, LoggedOut } from "../stories/Header.stories.ts";
+import { LoggedIn, LoggedOut, Maintenance } from "../stories/Header.stories.ts";
 
 export async function assertHeaderScreenshots(
   viewports: {
@@ -19,6 +19,7 @@ export async function assertHeaderScreenshots(
     for (const [name, story] of [
       ["logged-out", LoggedOut],
       ["logged-in", LoggedIn],
+      ["maintenance", Maintenance],
     ] as const) {
       const canvas = document.createElement("div");
       document.body.replaceChildren(canvas);
@@ -30,6 +31,7 @@ export async function assertHeaderScreenshots(
             authRole: "",
             authEmail: "",
             authEnabled: false,
+            maintenance: false,
             ...story.args,
           },
           {} as Parameters<typeof storyRender>[1],

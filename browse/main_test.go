@@ -243,6 +243,9 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	var tagsOffline atomic.Bool
 	var inspirationsOnline, hasInspirations atomic.Bool
 	var canRate atomic.Bool
+	var maintenance atomic.Bool
+	var imageEditOnline atomic.Bool
+	var imagesOnline atomic.Bool
 	canRate.Store(true)
 	hasImage.Store(true)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +261,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			data = map[string]any{"searchOnline": false, "recipeEditOnline": false, "ratingsOnline": false}
 		case "BrowseControls":
 			data = map[string]any{
+				"maintenance":      maintenance.Load(),
 				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
 				"recipeEditOnline": editOnline.Load(),
 			}
@@ -313,11 +317,13 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			data = map[string]any{"recipe": recipe}
 		case "RecipeControls":
 			data = map[string]any{
-				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": false},
-				"recipeEditOnline": editOnline.Load(), "imagesOnline": false, "imageEditOnline": false,
+				"maintenance":      maintenance.Load(),
+				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": imageEditOnline.Load()},
+				"recipeEditOnline": editOnline.Load(), "imagesOnline": imagesOnline.Load(), "imageEditOnline": imageEditOnline.Load(),
 			}
 		case "RatingCapabilities":
 			data = map[string]any{
+				"maintenance":    maintenance.Load(),
 				"myCapabilities": map[string]any{"role": "member", "canRate": canRate.Load()},
 				"rating":         map[string]any{"recipeId": "42", "average": 5, "count": 3},
 			}
@@ -337,8 +343,12 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			}
 			data = map[string]any{"recipe": recipe, "inspirationsOnline": inspirationsOnline.Load()}
 		case "RateRecipe":
-			data = map[string]any{"rate": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 5}}
-			version.Add(1)
+			if maintenance.Load() {
+				data = map[string]any{"rate": nil}
+			} else {
+				data = map[string]any{"rate": map[string]any{"recipeId": "42", "average": 5, "count": 3, "myRating": 5}}
+				version.Add(1)
+			}
 		default:
 			t.Errorf("unexpected operation: %s", request.OperationName)
 		}
@@ -377,6 +387,15 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 				},
 			})
 		}
+		if request.OperationName == "RateRecipe" && maintenance.Load() {
+			errors = append(errors, map[string]any{
+				"message": "maintenance active",
+				"path":    []any{"rate"},
+				"extensions": map[string]any{
+					"code": "maintenance-mode", "status": 503,
+				},
+			})
+		}
 		if len(errors) > 0 {
 			response["errors"] = errors
 		}
@@ -397,6 +416,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		r.Header.Set("If-None-Match", etag)
 		if method == "POST" {
 			r.Header.Set("Origin", "http://example.com")
+			r.Header.Set("HX-Request", "true")
 		}
 		if strings.Contains(path, "variant=2") {
 			r.Header.Set("HX-Request", "true")
@@ -426,6 +446,9 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	pageHTML := first.Body.String()
 	if strings.Contains(pageHTML, "auth-email") {
 		t.Fatal("cached recipe HTML must not include the current user's email")
+	}
+	if strings.Contains(pageHTML, "maintenance") || strings.Contains(pageHTML, maintenanceMessage) {
+		t.Fatal("cached recipe HTML must not contain maintenance state")
 	}
 	for _, markup := range []string{
 		`itemscope itemtype="https://schema.org/Recipe"`,
@@ -507,6 +530,57 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			t.Fatalf("add-recipe control placement or permission gating is incorrect: %s", body)
 		}
 	}
+	editOnline.Store(true)
+	imageEditOnline.Store(true)
+	imagesOnline.Store(true)
+	editableControls := request("GET", "/recipe/42/controls", "")
+	if editableControls.Code != http.StatusOK ||
+		!strings.Contains(editableControls.Body.String(), "Rezept bearbeiten") ||
+		!strings.Contains(editableControls.Body.String(), "Bilder bearbeiten") {
+		t.Fatalf("available role-based editor controls changed outside maintenance: %s", editableControls.Body.String())
+	}
+	maintenance.Store(true)
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	freshDuringMaintenance := request("GET", "/recipe/42?maintenance-fresh=true", "")
+	if freshDuringMaintenance.Code != http.StatusOK ||
+		strings.Contains(freshDuringMaintenance.Body.String(), "maintenance") ||
+		strings.Contains(freshDuringMaintenance.Body.String(), maintenanceMessage) ||
+		recipeCalls.Load() != 2 {
+		t.Fatalf("fresh recipe HTML must not capture maintenance state: %d %s", freshDuringMaintenance.Code, freshDuringMaintenance.Body.String())
+	}
+	maintenanceControls := request("GET", "/controls", "")
+	if maintenanceControls.Code != http.StatusOK ||
+		strings.Contains(maintenanceControls.Body.String(), "Rezept hinzufügen") ||
+		strings.Contains(maintenanceControls.Body.String(), `data-add-recipe`) {
+		t.Fatalf("maintenance must hide add-recipe controls: %s", maintenanceControls.Body.String())
+	}
+	maintenanceEditControls := request("GET", "/recipe/42/controls", "")
+	if maintenanceEditControls.Code != http.StatusOK ||
+		strings.Contains(maintenanceEditControls.Body.String(), "Rezept bearbeiten") ||
+		strings.Contains(maintenanceEditControls.Body.String(), "Bilder bearbeiten") {
+		t.Fatalf("maintenance must hide recipe and image editor links: %s", maintenanceEditControls.Body.String())
+	}
+	maintenanceRating := request("GET", "/recipe/42/rating", "")
+	if body := maintenanceRating.Body.String(); maintenanceRating.Code != http.StatusOK ||
+		!strings.Contains(body, `rating="5"`) || strings.Contains(body, "hx-post") ||
+		strings.Contains(body, "data-rating-saved") {
+		t.Fatalf("maintenance must preserve aggregate ratings without rating controls: %s", body)
+	}
+	interruptedRating := request("POST", "/recipe/42/rate", "")
+	if interruptedRating.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(interruptedRating.Body.String(), maintenanceMessage) ||
+		strings.Contains(interruptedRating.Body.String(), "Bewertung konnte derzeit nicht gespeichert werden") ||
+		interruptedRating.Header().Get("X-Browse-Full-Page-Error") != "true" ||
+		interruptedRating.Header().Get("HX-Retarget") != "main" ||
+		interruptedRating.Header().Get("HX-Reswap") != "innerHTML" ||
+		interruptedRating.Header().Get("HX-Reselect") != "main > *" {
+		t.Fatalf("maintenance-mode rating error was not explained: %d %s", interruptedRating.Code, interruptedRating.Body.String())
+	}
+	maintenance.Store(false)
+	imageEditOnline.Store(false)
+	imagesOnline.Store(false)
 	for _, tc := range []struct {
 		name                             string
 		online, hasLinks, missing, shown bool
@@ -562,12 +636,12 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	updated := request("GET", "/recipe/42", etag)
 	if updated.Code != 200 || !strings.Contains(updated.Body.String(), "Updated") || updated.Header().Get("ETag") == etag ||
-		recipeCalls.Load() != 2 {
+		recipeCalls.Load() != 3 {
 		t.Fatal("local mutation did not invalidate detail variants")
 	}
 	for _, path := range []string{"/recipe/42?variant=1", "/recipe/42?variant=2"} {
 		page := request("GET", path, etag)
-		if page.Code != 200 || !strings.Contains(page.Body.String(), "Updated") || recipeCalls.Load() != 2 {
+		if page.Code != 200 || !strings.Contains(page.Body.String(), "Updated") || recipeCalls.Load() != 3 {
 			t.Fatal("query/HTMX variant retained invalidated HTML")
 		}
 	}

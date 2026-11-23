@@ -25,6 +25,7 @@
 @import "@anyblades/blades/components/modal";
 @import "@anyblades/blades/components/modal-modern";
 @import "@anyblades/blades/components/nav";
+@import "@anyblades/blades/components/tooltip";
 @import "@anyblades/blades/utilities";
 @import "@anyblades/blades/variables-blades";
 @import "tailwindcss" source(none);
@@ -155,6 +156,42 @@ header-component > header[data-scroll-hidden]:not(:focus-within) {
 
 header-component > header:focus-within {
   transition: none;
+}
+
+.maintenance-indicator {
+  color: #9a6700;
+  display: inline-flex;
+  height: 1.25rem;
+  vertical-align: middle;
+  width: 1.25rem;
+}
+
+.maintenance-indicator[data-tooltip][data-placement="bottom"]::before {
+  left: 0;
+  max-width: calc(100vw - 12.5rem);
+  overflow-wrap: anywhere;
+  right: auto;
+  white-space: normal;
+  width: min(24rem, calc(100vw - 12.5rem));
+}
+
+.maintenance-indicator[data-tooltip][data-placement="bottom"]:is(
+    :focus,
+    :hover
+  )::before {
+  transform: translateY(0.25rem);
+}
+
+.maintenance-indicator:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .maintenance-indicator,
+  [data-theme="dark"] .maintenance-indicator {
+    color: #c89b3c;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {

@@ -26,6 +26,19 @@ func identityAuthenticationRejected(err error, upstreamStatus int) bool {
 	return false
 }
 
+func maintenanceModeError(err error) bool {
+	var list gqlerror.List
+	if !errors.As(err, &list) {
+		return false
+	}
+	for _, gqlErr := range list {
+		if gqlErr != nil && gqlErr.Extensions["code"] == "maintenance-mode" {
+			return true
+		}
+	}
+	return false
+}
+
 func tagErrorsOnly(err error) bool {
 	return serviceUnavailableOnly(err, map[string]string{"tags": "tags"})
 }

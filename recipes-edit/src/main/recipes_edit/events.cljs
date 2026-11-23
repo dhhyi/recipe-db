@@ -36,6 +36,7 @@
 (defn- authorization-state [errors]
   (let [extensions (:extensions (first errors))]
     (case (:code extensions)
+      "maintenance-mode" :maintenance
       "authentication-required" :authentication-required
       "invalid-credentials" :authentication-required
       "forbidden" :forbidden
@@ -101,10 +102,16 @@
  ::capabilities-loaded
  (fn [db [_ {:keys [response]}]]
    (let [{:keys [data errors]} (normalize-response response)]
-     (if (seq errors)
+     (cond
+       (:maintenance data)
+       (assoc db :authorization :maintenance)
+
+       (seq errors)
        (assoc db
               :authorization (or (authorization-state errors) :error)
               :authorization-message (model/error-message errors))
+
+       :else
        (let [capabilities (:myCapabilities data)]
          (assoc db
                 :authorization (if (:canManageRecipes capabilities) :allowed

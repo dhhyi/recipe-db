@@ -4,7 +4,7 @@ import gql "frontend/src/generated"
 
 templ BrowseControls(resp *gql.BrowseControlsResponse) {
 	<div id="browse-controls" class="sticky bottom-0 z-10 flex justify-end pb-3 pointer-events-none">
-		if resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline {
+		if !resp.Maintenance && resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline {
 			<a href="/edit/new" role="button" data-add-recipe class="outline pointer-events-auto mr-2">Rezept hinzufügen</a>
 		}
 	</div>
@@ -13,14 +13,14 @@ templ BrowseControls(resp *gql.BrowseControlsResponse) {
 templ BrowseIdentity(resp *gql.BrowseIdentityResponse, googleOAuthEnabled bool) {
 	if resp.MyEmail != nil {
 		if googleOAuthEnabled {
-			<header-component auth-role={ resp.MyCapabilities.Role } auth-email={ *resp.MyEmail } auth-enabled></header-component>
+			<header-component auth-role={ resp.MyCapabilities.Role } auth-email={ *resp.MyEmail } auth-enabled maintenance?={ resp.Maintenance }></header-component>
 		} else {
-			<header-component auth-role={ resp.MyCapabilities.Role } auth-email={ *resp.MyEmail }></header-component>
+			<header-component auth-role={ resp.MyCapabilities.Role } auth-email={ *resp.MyEmail } maintenance?={ resp.Maintenance }></header-component>
 		}
 	} else if googleOAuthEnabled {
-		<header-component auth-role={ resp.MyCapabilities.Role } auth-enabled></header-component>
+		<header-component auth-role={ resp.MyCapabilities.Role } auth-enabled maintenance?={ resp.Maintenance }></header-component>
 	} else {
-		<header-component auth-role={ resp.MyCapabilities.Role }></header-component>
+		<header-component auth-role={ resp.MyCapabilities.Role } maintenance?={ resp.Maintenance }></header-component>
 	}
 }
 

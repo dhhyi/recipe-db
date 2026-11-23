@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log"
 	"mime"
@@ -22,21 +23,27 @@ import (
 var errInvalidTagRequest = errors.New("invalid tag request")
 var errTagForbidden = errors.New("tag editing is not allowed")
 
-func loadRecipeTags(r *http.Request, client graphql.Client, id string) ([]gql.RecipeTag, bool, error) {
+func loadRecipeTags(r *http.Request, client graphql.Client, id string) ([]gql.RecipeTag, bool, bool, error) {
 	response, err := gql.RecipeTags(r.Context(), client, id)
+	if response != nil && response.Maintenance && response.Recipe != nil {
+		if response.Recipe.Tags == nil {
+			return nil, false, true, errTagsUnavailable
+		}
+		return response.Recipe.Tags, false, true, nil
+	}
 	if err != nil && !tagErrorsOnly(err) {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if response == nil || response.Recipe == nil {
 		if err == nil {
-			return nil, false, errRecipeNotFound
+			return nil, false, false, errRecipeNotFound
 		}
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if err != nil || response.Recipe.Tags == nil {
-		return nil, response.MyCapabilities.CanManageRecipes, errTagsUnavailable
+		return nil, response.MyCapabilities.CanManageRecipes, false, errTagsUnavailable
 	}
-	return response.Recipe.Tags, response.MyCapabilities.CanManageRecipes, nil
+	return response.Recipe.Tags, response.MyCapabilities.CanManageRecipes, false, nil
 }
 
 func loadTagInventory(r *http.Request, client graphql.Client) ([]gql.RecipeTag, error) {
@@ -87,6 +94,9 @@ func unassignedTagOptions(tags, assigned []gql.RecipeTag, query string) []gql.Re
 }
 
 func tagRequestStatus(err error, upstreamStatus int) int {
+	if maintenanceModeError(err) {
+		return http.StatusServiceUnavailable
+	}
 	if errors.Is(err, errRecipeNotFound) {
 		return http.StatusNotFound
 	}
@@ -145,6 +155,27 @@ func writeTagEditorFailure(w http.ResponseWriter, r *http.Request, status int, m
 	writeTagComponent(w, r, status, components.RecipeTagFeedback(message), true, false, false)
 }
 
+func writeTagMaintenance(w http.ResponseWriter, r *http.Request, id string, tags []gql.RecipeTag) {
+	w.Header().Set("HX-Retarget", "#recipe-tags")
+	w.Header().Set("HX-Reswap", "outerHTML")
+	writeTagComponent(w, r, http.StatusServiceUnavailable,
+		components.RecipeTagsWidget(id, tags, false, false, maintenanceMessage, true),
+		true, false, false)
+}
+
+func writeTagMaintenanceUnavailable(w http.ResponseWriter) {
+	trigger, _ := json.Marshal(map[string]any{
+		"tags-unavailable": map[string]string{
+			"target":  "#recipe-tags",
+			"message": maintenanceMessage,
+		},
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("HX-Trigger", string(trigger))
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 func parseTagEditMode(r *http.Request) (bool, error) {
 	values, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil || len(values) > 1 || len(values["edit"]) > 1 {
@@ -177,8 +208,24 @@ func recipeTagsHandler(endpoint string) http.HandlerFunc {
 			return
 		}
 		client, upstreamStatus := requestScopedClient(endpoint, r, w)
-		tags, owner, err := loadRecipeTags(r, client, id)
+		tags, owner, maintenance, err := loadRecipeTags(r, client, id)
+		if maintenance {
+			if edit || err != nil {
+				if !edit && errors.Is(err, errTagsUnavailable) {
+					writeTagMaintenanceUnavailable(w)
+					return
+				}
+				writeTagMaintenance(w, r, id, tags)
+			} else {
+				writeTagComponent(w, r, http.StatusOK, tagsWidget(id, tags, false, false, "", false), true, false, false)
+			}
+			return
+		}
 		if err != nil {
+			if maintenanceModeError(err) {
+				writeTagMaintenance(w, r, id, nil)
+				return
+			}
 			status := tagRequestStatus(err, *upstreamStatus)
 			message := "Tags konnten nicht geladen werden."
 			if status == http.StatusNotFound {
@@ -216,11 +263,19 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 			return
 		}
 		client, upstreamStatus := requestScopedClient(endpoint, r, w)
-		assigned, owner, err := loadRecipeTags(r, client, id)
+		assigned, owner, maintenance, err := loadRecipeTags(r, client, id)
+		if maintenance {
+			writeTagMaintenance(w, r, id, assigned)
+			return
+		}
 		if err == nil && !owner {
 			err = errTagForbidden
 		}
 		if err != nil {
+			if maintenanceModeError(err) {
+				writeTagMaintenance(w, r, id, assigned)
+				return
+			}
 			status := tagRequestStatus(err, *upstreamStatus)
 			message := "Tag-Auswahl ist nicht verfügbar."
 			if status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -237,6 +292,10 @@ func recipeTagOptionsHandler(endpoint string) http.HandlerFunc {
 		}
 		inventory, err := loadTagInventory(r, client)
 		if err != nil {
+			if maintenanceModeError(err) {
+				writeTagMaintenance(w, r, id, assigned)
+				return
+			}
 			log.Printf("failed to fetch tag inventory: %v", err)
 			status := tagRequestStatus(err, *upstreamStatus)
 			if status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -319,8 +378,16 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 			return
 		}
 		client, upstreamStatus := requestScopedClient(endpoint, r, w)
-		tags, owner, err := loadRecipeTags(r, client, id)
+		tags, owner, maintenance, err := loadRecipeTags(r, client, id)
+		if maintenance {
+			writeTagMaintenance(w, r, id, tags)
+			return
+		}
 		if err != nil {
+			if maintenanceModeError(err) {
+				writeTagMaintenance(w, r, id, nil)
+				return
+			}
 			status := tagRequestStatus(err, *upstreamStatus)
 			message := "Tags konnten nicht geladen werden; Änderung wurde nicht ausgeführt."
 			if status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -359,6 +426,10 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 		} else {
 			inventory, inventoryErr := loadTagInventory(r, client)
 			if inventoryErr != nil {
+				if maintenanceModeError(inventoryErr) {
+					writeTagMaintenance(w, r, id, tags)
+					return
+				}
 				log.Printf("failed to verify tag before assignment: %v", inventoryErr)
 				status := tagRequestStatus(inventoryErr, *upstreamStatus)
 				if status == http.StatusUnauthorized || status == http.StatusForbidden {
@@ -397,6 +468,10 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 		}
 		if err != nil {
 			log.Printf("failed to change recipe tag assignment: %v", err)
+			if maintenanceModeError(err) {
+				writeTagMaintenance(w, r, id, tags)
+				return
+			}
 			if cacheErr := invalidateRecipeTags(cache, id); cacheErr != nil {
 				log.Printf("failed to invalidate uncertain recipe tag assignment: %v", cacheErr)
 			}
@@ -417,8 +492,12 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 				false, false)
 			return
 		}
-		confirmedTags, confirmedOwner, err := loadRecipeTags(r, client, id)
+		confirmedTags, confirmedOwner, maintenance, err := loadRecipeTags(r, client, id)
 		if err != nil {
+			if maintenance || maintenanceModeError(err) {
+				writeTagMaintenance(w, r, id, tags)
+				return
+			}
 			log.Printf("failed to confirm recipe tag assignment: %v", err)
 			status := tagRequestStatus(err, *upstreamStatus)
 			message := "Änderung wurde möglicherweise gespeichert, konnte aber nicht bestätigt werden. Bitte neu laden."
@@ -427,6 +506,10 @@ func recipeTagMutationHandler(endpoint string, cache *pageCache, remove bool) ht
 			} else {
 				writeCurrentTagEdit(w, r, id, status, tags, message, false, false)
 			}
+			return
+		}
+		if maintenance {
+			writeTagMaintenance(w, r, id, confirmedTags)
 			return
 		}
 		if !confirmedOwner {

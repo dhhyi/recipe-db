@@ -1,4 +1,5 @@
 const capabilitiesQuery = `query MyCapabilities {
+  maintenance
   myCapabilities {
     role
     canManageRecipes
@@ -35,6 +36,7 @@ export const capabilities = Object.fromEntries(
       variables: {},
       response: {
         data: {
+          maintenance: false,
           myCapabilities: { role, canManageRecipes: role === "owner" },
         },
       },

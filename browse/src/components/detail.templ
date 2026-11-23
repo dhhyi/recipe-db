@@ -35,9 +35,9 @@ templ editFields(id string, recipeEdit bool, images bool, imageEdit bool) {
 templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
 	@editFields(
 		id,
-		resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline,
+		!resp.Maintenance && resp.MyCapabilities.CanManageRecipes && resp.RecipeEditOnline,
 		resp.ImagesOnline,
-		resp.MyCapabilities.CanManageImages && resp.ImageEditOnline,
+		!resp.Maintenance && resp.MyCapabilities.CanManageImages && resp.ImageEditOnline,
 	)
 }
 

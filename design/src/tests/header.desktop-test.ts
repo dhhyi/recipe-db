@@ -32,9 +32,9 @@ function restoreVisualViewportHeight() {
   }
 }
 
-async function mountHeader() {
+async function mountHeader(maintenance = false) {
   document.body.innerHTML = `
-    <header-component auth-role="anonymous" auth-enabled></header-component>
+    <header-component auth-role="anonymous" auth-enabled ${maintenance ? "maintenance" : ""}></header-component>
     <main style="height: 3000px"><button>Page control</button></main>
   `;
   const component = document.querySelector(
@@ -222,5 +222,80 @@ describe("shared header login", () => {
       history.replaceState(originalState, "", originalURL);
       document.body.replaceChildren();
     }
+  });
+
+  describe("maintenance indicator", () => {
+    beforeEach(async () => {
+      await page.viewport(320, 600);
+      await mountHeader(true);
+    });
+
+    afterEach(() => {
+      document.body.replaceChildren();
+    });
+
+    it("centers the indicator beside the logo with a small gap", async () => {
+      for (const width of [320, 800]) {
+        await page.viewport(width, 600);
+        await settle();
+        const nav = document.querySelector("header-component nav")!;
+        const logo = nav.querySelector("a svg")!.getBoundingClientRect();
+        const indicator = nav
+          .querySelector(".maintenance-indicator")!
+          .getBoundingClientRect();
+        const navBounds = nav.getBoundingClientRect();
+
+        expect(
+          Math.abs(
+            indicator.top +
+              indicator.height / 2 -
+              (navBounds.top + navBounds.height / 2),
+          ),
+        ).toBeLessThanOrEqual(1);
+        expect(indicator.left - logo.right).toBeGreaterThanOrEqual(4);
+        expect(indicator.left - logo.right).toBeLessThanOrEqual(12);
+      }
+    });
+
+    it("announces the explanation and reveals the Blades tooltip on hover and keyboard focus", async () => {
+      window.scrollTo(0, 0);
+      await settle();
+      const indicator = document.querySelector<HTMLElement>(
+        ".maintenance-indicator",
+      )!;
+      const description = indicator.getAttribute("data-tooltip")!;
+      expect(indicator.getAttribute("aria-label")).toBe(description);
+      expect(indicator.tabIndex).toBe(0);
+      expect(indicator.querySelector("svg")).toBeTruthy();
+
+      await userEvent.hover(indicator);
+      await expect
+        .poll(() => getComputedStyle(indicator, "::before").content)
+        .toContain(description);
+      await expect
+        .poll(() => getComputedStyle(indicator, "::before").opacity)
+        .toBe("1");
+      const tooltip = getComputedStyle(indicator, "::before");
+      const indicatorBounds = indicator.getBoundingClientRect();
+      const tooltipWidth = Number.parseFloat(tooltip.width);
+      expect(Number.parseFloat(tooltip.top)).toBeGreaterThanOrEqual(
+        indicatorBounds.height - 1,
+      );
+      expect(tooltip.left).toBe("0px");
+      expect(tooltip.whiteSpace).toBe("normal");
+      expect(tooltip.overflowWrap).toBe("anywhere");
+      expect(indicatorBounds.left).toBeGreaterThanOrEqual(0);
+      expect(indicatorBounds.left + tooltipWidth).toBeLessThanOrEqual(
+        window.innerWidth,
+      );
+
+      await userEvent.unhover(indicator);
+      await userEvent.tab();
+      await userEvent.tab();
+      expect(document.activeElement).toBe(indicator);
+      await expect
+        .poll(() => getComputedStyle(indicator, "::before").content)
+        .toContain(description);
+    });
   });
 });

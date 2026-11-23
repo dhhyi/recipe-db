@@ -13,6 +13,7 @@ const meta = {
     authRole: "",
     authEmail: "",
     authEnabled: false,
+    maintenance: false,
   },
   argTypes: {
     authRole: {
@@ -21,6 +22,7 @@ const meta = {
     },
     authEmail: { control: "text" },
     authEnabled: { control: "boolean" },
+    maintenance: { control: "boolean" },
   },
 } satisfies Meta;
 
@@ -58,11 +60,12 @@ export const Sticky: Story = {
       }
     });
   },
-  render: ({ authRole, authEmail, authEnabled }) => html`
+  render: ({ authRole, authEmail, authEnabled, maintenance }) => html`
     <header-component
       auth-role=${authRole}
       auth-email=${authEmail}
       ?auth-enabled=${authEnabled}
+      ?maintenance=${maintenance}
     ></header-component>
     <main style="padding: 0.5rem 0;">
       <h1>${lorem.generateWords(3)}</h1>
@@ -91,4 +94,9 @@ export const LoggedIn: Story = {
     authEmail: "max.mustermann@example.com",
     authEnabled: true,
   },
+};
+
+export const Maintenance: Story = {
+  ...LoggedIn,
+  args: { ...LoggedIn.args, maintenance: true },
 };

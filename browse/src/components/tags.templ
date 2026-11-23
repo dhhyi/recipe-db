@@ -117,6 +117,7 @@ templ recipeDetailTags(id string, tags []gql.RecipeTag) {
 		hx-swap="outerHTML"
 		hx-on::before-swap="if (event.detail.xhr.status >= 400) { const replace = event.detail.xhr.getResponseHeader('X-Tag-Replace') === 'true'; event.detail.shouldSwap = replace; event.detail.isError = !replace; }"
 		hx-on::response-error="const status = this.querySelector('[data-tag-feedback]'); if (status) { status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false"
+		hx-on:tags-unavailable="const warning = document.createElement('p'); warning.setAttribute('role', 'status'); warning.setAttribute('aria-live', 'polite'); warning.textContent = event.detail.message; this.prepend(warning)"
 		hx-on::send-error="const status = this.querySelector('[data-tag-feedback]'); if (status) { status.textContent = 'Tags konnten nicht aktualisiert werden.'; status.className = 'feedback error'; } const retry = this.querySelector('[data-tag-retry]'); if (retry) retry.hidden = false"
 		hx-on::timeout="htmx.trigger(this, 'htmx:sendError', event.detail)"
 	>

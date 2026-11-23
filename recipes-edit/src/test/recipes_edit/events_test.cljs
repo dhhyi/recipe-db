@@ -64,7 +64,29 @@
                      [::events/capabilities-loaded
                       {:response {:errors [{:message "Authentication required"
                                             :extensions {:code "authentication-required"}}]}}])]
-    (is (= :authentication-required (:authorization db)))))
+    (is (= :authentication-required (:authorization db))))
+  (let [db (event-db (events/initial-db {:page :new})
+                     [::events/capabilities-loaded
+                      {:response {:data {:maintenance true
+                                         :myCapabilities {:role "anonymous"
+                                                          :canManageRecipes false}}
+                                  :errors []}}])]
+    (is (= :maintenance (:authorization db)))))
+
+(deftest maintenance-mode-save-error-shows-maintenance-without-retrying
+  (let [db {:status :saving
+            :route {:page :new}
+            :authorization :allowed
+            :form (assoc (model/blank-form) :name "Soup")
+            :baseline (model/blank-form)}
+        effects (event-effects db [::events/saved
+                                   {:response {:data {:createRecipe nil}
+                                               :errors [{:message "Maintenance active"
+                                                         :extensions {:code "maintenance-mode"
+                                                                      :status 503}}]}}])]
+    (is (= :maintenance (get-in effects [:db :authorization])))
+    (is (empty? (:dispatch effects)))
+    (is (= {} (event-effects (:db effects) [::events/save])))))
 
 (deftest normalizes-graphql-response-keys
   (is (= {:data {:createRecipe nil}
