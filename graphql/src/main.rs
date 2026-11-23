@@ -262,6 +262,34 @@ async fn graphql(
     execute_graphql(state, headers, method, request.into_inner()).await
 }
 
+fn graphql_router(
+    route: axum::routing::MethodRouter<GraphQLState>,
+    runtime_mode: mode::RuntimeMode,
+    graphql_state: GraphQLState,
+    ingress_secret: Option<IngressSecret>,
+) -> Router {
+    let graphql_app = Router::new()
+        .route("/graphql", route)
+        .route_layer(middleware::from_fn_with_state(
+            runtime_mode,
+            maintenance_multipart_barrier,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            runtime_mode,
+            backup_mode_barrier,
+        ));
+    if let Some(secret) = ingress_secret {
+        graphql_app
+            .route_layer(middleware::from_fn_with_state(
+                secret,
+                trusted_graphql_ingress,
+            ))
+            .with_state(graphql_state)
+    } else {
+        graphql_app.with_state(graphql_state)
+    }
+}
+
 async fn execute_graphql(
     state: GraphQLState,
     headers: HeaderMap,
@@ -544,23 +572,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .post(graphql)
             .head(|| async { StatusCode::NO_CONTENT })
     };
-    let graphql_app =
-        Router::new()
-            .route("/graphql", graphql_route)
-            .route_layer(middleware::from_fn_with_state(
-                runtime_mode,
-                backup_mode_barrier,
-            ));
-    let graphql_app = if let Some(secret) = ingress_secret {
-        graphql_app
-            .route_layer(middleware::from_fn_with_state(
-                secret,
-                trusted_graphql_ingress,
-            ))
-            .with_state(graphql_state)
-    } else {
-        graphql_app.with_state(graphql_state)
-    };
+    let graphql_app = graphql_router(graphql_route, runtime_mode, graphql_state, ingress_secret);
     let app = app.merge(graphql_app);
 
     println!("async-graphql started");
@@ -875,13 +887,12 @@ mod ingress_tests {
             assert_eq!(result["errors"][0]["extensions"]["status"], 503);
         }
 
-        let graphql_app = Router::new()
-            .route("/graphql", axum::routing::post(super::graphql))
-            .route_layer(middleware::from_fn_with_state(
-                crate::mode::RuntimeMode::Maintenance,
-                super::maintenance_multipart_barrier,
-            ))
-            .with_state(state);
+        let graphql_app = super::graphql_router(
+            axum::routing::post(super::graphql),
+            crate::mode::RuntimeMode::Maintenance,
+            state,
+            None,
+        );
         let graphql_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let graphql_address = graphql_listener.local_addr().unwrap();
         let graphql_server =
