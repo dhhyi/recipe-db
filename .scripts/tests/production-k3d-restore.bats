@@ -71,6 +71,7 @@ load production-k3d-restore-setup
   export MOCK_RETAINED_CLASS_MISSING=true
   export MOCK_SERVICE_TYPE=ClusterIP
   pi_https_restore_values
+  set_value '.timeoutSeconds=1'
   run_restore
   printf '%s\n' "$output"
   [ "$status" -ne 0 ]
@@ -101,6 +102,7 @@ load production-k3d-restore-setup
 @test "Pi HTTPS restore rejects private application HTTP Service exposure" {
   restore_fixture
   pi_https_restore_values
+  set_value '.timeoutSeconds=1'
   export MOCK_PRIVATE_HTTP=true
   run_restore
   [ "$status" -ne 0 ]
@@ -113,6 +115,7 @@ load production-k3d-restore-setup
 @test "Pi HTTPS restore rejects a private target port" {
   restore_fixture
   pi_https_restore_values
+  set_value '.timeoutSeconds=1'
   export MOCK_TARGET_DRIFT=true
   run_restore
   [ "$status" -ne 0 ]
@@ -125,6 +128,7 @@ load production-k3d-restore-setup
 @test "Pi HTTPS restore rejects a non-TCP Service port" {
   restore_fixture
   pi_https_restore_values
+  set_value '.timeoutSeconds=1'
   export MOCK_PROTOCOL_DRIFT=true
   run_restore
   [ "$status" -ne 0 ]
@@ -165,6 +169,7 @@ load production-k3d-restore-setup
 
 @test "restore retains its barrier when local ingress is not a safe LoadBalancer" {
   restore_fixture
+  set_value '.timeoutSeconds=1'
   export MOCK_SERVICE_TYPE=ClusterIP
   run_restore
   [ "$status" -ne 0 ]
@@ -177,10 +182,11 @@ load production-k3d-restore-setup
 
 @test "restore hardens historical default LoadBalancer and removes allocated NodePorts" {
   restore_fixture
-  export MOCK_NODEPORT=true
+  export MOCK_NODEPORT=true MOCK_SERVICE_TRANSIENT=true
   run_restore
   [ "$status" -eq 0 ]
   [ -e "$MOCK_LOG.ingress-nodeports-removed" ]
+  [ "$(cat "$MOCK_LOG.service-check-count")" -ge 3 ]
   jq -e '.service.type == "LoadBalancer" and
     .service.spec.allocateLoadBalancerNodePorts == false and .deployment != null' "$MOCK_LOG.helm-values"
   local patch imports
@@ -204,6 +210,7 @@ load production-k3d-restore-setup
 
 @test "restore never patches a LoadBalancer with unsafe exposure" {
   restore_fixture
+  set_value '.timeoutSeconds=1'
   export MOCK_NODEPORT=true MOCK_EXTERNAL_IP=true
   run_restore
   [ "$status" -ne 0 ]
@@ -214,6 +221,7 @@ load production-k3d-restore-setup
 
 @test "restore rechecks ingress before reopening and retains the barrier on drift" {
   restore_fixture
+  set_value '.timeoutSeconds=8'
   export MOCK_SERVICE_DRIFT=true
   run_restore
   [ "$status" -ne 0 ]

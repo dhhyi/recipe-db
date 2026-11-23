@@ -1118,12 +1118,14 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
   fi
   case "$*" in
   *"get service traefik -o json"*)
-    if [[ ${MOCK_SERVICE_DRIFT:-false} == true ]]; then
+    if [[ ${MOCK_SERVICE_DRIFT:-false} == true || ${MOCK_SERVICE_TRANSIENT:-false} == true ]]; then
       count=$(cat "$MOCK_LOG.service-check-count" 2> /dev/null || echo 0)
       count=$((count + 1))
       echo "$count" > "$MOCK_LOG.service-check-count"
-      if ((count >= 3)); then
+      if [[ ${MOCK_SERVICE_DRIFT:-false} == true ]] && ((count >= 3)); then
         MOCK_EXTERNAL_IP=true
+      elif [[ ${MOCK_SERVICE_TRANSIENT:-false} == true ]]; then
+        if ((count < 3)); then MOCK_EXTERNAL_IP=true; else MOCK_EXTERNAL_IP=false; fi
       fi
     fi
     [[ ! -e $MOCK_LOG.ingress-nodeports-removed ]] || MOCK_NODEPORT=false
