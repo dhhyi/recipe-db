@@ -565,7 +565,6 @@ def acquire_run_lock(config):
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as error:
         os.close(lock_fd)
-        write_status(config, "interrupted", "already-running")
         raise BackupError("interrupted", "already-running") from error
     return lock_fd
 
@@ -635,8 +634,11 @@ def run_maintenance_capture(config):
             manifest = validate_snapshot(snapshot, allow_upload_pending=current[1] == "upload-pending")
             if manifest.get("backupId") != backup_id:
                 raise ValueError("maintenance backup identity mismatch")
-            result = upload_snapshot(snapshot, config, force_upload=True,
-                                     allow_upload_pending=current[1] == "upload-pending")
+            if current == ("backup-mode", "upload-pending") and verified_upload_status(config, backup_id):
+                result = "verified-upload"
+            else:
+                result = upload_snapshot(snapshot, config, force_upload=True,
+                                         allow_upload_pending=current[1] == "upload-pending")
         else:
             result = "verified-upload"
         if result != "verified-upload" or not verified_upload_status(config, backup_id):
@@ -682,20 +684,18 @@ def pending_verified_maintenance(config):
 
 def enter_maintenance(config):
     state = ensure_private_dir(config["stateDirectory"])
-    try:
-        result = subprocess.run(
-            ["systemctl", "disable", "--now", "recipe-db-backup.timer"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=False, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        write_status(config, "capture-failure", "timer-disable-failed")
-        raise BackupError("capture-failure", "timer-disable-failed") from error
-    if result.returncode:
-        write_status(config, "capture-failure", "timer-disable-failed")
-        raise BackupError("capture-failure", "timer-disable-failed")
     lock_fd = acquire_run_lock(config)
     try:
+        try:
+            result = subprocess.run(
+                ["systemctl", "disable", "--now", "recipe-db-backup.timer"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise BackupError("capture-failure", "timer-disable-failed") from error
+        if result.returncode:
+            raise BackupError("capture-failure", "timer-disable-failed")
         try:
             service = subprocess.run(
                 ["systemctl", "show", "--property=ActiveState", "--value",
@@ -726,7 +726,8 @@ def enter_maintenance(config):
     except BackupError as error:
         saved = lifecycle_state(maintenance_state_path(config))
         backup_id = saved.get("backupId") if isinstance(saved, dict) else None
-        write_status(config, error.status, error.code, backup_id)
+        if not pending_verified_maintenance(config):
+            write_status(config, error.status, error.code, backup_id)
         raise
     finally:
         os.close(lock_fd)

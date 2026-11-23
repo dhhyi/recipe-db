@@ -900,8 +900,32 @@ state_path.write_text(json.dumps(state))
         self.assertEqual(backup.lifecycle_state(maintenance)["phase"], "upload-pending")
         self.assertEqual(backup.read_json(backup.status_path(self.config))["status"], "verified-upload")
         self.assertEqual(backup.report_status(self.config)["status"], "restart-failure")
-        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
+            self.assertEqual(backup.run_nightly(self.config), "verified-upload")
         self.assertEqual(backup.lifecycle_state(maintenance)["phase"], "captured")
+
+    def test_competing_run_does_not_replace_restoration_verification(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        failure = self.root / "fail-restore"
+        failure.touch()
+        with self.assertRaises(backup.BackupError):
+            backup.run_nightly(self.config)
+        saved = backup.read_json(backup.status_path(self.config))
+        lock_fd = backup.acquire_run_lock(self.config)
+        try:
+            with self.assertRaises(backup.BackupError) as error:
+                backup.run_nightly(self.config)
+            self.assertEqual(error.exception.code, "already-running")
+            self.assertEqual(backup.read_json(backup.status_path(self.config)), saved)
+        finally:
+            os.close(lock_fd)
+        with self.assertRaises(backup.BackupError):
+            backup.enter_maintenance(self.config)
+        self.assertEqual(backup.read_json(backup.status_path(self.config)), saved)
+        failure.unlink()
+        with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
+            self.assertEqual(backup.run_nightly(self.config), "verified-upload")
 
     def test_restore_success_without_captured_state_fails_closed(self):
         self.write_maintenance_capture()
