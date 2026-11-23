@@ -28,7 +28,7 @@ values=$2
 shift 2
 if [[ $release_sources_from_git == true ]]; then
   [[ $command == release-* || $command == render || $command == maintenance-enter || $command == backup-enter ||
-    $command == backup-capture || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
+    $command == backup-capture || $command == maintenance-restore || $command == backup-run || $command == backup-exit || $command == restore || $command == recovery-* ]] \
     || production_fail "Git release sources are limited to render, backup operations, restore and guarded release operations"
   tooling_revision=$(git -C "$root" rev-parse HEAD)
   [[ -z $(git -C "$root" status --porcelain --untracked-files=all) ]] \
@@ -39,6 +39,7 @@ case "$command" in
   render | deploy | release-preflight) [[ $# = 1 ]] || production_fail "render/deploy/preflight require an immutable release artifact" ;;
   backup-run | backup-enter | maintenance-enter) [[ $# = 2 ]] || production_fail "$command requires an immutable release artifact and new absolute snapshot directory" ;;
   backup-capture) [[ $# = 1 || $# = 2 ]] || production_fail "backup-capture requires the existing maintenance state directory and optional legacy identity receipt" ;;
+  maintenance-restore) [[ $# = 1 ]] || production_fail "maintenance-restore requires the existing maintenance state directory" ;;
   release-stage) [[ $# = 4 ]] || production_fail "release-stage requires the maintenance state directory, candidate artifact, verified backup status and VERIFIED-<backup-id>-<status> confirmation" ;;
   release-fallback-stage) [[ $# = 3 ]] || production_fail "release-fallback-stage requires the maintenance state directory, failed candidate artifact and FALLBACK-<holder>-MARKERS-1-UNCHANGED-FORMAT confirmation" ;;
   release-migration-plan | release-migration-next | release-migration-status)
@@ -148,6 +149,7 @@ cleanup() {
   if [[ $result -ne 0 ]] && $locked && $retain_lock \
     && [[ $command != release-migration-* ]] \
     && [[ $command != release-recovery-reopen ]] \
+    && [[ $command != maintenance-restore ]] \
     && ([[ $command != release-* ]] || $release_mutation_started) \
     && [[ -n ${snapshot:-} && -f $snapshot/backup-state.json ]] \
     && [[ $(jq -r .status "$snapshot/backup-state.json") != recovery-required ]]; then
@@ -261,7 +263,7 @@ pull_release() {
   [[ $revision = "$(jq -r '.annotations["org.opencontainers.image.revision"]' "$work/manifest.json")" ]] \
     || production_fail "artifact and inventory revision mismatch"
   case "$command" in
-    backup-run | backup-enter | backup-capture | backup-exit | restore | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
+    backup-run | backup-enter | backup-capture | maintenance-restore | backup-exit | restore | recovery-* | release-closeout | release-migration-recover | release-recovery-reopen)
       local inputs=(.scripts/lib/project-metadata.sh
         .scripts/templates/kubernetes-template.yml .scripts/templates/kubernetes.lib.yml
         .scripts/templates/storage-version-gate.sh.ytt .scripts/templates/storage-version-sidecar.sh.ytt
@@ -969,7 +971,7 @@ backup_check_capacity() {
 }
 
 backup_capture() {
-  local entry name role pvc
+  local entry name role pvc final_status=${1:-captured}
   local inventory="$work/archive-inventory.jsonl"
   : > "$inventory" || return 1
   while IFS= read -r entry; do
@@ -988,7 +990,7 @@ backup_capture() {
   jq --arg capturedAt "$captured_at" '.capturedAt=$capturedAt' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
     && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json" \
-    && backup_state_write captured captured
+    && { [[ $final_status != captured ]] || backup_state_write captured captured; }
 }
 
 backup_remove_copy_pods() {
@@ -1538,20 +1540,73 @@ backup_capture_maintenance() {
   fi
   backup_scale_zero || return 1
   backup_state_write backup-mode writers-stopped || return 1
-  backup_capture || return 1
-  backup_write_manifest || return 1
-  if $readonly_maintenance && ! backup_restore_maintenance; then
-    backup_state_write recovery-required maintenance-restart-failed || true
-    cluster_operation_lock_update recovery-required || true
-    printf 'production: snapshot was captured but read-only maintenance could not be restored; backup barrier and Lease remain\n' >&2
-    return 1
-  fi
   if $readonly_maintenance; then
-    backup_state_write captured captured || return 1
+    backup_capture pending || return 1
+  else
+    backup_capture || return 1
   fi
-  cluster_operation_lock_update captured || return 1
+  backup_write_manifest || return 1
+  if $readonly_maintenance; then
+    backup_state_write backup-mode upload-pending || return 1
+    cluster_operation_lock_update upload-pending || return 1
+  else
+    cluster_operation_lock_update captured || return 1
+  fi
   printf 'production: maintenance snapshot captured at %s/manifest.json; holder=%s\n' \
     "$snapshot" "$backup_id"
+}
+
+maintenance_restore() {
+  local release current status_file
+  backup_load_state "$1"
+  jq -e '.stateVersion == 2 and .status == "backup-mode"
+    and (.phase == "upload-pending" or .phase == "restoration-pending")' \
+    "$snapshot/backup-state.json" > /dev/null \
+    || production_fail "maintenance restoration requires a pending verified snapshot"
+  status_file="$(dirname "$snapshot")/status.json"
+  [[ -f $status_file && ! -L $status_file ]] \
+    || production_fail "maintenance restoration requires verified upload status"
+  jq -e --arg id "$backup_id" '.backupId == $id
+    and (.status == "verified-upload" or .status == "verified-unchanged")' \
+    "$status_file" > /dev/null \
+    || production_fail "maintenance upload verification does not match the retained backup"
+  release=$(jq -er .source.artifact "$snapshot/backup-state.json")
+  pull_release "$release"
+  [[ $revision = "$(jq -r .source.revision "$snapshot/backup-state.json")" ]] \
+    || production_fail "maintenance release revision changed"
+  render
+  connect
+  current=$(cluster_operation_lock_status) || production_fail "cannot inspect maintenance Lease"
+  jq -e --arg holder "$backup_id" --arg release "$release" '
+    .spec.holderIdentity == $holder
+    and .metadata.labels["app.kubernetes.io/part-of"] == "recipe-db"
+    and .metadata.annotations["recipe-db/operation"] == "backup"
+    and .metadata.annotations["recipe-db/release"] == $release
+  ' <<< "$current" > /dev/null || production_fail "maintenance Lease does not match saved state"
+  cluster_operation_lock_holder=$backup_id
+  lock_holder=$backup_id
+  locked=true
+  retain_lock=true
+  if [[ $target = pi ]]; then production_storage_preflight; fi
+  kube get deployments -o json > "$work/maintenance-restore-workloads.json" || return 1
+  backup_validate_workload_images "$work/maintenance-restore-workloads.json" || return 1
+  jq -e --slurpfile prior "$work/prior-workloads.json" '
+    . as $actual | all($prior[0][]; . as $wanted |
+      any($actual.items[]; .metadata.name == $wanted.name and
+        .spec.template.metadata.annotations["recipe-db/release"] == $wanted.release))
+  ' "$work/maintenance-restore-workloads.json" > /dev/null \
+    || production_fail "maintenance workloads changed releases; retain the barrier and investigate"
+  backup_state_write backup-mode restoration-pending || return 1
+  cluster_operation_lock_update restoration-pending || return 1
+  barrier_touched=true
+  if ! backup_establish_barrier || ! backup_restore_maintenance; then
+    backup_reblock_graphql || true
+    printf 'production: read-only maintenance restoration failed; retry the retained operation\n' >&2
+    return 1
+  fi
+  cluster_operation_lock_update captured || return 1
+  backup_state_write captured captured || return 1
+  printf 'production: verified maintenance snapshot restored read-only service; holder=%s\n' "$backup_id"
 }
 
 backup_load_state() {
@@ -4776,6 +4831,9 @@ case "$command" in
     ;;
   backup-capture)
     backup_capture_maintenance "$@"
+    ;;
+  maintenance-restore)
+    maintenance_restore "$1"
     ;;
   restore)
     restore_run "$1" "$2" "$3" "$4" "$5"

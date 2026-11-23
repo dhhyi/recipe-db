@@ -110,7 +110,7 @@ def validate_timestamp(value):
     return parsed.astimezone(timezone.utc)
 
 
-def validate_snapshot(snapshot, require_storage_versions=False):
+def validate_snapshot(snapshot, require_storage_versions=False, allow_upload_pending=False):
     snapshot = Path(snapshot)
     if snapshot.is_symlink() or not snapshot.is_dir():
         raise ValueError("invalid snapshot directory")
@@ -124,10 +124,13 @@ def validate_snapshot(snapshot, require_storage_versions=False):
         state = read_json(state_path)
         state_source = state.get("source") if isinstance(state, dict) else None
         manifest_source = manifest.get("source")
+        allowed_states = {("captured", "captured")}
+        if allow_upload_pending:
+            allowed_states.add(("backup-mode", "upload-pending"))
         if (not isinstance(state, dict) or not isinstance(state_source, dict)
                 or not isinstance(manifest_source, dict)
-                or state.get("stateVersion") != 2 or state.get("status") != "captured"
-                or state.get("phase") != "captured"
+                or state.get("stateVersion") != 2
+                or (state.get("status"), state.get("phase")) not in allowed_states
                 or state.get("backupId") != manifest.get("backupId")
                 or state_source.get("artifact") != manifest_source.get("artifact")
                 or state_source.get("revision") != manifest_source.get("revision")):
@@ -618,23 +621,52 @@ def run_maintenance_capture(config):
         if manifest_path.exists() or manifest_path.is_symlink():
             raise BackupError("restart-failure", "unexpected-maintenance-manifest")
         run_capture_command(config, "maintenance-capture", snapshot)
-    elif state.get("status") != "captured" or state.get("phase") != "captured":
+        state = lifecycle_state(snapshot)
+    if not isinstance(state, dict) or state.get("backupId") != backup_id:
+        raise BackupError("restart-failure", "maintenance-state-invalid")
+    current = (state.get("status"), state.get("phase"))
+    if current not in (("captured", "captured"), ("backup-mode", "upload-pending"),
+                       ("backup-mode", "restoration-pending")):
         raise BackupError("restart-failure", "maintenance-recovery-required")
     try:
-        manifest = validate_snapshot(snapshot)
-        if manifest.get("backupId") != backup_id:
-            raise ValueError("maintenance backup identity mismatch")
-        result = upload_snapshot(snapshot, config, force_upload=True)
-        status = read_json(status_path(config))
-        if status.get("status") != result or status.get("backupId") != backup_id \
-                or result not in ("verified-upload", "verified-unchanged"):
+        if current != ("backup-mode", "restoration-pending"):
+            manifest = validate_snapshot(snapshot, allow_upload_pending=current[1] == "upload-pending")
+            if manifest.get("backupId") != backup_id:
+                raise ValueError("maintenance backup identity mismatch")
+            result = upload_snapshot(snapshot, config, force_upload=True,
+                                     allow_upload_pending=current[1] == "upload-pending")
+        else:
+            result = "verified-upload"
+        if result != "verified-upload" or not verified_upload_status(config, backup_id):
             raise BackupError("upload-failure", "remote-verification-mismatch")
+        if current != ("captured", "captured"):
+            run_capture_command(config, "maintenance-restore", snapshot)
+            manifest = validate_snapshot(snapshot)
+            if manifest.get("backupId") != backup_id or not verified_upload_status(config, backup_id):
+                raise BackupError("restart-failure", "maintenance-restore-verification-mismatch")
         return result
     except BackupError:
         raise
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         write_status(config, "capture-failure", "invalid-maintenance-snapshot", backup_id)
         raise BackupError("capture-failure", "invalid-maintenance-snapshot") from error
+
+
+def verified_upload_status(config, backup_id):
+    try:
+        status = read_json(status_path(config))
+        return isinstance(status, dict) and status.get("format") == STATUS_FORMAT \
+            and status.get("status") == "verified-upload" and status.get("backupId") == backup_id
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def pending_verified_maintenance(config):
+    state = lifecycle_state(maintenance_state_path(config))
+    return isinstance(state, dict) \
+        and (state.get("status"), state.get("phase")) in (
+            ("backup-mode", "upload-pending"), ("backup-mode", "restoration-pending")) \
+        and verified_upload_status(config, state.get("backupId"))
 
 
 def enter_maintenance(config):
@@ -966,12 +998,13 @@ def terminate_capture_process_group(process):
     process.wait()
 
 
-def upload_snapshot(snapshot, config, require_storage_versions=False, force_upload=False):
+def upload_snapshot(snapshot, config, require_storage_versions=False, force_upload=False,
+                    allow_upload_pending=False):
     ensure_private_dir(config["stateDirectory"])
     stage_root = ensure_private_dir(config["stagingDirectory"])
     baseline_file = baseline_path(config)
     try:
-        manifest = validate_snapshot(snapshot, require_storage_versions)
+        manifest = validate_snapshot(snapshot, require_storage_versions, allow_upload_pending)
         fingerprint = content_fingerprint(manifest)
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         write_status(config, "capture-failure", "invalid-snapshot")
@@ -1171,7 +1204,8 @@ def run_nightly(config):
                 except BackupError as error:
                     backup_id = maintenance_data.get("backupId") \
                         if isinstance(maintenance_data, dict) else None
-                    write_status(config, error.status, error.code, backup_id)
+                    if not pending_verified_maintenance(config):
+                        write_status(config, error.status, error.code, backup_id)
                     raise
         snapshots = ensure_private_dir(state / "staging")
         snapshot = snapshots / f"capture-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
@@ -1213,7 +1247,8 @@ def run_nightly(config):
             if snapshot.exists():
                 shutil.rmtree(snapshot, ignore_errors=True)
     except KeyboardInterrupt as error:
-        write_status(config, "interrupted", "process-interrupted")
+        if not pending_verified_maintenance(config):
+            write_status(config, "interrupted", "process-interrupted")
         raise BackupError("interrupted", "process-interrupted") from error
     except (OSError, TypeError, ValueError) as error:
         write_status(config, "capture-failure", "local-operation")
@@ -1249,6 +1284,9 @@ def report_status(config):
             value["status"] = "capture-failure"
             value["code"] = "invalid-status-record"
     value["maintenanceActive"] = maintenance_active(config)
+    if pending_verified_maintenance(config):
+        value["status"] = "restart-failure"
+        value["code"] = "maintenance-restore-pending"
     value["migrationRecoveryCloseoutVersion"] = 1
     return value
 
