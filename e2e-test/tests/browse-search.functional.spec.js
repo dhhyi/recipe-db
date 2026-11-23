@@ -825,6 +825,10 @@ for (const cacheSize of [10, 0]) {
       await manualSentinel(page);
       await page.addInitScript(() => {
         window.historyTransitions = [];
+        window.historyEvents = [];
+        for (const name of ["htmx:historyCacheHit", "htmx:historyCacheMissLoad"]) {
+          document.addEventListener(name, () => window.historyEvents.push(name));
+        }
         const start = document.startViewTransition.bind(document);
         document.startViewTransition = (...args) => {
           const transition = start(...args);
@@ -874,6 +878,7 @@ for (const cacheSize of [10, 0]) {
       await expect(page.locator(".recipe-image")).toBeVisible();
       await page.evaluate(() => {
         window.historyTransitions = [];
+        window.historyEvents = [];
       });
       await page.goBack();
       await expect(search).toHaveValue("boundary");
@@ -887,10 +892,15 @@ for (const cacheSize of [10, 0]) {
       await expect(search).toBeVisible();
       await expect(page.locator("[data-add-recipe]")).toHaveCount(1);
       expect(await page.evaluate(() => window.historyTransitions)).toEqual([]);
+      expect(await page.evaluate(() => window.historyEvents)).toEqual(["htmx:historyCacheMissLoad"]);
       await page.goForward();
       await expect(page).toHaveURL(`/recipe/${demoRecipe.id}`);
       await expect(page.locator(".recipe-image")).toBeVisible();
       expect(await page.evaluate(() => window.historyTransitions)).toEqual([]);
+      expect(await page.evaluate(() => window.historyEvents)).toEqual([
+        "htmx:historyCacheMissLoad",
+        "htmx:historyCacheMissLoad",
+      ]);
       await page.goBack();
       await expect(search).toHaveValue("boundary");
       await expect(page.locator("[data-recipe-id]")).toHaveCount(72);

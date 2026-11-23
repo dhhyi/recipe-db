@@ -241,6 +241,21 @@ transitionTest(
   async ({ page, request, recipeWithoutImage }) => {
     await waitForRecipeIndexed(request, recipeWithoutImage.id);
     await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.addInitScript(() => {
+      window.motionAnimations = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (...args) => {
+        const transition = start(...args);
+        transition.ready.then(() => {
+          window.motionAnimations.push(
+            document.getAnimations().filter((animation) =>
+              animation.effect?.pseudoElement?.startsWith("::view-transition"),
+            ).length,
+          );
+        });
+        return transition;
+      };
+    });
     await page.goto("/");
     const tile = page.locator(`recipe-tile-component[data-recipe-id="${recipeWithoutImage.id}"]`);
     await tile.locator('a[slot="rating"]').evaluate((rating) => rating.remove());
@@ -250,6 +265,7 @@ transitionTest(
     await page.getByRole("link", { name: "Zur Startseite" }).click();
     await expect(page).toHaveURL("/");
     await expect(tile).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.motionAnimations)).toEqual([0, 0]);
   },
 );
 
