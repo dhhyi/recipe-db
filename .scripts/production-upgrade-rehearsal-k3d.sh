@@ -656,6 +656,8 @@ new_cluster() {
 
 prepare_fake_upload() {
   local label=$1 source_snapshot=$2 source_values=$3 deployment_id capture
+  [[ $source_snapshot == "$work/uploader/$label/maintenance" ]] \
+    || die "$label rehearsal snapshot does not match the retained uploader operation"
   deployment_id="issue-251-$run_id-$label"
   capture="$work/$label-capture-existing-snapshot"
   printf '#!/bin/bash\nset -eu\n[[ $# == 2 && $1 == maintenance-restore ]] || exit 2\ncd %q\nexec %q exec -- bash %q --release-sources-from-git maintenance-restore %q "$2"\n' \
