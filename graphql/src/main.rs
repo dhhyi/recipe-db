@@ -130,7 +130,7 @@ async fn execute_graphql(
     method: Method,
     request: async_graphql::Request,
 ) -> GraphQLResponse {
-    if state.mode == mode::RuntimeMode::Maintenance && request_contains_mutation(&request) {
+    if state.mode == mode::RuntimeMode::Maintenance && request_selects_mutation(&request) {
         return async_graphql::Response::from_errors(vec![maintenance_mode_error()]).into();
     }
     let context = match state.auth_policy.request_context(&headers) {
@@ -231,6 +231,20 @@ fn request_contains_mutation(request: &async_graphql::Request) -> bool {
                 operation.node.ty == async_graphql::parser::types::OperationType::Mutation
             })
         })
+}
+
+fn request_selects_mutation(request: &async_graphql::Request) -> bool {
+    let Ok(document) = async_graphql::parser::parse_query(&request.query) else {
+        return false;
+    };
+    let operation = match request.operation_name.as_deref() {
+        Some(name) => document.operations.get(&Some(name.to_owned())),
+        None if document.operations.len() == 1 => document.operations.values().next(),
+        None => None,
+    };
+    operation.is_some_and(|operation| {
+        operation.node.ty == async_graphql::parser::types::OperationType::Mutation
+    })
 }
 
 fn maintenance_mode_error() -> async_graphql::ServerError {
@@ -622,6 +636,24 @@ mod ingress_tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         calls.store(0, Ordering::SeqCst);
 
+        let response = execute_graphql(
+            state.clone(),
+            headers.clone(),
+            Method::POST,
+            async_graphql::Request::new(
+                r#"query ReadOnly { maintenance } mutation Write { rate(id: "42", rating: 5) { count } }"#,
+            )
+            .operation_name("ReadOnly"),
+        )
+        .await;
+        let response = axum::response::IntoResponse::into_response(response);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(result.get("errors").is_none(), "{result}");
+        assert_eq!(result["data"]["maintenance"], true);
+
         let mut upload = async_graphql::Request::new(
             "mutation($file: Upload!) { addImage(recipeId: \"42\", file: $file) { url } }",
         )
@@ -641,6 +673,10 @@ mod ingress_tests {
             async_graphql::Request::new(
                 r#"mutation { rate(id: "42", rating: 5) { recipeId count } }"#,
             ),
+            async_graphql::Request::new(
+                r#"query ReadOnly { maintenance } mutation Write { rate(id: "42", rating: 5) { count } }"#,
+            )
+            .operation_name("Write"),
             upload,
         ];
         for request in requests {
@@ -698,7 +734,6 @@ mod ingress_tests {
         assert_eq!(result["errors"][0]["extensions"]["status"], 503);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
         let publisher_status = serde_json::to_value(publisher.status()).unwrap();
         assert_eq!(publisher_status["published"], 0);
         assert_eq!(publisher_status["failed"], 0);
