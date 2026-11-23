@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 release_data_cache_path() {
   local kind=$1 digest=$2 cache_home
   [[ $kind =~ ^(artifact-manifests|inventories|image-indexes)$ &&
