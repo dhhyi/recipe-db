@@ -771,7 +771,10 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("8472 accept", rules)
         self.assertNotIn("10250 accept", rules)
         self.assertIn('iifname { "cni0", "flannel.1" } accept', rules)
-        self.assertIn("ct original proto-dst { 80, 443 } accept", rules)
+        self.assertNotIn("tcp dport { 80, 443 } accept", rules)
+        self.assertNotIn("ct original proto-dst { 80, 443 } accept", rules)
+        self.assertIn("ip saddr 192.168.1.0/24 udp dport 5353 accept", rules)
+        self.assertIn("ip6 saddr fe80::/10 udp dport 5353 accept", rules)
         self.assertNotIn("192.168.1.218", rules)
         self.assertNotIn("8081", rules)
         self.assertNotIn("8443", rules)
@@ -782,6 +785,7 @@ class ContractTests(unittest.TestCase):
         rules = self.render("firewall.nft.j2")
         self.assertIn('meta nfproto ipv4 tcp dport { 8081, 8443 } accept comment "recipe-db-public-https"', rules)
         self.assertIn("ct status dnat ct original ip daddr 192.168.1.218 ct original proto-dst { 8081, 8443 } accept", rules)
+        self.assertNotIn("ct original proto-dst { 80, 443 } accept", rules)
         self.assertLess(rules.index('ct original proto-dst { 8081, 8443 }'),
                         rules.index('ct state new ip daddr'))
         for line in rules.splitlines():

@@ -1129,17 +1129,21 @@ printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
     [[ ! -e $MOCK_LOG.ingress-nodeports-removed ]] || MOCK_NODEPORT=false
     jq -n --arg lan "$MOCK_LAN" --arg pi "${MOCK_PI:-false}" --arg type "$MOCK_SERVICE_TYPE" \
       --arg nodeport "$MOCK_NODEPORT" --arg allocate "$MOCK_ALLOCATE_NODEPORT" \
-      --arg external "$MOCK_EXTERNAL_IP" --arg https "$MOCK_HTTPS" '
+      --arg external "$MOCK_EXTERNAL_IP" --arg https "$MOCK_HTTPS" \
+      --arg private_http "${MOCK_PRIVATE_HTTP:-false}" '
       {metadata:{resourceVersion:"42"},spec:{type:(if $type != "auto" then $type
           elif $lan == "true" or $pi != "true" then "LoadBalancer" else "ClusterIP" end),
         allocateLoadBalancerNodePorts:($allocate == "true"),
-        externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),ports:[{port:80} +
-          (if $nodeport == "true" then {nodePort:30080} else {} end)] +
-          (if $https == "true" then [{port:8081},{port:8443}] else [] end)}}' ;;
+        externalIPs:(if $external == "true" then ["192.0.2.1"] else [] end),
+        ports:(if $https == "true" then [{port:8081},{port:8443}] +
+          (if $private_http == "true" then [{port:80}] else [] end)
+          else [{port:80}] end)}} |
+      if $nodeport == "true" then .spec.ports |= map(. + {nodePort:30080}) else . end' ;;
   *"patch service traefik --type=strategic --patch-file "*)
     [[ ${MOCK_INGRESS_PATCH_FAIL:-false} != true ]] || exit 1
-    jq -e '.metadata.resourceVersion == "42" and
-      .spec.ports == [{port:80,nodePort:null}]' "${*: -1}" > /dev/null || exit 1
+    jq -e --arg https "$MOCK_HTTPS" '.metadata.resourceVersion == "42" and
+      ([.spec.ports[].port] | sort) == (if $https == "true" then [8081,8443] else [80] end)
+      and all(.spec.ports[]; .nodePort == null)' "${*: -1}" > /dev/null || exit 1
     touch "$MOCK_LOG.ingress-nodeports-removed" ;;
   *"config view --minify -o jsonpath="*) printf 'https://127.0.0.1:6445' ;;
   *"get nodes -o json"*)

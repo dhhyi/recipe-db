@@ -449,7 +449,7 @@ guard_ingress_service() {
   jq -e --slurpfile config "$work/config.json" '
     .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
     ([.spec.ports[].port] | sort) ==
-      (if $config[0].httpsStaging then [80,8081,8443] else [80] end) and
+      (if $config[0].httpsStaging then [8081,8443] else [80] end) and
     ((.spec.externalIPs // []) | length == 0) and
     all(.spec.ports[]; .nodePort == null)' "$work/traefik-service.json" > /dev/null \
     || production_fail "ingress does not match the requested exposure without NodePorts"

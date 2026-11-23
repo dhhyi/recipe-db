@@ -253,6 +253,7 @@
 #@   values["service"] = {"type": "LoadBalancer", "spec": {"allocateLoadBalancerNodePorts": False}}
 #@   if https_staging != None:
 #@     ca = "https://acme-v02.api.letsencrypt.org/directory"
+#@     values["ports"]["web"] = {"port": 8000, "expose": {"default": False}}
 #@     values["ports"]["staging-http"] = {"port": 8001, "expose": {"default": True}, "exposedPort": 8081, "protocol": "TCP", "observability": {}}
 #@     values["ports"]["websecure"] = {"port": 8443, "expose": {"default": True}, "exposedPort": 8443, "protocol": "TCP"}
 #@     values["persistence"] = {"enabled": True, "existingClaim": "recipe-db-acme", "path": "/data"}

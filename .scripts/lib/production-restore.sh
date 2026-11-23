@@ -22,7 +22,7 @@ restore_remove_ingress_nodeports() {
     .spec.type == "LoadBalancer" and .spec.allocateLoadBalancerNodePorts == false and
     ((.spec.externalIPs // []) | length == 0) and
     ([.spec.ports[].port] | sort) ==
-      (if $config[0].httpsStaging then [80,8081,8443] else [80] end) and
+      (if $config[0].httpsStaging then [8081,8443] else [80] end) and
     (.metadata.resourceVersion | type == "string" and length > 0)' \
     "$work/restore-ingress-service.json" > /dev/null \
     || production_fail "restore ingress is not a safe LoadBalancer"

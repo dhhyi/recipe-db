@@ -200,14 +200,16 @@ google_https_values() {
   run ! grep -q 'oras' "$MOCK_LOG"
 }
 
-@test "Google HTTPS rejects NodePorts and missing HTTPS ports on the actual LoadBalancer" {
+@test "Google HTTPS requires only challenge and secure ports on the actual LoadBalancer" {
   google_https_values
   export MOCK_LAN=true
-  for combination in nodeport missing-https; do
+  for combination in nodeport missing-https private-http; do
     if [[ $combination = nodeport ]]; then
-      export MOCK_HTTPS=true MOCK_NODEPORT=true
+      export MOCK_HTTPS=true MOCK_NODEPORT=true MOCK_PRIVATE_HTTP=false
+    elif [[ $combination = private-http ]]; then
+      export MOCK_HTTPS=true MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=true
     else
-      export MOCK_HTTPS=false MOCK_NODEPORT=false
+      export MOCK_HTTPS=false MOCK_NODEPORT=false MOCK_PRIVATE_HTTP=false
     fi
     run bash .scripts/production-k3d.sh deploy "$VALUES" "$ARTIFACT"
     [ "$status" -ne 0 ]

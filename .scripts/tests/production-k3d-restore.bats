@@ -68,15 +68,9 @@ load production-k3d-restore-setup
 
 @test "fresh Pi HTTPS restore creates retained storage before applying Traefik certificate infrastructure" {
   restore_fixture
-  export MOCK_PI=true MOCK_LAN=true MOCK_HTTPS=true MOCK_RETAINED_CLASS_MISSING=true
+  export MOCK_RETAINED_CLASS_MISSING=true
   export MOCK_SERVICE_TYPE=ClusterIP
-  set_value '.target="pi" | .cluster="recipe-db-pi" | .context="explicit-pi" |
-    .storageClass="recipe-db-retained" |
-    .timeoutSeconds=8 |
-    .piStorage={node:"recipe-db-pi",expectedRootUuid:"02f61d5e-92cb-4f9c-a781-099d97795020",dataRoot:"/srv/recipe-db"} |
-    .origin="https://recipes.example.org" |
-    .httpsStaging={hostname:"recipes.example.org"} |
-    .secrets."acme-account-email"=(.secrets."auth-accounts.json" | sub("auth-accounts.json$"; "acme-account-email"))'
+  pi_https_restore_values
   run_restore
   printf '%s\n' "$output"
   [ "$status" -ne 0 ]
@@ -102,6 +96,18 @@ load production-k3d-restore-setup
   [[ $output != *"unsafe-private-contact"* ]]
   [ -e "$MOCK_LOG.lease" ]
   run ! grep -Eq 'apply -f .*infrastructure.yml|exec -i restore-volume-' "$MOCK_LOG"
+}
+
+@test "Pi HTTPS restore rejects private application HTTP Service exposure" {
+  restore_fixture
+  pi_https_restore_values
+  export MOCK_PRIVATE_HTTP=true
+  run_restore
+  [ "$status" -ne 0 ]
+  [[ $output == *"restore ingress is not a safe LoadBalancer"* ]]
+  [ -e "$MOCK_LOG.lease" ]
+  jq -e '.status == "recovery-required"' "$RESTORE_STATE/restore-state.json"
+  run ! grep -Eq 'restore-final-routes|exec -i restore-volume-' "$MOCK_LOG"
 }
 
 @test "restore fully imports only after ALL volumes are empty and verifies propagation before public reopening" {

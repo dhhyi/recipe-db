@@ -124,6 +124,7 @@ render() {
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '
     .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
+    and .ports.web.port == 8000 and .ports.web.expose.default == false
     and .ports["staging-http"].exposedPort == 8081
     and .ports["staging-http"].port == 8001
     and .ports.websecure.exposedPort == 8443 and .ports.websecure.expose.default == true
