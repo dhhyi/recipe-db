@@ -16,6 +16,8 @@ source "$root/.scripts/lib/production-storage.sh"
 source "$root/.scripts/lib/production-restore.sh"
 # shellcheck source=.scripts/lib/production-recovery.sh
 source "$root/.scripts/lib/production-recovery.sh"
+# shellcheck source=.scripts/lib/release-data-cache.sh
+source "$root/.scripts/lib/release-data-cache.sh"
 
 release_sources_from_git=false
 if [[ ${1:-} == --release-sources-from-git ]]; then
@@ -237,9 +239,13 @@ connect() {
 
 pull_release() {
   artifact=$1
+  local cache_artifact_manifest=false cache_inventory=false
   [[ $artifact =~ ^ghcr.io/dhhyi/recipe-db-releases@sha256:[0-9a-f]{64}$ ]] \
     || production_fail "release must be the GHCR release repository at an immutable sha256 digest"
-  oras manifest fetch "$artifact" > "$work/manifest.json"
+  if ! release_data_cache_get artifact-manifests "${artifact##*@}" "$work/manifest.json"; then
+    oras manifest fetch "$artifact" > "$work/manifest.json"
+    cache_artifact_manifest=true
+  fi
   jq -e '
     .schemaVersion == 2
     and .artifactType == "application/vnd.dhhyi.recipe-db.release.v1+json"
@@ -251,9 +257,24 @@ pull_release() {
     and (.layers[0].digest | test("^sha256:[0-9a-f]{64}$"))
     and (.layers[0].size | type == "number" and . > 0 and . <= 1048576)
   ' "$work/manifest.json" > /dev/null || production_fail "unsafe or invalid release artifact shape"
-  rm -rf -- "$work/pulled"
-  mkdir "$work/pulled"
-  oras pull "$artifact" --output "$work/pulled" > /dev/null
+  if [[ $cache_artifact_manifest == true ]]; then
+    release_data_cache_put artifact-manifests "${artifact##*@}" "$work/manifest.json"
+  fi
+  mkdir -p "$work/pulled"
+  local inventory_digest inventory_size inventory_reference
+  inventory_digest=$(jq -er '.layers[0].digest' "$work/manifest.json")
+  inventory_size=$(jq -er '.layers[0].size' "$work/manifest.json")
+  if ! release_data_cache_get inventories "$inventory_digest" "$work/pulled/release.json" \
+    || [[ $(wc -c < "$work/pulled/release.json") != "$inventory_size" ]]; then
+    rm -f -- "$work/pulled/release.json"
+    inventory_reference="${artifact%@*}@$inventory_digest"
+    oras blob fetch --output "$work/pulled/release.json" "$inventory_reference" \
+      || production_fail "could not fetch release inventory $inventory_digest"
+    [[ -f $work/pulled/release.json && ! -L $work/pulled/release.json &&
+      $(wc -c < "$work/pulled/release.json") == "$inventory_size" ]] \
+      || production_fail "release artifact inventory is incomplete"
+    cache_inventory=true
+  fi
   [[ -f $work/pulled/release.json && ! -L $work/pulled/release.json ]] \
     || production_fail "release artifact did not contain a regular release.json"
   revision=$(jq -er .revision "$work/pulled/release.json")
@@ -290,10 +311,21 @@ pull_release() {
     fi
   fi
   sh "$root/.scripts/validate-production-release.sh" "$work/pulled/release.json" "$revision" "$release_root"
-  local image
+  if [[ $cache_inventory == true ]]; then
+    release_data_cache_put inventories "$inventory_digest" "$work/pulled/release.json"
+  fi
+  local image cache_image_index
   while IFS= read -r image; do
-    oras manifest fetch "$image" > "$work/image-index.json"
+    if ! release_data_cache_get image-indexes "${image##*@}" "$work/image-index.json"; then
+      oras manifest fetch "$image" > "$work/image-index.json"
+      cache_image_index=true
+    else
+      cache_image_index=false
+    fi
     sh "$root/.scripts/validate-production-image-index.sh" "$work/image-index.json"
+    if [[ $cache_image_index == true ]]; then
+      release_data_cache_put image-indexes "${image##*@}" "$work/image-index.json"
+    fi
   done < <(jq -r '(.images[]), (.migrations[]?.image)' "$work/pulled/release.json")
 }
 

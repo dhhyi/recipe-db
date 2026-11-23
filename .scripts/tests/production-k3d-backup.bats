@@ -2574,7 +2574,7 @@ EOF
   [ "$(migration_job_count)" -eq 0 ]
   [ -e "$MOCK_LOG.foreign-migration-job.json" ]
   [ "$(grep -c ' delete job migration-' "$MOCK_LOG")" -eq 5 ]
-  grep -q "oras pull $CANDIDATE" "$MOCK_LOG"
+  grep -q '^oras blob fetch --output .* ghcr.io/dhhyi/recipe-db-releases@sha256:' "$MOCK_LOG"
   run grep -Eq '^oras (delete|manifest delete|blob delete) ' "$MOCK_LOG"
   [ "$status" -ne 0 ]
 }
