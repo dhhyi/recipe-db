@@ -208,7 +208,7 @@ async fn multipart_operation_is_mutation(
         {
             return Some(true);
         }
-        if has_filename {
+        if !is_operations_part && name != "map" && has_filename {
             return Some(false);
         }
 
@@ -863,6 +863,56 @@ mod ingress_tests {
             Some(true)
         );
         assert_eq!(chunks_read.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn multipart_mutation_inspection_checks_filename_tagged_control_parts() {
+        let bodies = [
+            concat!(
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"; filename=\"operations.json\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"map\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+                "Content-Type: image/svg+xml\r\n\r\n",
+                "<svg/>\r\n",
+                "--boundary--\r\n"
+            ),
+            concat!(
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"query\":\"{ maintenance }\"}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"map\"; filename=\"map.json\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"0\":[\"variables.file\"]}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"operations\"\r\n",
+                "Content-Type: application/json\r\n\r\n",
+                "{\"query\":\"mutation { rate(id: \\\"42\\\", rating: 5) { count } }\"}\r\n",
+                "--boundary\r\n",
+                "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+                "Content-Type: image/svg+xml\r\n\r\n",
+                "<svg/>\r\n",
+                "--boundary--\r\n"
+            ),
+        ];
+
+        for body in bodies {
+            let mut stream =
+                futures::stream::iter([Ok::<_, axum::Error>(Bytes::from_static(body.as_bytes()))]);
+            let mut prefix = Vec::new();
+            assert_eq!(
+                super::multipart_operation_is_mutation(&mut stream, &mut prefix, "boundary").await,
+                Some(true)
+            );
+        }
     }
 
     #[tokio::test]
