@@ -37,11 +37,15 @@ export const images = { a, b, c };
 export const graphqlMocks = [
   {
     query: `query {
+      maintenance
       myCapabilities { role canManageImages }
     }`,
     variables: {},
     response: {
-      data: { myCapabilities: { role: "owner", canManageImages: true } },
+      data: {
+        maintenance: false,
+        myCapabilities: { role: "owner", canManageImages: true },
+      },
     },
   },
   // Three rows: the server applies the write but reports a concurrently changed default.

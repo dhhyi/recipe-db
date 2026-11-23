@@ -90,7 +90,7 @@ func writeErrorPage(w http.ResponseWriter, r *http.Request, status int, title, m
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Del("ETag")
-	if r.Header.Get("HX-Boosted") == "true" || r.Header.Get("HX-History-Restore-Request") == "true" {
+	if r.Header.Get("HX-Request") == "true" || r.Header.Get("HX-Boosted") == "true" || r.Header.Get("HX-History-Restore-Request") == "true" {
 		w.Header().Set("X-Browse-Full-Page-Error", "true")
 		w.Header().Set("HX-Retarget", "main")
 		w.Header().Set("HX-Reswap", "innerHTML")

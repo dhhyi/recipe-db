@@ -14,11 +14,13 @@ export const capabilities = Object.fromEntries(
     role,
     {
       query: `query {
+        maintenance
         myCapabilities { role canManageImages }
       }`,
       variables: {},
       response: {
         data: {
+          maintenance: false,
           myCapabilities: { role, canManageImages: role === "owner" },
         },
       },

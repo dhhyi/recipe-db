@@ -358,7 +358,7 @@ step msg model =
                                     | phase = SaveFailed
                                     , error =
                                         Just
-                                            (if error == "authentication-required" || error == "forbidden" then
+                                            (if error == "authentication-required" || error == "forbidden" || error == "maintenance-mode" then
                                                 error
 
                                              else

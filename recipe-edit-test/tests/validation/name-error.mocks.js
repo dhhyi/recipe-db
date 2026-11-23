@@ -11,6 +11,7 @@ export const graphqlMocks = [
   {
     operationName: "MyCapabilities",
     query: `query MyCapabilities {
+      maintenance
       myCapabilities {
         role
         canManageRecipes
@@ -19,6 +20,7 @@ export const graphqlMocks = [
     variables: {},
     response: {
       data: {
+        maintenance: false,
         myCapabilities: { role: "owner", canManageRecipes: true },
       },
     },

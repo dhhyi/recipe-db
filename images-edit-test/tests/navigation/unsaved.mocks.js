@@ -6,11 +6,15 @@ export const returnDocument = "<!doctype html><title>Ziel</title><h1>Ziel</h1>";
 export const graphqlMocks = [
   {
     query: `query {
+      maintenance
       myCapabilities { role canManageImages }
     }`,
     variables: {},
     response: {
-      data: { myCapabilities: { role: "owner", canManageImages: true } },
+      data: {
+        maintenance: false,
+        myCapabilities: { role: "owner", canManageImages: true },
+      },
     },
   },
   {

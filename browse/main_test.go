@@ -317,7 +317,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 			data = map[string]any{"recipe": recipe}
 		case "RecipeControls":
 			data = map[string]any{
-				"maintenance":    maintenance.Load(),
+				"maintenance":      maintenance.Load(),
 				"myCapabilities":   map[string]any{"role": "owner", "canManageRecipes": editOnline.Load(), "canManageImages": imageEditOnline.Load()},
 				"recipeEditOnline": editOnline.Load(), "imagesOnline": imagesOnline.Load(), "imageEditOnline": imageEditOnline.Load(),
 			}
@@ -416,6 +416,7 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		r.Header.Set("If-None-Match", etag)
 		if method == "POST" {
 			r.Header.Set("Origin", "http://example.com")
+			r.Header.Set("HX-Request", "true")
 		}
 		if strings.Contains(path, "variant=2") {
 			r.Header.Set("HX-Request", "true")
@@ -539,6 +540,16 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 		t.Fatalf("available role-based editor controls changed outside maintenance: %s", editableControls.Body.String())
 	}
 	maintenance.Store(true)
+	if err := c.invalidate("42"); err != nil {
+		t.Fatal(err)
+	}
+	freshDuringMaintenance := request("GET", "/recipe/42?maintenance-fresh=true", "")
+	if freshDuringMaintenance.Code != http.StatusOK ||
+		strings.Contains(freshDuringMaintenance.Body.String(), "maintenance") ||
+		strings.Contains(freshDuringMaintenance.Body.String(), maintenanceMessage) ||
+		recipeCalls.Load() != 2 {
+		t.Fatalf("fresh recipe HTML must not capture maintenance state: %d %s", freshDuringMaintenance.Code, freshDuringMaintenance.Body.String())
+	}
 	maintenanceControls := request("GET", "/controls", "")
 	if maintenanceControls.Code != http.StatusOK ||
 		strings.Contains(maintenanceControls.Body.String(), "Rezept hinzufügen") ||
@@ -560,7 +571,11 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	interruptedRating := request("POST", "/recipe/42/rate", "")
 	if interruptedRating.Code != http.StatusServiceUnavailable ||
 		!strings.Contains(interruptedRating.Body.String(), maintenanceMessage) ||
-		strings.Contains(interruptedRating.Body.String(), "Bewertung konnte derzeit nicht gespeichert werden") {
+		strings.Contains(interruptedRating.Body.String(), "Bewertung konnte derzeit nicht gespeichert werden") ||
+		interruptedRating.Header().Get("X-Browse-Full-Page-Error") != "true" ||
+		interruptedRating.Header().Get("HX-Retarget") != "main" ||
+		interruptedRating.Header().Get("HX-Reswap") != "innerHTML" ||
+		interruptedRating.Header().Get("HX-Reselect") != "main > *" {
 		t.Fatalf("maintenance-mode rating error was not explained: %d %s", interruptedRating.Code, interruptedRating.Body.String())
 	}
 	maintenance.Store(false)
@@ -621,12 +636,12 @@ func TestDetailHTTPAndLiveWidgets(t *testing.T) {
 	}
 	updated := request("GET", "/recipe/42", etag)
 	if updated.Code != 200 || !strings.Contains(updated.Body.String(), "Updated") || updated.Header().Get("ETag") == etag ||
-		recipeCalls.Load() != 2 {
+		recipeCalls.Load() != 3 {
 		t.Fatal("local mutation did not invalidate detail variants")
 	}
 	for _, path := range []string{"/recipe/42?variant=1", "/recipe/42?variant=2"} {
 		page := request("GET", path, etag)
-		if page.Code != 200 || !strings.Contains(page.Body.String(), "Updated") || recipeCalls.Load() != 2 {
+		if page.Code != 200 || !strings.Contains(page.Body.String(), "Updated") || recipeCalls.Load() != 3 {
 			t.Fatal("query/HTMX variant retained invalidated HTML")
 		}
 	}
