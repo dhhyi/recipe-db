@@ -95,6 +95,207 @@ test("browse seeded recipes, open a recipe and return home", async ({
   await expect(recipeLink).toBeVisible();
 });
 
+const transitionTest = test.extend({ viewTransitions: true });
+
+transitionTest(
+  "recipe navigation isolates the selected card and home links fade the page",
+  async ({ page, overviewRecipes }) => {
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.addInitScript(() => {
+      window.recipeTransitions = [];
+      const start = document.startViewTransition.bind(document);
+      const names = () => ({
+        tiles: [...document.querySelectorAll("recipe-tile-component")].map(
+          (tile) => ({
+            id: tile.dataset.recipeId,
+            selected: tile.hasAttribute("data-transition-selected"),
+            tile: getComputedStyle(tile).viewTransitionName,
+            image: tile.querySelector("img")
+              ? getComputedStyle(tile.querySelector("img")).viewTransitionName
+              : null,
+            rating: tile.querySelector('a[slot="rating"]')
+              ? getComputedStyle(tile.querySelector('a[slot="rating"]'))
+                  .viewTransitionName
+              : null,
+          }),
+        ),
+        detail: [
+          ...document.querySelectorAll(".recipe-image, .recipe-rating"),
+        ].map((element) => getComputedStyle(element).viewTransitionName),
+      });
+      document.startViewTransition = (update) => {
+        const record = {};
+        window.recipeTransitions.push(record);
+        const transition = start(async () => {
+          record.old = names();
+          record.selected = document.querySelector(
+            "[data-transition-selected]",
+          );
+          await update();
+        });
+        transition.ready.then(async () => {
+          record.types = [...transition.types];
+          record.new = names();
+          if (record.types.includes("recipe-open")) {
+            const selected = record.old.tiles.find((tile) => tile.selected);
+            const animations = document
+              .getAnimations()
+              .filter((animation) =>
+                [selected.image, selected.rating].some(
+                  (name) =>
+                    name &&
+                    animation.effect?.pseudoElement ===
+                      `::view-transition-group(${name})`,
+                ),
+              );
+            for (const animation of animations) {
+              animation.pause();
+              animation.currentTime = 100;
+            }
+            const wrapper = document.querySelector(".recipe-rating");
+            const widget = wrapper?.firstElementChild;
+            if (widget) {
+              await window.htmx.ajax("GET", `/recipe/${selected.id}/rating`, {
+                target: widget,
+                swap: "outerHTML",
+              });
+            }
+            record.refresh = {
+              replaced: !!widget && !widget.isConnected && wrapper.isConnected,
+              frames: animations.map((animation) => ({
+                pseudo: animation.effect.pseudoElement,
+                time: animation.currentTime,
+                state: animation.playState,
+              })),
+            };
+            for (const animation of animations) animation.play();
+          }
+        });
+        transition.finished.then(() => {
+          record.finished = true;
+        });
+        return transition;
+      };
+    });
+    await page.goto("/");
+    const recipe = overviewRecipes[0];
+    for (const home of ["detail", "header"]) {
+      const tile = page.locator(
+        `recipe-tile-component[data-recipe-id="${recipe.id}"]`,
+      );
+      await expect(tile.locator('a[slot="image"] img')).toBeVisible();
+      await expect(tile.locator('a[slot="rating"]')).toBeVisible();
+      await page.evaluate(() => (window.recipeTransitions = []));
+      await tile.locator('a[slot="title"]').click();
+      await expect(page).toHaveURL(`/recipe/${recipe.id}`);
+      await expect
+        .poll(() => page.evaluate(() => window.recipeTransitions[0]?.finished))
+        .toBe(true);
+      const opening = await page.evaluate(() => {
+        const { selected, ...record } = window.recipeTransitions[0];
+        return {
+          ...record,
+          selectedCleaned: !selected.hasAttribute("data-transition-selected"),
+        };
+      });
+      expect(opening.types).toEqual(["recipe-open"]);
+      expect(opening.selectedCleaned).toBe(true);
+      const selected = opening.old.tiles.find((item) => item.id === recipe.id);
+      expect(selected.selected).toBe(true);
+      expect(selected.image).toMatch(/^recipe-image-/);
+      expect(selected.rating).toMatch(/^recipe-rating-/);
+      expect(selected.tile).toBe("none");
+      const others = opening.old.tiles.filter((item) => item.id !== recipe.id);
+      expect(others.length).toBeGreaterThan(0);
+      for (const item of others) {
+        expect(item.tile).toBe("none");
+        if (item.image) expect(item.image).toBe("none");
+        if (item.rating) expect(item.rating).toBe("none");
+      }
+      expect(opening.new.detail).toContain(selected.image);
+      expect(opening.new.detail).toContain(selected.rating);
+      expect(opening.refresh.replaced).toBe(true);
+      expect(opening.refresh.frames).toEqual(
+        expect.arrayContaining([
+          {
+            pseudo: `::view-transition-group(${selected.image})`,
+            time: 100,
+            state: "paused",
+          },
+          {
+            pseudo: `::view-transition-group(${selected.rating})`,
+            time: 100,
+            state: "paused",
+          },
+        ]),
+      );
+
+      await page.evaluate(() => (window.recipeTransitions = []));
+      if (home === "detail") {
+        await page.getByRole("link", { name: "Zur Startseite" }).click();
+      } else {
+        await page.locator("header-component a[data-browse-home]").click();
+      }
+      await expect(page).toHaveURL("/");
+      await expect
+        .poll(() => page.evaluate(() => window.recipeTransitions[0]?.finished))
+        .toBe(true);
+      const returning = await page.evaluate(() => window.recipeTransitions[0]);
+      expect(returning.types).toEqual(["browse-home"]);
+      expect(returning.old.detail.length).toBeGreaterThan(0);
+      expect(returning.old.detail.every((name) => name === "none")).toBe(true);
+      for (const item of returning.new.tiles) {
+        expect(item.tile).toBe("none");
+        if (item.image) expect(item.image).toBe("none");
+        if (item.rating) expect(item.rating).toBe("none");
+      }
+    }
+  },
+);
+
+transitionTest(
+  "navigation works without an image or rating under reduced motion",
+  async ({ page, request, recipeWithoutImage }) => {
+    await waitForRecipeIndexed(request, recipeWithoutImage.id);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.addInitScript(() => {
+      window.motionAnimations = [];
+      const start = document.startViewTransition.bind(document);
+      document.startViewTransition = (...args) => {
+        const transition = start(...args);
+        transition.ready.then(() => {
+          window.motionAnimations.push(
+            document
+              .getAnimations()
+              .filter((animation) =>
+                animation.effect?.pseudoElement?.startsWith(
+                  "::view-transition",
+                ),
+              ).length,
+          );
+        });
+        return transition;
+      };
+    });
+    await page.goto("/");
+    const tile = page.locator(
+      `recipe-tile-component[data-recipe-id="${recipeWithoutImage.id}"]`,
+    );
+    await tile
+      .locator('a[slot="rating"]')
+      .evaluate((rating) => rating.remove());
+    await expect(tile.locator('a[slot="image"] img')).toHaveCount(0);
+    await tile.locator('a[slot="title"]').click();
+    await expect(page).toHaveURL(`/recipe/${recipeWithoutImage.id}`);
+    await page.getByRole("link", { name: "Zur Startseite" }).click();
+    await expect(page).toHaveURL("/");
+    await expect(tile).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => window.motionAnimations))
+      .toEqual([0, 0]);
+  },
+);
+
 test("edit a seeded recipe and see the saved changes in the browser", async ({
   page,
   browser,

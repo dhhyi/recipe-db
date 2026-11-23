@@ -15,7 +15,6 @@ import (
 
 func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 	transitionStyle := regexp.MustCompile(`view-transition-name:\s*(recipe-image-[0-9a-f]+)`)
-	tileStyle := regexp.MustCompile(`--recipe-tile-transition-name:\s*(recipe-tile-[0-9a-f]+)`)
 	seen := map[string]bool{}
 	for _, id := range []string{"42", "recipe-42", "recipe_42", "ä/42", `42"; color: red; --x: "`} {
 		tile := renderTagComponent(t, recipeTile(gql.RecipeStub{
@@ -34,10 +33,8 @@ func TestRecipeImagesShareUniqueCSSSafeTransitionNames(t *testing.T) {
 		if seen[thumbnailName[1]] {
 			t.Fatalf("different recipe IDs must not share transition name %q", thumbnailName[1])
 		}
-		tileName := tileStyle.FindStringSubmatch(tile)
-		heroTileName := tileStyle.FindStringSubmatch(hero)
-		if len(tileName) != 2 || len(heroTileName) != 2 || tileName[1] != heroTileName[1] {
-			t.Fatalf("recipe %q must match its hero to the whole card on return: tile=%s hero=%s", id, tile, hero)
+		if strings.Contains(hero, "--recipe-tile-transition-name") {
+			t.Fatalf("recipe %q hero must not claim a return card identity: %s", id, hero)
 		}
 		seen[thumbnailName[1]] = true
 	}

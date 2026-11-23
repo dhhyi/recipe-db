@@ -44,7 +44,7 @@ templ RecipeControls(id string, resp *gql.RecipeControlsResponse) {
 templ image(recipe *gql.RecipeDetail, imageURL string, imageID string) {
 	<recipe-image-carousel
 		class="recipe-image recipe-image-frame"
-		style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
+		style={ recipeImageTransitionStyle(recipe.Id) }
 	>
 		<img
 			class="recipe-image-content"
@@ -60,7 +60,7 @@ templ image(recipe *gql.RecipeDetail, imageURL string, imageID string) {
 templ imageCarousel(recipe *gql.RecipeDetail) {
 	<recipe-image-carousel
 		class="recipe-image recipe-image-frame"
-		style={ recipeImageTransitionStyle(recipe.Id) + "; " + recipeTileTransitionStyle(recipe.Id) }
+		style={ recipeImageTransitionStyle(recipe.Id) }
 	>
 		<div class="swiper" role="region" aria-label="Rezeptbilder" aria-roledescription="Karussell">
 			<div class="swiper-wrapper">
