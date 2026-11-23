@@ -1,0 +1,76 @@
+<script>
+  (() => {
+    const title = "RezeptDB";
+    let bannerUrl;
+    let originalBanner;
+
+    const isDark = () => {
+      if (
+        document.documentElement.dataset.theme === "dark" ||
+        document.body?.dataset.theme === "dark"
+      ) {
+        return true;
+      }
+
+      const background = getComputedStyle(document.body).backgroundColor;
+      const match = background.match(
+        /(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/,
+      );
+      if (match) {
+        const [red, green, blue] = match.slice(1).map(Number);
+        return red * 0.299 + green * 0.587 + blue * 0.114 < 128;
+      }
+
+      return matchMedia("(prefers-color-scheme: dark)").matches;
+    };
+
+    const createDarkBanner = async (image) => {
+      if (!bannerUrl) bannerUrl = image.currentSrc || image.src;
+      if (!originalBanner) {
+        const response = await fetch(bannerUrl);
+        const document = new DOMParser().parseFromString(
+          await response.text(),
+          "image/svg+xml",
+        );
+        originalBanner = document.documentElement;
+      }
+
+      const banner = originalBanner.cloneNode(true);
+      banner.setAttribute("role", "img");
+      banner.setAttribute("aria-label", title);
+      banner.setAttribute("class", image.className);
+      banner.querySelector("#text1")?.setAttribute("fill", "#ffffff");
+      image.replaceWith(banner);
+    };
+
+    const restoreBanner = (banner) => {
+      if (!bannerUrl) return;
+      const image = document.createElement("img");
+      image.src = bannerUrl;
+      image.alt = title;
+      image.className = banner.className;
+      banner.replaceWith(image);
+    };
+
+    const updateBanner = () => {
+      const link = document.querySelector(`a[title="${title}"]`);
+      if (!link) return;
+
+      const image = link.querySelector("img");
+      const inlineBanner = link.querySelector("svg");
+      if (isDark() && image) {
+        void createDarkBanner(image);
+      } else if (!isDark() && inlineBanner) {
+        restoreBanner(inlineBanner);
+      }
+    };
+
+    const observer = new MutationObserver(updateBanner);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+    updateBanner();
+  })();
+</script>
