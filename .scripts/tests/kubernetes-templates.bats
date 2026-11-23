@@ -85,7 +85,10 @@ render() {
 
 @test "Google-disabled Pi deployment omits OAuth and uses ClusterIP by default" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
-    .config.storageClass="recipe-db-retained"' values.json > no-google-values.json
+    .config.storageClass="recipe-db-retained" |
+    .config.origin="https://recipes.example.org" |
+    .config.runtime.ingressMode="private-lan" |
+    .config.httpsStaging={hostname:"recipes.example.org"}' values.json > no-google-values.json
   render no-google-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '.ports["rest-internal"].observability == {}'
@@ -96,9 +99,9 @@ render() {
       all(.spec.template.spec.containers[0].env[];
         .name != "GOOGLE_OAUTH_CLIENT_ID")
       and any(.spec.template.spec.containers[0].env[];
-        .name == "PUBLIC_ORIGIN" and .value == "http://127.0.0.1:8080"))
+        .name == "PUBLIC_ORIGIN" and .value == "https://recipes.example.org"))
     and any(.items[]; .kind == "HelmChartConfig" and
-      (.spec.valuesContent | contains("ClusterIP")))
+      (.spec.valuesContent | contains("LoadBalancer")))
     and any(.items[]; .kind == "Deployment" and .metadata.name == "graphql" and
       any(.spec.template.spec.containers[0].env[]; .name == "MODE" and .value == "production"))
   ' manifests.json
@@ -119,61 +122,40 @@ render() {
   done
 }
 
-@test "explicit private LAN rehearsal exposes only HTTP without NodePorts" {
+@test "Pi HTTPS uses production ACME state and omits the certificate-only placeholder" {
   jq '.config.target="pi" | .config.context="recipe-db-pi" |
     .config.storageClass="recipe-db-retained" |
-    .config.origin="http://recipe-pi.home" |
-    .config.runtime.ingressMode="private-lan"' values.json > lan-values.json
-  render lan-values.json
+    .config.origin="https://recipes.example.org" |
+    .config.runtime.ingressMode="private-lan" |
+    .config.httpsStaging={hostname:"recipes.example.org"}' values.json > https-values.json
+  render https-values.json
   jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
   yq -o=json '.' helm-values.yaml | jq -e '
-    .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false and
-    .ports.websecure.expose.default == false and .ports["rest-internal"].expose.default == false'
-  jq -e 'all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")' manifests.json
-}
-
-@test "certificate-only staging preserves private HTTP and persists separate ACME environments" {
-  for environment in staging production; do
-    jq --arg environment "$environment" '
-      .config.target="pi" | .config.context="recipe-db-pi" |
-      .config.storageClass="recipe-db-retained" |
-      .config.origin="http://recipe-pi.home" |
-      .config.runtime.ingressMode="private-lan" |
-      .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:$environment}
-    ' values.json > https-values.json
-    render https-values.json
-    jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json > helm-values.yaml
-    yq -o=json '.' helm-values.yaml | jq -e --arg environment "$environment" '
-      .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
-      and .ports["staging-http"].exposedPort == 8081
-      and .ports["staging-http"].port == 8001
-      and .ports.websecure.exposedPort == 8443 and .ports.websecure.expose.default == true
-      and .ports["rest-internal"].expose.default == false
-      and .persistence.existingClaim == "recipe-db-acme" and .persistence.path == "/data"
-      and .podSecurityContext.fsGroup == 65532 and .updateStrategy.type == "Recreate"
-      and .env == [{name:"ACME_ACCOUNT_EMAIL",valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
-      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)") != null)
-      and (.deployment.initContainers[0].command[2] |
-        contains("chmod 600 /data/acme-" + $environment + ".json"))
-      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http") != null)
-      and (.additionalArguments | index("--entrypoints.staging-http.http.redirections.entrypoint.to=:443") != null)
-      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme-" + $environment + ".json") != null)
-      and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.caserver=" +
-        (if $environment == "production" then "https://acme-v02.api.letsencrypt.org/directory"
-         else "https://acme-staging-v02.api.letsencrypt.org/directory" end)) != null)'
-    jq -e '
-      any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme"
-        and .metadata.namespace == "kube-system" and .spec.storageClassName == "recipe-db-retained"
-        and .spec.resources.requests.storage == "64Mi")
-      and any(.items[]; .kind == "Service" and .metadata.name == "recipe-db-internal"
-        and any(.spec.ports[]; .port == 80 and .targetPort == 8000))
-      and any(.items[]; .kind == "Deployment" and .metadata.name == "https-staging"
-        and .spec.template.spec.automountServiceAccountToken == false)
-      and any(.items[]; .kind == "ConfigMap" and .metadata.name == "https-staging-config"
-        and (.data["default.conf"] | contains("location = /") and contains("location / { return 404; }")))
-      and all(.items[]; .metadata.name != "oauth2-proxy" and .metadata.name != "oauth-config")
-    ' manifests.json
-  done
+    .service.type == "LoadBalancer" and .service.spec.allocateLoadBalancerNodePorts == false
+    and .ports["staging-http"].exposedPort == 8081
+    and .ports["staging-http"].port == 8001
+    and .ports.websecure.exposedPort == 8443 and .ports.websecure.expose.default == true
+    and .ports["rest-internal"].expose.default == false
+    and .persistence.existingClaim == "recipe-db-acme" and .persistence.path == "/data"
+    and .podSecurityContext.fsGroup == 65532 and .updateStrategy.type == "Recreate"
+    and .env == [{name:"ACME_ACCOUNT_EMAIL",valueFrom:{secretKeyRef:{name:"recipe-db-acme-contact",key:"email"}}}]
+    and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.email=$(ACME_ACCOUNT_EMAIL)") != null)
+    and (.deployment.initContainers[0].command[2] | contains("chmod 600 /data/acme-production.json"))
+    and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=staging-http") != null)
+    and (.additionalArguments | index("--entrypoints.staging-http.http.redirections.entrypoint.to=:443") != null)
+    and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.storage=/data/acme-production.json") != null)
+    and (.additionalArguments | index("--certificatesresolvers.letsencrypt.acme.caserver=https://acme-v02.api.letsencrypt.org/directory") != null)
+    and all(.additionalArguments[]; contains("acme-staging") | not)
+    and all(.additionalArguments[]; contains("certificatesduration") | not)'
+  jq -e '
+    any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme"
+      and .metadata.namespace == "kube-system" and .spec.storageClassName == "recipe-db-retained"
+      and .spec.resources.requests.storage == "64Mi")
+    and any(.items[]; .kind == "Service" and .metadata.name == "recipe-db-internal"
+      and any(.spec.ports[]; .port == 80 and .targetPort == 8000))
+    and all(.items[]; .metadata.name != "https-staging"
+      and .metadata.name != "https-staging-config")
+  ' manifests.json
 }
 
 @test "complete Google HTTPS config deploys OAuth with secure sessions and keeps backend listeners private" {
@@ -187,7 +169,7 @@ render() {
     .config.infrastructure.redis="redis:8-alpine" |
     .config.secrets["google-oauth-client-secret"]="/private/google-client-secret" |
     .config.secrets["oauth2-cookie-secret"]="/private/oauth-cookie-secret" |
-    .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}
+    .config.httpsStaging={hostname:"recipes.example.org"}
   ' values.json > google-https-values.json
   render google-https-values.json
   jq -e '
@@ -207,7 +189,6 @@ render() {
     and any(.items[]; .kind == "Deployment" and .metadata.name == "browse" and
       any(.spec.template.spec.containers[0].env[];
         .name == "GOOGLE_OAUTH_CLIENT_ID" and .value == "explicit.apps.googleusercontent.com"))
-    and any(.items[]; .kind == "Deployment" and .metadata.name == "https-staging")
     and any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "redis")
     and any(.items[]; .kind == "PersistentVolumeClaim" and .metadata.name == "recipe-db-acme")
   ' manifests.json
@@ -238,28 +219,6 @@ render() {
       and (.spec.template.spec.containers[0].readinessProbe != null)
       and (.spec.template.spec.containers[0].startupProbe != null))
   ' manifests.json
-}
-
-@test "renewal rehearsal enlarges only the test CA renewal window and retains normal production settings" {
-  jq '.config.target="pi" |
-    .config.runtime.ingressMode="private-lan" |
-    .config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"staging",renewalRehearsal:true}
-  ' values.json > renewal-values.json
-  render renewal-values.json
-  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
-    | yq -o=json '.' | jq -e '
-      .additionalArguments | index("--certificatesresolvers.letsencrypt.acme.certificatesduration=8760") != null'
-  jq '.config.httpsStaging={hostname:"recipes.example.org",acmeEnvironment:"production",exposeApplication:true}' \
-    renewal-values.json > preview-values.json
-  render preview-values.json
-  jq -r '.items[] | select(.kind == "HelmChartConfig").spec.valuesContent' manifests.json \
-    | yq -o=json '.' | jq -e '
-      all(.additionalArguments[]; startswith("--certificatesresolvers.letsencrypt.acme.certificatesduration=") | not)
-      and .persistence.existingClaim == "recipe-db-acme"'
-  jq '.config.httpsStaging.renewalRehearsal=true' preview-values.json > unsafe-values.json
-  run render unsafe-values.json
-  [ "$status" -ne 0 ]
-  [[ $output == *"Renewal rehearsal is restricted to the test CA"* ]]
 }
 
 @test "only explicitly durable services have independent local-path claims" {

@@ -15,12 +15,9 @@ This guide is the technical reference for maintainers and operators using Recipe
   - [Fresh-deployment restore](#fresh-deployment-restore)
 - [Operator configuration and secrets](#operator-configuration-and-secrets)
 - [Create, render, deploy and inspect](#create-render-deploy-and-inspect)
-  - [Certificate-only HTTPS staging on the Pi](#certificate-only-https-staging-on-the-pi)
-    - [Explicit anonymous-only public preview](#explicit-anonymous-only-public-preview)
+  - [Production HTTPS on the Pi](#production-https-on-the-pi)
     - [Google sign-in on the existing HTTPS application](#google-sign-in-on-the-existing-https-application)
-    - [Controlled test-CA renewal rehearsal](#controlled-test-ca-renewal-rehearsal)
-  - [Workstation-only token rehearsal on the Pi](#workstation-only-token-rehearsal-on-the-pi)
-  - [Home-LAN HTTP token rehearsal on the Pi](#home-lan-http-token-rehearsal-on-the-pi)
+  - [Local HTTP rehearsal](#local-http-rehearsal)
   - [Bundled Traefik configuration](#bundled-traefik-configuration)
   - [Check Traefik after a K3s upgrade](#check-traefik-after-a-k3s-upgrade)
   - [Deployment behavior](#deployment-behavior)
@@ -325,45 +322,34 @@ The local protocol smoke requires a private owner bearer-token file whose token 
 
 ## Create, render, deploy and inspect
 
-### Certificate-only HTTPS staging on the Pi
+### Production HTTPS on the Pi
 
-After rehearsal credential replacement, an operator may add this optional block to the private Pi values file. Keep `runtime.ingressMode: private-lan` and the existing private LAN `origin`; Google OAuth settings remain absent:
+Every Pi values file requires an HTTPS origin matching the configured hostname. Keep the existing `httpsStaging` key until #397; its only supported setting is `hostname`. The name is retained for that follow-up, not to select a test CA. Keep `runtime.ingressMode: private-lan` until #316 removes the selector:
 
 ```yaml
+origin: https://your-hostname.example.org
+runtime:
+  ingressMode: private-lan
+  trustedIssuer: https://accounts.google.com
 httpsStaging:
   hostname: your-hostname.example.org
-  acmeEnvironment: staging
+secrets:
+  acme-account-email: deployment/acme-account-email
 ```
 
-Also add `secrets.acme-account-email` pointing to a private mode-0600 file containing a dedicated contact mailbox. HTTPS deployment requires and validates it. The address is stored only in a private `recipe-db-acme-contact` Secret in `kube-system`; manifests reference its key, not the address. Kubernetes expands that Secret-backed environment variable into Traefik's email argument. Contact changes roll Traefik consistently without publishing the value. This avoids Traefik 3.7.16's repeated empty-email account recreation on renewal/restart. An already stored email-less account is replaced on its next ACME interaction before the contact-bearing account is persisted; adding the setting does not retroactively rewrite live account files or prove scheduled production renewal. Keep the contact file in private recovery sources; never put its contents in issue evidence or unrestricted logs.
+Store the dedicated ACME contact mailbox in a private mode-0600 file. HTTPS deployment validates it and stores the address only in the private `recipe-db-acme-contact` Secret in `kube-system`; manifests reference the Secret key, not the address. Contact changes roll Traefik consistently. Keep the contact file in private recovery sources; never put its contents in issue evidence or unrestricted logs.
 
-This enables a separate Traefik HTTP entrypoint on Pi TCP 8081 and HTTPS on TCP 8443. Existing private LAN application HTTP on TCP 80 and internal GraphQL ingress remain unchanged. The HTTPS entrypoint serves only a fixed staging-check response at `/` for the configured hostname; application, OAuth, MCP, static, image, and infrastructure paths have no staging router and return 404.
+Pi always uses the Let's Encrypt production CA and serves the application on HTTPS. HTTP-01 challenges use Pi TCP 8081; ordinary HTTP requests redirect to HTTPS on TCP 8443. The current internal web entrypoint and private-LAN HTTP behavior remain unchanged until the later Pi ingress specifications. Forward router TCP 80 to Pi TCP 8081 and router TCP 443 to Pi TCP 8443 only after inspecting the deployed listeners. The private host firewall also requires the approved exceptions for those ports and their Kubernetes DNAT paths. Do not forward to Pi TCP 80, open SSH/Kubernetes/backend ports, flush nftables, or publish an unverified IPv6 record. Deployment does not change the router or host firewall.
 
-Only after inspecting the deployed listeners, the operator forwards router TCP 80 to Pi TCP 8081 and router TCP 443 to Pi TCP 8443. The private host firewall also requires explicitly approved exceptions for these two destination ports and their Kubernetes DNAT paths. Do not forward to the application's Pi TCP 80, open SSH/Kubernetes/backend ports, flush nftables, or publish an unverified IPv6 record. This deployment command does not change the router or host firewall.
+The existing application routes—including browse, design, PWA, public images, GraphQL, editors, and MCP—use the configured hostname and production TLS. `/pwa/` serves the public manifest and icons. OAuth remains optional; when configured, only `/oauth2/start`, `/oauth2/callback`, `/oauth2/sign_in`, and `/oauth2/sign_out` are exposed. Bearer-authenticated GraphQL requests retain priority over cookie-authenticated requests. Public GraphQL strips untrusted identity headers before injecting the private ingress token. Backend REST, maintenance/reset, and administration interfaces remain private.
 
-Traefik answers Let's Encrypt HTTP-01 challenges on the staging HTTP entrypoint; ordinary requests redirect to external HTTPS port 443. No Dynu API credential is needed. Begin with the ACME staging environment to test validation without production rate limits. Its test certificates are **not browser-trusted**: successful test issuance is not trusted-HTTPS acceptance. Change `acmeEnvironment` to `production` and redeploy to obtain the trusted certificate. Use the hostname, not the numeric IP, and do not bypass certificate validation for production acceptance.
+Authorization comes from the accounts policy, not an HTTPS exposure flag. For anonymous-only access, keep `anonymous.role: anonymous`, `tokens: []`, and `googleAccounts: {}`; GraphQL enforces permissions. Deployment does not impose a role or token-count policy. Editors and MCP can load/read according to the policy but cannot exceed GraphQL's existing capability guards. The internal GraphQL routes and backend listeners remain unchanged.
 
-ACME account keys and certificates persist in the private `recipe-db-acme` PVC in `kube-system`, using the owned retained Pi StorageClass. Traefik runs as UID/GID 65532, uses a single Recreate deployment, and initializes each environment's ACME file with mode 0600. Test and production use separate files; ordinary redeployments must not delete the claim. The claim is outside application backup capture: protect it separately as private recovery material or explicitly reissue after recovery, accounting for CA rate limits. Never publish ACME files, private keys, raw Secret data, or unrestricted proxy logs.
+Traefik automatically renews certificates while DNS and inbound challenge access remain usable. ACME account keys and certificates persist in the private `recipe-db-acme` PVC in `kube-system`, using the owned retained Pi StorageClass. Traefik runs as UID/GID 65532, uses a single Recreate deployment, and initializes `/data/acme-production.json` with mode 0600. The claim is outside application backup capture: protect it separately as private recovery material or explicitly reissue after recovery, accounting for CA rate limits. Never publish ACME files, private keys, raw Secret data, or unrestricted proxy logs.
 
-Traefik automatically renews certificates while DNS and inbound challenge access remain usable. Before acceptance, verify the trusted hostname/chain, root response, 404s for `/graphql`, `/mcp`, `/oauth2/callback`, `/design`, `/pwa`, `/images`, and `/api`, HTTP redirects, private LAN browsing, retained state across redeployment, and actual renewal evidence. Inspect certificate expiry and ACME failure diagnostics locally without publishing credentials; successful initial issuance alone does not prove renewal. Certificate hostnames are public in certificate transparency logs.
+Before acceptance, verify the trusted hostname/chain, application routes, HTTP redirect, excluded backend/admin paths, retained ACME state across redeployment, and renewal diagnostics. Inspect certificate expiry and ACME failures locally without publishing credentials; successful initial issuance alone does not prove renewal. Certificate hostnames are public in certificate transparency logs.
 
-To disable external staging, remove the two router forwards and their host firewall exceptions. Removing `httpsStaging` and redeploying also removes the staging listeners/routes; it deliberately retains the ACME PVC and the unexposed staging workload. This milestone is not Google-provider verification or full authenticated go-live. Those remain gated by the deployment/authentication acceptance issues.
-
-#### Explicit anonymous-only public preview
-
-The public preview under [#44](https://github.com/dhhyi/recipe-db/issues/44) is separate from full authenticated launch [#123](https://github.com/dhhyi/recipe-db/issues/123). After private checks and explicit operator approval, set `httpsStaging.exposeApplication: true` with `acmeEnvironment: production`; leave the optional Google OAuth configuration absent for an anonymous-only preview. Omission or `false` of the exposure flag keeps certificate-only staging; application exposure still requires the production CA for trusted HTTPS. This setting controls routing only: it neither grants permissions nor restricts roles or token definitions. GraphQL validates and enforces the accounts policy.
-
-For the approved anonymous-only preview, keep `anonymous.role: anonymous`, `tokens: []` and `googleAccounts: {}` in the accounts policy. Removing accepted tokens also revokes their private-LAN use. Deployment no longer enforces this preview policy: verify the effective capabilities and denied writes before public exposure, and obtain separate launch approval before granting privileges. Deploy and restore generate the internal GraphQL ingress and Typesense credentials; these authenticate services, not public users.
-
-Read-only authorization comes entirely from the accounts policy, not a separate runtime mode. Remove the obsolete `runtime.readOnly` key and replace `httpsStaging.readOnlyPreview` with `httpsStaging.exposeApplication` in existing values; old keys are rejected rather than silently ignored. Removing `httpsStaging` and redeploying still accepts the anonymous-only policy, closes public listeners, and preserves private read-only browsing without reintroducing owner tokens.
-
-The dedicated HTTPS listener reuses the existing browse, design, PWA, public-image, GraphQL, recipe-editor, image-editor and MCP routing rules and middleware, adding the configured hostname and TLS. `/pwa/` serves the public manifest and icons; it is static content, not an API or a backup/maintenance interface. Editors can load but cannot save; MCP can initialize and read but its mutation tools are denied by GraphQL's existing anonymous capability guards, as are private ratings/comments. Public GraphQL still strips untrusted identity headers before injecting the private ingress token. The frontend's existing compression/maintenance handling and internal GraphQL routes remain unchanged. HTTP method or UI availability is not the write boundary: authorization is.
-
-Production mounts the reviewed `design/nginx.conf` as a ConfigMap. Its CSS/JS aliases and directory redirects are origin-relative, preserving HTTPS when nginx is behind Traefik's TLS termination and HTTP on the private origin. Check alias `Location` headers and actual browser asset loading: following an accidental HTTP redirect in a command-line client is not proof that an HTTPS browser will load the asset.
-
-Browse links `/pwa/manifest.webmanifest` and the chef-hat icons, enabling installation from Android Chrome and iOS Safari. The manifest scope is `/`, so browse and both editors stay in the installed app; OAuth navigation leaves that scope. Before accepting mobile installation, manually check sign-in on Android and iOS: Android may show browser chrome for the OAuth redirect, while iOS may open it outside the installed app. Record the observed behavior for the deployed OAuth configuration; this repository's protocol tests do not verify device-specific browser behavior.
-
-OAuth, backend REST, maintenance/reset and dashboard services remain excluded from public routing. Browse retains its existing fallback route; unknown URLs do not acquire a backend/admin router. Browser and MCP URLs use the public HTTPS hostname; private application HTTP remains for anonymous LAN browsing, not privileged token rehearsal. Verify forbidden GraphQL/MCP/editor writes and excluded interfaces leave data unchanged before enabling router forwarding. This preview is public exposure, **not** completion of Google verification, application backup/recovery, or the full launch checklist.
+Existing `https-staging` placeholder resources are no longer rendered, but ordinary deployment does not automatically delete resources already applied to a live cluster. Their cleanup belongs to the dedicated cutover procedure in #398. To stop external access immediately, disable the existing router forwards and their firewall exceptions; this does not delete application data or ACME state.
 
 #### Google sign-in on the existing HTTPS application
 
@@ -387,11 +373,9 @@ secrets:
   oauth2-cookie-secret: deployment/oauth2-cookie-secret
 httpsStaging:
   hostname: your-hostname.example.org
-  acmeEnvironment: production
-  exposeApplication: true
 ```
 
-The origin must exactly match `https://` plus the configured hostname, without a port suffix. A Pi deployment with Google OAuth requires application exposure and the production CA; mismatched origins, test-CA certificates and certificate-only combinations are rejected before cluster access. Register this origin's `/oauth2/callback` in the Google web client. Use a fresh cookie key and the actual Google client secret. The client ID and both secret paths must be present together; partial or invalid configuration fails explicitly. Never put the downloaded credential JSON, secret values or session cookies into reports or Git.
+The origin must exactly match `https://` plus the configured hostname, without a port suffix. The production CA and application HTTPS routes are always enabled on Pi, with or without Google settings. Register this origin's `/oauth2/callback` in the Google web client. Use a fresh cookie key and the actual Google client secret. The client ID and both secret paths must be present together; partial or invalid configuration fails explicitly. Never put the downloaded credential JSON, secret values or session cookies into reports or Git.
 
 This deploys OAuth2 Proxy alongside Redis and retains the existing ACME claim and listener layout. HTTPS reuses the existing optional-authentication GraphQL routers, preserving bearer-first priority without cookie fallback. It also exposes only `/oauth2/start`, `/oauth2/callback`, `/oauth2/sign_in` and `/oauth2/sign_out`, not `/oauth2/auth` or other proxy endpoints. Untrusted identity headers are stripped before authentication and trusted ingress injection. Backend REST, maintenance/reset and administrative routes remain private, with no new public ports or NodePorts. To disable Google login, remove the client ID, both OAuth secret paths, optional OAuth/Redis images, and `volumes.redis`, then redeploy; the deployment removes its owned OAuth workloads and routes without changing application exposure or GraphQL authorization.
 
@@ -399,70 +383,15 @@ Keep `anonymous.role: anonymous` and existing accounts intact. Google registrati
 
 After deployment, verify real-browser login, callback and logout on the HTTPS hostname, Secure/HttpOnly/SameSite=Lax cookies, member/owner boundaries, denied accounts, bearer precedence and refresh/revocation behavior. Private LAN HTTP remains available but does not receive Secure login cookies; use HTTPS for authenticated browser verification. Automated rendering/routing tests are not evidence of real Google consent or refresh. To stop external access immediately, disable the existing router forwards and their firewall exceptions; this does not delete application data, Redis or ACME state.
 
-#### Controlled test-CA renewal rehearsal
-
-Set `httpsStaging.renewalRehearsal: true` only with `acmeEnvironment: staging` and certificate-only routing. It enlarges Traefik's configured certificate duration to 8760 hours solely to move an existing test certificate into the renewal window. Traefik checks that window at startup and uses its normal renewal path; no clock change, live-file editing or certificate deletion is needed. The flag is rejected for production. Record the existing test certificate fingerprint/serial, observe renewal diagnostics and the replacement certificate, and verify account continuity and unchanged production ACME state. Initial issuance of an absent test certificate is not renewal evidence.
-
-Exercise failure visibility while challenge access is unavailable, then restore operator-approved reachability and verify renewal. Remove the rehearsal flag immediately afterward and restore `acmeEnvironment: production`. An ordinary production deployment uses Traefik's default duration/renewal schedule. Never leave the enlarged window enabled: repeated starts could unnecessarily renew test certificates. A controlled test-CA rehearsal does not claim an observed scheduled production renewal; retain that explicit limitation and inspect the trusted production certificate's expiry and normal ACME diagnostics.
-
-Run `bash .scripts/check-public-https.sh your-hostname.example.org` from the trusted operator workstation to check public reachability, root HTTP 200, normal CA/hostname trust and at least 14 days of remaining validity. Success emits JSON; any failed check exits nonzero with an explicit diagnostic. An optional second whole-day argument changes the required margin (1–3650 days). Run it regularly, especially after DNS/router/firewall changes; this is an operator check, not an installed notification service. A failure needs investigation even if the browser still accepts a cached certificate.
-
 Inspect Traefik's local ACME diagnostics for `Renewing ACME certificate` and `Error renewing ACME certificate` without publishing raw logs. Failed renewal can leave the currently valid certificate served, so HTTP 200 alone is not renewal success. Restore DNS/challenge reachability and retry under controlled operator supervision; do not repeatedly restart against the production CA or delete account/certificate state to bypass a failure.
 
-For private ACME recovery, copy both environment files from the owned PVC into a mode-0700 operator directory with mode-0600 files while no renewal is writing them. Validate JSON and certificate/private-key correspondence locally, confirm repeated source copies agree, and protect this material separately from application backups. Before a real restore, stop the single Traefik writer, verify the selected cluster/PVC/node identity, preserve existing state, restore the exact files as UID/GID 65532 with mode 0600, then restart Traefik and verify normal trust and expiry. Rehearse the byte/permission-preserving restore in a separate private path without overwriting live state. If recovery material is absent or compromised, explicitly reissue using the chosen CA; account/key loss, authorization reachability and CA rate limits can delay recovery. Do not imply that the application snapshot contains the ACME PVC.
+#### HTTPS certificate operations and recovery
 
-### Workstation-only token rehearsal on the Pi
+For private ACME recovery, copy `/data/acme-production.json` from the owned PVC into a mode-0700 operator directory with a mode-0600 file while no renewal is writing it. Validate the JSON and certificate/private-key correspondence locally, confirm repeated source copies agree, and protect this material separately from application backups. Before a real restore, stop the single Traefik writer, verify the selected cluster/PVC/node identity, preserve existing state, restore the exact file as UID/GID 65532 with mode 0600, then restart Traefik and verify normal trust and expiry. Rehearse the byte/permission-preserving restore in a separate private path without overwriting live state. If recovery material is absent or compromised, explicitly reissue; account/key loss, authorization reachability and CA rate limits can delay recovery. Do not imply that the application snapshot contains the ACME PVC.
 
-For an initial private rehearsal without Google login, omit `runtime.googleOAuthClientId`, OAuth secret paths, OAuth/Redis images, and `volumes.redis`; set `origin: http://127.0.0.1:8080` (matching `httpPort`). The account policy is required; ingress and Typesense credentials are generated by deployment. This is the default configuration.
+### Local HTTP rehearsal
 
-This configuration omits OAuth2 Proxy, Redis and Google callback/cookie routing. GraphQL still runs in production mode behind trusted ingress, strips untrusted identity headers and validates the accounts policy and configured bearer tokens. Deployment imposes no role or token-count requirements: define tokens only for the operations being rehearsed. Keep `anonymous.role: anonymous` and `googleAccounts: {}` for the approved rehearsal; never elevate the credential-free role for testing. For authenticated write rehearsals, generate separate strong, temporary owner tokens for operator/MCP clients in private files; revoke them afterward. Restore verification separately requires an owner token for its write probe.
-
-Traefik becomes a ClusterIP service, not a LAN load balancer. Access the application with a loopback-only Kubernetes port-forward carried through the existing private API SSH tunnel:
-
-```sh
-mise exec -- kubectl --kubeconfig "$HOME/.config/recipe-db/kubeconfig/pi.yaml" \
-  --context recipe-db-pi -n kube-system port-forward --address 127.0.0.1 service/traefik 8080:80
-```
-
-Use the production deploy command with the private values file and `recipe-db-pi` context. Keep the port-forward and API tunnel running while testing; stop them afterward. This is an initial synthetic-data rehearsal, not browser Google-login, public HTTPS, backup or production-readiness acceptance. Browser writes requiring Google login are not validated by bearer GraphQL/MCP tests. Enabling Google login or public exposure is not part of this procedure.
-
-### Home-LAN HTTP token rehearsal on the Pi
-
-Accepted decision [#103](https://github.com/dhhyi/recipe-db/issues/103) makes private phone browsing part of [#45](https://github.com/dhhyi/recipe-db/issues/45). Keep the account/secret requirements above, leave Google OAuth settings absent, and explicitly set:
-
-```yaml
-runtime:
-  ingressMode: private-lan
-  trustedIssuer: https://accounts.google.com
-origin: http://recipe-pi.home
-```
-
-Use the Pi's actual private hostname (ending in `.home`, `.lan` or `.local`) or RFC 1918 IPv4 address, with HTTP port 80 and no explicit port suffix. `httpPort` remains the workstation-forwarding port, not the LAN listening port. The origin controls browser-write validation; use that configured origin for same-origin browser writes. A phone may need the private IPv4 address if it cannot resolve the hostname.
-
-Deploy using the same private API tunnel and immutable release. Traefik becomes a k3s LoadBalancer on port 80 only, with NodePort allocation disabled; the internal REST entrypoint and HTTPS remain unexposed. The provisioned private-network firewall is a prerequisite: only its configured application networks may reach port 80, including forwarding rules; global IPv6 is not enabled. Do not configure router forwarding, UPnP, public DNS or public ingress. No API/SSH exposure changes are made. Setting `ingressMode: loopback` (or omitting it) restores the ClusterIP-only default after redeployment.
-
-Anonymous browsing remains read-only. Bearer GraphQL/MCP writes are temporarily allowed on trusted-LAN HTTP at the operator's explicit request; HTTP does not protect tokens or recipe data against observers or intermediaries. Do not share these credentials, add an anonymous-owner bypass or assume browser Google login works.
-
-Before external exposure, verify the intended account policy, actual authentication and HTTPS behavior, replace temporary bearer tokens, and remove temporary private-LAN access. Do not rotate or store ingress/Typesense credentials: each deployment/restore creates fresh values and rolls dependent workloads. External exposure requires explicit approval and completed deployment acceptance criteria.
-
-```sh
-cd /home/runner/work/recipe-db/recipe-db
-VALUES="$PWD/.secrets/local-values.yaml"
-RELEASE='ghcr.io/dhhyi/recipe-db-releases@sha256:<64-hex-artifact-digest>'
-
-mise run production-k3d create "$VALUES"
-mise run production-k3d verify "$VALUES"
-mise run production-k3d render "$VALUES" "$RELEASE" > "$PWD/.secrets/rendered.yaml"
-mise run production-k3d deploy "$VALUES" "$RELEASE"
-mise run production-k3d status "$VALUES"
-mise run production-k3d kubectl "$VALUES" get configmap recipe-db-release -o json
-mise run production-smoke "$VALUES" "$RELEASE" \
-  "$PWD/.secrets/production-smoke-token" "$PWD/.secrets/production-smoke-result.json"
-```
-
-`create` reuses only a cluster that passes the managed-identity checks; it refuses an unrelated cluster using the reserved name. `deploy` applies namespaced configuration and operator secrets, initializes JetStream, and waits for readiness. Under the shared Lease, it removes an existing owned cleanup Job and waits for its workers to disappear before recreating the release-specific Job suspended; Kubernetes Job templates cannot be updated in place. An unowned Job or failed worker removal blocks deployment. `recipe-db-release` records the release artifact and source revision. Reapplying the identical artifact is intentional and should preserve PVC-backed data. `status` and smoke failure diagnostics report resource summaries, not credentials. All smoke Kubernetes operations use the driver's guarded `kubectl` interface with explicit context and namespace; no ambient kubeconfig is trusted.
-
-After the pinned k3s image changes, the current driver refuses older rehearsal clusters. Preserve retained failure evidence and use the original tooling and its target-bound recovery instructions to inspect or clean up those clusters; do not bypass the identity check.
+Local rehearsals remain HTTP-only and use target `local` with `deploy/local.yaml`; do not add `httpsStaging` or Pi HTTPS settings to local values. The production configuration validator rejects those settings on local targets. Continue to use the managed local k3d workflows for isolated rehearsals and interactive inspection; Pi application access uses its configured public HTTPS hostname.
 
 ### Bundled Traefik configuration
 

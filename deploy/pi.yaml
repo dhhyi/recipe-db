@@ -3,6 +3,8 @@ cluster: recipe-db-pi
 context: recipe-db-pi
 namespace: recipe-db
 origin: https://recipes.example.invalid
+httpsStaging:
+  hostname: recipes.example.invalid
 httpPort: 8080
 apiPort: 6445
 timeoutSeconds: 900
@@ -34,6 +36,8 @@ infrastructure:
   typesense: typesense/typesense:29.0-arm64-lg-page16@sha256:ab3e3b8fc63585e8246096fc610216e12d68f1165ed02b54df35be66d8f3eaa2
   maintenance: nginx:stable-alpine@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
 runtime:
+  ingressMode: private-lan
   trustedIssuer: https://accounts.google.com
 secrets:
   auth-accounts.json: deployment/auth-accounts.json
+  acme-account-email: deployment/acme-account-email
