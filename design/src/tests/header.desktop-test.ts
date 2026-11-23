@@ -234,6 +234,29 @@ describe("shared header login", () => {
       document.body.replaceChildren();
     });
 
+    it("centers the indicator beside the logo with a small gap", async () => {
+      for (const width of [320, 800]) {
+        await page.viewport(width, 600);
+        await settle();
+        const nav = document.querySelector("header-component nav")!;
+        const logo = nav.querySelector("a svg")!.getBoundingClientRect();
+        const indicator = nav
+          .querySelector(".maintenance-indicator")!
+          .getBoundingClientRect();
+        const navBounds = nav.getBoundingClientRect();
+
+        expect(
+          Math.abs(
+            indicator.top +
+              indicator.height / 2 -
+              (navBounds.top + navBounds.height / 2),
+          ),
+        ).toBeLessThanOrEqual(1);
+        expect(indicator.left - logo.right).toBeGreaterThanOrEqual(4);
+        expect(indicator.left - logo.right).toBeLessThanOrEqual(12);
+      }
+    });
+
     it("announces the explanation and reveals the Blades tooltip on hover and keyboard focus", async () => {
       window.scrollTo(0, 0);
       await settle();

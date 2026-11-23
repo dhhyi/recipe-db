@@ -186,7 +186,7 @@ export class HeaderComponent extends LitElement {
       >
         <nav class="[--pico-nav-element-spacing-vertical:0]">
           <ul>
-            <li>
+            <li class=${this.maintenance ? "flex items-center gap-1" : ""}>
               <a
                 href="/"
                 data-browse-home
