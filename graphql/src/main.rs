@@ -558,9 +558,15 @@ mod ingress_tests {
         let _environment_lock = crate::REST_ENDPOINT_TEST_MUTEX.lock().await;
         let calls = Arc::new(AtomicUsize::new(0));
         let backend_calls = calls.clone();
-        let app = Router::new().fallback(move || {
+        let app = Router::new().fallback(move |request: axum::http::Request<axum::body::Body>| {
             backend_calls.fetch_add(1, Ordering::SeqCst);
-            async { axum::Json(json!({"rating": 5.0, "count": 1})) }
+            async move {
+                if request.uri().query().is_some() {
+                    axum::Json(json!({"rating": 4}))
+                } else {
+                    axum::Json(json!({"rating": 5.0, "count": 1}))
+                }
+            }
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let previous_endpoint = std::env::var_os("REST_ENDPOINT");
@@ -593,6 +599,24 @@ mod ingress_tests {
         headers.insert("host", HeaderValue::from_static("recipes.example"));
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
         headers.insert("origin", HeaderValue::from_static("https://recipes.example"));
+
+        let response = execute_graphql(
+            state.clone(),
+            headers.clone(),
+            Method::POST,
+            async_graphql::Request::new(r#"{ maintenance rating(id: "42") { myRating } }"#),
+        )
+        .await;
+        let response = axum::response::IntoResponse::into_response(response);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(result.get("errors").is_none(), "{result}");
+        assert_eq!(result["data"]["maintenance"], true);
+        assert_eq!(result["data"]["rating"]["myRating"], 4);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        calls.store(0, Ordering::SeqCst);
 
         let mut upload = async_graphql::Request::new(
             "mutation($file: Upload!) { addImage(recipeId: \"42\", file: $file) { url } }",
@@ -627,11 +651,46 @@ mod ingress_tests {
             assert_eq!(result["errors"][0]["extensions"]["status"], 503);
         }
 
+        let graphql_app = Router::new()
+            .route("/graphql", axum::routing::post(super::graphql))
+            .with_state(state);
+        let graphql_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let graphql_address = graphql_listener.local_addr().unwrap();
+        let graphql_server =
+            tokio::spawn(async move { axum::serve(graphql_listener, graphql_app).await.unwrap() });
+        let multipart_body = concat!(
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"operations\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"query\":\"mutation($file: Upload!) { addImage(recipeId: \\\"42\\\", file: $file) { url } }\",\"variables\":{\"file\":null}}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"map\"\r\n",
+            "Content-Type: application/json\r\n\r\n",
+            "{\"0\":[\"variables.file\"]}\r\n",
+            "--maintenance-boundary\r\n",
+            "Content-Disposition: form-data; name=\"0\"; filename=\"image.svg\"\r\n",
+            "Content-Type: image/svg+xml\r\n\r\n",
+            "<svg/>\r\n",
+            "--maintenance-boundary--\r\n"
+        );
+        let response = reqwest::Client::new()
+            .post(format!("http://{graphql_address}/graphql"))
+            .header("content-type", "multipart/form-data; boundary=maintenance-boundary")
+            .body(multipart_body)
+            .send()
+            .await
+            .unwrap();
+        let result: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(result["errors"][0]["extensions"]["code"], "maintenance-mode");
+        assert_eq!(result["errors"][0]["extensions"]["status"], 503);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         let publisher_status = serde_json::to_value(publisher.status()).unwrap();
         assert_eq!(publisher_status["published"], 0);
         assert_eq!(publisher_status["failed"], 0);
 
+        graphql_server.abort();
         backend.abort();
         match previous_endpoint {
             Some(value) => std::env::set_var("REST_ENDPOINT", value),
