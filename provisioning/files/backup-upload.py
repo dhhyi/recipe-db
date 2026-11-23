@@ -538,6 +538,8 @@ def archive_recovered_maintenance(config):
 
 def write_status(config, status, code, backup_id=None, last_upload=None):
     path = status_path(config)
+    if status != "verified-upload" and pending_verified_maintenance(config):
+        return read_json(path)
     prior = {}
     if path.is_file() and not path.is_symlink():
         try:
@@ -629,13 +631,17 @@ def run_maintenance_capture(config):
     if current not in (("captured", "captured"), ("backup-mode", "upload-pending"),
                        ("backup-mode", "restoration-pending")):
         raise BackupError("restart-failure", "maintenance-recovery-required")
+    if current == ("captured", "captured") and state.get("maintenanceRestored") is not True:
+        raise BackupError("restart-failure", "maintenance-restoration-unverified")
     try:
         if current != ("backup-mode", "restoration-pending"):
             manifest = validate_snapshot(snapshot, allow_upload_pending=current[1] == "upload-pending")
             if manifest.get("backupId") != backup_id:
                 raise ValueError("maintenance backup identity mismatch")
-            if current == ("backup-mode", "upload-pending") and verified_upload_status(config, backup_id):
+            if verified_upload_status(config, backup_id):
                 result = "verified-upload"
+            elif current == ("captured", "captured"):
+                raise BackupError("restart-failure", "maintenance-upload-verification-missing")
             else:
                 result = upload_snapshot(snapshot, config, force_upload=True,
                                          allow_upload_pending=current[1] == "upload-pending")
@@ -648,7 +654,7 @@ def run_maintenance_capture(config):
             restored = lifecycle_state(snapshot)
             if not isinstance(restored, dict) or restored.get("stateVersion") != 2 \
                     or (restored.get("status"), restored.get("phase")) != ("captured", "captured") \
-                    or restored.get("backupId") != backup_id:
+                    or restored.get("backupId") != backup_id or restored.get("maintenanceRestored") is not True:
                 raise BackupError("restart-failure", "maintenance-restore-incomplete")
             try:
                 manifest = validate_snapshot(snapshot)

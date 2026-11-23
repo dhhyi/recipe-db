@@ -344,6 +344,7 @@ if action == "maintenance-restore":
         raise SystemExit(1)
     state["status"] = "captured"
     state["phase"] = "captured"
+    state["maintenanceRestored"] = True
     state_path.write_text(json.dumps(state))
     raise SystemExit(0)
 if action != "maintenance-capture":
@@ -840,7 +841,8 @@ state_path.write_text(json.dumps(state))
         self.write_maintenance_capture()
         backup.enter_maintenance(self.config)
         self.assertEqual(backup.run_nightly(self.config), "verified-upload")
-        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+        with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
+            self.assertEqual(backup.run_nightly(self.config), "verified-upload")
         self.assertEqual((self.root / "capture-actions.log").read_text().splitlines(),
                          ["maintenance-enter", "maintenance-capture", "maintenance-restore"])
         self.assertTrue((backup.maintenance_state_path(self.config) / "manifest.json").is_file())
@@ -926,6 +928,36 @@ state_path.write_text(json.dumps(state))
         failure.unlink()
         with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
             self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+
+    def test_missing_capture_command_does_not_erase_restoration_evidence(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        failure = self.root / "fail-restore"
+        failure.touch()
+        with self.assertRaises(backup.BackupError):
+            backup.run_nightly(self.config)
+        saved = backup.read_json(backup.status_path(self.config))
+        capture = Path(self.config["captureCommand"])
+        capture.chmod(0o600)
+        with self.assertRaises(backup.BackupError):
+            backup.run_nightly(self.config)
+        self.assertEqual(backup.read_json(backup.status_path(self.config)), saved)
+        capture.chmod(0o755)
+        failure.unlink()
+        self.assertEqual(backup.run_nightly(self.config), "verified-upload")
+
+    def test_legacy_captured_state_without_restoration_evidence_is_refused(self):
+        self.write_maintenance_capture()
+        backup.enter_maintenance(self.config)
+        maintenance = backup.maintenance_state_path(self.config)
+        backup.run_capture_command(self.config, "maintenance-capture", maintenance)
+        state = backup.lifecycle_state(maintenance)
+        state.update(status="captured", phase="captured")
+        backup.atomic_json(maintenance / "backup-state.json", state)
+        with patch.object(backup, "upload_snapshot", side_effect=AssertionError("must not upload")):
+            with self.assertRaises(backup.BackupError) as error:
+                backup.run_nightly(self.config)
+        self.assertEqual(error.exception.code, "maintenance-restoration-unverified")
 
     def test_restore_success_without_captured_state_fails_closed(self):
         self.write_maintenance_capture()

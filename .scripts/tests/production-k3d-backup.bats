@@ -464,7 +464,8 @@ EOF
   export MOCK_PROJECTION_FAIL=false
   run bash .scripts/production-k3d.sh maintenance-restore "$VALUES" "$snapshot"
   [ "$status" -eq 0 ]
-  jq -e '.status == "captured" and .phase == "captured"' "$snapshot/backup-state.json" > /dev/null
+  jq -e '.status == "captured" and .phase == "captured" and .maintenanceRestored == true' \
+    "$snapshot/backup-state.json" > /dev/null
   jq -e --arg holder "$holder" '.spec.holderIdentity == $holder
     and .metadata.annotations["recipe-db/phase"] == "captured"' "$MOCK_LOG.lease" > /dev/null
   jq -e '.items[] | select(.metadata.name == "graphql")

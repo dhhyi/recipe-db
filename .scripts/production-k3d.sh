@@ -550,7 +550,10 @@ backup_state_write() {
   fi
   jq --arg status "$status" --arg phase "$phase" \
     --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '.status=$status | .phase=$phase | .updatedAt=$updatedAt' \
+    --arg command "$command" \
+    '.status=$status | .phase=$phase | .updatedAt=$updatedAt
+      | if $command == "maintenance-restore" and $status == "captured" and $phase == "captured"
+        then .maintenanceRestored=true else . end' \
     "$snapshot/backup-state.json" > "$snapshot/backup-state.next" \
     && mv "$snapshot/backup-state.next" "$snapshot/backup-state.json" \
     && release_private_file checkpoint
